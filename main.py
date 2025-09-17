@@ -1,64 +1,78 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import List, Optional
 
-# FastAPI 앱 생성
+import models
+from database import SessionLocal, engine
+
+models.Base.metadata.create_all(bind=engine)
+
+class ProcessSchema(BaseModel):
+    id: str
+    name: str
+    monitoring_path: str
+    launch_path: str
+    server_reset_time_str: Optional[str] = None
+    user_cycle_hours: Optional[int] = 24
+    mandatory_times_str: Optional[List[str]] = None
+    is_mandatory_time_enabled: bool = False
+    last_played_timestamp: Optional[float] = None
+    original_launch_path: Optional[str] = None
+
+class ProcessCreateSchema(BaseModel):
+    name: str
+    monitoring_path: str
+    launch_path: str
+    server_reset_time_str: Optional[str] = None
+    user_cycle_hours: Optional[int] = 24
+    mandatory_times_str: Optional[List[str]] = None
+    is_mandatory_time_enabled: bool = False
+
+from data_manager import DataManager
+from data_models import ManagedProcess
+
 app = FastAPI()
+data_manager = DataManager()
 
-# Pydantic 모델 정의
-class Homework(BaseModel):
-    subject: str
-    title: str
-    due_date: str
+@app.get("/processes", response_model=List[ProcessSchema])
+def get_processes():
+    return data_manager.managed_processes
 
-fake_homeworks_db = [
-    {"id": 1, "subject": "수학", "title": "1단원 연습문제 풀기", "due_date": "2025-09-24"},
-    {"id": 2, "subject": "과학", "title": "실험 보고서 작성", "due_date": "2025-09-26"},
-    {"id": 3, "subject": "파이썬", "title": "FastAPI 프로젝트 시작하기", "due_date": "2025-09-30"},
-]
+@app.post("/processes", response_model=ProcessSchema, status_code=201)
+def create_process(process_data: ProcessCreateSchema):
+    process_dict = process_data.dict()
+    new_process = ManagedProcess(**process_dict)
+    data_manager.add_process(new_process)
+    return new_process
 
-# 기본 주소 ("/") API - 기존과 동일
-@app.get("/")
-def read_root():
-    return {"message": "연습용 예제 프로젝트임"}
+@app.delete("/processes/{process_id}")
+def delete_process(process_id: str):
+    # DataManager의 삭제 메서드를 직접 호출합니다.
+    # 이 메서드는 성공 시 True, 실패 시 False를 반환합니다.
+    success = data_manager.remove_process(process_id)
+    
+    if success:
+        return {"message": "프로세스가 삭제되었습니다."}
+    else:
+        raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
 
-# 과제 목록을 보여주는 API
-@app.get("/homeworks")
-def get_homeworks():
-    return fake_homeworks_db
+@app.put("/processes/{process_id}", response_model=ProcessSchema)
+# 입력받는 모델을 ProcessCreateSchema로 변경
+def update_process(process_id: str, process_data: ProcessCreateSchema):
+    # 1. 수정할 프로세스가 존재하는지 먼저 확인합니다.
+    target_process = data_manager.get_process_by_id(process_id)
+    if not target_process:
+        raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
 
-# 과제를 추가하는 API
-@app.post("/homeworks")
-def create_homework(homework: Homework):
-
-    new_id = fake_homeworks_db[-1]["id"] + 1
-    complete_homework = {"id": new_id, **homework.dict()}
-    fake_homeworks_db.append(complete_homework)
-
-    return complete_homework
-
-@app.get("/homeworks/{homework_id}")
-def get_homework(homework_id: int):
-    for homework in fake_homeworks_db:
-        if homework["id"] == homework_id:
-            return homework
+    # 2. 입력받은 데이터(Pydantic 모델)를 딕셔너리로 변환합니다.
+    update_data_dict = process_data.dict()
+    
+    # 3. 기존 객체의 내용을 새 내용으로 업데이트합니다.
+    #    id는 기존 값을 그대로 유지합니다.
+    for key, value in update_data_dict.items():
+        setattr(target_process, key, value)
         
-    return None
-
-@app.delete("/homeworks/{homework_id}")
-def delete_homework(homework_id: int):
-    for index, homework in enumerate(fake_homeworks_db):
-        if homework["id"] == homework_id:
-            fake_homeworks_db.pop(index)
-            return {"message": "과제가 삭제되었습니다."}
-        
-    raise HTTPException(status_code=404, detail="과제를 찾을 수 없습니다.")
-
-@app.put("/homeworks/{homework_id}")
-def update_homework(homework_id: int, updated_homework: Homework):
-    for index, homework in enumerate(fake_homeworks_db):
-        if homework["id"] == homework_id:
-            updated_data = {"id": homework_id, **updated_homework.dict()}
-            fake_homeworks_db[index] = updated_data
-            return updated_data
-        
-    raise HTTPException(status_code=404, detail="과제를 찾을 수 없습니다.")
+    # 4. DataManager의 업데이트 메서드를 호출하여 파일에 저장합니다.
+    data_manager.update_process(target_process)
+    
+    return target_process
