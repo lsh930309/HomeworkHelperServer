@@ -1,2 +1,4 @@
 **/__pycache__/
 *.pyc
+*.csv
+db_view.py
