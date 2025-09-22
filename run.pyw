@@ -17,9 +17,9 @@ def main():
         sys.path.insert(0, project_root)
 
     # 이제 경로가 설정되었으므로 애플리케이션 모듈을 임포트할 수 있습니다.
-    from python.views.homework_helper import start_main_application, run_with_single_instance_check
+    from python.views.main_widget import start_main_application, run_with_single_instance_check
 
-    # 이전에 homework_helper.pyw의 __main__ 블록에 있던 로직입니다.
+    # 이전에 main_widget.pyw의 __main__ 블록에 있던 로직입니다.
     run_with_single_instance_check(
         application_name="숙제 관리자",
         main_app_start_callback=start_main_application

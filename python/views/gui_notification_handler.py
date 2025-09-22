@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSlot
 # To avoid circular imports with type hinting, you might use:
 # from typing import TYPE_CHECKING
 # if TYPE_CHECKING:
-#     from .homework_helper import MainWindow # Assuming homework_helper.py contains MainWindow
+#     from .main_widget import MainWindow # Assuming main_widget.py contains MainWindow
 #     from .data_manager import DataManager
 
 
