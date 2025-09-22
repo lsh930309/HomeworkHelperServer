@@ -23,3 +23,35 @@ class Process(Base):
     is_mandatory_time_enabled = Column(Boolean, default=False)
     last_played_timestamp = Column(Float, nullable=True)
     original_launch_path = Column(String, nullable=True)
+
+
+class WebShortcut(Base):
+    __tablename__ = "web_shortcuts"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, index=True)
+    url = Column(String)
+    refresh_time_str = Column(String, nullable=True)
+    last_reset_timestamp = Column(Float, nullable=True)
+
+
+class GlobalSettings(Base):
+    __tablename__ = "global_settings"
+
+    # 이 테이블은 항상 id=1인 행 하나만 가질 것입니다.
+    id = Column(Integer, primary_key=True, default=1)
+    
+    sleep_start_time_str = Column(String, default="00:00")
+    sleep_end_time_str = Column(String, default="08:00")
+    sleep_correction_advance_notify_hours = Column(Float, default=1.0)
+    cycle_deadline_advance_notify_hours = Column(Float, default=2.0)
+    run_on_startup = Column(Boolean, default=False)
+    lock_window_resize = Column(Boolean, default=False)
+    always_on_top = Column(Boolean, default=False)
+    run_as_admin = Column(Boolean, default=False)
+    notify_on_launch_success = Column(Boolean, default=True)
+    notify_on_launch_failure = Column(Boolean, default=True)
+    notify_on_mandatory_time = Column(Boolean, default=True)
+    notify_on_cycle_deadline = Column(Boolean, default=True)
+    notify_on_sleep_correction = Column(Boolean, default=True)
+    notify_on_daily_reset = Column(Boolean, default=True)

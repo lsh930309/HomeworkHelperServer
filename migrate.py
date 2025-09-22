@@ -51,5 +51,30 @@ print("\n마이그레이션 완료!")
 print(f"총 {migrated_count}개의 데이터가 DB로 옮겨졌습니다.")
 print(f"{skipped_count}개의 데이터는 이미 존재하여 건너뛰었습니다.")
 
-# 4. DB 세션을 닫아줍니다.
+# 4. 각 웹 바로가기를 순회하며 DB로 옮깁니다.
+for shortcut in local_data_manager.web_shortcuts:
+    existing_shortcut = crud.get_shortcut_by_id(db, shortcut_id=shortcut.id)
+    if existing_shortcut:
+        # 이미 존재하면 건너뜁니다.
+        # print(f"'{shortcut.name}' (ID: {shortcut.id}) 웹 바로 가기는 이미 DB에 존재하므로 건너뜁니다.")
+        skipped_count += 1
+        continue
+
+    shortcut_schema = schemas.WebShortcutCreate(
+        name=shortcut.name,
+        url=shortcut.url,
+        refresh_time_str=shortcut.refresh_time_str,
+        last_reset_timestamp=shortcut.last_reset_timestamp
+    )
+    crud.create_shortcut(db, shortcut=shortcut_schema)
+    print(f"✅ '{shortcut.name}' (ID: {shortcut.id}) 웹 바로 가기를 DB로 마이그레이션했습니다.")
+    migrated_count += 1
+
+print("\n마이그레이션 완료!")
+print(f"총 {migrated_count}개의 데이터가 DB로 옮겨졌습니다.")
+print(f"{skipped_count}개의 데이터는 이미 존재하여 건너뛰었습니다.")
+
+
+
+
 db.close()
