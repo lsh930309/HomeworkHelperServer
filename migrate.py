@@ -74,7 +74,15 @@ print("\n마이그레이션 완료!")
 print(f"총 {migrated_count}개의 데이터가 DB로 옮겨졌습니다.")
 print(f"{skipped_count}개의 데이터는 이미 존재하여 건너뛰었습니다.")
 
+local_settings = local_data_manager.global_settings
+print(f"\n[GlobalSettings] JSON 파일에서 설정을 불러왔습니다.")
+
+settings_schema = schemas.GlobalSettingsSchema(**local_settings.to_dict())
+crud.update_settings(db, settings=settings_schema)
+
+print(f"-> GlobalSettings를 DB에 업데이트했습니다.")
 
 
-
+# 5. 마무리
+print("\n모든 데이터 마이그레이션이 완료되었습니다!")
 db.close()
