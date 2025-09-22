@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-import models
-import schemas
+from . import models
+from . import schemas
 import uuid
 
 # process management funcions
@@ -29,7 +29,7 @@ def delete_process(db: Session, process_id: str):
         db.commit()
     return db_process
 
-def update_process(db: Session, process_id: str, process: schemas.ProcessCreateSchema):
+def update_process(db: Session, process_id: str, process: schemas.ProcessUpdateSchema):
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = process.dict(exclude_unset=True)

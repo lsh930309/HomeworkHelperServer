@@ -3,8 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
-import models, crud, schemas
-from database import SessionLocal, engine
+from ..models import models, crud, schemas
+from ..models.database import SessionLocal, engine
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -35,8 +35,8 @@ def get_process_by_id(process_id: str, db: Session = Depends(get_db)):
 def create_new_process(process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
     return crud.create_process(db = db, process = process_data)
 
-@app.put("/processes/{process_id}", response_model=schemas.ProcessCreateSchema)
-def update_existing_process(process_id: str, process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
+@app.put("/processes/{process_id}", response_model=schemas.ProcessSchema)
+def update_existing_process(process_id: str, process_data: schemas.ProcessUpdateSchema, db: Session = Depends(get_db)):
     updated_process = crud.update_process(db = db, process_id = process_id, process = process_data)
     if updated_process is None:
         raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")

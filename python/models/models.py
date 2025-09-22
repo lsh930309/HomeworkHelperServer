@@ -1,7 +1,7 @@
 # models.py
 
 from sqlalchemy import Column, Integer, String, Boolean, Float, JSON
-from database import Base # 2단계에서 만든 database.py 파일에서 Base를 가져옵니다.
+from .database import Base # 2단계에서 만든 database.py 파일에서 Base를 가져옵니다.
 
 class Process(Base):
     __tablename__ = "managed_processes"

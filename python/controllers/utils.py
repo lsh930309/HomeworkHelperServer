@@ -27,8 +27,8 @@ def get_bundle_resource_path(relative_path: str) -> str:
         base_path = sys._MEIPASS
     except AttributeError:
         # 개발 환경인 경우, 프로젝트 루트(X)를 기준으로 경로 설정
-        # (이 파일의 위치가 X/python/utils.py라고 가정)
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        # (이 파일의 위치가 X/python/controllers/utils.py라고 가정)
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         
     return os.path.join(base_path, relative_path)
 

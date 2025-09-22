@@ -22,6 +22,16 @@ class ProcessCreateSchema(BaseModel):
     mandatory_times_str: Optional[List[str]] = None
     is_mandatory_time_enabled: bool = False
 
+class ProcessUpdateSchema(BaseModel):
+    name: Optional[str] = None
+    monitoring_path: Optional[str] = None
+    launch_path: Optional[str] = None
+    server_reset_time_str: Optional[str] = None
+    user_cycle_hours: Optional[int] = None
+    mandatory_times_str: Optional[List[str]] = None
+    is_mandatory_time_enabled: Optional[bool] = None
+    last_played_timestamp: Optional[float] = None
+
 class WebShortcutBase(BaseModel):
     name: str = ""
     url: str = ""

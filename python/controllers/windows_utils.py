@@ -137,7 +137,7 @@ def set_startup_shortcut(enable: bool) -> bool:
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.Targetpath = interpreter_path
             shortcut.Arguments = script_path
-            shortcut.WorkingDirectory = os.path.dirname(script_path)
+            shortcut.WorkingDirectory = os.path.abspath(os.path.join(os.path.dirname(script_path), "..", ".."))
             shortcut.IconLocation = script_path
             shortcut.save()
             

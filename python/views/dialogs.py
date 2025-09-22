@@ -13,9 +13,9 @@ from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons direc
 
 # Local imports (assuming these files are in the same directory or accessible in PYTHONPATH)
 # If data_models.py or process_utils.py are in a subdirectory, adjust the import path.
-from data_models import ManagedProcess, GlobalSettings
-from process_utils import get_all_running_processes_info # Used by RunningProcessSelectionDialog
-from utils import copy_shortcut_file # 바로가기 파일 복사 기능
+from ..models.data_models import ManagedProcess, GlobalSettings
+from ..controllers.process_utils import get_all_running_processes_info # Used by RunningProcessSelectionDialog
+from ..controllers.utils import copy_shortcut_file # 바로가기 파일 복사 기능
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """ QTableWidgetItem that allows numeric sorting. """
