@@ -109,6 +109,16 @@ class ApiClient:
             print(f"웹 바로가기 목록 가져오기 오류: {e}")
             return []
 
+    def get_shortcut_by_id(self, shortcut_id: str) -> Optional[Dict[str, Any]]:
+        """ID로 단일 웹 바로가기 정보를 가져옵니다."""
+        try:
+            response = requests.get(f"{BASE_URL}/shortcuts/{shortcut_id}")
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"웹 바로가기 정보 가져오기 오류 (ID: {shortcut_id}): {e}")
+            return None
+
     def create_shortcut(self, shortcut_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """새로운 웹 바로가기를 생성합니다."""
         try:
