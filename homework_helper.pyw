@@ -4,7 +4,10 @@ import os
 import functools
 import ctypes
 import subprocess
+import atexit
 from typing import List, Optional, Dict, Any
+
+api_server_process = None
 
 # Windows 전용 모듈 임포트 (선택적)
 if os.name == 'nt':
@@ -88,6 +91,42 @@ def check_admin_requirement():
         print(f"관리자 권한 설정 확인 중 오류 발생: {e}")
     
     return False
+
+def start_api_server():
+    """FastAPI 서버를 서브프로세스로 실행합니다."""
+    global api_server_process
+    try:
+        # PyInstaller로 패키징되었을 때와 일반 실행일 때를 구분
+        if getattr(sys, 'frozen', False):
+            # .exe 실행 시, uvicorn과 main.py는 같은 폴더에 있다고 가정
+            base_path = os.path.dirname(sys.executable)
+            uvicorn_path = os.path.join(base_path, "uvicorn.exe") # uvicorn 실행 파일 경로
+            main_path = "main:app"
+            command = [uvicorn_path, main_path, "--host", "127.0.0.1", "--port", "8000"]
+        else:
+            # 일반 .py 실행 시
+            command = ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+
+        print(f"API 서버 실행 명령어: {' '.join(command)}")
+        # CREATE_NO_WINDOW 플래그로 콘솔 창이 뜨지 않도록 함 (Windows 전용)
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        api_server_process = subprocess.Popen(command, creationflags=creationflags)
+        print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
+
+        # 프로그램 종료 시 서버도 함께 종료되도록 등록
+        atexit.register(stop_api_server)
+
+    except Exception as e:
+        print(f"API 서버 시작 실패: {e}")
+        # 여기서 사용자에게 알리는 QMessageBox를 띄워주는 것이 좋습니다.
+
+def stop_api_server():
+    """실행 중인 API 서버 서브프로세스를 종료합니다."""
+    global api_server_process
+    if api_server_process:
+        print(f"API 서버(PID: {api_server_process.pid})를 종료합니다.")
+        api_server_process.terminate()
+        api_server_process.wait()
 
 # PyQt6 임포트
 from PyQt6.QtWidgets import (
@@ -990,6 +1029,7 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
+        stop_api_server() # API 서버 중지
         print("애플리케이션 종료 절차 시작...")
         # 활성화된 타이머들 중지
         if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive(): self.monitor_timer.stop()
@@ -1501,10 +1541,98 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
-if __name__ == "__main__":
-    # 관리자 권한 요구사항 확인 및 자동 재시작
-    check_admin_requirement()
+def run_automatic_migration():
+    """
+    애플리케이션 시작 시 자동으로 JSON 데이터를 SQLite DB로 마이그레이션합니다.
+    성공 시 .migration_done 파일을 생성하여 중복 실행을 방지합니다.
+    """
+    print("자동 마이그레이션 필요 여부 확인...")
     
+    # 데이터 경로 및 마이그레이션 완료 플래그 파일 경로 설정
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    data_path = os.path.join(base_path, "homework_helper_data")
+    migration_flag_path = os.path.join(data_path, ".migration_done")
+
+    # 데이터 폴더가 없으면 새로 생성합니다.
+    if not os.path.exists(data_path):
+        os.makedirs(data_path)
+    
+    # 마이그레이션이 이미 완료되었으면 함수 종료
+    if os.path.exists(migration_flag_path):
+        print("마이그레이션이 이미 완료되었습니다. 건너뜁니다.")
+        return
+
+    # 구 버전의 핵심 데이터 파일이 있는지 확인
+    old_process_file = os.path.join(data_path, "managed_processes.json")
+    if not os.path.exists(old_process_file):
+        print("구 버전 데이터 파일이 없어 마이그레이션이 필요하지 않습니다.")
+        with open(migration_flag_path, 'w', encoding='utf-8') as f:
+            f.write(datetime.datetime.now().isoformat())
+        return
+
+    # --- 마이그레이션 실행 ---
+    app = QApplication.instance() or QApplication(sys.argv)
+    QMessageBox.information(None, "데이터 업그레이드", 
+                              "데이터를 최신 버전으로 안전하게 업그레이드합니다.\n"
+                              "잠시만 기다려주세요...")
+
+    try:
+        # DB와 데이터 로직 모듈 임포트
+        import crud
+        import schemas
+        from data_manager import DataManager
+        from database import SessionLocal
+
+        db = SessionLocal()
+        local_data_manager = DataManager(data_folder=data_path)
+
+        # 1. ManagedProcess 마이그레이션
+        for p in local_data_manager.managed_processes:
+            if not crud.get_process_by_id(db, p.id):
+                crud.create_process(db, schemas.ProcessCreateSchema(**p.to_dict()))
+        
+        # 2. WebShortcut 마이그레이션
+        for sc in local_data_manager.web_shortcuts:
+            if not crud.get_shortcut_by_id(db, sc.id):
+                crud.create_shortcut(db, schemas.WebShortcutCreate(**sc.to_dict()))
+        
+        # 3. GlobalSettings 마이그레이션 (업데이트)
+        gs_schema = schemas.GlobalSettingsSchema(**local_data_manager.global_settings.to_dict())
+        crud.update_settings(db, gs_schema)
+        
+        db.close()
+        
+        # 성공 시 플래그 파일 생성
+        with open(migration_flag_path, 'w', encoding='utf-8') as f:
+            f.write(datetime.datetime.now().isoformat())
+        
+        QMessageBox.information(None, "업그레이드 완료", "데이터 업그레이드가 성공적으로 완료되었습니다.")
+
+        # --- 데이터 정리 ---
+        print("기존 JSON 데이터 파일을 백업합니다...")
+        for filename in ["managed_processes.json", "web_shortcuts.json", "global_settings.json"]:
+            old_file = os.path.join(data_path, filename)
+            if os.path.exists(old_file):
+                backup_file = old_file + ".bak"
+                os.rename(old_file, backup_file)
+                print(f"'{filename}' -> '{filename}.bak'")
+
+    except Exception as e:
+        print(f"마이그레이션 중 심각한 오류 발생: {e}")
+        QMessageBox.critical(None, "업그레이드 실패",
+                               f"데이터 업그레이드 중 오류가 발생했습니다.\n\n{e}\n\n"
+                               "프로그램을 종료합니다. 개발자에게 문의해주세요.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+        # 관리자 권한 요구사항 확인 및 자동 재시작
+    check_admin_requirement()
+    start_api_server() # API 서버 시작
+    run_automatic_migration() # 자동 마이그레이션 실행
     # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
     run_with_single_instance_check(
         application_name="숙제 관리자", # QApplication.applicationName()과 일치해야 IPC가 제대로 동작
