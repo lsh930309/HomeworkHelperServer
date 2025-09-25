@@ -3,11 +3,23 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import os, sys
 
-# 1. 데이터베이스 접속 주소 설정
-SQLALCHEMY_DATABASE_URL = r"sqlite:///./app_data.db"
-# 위 주소는 'app_data.db'라는 이름의 파일을 현재 폴더에 만들고, 
-# 이 파일을 SQLite 데이터베이스로 사용하겠다는 의미입니다.
+# 1. 데이터베이스 파일 절대 경로 설정 (패키지/개발 환경 모두 일관)
+# 패키지(배포) 환경에서는 사용자 프로필 하위에 저장하여 권한/일관성 문제 예방
+if getattr(sys, 'frozen', False):
+    appdata_dir = os.environ.get('APPDATA') or os.path.expanduser('~')
+    data_dir = os.path.join(appdata_dir, "HomeworkHelper")
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, "homework_helper_data")
+os.makedirs(data_dir, exist_ok=True)
+
+db_path = os.path.join(data_dir, "app_data.db")
+# Windows 백슬래시를 URL 포맷에 맞게 슬래시로 변환
+db_path_url = db_path.replace("\\", "/")
+
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{db_path_url}"
 
 # 2. 데이터베이스 엔진 생성
 engine = create_engine(

@@ -1,4 +1,4 @@
 **/__pycache__/
+**/homework_helper_data/
 *.pyc
-*.csv
-db_view.py
+build.bat

@@ -93,25 +93,34 @@ def check_admin_requirement():
     return False
 
 def start_api_server():
-    """FastAPI 서버를 서브프로세스로 실행합니다."""
+    """FastAPI 서버를 실행합니다.
+    - 개발 환경: uvicorn 서브프로세스 사용
+    - 패키지 환경: 인프로세스(스레드)로 실행하여 경로/권한/IPC 이슈 방지
+    """
     global api_server_process
     try:
-        # PyInstaller로 패키징되었을 때와 일반 실행일 때를 구분
+        # 패키지 환경에서는 인프로세스 실행
         if getattr(sys, 'frozen', False):
-            # .exe 실행 시, uvicorn과 main.py는 같은 폴더에 있다고 가정
-            base_path = os.path.dirname(sys.executable)
-            uvicorn_path = os.path.join(base_path, "uvicorn.exe") # uvicorn 실행 파일 경로
-            main_path = "main:app"
-            command = [uvicorn_path, main_path, "--host", "127.0.0.1", "--port", "8000"]
-        else:
-            # 일반 .py 실행 시
-            command = ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+            print("API 서버를 인프로세스로 실행합니다 (패키지 환경).")
+            # 지연 임포트로 의존 순환/패키징 누락 방지
+            import threading
+            import uvicorn
+            from main import app
 
-        print(f"API 서버 실행 명령어: {' '.join(command)}")
-        # CREATE_NO_WINDOW 플래그로 콘솔 창이 뜨지 않도록 함 (Windows 전용)
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        api_server_process = subprocess.Popen(command, creationflags=creationflags)
-        print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
+            def _run():
+                uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            api_server_process = None
+            print("API 서버(인프로세스)가 스레드로 시작되었습니다.")
+        else:
+            # 개발 환경: 서브프로세스 실행
+            command = ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+            print(f"API 서버 실행 명령어: {' '.join(command)}")
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            api_server_process = subprocess.Popen(command, creationflags=creationflags)
+            print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
 
         # 프로그램 종료 시 서버도 함께 종료되도록 등록
         atexit.register(stop_api_server)
@@ -1586,6 +1595,10 @@ def run_automatic_migration():
         import schemas
         from data_manager import DataManager
         from database import SessionLocal
+        # DB 테이블이 아직 생성되지 않았을 수 있으므로, 마이그레이션 전에 명시적으로 생성 보장
+        import models
+        from database import engine
+        models.Base.metadata.create_all(bind=engine)
 
         db = SessionLocal()
         local_data_manager = DataManager(data_folder=data_path)
