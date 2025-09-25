@@ -75,7 +75,21 @@ def delete_shortcut(db: Session, shortcut_id: str):
 
 # global setting management functions
 def get_settings(db: Session):
-    return db.query(models.GlobalSettings).first()
+    """ GlobalSettings를 조회합니다. 없으면 기본값으로 생성하여 반환합니다. """
+    db_settings = db.query(models.GlobalSettings).filter(models.GlobalSettings.id == 1).first()
+    
+    if not db_settings:
+        print("기본 설정을 생성합니다.")
+        # 기본 스키마로부터 딕셔너리를 만듭니다.
+        default_data = schemas.GlobalSettingsSchema().dict()
+        # id를 추가하고 DB 모델 객체를 생성합니다.
+        db_settings = models.GlobalSettings(id=1, **default_data)
+        
+        db.add(db_settings)
+        db.commit()
+        db.refresh(db_settings)
+        
+    return db_settings
 
 def update_settings(db: Session, settings: schemas.GlobalSettingsSchema):
     db_settings = get_settings(db)
