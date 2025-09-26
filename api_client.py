@@ -16,22 +16,11 @@ class ApiClient:
         if dyn_port:
             base_url = f"http://127.0.0.1:{dyn_port}"
         self.base_url = base_url
-        # 서버 준비 대기 (패키징 환경에서 인프로세스 uvicorn 부팅 지연 고려)
-        import time
-        for _ in range(25): # 최대 ~5초 대기 (0.2초 * 25)
-            try:
-                import requests
-                requests.get(f"{self.base_url}/settings", timeout=0.2)
-                break
-            except Exception:
-                time.sleep(0.2)
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
         self.global_settings: GlobalSettings = self._fetch_global_settings()
-        
-    # --- ManagedProcess 관련 메서드 ---
-    
+
     def _fetch_all_processes(self) -> List[ManagedProcess]:
         """서버에서 모든 프로세스 목록을 가져옵니다."""
         try:
@@ -44,12 +33,7 @@ class ApiClient:
             print(f"프로세스 목록을 불러오는 데 실패했습니다: {e}")
             return []
 
-    def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
-        """ID로 단일 프로세스를 찾습니다 (내부 메모리에서)."""
-        for p in self.managed_processes:
-            if p.id == process_id:
-                return p
-        return None
+    # --- ManagedProcess 관련 메서드 ---
 
     def add_process(self, process: ManagedProcess) -> bool:
         """새로운 프로세스를 서버에 추가합니다."""
@@ -62,11 +46,8 @@ class ApiClient:
             response = requests.post(f"{self.base_url}/processes", json=data_to_send)
             response.raise_for_status()
             
-            # 성공 시, 내부 데이터 목록도 새로고침합니다.
-            new_process_data = response.json()
-            new_process_obj = ManagedProcess.from_dict(new_process_data)
-
-            self.managed_processes.append(new_process_obj)
+            # 성공 시, 내부 데이터 목록도 새로고침합니다. (전체 목록을 다시 가져오는 것이 가장 간단하고 확실함)
+            self.managed_processes = self._fetch_all_processes()
             return True
         except requests.RequestException as e:
             print(f"프로세스 추가에 실패했습니다: {e}")
@@ -78,6 +59,7 @@ class ApiClient:
             response = requests.delete(f"{self.base_url}/processes/{process_id}")
             response.raise_for_status()
             
+            # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
             return True
         except requests.RequestException as e:
@@ -94,12 +76,19 @@ class ApiClient:
             response = requests.put(f"{self.base_url}/processes/{updated_process.id}", json=data_to_send)
             response.raise_for_status()
             
+            # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
             return True
         except requests.RequestException as e:
             print(f"프로세스 업데이트에 실패했습니다: {e}")
             return False
-            
+
+    def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
+        """ID로 단일 프로세스를 찾습니다 (내부 메모리에서)."""
+        for p in self.managed_processes:
+            if p.id == process_id:
+                return p
+        return None
     # --- WebShortcut 관련 메서드 ---
 
     def _fetch_all_web_shortcuts(self) -> List[WebShortcut]:
@@ -112,13 +101,6 @@ class ApiClient:
         except requests.RequestException as e:
             print(f"웹 바로 가기 목록을 불러오는 데 실패했습니다: {e}")
             return []
-        
-    def get_web_shortcut_by_id(self, shortcut_id: str) -> Optional[WebShortcut]:
-        """ID로 단일 웹 바로 가기를 찾습니다 (내부 메모리에서)."""
-        for sc in self.web_shortcuts:
-            if sc.id == shortcut_id:
-                return sc
-        return None
 
     def add_web_shortcut(self, shortcut: WebShortcut) -> bool:
         """새로운 웹 바로 가기를 서버에 추가합니다."""
@@ -130,6 +112,7 @@ class ApiClient:
             response = requests.post(f"{self.base_url}/shortcuts", json=data_to_send)
             response.raise_for_status()
             
+            # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
             return True
         except requests.RequestException as e:
@@ -142,6 +125,7 @@ class ApiClient:
             response = requests.delete(f"{self.base_url}/shortcuts/{shortcut_id}")
             response.raise_for_status()
             
+            # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
             return True
         except requests.RequestException as e:
@@ -158,12 +142,19 @@ class ApiClient:
             response = requests.put(f"{self.base_url}/shortcuts/{updated_shortcut.id}", json=data_to_send)
             response.raise_for_status()
             
+            # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
             return True
         except requests.RequestException as e:
             print(f"웹 바로 가기 업데이트에 실패했습니다: {e}")
             return False
-        
+
+    def get_web_shortcut_by_id(self, shortcut_id: str) -> Optional[WebShortcut]:
+        """ID로 단일 웹 바로 가기를 찾습니다 (내부 메모리에서)."""
+        for sc in self.web_shortcuts:
+            if sc.id == shortcut_id:
+                return sc
+        return None
     # --- GlobalSettings 관련 메서드 ---
 
     def _fetch_global_settings(self) -> GlobalSettings:
