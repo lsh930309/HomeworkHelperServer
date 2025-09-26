@@ -325,7 +325,6 @@ class MainWindow(QMainWindow):
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
         self._create_menu_bar() # 메뉴 바 생성
-        self._add_always_on_top_checkbox() # 항상 위 체크박스 추가
 
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
 
@@ -464,7 +463,6 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
 
     def _configure_table_header(self):
-        """테이블 헤더의 크기 조절 모드 및 컬럼 너비를 설정합니다."""
         h = self.process_table.horizontalHeader()
         if h:
             h.setSectionResizeMode(self.COL_ICON, QHeaderView.ResizeMode.ResizeToContents) # 아이콘 컬럼: 내용에 맞게
@@ -474,7 +472,6 @@ class MainWindow(QMainWindow):
             h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
 
     def _create_menu_bar(self):
-        """메뉴 바와 메뉴 항목들을 생성합니다."""
         mb = self.menuBar()
         if not mb:
             return
@@ -498,81 +495,20 @@ class MainWindow(QMainWindow):
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
 
-    def _add_always_on_top_checkbox(self):
-        """메뉴바 오른쪽에 '항상 위' 체크박스를 추가합니다."""
-        menu_bar = self.menuBar()
-        if not menu_bar:
-            return
-            
-        # 메뉴바 오른쪽에 위젯을 추가하기 위한 컨테이너 위젯 생성
-        right_widget = QWidget()
-        right_layout = QHBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)  # 여백 제거
-        right_layout.setSpacing(5)  # 간격 설정
-        right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)  # 세로 중앙 정렬
-        
-        # 항상 위 체크박스 생성
-        self.always_on_top_checkbox = QCheckBox("항상 위")
-        self.always_on_top_checkbox.setToolTip("창을 다른 창들보다 항상 위에 표시합니다.")
-        self.always_on_top_checkbox.toggled.connect(self._toggle_always_on_top)
-        
-        # 체크박스를 메뉴 텍스트와 같은 높이에 정렬하기 위한 스타일 설정
-        self.always_on_top_checkbox.setStyleSheet("""
-            QCheckBox {
-                margin: 0px;
-                padding: 0px;
-                border: none;
-                background: transparent;
-                margin-top: 6px;
-                margin-left: 6px;
-                margin-right: 6px;
-            }
-            QCheckBox::indicator {
-                width: 13px;
-                height: 13px;
-                margin-top: 5px;
-            }
-        """)
-        
-        right_layout.addWidget(self.always_on_top_checkbox)
-        right_layout.addStretch()  # 오른쪽 여백 추가
-        
-        # 메뉴바에 위젯 추가
-        menu_bar.setCornerWidget(right_widget, Qt.Corner.TopRightCorner)
-        
-        # 초기 상태 설정 (전역 설정에서 로드)
-        self._load_always_on_top_setting()
-
-    def _toggle_always_on_top(self, checked: bool):
-        """항상 위 설정을 토글합니다."""
-        if checked:
-            self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-            print("항상 위 모드 활성화됨")
-        else:
-            self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
-            print("항상 위 모드 비활성화됨")
-        
-        # 창 플래그 변경 후 창을 다시 표시해야 함
-        self.show()
-        
-        # 전역 설정에 저장
-        self.data_manager.global_settings.always_on_top = checked
-        self.data_manager.save_global_settings()
-
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
         always_on_top = self.data_manager.global_settings.always_on_top
-        self.always_on_top_checkbox.setChecked(always_on_top)
-        
-        # 초기 창 플래그 설정
         if always_on_top:
             self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-            print("항상 위 모드 초기 활성화됨")
+        else:
+            self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
-        cur_gs = self.data_manager.global_settings # 현재 전역 설정 가져오기
-        dlg = GlobalSettingsDialog(cur_gs, self) # 대화 상자 생성
+        # 중요: 대화상자를 열 때마다 data_manager로부터 최신 설정 객체를 가져와야 합니다.
+        # ApiClient는 설정을 저장할 때마다 내부의 global_settings 객체를 새로 교체하기 때문입니다.
+        latest_settings = self.data_manager.global_settings
+        dlg = GlobalSettingsDialog(latest_settings, self) # 최신 설정으로 대화 상자 생성
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
             upd_gs = dlg.get_updated_settings() # 업데이트된 설정 가져오기
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
@@ -580,6 +516,10 @@ class MainWindow(QMainWindow):
             
             # Launcher 인스턴스의 관리자 권한 설정 업데이트
             self.launcher.run_as_admin = upd_gs.run_as_admin
+            
+            # '항상 위' 설정이 변경되었을 수 있으므로 즉시 적용
+            self._load_always_on_top_setting()
+            self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
             
             status_bar = self.statusBar()
             if status_bar:
