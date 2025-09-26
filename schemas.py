@@ -12,6 +12,8 @@ class ProcessSchema(BaseModel):
     is_mandatory_time_enabled: bool = False
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
+    last_played_timestamp: Optional[float] = None
+    original_launch_path: Optional[str] = None
 
 class ProcessCreateSchema(BaseModel):
     name: str
@@ -21,6 +23,10 @@ class ProcessCreateSchema(BaseModel):
     user_cycle_hours: Optional[int] = 24
     mandatory_times_str: Optional[List[str]] = None
     is_mandatory_time_enabled: bool = False
+    last_played_timestamp: Optional[float] = None
+    original_launch_path: Optional[str] = None
+    last_played_timestamp: Optional[float] = None
+    original_launch_path: Optional[str] = None
 
 class WebShortcutBase(BaseModel):
     name: str = ""

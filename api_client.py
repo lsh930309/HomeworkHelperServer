@@ -15,7 +15,6 @@ class ApiClient:
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
         self.global_settings: GlobalSettings = self._fetch_global_settings()
-        # (나중에 WebShortcut, GlobalSettings도 여기에 추가)
         
     # --- ManagedProcess 관련 메서드 ---
     
