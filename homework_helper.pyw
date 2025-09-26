@@ -254,8 +254,8 @@ from PyQt6.QtWidgets import (
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QSize
-from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QSize, QThread
+from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette
 
 # --- 로컬 모듈 임포트 ---
 from dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog
@@ -263,6 +263,7 @@ from tray_manager import TrayManager
 from gui_notification_handler import GuiNotificationHandler
 from instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from utils import get_bundle_resource_path
+import requests
 
 # --- 기타 로컬 유틸리티/데이터 모듈 임포트 ---
 #from data_manager import DataManager
@@ -273,6 +274,34 @@ from windows_utils import set_startup_shortcut, get_startup_shortcut_status
 from launcher import Launcher
 from notifier import Notifier
 from scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
+
+class IconDownloader(QThread):
+    """
+    별도 스레드에서 URL로부터 아이콘을 다운로드하는 클래스.
+    다운로드가 완료되면 icon_ready 시그널을 통해 QIcon 객체를 전달합니다.
+    """
+    icon_ready = pyqtSignal(QIcon)
+
+    def __init__(self, url, parent=None):
+        super().__init__(parent)
+        self.url = url
+
+    def run(self):
+        try:
+            # 5초 타임아웃으로 이미지 데이터 요청
+            response = requests.get(self.url, timeout=5)
+            response.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+
+            pixmap = QPixmap()
+            # 받아온 바이트(byte) 데이터로부터 이미지 로드
+            pixmap.loadFromData(response.content)
+
+            if not pixmap.isNull():
+                # 성공적으로 로드되면 QIcon 객체를 시그널로 전달
+                self.icon_ready.emit(QIcon(pixmap))
+        except Exception as e:
+            # 오류 발생 시 콘솔에 로그 출력 (시그널은 발생하지 않음)
+            print(f"아이콘 다운로드 실패 ({self.url}): {e}")
 
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
@@ -359,16 +388,26 @@ class MainWindow(QMainWindow):
         # GitHub 바로가기 버튼 추가
         self.github_button = QPushButton()
         self.github_button.setToolTip("GitHub 저장소 방문")
-        # 아이콘 설정 (표준 아이콘 또는 테마 아이콘 사용)
-        github_icon = QIcon.fromTheme("github", self.style().standardIcon(QStyle.StandardPixmap.SP_CommandLink))
-        if not github_icon.isNull():
-            self.github_button.setIcon(github_icon)
-        else:
-            self.github_button.setText("GH") # 아이콘 없을 시 대체 텍스트
+        self.github_button.setText("GH") # 아이콘 로딩 전 기본 텍스트
         # 크기를 다른 아이콘 버튼과 맞춤
         self.github_button.setFixedSize(icon_button_size, icon_button_size)
-        self.github_button.clicked.connect(lambda: self.open_webpage("https://github.com/lsh930309/HomeworkHelper"))
+        self.github_button.clicked.connect(lambda: self.open_webpage("https://github.com/lsh930309/HomeworkHelperServer"))
         self.top_button_area_layout.addWidget(self.github_button)
+
+        # 시스템 테마에 따라 적절한 GitHub 아이콘 URL 선택
+        palette = self.palette()
+        # 창 배경색과 텍스트 색상의 밝기를 비교하여 다크 모드 여부 판단
+        # 다크 모드에서는 보통 텍스트가 배경보다 밝습니다.
+        is_dark_theme = palette.color(QPalette.ColorRole.WindowText).lightness() > palette.color(QPalette.ColorRole.Window).lightness()
+        
+        if is_dark_theme:
+            favicon_url = "https://github.githubassets.com/favicons/favicon-dark.svg" # 다크 모드용 아이콘
+        else:
+            favicon_url = "https://github.githubassets.com/favicons/favicon.svg" # 라이트 모드용 아이콘
+
+        self.icon_downloader = IconDownloader(favicon_url)
+        self.icon_downloader.icon_ready.connect(self.set_github_button_icon) # 아이콘 다운로더에 연결
+        self.icon_downloader.start()
 
         main_layout.addLayout(self.top_button_area_layout) # 메인 레이아웃에 상단 버튼 영역 추가
 
@@ -427,6 +466,12 @@ class MainWindow(QMainWindow):
             status_bar.showMessage("준비 완료.", 5000) # 상태 표시줄 메시지
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
+
+    def set_github_button_icon(self, icon: QIcon):
+        """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
+        if not icon.isNull():
+            self.github_button.setIcon(icon)
+            self.github_button.setText("") # 아이콘이 설정되면 텍스트는 지웁니다.
 
     def changeEvent(self, event: QEvent):
         """창 상태 변경 이벤트를 처리합니다 (최소화 시 트레이로 보내는 로직 포함)."""
