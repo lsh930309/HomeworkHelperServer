@@ -34,7 +34,7 @@ class ManagedProcess:
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
-        return self.__dict__
+        return self.__dict__.copy()
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'ManagedProcess':
@@ -78,7 +78,7 @@ class GlobalSettings:
         self.notify_on_daily_reset = notify_on_daily_reset
 
     def to_dict(self) -> Dict:
-        return self.__dict__
+        return self.__dict__.copy()
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'GlobalSettings':
