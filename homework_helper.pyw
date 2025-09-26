@@ -102,25 +102,68 @@ def start_api_server():
         # 패키지 환경에서는 인프로세스 실행
         if getattr(sys, 'frozen', False):
             print("API 서버를 인프로세스로 실행합니다 (패키지 환경).")
-            # 지연 임포트로 의존 순환/패키징 누락 방지
             import threading
+            import socket
+            import time
+            import requests
             import uvicorn
             from main import app
 
+            def _find_free_port(candidates: list[int]) -> int:
+                for p in candidates:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        try:
+                            s.bind(("127.0.0.1", p))
+                            return p
+                        except OSError:
+                            continue
+                return 8000
+
+            selected_port = _find_free_port(list(range(8000, 8011)))
+            os.environ["HH_API_PORT"] = str(selected_port)
+
             def _run():
-                uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+                # uvicorn 서버를 현재 프로세스의 별도 스레드에서 실행
+                config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="warning")
+                server = uvicorn.Server(config)
+                import asyncio
+                asyncio.run(server.serve())
 
             t = threading.Thread(target=_run, daemon=True)
             t.start()
             api_server_process = None
-            print("API 서버(인프로세스)가 스레드로 시작되었습니다.")
+            print(f"API 서버(인프로세스)가 스레드로 시작되었습니다. 포트: {selected_port}")
+
+            # 간단한 준비 대기 루프 (최대 ~6초)
+            base_url = f"http://127.0.0.1:{selected_port}"
+            for _ in range(30):
+                try:
+                    requests.get(f"{base_url}/settings", timeout=0.2)
+                    print("API 서버 준비 완료")
+                    break
+                except Exception:
+                    time.sleep(0.2)
         else:
-            # 개발 환경: 서브프로세스 실행
-            command = ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
-            print(f"API 서버 실행 명령어: {' '.join(command)}")
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            api_server_process = subprocess.Popen(command, creationflags=creationflags)
-            print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
+            # 개발 환경: 서브프로세스 실행 (uvicorn 또는 python -m uvicorn 폴백)
+            commands = [
+                ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+            ]
+            last_err = None
+            for command in commands:
+                try:
+                    print(f"API 서버 실행 명령어: {' '.join(command)}")
+                    creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    api_server_process = subprocess.Popen(command, creationflags=creationflags)
+                    print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"API 서버 실행 시도 실패: {e}")
+                    api_server_process = None
+            if api_server_process is None and last_err:
+                raise last_err
 
         # 프로그램 종료 시 서버도 함께 종료되도록 등록
         atexit.register(stop_api_server)
@@ -1557,7 +1600,7 @@ def run_automatic_migration():
     """
     print("자동 마이그레이션 필요 여부 확인...")
     
-    # 데이터 경로 및 마이그레이션 완료 플래그 파일 경로 설정
+    # 데이터 경로 및 마이그레이션 완료 플래그 파일 경로 설정 (원래 로직으로 복구)
     if getattr(sys, 'frozen', False):
         base_path = os.path.dirname(sys.executable)
     else:
@@ -1603,15 +1646,23 @@ def run_automatic_migration():
         db = SessionLocal()
         local_data_manager = DataManager(data_folder=data_path)
 
-        # 1. ManagedProcess 마이그레이션
+        # 1. ManagedProcess 마이그레이션 (업서트)
         for p in local_data_manager.managed_processes:
-            if not crud.get_process_by_id(db, p.id):
-                crud.create_process(db, schemas.ProcessCreateSchema(**p.to_dict()))
+            existing = crud.get_process_by_id(db, p.id)
+            p_schema = schemas.ProcessCreateSchema(**p.to_dict())
+            if existing:
+                crud.update_process(db, p.id, p_schema)
+            else:
+                crud.create_process(db, p_schema)
         
-        # 2. WebShortcut 마이그레이션
+        # 2. WebShortcut 마이그레이션 (업서트)
         for sc in local_data_manager.web_shortcuts:
-            if not crud.get_shortcut_by_id(db, sc.id):
-                crud.create_shortcut(db, schemas.WebShortcutCreate(**sc.to_dict()))
+            existing_sc = crud.get_shortcut_by_id(db, sc.id)
+            sc_schema = schemas.WebShortcutCreate(**sc.to_dict())
+            if existing_sc:
+                crud.update_shortcut(db, sc.id, sc_schema)
+            else:
+                crud.create_shortcut(db, sc_schema)
         
         # 3. GlobalSettings 마이그레이션 (업데이트)
         gs_schema = schemas.GlobalSettingsSchema(**local_data_manager.global_settings.to_dict())

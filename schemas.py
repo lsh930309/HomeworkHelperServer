@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 class ProcessSchema(BaseModel):
-    id: str
+    id: Optional[str] = None
     name: str
     monitoring_path: str
     launch_path: str
@@ -12,10 +12,12 @@ class ProcessSchema(BaseModel):
     is_mandatory_time_enabled: bool = False
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
-    last_played_timestamp: Optional[float] = None
-    original_launch_path: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
 
 class ProcessCreateSchema(BaseModel):
+    id: Optional[str] = None
     name: str
     monitoring_path: str
     launch_path: str
@@ -23,8 +25,6 @@ class ProcessCreateSchema(BaseModel):
     user_cycle_hours: Optional[int] = 24
     mandatory_times_str: Optional[List[str]] = None
     is_mandatory_time_enabled: bool = False
-    last_played_timestamp: Optional[float] = None
-    original_launch_path: Optional[str] = None
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
 
@@ -35,7 +35,7 @@ class WebShortcutBase(BaseModel):
     last_reset_timestamp: Optional[float] = None
 
 class WebShortcutCreate(WebShortcutBase):
-    pass
+    id: Optional[str] = None
 
 class WebShortcutSchema(WebShortcutBase):
     id: str

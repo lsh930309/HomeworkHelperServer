@@ -2,6 +2,7 @@
 
 import requests
 from typing import List, Optional
+import os
 from data_models import ManagedProcess, WebShortcut, GlobalSettings
 
 class ApiClient:
@@ -10,7 +11,20 @@ class ApiClient:
     기존 DataManager의 역할을 대체합니다.
     """
     def __init__(self, base_url: str = "http://127.0.0.1:8000"):
+        # 패키지 환경에서 동적으로 선택된 포트를 우선 사용
+        dyn_port = os.environ.get("HH_API_PORT")
+        if dyn_port:
+            base_url = f"http://127.0.0.1:{dyn_port}"
         self.base_url = base_url
+        # 서버 준비 대기 (패키징 환경에서 인프로세스 uvicorn 부팅 지연 고려)
+        import time
+        for _ in range(25): # 최대 ~5초 대기 (0.2초 * 25)
+            try:
+                import requests
+                requests.get(f"{self.base_url}/settings", timeout=0.2)
+                break
+            except Exception:
+                time.sleep(0.2)
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()

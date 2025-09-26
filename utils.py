@@ -6,30 +6,21 @@ from typing import Optional
 
 # --- 추가: 실행 파일 기준 경로 반환 함수 ---
 def get_base_path() -> str:
-    """PyInstaller 환경이면 실행 파일 위치, 아니면 현재 파일 위치 반환"""
+    """PyInstaller 환경이면 실행 파일 위치, 아니면 프로젝트 루트 추정(이 파일의 상위 디렉토리)."""
     if getattr(sys, 'frozen', False):
-        # PyInstaller로 패키징된 경우
         return os.path.dirname(sys.executable)
-    else:
-        # 개발 환경(스크립트 실행)인 경우
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    # 개발 환경: 현재 파일이 프로젝트 루트 하위라고 가정하고 한 단계만 올라감
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
 
 def resource_path(relative_path):
     """ 개발 환경 및 PyInstaller 환경 모두에서 리소스 파일의 절대 경로를 반환합니다. """
     return os.path.join(get_base_path(), relative_path)
 
 def get_bundle_resource_path(relative_path: str) -> str:
-    """
-    PyInstaller 번들 내부의 리소스(이미지, 아이콘 등) 절대 경로를 반환합니다.
-    """
-    try:
-        # PyInstaller로 패키징된 경우, _MEIPASS 임시 폴더를 기준으로 경로 설정
-        base_path = sys._MEIPASS
-    except AttributeError:
-        # 개발 환경인 경우, 프로젝트 루트(X)를 기준으로 경로 설정
-        # (이 파일의 위치가 X/python/utils.py라고 가정)
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        
+    """PyInstaller면 _MEIPASS, 아니면 get_base_path() 기준."""
+    base_path = getattr(sys, "_MEIPASS", None)
+    if not base_path:
+        base_path = get_base_path()
     return os.path.join(base_path, relative_path)
 
 def get_shortcuts_directory() -> str:

@@ -13,8 +13,9 @@ def get_process_by_id(db: Session, process_id: str):
 def create_process(db: Session, process: schemas.ProcessCreateSchema):
     process_data = process.dict()
 
+    provided_id = process_data.pop('id', None)
     db_process = models.Process(
-        id = str(uuid.uuid4()),
+        id = provided_id if provided_id else str(uuid.uuid4()),
         **process_data
     )
     db.add(db_process)
@@ -32,7 +33,8 @@ def delete_process(db: Session, process_id: str):
 def update_process(db: Session, process_id: str, process: schemas.ProcessCreateSchema):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = process.dict(exclude_unset=True)
+        # None 값을 전달하면 기존 값이 덮어써지는 문제 방지: None은 제외
+        update_data = {k: v for k, v in process.dict(exclude_unset=True).items() if v is not None}
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -47,9 +49,11 @@ def get_shortcuts(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.WebShortcut).offset(skip).limit(limit).all()
 
 def create_shortcut(db: Session, shortcut: schemas.WebShortcutCreate):
+    shortcut_data = shortcut.dict()
+    provided_id = shortcut_data.pop('id', None)
     db_shortcut = models.WebShortcut(
-        id = str(uuid.uuid4()),
-        **shortcut.dict()
+        id = provided_id if provided_id else str(uuid.uuid4()),
+        **shortcut_data
     )
     db.add(db_shortcut)
     db.commit()

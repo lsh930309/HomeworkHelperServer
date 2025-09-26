@@ -3,11 +3,15 @@ import psutil
 import time
 import os
 from typing import Dict, Any, Optional, List
-from data_manager import DataManager
-# from data_models import ManagedProcess # 직접 사용 안 함 (DataManager 통해 접근)
+from typing import Protocol
+from data_models import ManagedProcess
+
+class ProcessesDataPort(Protocol):
+    managed_processes: list[ManagedProcess]
+    def update_process(self, updated_process: ManagedProcess) -> bool: ...
 
 class ProcessMonitor:
-    def __init__(self, data_manager: DataManager):
+    def __init__(self, data_manager: ProcessesDataPort):
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}
 

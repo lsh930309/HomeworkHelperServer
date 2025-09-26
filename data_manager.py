@@ -12,7 +12,8 @@ class DataManager:
     def __init__(self, data_folder: str = "homework_helper_data"):
         # 실행 파일 기준 homework_helper_data 경로 계산
         base_path = get_base_path()
-        self.data_folder = os.path.join(base_path, data_folder)
+        # 절대 경로가 전달되면 그대로 사용, 아니면 base_path 기준으로 결합
+        self.data_folder = data_folder if os.path.isabs(data_folder) else os.path.join(base_path, data_folder)
         
         if not os.path.exists(self.data_folder):
             os.makedirs(self.data_folder) # 데이터 저장 폴더 생성
@@ -35,16 +36,16 @@ class DataManager:
         self._ensure_existing_shortcuts()
 
     def _load_global_settings(self) -> GlobalSettings:
-        """파일에서 전역 설정을 로드합니다. 파일이 없으면 기본값으로 객체를 생성합니다."""
-        if os.path.exists(self.settings_file_path):
-            try:
-                with open(self.settings_file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return GlobalSettings.from_dict(data)
-            except (json.JSONDecodeError, TypeError) as e:
-                print(f"Error loading global settings: {e}. Using default settings.")
-                return GlobalSettings() # 오류 발생 시 기본 설정 사용
-        return GlobalSettings() # 파일 없을 시 기본 설정 사용
+        """파일에서 전역 설정을 로드합니다. 주파일 없으면 .bak에서 폴백합니다."""
+        for path in [self.settings_file_path, self.settings_file_path + ".bak"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        return GlobalSettings.from_dict(data)
+                except (json.JSONDecodeError, TypeError) as e:
+                    print(f"Error loading global settings from {path}: {e}.")
+        return GlobalSettings()
 
     def save_global_settings(self):
         """파일에 현재 전역 설정을 저장합니다."""
@@ -55,16 +56,16 @@ class DataManager:
             print(f"Error saving global settings: {e}")
 
     def _load_managed_processes(self) -> List[ManagedProcess]:
-        """파일에서 관리 대상 프로세스 목록을 로드합니다."""
-        if os.path.exists(self.processes_file_path):
-            try:
-                with open(self.processes_file_path, 'r', encoding='utf-8') as f:
-                    data_list = json.load(f)
-                    return [ManagedProcess.from_dict(data) for data in data_list]
-            except (json.JSONDecodeError, TypeError) as e:
-                print(f"Error loading managed processes: {e}. Returning empty list.")
-                return [] # 오류 발생 시 빈 목록 반환
-        return [] # 파일 없을 시 빈 목록 반환
+        """파일에서 관리 대상 프로세스 목록을 로드합니다. 주파일 없으면 .bak에서 폴백합니다."""
+        for path in [self.processes_file_path, self.processes_file_path + ".bak"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data_list = json.load(f)
+                        return [ManagedProcess.from_dict(data) for data in data_list]
+                except (json.JSONDecodeError, TypeError) as e:
+                    print(f"Error loading managed processes from {path}: {e}.")
+        return []
 
     def save_managed_processes(self):
         """파일에 현재 관리 대상 프로세스 목록을 저장합니다."""

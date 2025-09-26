@@ -5,14 +5,16 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os, sys
 
-# 1. 데이터베이스 파일 절대 경로 설정 (패키지/개발 환경 모두 일관)
-# 패키지(배포) 환경에서는 사용자 프로필 하위에 저장하여 권한/일관성 문제 예방
+"""데이터베이스 파일 저장 경로 설정
+- 패키징(.exe) 환경: 실행 파일(.exe)과 같은 경로의 homework_helper_data
+- 개발 환경: 현재 파일 기준 프로젝트 경로의 homework_helper_data
+"""
 if getattr(sys, 'frozen', False):
-    appdata_dir = os.environ.get('APPDATA') or os.path.expanduser('~')
-    data_dir = os.path.join(appdata_dir, "HomeworkHelper")
+    base_dir = os.path.dirname(sys.executable)
 else:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(base_dir, "homework_helper_data")
+
+data_dir = os.path.join(base_dir, "homework_helper_data")
 os.makedirs(data_dir, exist_ok=True)
 
 db_path = os.path.join(data_dir, "app_data.db")
