@@ -572,10 +572,37 @@ class Launcher:
                     print(f"  추출된 URL: {url_to_launch}")
                     
                     # 게임 런처 프로토콜인 경우 관리자 권한으로 실행 시도
-                    if (url_to_launch.startswith(('steam://', 'epic://', 'uplay://', 'battle.net://')) and 
+                    if (url_to_launch.startswith(('steam://', 'epic://', 'uplay://', 'battle.net://')) and
                         self.run_as_admin):
                         print(f"  게임 런처 프로토콜을 관리자 권한으로 실행 시도합니다.")
-                        return self._launch_game_launcher_as_admin(url_to_launch)
+
+                        # 현재 프로세스가 이미 관리자 권한으로 실행 중인지 확인
+                        try:
+                            is_current_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                        except:
+                            is_current_admin = False
+
+                        if is_current_admin:
+                            # 이미 관리자 권한이면 일반 방식으로 실행 (관리자 권한 유지됨)
+                            print(f"  현재 앱이 관리자 권한으로 실행 중이므로 일반 실행으로 게임 런처를 시작합니다.")
+                            try:
+                                os.startfile(url_to_launch)
+                                print(f"  '{url_to_launch}' URL 실행을 os.startfile로 시도했습니다.")
+                                return True
+                            except Exception as e_url_start:
+                                print(f"  os.startfile로 URL '{url_to_launch}' 실행 중 오류: {e_url_start}")
+                                # 실패 시 ShellExecuteW로 재시도
+                                shell32 = ctypes.windll.shell32
+                                ret = shell32.ShellExecuteW(None, "open", url_to_launch, None, None, 1)
+                                if ret > 32:
+                                    print(f"  '{url_to_launch}' URL 실행을 ShellExecuteW (open)로 요청했습니다.")
+                                    return True
+                                else:
+                                    print(f"  ShellExecuteW (open)로 URL '{url_to_launch}' 실행 실패. 반환 코드: {ret}")
+                                    return False
+                        else:
+                            # 관리자 권한이 아니면 고급 방법으로 실행
+                            return self._launch_game_launcher_as_admin(url_to_launch)
                     
                     # 일반 URL 처리 (기존 로직)
                     if os.name == 'nt':
@@ -633,28 +660,42 @@ class Launcher:
             else:
                 if os.name == 'nt':
                     shell32 = ctypes.windll.shell32
+
+                    # 현재 프로세스가 이미 관리자 권한으로 실행 중인지 확인
+                    try:
+                        is_current_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                    except:
+                        is_current_admin = False
+
                     # 관리자 권한 설정에 따라 실행 방식 결정
-                    # 관리자 권한으로 실행 설정이 활성화되어 있고, 파일이 관리자 권한을 필요로 하는 경우에만 runas 사용
                     admin_required = self._is_admin_required(launch_command)
+
                     if self.run_as_admin and admin_required:
-                        verb = "runas"
-                        print(f"  관리자 권한으로 실행 설정이 활성화되어 있고, 파일이 관리자 권한을 필요로 합니다.")
-                        print(f"  UAC 프롬프트 없이 관리자 권한으로 실행을 시도합니다.")
+                        if is_current_admin:
+                            # 이미 관리자 권한으로 실행 중이면 "open"으로 실행 (UAC 없이 관리자 권한 유지)
+                            verb = "open"
+                            print(f"  현재 앱이 관리자 권한으로 실행 중입니다.")
+                            print(f"  UAC 프롬프트 없이 관리자 권한으로 프로세스를 실행합니다.")
+                        else:
+                            # 관리자 권한이 아닐 때는 "runas"로 UAC 호출
+                            verb = "runas"
+                            print(f"  관리자 권한으로 실행 설정이 활성화되어 있고, 파일이 관리자 권한을 필요로 합니다.")
+                            print(f"  UAC 프롬프트를 호출하여 관리자 권한으로 실행합니다.")
                     else:
                         verb = "open"
                         if self.run_as_admin:
                             print(f"  관리자 권한으로 실행 설정이 활성화되어 있지만, 이 파일은 관리자 권한이 필요하지 않습니다.")
                         else:
                             print(f"  일반 사용자 권한으로 실행합니다.")
-                    
+
                     print(f"  ShellExecuteW 호출 시도: verb='{verb}', file='{launch_command}', params=None")
-                    
+
                     ret = shell32.ShellExecuteW(None, verb, launch_command, None, None, 1) # SW_SHOWNORMAL = 1
                     if ret > 32:
                         print(f"  '{launch_command}' 실행을 ShellExecuteW ({verb})로 요청했습니다. (반환 값: {ret})")
                         return True
                     else:
-                        win_error_code = ret 
+                        win_error_code = ret
                         print(f"  ShellExecuteW ({verb}) 실패. 반환/오류 코드: {win_error_code}")
                         if win_error_code == 0: print("    오류 원인: 시스템 리소스 부족 또는 매우 심각한 오류.")
                         elif win_error_code == 2: print("    오류 원인: 지정된 파일을 찾을 수 없습니다.")

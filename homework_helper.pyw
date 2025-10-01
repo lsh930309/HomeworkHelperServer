@@ -553,19 +553,36 @@ class MainWindow(QMainWindow):
         # 중요: 대화상자를 열 때마다 data_manager로부터 최신 설정 객체를 가져와야 합니다.
         # ApiClient는 설정을 저장할 때마다 내부의 global_settings 객체를 새로 교체하기 때문입니다.
         latest_settings = self.data_manager.global_settings
+        previous_run_as_admin = latest_settings.run_as_admin  # 이전 설정 값 저장
+
         dlg = GlobalSettingsDialog(latest_settings, self) # 최신 설정으로 대화 상자 생성
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
             upd_gs = dlg.get_updated_settings() # 업데이트된 설정 가져오기
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
             self.data_manager.save_global_settings(upd_gs)
-            
+
+            # 관리자 권한 설정이 False에서 True로 변경되었는지 확인
+            if not previous_run_as_admin and upd_gs.run_as_admin and not is_admin():
+                # 관리자 권한으로 재시작 필요
+                print("관리자 권한으로 실행 설정이 활성화되었습니다. 앱을 재시작합니다...")
+                if run_as_admin():
+                    # 재시작 성공 시 현재 인스턴스 종료
+                    QApplication.quit()
+                    sys.exit(0)
+                else:
+                    # 재시작 실패 시 상태 표시
+                    status_bar = self.statusBar()
+                    if status_bar:
+                        status_bar.showMessage("관리자 권한으로 재시작 실패. 일반 권한으로 계속 실행합니다.", 5000)
+                    return
+
             # Launcher 인스턴스의 관리자 권한 설정 업데이트
             self.launcher.run_as_admin = upd_gs.run_as_admin
-            
+
             # '항상 위' 설정이 변경되었을 수 있으므로 즉시 적용
             self._load_always_on_top_setting()
             self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
-            
+
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage("전역 설정 저장됨.", 3000) # 상태 표시줄 메시지
@@ -574,7 +591,7 @@ class MainWindow(QMainWindow):
             self._refresh_web_button_states() # 웹 버튼 상태 새로고침 (전역 설정 변경이 웹 버튼에 영향을 줄 수 있는 경우)
             self._adjust_window_height_for_table_rows() # 창 높이 조절
             self._update_window_resize_lock() # 창 크기 조절 잠금 업데이트
-            
+
             # 시작 프로그램 상태 확인 및 메시지 표시
             current_status = get_startup_shortcut_status()
             status_bar = self.statusBar()
