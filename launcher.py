@@ -4,11 +4,132 @@ import shlex
 import os
 import ctypes
 import configparser # .url 파일 파싱을 위해 추가
-from typing import Optional # 타입 힌트를 위해 추가
+from typing import Optional, Tuple # 타입 힌트를 위해 추가
+import psutil  # 프로세스 관리를 위해 추가
 
 class Launcher:
     def __init__(self, run_as_admin: bool = False):
         self.run_as_admin = run_as_admin
+
+        # 게임 런처 프로세스명 매핑
+        self.launcher_process_map = {
+            'steam://': ['Steam.exe'],
+            'epic://': ['EpicGamesLauncher.exe', 'EpicWebHelper.exe'],
+            'uplay://': ['Uplay.exe', 'UbisoftConnect.exe'],
+            'battle.net://': ['Battle.net.exe', 'Agent.exe']
+        }
+
+    def _is_process_elevated(self, pid: int) -> Optional[bool]:
+        """
+        특정 프로세스가 관리자 권한으로 실행 중인지 확인합니다.
+
+        Returns:
+            True: 관리자 권한으로 실행 중
+            False: 일반 권한으로 실행 중
+            None: 확인 실패 (접근 권한 없음 등)
+        """
+        if not os.name == 'nt':
+            return None
+
+        try:
+            # Windows API를 사용하여 프로세스 토큰의 권한 레벨 확인
+            import win32api
+            import win32security
+            import win32process
+            import win32con
+
+            # 프로세스 핸들 열기
+            process_handle = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_INFORMATION,
+                False,
+                pid
+            )
+
+            # 프로세스 토큰 가져오기
+            token_handle = win32security.OpenProcessToken(
+                process_handle,
+                win32con.TOKEN_QUERY
+            )
+
+            # 토큰의 권한 레벨 확인
+            elevation = win32security.GetTokenInformation(
+                token_handle,
+                win32security.TokenElevation
+            )
+
+            win32api.CloseHandle(token_handle)
+            win32api.CloseHandle(process_handle)
+
+            return bool(elevation)
+
+        except ImportError:
+            print("  pywin32가 설치되지 않아 프로세스 권한 확인을 할 수 없습니다.")
+            return None
+        except Exception as e:
+            # 접근 거부 등의 이유로 권한 확인 실패
+            print(f"  프로세스 권한 확인 중 오류: {e}")
+            return None
+
+    def _find_launcher_process(self, protocol: str) -> Optional[Tuple[psutil.Process, bool]]:
+        """
+        특정 프로토콜에 해당하는 게임 런처 프로세스를 찾습니다.
+
+        Returns:
+            (프로세스 객체, 관리자 권한 여부) 또는 None
+        """
+        if protocol not in self.launcher_process_map:
+            return None
+
+        process_names = self.launcher_process_map[protocol]
+
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info['name'] in process_names:
+                        # 프로세스 발견
+                        is_elevated = self._is_process_elevated(proc.info['pid'])
+                        print(f"  게임 런처 프로세스 발견: {proc.info['name']} (PID: {proc.info['pid']}, 관리자: {is_elevated})")
+                        return (proc, is_elevated)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            print(f"  {protocol} 게임 런처 프로세스를 찾을 수 없습니다.")
+            return None
+
+        except Exception as e:
+            print(f"  게임 런처 프로세스 검색 중 오류: {e}")
+            return None
+
+    def _terminate_launcher_gracefully(self, process: psutil.Process) -> bool:
+        """
+        게임 런처 프로세스를 graceful하게 종료합니다.
+
+        Returns:
+            True: 종료 성공
+            False: 종료 실패
+        """
+        try:
+            print(f"  게임 런처 프로세스 종료 시도: {process.name()} (PID: {process.pid})")
+
+            # SIGTERM 신호 전송 (Windows에서는 terminate()가 TerminateProcess 호출)
+            process.terminate()
+
+            # 최대 10초 대기
+            try:
+                process.wait(timeout=10)
+                print(f"  게임 런처 프로세스가 정상 종료되었습니다.")
+                return True
+            except psutil.TimeoutExpired:
+                # 강제 종료 시도
+                print(f"  게임 런처 프로세스가 응답하지 않아 강제 종료합니다.")
+                process.kill()
+                process.wait(timeout=5)
+                print(f"  게임 런처 프로세스가 강제 종료되었습니다.")
+                return True
+
+        except Exception as e:
+            print(f"  게임 런처 프로세스 종료 중 오류: {e}")
+            return False
 
     def _get_url_from_file(self, file_path: str) -> Optional[str]:
         """
@@ -583,8 +704,69 @@ class Launcher:
                             is_current_admin = False
 
                         if is_current_admin:
-                            # 이미 관리자 권한이면 일반 방식으로 실행 (관리자 권한 유지됨)
-                            print(f"  현재 앱이 관리자 권한으로 실행 중이므로 일반 실행으로 게임 런처를 시작합니다.")
+                            # 이미 관리자 권한이면 런처 프로세스 권한 검사
+                            print(f"  현재 앱이 관리자 권한으로 실행 중입니다.")
+
+                            # 프로토콜에 해당하는 런처 프로세스 검색
+                            protocol_prefix = None
+                            for prefix in ['steam://', 'epic://', 'uplay://', 'battle.net://']:
+                                if url_to_launch.startswith(prefix):
+                                    protocol_prefix = prefix
+                                    break
+
+                            if protocol_prefix:
+                                launcher_info = self._find_launcher_process(protocol_prefix)
+
+                                if launcher_info:
+                                    launcher_proc, is_launcher_admin = launcher_info
+
+                                    # 런처가 일반 권한으로 실행 중이면 재시작 필요
+                                    if is_launcher_admin is False:
+                                        print(f"  경고: 게임 런처가 일반 권한으로 실행 중입니다.")
+                                        print(f"  게임을 관리자 권한으로 실행하려면 런처를 재시작해야 합니다.")
+
+                                        # 콜백 함수가 설정되어 있으면 호출 (UI에서 사용자 확인)
+                                        if hasattr(self, 'launcher_restart_callback') and callable(self.launcher_restart_callback):
+                                            should_restart = self.launcher_restart_callback(launcher_proc.name())
+                                            if should_restart:
+                                                # 런처 종료
+                                                if self._terminate_launcher_gracefully(launcher_proc):
+                                                    # 잠시 대기
+                                                    import time
+                                                    time.sleep(2)
+
+                                                    # 런처를 관리자 권한으로 재시작
+                                                    if self._launch_game_launcher_as_admin(url_to_launch):
+                                                        print(f"  게임 런처를 관리자 권한으로 재시작했습니다.")
+                                                        return True
+                                                    else:
+                                                        print(f"  게임 런처 재시작 실패.")
+                                                        return False
+                                                else:
+                                                    print(f"  게임 런처 종료 실패.")
+                                                    return False
+                                            else:
+                                                print(f"  사용자가 런처 재시작을 취소했습니다.")
+                                                return False
+                                        else:
+                                            # 콜백이 없으면 자동으로 재시작 (기본 동작)
+                                            print(f"  게임 런처를 자동으로 재시작합니다.")
+                                            if self._terminate_launcher_gracefully(launcher_proc):
+                                                import time
+                                                time.sleep(2)
+                                                return self._launch_game_launcher_as_admin(url_to_launch)
+                                            else:
+                                                print(f"  게임 런처 종료 실패.")
+                                                return False
+
+                                    elif is_launcher_admin is True:
+                                        # 런처가 이미 관리자 권한이면 바로 실행
+                                        print(f"  게임 런처가 이미 관리자 권한으로 실행 중입니다. 바로 실행합니다.")
+                                    else:
+                                        # 권한 확인 실패 (None)
+                                        print(f"  게임 런처 권한 확인 실패. 그대로 실행을 시도합니다.")
+
+                            # 일반 방식으로 실행 (관리자 권한 유지됨)
                             try:
                                 os.startfile(url_to_launch)
                                 print(f"  '{url_to_launch}' URL 실행을 os.startfile로 시도했습니다.")

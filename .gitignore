@@ -1,5 +1,6 @@
 **/__pycache__/
 **/homework_helper_data/
-**/.cluade/
+**/.claude/
+**/release/
 *.pyc
 build.bat

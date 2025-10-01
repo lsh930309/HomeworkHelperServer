@@ -35,7 +35,7 @@ def run_as_admin():
     """현재 스크립트를 관리자 권한으로 재시작합니다."""
     if not os.name == 'nt':
         return False
-    
+
     try:
         if getattr(sys, 'frozen', False):
             # PyInstaller로 패키징된 경우
@@ -43,11 +43,14 @@ def run_as_admin():
         else:
             # 일반 파이썬 스크립트인 경우
             script = sys.argv[0]
-        
+
+        # 명령줄 인수를 문자열로 결합 (sys.argv[1:]부터 전달)
+        params = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in sys.argv[1:])
+
         # ShellExecuteW를 사용하여 관리자 권한으로 재시작
         shell32 = ctypes.windll.shell32
-        ret = shell32.ShellExecuteW(None, "runas", script, None, None, 1)
-        
+        ret = shell32.ShellExecuteW(None, "runas", script, params if params else None, None, 1)
+
         if ret > 32:
             print("관리자 권한으로 재시작을 요청했습니다.")
             return True
@@ -61,25 +64,41 @@ def run_as_admin():
 def check_admin_requirement():
     """관리자 권한이 필요한지 확인하고, 필요시 자동으로 재시작합니다."""
     if not os.name == 'nt':
+        print("[DEBUG] Windows가 아닌 환경입니다. 관리자 권한 체크를 건너뜁니다.")
         return False
-    
-    # 글로벌 설정 파일을 먼저 확인하여 관리자 권한 실행 설정을 확인
+
+    # SQLite 데이터베이스에서 글로벌 설정을 직접 읽어 관리자 권한 실행 설정을 확인
     try:
         # 실행 파일 기준 homework_helper_data 경로 계산
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
+            print(f"[DEBUG] PyInstaller 패키징 환경: base_path = {base_path}")
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
-        
+            print(f"[DEBUG] 일반 Python 환경: base_path = {base_path}")
+
         data_folder = os.path.join(base_path, "homework_helper_data")
-        settings_file_path = os.path.join(data_folder, "global_settings.json")
-        
-        if os.path.exists(settings_file_path):
-            import json
-            with open(settings_file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                run_as_admin_setting = data.get('run_as_admin', False)
-                
+        db_path = os.path.join(data_folder, "app_data.db")
+
+        print(f"[DEBUG] 데이터베이스 경로: {db_path}")
+        print(f"[DEBUG] 데이터베이스 존재 여부: {os.path.exists(db_path)}")
+
+        if os.path.exists(db_path):
+            # SQLite 데이터베이스에서 직접 설정 읽기
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # global_settings 테이블에서 run_as_admin 값 가져오기 (id=1인 행)
+            cursor.execute("SELECT run_as_admin FROM global_settings WHERE id = 1")
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                run_as_admin_setting = bool(result[0])
+                print(f"[DEBUG] run_as_admin 설정 값: {run_as_admin_setting}")
+                print(f"[DEBUG] 현재 관리자 권한 여부: {is_admin()}")
+
                 if run_as_admin_setting and not is_admin():
                     print("글로벌 설정에서 관리자 권한으로 실행이 활성화되어 있습니다.")
                     print("관리자 권한으로 재시작을 시도합니다...")
@@ -88,9 +107,17 @@ def check_admin_requirement():
                     else:
                         print("관리자 권한으로 재시작에 실패했습니다. 일반 권한으로 계속 실행합니다.")
                         return False
+                else:
+                    print(f"[DEBUG] 관리자 권한으로 재시작 불필요 (설정: {run_as_admin_setting}, 현재 관리자: {is_admin()})")
+            else:
+                print("[DEBUG] 데이터베이스에 설정 정보가 없습니다.")
+        else:
+            print("[DEBUG] 데이터베이스 파일이 존재하지 않습니다.")
     except Exception as e:
         print(f"관리자 권한 설정 확인 중 오류 발생: {e}")
-    
+        import traceback
+        traceback.print_exc()
+
     return False
 
 def start_api_server() -> bool:
@@ -328,6 +355,9 @@ class MainWindow(QMainWindow):
         self.data_manager = data_manager
         self._instance_manager = instance_manager # 종료 시 정리를 위해 인스턴스 매니저 참조 저장
         self.launcher = Launcher(run_as_admin=self.data_manager.global_settings.run_as_admin)
+
+        # Launcher 콜백 설정: 게임 런처 재시작 확인
+        self.launcher.launcher_restart_callback = self._on_launcher_restart_request
 
         # statusBar, menuBar 명시적 생성
         self.setStatusBar(QStatusBar(self))
@@ -1615,6 +1645,39 @@ class MainWindow(QMainWindow):
     def _update_window_resize_lock(self):
         """전역 설정 변경 시 창 크기 조절 잠금을 업데이트합니다."""
         self._apply_window_resize_lock()
+
+    def _on_launcher_restart_request(self, launcher_name: str) -> bool:
+        """
+        게임 런처 재시작 요청 시 사용자 확인 대화상자를 표시합니다.
+
+        Args:
+            launcher_name: 재시작할 런처 프로세스명 (예: "Steam.exe")
+
+        Returns:
+            True: 사용자가 재시작에 동의
+            False: 사용자가 재시작 거부
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        # 런처명을 사용자 친화적으로 변환
+        friendly_name = launcher_name.replace('.exe', '').replace('Launcher', ' Launcher')
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("게임 런처 재시작 필요")
+        msg_box.setText(f"{friendly_name}가 일반 권한으로 실행 중입니다.")
+        msg_box.setInformativeText(
+            f"게임을 관리자 권한으로 실행하려면 {friendly_name}를 재시작해야 합니다.\n\n"
+            f"재시작하시겠습니까?\n\n"
+            f"참고: 현재 실행 중인 게임이 있다면 저장 후 진행하세요."
+        )
+        msg_box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+
+        result = msg_box.exec()
+        return result == QMessageBox.StandardButton.Yes
 
 # --- 애플리케이션 실행 로직 ---
 def start_main_application(instance_manager: SingleInstanceApplication):
