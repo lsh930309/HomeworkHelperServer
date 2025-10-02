@@ -3,7 +3,7 @@
 import requests
 from typing import List, Optional
 import os
-from data_models import ManagedProcess, WebShortcut, GlobalSettings
+from data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
 
 class ApiClient:
     """
@@ -172,14 +172,87 @@ class ApiClient:
         try:
             response = requests.put(f"{self.base_url}/settings", json=updated_settings.to_dict())
             response.raise_for_status()
-            
+
             # 서버로부터 최종적으로 저장된 데이터를 응답으로 받습니다.
             saved_settings_data = response.json()
-            
+
             # 서버가 보내준 최신 데이터로 내부 상태를 갱신합니다.
             self.global_settings = GlobalSettings.from_dict(saved_settings_data)
-            
+
             return True
         except requests.RequestException as e:
             print(f"전역 설정 업데이트에 실패했습니다: {e}")
             return False # 실패 시 False 반환
+
+    # --- ProcessSession 관련 메서드 ---
+
+    def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Optional[ProcessSession]:
+        """새로운 프로세스 세션 시작"""
+        try:
+            data = {
+                "process_id": process_id,
+                "process_name": process_name,
+                "start_timestamp": start_timestamp
+            }
+            response = requests.post(f"{self.base_url}/sessions", json=data)
+            response.raise_for_status()
+            return ProcessSession.from_dict(response.json())
+        except requests.RequestException as e:
+            print(f"세션 시작 실패: {e}")
+            return None
+
+    def end_session(self, session_id: int, end_timestamp: float) -> Optional[ProcessSession]:
+        """프로세스 세션 종료"""
+        try:
+            data = {
+                "end_timestamp": end_timestamp,
+                "session_duration": 0  # 서버에서 자동 계산됨
+            }
+            response = requests.put(
+                f"{self.base_url}/sessions/{session_id}/end",
+                json=data
+            )
+            response.raise_for_status()
+            return ProcessSession.from_dict(response.json())
+        except requests.RequestException as e:
+            print(f"세션 종료 실패: {e}")
+            return None
+
+    def get_active_session(self, process_id: str) -> Optional[ProcessSession]:
+        """특정 프로세스의 현재 활성 세션 조회"""
+        try:
+            response = requests.get(f"{self.base_url}/sessions/process/{process_id}/active")
+            response.raise_for_status()
+            data = response.json()
+            return ProcessSession.from_dict(data) if data else None
+        except requests.RequestException as e:
+            print(f"활성 세션 조회 실패: {e}")
+            return None
+
+    def get_sessions_by_process(self, process_id: str, skip: int = 0, limit: int = 100) -> List[ProcessSession]:
+        """특정 프로세스의 세션 이력 조회"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/sessions/process/{process_id}",
+                params={"skip": skip, "limit": limit}
+            )
+            response.raise_for_status()
+            sessions_data = response.json()
+            return [ProcessSession.from_dict(s) for s in sessions_data]
+        except requests.RequestException as e:
+            print(f"세션 이력 조회 실패: {e}")
+            return []
+
+    def get_all_sessions(self, skip: int = 0, limit: int = 100) -> List[ProcessSession]:
+        """모든 세션 조회"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/sessions",
+                params={"skip": skip, "limit": limit}
+            )
+            response.raise_for_status()
+            sessions_data = response.json()
+            return [ProcessSession.from_dict(s) for s in sessions_data]
+        except requests.RequestException as e:
+            print(f"전체 세션 조회 실패: {e}")
+            return []

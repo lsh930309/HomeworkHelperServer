@@ -25,10 +25,23 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{db_path_url}"
 
 # 2. 데이터베이스 엔진 생성
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={
+        "check_same_thread": False,
+    }
 )
 # 'engine'은 SQLAlchemy가 데이터베이스와 소통하는 핵심 통로입니다.
 # connect_args는 SQLite를 사용할 때만 필요한 옵션입니다.
+
+# WAL 모드 활성화 (동시 읽기/쓰기 지원, 데이터 안전성 향상)
+from sqlalchemy import event
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
 
 # 3. 데이터베이스 세션 생성
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -149,3 +149,47 @@ class WebShortcut:
             refresh_time_str=data.get("refresh_time_str"), # None일 수 있음
             last_reset_timestamp=data.get("last_reset_timestamp"), # None일 수 있음
         )
+
+
+class ProcessSession:
+    """프로세스 세션 데이터 모델 (API 클라이언트용)"""
+    def __init__(self,
+                 id: Optional[int] = None,
+                 process_id: str = "",
+                 process_name: str = "",
+                 start_timestamp: float = 0.0,
+                 end_timestamp: Optional[float] = None,
+                 session_duration: Optional[float] = None):
+        self.id = id
+        self.process_id = process_id
+        self.process_name = process_name
+        self.start_timestamp = start_timestamp
+        self.end_timestamp = end_timestamp
+        self.session_duration = session_duration
+
+    def __repr__(self):
+        return (f"ProcessSession(id={self.id}, process_name='{self.process_name}', "
+                f"start={self.start_timestamp}, end={self.end_timestamp}, duration={self.session_duration})")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """객체를 직렬화 가능한 딕셔너리로 변환"""
+        return {
+            "id": self.id,
+            "process_id": self.process_id,
+            "process_name": self.process_name,
+            "start_timestamp": self.start_timestamp,
+            "end_timestamp": self.end_timestamp,
+            "session_duration": self.session_duration,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ProcessSession':
+        """딕셔너리에서 객체를 생성"""
+        return cls(
+            id=data.get("id"),
+            process_id=data.get("process_id", ""),
+            process_name=data.get("process_name", ""),
+            start_timestamp=data.get("start_timestamp", 0.0),
+            end_timestamp=data.get("end_timestamp"),
+            session_duration=data.get("session_duration"),
+        )

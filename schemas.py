@@ -58,3 +58,29 @@ class GlobalSettingsSchema(BaseModel):
     notify_on_cycle_deadline: bool = True
     notify_on_sleep_correction: bool = True
     notify_on_daily_reset: bool = True
+
+
+class ProcessSessionCreate(BaseModel):
+    """세션 생성용 스키마"""
+    process_id: str
+    process_name: str
+    start_timestamp: float
+
+
+class ProcessSessionUpdate(BaseModel):
+    """세션 종료 업데이트용 스키마"""
+    end_timestamp: float
+    session_duration: float
+
+
+class ProcessSessionSchema(BaseModel):
+    """세션 조회용 스키마"""
+    id: int
+    process_id: str
+    process_name: str
+    start_timestamp: float
+    end_timestamp: Optional[float] = None
+    session_duration: Optional[float] = None
+
+    class Config:
+        from_attributes = True
