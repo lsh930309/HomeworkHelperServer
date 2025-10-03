@@ -2,5 +2,6 @@
 **/homework_helper_data/
 **/.claude/
 **/release/
+**/.bak/
 *.pyc
 build.bat
