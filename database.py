@@ -40,7 +40,8 @@ from sqlalchemy import event
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA synchronous=FULL")  # PC 강제 종료 시 데이터 손실 방지
+    cursor.execute("PRAGMA wal_autocheckpoint=100")  # 100 페이지마다 자동 checkpoint
     cursor.close()
 
 # 3. 데이터베이스 세션 생성

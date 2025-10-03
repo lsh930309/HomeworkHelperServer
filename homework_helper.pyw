@@ -262,6 +262,38 @@ def run_server_main():
     def update_global_settings(settings_data: schemas.GlobalSettingsSchema, db: Session = Depends(get_db)):
         return crud.update_settings(db = db, settings = settings_data)
 
+    # create / read / update [process sessions]
+    @app.post("/sessions", response_model=schemas.ProcessSessionSchema, status_code=201)
+    def create_new_session(session_data: schemas.ProcessSessionCreate, db: Session = Depends(get_db)):
+        """새로운 프로세스 세션 시작"""
+        return crud.create_session(db=db, session=session_data)
+
+    @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
+    def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
+        """프로세스 세션 종료"""
+        ended_session = crud.end_session(db=db, session_id=session_id, end_timestamp=end_data.end_timestamp)
+        if ended_session is None:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+        return ended_session
+
+    @app.get("/sessions/process/{process_id}", response_model=List[schemas.ProcessSessionSchema])
+    def get_sessions_by_process(process_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+        """특정 프로세스의 세션 이력 조회"""
+        return crud.get_sessions_by_process_id(db=db, process_id=process_id, skip=skip, limit=limit)
+
+    @app.get("/sessions/process/{process_id}/active", response_model=schemas.ProcessSessionSchema)
+    def get_active_session(process_id: str, db: Session = Depends(get_db)):
+        """특정 프로세스의 현재 활성 세션 조회"""
+        session = crud.get_active_session_by_process_id(db=db, process_id=process_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="활성 세션이 없습니다.")
+        return session
+
+    @app.get("/sessions", response_model=List[schemas.ProcessSessionSchema])
+    def get_all_sessions_list(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+        """모든 세션 조회"""
+        return crud.get_all_sessions(db=db, skip=skip, limit=limit)
+
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
