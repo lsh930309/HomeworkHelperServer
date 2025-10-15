@@ -23,11 +23,23 @@ def get_bundle_resource_path(relative_path: str) -> str:
         base_path = get_base_path()
     return os.path.join(base_path, relative_path)
 
+def get_app_data_dir():
+    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
+    if os.name == 'nt':  # Windows
+        app_data = os.getenv('APPDATA')
+        if not app_data:
+            app_data = os.path.expanduser('~')
+    else:  # Linux/Mac
+        app_data = os.path.expanduser('~/.config')
+
+    app_dir = os.path.join(app_data, 'HomeworkHelper')
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
 def get_shortcuts_directory() -> str:
-    """homework_helper_data/shortcuts 디렉토리 경로를 반환합니다."""
-    # 실행 파일 기준 homework_helper_data/shortcuts 경로 계산
-    base_path = get_base_path()
-    shortcuts_dir = os.path.join(base_path, "homework_helper_data", "shortcuts")
+    """homework_helper_data/shortcuts 디렉토리 경로를 반환합니다. (%APPDATA% 사용)"""
+    app_data_dir = get_app_data_dir()
+    shortcuts_dir = os.path.join(app_data_dir, "homework_helper_data", "shortcuts")
     return os.path.abspath(shortcuts_dir)
 
 def ensure_shortcuts_directory() -> bool:

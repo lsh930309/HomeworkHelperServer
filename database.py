@@ -6,16 +6,28 @@ from sqlalchemy.orm import sessionmaker
 import os, sys
 
 """데이터베이스 파일 저장 경로 설정
-- 패키징(.exe) 환경: 실행 파일(.exe)과 같은 경로의 homework_helper_data
-- 개발 환경: 현재 파일 기준 프로젝트 경로의 homework_helper_data
+- 모든 환경: %APPDATA%/HomeworkHelper/homework_helper_data (권한 문제 방지)
+- 개발 환경에서도 동일한 경로 사용 (일관성 유지)
 """
-if getattr(sys, 'frozen', False):
-    base_dir = os.path.dirname(sys.executable)
-else:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+def get_app_data_dir():
+    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
+    if os.name == 'nt':  # Windows
+        app_data = os.getenv('APPDATA')
+        if not app_data:
+            # fallback: 사용자 홈 디렉토리
+            app_data = os.path.expanduser('~')
+    else:  # Linux/Mac (향후 대비)
+        app_data = os.path.expanduser('~/.config')
 
+    app_dir = os.path.join(app_data, 'HomeworkHelper')
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
+base_dir = get_app_data_dir()
 data_dir = os.path.join(base_dir, "homework_helper_data")
 os.makedirs(data_dir, exist_ok=True)
+
+print(f"데이터 디렉토리: {data_dir}")
 
 db_path = os.path.join(data_dir, "app_data.db")
 # Windows 백슬래시를 URL 포맷에 맞게 슬래시로 변환
@@ -41,7 +53,9 @@ def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=FULL")  # PC 강제 종료 시 데이터 손실 방지
-    cursor.execute("PRAGMA wal_autocheckpoint=100")  # 100 페이지마다 자동 checkpoint
+    cursor.execute("PRAGMA wal_autocheckpoint=20")  # 20 페이지마다 자동 checkpoint (더 자주)
+    cursor.execute("PRAGMA busy_timeout=5000")  # 락 대기 시간 5초 (기본 0)
+    cursor.execute("PRAGMA cache_size=-64000")  # 64MB 캐시 (성능 향상)
     cursor.close()
 
 # 3. 데이터베이스 세션 생성

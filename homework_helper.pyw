@@ -31,10 +31,120 @@ if os.name == 'nt':
 else:
     WINDOWS_SECURITY_AVAILABLE = False
 
+def wait_for_server_ready(max_wait_seconds: int = 10) -> bool:
+    """서버가 준비될 때까지 대기합니다."""
+    print("API 서버 준비 대기 중...")
+    import requests
+    base_url = "http://127.0.0.1:8000"
+    iterations = int(max_wait_seconds / 0.2)
+
+    for i in range(iterations):
+        try:
+            # /settings 엔드포인트에 GET 요청을 보내 서버 상태 확인
+            response = requests.get(f"{base_url}/settings", timeout=0.5)
+            if response.status_code == 200:
+                print(f"API 서버 준비 완료. ({i * 0.2:.1f}초 소요)")
+                return True
+        except requests.ConnectionError:
+            time.sleep(0.2)
+        except Exception as e:
+            print(f"API 서버 확인 중 오류: {e}")
+            time.sleep(0.2)
+
+    print("API 서버가 시간 내에 응답하지 않았습니다.")
+    return False
+
+def get_app_data_dir():
+    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
+    if os.name == 'nt':  # Windows
+        app_data = os.getenv('APPDATA')
+        if not app_data:
+            app_data = os.path.expanduser('~')
+    else:  # Linux/Mac
+        app_data = os.path.expanduser('~/.config')
+
+    app_dir = os.path.join(app_data, 'HomeworkHelper')
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
+def is_server_running() -> bool:
+    """
+    Windows Named Mutex를 사용하여 서버가 실행 중인지 확인합니다.
+    PID 파일보다 훨씬 안정적입니다 (OS 수준에서 자동 관리).
+    """
+    if os.name != 'nt':
+        # Windows 아닌 경우 PID 파일 fallback
+        return is_server_running_pid_fallback()
+
+    try:
+        import win32event
+        import win32api
+        import winerror
+
+        mutex_name = "Global\\HomeworkHelperDBServerMutex"
+
+        # 뮤텍스 열기 시도 (이미 존재하면 서버 실행 중)
+        try:
+            mutex_handle = win32event.OpenMutex(win32api.GENERIC_READ, False, mutex_name)
+            win32api.CloseHandle(mutex_handle)
+            return True  # 뮤텍스 존재 = 서버 실행 중
+        except Exception as e:
+            if getattr(e, 'winerror', None) == winerror.ERROR_FILE_NOT_FOUND:
+                return False  # 뮤텍스 없음 = 서버 미실행
+            else:
+                # 다른 오류 발생 시 PID 파일로 fallback
+                print(f"Mutex 확인 오류: {e}, PID 파일로 fallback")
+                return is_server_running_pid_fallback()
+    except ImportError:
+        # pywin32 없으면 PID 파일 fallback
+        print("pywin32 없음, PID 파일로 fallback")
+        return is_server_running_pid_fallback()
+
+def is_server_running_pid_fallback() -> bool:
+    """PID 파일을 확인하여 서버가 실행 중인지 확인 (Fallback 방법)"""
+    data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
+    pid_file = os.path.join(data_dir, "db_server.pid")
+
+    if not os.path.exists(pid_file):
+        return False
+
+    try:
+        with open(pid_file, 'r') as f:
+            pid = int(f.read().strip())
+
+        # PID가 실제로 실행 중인지 확인
+        import psutil
+        if psutil.pid_exists(pid):
+            try:
+                proc = psutil.Process(pid)
+                # 프로세스가 존재하고 좀비가 아닌지 확인
+                return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return False
+        return False
+    except (ValueError, IOError):
+        return False
+
 def start_api_server() -> bool:
-    """FastAPI 서버를 서브프로세스로 실행합니다."""
+    """FastAPI 서버를 독립 프로세스로 실행합니다."""
     global api_server_process
     try:
+        # 이미 서버가 실행 중인지 확인
+        if is_server_running():
+            print("API 서버가 이미 실행 중입니다. 기존 서버를 사용합니다.")
+            # 서버가 준비될 때까지 대기
+            if wait_for_server_ready():
+                return True
+            else:
+                print("기존 서버가 응답하지 않습니다. 서버를 재시작합니다.")
+                # PID 파일 삭제하고 재시작
+                data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
+                pid_file = os.path.join(data_dir, "db_server.pid")
+                try:
+                    os.remove(pid_file)
+                except:
+                    pass
+
         if getattr(sys, 'frozen', False):
             # 패키지 환경: 자기 자신(.exe)을 '--run-server' 인자와 함께 실행
             command = [sys.executable, "--run-server"]
@@ -43,37 +153,36 @@ def start_api_server() -> bool:
             command = [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
 
         print(f"API 서버 실행 명령어: {' '.join(command)}")
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        
+
+        # Windows에서 완전히 독립적인 프로세스로 실행
+        if os.name == 'nt':
+            # CREATE_NO_WINDOW: 콘솔 창 생성 안 함
+            # CREATE_NEW_PROCESS_GROUP: 새로운 프로세스 그룹 (Ctrl+C 신호 독립)
+            # CREATE_BREAKAWAY_FROM_JOB: Job Object에서 독립 (부모 종료 시 영향 없음)
+            creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            try:
+                creationflags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
+            except AttributeError:
+                # Python 3.7 이하에서는 CREATE_BREAKAWAY_FROM_JOB이 없을 수 있음
+                creationflags |= 0x01000000  # CREATE_BREAKAWAY_FROM_JOB 값
+        else:
+            creationflags = 0
+
         # CREATE_NO_WINDOW 사용 시 stdout/stderr이 None이 되어 uvicorn 로깅 설정에서 오류 발생
         # 이를 방지하기 위해 stdout과 stderr를 DEVNULL로 리디렉션합니다.
         api_server_process = subprocess.Popen(
-            command, creationflags=creationflags, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            command,
+            creationflags=creationflags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL  # 입력도 차단하여 완전 독립
         )
-        print(f"API 서버가 PID {api_server_process.pid}로 시작되었습니다.")
-        
-        # 프로그램 종료 시 서버도 함께 종료되도록 등록
-        atexit.register(stop_api_server)
+        print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
 
-        # 서버가 준비될 때까지 대기 (최대 10초)
-        print("API 서버 준비 대기 중...")
-        import requests
-        base_url = "http://127.0.0.1:8000"
-        for i in range(50): # 0.2초 * 50 = 10초
-            try:
-                # /settings 엔드포인트에 GET 요청을 보내 서버 상태 확인
-                response = requests.get(f"{base_url}/settings", timeout=0.5)
-                if response.status_code == 200:
-                    print(f"API 서버 준비 완료. ({i * 0.2:.1f}초 소요)")
-                    return True
-            except requests.ConnectionError:
-                time.sleep(0.2)
-            except Exception as e:
-                print(f"API 서버 확인 중 오류: {e}")
-                time.sleep(0.2)
-        
-        print("API 서버가 시간 내에 응답하지 않았습니다.")
-        return False
+        # 독립 프로세스이므로 atexit 제거 (GUI 종료 시 서버는 계속 실행)
+
+        # 서버가 준비될 때까지 대기
+        return wait_for_server_ready()
 
     except Exception as e:
         print(f"API 서버 시작 실패: {e}")
@@ -82,15 +191,181 @@ def start_api_server() -> bool:
 
 def run_server_main():
     """'--run-server' 인자가 있을 때 uvicorn 서버를 실행하는 함수."""
-    print("서버 모드로 실행합니다.")
+    import signal
+    import threading
+    import logging
+    from logging.handlers import RotatingFileHandler
+    from sqlalchemy import text
+
+    # PID 파일 및 로그 파일 경로 설정 (%APPDATA% 사용)
+    app_data_dir = get_app_data_dir()
+    data_dir = os.path.join(app_data_dir, "homework_helper_data")
+    os.makedirs(data_dir, exist_ok=True)
+    pid_file = os.path.join(data_dir, "db_server.pid")
+    log_file = os.path.join(data_dir, "db_server.log")
+
+    # 로깅 시스템 설정 (파일 기반, 순환 로그)
+    logger = logging.getLogger('DBServer')
+    logger.setLevel(logging.INFO)
+
+    # 로그 포맷 설정
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # 파일 핸들러 (최대 10MB, 5개 파일 유지)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # 콘솔 핸들러 (개발 환경에서 확인용)
+    if not getattr(sys, 'frozen', False):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    logger.info("=" * 60)
+    logger.info("서버 모드로 실행합니다.")
+    logger.info(f"PID: {os.getpid()}")
+    logger.info(f"로그 파일: {log_file}")
+    logger.info(f"데이터 디렉토리: {data_dir}")
+
+    # Windows Named Mutex 생성 (프로세스 유일성 보장)
+    server_mutex = None
+    if os.name == 'nt':
+        try:
+            import win32event
+            import win32api
+            mutex_name = "Global\\HomeworkHelperDBServerMutex"
+            server_mutex = win32event.CreateMutex(None, False, mutex_name)
+            if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                logger.error("서버가 이미 실행 중입니다! 중복 실행 불가.")
+                sys.exit(1)
+            logger.info(f"Windows Named Mutex 생성 완료: {mutex_name}")
+        except ImportError:
+            logger.warning("pywin32 없음: Named Mutex 사용 불가, PID 파일만 사용")
+        except Exception as e:
+            logger.error(f"Mutex 생성 실패: {e}")
+
+    # PID 파일 생성 (Mutex와 함께 사용, fallback 용도)
+    try:
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+        logger.info(f"PID 파일 생성: {pid_file}")
+    except Exception as e:
+        logger.error(f"PID 파일 생성 실패: {e}")
+
     # --- main.py의 내용을 여기로 통합 ---
     from fastapi import FastAPI, Depends, HTTPException
     from sqlalchemy.orm import Session
     import crud, models, schemas
     from database import SessionLocal, engine
 
+    # 데이터베이스 무결성 확인 및 복구
+    logger.info("데이터베이스 무결성 확인 중...")
+    try:
+        with engine.connect() as conn:
+            # WAL 복구 체크포인트
+            conn.execute(text("PRAGMA wal_checkpoint(RECOVER)"))
+            conn.commit()
+
+            # 무결성 검사
+            result = conn.execute(text("PRAGMA integrity_check"))
+            integrity_result = result.scalar()
+            if integrity_result != "ok":
+                logger.warning(f"데이터베이스 무결성 검사 실패: {integrity_result}")
+            else:
+                logger.info("데이터베이스 무결성 확인 완료.")
+    except Exception as e:
+        logger.error(f"데이터베이스 복구 중 오류: {e}", exc_info=True)
+
     # 데이터베이스 테이블 생성
     models.Base.metadata.create_all(bind=engine)
+
+    # 주기적 WAL checkpoint 백그라운드 스레드
+    def periodic_checkpoint(interval=60):
+        """주기적으로 WAL checkpoint 수행"""
+        while True:
+            try:
+                time.sleep(interval)
+                with engine.connect() as conn:
+                    conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
+                    conn.commit()
+                logger.info("WAL checkpoint 완료")
+            except Exception as e:
+                logger.error(f"Checkpoint 오류: {e}", exc_info=True)
+
+    checkpoint_thread = threading.Thread(target=periodic_checkpoint, args=(60,), daemon=True)
+    checkpoint_thread.start()
+    logger.info("주기적 WAL checkpoint 스레드 시작 (60초 간격)")
+
+    # Graceful shutdown 핸들러
+    def shutdown_handler(signum, frame):
+        """종료 신호 처리 - 안전하게 종료"""
+        logger.info(f"서버 종료 신호 수신 (Signal: {signum}). 안전하게 종료합니다...")
+
+        try:
+            # 1. 최종 WAL checkpoint 수행
+            logger.info("최종 WAL checkpoint 수행 중...")
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+                conn.commit()
+            logger.info("WAL checkpoint 완료")
+
+            # 2. 모든 데이터베이스 연결 종료
+            engine.dispose()
+            logger.info("데이터베이스 연결 종료")
+
+            # 3. Mutex 해제 (프로세스 종료 시 자동 해제되지만 명시적으로 해제)
+            if server_mutex and os.name == 'nt':
+                try:
+                    import win32api
+                    win32api.CloseHandle(server_mutex)
+                    logger.info("Windows Named Mutex 해제")
+                except:
+                    pass
+
+            # 4. PID 파일 삭제
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+                logger.info("PID 파일 삭제")
+        except Exception as e:
+            logger.error(f"종료 처리 중 오류: {e}", exc_info=True)
+
+        logger.info("서버 종료 완료")
+        logger.info("=" * 60)
+        sys.exit(0)
+
+    # Windows에서 Ctrl+C 처리
+    if os.name == 'nt':
+        signal.signal(signal.SIGINT, shutdown_handler)
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        signal.signal(signal.SIGBREAK, shutdown_handler)
+        logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
+
+        # SetConsoleCtrlHandler로 시스템 종료 이벤트 처리
+        try:
+            import win32api
+            def console_ctrl_handler(ctrl_type):
+                """Windows 콘솔 제어 이벤트 처리"""
+                if ctrl_type in (win32api.CTRL_C_EVENT, win32api.CTRL_BREAK_EVENT,
+                                win32api.CTRL_CLOSE_EVENT, win32api.CTRL_LOGOFF_EVENT,
+                                win32api.CTRL_SHUTDOWN_EVENT):
+                    logger.info(f"Windows 시스템 종료 이벤트 감지 (Type: {ctrl_type})")
+                    shutdown_handler(ctrl_type, None)
+                    return True
+                return False
+
+            win32api.SetConsoleCtrlHandler(console_ctrl_handler, True)
+            logger.info("Windows 시스템 종료 이벤트 핸들러 등록 완료")
+        except ImportError:
+            logger.warning("pywin32 없음: 시스템 종료 이벤트 처리 불가 (signal만 사용)")
 
     app = FastAPI()
 
@@ -210,12 +485,17 @@ def run_server_main():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
 def stop_api_server():
-    """실행 중인 API 서버 서브프로세스를 종료합니다."""
+    """
+    독립 프로세스로 실행된 API 서버를 종료합니다.
+    주의: 이 함수는 더 이상 자동으로 호출되지 않습니다.
+    서버는 독립적으로 실행되며, 사용자가 수동으로 종료하거나 시스템 종료 시 graceful shutdown됩니다.
+    """
     global api_server_process
     if api_server_process:
-        print(f"API 서버(PID: {api_server_process.pid})를 종료합니다.")
-        api_server_process.terminate()
-        api_server_process.wait()
+        print(f"API 서버(PID: {api_server_process.pid})는 독립 프로세스로 계속 실행됩니다.")
+        # 더 이상 서버를 종료하지 않음
+        # api_server_process.terminate()
+        # api_server_process.wait()
 
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
