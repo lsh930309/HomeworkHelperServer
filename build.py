@@ -17,6 +17,7 @@ from datetime import datetime
 # ==================== 설정 ====================
 PROJECT_ROOT = Path(__file__).parent
 RELEASE_DIR = PROJECT_ROOT / "release"
+OLD_VERSIONS_DIR = RELEASE_DIR / "old"  # 이전 버전 보관 폴더
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
 
@@ -62,23 +63,28 @@ def print_section(title):
 
 
 def backup_existing_exe():
-    """기존 .exe 파일을 타임스탬프로 백업"""
+    """기존 .exe 파일을 타임스탬프로 백업 (release/old/ 폴더에 보관)"""
     exe_path = RELEASE_DIR / EXE_NAME
 
     if not exe_path.exists():
         print(f"기존 실행파일 없음. 백업 생략.")
         return
 
+    # old 폴더 생성 (없으면)
+    if not OLD_VERSIONS_DIR.exists():
+        OLD_VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"[OK] old 폴더 생성: {OLD_VERSIONS_DIR}")
+
     # 파일 생성 시간 가져오기
     timestamp = os.path.getctime(exe_path)
     dt = datetime.fromtimestamp(timestamp)
     backup_name = f"{APP_NAME}_{dt.strftime('%y-%m-%d-%H%M%S')}.exe"
-    backup_path = RELEASE_DIR / backup_name
+    backup_path = OLD_VERSIONS_DIR / backup_name
 
     # 백업
     try:
         shutil.move(str(exe_path), str(backup_path))
-        print(f"[OK] 이전 버전 백업: {backup_name}")
+        print(f"[OK] 이전 버전 백업: old/{backup_name}")
     except Exception as e:
         print(f"[경고] 백업 실패: {e}")
 
@@ -210,7 +216,7 @@ def main():
     # 완료
     print_section("빌드 완료!")
     print(f"[OK] 실행파일 경로: {RELEASE_DIR / EXE_NAME}")
-    print(f"[OK] 이전 버전들: {RELEASE_DIR}/ 폴더 참조")
+    print(f"[OK] 이전 버전들: {OLD_VERSIONS_DIR}/ 폴더 참조")
     print("\n" + "=" * 60 + "\n")
 
     return 0

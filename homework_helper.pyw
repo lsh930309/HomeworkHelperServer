@@ -126,7 +126,7 @@ def is_server_running_pid_fallback() -> bool:
         return False
 
 def start_api_server() -> bool:
-    """FastAPI 서버를 독립 프로세스로 실행합니다."""
+    """FastAPI 서버를 독립 프로세스로 실행합니다 (multiprocessing.Process 방식)."""
     global api_server_process
     try:
         # 이미 서버가 실행 중인지 확인
@@ -145,41 +145,17 @@ def start_api_server() -> bool:
                 except:
                     pass
 
-        if getattr(sys, 'frozen', False):
-            # 패키지 환경: 자기 자신(.exe)을 '--run-server' 인자와 함께 실행
-            command = [sys.executable, "--run-server"]
-        else:
-            # 개발 환경: uvicorn을 직접 실행
-            command = [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]
+        print("API 서버를 독립 프로세스로 시작합니다...")
 
-        print(f"API 서버 실행 명령어: {' '.join(command)}")
-
-        # Windows에서 완전히 독립적인 프로세스로 실행
-        if os.name == 'nt':
-            # CREATE_NO_WINDOW: 콘솔 창 생성 안 함
-            # CREATE_NEW_PROCESS_GROUP: 새로운 프로세스 그룹 (Ctrl+C 신호 독립)
-            # CREATE_BREAKAWAY_FROM_JOB: Job Object에서 독립 (부모 종료 시 영향 없음)
-            creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-            try:
-                creationflags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
-            except AttributeError:
-                # Python 3.7 이하에서는 CREATE_BREAKAWAY_FROM_JOB이 없을 수 있음
-                creationflags |= 0x01000000  # CREATE_BREAKAWAY_FROM_JOB 값
-        else:
-            creationflags = 0
-
-        # CREATE_NO_WINDOW 사용 시 stdout/stderr이 None이 되어 uvicorn 로깅 설정에서 오류 발생
-        # 이를 방지하기 위해 stdout과 stderr를 DEVNULL로 리디렉션합니다.
-        api_server_process = subprocess.Popen(
-            command,
-            creationflags=creationflags,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL  # 입력도 차단하여 완전 독립
+        # multiprocessing.Process를 사용하여 서버 프로세스 생성
+        # daemon=False: 부모 프로세스(GUI) 종료 시에도 서버는 계속 실행
+        import multiprocessing
+        api_server_process = multiprocessing.Process(
+            target=run_server_main,
+            daemon=False
         )
+        api_server_process.start()
         print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
-
-        # 독립 프로세스이므로 atexit 제거 (GUI 종료 시 서버는 계속 실행)
 
         # 서버가 준비될 때까지 대기
         return wait_for_server_ready()
@@ -196,6 +172,12 @@ def run_server_main():
     import logging
     from logging.handlers import RotatingFileHandler
     from sqlalchemy import text
+
+    # multiprocessing 환경에서 stdout/stderr가 None일 수 있으므로 재설정
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w')
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w')
 
     # PID 파일 및 로그 파일 경로 설정 (%APPDATA% 사용)
     app_data_dir = get_app_data_dir()
@@ -593,20 +575,27 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
 if __name__ == "__main__":
-    # 패키징된 .exe가 '--run-server' 인자와 함께 실행되면 서버만 구동
-    if getattr(sys, 'frozen', False) and "--run-server" in sys.argv:
-        run_server_main()
-    else:
-        # 일반 GUI 애플리케이션 실행
-        check_admin_requirement()
-        
-        # API 서버 시작 및 준비 확인
-        if not start_api_server():
-            # 서버 시작 실패 시 프로그램 종료
-            sys.exit(1)
+    # PyInstaller 다중 프로세스 지원 (필수!)
+    import multiprocessing
+    multiprocessing.freeze_support()
 
-        # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
-        run_with_single_instance_check(
-            application_name="숙제 관리자",
-            main_app_start_callback=start_main_application
-        )
+    # 디버깅: _MEIPASS 경로 확인
+    if getattr(sys, 'frozen', False):
+        meipass_path = getattr(sys, '_MEIPASS', 'N/A')
+        print(f"[GUI] _MEIPASS: {meipass_path}")
+        print(f"[GUI] PID: {os.getpid()}")
+
+    # GUI 애플리케이션 실행
+    # (multiprocessing.Process 방식에서는 --run-server 분기 불필요)
+    check_admin_requirement()
+
+    # API 서버 시작 및 준비 확인
+    if not start_api_server():
+        # 서버 시작 실패 시 프로그램 종료
+        sys.exit(1)
+
+    # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
+    run_with_single_instance_check(
+        application_name="숙제 관리자",
+        main_app_start_callback=start_main_application
+    )

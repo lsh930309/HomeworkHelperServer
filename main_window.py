@@ -928,7 +928,8 @@ class MainWindow(QMainWindow):
 
         # 1. FastAPI 서버에 Graceful Shutdown 요청
         server_shutdown_success = False
-        if homework_helper.api_server_process and homework_helper.api_server_process.poll() is None:
+        # multiprocessing.Process는 is_alive()로 프로세스 실행 여부 확인
+        if homework_helper.api_server_process and homework_helper.api_server_process.is_alive():
             try:
                 print("서버에 graceful shutdown 요청 중...")
                 response = requests.post("http://127.0.0.1:8000/shutdown", timeout=3)
@@ -936,12 +937,20 @@ class MainWindow(QMainWindow):
                     print("✓ 서버가 종료 신호를 수신했습니다.")
 
                     # 서버 프로세스가 완전히 종료될 때까지 대기 (타임아웃: 전역 변수 사용)
-                    try:
-                        homework_helper.api_server_process.wait(timeout=API_SERVER_SHUTDOWN_TIMEOUT)
-                        print("✓ 서버 프로세스 정상 종료 완료")
+                    # multiprocessing.Process는 join() 사용 (subprocess.Popen의 wait()와 동일한 의미)
+                    homework_helper.api_server_process.join(timeout=API_SERVER_SHUTDOWN_TIMEOUT)
+
+                    # join() 후에도 프로세스가 살아있는지 확인
+                    if not homework_helper.api_server_process.is_alive():
+                        print("[OK] 서버 프로세스 정상 종료 완료")
                         server_shutdown_success = True
-                    except subprocess.TimeoutExpired:
-                        print(f"⚠ 서버 종료 타임아웃 ({API_SERVER_SHUTDOWN_TIMEOUT}초 초과)")
+
+                        # 추가 안전장치: 서버가 리소스를 완전히 해제할 시간 제공
+                        import time
+                        time.sleep(2)
+                        print("[OK] 서버 리소스 해제 대기 완료 (2초)")
+                    else:
+                        print(f"[경고] 서버 종료 타임아웃 ({API_SERVER_SHUTDOWN_TIMEOUT}초 초과)")
                         print("   서버를 독립 프로세스로 남겨두고 GUI만 종료합니다.")
                         # 강제 종료하지 않음 - 서버가 DB 정리 중일 수 있으므로 안전을 위해 독립 실행 유지
             except requests.exceptions.RequestException as e:
