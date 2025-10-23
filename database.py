@@ -66,3 +66,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # 4. 데이터베이스 모델의 부모 클래스 생성
 Base = declarative_base()
 # 앞으로 만들 DB 테이블 모델들은 모두 이 Base 클래스를 상속받아 만들어집니다.
+
+# 5. 안전한 데이터베이스 종료 함수 (선택사항 - 추가 안전장치)
+def safe_shutdown_database():
+    """
+    데이터베이스를 안전하게 종료합니다.
+    - WAL 체크포인트 실행 (.wal 내용을 .db로 완전 이동)
+    - 모든 연결 정리
+
+    주의: 이 함수는 서버 종료 시 자동으로 호출되므로 일반적으로 직접 호출할 필요 없음
+    """
+    from sqlalchemy import text
+
+    try:
+        # WAL 체크포인트 (TRUNCATE 모드: .wal 내용을 .db로 이동 후 .wal 삭제)
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
+            checkpoint_result = result.fetchone()
+            print(f"WAL 체크포인트 결과: {checkpoint_result}")
+
+        # 모든 연결 정리
+        engine.dispose()
+        print("데이터베이스 안전 종료 완료")
+    except Exception as e:
+        print(f"데이터베이스 종료 중 오류: {e}")

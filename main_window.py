@@ -34,6 +34,15 @@ from launcher import Launcher
 from notifier import Notifier
 from scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 
+# ==================== 서버 종료 설정 ====================
+# API 서버 Graceful Shutdown 타임아웃 (초 단위)
+# - GUI 종료 시 서버가 안전하게 종료될 때까지 대기하는 최대 시간
+# - 서버는 이 시간 내에 DB 체크포인트 등 정리 작업을 완료해야 함
+# - 기본값: 10초 (일반적으로 충분함)
+# - 타임아웃 초과 시: 서버를 독립 프로세스로 남겨두고 GUI만 종료
+API_SERVER_SHUTDOWN_TIMEOUT = 10  # 초 단위
+# ========================================================
+
 class IconDownloader(QThread):
     """
     별도 스레드에서 URL로부터 아이콘을 다운로드하는 클래스.
@@ -912,25 +921,58 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
-        # 순환 import 방지를 위해 동적 import
         import homework_helper
-        homework_helper.stop_api_server() # API 서버 중지
-        print("애플리케이션 종료 절차 시작...")
-        # 활성화된 타이머들 중지
-        if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive(): self.monitor_timer.stop()
-        if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive(): self.scheduler_timer.stop()
+        import subprocess
+
+        print("=== 애플리케이션 종료 절차 시작 ===")
+
+        # 1. FastAPI 서버에 Graceful Shutdown 요청
+        server_shutdown_success = False
+        if homework_helper.api_server_process and homework_helper.api_server_process.poll() is None:
+            try:
+                print("서버에 graceful shutdown 요청 중...")
+                response = requests.post("http://127.0.0.1:8000/shutdown", timeout=3)
+                if response.status_code == 200:
+                    print("✓ 서버가 종료 신호를 수신했습니다.")
+
+                    # 서버 프로세스가 완전히 종료될 때까지 대기 (타임아웃: 전역 변수 사용)
+                    try:
+                        homework_helper.api_server_process.wait(timeout=API_SERVER_SHUTDOWN_TIMEOUT)
+                        print("✓ 서버 프로세스 정상 종료 완료")
+                        server_shutdown_success = True
+                    except subprocess.TimeoutExpired:
+                        print(f"⚠ 서버 종료 타임아웃 ({API_SERVER_SHUTDOWN_TIMEOUT}초 초과)")
+                        print("   서버를 독립 프로세스로 남겨두고 GUI만 종료합니다.")
+                        # 강제 종료하지 않음 - 서버가 DB 정리 중일 수 있으므로 안전을 위해 독립 실행 유지
+            except requests.exceptions.RequestException as e:
+                print(f"⚠ 서버 종료 요청 실패 (서버가 이미 종료되었을 수 있음): {e}")
+
+        # 2. 활성화된 타이머들 중지
+        if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
+            self.monitor_timer.stop()
+        if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive():
+            self.scheduler_timer.stop()
         if hasattr(self, 'web_button_refresh_timer') and self.web_button_refresh_timer.isActive():
-            self.web_button_refresh_timer.stop(); print("웹 버튼 상태 새로고침 타이머 중지됨.")
+            self.web_button_refresh_timer.stop()
+            print("웹 버튼 상태 새로고침 타이머 중지됨.")
         if hasattr(self, 'status_column_refresh_timer') and self.status_column_refresh_timer.isActive():
-            self.status_column_refresh_timer.stop(); print("상태 컬럼 자동 업데이트 타이머 중지됨.")
-        # 트레이 아이콘 숨기기
-        if hasattr(self, 'tray_manager') and self.tray_manager: self.tray_manager.hide_tray_icon()
-        # 인스턴스 매니저 리소스 정리 (단일 인스턴스 실행 관련)
+            self.status_column_refresh_timer.stop()
+            print("상태 컬럼 자동 업데이트 타이머 중지됨.")
+
+        # 3. 트레이 아이콘 숨기기
+        if hasattr(self, 'tray_manager') and self.tray_manager:
+            self.tray_manager.hide_tray_icon()
+
+        # 4. 인스턴스 매니저 리소스 정리 (단일 인스턴스 실행 관련)
         if self._instance_manager and hasattr(self._instance_manager, 'cleanup'):
             self._instance_manager.cleanup()
-        # QApplication 종료
+
+        # 5. QApplication 종료
         app_instance = QApplication.instance()
-        if app_instance: app_instance.quit()
+        if app_instance:
+            app_instance.quit()
+
+        print("=== GUI 종료 완료 ===")
 
     def _adjust_window_size_to_content(self):
         """테이블 내용에 맞춰 메인 윈도우의 높이를 자동으로 조절합니다. 너비는 고정합니다."""
