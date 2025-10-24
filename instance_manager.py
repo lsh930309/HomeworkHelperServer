@@ -145,20 +145,38 @@ class SingleInstanceApplication(QObject):
 
     def cleanup(self):
         """애플리케이션 종료 시 IPC 서버 및 공유 메모리 관련 리소스를 정리합니다."""
+        # 중복 호출 방지 플래그 확인
+        if hasattr(self, '_cleanup_done') and self._cleanup_done:
+            return
+
         print("InstanceManager: 리소스 정리 시작...")
-        if self._local_server and self._local_server.isListening():
-            self._local_server.close()
-            print("IPC 서버가 닫혔습니다.")
-        
+
+        # Qt 객체는 이미 삭제되었을 수 있으므로 try-except로 보호
+        try:
+            if self._local_server and self._local_server.isListening():
+                self._local_server.close()
+                print("IPC 서버가 닫혔습니다.")
+        except RuntimeError:
+            # Qt 객체가 이미 삭제된 경우 무시
+            print("IPC 서버가 이미 정리되었습니다.")
+
         # 공유 메모리는 이 인스턴스가 생성한 경우에만 detach/release 책임이 있음.
         # QSharedMemory 객체의 소멸자가 자동으로 처리해주지만, 명시적으로 호출 가능.
-        if self._shared_memory and self._shared_memory.isAttached():
-            if not self._shared_memory.detach():
-                print(f"경고: 공유 메모리 분리 실패 - {self._shared_memory.errorString()}")
-            else:
-                print("공유 메모리가 분리되었습니다.")
+        try:
+            if self._shared_memory and self._shared_memory.isAttached():
+                if not self._shared_memory.detach():
+                    print(f"경고: 공유 메모리 분리 실패 - {self._shared_memory.errorString()}")
+                else:
+                    print("공유 메모리가 분리되었습니다.")
+        except RuntimeError:
+            # Qt 객체가 이미 삭제된 경우 무시
+            print("공유 메모리가 이미 정리되었습니다.")
+
         # 만약 이 인스턴스가 공유 메모리를 create 했다면, QSharedMemory 객체가 소멸될 때 OS 레벨의 세그먼트도 정리됨 (참조 카운트 기반)
         print("InstanceManager: 리소스 정리 완료.")
+
+        # 중복 호출 방지 플래그 설정
+        self._cleanup_done = True
 
 
 def run_with_single_instance_check(application_name: str, main_app_start_callback):

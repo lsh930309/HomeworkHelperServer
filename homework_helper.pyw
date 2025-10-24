@@ -5,7 +5,12 @@ import functools
 import ctypes
 import subprocess
 import atexit
+import signal
 import time
+import tempfile
+import glob
+import shutil
+import threading
 from typing import List, Optional, Dict, Any
 
 api_server_process = None
@@ -30,6 +35,40 @@ if os.name == 'nt':
         WINDOWS_SECURITY_AVAILABLE = False
 else:
     WINDOWS_SECURITY_AVAILABLE = False
+
+def cleanup_old_mei_folders():
+    """
+    이전에 생성되었지만 삭제되지 않은 _MEIxxxxxx 폴더들을 정리합니다.
+    현재 프로세스가 사용 중인 폴더는 제외합니다.
+    """
+    try:
+        temp_dir = tempfile.gettempdir()
+        # PyInstaller가 생성하는 임시 폴더 이름 패턴
+        mei_pattern = os.path.join(temp_dir, '_MEI*')
+
+        # 현재 프로세스가 사용하는 _MEIPASS가 있다면 가져옵니다.
+        current_mei_folder = getattr(sys, '_MEIPASS', None)
+
+        cleaned_count = 0
+        for folder in glob.glob(mei_pattern):
+            if os.path.isdir(folder):
+                # 현재 사용 중인 폴더는 건너뜁니다.
+                if folder == current_mei_folder:
+                    continue
+
+                try:
+                    shutil.rmtree(folder, ignore_errors=False)
+                    print(f"✓ 이전 임시 폴더 삭제 성공: {folder}")
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"  이전 임시 폴더 삭제 실패 (사용 중일 수 있음): {folder} - {e}")
+
+        if cleaned_count > 0:
+            print(f"총 {cleaned_count}개의 이전 MEI 임시 폴더를 정리했습니다.")
+        else:
+            print("정리할 이전 MEI 임시 폴더가 없습니다.")
+    except Exception as e:
+        print(f"임시 폴더 정리 중 오류 발생: {e}")
 
 def wait_for_server_ready(max_wait_seconds: int = 10) -> bool:
     """서버가 준비될 때까지 대기합니다."""
@@ -148,11 +187,12 @@ def start_api_server() -> bool:
         print("API 서버를 독립 프로세스로 시작합니다...")
 
         # multiprocessing.Process를 사용하여 서버 프로세스 생성
-        # daemon=False: 부모 프로세스(GUI) 종료 시에도 서버는 계속 실행
+        # daemon=True: 부모 프로세스(GUI) 종료 시 서버도 자동 종료
+        #              SQLite WAL 모드가 DB 무결성 보장
         import multiprocessing
         api_server_process = multiprocessing.Process(
             target=run_server_main,
-            daemon=False
+            daemon=True
         )
         api_server_process.start()
         print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
@@ -568,6 +608,36 @@ def start_main_application(instance_manager: SingleInstanceApplication):
 
     # 메인 윈도우 생성 (인스턴스 매니저 전달)
     main_window = MainWindow(api_client_instance, instance_manager=instance_manager)
+
+    # === Graceful Shutdown: signal 및 atexit 핸들러 등록 ===
+    def gui_signal_handler(signum, frame):
+        """GUI 프로세스가 종료 신호를 받았을 때 안전하게 종료합니다."""
+        print(f"\n[GUI] 종료 신호 수신 (Signal: {signum}). Graceful shutdown 시작...")
+        main_window.initiate_quit_sequence()
+
+    # Windows에서 지원하는 signal 핸들러 등록
+    if os.name == 'nt':
+        signal.signal(signal.SIGINT, gui_signal_handler)    # Ctrl+C
+        signal.signal(signal.SIGTERM, gui_signal_handler)   # 프로세스 종료 요청
+        signal.signal(signal.SIGBREAK, gui_signal_handler)  # Ctrl+Break
+        print("[GUI] Signal 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
+
+    # atexit 핸들러 등록 (정상 종료 시 호출)
+    # 주의: atexit은 중복 호출을 막기 위해 flag를 사용합니다.
+    cleanup_done = {'flag': False}
+    def gui_atexit_handler():
+        if not cleanup_done['flag']:
+            cleanup_done['flag'] = True
+            print("[GUI] atexit 핸들러 호출 - 정리 작업 수행")
+            # initiate_quit_sequence는 이미 호출되었을 수 있으므로 중복 방지
+            # 여기서는 instance_manager cleanup만 수행
+            if instance_manager and hasattr(instance_manager, 'cleanup'):
+                instance_manager.cleanup()
+
+    atexit.register(gui_atexit_handler)
+    print("[GUI] atexit 핸들러 등록 완료")
+    # =========================================================
+
     # IPC 서버 시작 (다른 인스턴스로부터의 활성화 요청 처리용)
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
     main_window.show() # 메인 윈도우 표시
@@ -584,6 +654,12 @@ if __name__ == "__main__":
         meipass_path = getattr(sys, '_MEIPASS', 'N/A')
         print(f"[GUI] _MEIPASS: {meipass_path}")
         print(f"[GUI] PID: {os.getpid()}")
+
+        # === MEI 임시 폴더 정리 ===
+        # PyInstaller로 패키징된 경우에만 이전 MEI 폴더를 정리합니다.
+        print("\n=== 이전 MEI 임시 폴더 정리 시작 ===")
+        cleanup_old_mei_folders()
+        print("=== MEI 임시 폴더 정리 완료 ===\n")
 
     # GUI 애플리케이션 실행
     # (multiprocessing.Process 방식에서는 --run-server 분기 불필요)
