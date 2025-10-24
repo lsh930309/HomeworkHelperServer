@@ -1,99 +1,53 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-PyInstaller 자동 빌드 스크립트
-- 이전 버전 자동 백업 (타임스탬프 기반)
-- 빌드 산출물 자동 정리
-- release 폴더에 최종 실행파일만 출력
+PyInstaller 자동 빌드 스크립트 (onedir + Inno Setup)
+- .spec 파일 기반 빌드 (onedir 모드)
+- ZIP 배포 파일 자동 생성
+- Inno Setup 인스톨러 자동 생성 (선택적)
+- release 폴더에 모든 배포 파일 출력
 """
 
 import os
 import sys
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 from datetime import datetime
 
 # ==================== 설정 ====================
 PROJECT_ROOT = Path(__file__).parent
 RELEASE_DIR = PROJECT_ROOT / "release"
-OLD_VERSIONS_DIR = RELEASE_DIR / "old"  # 이전 버전 보관 폴더
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
+INSTALLER_OUTPUT_DIR = PROJECT_ROOT / "installer_output"
 
 # 빌드 대상
-MAIN_SCRIPT = "homework_helper.pyw"
+SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
-EXE_NAME = f"{APP_NAME}.exe"
+APP_FOLDER = DIST_DIR / APP_NAME  # onedir 결과물 폴더
+APP_VERSION = "1.0.0"
 
-# 포함할 리소스
-DATAS = [
-    ("font", "font"),
-    ("img", "img"),
-]
-
-# Hidden imports (PyInstaller가 자동 탐지 못하는 모듈)
-HIDDEN_IMPORTS = [
-    "uvicorn",
-    "fastapi",
-    "sqlalchemy",
-    "requests",
-    "PyQt6",
-    "psutil",
-]
-
-# Windows 전용 imports
-if os.name == 'nt':
-    HIDDEN_IMPORTS.extend([
-        "win32api",
-        "win32security",
-        "win32process",
-        "win32con",
-        "win32com.client",
-    ])
+# Inno Setup 경로 (일반적인 설치 경로)
+INNO_SETUP_PATH = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
+INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
 
 # ================================================
 
 
 def print_section(title):
     """섹션 제목 출력"""
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print(f"  {title}")
-    print("=" * 60)
-
-
-def backup_existing_exe():
-    """기존 .exe 파일을 타임스탬프로 백업 (release/old/ 폴더에 보관)"""
-    exe_path = RELEASE_DIR / EXE_NAME
-
-    if not exe_path.exists():
-        print(f"기존 실행파일 없음. 백업 생략.")
-        return
-
-    # old 폴더 생성 (없으면)
-    if not OLD_VERSIONS_DIR.exists():
-        OLD_VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"[OK] old 폴더 생성: {OLD_VERSIONS_DIR}")
-
-    # 파일 생성 시간 가져오기
-    timestamp = os.path.getctime(exe_path)
-    dt = datetime.fromtimestamp(timestamp)
-    backup_name = f"{APP_NAME}_{dt.strftime('%y-%m-%d-%H%M%S')}.exe"
-    backup_path = OLD_VERSIONS_DIR / backup_name
-
-    # 백업
-    try:
-        shutil.move(str(exe_path), str(backup_path))
-        print(f"[OK] 이전 버전 백업: old/{backup_name}")
-    except Exception as e:
-        print(f"[경고] 백업 실패: {e}")
+    print("=" * 70)
 
 
 def clean_build_artifacts():
     """빌드 산출물 폴더 삭제"""
-    print_section("빌드 산출물 정리")
+    print_section("이전 빌드 산출물 정리")
 
-    for folder in [BUILD_DIR, DIST_DIR]:
+    for folder in [BUILD_DIR, DIST_DIR, INSTALLER_OUTPUT_DIR]:
         if folder.exists():
             try:
                 shutil.rmtree(folder)
@@ -109,116 +63,230 @@ def ensure_release_dir():
     if not RELEASE_DIR.exists():
         RELEASE_DIR.mkdir(parents=True, exist_ok=True)
         print(f"[OK] release 폴더 생성")
-    else:
-        print(f"[OK] release 폴더 확인")
+    return RELEASE_DIR
 
 
 def build_with_pyinstaller():
-    """PyInstaller로 빌드"""
-    print_section("PyInstaller 빌드 시작")
+    """PyInstaller로 .spec 파일 기반 빌드"""
+    print_section("PyInstaller 빌드 시작 (onedir 모드)")
 
-    # PyInstaller 명령 생성
+    if not SPEC_FILE.exists():
+        print(f"[오류] .spec 파일 없음: {SPEC_FILE}")
+        return False
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name", APP_NAME,
-        "--windowed",  # 콘솔 창 숨김
-        "--onefile",   # 단일 실행파일
-        "--clean",     # 이전 빌드 캐시 정리
+        str(SPEC_FILE),
+        "--noconfirm",  # 기존 빌드 덮어쓰기 확인 생략
+        "--clean",      # 이전 빌드 캐시 정리
     ]
 
-    # 아이콘 설정 (있으면)
-    icon_path = PROJECT_ROOT / "img" / "app_icon.ico"
-    if icon_path.exists():
-        cmd.extend(["--icon", str(icon_path)])
+    print(f"빌드 명령: {' '.join(cmd)}\n")
 
-    # 데이터 파일 추가
-    for src, dest in DATAS:
-        src_path = PROJECT_ROOT / src
-        if src_path.exists():
-            cmd.extend(["--add-data", f"{src};{dest}"])
-
-    # Hidden imports 추가
-    for module in HIDDEN_IMPORTS:
-        cmd.extend(["--hidden-import", module])
-
-    # 메인 스크립트
-    cmd.append(str(PROJECT_ROOT / MAIN_SCRIPT))
-
-    # 명령 출력
-    print(f"빌드 명령:\n{' '.join(cmd)}\n")
-
-    # 실행
     try:
         result = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
-        print("\n[OK] 빌드 성공!")
+        print("\n[OK] PyInstaller 빌드 성공!")
         return True
     except subprocess.CalledProcessError as e:
         print(f"\n[오류] 빌드 실패: {e}")
         return False
 
 
-def copy_to_release():
-    """dist 폴더의 .exe를 release 폴더로 복사"""
-    print_section("최종 실행파일 복사")
+def create_zip_distribution():
+    """onedir 결과물을 ZIP으로 압축하여 release 폴더에 저장"""
+    print_section("ZIP 배포 파일 생성")
 
-    src_exe = DIST_DIR / EXE_NAME
-    dest_exe = RELEASE_DIR / EXE_NAME
-
-    if not src_exe.exists():
-        print(f"[오류] 실행파일 없음: {src_exe}")
+    if not APP_FOLDER.exists():
+        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
         return False
+
+    ensure_release_dir()
+    zip_filename = f"HomeworkHelper_v{APP_VERSION}_Portable.zip"
+    zip_path = RELEASE_DIR / zip_filename
 
     try:
-        shutil.copy2(str(src_exe), str(dest_exe))
-        print(f"[OK] 복사 완료: {EXE_NAME} -> release/")
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(APP_FOLDER):
+                for file in files:
+                    file_path = Path(root) / file
+                    # ZIP 내 경로: homework_helper/...
+                    arcname = file_path.relative_to(DIST_DIR)
+                    zipf.write(file_path, arcname)
 
-        # 파일 크기 출력
-        size_mb = dest_exe.stat().st_size / (1024 * 1024)
+        size_mb = zip_path.stat().st_size / (1024 * 1024)
+        print(f"[OK] ZIP 생성 완료: {zip_filename}")
         print(f"  파일 크기: {size_mb:.2f} MB")
+        print(f"  저장 위치: {zip_path}")
         return True
     except Exception as e:
-        print(f"[오류] 복사 실패: {e}")
+        print(f"[오류] ZIP 생성 실패: {e}")
         return False
+
+
+def create_installer():
+    """Inno Setup으로 인스톨러 생성"""
+    print_section("Inno Setup 인스톨러 생성")
+
+    # Inno Setup 설치 확인
+    if not INNO_SETUP_PATH.exists():
+        print(f"[건너뛰기] Inno Setup이 설치되어 있지 않습니다.")
+        print(f"  예상 경로: {INNO_SETUP_PATH}")
+        print(f"  다운로드: https://jrsoftware.org/isinfo.php")
+        return False
+
+    # .iss 스크립트 확인
+    if not INSTALLER_SCRIPT.exists():
+        print(f"[오류] 인스톨러 스크립트 없음: {INSTALLER_SCRIPT}")
+        return False
+
+    # 앱 폴더 확인
+    if not APP_FOLDER.exists():
+        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
+        return False
+
+    cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
+    print(f"인스톨러 명령: {' '.join(cmd)}\n")
+
+    try:
+        result = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT,
+                                 capture_output=True, text=True)
+        print(result.stdout)
+        print("\n[OK] 인스톨러 생성 성공!")
+
+        # 생성된 인스톨러를 release 폴더로 복사
+        if INSTALLER_OUTPUT_DIR.exists():
+            for setup_file in INSTALLER_OUTPUT_DIR.glob("*.exe"):
+                dest = RELEASE_DIR / setup_file.name
+                shutil.copy2(setup_file, dest)
+                size_mb = dest.stat().st_size / (1024 * 1024)
+                print(f"  인스톨러: {setup_file.name} ({size_mb:.2f} MB)")
+                print(f"  저장 위치: {dest}")
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"\n[오류] 인스톨러 생성 실패: {e}")
+        if e.stderr:
+            print(f"오류 메시지:\n{e.stderr}")
+        return False
+
+
+def copy_onedir_to_release():
+    """onedir 폴더를 release 폴더에 복사 (테스트용)"""
+    print_section("onedir 폴더 복사 (테스트용)")
+
+    if not APP_FOLDER.exists():
+        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
+        return False
+
+    ensure_release_dir()
+    dest_folder = RELEASE_DIR / APP_NAME
+
+    try:
+        if dest_folder.exists():
+            shutil.rmtree(dest_folder)
+
+        shutil.copytree(APP_FOLDER, dest_folder)
+
+        # 폴더 크기 계산
+        total_size = sum(f.stat().st_size for f in dest_folder.rglob('*') if f.is_file())
+        size_mb = total_size / (1024 * 1024)
+
+        print(f"[OK] 폴더 복사 완료: {dest_folder}")
+        print(f"  총 크기: {size_mb:.2f} MB")
+        print(f"  실행파일: {dest_folder / (APP_NAME + '.exe')}")
+        return True
+    except Exception as e:
+        print(f"[오류] 폴더 복사 실패: {e}")
+        return False
+
+
+def print_summary():
+    """빌드 결과 요약"""
+    print_section("빌드 완료 - 결과 요약")
+
+    print("\n배포 파일 목록 (release 폴더):")
+    print("-" * 70)
+
+    if not RELEASE_DIR.exists():
+        print("  (release 폴더 없음)")
+        return
+
+    has_files = False
+
+    # 1. 인스톨러
+    for setup_file in RELEASE_DIR.glob("*Setup*.exe"):
+        size_mb = setup_file.stat().st_size / (1024 * 1024)
+        print(f"  [인스톨러] {setup_file.name} ({size_mb:.2f} MB)")
+        has_files = True
+
+    # 2. ZIP
+    for zip_file in RELEASE_DIR.glob("*.zip"):
+        size_mb = zip_file.stat().st_size / (1024 * 1024)
+        print(f"  [Portable] {zip_file.name} ({size_mb:.2f} MB)")
+        has_files = True
+
+    # 3. onedir 폴더
+    onedir_folder = RELEASE_DIR / APP_NAME
+    if onedir_folder.exists():
+        total_size = sum(f.stat().st_size for f in onedir_folder.rglob('*') if f.is_file())
+        size_mb = total_size / (1024 * 1024)
+        print(f"  [테스트용] {APP_NAME}/ 폴더 ({size_mb:.2f} MB)")
+        has_files = True
+
+    if not has_files:
+        print("  (파일 없음)")
+
+    print("-" * 70)
+    print(f"\n배포 경로: {RELEASE_DIR.absolute()}")
+    print("\n사용 방법:")
+    print("  1. 설치 프로그램: *Setup*.exe 실행")
+    print("  2. Portable 버전: *.zip 압축 해제 후 실행")
+    print(f"  3. 테스트: release/{APP_NAME}/{APP_NAME}.exe 직접 실행")
 
 
 def main():
     """메인 함수"""
-    print_section("숙제 관리자 빌드 스크립트")
+    print_section("HomeworkHelper 빌드 스크립트 (onedir + Installer)")
     print(f"프로젝트 경로: {PROJECT_ROOT}")
-    print(f"빌드 대상: {MAIN_SCRIPT}")
+    print(f"빌드 모드: onedir (폴더 배포)")
+    print(f"버전: {APP_VERSION}")
 
-    # 0. 메인 스크립트 존재 확인
-    if not (PROJECT_ROOT / MAIN_SCRIPT).exists():
-        print(f"\n[오류] {MAIN_SCRIPT} 파일을 찾을 수 없습니다.")
+    # 0. .spec 파일 존재 확인
+    if not SPEC_FILE.exists():
+        print(f"\n[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
         return 1
 
-    # 1. release 폴더 생성
-    print_section("준비 단계")
-    ensure_release_dir()
-
-    # 2. 기존 실행파일 백업
-    backup_existing_exe()
-
-    # 3. 이전 빌드 산출물 정리
+    # 1. 이전 빌드 산출물 정리
     clean_build_artifacts()
 
-    # 4. PyInstaller 빌드
+    # 2. PyInstaller 빌드 (onedir 모드)
     if not build_with_pyinstaller():
+        print("\n[실패] 빌드 과정에서 오류가 발생했습니다.")
         return 1
 
-    # 5. 최종 실행파일을 release 폴더로 복사
-    if not copy_to_release():
+    # 3. 배포 파일 생성
+    success_count = 0
+
+    # 3-1. ZIP 생성
+    if create_zip_distribution():
+        success_count += 1
+
+    # 3-2. 인스톨러 생성 (Inno Setup 있는 경우)
+    if create_installer():
+        success_count += 1
+
+    # 3-3. onedir 폴더 복사 (테스트용)
+    if copy_onedir_to_release():
+        success_count += 1
+
+    # 4. 결과 요약
+    print_summary()
+
+    if success_count == 0:
+        print("\n[경고] 배포 파일이 생성되지 않았습니다.")
         return 1
 
-    # 6. 빌드 산출물 정리
-    clean_build_artifacts()
-
-    # 완료
-    print_section("빌드 완료!")
-    print(f"[OK] 실행파일 경로: {RELEASE_DIR / EXE_NAME}")
-    print(f"[OK] 이전 버전들: {OLD_VERSIONS_DIR}/ 폴더 참조")
-    print("\n" + "=" * 60 + "\n")
-
+    print("\n" + "=" * 70 + "\n")
     return 0
 
 
