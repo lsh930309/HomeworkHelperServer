@@ -2,9 +2,9 @@
 ; Inno Setup 6.x 이상 필요 (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "HomeworkHelper"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "HomeworkHelper Team"
-#define MyAppURL "https://github.com/yourusername/HomeworkHelper"
+#define MyAppVersion "1.0.1"
+#define MyAppPublisher "lsh930309"
+#define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
 
 [Setup]
@@ -34,8 +34,8 @@ SolidCompression=yes
 ; Windows 버전 요구사항
 MinVersion=10.0
 
-; 관리자 권한 (필요 시 주석 해제)
-; PrivilegesRequired=admin
+; 관리자 권한 (Program Files 설치를 위해 필요)
+PrivilegesRequired=admin
 
 ; 아키텍처 (64비트)
 ArchitecturesAllowed=x64

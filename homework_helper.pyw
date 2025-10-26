@@ -17,7 +17,6 @@ api_server_process = None
 
 # 새로 분리된 모듈 imports
 from admin_utils import check_admin_requirement, is_admin
-from migration import run_automatic_migration
 from main_window import MainWindow
 from instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -571,9 +570,6 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     app = QApplication(sys.argv)
     app.setApplicationName("숙제 관리자") # 애플리케이션 이름 설정
     app.setOrganizationName("HomeworkHelperOrg") # 조직 이름 설정 (설정 파일 경로 등에 사용될 수 있음)
-
-    # 마이그레이션 로직을 QApplication 생성 직후로 이동
-    run_automatic_migration()
 
     # 현재 관리자 권한 상태 로그
     if os.name == 'nt':

@@ -4,7 +4,6 @@
 **/release/
 **/.bak/
 *.pyc
-*.spec
 
 # PyInstaller 빌드 산출물
 build/

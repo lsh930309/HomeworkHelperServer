@@ -56,16 +56,18 @@ def check_admin_requirement():
 
     # SQLite 데이터베이스에서 글로벌 설정을 직접 읽어 관리자 권한 실행 설정을 확인
     try:
-        # 실행 파일 기준 homework_helper_data 경로 계산
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-            print(f"[DEBUG] PyInstaller 패키징 환경: base_path = {base_path}")
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            print(f"[DEBUG] 일반 Python 환경: base_path = {base_path}")
+        # %APPDATA% 기반 경로 사용 (homework_helper.pyw의 get_app_data_dir()와 동일한 로직)
+        # onedir 빌드에서 sys.executable은 Program Files를 가리키므로 사용하지 않음!
+        app_data = os.getenv('APPDATA')
+        if not app_data:
+            app_data = os.path.expanduser('~')
+            print(f"[DEBUG] APPDATA 환경변수가 없어 홈 디렉토리 사용: {app_data}")
 
-        data_folder = os.path.join(base_path, "homework_helper_data")
+        app_dir = os.path.join(app_data, 'HomeworkHelper')
+        data_folder = os.path.join(app_dir, "homework_helper_data")
         db_path = os.path.join(data_folder, "app_data.db")
+
+        print(f"[DEBUG] APPDATA 기반 경로 사용: {app_data}")
 
         print(f"[DEBUG] 데이터베이스 경로: {db_path}")
         print(f"[DEBUG] 데이터베이스 존재 여부: {os.path.exists(db_path)}")
