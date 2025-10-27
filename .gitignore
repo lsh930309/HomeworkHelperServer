@@ -1,10 +1,93 @@
+# ===========================
+# Python
+# ===========================
 **/__pycache__/
-**/homework_helper_data/
-**/.claude/
-**/release/
-**/.bak/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
 
+# ===========================
+# 환경 변수 (민감 정보) ⭐
+# ===========================
+.env
+.env.local
+.env.*.local
+**/.env
+**/server/.env
+
+# ===========================
 # PyInstaller 빌드 산출물
+# ===========================
 build/
 dist/
+*.spec
+installer_output/
+release/
+
+# ===========================
+# Android
+# ===========================
+android/.gradle/
+android/.idea/
+android/local.properties
+android/*.iml
+android/build/
+android/app/build/
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+*.apk
+*.aab
+
+# ===========================
+# 데이터 및 로그
+# ===========================
+**/homework_helper_data/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# ===========================
+# IDE 및 에디터
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===========================
+# 임시 파일
+# ===========================
+**/.bak/
+*.bak
+*.tmp
+*.temp
+
+# ===========================
+# Claude Code (선택적으로 제거 가능)
+# ===========================
+# **/.claude/
+
+# ===========================
+# Git LFS (대용량 파일)
+# ===========================
+# 아래 파일들은 .gitattributes에서 LFS로 추적
+# *.pt
+# *.onnx
+# *.pkl
+# *.h5
+# *.otf
+# *.ttf
