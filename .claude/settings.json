@@ -1,0 +1,29 @@
+{
+  "description": "HomeworkHelper 프로젝트 공통 Claude Code 설정",
+  "version": "1.0.0",
+  "permissions": {
+    "allow": [
+      "mcp__smithery-ai-server-sequential-thinking__sequentialthinking",
+      "Bash(python:*)",
+      "Bash(gemini:*)",
+      "Bash(cd:*)",
+      "Bash(pip install:*)",
+      "Bash(mkdir:*)",
+      "Bash(git lfs install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "notes": {
+    "multi_pc_setup": "이 파일은 Git에 포함되어 모든 PC에서 공유됩니다.",
+    "local_override": "개인별 설정은 settings.local.json에 작성하세요 (Git에서 제외됨).",
+    "read_permissions": "Read(//c/**) 같은 시스템 경로는 settings.local.json에만 추가하세요."
+  }
+}
