@@ -3,7 +3,7 @@
 **프로젝트명**: HomeworkHelper
 **최종 목표**: **PC/모바일 크로스 플랫폼** 지능형 게임 플레이 데이터 수집 및 예측 시스템
 **작성일**: 2025-10-27
-**버전**: v0.2 (Cross-Platform Architecture)
+**버전**: v0.3 (Local-First Development Strategy)
 
 ---
 
@@ -114,127 +114,251 @@
 
 ---
 
-## 🌐 Phase 1: 클라우드 기반 마련 + PC 데이터 수집 MVP
+## 🌐 Phase 1: 로컬 서버 아키텍처 + Android MVP + 데이터 수집 시스템
 
-**목표**: 크로스 플랫폼 아키텍처의 핵심인 클라우드 백엔드 구축 및 PC 클라이언트 데이터 수집
+**목표**: VM 기반 서버 완성 + Android 앱 Phase 0 기능 통합 + Label Studio 데이터 수집 환경 구축
 **예상 기간**: 3-4개월 (1인 개발 기준)
-**핵심 기술**: FastAPI, PostgreSQL, Docker, 하드코딩 BBox + OCR
-**난이도**: ⭐⭐⭐ (Medium) - 클라우드 인프라 학습 곡선
+**핵심 기술**: FastAPI, PostgreSQL, Docker, Android (Kotlin/Java), Label Studio, OCR
+**난이도**: ⭐⭐⭐ (Medium) - 서버/모바일/CV 복합 작업
+**비용**: $0 (완전 로컬 환경, 클라우드 호스팅은 이후 Phase에서 진행)
 
-### 1.1 클라우드 백엔드 개발
+### 1.1 VM + Docker 서버 아키텍처 구축
+
+**목표**: 로컬 VM 환경에서 실제 프로덕션과 유사한 서버 아키텍처 완성 및 테스트
 
 **작업 목록**:
-- [ ] **인프라 선택 및 셋업**
-  - 클라우드 제공자 선택: AWS (EC2 + RDS), GCP, 또는 Vercel + Supabase
-  - 초기에는 무료 티어 활용 (Vercel Free, Supabase Free, Railway)
-  - Docker 컨테이너화
+- [ ] **VM 환경 셋업**
+  - VirtualBox 또는 VMware로 Linux VM 생성 (Ubuntu 22.04 LTS 권장)
+  - VM 네트워크 설정: Host-Only + NAT (로컬에서 API 접근 가능하도록)
+  - SSH 접속 설정
+- [ ] **Docker 컨테이너 아키텍처 설계**
+  - `docker-compose.yml` 작성
+  - 서비스 구성:
+    - `fastapi-server`: FastAPI 백엔드 (Python 3.11)
+    - `postgres`: PostgreSQL 15 (데이터베이스)
+    - `nginx`: 리버스 프록시 (선택적, 프로덕션 유사 환경)
+  - 볼륨 마운트: DB 데이터 영속성 보장
 - [ ] **FastAPI 서버 개발**
-  - 기존 로컬 FastAPI 코드를 클라우드용으로 리팩토링
   - RESTful API 엔드포인트:
     - `POST /api/v1/sessions` - 세션 데이터 업로드
     - `POST /api/v1/events` - 이벤트 데이터 업로드 (게임 내 자원 변화)
     - `GET /api/v1/sync/{user_id}` - 동기화 데이터 다운로드
     - `POST /api/v1/predict` - AI 예측 요청 (Phase 2에서 구현)
   - API 인증: JWT 토큰 기반
-- [ ] **데이터베이스 마이그레이션**
-  - 로컬 SQLite → 클라우드 PostgreSQL 또는 MongoDB
-  - 스키마 설계:
-    - `users` (id, username, created_at)
+  - CORS 설정 (Android 앱 연동 대비)
+- [ ] **데이터베이스 스키마 설계**
+  - PostgreSQL 스키마:
+    - `users` (id, username, password_hash, created_at)
     - `sessions` (id, user_id, process_id, start_ts, end_ts, duration)
     - `events` (id, session_id, event_type, resource_type, value, timestamp)
     - `predictions` (id, session_id, predicted_action, predicted_resource, confidence)
+  - SQLAlchemy ORM 모델 정의
+  - Alembic 마이그레이션 설정
 - [ ] **사용자 인증 시스템**
   - 회원가입/로그인 API
-  - OAuth 2.0 (Google, Discord) 연동 (선택)
+  - JWT 토큰 발급 및 검증
+  - 비밀번호 해싱 (bcrypt)
+
+**결과물**:
+- VM 환경에서 동작하는 Docker Compose 스택
+- FastAPI 서버 (http://192.168.x.x:8000)
+- PostgreSQL 데이터베이스 (로컬 VM)
+- API 문서 (Swagger UI: http://192.168.x.x:8000/docs)
+
+---
+
+### 1.2 Android 앱 MVP - Phase 0 기능 통합
+
+**목표**: Phase 0의 핵심 기능(프로세스 모니터링, 알림, 스케줄링)을 Android 플랫폼으로 이식
+
+**작업 목록**:
+- [ ] **Git 브랜치 전략 수립**
+  - `main` (프로덕션), `develop` (개발), `feature/phase-1-android` (Android 앱)
+  - Android 프로젝트 레포지토리 생성 (별도 또는 모노레포)
+- [ ] **Android 프로젝트 셋업**
+  - 개발 환경: Android Studio, Kotlin
+  - Minimum SDK: API 26 (Android 8.0) - UsageStatsManager 지원
+  - 아키텍처: MVVM + Jetpack Compose (또는 XML)
+  - 의존성:
+    - Retrofit (HTTP 클라이언트)
+    - Room (로컬 DB)
+    - WorkManager (백그라운드 작업)
+    - Hilt (DI)
+- [ ] **게임 프로세스 모니터링 구현**
+  - UsageStatsManager API로 포그라운드 앱 감지
+  - 목표 게임: 스타레일, 젠레스 존 제로
+  - 게임 실행/종료 타임스탬프 자동 기록
+  - WorkManager로 주기적 모니터링 (5분 간격)
+- [ ] **로컬 데이터 관리**
+  - Room 데이터베이스:
+    - `sessions` (id, game_name, start_ts, end_ts, duration)
+    - `settings` (id, key, value)
+  - PC 버전과 동일한 데이터 구조 유지
+- [ ] **알림 시스템**
+  - 서버 리셋 시간 기반 알림 (게임별 설정)
+  - 사용자 주기 (24시간) 데드라인 추적
+  - NotificationChannel 설정 (Android 8.0+)
+  - 수면 시간 보정 로직 (PC 버전 이식)
+- [ ] **서버 동기화 기능**
+  - Retrofit으로 VM 서버 API 연동
+  - 로그인 후 세션 데이터를 서버로 자동 업로드
+  - 네트워크 실패 시 로컬 큐에 저장 후 재시도 (WorkManager)
+  - 서버 주소 설정 UI (개발용: http://192.168.x.x:8000)
+- [ ] **기본 UI 구현**
+  - 로그인/회원가입 화면
+  - 게임 목록 화면 (스타레일, 젠레스)
+  - 세션 히스토리 (오늘/이번 주/전체)
+  - 설정 화면 (알림 시간, 서버 주소)
+
+**결과물**:
+- Android 앱 APK (Phase 0 기능 완료)
+- UsageStatsManager 기반 프로세스 모니터링
+- VM 서버 동기화 성공 확인
+- 테스트 디바이스에서 동작 검증
+
+---
+
+### 1.3 Label Studio 기반 데이터 수집 시스템
+
+**목표**: 기존 녹화 영상을 활용하여 유저 친화적 BBox 설정 시스템 구축 (하드코딩 방식 대체)
+
+**작업 목록**:
+- [ ] **Label Studio 환경 구축**
+  - Docker로 Label Studio 설치 (VM 또는 로컬 PC)
+  - 웹 UI 접속 설정 (http://localhost:8080)
+  - 프로젝트 생성: "HomeworkHelper UI Detection"
+- [ ] **기존 녹화 영상 전처리**
+  - 목표 게임: 스타레일, 젠레스 존 제로
+  - 영상에서 프레임 추출:
+    - FFmpeg 사용: `ffmpeg -i recording.mp4 -vf fps=1 frames/frame_%04d.png`
+    - 다양한 해상도별 추출 (FHD, QHD, 4K)
+  - 게임별 최소 300-500장 확보
+- [ ] **Label Studio 라벨링 템플릿 설정**
+  - BBox 라벨 정의:
+    - `stamina_icon` (개척력/배터리 아이콘)
+    - `stamina_text` (자원 숫자 영역)
+    - `currency_icon` (성옥/원석 아이콘)
+    - `currency_text` (재화 숫자 영역)
+    - `quest_checkbox` (일일 임무 체크박스)
+  - XML 템플릿 작성 (RectangleLabels)
+- [ ] **유저 친화적 라벨링 워크플로우**
+  - Label Studio UI로 직관적으로 BBox 드래그 앤 드롭
+  - 개발 환경 PC 해상도에 맞춰 라벨링 우선 진행
+  - 라벨링 단축키 설정으로 효율성 향상
+- [ ] **라벨 데이터 Export 및 활용**
+  - Label Studio에서 JSON 형식으로 Export
+  - JSON → YOLO 형식 변환 스크립트 작성 (Phase 2 대비)
+  - 개발 환경용 BBox 좌표 추출:
+    ```python
+    # extract_bbox.py
+    def extract_bbox_from_label_studio(json_path):
+        # Label Studio JSON 파싱
+        labels = parse_json(json_path)
+        # 개발 PC 해상도별 BBox 좌표 추출
+        bbox_config = {
+            "stamina_text": {"x": 1000, "y": 50, "w": 150, "h": 30},
+            ...
+        }
+        return bbox_config
+    ```
+  - 설정 파일 생성: `config/bbox_config.json`
+- [ ] **OCR 라이브러리 선정 및 테스트**
+  - Tesseract OCR, EasyOCR, PaddleOCR 성능 비교
+  - 벤치마크 항목:
+    - 한글/숫자 인식 정확도
+    - 처리 속도 (FPS)
+    - CPU/메모리 사용률
+  - Label Studio로 라벨링한 BBox로 OCR 테스트
+- [ ] **PC 클라이언트 통합 (선택적)**
+  - Phase 0 PC 클라이언트에 데이터 수집 기능 추가
+  - `bbox_config.json` 기반 자원 인식
+  - 서버로 이벤트 데이터 업로드 (`POST /api/v1/events`)
+
+**결과물**:
+- Label Studio 프로젝트 (라벨링된 300-500장)
+- `bbox_config.json` (개발 환경용 BBox 설정)
+- JSON → YOLO 변환 스크립트 (`scripts/label_studio_to_yolo.py`)
+- OCR 벤치마크 리포트
+- YOLO 학습용 데이터셋 준비 (Phase 2에서 사용)
+
+---
+
+### 1.4 Phase 1 검증 및 안정화
+
+**작업 목록**:
+- [ ] **실전 테스트 (2주일)**
+  - VM 서버 부하 테스트 (동시 요청 100개)
+  - Android 앱 배터리 소모 측정 (< 5% 목표)
+  - 서버 동기화 안정성 테스트 (네트워크 끊김 시나리오)
+  - Label Studio 라벨링 데이터 품질 검증
+- [ ] **성능 최적화**
+  - Android 앱 백그라운드 프로세스 최적화
+  - VM 서버 API 응답 시간 < 200ms
+  - PostgreSQL 쿼리 최적화 (인덱스 추가)
+- [ ] **문서화**
+  - VM 서버 셋업 가이드 (`docs/vm-setup.md`)
+  - Android 앱 빌드 가이드 (`docs/android-build.md`)
+  - Label Studio 사용 가이드 (`docs/label-studio-guide.md`)
+  - API 문서 완성 (Swagger UI)
+
+**결과물**:
+- Phase 1 완료 리포트
+- VM 서버 + Android 앱 + Label Studio 통합 환경 완성
+- 서버 동기화 성공률 ≥ 95%
+- Phase 2 YOLO 학습을 위한 데이터셋 준비 완료
+
+---
+
+## 🤖 Phase 2: 클라우드 마이그레이션 + YOLO 인식 엔진 + AI 예측 모델 개발
+
+**목표**: 로컬 서버를 클라우드로 이전 + 범용성 있는 데이터 수집기 개발 + AI 행동 예측 모델
+**예상 기간**: 4-5개월 (클라우드 배포 + YOLO 학습 + AI 모델 개발)
+**핵심 기술**: AWS/GCP/Vercel, YOLOv8/v11, XGBoost, Label Studio
+**난이도**: ⭐⭐⭐⭐⭐ (Very High) - 클라우드 인프라 + CV + ML 복합 작업
+**비용**: 발생 시작 (클라우드 호스팅, 월 $10-50 예상)
+
+### 2.1 클라우드 마이그레이션 (VM → 실제 호스팅)
+
+**목표**: Phase 1에서 완성한 VM 서버를 실제 클라우드 환경으로 이전
+
+**작업 목록**:
+- [ ] **클라우드 제공자 선택**
+  - 옵션 1: AWS (EC2 + RDS) - 가장 범용적
+  - 옵션 2: Vercel (FastAPI) + Supabase (PostgreSQL) - 무료 티어 활용
+  - 옵션 3: GCP (Cloud Run + Cloud SQL) - 컨테이너 최적화
+  - 옵션 4: Railway / Render - 1인 개발 친화적
+  - 비용 비교 후 최종 결정 (초기에는 무료/저가 티어 활용)
+- [ ] **Docker 컨테이너 배포**
+  - Phase 1의 `docker-compose.yml`을 클라우드 환경에 맞게 수정
+  - 환경 변수 설정 (DB 연결 정보, JWT 시크릿 등)
+  - CI/CD 파이프라인 구축 (GitHub Actions)
+    - `main` 브랜치 push → 자동 배포
+- [ ] **데이터베이스 마이그레이션**
+  - VM PostgreSQL → 클라우드 PostgreSQL (RDS/Supabase/Cloud SQL)
+  - 데이터 백업 및 복원 테스트
+  - 연결 보안 설정 (SSL/TLS)
+- [ ] **도메인 및 HTTPS 설정**
+  - 도메인 구매 (선택) 또는 클라우드 제공 URL 사용
+  - SSL/TLS 인증서 설정 (Let's Encrypt 또는 클라우드 자동 발급)
+  - API 엔드포인트: `https://api.homeworkhelper.com` (예시)
+- [ ] **Android 앱 서버 주소 업데이트**
+  - 하드코딩된 VM IP (`http://192.168.x.x:8000`) → 클라우드 URL
+  - 환경별 설정 (개발/프로덕션) 분리
+- [ ] **모니터링 및 알림 설정**
+  - 서버 상태 모니터링 (Uptime, CPU, 메모리)
+  - 에러 로그 수집 (Sentry 또는 CloudWatch)
+  - 비용 알림 설정 (월 예산 초과 시 알림)
 
 **결과물**:
 - 클라우드 배포된 FastAPI 서버 (예: https://api.homeworkhelper.com)
 - PostgreSQL 데이터베이스 (클라우드)
-- API 문서 (Swagger UI)
+- CI/CD 파이프라인 (GitHub Actions)
+- Android 앱 클라우드 서버 연동 완료
+- 모니터링 대시보드
 
 ---
 
-### 1.2 PC 클라이언트 - 하드코딩 BBox + OCR (빠른 MVP)
-
-**작업 목록**:
-- [ ] **Git 브랜치 전략 수립**
-  - `main` (프로덕션), `develop` (개발), `feature/phase-1-*` (기능별)
-- [ ] **OCR 라이브러리 선정 및 테스트**
-  - Tesseract OCR, EasyOCR, PaddleOCR 성능 비교
-  - **벤치마크 항목**:
-    - 한글/숫자 인식 정확도
-    - 게임 해상도별 (FHD, QHD, 4K)
-    - UI 스케일링별 (100%, 125%, 150%)
-    - 처리 속도 (FPS) 및 CPU/메모리 사용률
-- [ ] **하드코딩 BBox 기반 데이터 수집**
-  - 개발자 PC 환경에 맞춘 고정 좌표 (x, y, w, h)로 빠르게 MVP 구현
-  - 목표 게임: 스타레일, 젠레스 존 제로
-  - 수집 데이터:
-    - 자원: 개척력, 배터리
-    - 재화: 성옥, 원석
-  - **중요**: 나중에 YOLO로 교체 가능하도록 **모듈화** 설계
-    ```python
-    # detector_interface.py
-    class ResourceDetector(ABC):
-        @abstractmethod
-        def detect(self, screenshot) -> Dict[str, Any]:
-            pass
-
-    # bbox_detector.py (Phase 1)
-    class HardcodedBBoxDetector(ResourceDetector):
-        def detect(self, screenshot):
-            # 하드코딩 좌표
-            bbox = (1000, 100, 150, 30)
-            cropped = screenshot.crop(bbox)
-            text = ocr(cropped)
-            return {"resource": "stamina", "value": text}
-
-    # yolo_detector.py (Phase 2에서 구현)
-    class YOLODetector(ResourceDetector):
-        def detect(self, screenshot):
-            # YOLO 탐지
-            ...
-    ```
-- [ ] **클라우드 동기화 기능 추가**
-  - PC 클라이언트에 "클라우드 계정 연동" 설정 추가
-  - 로그인 후 세션/이벤트 데이터를 클라우드로 자동 업로드
-  - 네트워크 실패 시 로컬 큐에 저장 후 재시도
-
-**결과물**:
-- OCR 벤치마크 리포트
-- PC 클라이언트 v0.2 (클라우드 동기화 지원)
-- `detector_interface.py` (교체 가능한 인터페이스 설계)
-
----
-
-### 1.3 Phase 1 검증 및 안정화
-
-**작업 목록**:
-- [ ] 실전 테스트 (2주일)
-  - 개발자 PC에서 실제 게임 플레이 + 데이터 수집 동작 확인
-  - 클라우드 동기화 안정성 테스트 (네트워크 끊김 시나리오)
-- [ ] 성능 최적화
-  - PC 클라이언트 CPU 사용률 < 10%
-  - 클라우드 API 응답 시간 < 200ms
-- [ ] 문서화
-  - 클라우드 API 문서 완성
-  - PC 클라이언트 설치 가이드
-
-**결과물**:
-- Phase 1 완료 리포트
-- 클라우드 동기화 성공률 99% 이상
-- 다음 Phase를 위한 데이터 수집 시작
-
----
-
-## 🤖 Phase 2: YOLO 인식 엔진 + AI 예측 모델 개발
-
-**목표**: 범용성 있는 데이터 수집기 개발 + AI 행동 예측 모델로 모바일 지원 준비
-**예상 기간**: 4-5개월 (데이터 수집 + YOLO 학습 + AI 모델 개발)
-**핵심 기술**: YOLOv8/v11, XGBoost, Label Studio
-**난이도**: ⭐⭐⭐⭐⭐ (Very High) - CV + ML 복합 작업
-
-### 2.1 YOLO 기반 UI 탐지 시스템 개발
+### 2.2 YOLO 기반 UI 탐지 시스템 개발
 
 **목표**: 하드코딩 좌표 문제 해결 → 다양한 해상도/환경에서 동작하는 범용 인식기
 
@@ -292,7 +416,7 @@
 
 ---
 
-### 2.2 AI 행동 예측 모델 개발 (모바일 지원 핵심)
+### 2.3 AI 행동 예측 모델 개발 (모바일 지원 핵심)
 
 **목표**: 모바일에서 화면 인식 없이 "타임스탬프 + 행동 패턴"만으로 자원을 예측
 
@@ -361,37 +485,39 @@
 
 ---
 
-### 2.3 모바일 앱 프로토타입 개발
+### 2.4 Android 앱 고도화 (AI 예측 통합)
 
-**목표**: 모바일 환경에서 경량 데이터 수집 + AI 예측 결과 표시
+**목표**: Phase 1 Android 앱에 AI 예측 기능 통합 + iOS 개발 시작 (선택)
 
 **작업 목록**:
-- [ ] **프레임워크 선택**
-  - React Native 또는 Flutter (크로스 플랫폼)
-  - 1인 개발 효율을 위해 웹 기술 활용 고려
-- [ ] **기본 기능 구현**
-  - 로그인 (클라우드 계정)
-  - 게임 프로세스 감지:
-    - Android: UsageStatsManager API
-    - iOS: ScreenTime API (제한적)
-  - 세션 타임스탬프 수집
-  - 클라우드 동기화
-- [ ] **AI 예측 결과 표시**
+- [ ] **AI 예측 API 연동**
   - 게임 종료 시 자동으로 `/api/v1/predict` 호출
-  - 예상 자원 표시: "개척력 약 50 남음 (AI 예측)"
+  - 예상 자원 표시: "개척력 약 50 남음 (AI 예측, 70% 확률)"
   - 실제 자원 수동 입력 옵션 (피드백)
-- [ ] **UI/UX 설계**
-  - 게임 목록 화면
-  - 세션 히스토리
-  - 자원 트래킹 대시보드
+  - 피드백 데이터를 서버로 전송하여 모델 재학습에 활용
+- [ ] **UI/UX 개선**
+  - 자원 트래킹 대시보드 추가
+    - 일일/주간 플레이 통계
+    - 자원 소모 패턴 그래프
+  - AI 예측 결과 카드 디자인
+  - 다크 모드 지원
+- [ ] **iOS 앱 개발 (선택적)**
+  - Phase 1 Android 앱을 기반으로 iOS 포팅
+  - Swift/SwiftUI 또는 React Native/Flutter (크로스 플랫폼)
+  - ScreenTime API로 프로세스 모니터링 (제한적)
+  - TestFlight 베타 배포
+- [ ] **오프라인 지원 강화**
+  - 네트워크 끊김 시 AI 예측 실패 → 로컬 캐시 사용
+  - 재연결 시 자동 동기화
 
 **결과물**:
-- 모바일 앱 프로토타입 (Android/iOS)
-- TestFlight 또는 내부 테스트 배포
+- Android 앱 v1.0 (AI 예측 통합)
+- iOS 앱 프로토타입 (선택)
+- TestFlight/내부 테스트 배포
 
 ---
 
-### 2.4 Phase 2 검증 및 개선
+### 2.5 Phase 2 검증 및 개선
 
 **작업 목록**:
 - [ ] 실전 테스트 (3주일)
@@ -624,16 +750,20 @@
 ## 📊 성공 지표 (KPI)
 
 ### Phase 1 성공 기준
-- [ ] 클라우드 API 배포 완료 (Uptime ≥ 99%)
-- [ ] PC-클라우드 동기화 성공률 ≥ 99%
-- [ ] PC OCR 정확도 ≥ 85% (하드코딩 BBox)
+- [ ] VM 서버 배포 완료 (Docker Compose 스택 정상 동작)
+- [ ] Android 앱 기본 기능 완성 (프로세스 모니터링, 알림, 서버 동기화)
+- [ ] Android-VM 서버 동기화 성공률 ≥ 95%
+- [ ] Label Studio 라벨링 완료 (게임별 300-500장)
+- [ ] OCR 정확도 ≥ 85% (Label Studio BBox 기반)
 
 ### Phase 2 성공 기준
+- [ ] 클라우드 배포 완료 (Uptime ≥ 99%)
+- [ ] Android 앱 클라우드 서버 연동 성공
 - [ ] YOLO mAP@0.5 ≥ 90%
 - [ ] YOLO 인식 속도 < 100ms (PC)
 - [ ] AI 행동 분류 정확도 ≥ 70%
 - [ ] AI 자원 예측 MAE ≤ 20 (스타레일 기준)
-- [ ] 모바일 앱 프로토타입 동작
+- [ ] Android 앱 AI 예측 통합 완료
 
 ### Phase 3 성공 기준
 - [ ] 앱스토어 정식 출시 (Google Play, App Store)
@@ -751,7 +881,7 @@ graph TD
     style Phase4 fill:#9370DB
 ```
 
-**핵심**: Phase 1의 클라우드 기반이 모든 후속 Phase의 토대
+**핵심**: Phase 1의 로컬 아키텍처(VM + Docker + Android)가 모든 후속 Phase의 토대
 
 ---
 
@@ -761,28 +891,39 @@ graph TD
 
 **작업 0. [3일 내]** Git 브랜치 전략 수립
 - `develop` 브랜치 생성
-- `feature/phase-1-cloud` 브랜치 생성
+- `feature/phase-1-vm-server` 브랜치 생성 (VM + Docker 서버)
+- `feature/phase-1-android` 브랜치 생성 (Android 앱)
 - 브랜치 전략 문서 작성 (`docs/git-workflow.md`)
 
-**작업 1. [1주일 내]** 클라우드 제공자 선택 및 계정 셋업
-- Vercel + Supabase (무료 티어) 또는 AWS Free Tier
-- FastAPI 서버 로컬 테스트 환경 구축
-- Docker 컨테이너화
+**작업 1. [1주일 내]** VM 환경 셋업 및 Docker 컨테이너 구축
+- VirtualBox/VMware로 Ubuntu VM 생성
+- Docker, Docker Compose 설치
+- `docker-compose.yml` 작성 (FastAPI + PostgreSQL + nginx)
+- VM 네트워크 설정 (Host-Only + NAT)
 
-**작업 2. [2주일 내]** 클라우드 백엔드 기본 API 개발
+**작업 2. [2주일 내]** FastAPI 백엔드 기본 API 개발
 - `POST /api/v1/sessions` 구현
+- `POST /api/v1/events` 구현
 - `GET /api/v1/sync/{user_id}` 구현
 - JWT 인증 기본 구조
+- PostgreSQL 스키마 설계 및 마이그레이션
 
-**작업 3. [3주일 내]** OCR 라이브러리 비교 테스트
+**작업 3. [3주일 내]** Android 프로젝트 셋업 및 기본 기능 구현
+- Android Studio 프로젝트 생성 (Kotlin + Jetpack Compose)
+- UsageStatsManager로 게임 프로세스 모니터링
+- Room 데이터베이스 설정
+- VM 서버 API 연동 (Retrofit)
+
+**작업 4. [1개월 내]** Label Studio 환경 구축 및 라벨링 시작
+- Docker로 Label Studio 설치
+- 기존 녹화 영상에서 프레임 추출 (FFmpeg)
+- BBox 라벨링 템플릿 설정
+- 게임별 300-500장 라벨링 시작
+
+**작업 5. [1.5개월 내]** OCR 라이브러리 비교 테스트
 - Tesseract, EasyOCR, PaddleOCR 벤치마크
-- 해상도별/스케일링별 정확도 측정
-- 최적 라이브러리 선택
-
-**작업 4. [1개월 내]** PC 클라이언트 클라우드 동기화 통합
-- 로그인 UI 추가
-- 세션 데이터 클라우드 업로드 기능
-- 동기화 성공률 테스트
+- Label Studio BBox로 OCR 정확도 측정
+- 최적 라이브러리 선택 및 `bbox_config.json` 생성
 
 ---
 
@@ -822,10 +963,15 @@ graph TD
   - Phase 2에 YOLO + AI 예측 모델 통합
   - Phase 3을 모바일 앱 집중
   - Phase 4에 VLM 보조 시스템 추가
+- **v0.3 (2025-10-27)**: Phase 1 로컬 환경 중심으로 재구성
+  - Phase 1을 VM + Docker + Android + Label Studio로 변경
+  - 클라우드 마이그레이션을 Phase 2로 이동 (비용 절감)
+  - 하드코딩 BBox 대신 Label Studio 기반 데이터 수집
+  - Android 앱 MVP를 Phase 1에 통합
 
 ### 다음 리뷰 예정일
-- **Phase 1 시작 후 1개월**: 클라우드 API 진행 상황 점검
-- **Phase 1 완료 시**: Phase 2 YOLO 학습 상세 계획 업데이트
+- **Phase 1 시작 후 1개월**: VM 서버 + Android 앱 진행 상황 점검
+- **Phase 1 완료 시**: Phase 2 클라우드 마이그레이션 및 YOLO 학습 상세 계획 업데이트
 
 ---
 
@@ -841,6 +987,6 @@ graph TD
 
 **작성자**: HomeworkHelper Development Team
 **최종 수정**: 2025-10-27
-**문서 버전**: v0.2 (Cross-Platform Architecture)
+**문서 버전**: v0.3 (Local-First Development Strategy)
 
-**다음 목표**: Phase 1 클라우드 백엔드 구축 시작 🚀
+**다음 목표**: Phase 1 VM 서버 + Android 앱 + Label Studio 환경 구축 시작 🚀
