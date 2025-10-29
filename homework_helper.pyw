@@ -16,13 +16,13 @@ from typing import List, Optional, Dict, Any
 api_server_process = None
 
 # 새로 분리된 모듈 imports
-from admin_utils import check_admin_requirement, is_admin
-from main_window import MainWindow
-from instance_manager import run_with_single_instance_check, SingleInstanceApplication
+from src.utils.admin import check_admin_requirement, is_admin
+from src.gui.main_window import MainWindow
+from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QFontDatabase, QFont
-from utils import get_bundle_resource_path
-from api_client import ApiClient
+from src.utils.common import get_bundle_resource_path
+from src.api.client import ApiClient
 
 # Windows 전용 모듈 임포트 (선택적)
 if os.name == 'nt':
@@ -285,8 +285,8 @@ def run_server_main():
     # --- main.py의 내용을 여기로 통합 ---
     from fastapi import FastAPI, Depends, HTTPException
     from sqlalchemy.orm import Session
-    import crud, models, schemas
-    from database import SessionLocal, engine
+    from src.data import crud, models, schemas
+    from src.data.database import SessionLocal, engine
 
     # 데이터베이스 무결성 확인 및 복구
     logger.info("데이터베이스 무결성 확인 중...")
@@ -518,7 +518,7 @@ def run_server_main():
 
             # 1. 데이터베이스 WAL 체크포인트 실행 (가장 중요!)
             try:
-                from database import engine
+                from src.data.database import engine
                 from sqlalchemy import text
                 with engine.connect() as conn:
                     # TRUNCATE: WAL 파일의 모든 내용을 .db에 기록하고 WAL 파일을 삭제
@@ -530,7 +530,7 @@ def run_server_main():
 
             # 2. 데이터베이스 엔진 정리
             try:
-                from database import engine
+                from src.data.database import engine
                 engine.dispose()
                 print("✓ 데이터베이스 엔진 정리 완료")
             except Exception as e:

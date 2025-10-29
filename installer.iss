@@ -2,7 +2,7 @@
 ; Inno Setup 6.x 이상 필요 (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "HomeworkHelper"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
