@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-PyInstaller 자동 빌드 스크립트 (onedir + Inno Setup)
+PyInstaller 자동 빌드 스크립트 (Portable + Installer)
 - .spec 파일 기반 빌드 (onedir 모드)
-- ZIP 배포 파일 자동 생성
-- Inno Setup 인스톨러 자동 생성 (선택적)
-- release 폴더에 모든 배포 파일 출력
+- ZIP 배포 파일 자동 생성 (Portable 버전)
+- Inno Setup 인스톨러 자동 생성
+- release 폴더에 최종 배포 파일 출력 (ZIP + Setup.exe)
 """
 
 import os
@@ -170,36 +170,6 @@ def create_installer():
         return False
 
 
-def copy_onedir_to_release():
-    """onedir 폴더를 release 폴더에 복사 (테스트용)"""
-    print_section("onedir 폴더 복사 (테스트용)")
-
-    if not APP_FOLDER.exists():
-        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
-        return False
-
-    ensure_release_dir()
-    dest_folder = RELEASE_DIR / APP_NAME
-
-    try:
-        if dest_folder.exists():
-            shutil.rmtree(dest_folder)
-
-        shutil.copytree(APP_FOLDER, dest_folder)
-
-        # 폴더 크기 계산
-        total_size = sum(f.stat().st_size for f in dest_folder.rglob('*') if f.is_file())
-        size_mb = total_size / (1024 * 1024)
-
-        print(f"[OK] 폴더 복사 완료: {dest_folder}")
-        print(f"  총 크기: {size_mb:.2f} MB")
-        print(f"  실행파일: {dest_folder / (APP_NAME + '.exe')}")
-        return True
-    except Exception as e:
-        print(f"[오류] 폴더 복사 실패: {e}")
-        return False
-
-
 def print_summary():
     """빌드 결과 요약"""
     print_section("빌드 완료 - 결과 요약")
@@ -225,14 +195,6 @@ def print_summary():
         print(f"  [Portable] {zip_file.name} ({size_mb:.2f} MB)")
         has_files = True
 
-    # 3. onedir 폴더
-    onedir_folder = RELEASE_DIR / APP_NAME
-    if onedir_folder.exists():
-        total_size = sum(f.stat().st_size for f in onedir_folder.rglob('*') if f.is_file())
-        size_mb = total_size / (1024 * 1024)
-        print(f"  [테스트용] {APP_NAME}/ 폴더 ({size_mb:.2f} MB)")
-        has_files = True
-
     if not has_files:
         print("  (파일 없음)")
 
@@ -241,14 +203,13 @@ def print_summary():
     print("\n사용 방법:")
     print("  1. 설치 프로그램: *Setup*.exe 실행")
     print("  2. Portable 버전: *.zip 압축 해제 후 실행")
-    print(f"  3. 테스트: release/{APP_NAME}/{APP_NAME}.exe 직접 실행")
 
 
 def main():
     """메인 함수"""
-    print_section("HomeworkHelper 빌드 스크립트 (onedir + Installer)")
+    print_section("HomeworkHelper 빌드 스크립트 (Portable + Installer)")
     print(f"프로젝트 경로: {PROJECT_ROOT}")
-    print(f"빌드 모드: onedir (폴더 배포)")
+    print(f"최종 결과물: ZIP (Portable) + 인스톨러 (Setup.exe)")
     print(f"버전: {APP_VERSION}")
 
     # 0. .spec 파일 존재 확인
@@ -273,10 +234,6 @@ def main():
 
     # 3-2. 인스톨러 생성 (Inno Setup 있는 경우)
     if create_installer():
-        success_count += 1
-
-    # 3-3. onedir 폴더 복사 (테스트용)
-    if copy_onedir_to_release():
         success_count += 1
 
     # 4. 결과 요약

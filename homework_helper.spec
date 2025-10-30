@@ -3,7 +3,7 @@
 # onedir 모드: 모든 파일을 폴더에 배포하여 MEI 임시 폴더 문제 해결
 
 a = Analysis(
-    ['c:\\VSCode\\Projects\\HomeworkHelperServer\\homework_helper.pyw'],
+    ['homework_helper.pyw'],
     pathex=[],
     binaries=[],
     datas=[('font', 'font'), ('img', 'img')],
@@ -35,7 +35,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['c:\\VSCode\\Projects\\HomeworkHelperServer\\img\\app_icon.ico'],
+    icon=['img\\app_icon.ico'],
 )
 
 # COLLECT: 모든 파일을 하나의 폴더에 수집 (onedir의 핵심)
