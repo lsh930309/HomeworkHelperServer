@@ -202,15 +202,31 @@ Phase 전체 완료를 기다리지 않고, 기능이 완성될 때마다 `main`
    - `feature/label-studio-templates`
 
 **브랜치 계획** (작은 단위):
-```
-develop
-├── feature/server-initial-setup → v1.0.0
-├── feature/docker-compose-setup → v1.0.0
-├── feature/server-auth-api → v1.0.0
-├── feature/db-schema-setup → v1.0.0
-├── feature/android-project-setup → v1.1.0
-├── feature/android-usage-stats → v1.1.0
-└── feature/label-studio-docker → v1.2.0
+
+```mermaid
+graph TD
+    develop[develop 브랜치]
+
+    develop --> f1[feature/server-initial-setup]
+    develop --> f2[feature/docker-compose-setup]
+    develop --> f3[feature/server-auth-api]
+    develop --> f4[feature/db-schema-setup]
+    develop --> f5[feature/android-project-setup]
+    develop --> f6[feature/android-usage-stats]
+    develop --> f7[feature/label-studio-docker]
+
+    f1 --> v1[v1.0.0 릴리스]
+    f2 --> v1
+    f3 --> v1
+    f4 --> v1
+    f5 --> v11[v1.1.0 릴리스]
+    f6 --> v11
+    f7 --> v12[v1.2.0 릴리스]
+
+    style develop fill:#4a90e2,stroke:#333,stroke-width:2px
+    style v1 fill:#28a745,stroke:#333,stroke-width:2px
+    style v11 fill:#28a745,stroke:#333,stroke-width:2px
+    style v12 fill:#28a745,stroke:#333,stroke-width:2px
 ```
 
 **통합 절차**:

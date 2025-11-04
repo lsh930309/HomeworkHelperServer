@@ -40,48 +40,37 @@ Nginx는 리버스 프록시로서 다음 역할을 합니다:
 
 ## 아키텍처 다이어그램
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Host PC (Windows)                     │
-│                                                              │
-│  ┌─────────────────┐          ┌──────────────────┐          │
-│  │ PC 클라이언트   │          │ Android 에뮬레이터│          │
-│  │ (Phase 0)       │          │ (테스트용)        │          │
-│  └────────┬────────┘          └─────────┬────────┘          │
-│           │                              │                   │
-│           └──────────┬───────────────────┘                   │
-│                      │ HTTP (192.168.x.x:8000)               │
-└──────────────────────┼───────────────────────────────────────┘
-                       │
-                       │ Host-Only Network
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│               Virtual Machine (Ubuntu 22.04 LTS)            │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │          Docker Compose 스택                         │   │
-│  │                                                       │   │
-│  │  ┌────────────────┐       ┌──────────────────┐      │   │
-│  │  │  nginx         │       │  fastapi-server  │      │   │
-│  │  │  (리버스 프록시)│◄──────┤  (Python 3.11)   │      │   │
-│  │  │  Port: 80      │       │  Port: 8000      │      │   │
-│  │  └────────┬───────┘       └─────────┬────────┘      │   │
-│  │           │                          │               │   │
-│  │           │                          ▼               │   │
-│  │           │                 ┌────────────────┐       │   │
-│  │           │                 │  postgres      │       │   │
-│  │           │                 │  (PostgreSQL15)│       │   │
-│  │           │                 │  Port: 5432    │       │   │
-│  │           │                 └────────────────┘       │   │
-│  │           │                                          │   │
-│  │           └─────► Static Files (선택적)              │   │
-│  │                                                       │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  볼륨 (Docker Volumes)                                       │
-│  - postgres-data: PostgreSQL 데이터 영속성                   │
-│  - server-logs: FastAPI 로그 파일                           │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph HostPC["Host PC (Windows)"]
+        PCClient["PC 클라이언트<br/>(Phase 0)"]
+        AndroidEmu["Android 에뮬레이터<br/>(테스트용)"]
+    end
+
+    subgraph VM["Virtual Machine (Ubuntu 22.04 LTS)"]
+        subgraph Docker["Docker Compose 스택"]
+            Nginx["nginx<br/>(리버스 프록시)<br/>Port: 80"]
+            FastAPI["fastapi-server<br/>(Python 3.11)<br/>Port: 8000"]
+            Postgres["postgres<br/>(PostgreSQL 15)<br/>Port: 5432"]
+            StaticFiles["Static Files<br/>(선택적)"]
+        end
+
+        Volumes["볼륨 (Docker Volumes)<br/>- postgres-data<br/>- server-logs"]
+    end
+
+    PCClient -->|HTTP<br/>192.168.x.x:8000| Nginx
+    AndroidEmu -->|HTTP<br/>192.168.x.x:8000| Nginx
+    Nginx -->|프록시| FastAPI
+    FastAPI -->|DB 연결| Postgres
+    Nginx -.->|서빙| StaticFiles
+    Postgres -.->|영속성| Volumes
+
+    style HostPC fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style VM fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    style Docker fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style Nginx fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
+    style FastAPI fill:#ffccbc,stroke:#d84315,stroke-width:2px
+    style Postgres fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
 ```
 
 ---
@@ -457,56 +446,49 @@ settings = Settings()
 
 ### ER 다이어그램
 
-```
-┌─────────────────┐
-│     users       │
-├─────────────────┤
-│ id (PK)         │
-│ username        │
-│ email           │
-│ password_hash   │
-│ created_at      │
-└────────┬────────┘
-         │ 1
-         │
-         │ N
-┌────────▼────────┐
-│    sessions     │
-├─────────────────┤
-│ id (PK)         │
-│ user_id (FK)    │
-│ process_id      │
-│ game_name       │
-│ start_ts        │
-│ end_ts          │
-│ duration        │
-│ created_at      │
-└────────┬────────┘
-         │ 1
-         │
-         │ N
-┌────────▼────────┐
-│     events      │
-├─────────────────┤
-│ id (PK)         │
-│ session_id (FK) │
-│ event_type      │
-│ resource_type   │
-│ value           │
-│ timestamp       │
-│ created_at      │
-└─────────────────┘
+```mermaid
+erDiagram
+    users ||--o{ sessions : "has"
+    sessions ||--o{ events : "contains"
+    sessions ||--o{ predictions : "has"
 
-┌─────────────────┐
-│  predictions    │
-├─────────────────┤
-│ id (PK)         │
-│ session_id (FK) │
-│ predicted_action│
-│ predicted_value │
-│ confidence      │
-│ created_at      │
-└─────────────────┘
+    users {
+        int id PK
+        string username
+        string email
+        string password_hash
+        datetime created_at
+    }
+
+    sessions {
+        int id PK
+        int user_id FK
+        int process_id
+        string game_name
+        datetime start_ts
+        datetime end_ts
+        int duration
+        datetime created_at
+    }
+
+    events {
+        int id PK
+        int session_id FK
+        string event_type
+        string resource_type
+        int value
+        datetime timestamp
+        datetime created_at
+    }
+
+    predictions {
+        int id PK
+        int session_id FK
+        string predicted_action
+        int predicted_value
+        float confidence
+        datetime created_at
+    }
 ```
 
 ### SQLAlchemy 모델 (server/app/models/models.py)

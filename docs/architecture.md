@@ -42,22 +42,31 @@
 
 ### 시스템 구성도
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         HomeworkHelper System                        │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    subgraph System["HomeworkHelper System"]
+        subgraph Desktop["데스크톱 클라이언트 (로컬)<br/>Windows 전용"]
+            GUI["PyQt6 GUI"]
+            EmbeddedAPI["내장 FastAPI<br/>(독립 프로세스)"]
+            SQLite["SQLite DB<br/>(WAL 모드)"]
+            Monitor["Process Monitor<br/>(psutil)"]
+            Scheduler["Scheduler &<br/>Notifier"]
+            Tray["System Tray<br/>Integration"]
+        end
 
-┌───────────────────────────────┐         ┌───────────────────────────┐
-│   데스크톱 클라이언트 (로컬)    │         │   원격 서버 (Docker/VM)    │
-│   Windows 전용                 │         │   Multi-Platform          │
-└───────────────────────────────┘         └───────────────────────────┘
-         │                                           │
-         ├─ PyQt6 GUI                               ├─ FastAPI Server
-         ├─ 내장 FastAPI (독립 프로세스)             ├─ PostgreSQL DB
-         ├─ SQLite DB (WAL 모드)                    ├─ JWT 인증
-         ├─ Process Monitor (psutil)                ├─ CORS 설정
-         ├─ Scheduler & Notifier                    └─ Android 연동 준비
-         └─ System Tray Integration
+        subgraph RemoteServer["원격 서버 (Docker/VM)<br/>Multi-Platform"]
+            FastAPI["FastAPI Server"]
+            PostgreSQL["PostgreSQL DB"]
+            JWT["JWT 인증"]
+            CORS["CORS 설정"]
+            AndroidSync["Android<br/>연동 준비"]
+        end
+    end
+
+    Desktop -.->|Phase 2| RemoteServer
+
+    style Desktop fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style RemoteServer fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 아키텍처 타입
@@ -75,43 +84,46 @@
 
 ### 레이어 구조
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                      Presentation Layer                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐                │
-│  │ MainWindow │  │  Dialogs   │  │ TrayManager│                │
-│  │  (PyQt6)   │  │  (PyQt6)   │  │  (PyQt6)   │                │
-│  └────────────┘  └────────────┘  └────────────┘                │
-└──────────────────────────────────────────────────────────────────┘
-                            ↓
-┌──────────────────────────────────────────────────────────────────┐
-│                      Business Logic Layer                        │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────┐ │
-│  │  Process   │  │ Scheduler  │  │  Notifier  │  │  Utils   │ │
-│  │  Monitor   │  │            │  │            │  │          │ │
-│  └────────────┘  └────────────┘  └────────────┘  └──────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-                            ↓
-┌──────────────────────────────────────────────────────────────────┐
-│                      API Layer (독립 프로세스)                    │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                  FastAPI Server (main.py)                  │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │ │
-│  │  │  Routes  │  │   CRUD   │  │ Schemas  │               │ │
-│  │  └──────────┘  └──────────┘  └──────────┘               │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-                            ↓
-┌──────────────────────────────────────────────────────────────────┐
-│                      Data Layer                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │               SQLite Database (WAL Mode)                   │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │ │
-│  │  │ Process  │  │ Session  │  │ Shortcut │  │ Settings │ │ │
-│  │  │  Table   │  │  Table   │  │  Table   │  │  Table   │ │ │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph PresentationLayer["Presentation Layer"]
+        MainWindow["MainWindow<br/>(PyQt6)"]
+        Dialogs["Dialogs<br/>(PyQt6)"]
+        TrayManager["TrayManager<br/>(PyQt6)"]
+    end
+
+    subgraph BusinessLogicLayer["Business Logic Layer"]
+        ProcessMonitor["Process<br/>Monitor"]
+        Scheduler["Scheduler"]
+        Notifier["Notifier"]
+        Utils["Utils"]
+    end
+
+    subgraph APILayer["API Layer (독립 프로세스)"]
+        subgraph FastAPIServer["FastAPI Server (main.py)"]
+            Routes["Routes"]
+            CRUD["CRUD"]
+            Schemas["Schemas"]
+        end
+    end
+
+    subgraph DataLayer["Data Layer"]
+        subgraph SQLiteDB["SQLite Database (WAL Mode)"]
+            ProcessTable["Process<br/>Table"]
+            SessionTable["Session<br/>Table"]
+            ShortcutTable["Shortcut<br/>Table"]
+            SettingsTable["Settings<br/>Table"]
+        end
+    end
+
+    PresentationLayer --> BusinessLogicLayer
+    BusinessLogicLayer --> APILayer
+    APILayer --> DataLayer
+
+    style PresentationLayer fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    style BusinessLogicLayer fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    style APILayer fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style DataLayer fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
 ```
 
 ### 핵심 파일 구조
@@ -187,23 +199,27 @@ api_server_process.start()
 
 ### 컨테이너 구성
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose Stack                      │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    subgraph DockerCompose["Docker Compose Stack"]
+        FastAPIServer["FastAPI Server<br/>(Port 8000)<br/><br/>- JWT 인증<br/>- CORS 설정<br/>- API v1"]
+        PostgreSQL["PostgreSQL<br/>(Port 5432)<br/><br/>- 볼륨 마운트<br/>- Health Check<br/>- 자동 재시작"]
+        Nginx["Nginx<br/>(Phase 2)<br/><br/>- 리버스 프록시<br/>- SSL/TLS"]
 
-┌──────────────────┐    ┌──────────────────┐    ┌────────────┐
-│  FastAPI Server  │───▶│   PostgreSQL     │    │   Nginx    │
-│  (Port 8000)     │    │   (Port 5432)    │    │ (Phase 2)  │
-│                  │    │                  │    │            │
-│ - JWT 인증       │    │ - 볼륨 마운트    │    │ - 리버스   │
-│ - CORS 설정      │    │ - Health Check   │    │   프록시   │
-│ - API v1         │    │ - 자동 재시작    │    │ - SSL/TLS  │
-└──────────────────┘    └──────────────────┘    └────────────┘
-        │                        │
-        └────────────────────────┘
-                  │
-        homework-network (bridge)
+        Network["homework-network<br/>(bridge)"]
+    end
+
+    FastAPIServer -->|DB 연결| PostgreSQL
+    Nginx -.->|Phase 2| FastAPIServer
+
+    FastAPIServer ---|네트워크| Network
+    PostgreSQL ---|네트워크| Network
+    Nginx ---|네트워크| Network
+
+    style FastAPIServer fill:#ffccbc,stroke:#d84315,stroke-width:2px
+    style PostgreSQL fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
+    style Nginx fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
+    style Network fill:#f5f5f5,stroke:#757575,stroke-width:2px
 ```
 
 ### 서버 디렉토리 구조
@@ -291,60 +307,57 @@ class Settings(BaseSettings):
 
 ### ERD (Entity Relationship Diagram)
 
-```
-┌─────────────────────────┐
-│   managed_processes     │
-├─────────────────────────┤
-│ id (PK)                 │──┐
-│ name                    │  │
-│ monitoring_path         │  │
-│ launch_path             │  │
-│ server_reset_time_str   │  │
-│ user_cycle_hours        │  │
-│ mandatory_times_str     │  │  1:N
-│ is_mandatory_time_...   │  │
-│ last_played_timestamp   │  │
-│ original_launch_path    │  │
-└─────────────────────────┘  │
-                             │
-                             ▼
-┌─────────────────────────┐
-│   process_sessions      │◀─┘
-├─────────────────────────┤
-│ id (PK, AI)             │
-│ process_id (FK)         │
-│ process_name            │
-│ start_timestamp         │
-│ end_timestamp           │
-│ session_duration        │
-└─────────────────────────┘
+```mermaid
+erDiagram
+    managed_processes ||--o{ process_sessions : "has"
 
+    managed_processes {
+        string id PK
+        string name
+        string monitoring_path
+        string launch_path
+        string server_reset_time_str
+        int user_cycle_hours
+        json mandatory_times_str
+        bool is_mandatory_time_enabled
+        float last_played_timestamp
+        string original_launch_path
+    }
 
-┌─────────────────────────┐
-│   web_shortcuts         │
-├─────────────────────────┤
-│ id (PK)                 │
-│ name                    │
-│ url                     │
-│ refresh_time_str        │
-│ last_reset_timestamp    │
-└─────────────────────────┘
+    process_sessions {
+        int id PK
+        string process_id FK
+        string process_name
+        float start_timestamp
+        float end_timestamp
+        float session_duration
+    }
 
+    web_shortcuts {
+        string id PK
+        string name
+        string url
+        string refresh_time_str
+        float last_reset_timestamp
+    }
 
-┌─────────────────────────┐
-│   global_settings       │
-├─────────────────────────┤
-│ id (PK, fixed=1)        │
-│ sleep_start_time_str    │
-│ sleep_end_time_str      │
-│ sleep_correction_...    │
-│ cycle_deadline_...      │
-│ run_on_startup          │
-│ lock_window_resize      │
-│ always_on_top           │
-│ run_as_admin            │
-│ notify_on_*             │ (6개 알림 플래그)
-└─────────────────────────┘
+    global_settings {
+        int id PK "fixed=1"
+        string sleep_start_time_str
+        string sleep_end_time_str
+        float sleep_correction_advance_notify_hours
+        float cycle_deadline_advance_notify_hours
+        bool run_on_startup
+        bool lock_window_resize
+        bool always_on_top
+        bool run_as_admin
+        bool notify_on_launch_success
+        bool notify_on_launch_failure
+        bool notify_on_mandatory_time
+        bool notify_on_cycle_deadline
+        bool notify_on_sleep_correction
+        bool notify_on_daily_reset
+    }
 ```
 
 ### 주요 테이블 상세
@@ -571,190 +584,63 @@ def create_process(db: Session, process: ProcessCreateSchema, max_retries=3):
 
 ### 1. 프로세스 시작 감지 흐름
 
-```
-┌──────────────┐
-│ 사용자가 게임 │
-│   실행       │
-└──────┬───────┘
-       │
-       ▼
-┌─────────────────────────────────────────────┐
-│ 1. psutil.process_iter()                    │
-│    → 시스템 프로세스 스캔                    │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 2. ProcessMonitor.check_and_update_statuses()│
-│    → monitoring_path 매칭                    │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 3. 신규 프로세스 감지                        │
-│    → proc.create_time() 획득                 │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 4. API Client                                │
-│    → POST /sessions                          │
-│    {                                         │
-│      process_id: "xxx",                      │
-│      process_name: "원신",                   │
-│      start_timestamp: 1759405875.47          │
-│    }                                         │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 5. FastAPI (main.py)                         │
-│    → crud.create_session()                   │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 6. Database (SQLite)                         │
-│    INSERT INTO process_sessions              │
-│    VALUES (id, process_id, process_name,     │
-│            start_timestamp, NULL, NULL)      │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 7. active_monitored_processes에 추가         │
-│    {                                         │
-│      process_id: {                           │
-│        pid: 12345,                           │
-│        exe: "C:\\...\\game.exe",             │
-│        start_time_approx: 1759405875.47,     │
-│        session_id: 1                         │
-│      }                                       │
-│    }                                         │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 8. 콘솔 로그 출력                            │
-│    [2025-10-29 12:34:56] Process STARTED:   │
-│    '원신' (PID: 12345, Session ID: 1)        │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Start["사용자가 게임 실행"] --> Step1["1. psutil.process_iter()<br/>→ 시스템 프로세스 스캔"]
+    Step1 --> Step2["2. ProcessMonitor.check_and_update_statuses()<br/>→ monitoring_path 매칭"]
+    Step2 --> Step3["3. 신규 프로세스 감지<br/>→ proc.create_time() 획득"]
+    Step3 --> Step4["4. API Client<br/>→ POST /sessions<br/>{ process_id, process_name,<br/>start_timestamp }"]
+    Step4 --> Step5["5. FastAPI (main.py)<br/>→ crud.create_session()"]
+    Step5 --> Step6["6. Database (SQLite)<br/>INSERT INTO process_sessions<br/>VALUES (id, process_id, process_name,<br/>start_timestamp, NULL, NULL)"]
+    Step6 --> Step7["7. active_monitored_processes에 추가<br/>{ pid, exe, start_time_approx, session_id }"]
+    Step7 --> Step8["8. 콘솔 로그 출력<br/>[2025-10-29 12:34:56] Process STARTED:<br/>'원신' (PID: 12345, Session ID: 1)"]
+
+    style Start fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    style Step6 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style Step8 fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 2. 프로세스 종료 감지 흐름
 
-```
-┌──────────────┐
-│ 사용자가 게임 │
-│   종료       │
-└──────┬───────┘
-       │
-       ▼
-┌─────────────────────────────────────────────┐
-│ 1. psutil에서 프로세스 사라짐                 │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 2. ProcessMonitor.check_and_update_statuses()│
-│    → monitoring_path 매칭 실패               │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 3. active_monitored_processes에서 제거       │
-│    → session_id 추출                         │
-│    → termination_time = time.time()          │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 4. API Client                                │
-│    → PUT /sessions/{session_id}/end          │
-│    {                                         │
-│      end_timestamp: 1759405938.14            │
-│    }                                         │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 5. FastAPI (main.py)                         │
-│    → crud.end_session()                      │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 6. Database (SQLite)                         │
-│    UPDATE process_sessions                   │
-│    SET end_timestamp = 1759405938.14,        │
-│        session_duration = 62.67              │
-│    WHERE id = 1                              │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 7. last_played_timestamp 업데이트            │
-│    → PUT /processes/{process_id}             │
-│    { last_played_timestamp: 1759405938.14 }  │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 8. 콘솔 로그 출력                            │
-│    [2025-10-29 12:35:38] Process STOPPED:   │
-│    '원신' (Was PID: 12345, Session ID: 1,   │
-│     Duration: 62.67s)                        │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Start["사용자가 게임 종료"] --> Step1["1. psutil에서 프로세스 사라짐"]
+    Step1 --> Step2["2. ProcessMonitor.check_and_update_statuses()<br/>→ monitoring_path 매칭 실패"]
+    Step2 --> Step3["3. active_monitored_processes에서 제거<br/>→ session_id 추출<br/>→ termination_time = time.time()"]
+    Step3 --> Step4["4. API Client<br/>→ PUT /sessions/{session_id}/end<br/>{ end_timestamp }"]
+    Step4 --> Step5["5. FastAPI (main.py)<br/>→ crud.end_session()"]
+    Step5 --> Step6["6. Database (SQLite)<br/>UPDATE process_sessions<br/>SET end_timestamp, session_duration<br/>WHERE id = session_id"]
+    Step6 --> Step7["7. last_played_timestamp 업데이트<br/>→ PUT /processes/{process_id}<br/>{ last_played_timestamp }"]
+    Step7 --> Step8["8. 콘솔 로그 출력<br/>[2025-10-29 12:35:38] Process STOPPED:<br/>'원신' (Was PID: 12345, Session ID: 1,<br/>Duration: 62.67s)"]
+
+    style Start fill:#ffebee,stroke:#c62828,stroke-width:2px
+    style Step6 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style Step8 fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 3. 사용자 인터랙션 흐름
 
-```
-┌──────────────┐
-│ 사용자 행동   │
-└──────┬───────┘
-       │
-       ├─ [프로세스 추가 버튼 클릭]
-       │   ↓
-       │   ┌─────────────────────────────────┐
-       │   │ 1. dialogs.py                   │
-       │   │    → AddProcessDialog.show()    │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 2. 사용자 입력                  │
-       │   │    - 이름, 경로, 리셋 시간 등   │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 3. API Client                   │
-       │   │    → POST /processes            │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 4. Database 저장                │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 5. main_window.py               │
-       │   │    → 테이블 행 추가              │
-       │   └─────────────────────────────────┘
-       │
-       ├─ [실행 버튼 클릭]
-       │   ↓
-       │   ┌─────────────────────────────────┐
-       │   │ 1. main_window.py               │
-       │   │    → launch_selected_process()  │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 2. process_utils.py             │
-       │   │    → subprocess.Popen()         │
-       │   └───────────┬─────────────────────┘
-       │               ▼
-       │   ┌─────────────────────────────────┐
-       │   │ 3. 성공/실패 알림               │
-       │   │    → GUINotificationHandler     │
-       │   └─────────────────────────────────┘
-       │
-       └─ [시스템 트레이 아이콘 클릭]
-           ↓
-           ┌─────────────────────────────────┐
-           │ 1. tray_manager.py              │
-           │    → TrayManager.show_menu()    │
-           └───────────┬─────────────────────┘
-                       ▼
-           ┌─────────────────────────────────┐
-           │ 2. 컨텍스트 메뉴 표시            │
-           │    - 창 표시/숨기기              │
-           │    - 종료                        │
-           └─────────────────────────────────┘
+```mermaid
+flowchart TD
+    Start["사용자 행동"] --> Action1{액션 선택}
+
+    Action1 -->|프로세스 추가<br/>버튼 클릭| Add1["1. dialogs.py<br/>→ AddProcessDialog.show()"]
+    Add1 --> Add2["2. 사용자 입력<br/>- 이름, 경로, 리셋 시간 등"]
+    Add2 --> Add3["3. API Client<br/>→ POST /processes"]
+    Add3 --> Add4["4. Database 저장"]
+    Add4 --> Add5["5. main_window.py<br/>→ 테이블 행 추가"]
+
+    Action1 -->|실행 버튼<br/>클릭| Launch1["1. main_window.py<br/>→ launch_selected_process()"]
+    Launch1 --> Launch2["2. process_utils.py<br/>→ subprocess.Popen()"]
+    Launch2 --> Launch3["3. 성공/실패 알림<br/>→ GUINotificationHandler"]
+
+    Action1 -->|시스템 트레이<br/>아이콘 클릭| Tray1["1. tray_manager.py<br/>→ TrayManager.show_menu()"]
+    Tray1 --> Tray2["2. 컨텍스트 메뉴 표시<br/>- 창 표시/숨기기<br/>- 종료"]
+
+    style Start fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style Action1 fill:#fff3e0,stroke:#f57c00,stroke-width:3px
+    style Add4 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style Launch3 fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
 ```
 
 ---
