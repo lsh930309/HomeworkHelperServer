@@ -64,9 +64,6 @@ graph LR
     end
 
     Desktop -.->|Phase 2| RemoteServer
-
-    style Desktop fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style RemoteServer fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 아키텍처 타입
@@ -119,11 +116,6 @@ graph TB
     PresentationLayer --> BusinessLogicLayer
     BusinessLogicLayer --> APILayer
     APILayer --> DataLayer
-
-    style PresentationLayer fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    style BusinessLogicLayer fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style APILayer fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style DataLayer fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
 ```
 
 ### 핵심 파일 구조
@@ -215,11 +207,6 @@ graph LR
     FastAPIServer ---|네트워크| Network
     PostgreSQL ---|네트워크| Network
     Nginx ---|네트워크| Network
-
-    style FastAPIServer fill:#ffccbc,stroke:#d84315,stroke-width:2px
-    style PostgreSQL fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
-    style Nginx fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
-    style Network fill:#f5f5f5,stroke:#757575,stroke-width:2px
 ```
 
 ### 서버 디렉토리 구조
@@ -594,10 +581,6 @@ flowchart TD
     Step5 --> Step6["6. Database (SQLite)<br/>INSERT INTO process_sessions<br/>VALUES (id, process_id, process_name,<br/>start_timestamp, NULL, NULL)"]
     Step6 --> Step7["7. active_monitored_processes에 추가<br/>{ pid, exe, start_time_approx, session_id }"]
     Step7 --> Step8["8. 콘솔 로그 출력<br/>[2025-10-29 12:34:56] Process STARTED:<br/>'원신' (PID: 12345, Session ID: 1)"]
-
-    style Start fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    style Step6 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style Step8 fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 2. 프로세스 종료 감지 흐름
@@ -612,10 +595,6 @@ flowchart TD
     Step5 --> Step6["6. Database (SQLite)<br/>UPDATE process_sessions<br/>SET end_timestamp, session_duration<br/>WHERE id = session_id"]
     Step6 --> Step7["7. last_played_timestamp 업데이트<br/>→ PUT /processes/{process_id}<br/>{ last_played_timestamp }"]
     Step7 --> Step8["8. 콘솔 로그 출력<br/>[2025-10-29 12:35:38] Process STOPPED:<br/>'원신' (Was PID: 12345, Session ID: 1,<br/>Duration: 62.67s)"]
-
-    style Start fill:#ffebee,stroke:#c62828,stroke-width:2px
-    style Step6 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style Step8 fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 3. 사용자 인터랙션 흐름
@@ -636,11 +615,6 @@ flowchart TD
 
     Action1 -->|시스템 트레이<br/>아이콘 클릭| Tray1["1. tray_manager.py<br/>→ TrayManager.show_menu()"]
     Tray1 --> Tray2["2. 컨텍스트 메뉴 표시<br/>- 창 표시/숨기기<br/>- 종료"]
-
-    style Start fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style Action1 fill:#fff3e0,stroke:#f57c00,stroke-width:3px
-    style Add4 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style Launch3 fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
 ```
 
 ---

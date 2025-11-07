@@ -27,53 +27,27 @@
 
 ## 🏗️ 크로스 플랫폼 아키텍처
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     사용자 디바이스                           │
-├─────────────────────────┬───────────────────────────────────┤
-│   PC Client             │   Mobile Client                   │
-│   (Ground-Truth)        │   (Event Logger)                  │
-│                         │                                   │
-│  • 화면 캡처 (mss)      │   • 게임 프로세스 감지            │
-│  • YOLO UI 탐지         │   • 터치 이벤트 (선택)            │
-│  • OCR 숫자 인식        │   • 타임스탬프 기록               │
-│  • 정확한 자원 데이터   │   • 최소 배터리 소모              │
-│                         │                                   │
-│  출력: (timestamp,      │   출력: (timestamp,               │
-│         resource_type,  │         action_type)              │
-│         exact_value)    │                                   │
-└──────────┬──────────────┴──────────┬────────────────────────┘
-           │                         │
-           └──────────┬──────────────┘
-                      ▼
-      ┌───────────────────────────────────────┐
-      │        Cloud Backend (AI Brain)       │
-      │                                       │
-      │  🔄 데이터 동기화                      │
-      │    • PC/모바일 타임라인 통합           │
-      │    • 사용자별 세션 재구성              │
-      │                                       │
-      │  🧠 AI 예측 엔진                       │
-      │    • Model 1: 행동 분류 (XGBoost)     │
-      │    • Model 2: 자원 예측 (Regression)  │
-      │                                       │
-      │  📦 모델 학습/배포                     │
-      │    • PC 데이터로 학습                  │
-      │    • 모바일 요청 시 예측 제공          │
-      │                                       │
-      │  🗄️ Database (PostgreSQL/MongoDB)    │
-      │    • 세션, 이벤트, 예측 결과           │
-      └───────────────────────────────────────┘
-                      ▲
-                      │
-      ┌───────────────┴───────────────┐
-      │                               │
-      ▼                               ▼
-┌──────────┐                   ┌──────────┐
-│ PC 앱    │                   │ 모바일 앱 │
-│ 동기화   │                   │ AI 예측  │
-│ + 예측   │                   │ 결과 표시 │
-└──────────┘                   └──────────┘
+```mermaid
+flowchart TB
+    subgraph Devices["사용자 디바이스"]
+        PC["PC Client<br/>(Ground-Truth)<br/>━━━━━━━━━<br/>• 화면 캡처 (mss)<br/>• YOLO UI 탐지<br/>• OCR 숫자 인식<br/>• 정확한 자원 데이터<br/>━━━━━━━━━<br/>출력: (timestamp,<br/>resource_type,<br/>exact_value)"]
+        Mobile["Mobile Client<br/>(Event Logger)<br/>━━━━━━━━━<br/>• 게임 프로세스 감지<br/>• 터치 이벤트 (선택)<br/>• 타임스탬프 기록<br/>• 최소 배터리 소모<br/>━━━━━━━━━<br/>출력: (timestamp,<br/>action_type)"]
+    end
+
+    subgraph Backend["Cloud Backend (AI Brain)"]
+        Sync["🔄 데이터 동기화<br/>• PC/모바일 타임라인 통합<br/>• 사용자별 세션 재구성"]
+        AI["🧠 AI 예측 엔진<br/>• Model 1: 행동 분류 (XGBoost)<br/>• Model 2: 자원 예측 (Regression)"]
+        Model["📦 모델 학습/배포<br/>• PC 데이터로 학습<br/>• 모바일 요청 시 예측 제공"]
+        DB["🗄️ Database (PostgreSQL/MongoDB)<br/>• 세션, 이벤트, 예측 결과"]
+    end
+
+    PCApp["PC 앱<br/>동기화 + 예측"]
+    MobileApp["모바일 앱<br/>AI 예측 결과 표시"]
+
+    PC --> Backend
+    Mobile --> Backend
+    Backend --> PCApp
+    Backend --> MobileApp
 ```
 
 **핵심 원칙**:
@@ -375,6 +349,20 @@
     - 해상도 3종: FHD (1920x1080), QHD (2560x1440), 4K (3840x2160)
     - UI 스케일링 3종: 100%, 125%, 150%
     - 게임별 최소 500장 (9가지 환경 × 약 55장)
+  - **비디오 타임라인 기반 라벨링** (Label Studio):
+    - 개별 프레임이 아닌 **비디오 타임라인**에 직접 라벨링
+    - 예: `[01:30 ~ 01:35]` 구간에 `quest_hud_bbox` 라벨 할당
+    - BBOX 안의 텍스트 내용은 라벨링하지 않음 (OCR의 몫)
+  - **SSIM 기반 스마트 샘플링**:
+    - 장면 변화 감지 (Scene Change Detection) 로직 구현
+    - 이전 프레임과 SSIM 유사도 측정:
+      - SSIM > 0.98: "잠수 구간" → 프레임 버림 (과적합 방지)
+      - SSIM < 0.85: "UI 팝업/배경 변화" → 프레임 저장
+    - Python 스크립트: `scripts/smart_sampling.py` (OpenCV, scikit-image)
+  - **데이터 품질 확보 전략**:
+    - 단순 증강(Padding, Cropping)보다 **실제 환경 데이터 우선**
+    - 다양한 해상도 및 화면 비율(16:9, 21:9 등)로 게임 재녹화
+    - 게임 엔진이 UI를 재배치한 실제 화면 학습
   - Label Studio로 BBox 라벨링 → YOLO 형식 (COCO 또는 YOLO txt) Export
 - [ ] **YOLOv8-nano 학습**
   - 경량 모델 선택 (nano 또는 small): 실시간 처리 + 낮은 리소스
@@ -873,12 +861,6 @@ graph TD
     Phase2 -.->|AI 모델| Phase3
     Phase3 -.->|모바일 피드백| Phase2
     Phase4 -.->|VLM 재보정| Phase2
-
-    style Phase0 fill:#90EE90
-    style Phase1 fill:#FFD700
-    style Phase2 fill:#FFA500
-    style Phase3 fill:#FF6347
-    style Phase4 fill:#9370DB
 ```
 
 **핵심**: Phase 1의 로컬 아키텍처(VM + Docker + Android)가 모든 후속 Phase의 토대

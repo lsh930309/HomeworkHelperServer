@@ -222,11 +222,6 @@ graph TD
     f5 --> v11[v1.1.0 릴리스]
     f6 --> v11
     f7 --> v12[v1.2.0 릴리스]
-
-    style develop fill:#4a90e2,stroke:#333,stroke-width:2px
-    style v1 fill:#28a745,stroke:#333,stroke-width:2px
-    style v11 fill:#28a745,stroke:#333,stroke-width:2px
-    style v12 fill:#28a745,stroke:#333,stroke-width:2px
 ```
 
 **통합 절차**:

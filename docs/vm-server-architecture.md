@@ -64,13 +64,6 @@ graph TB
     FastAPI -->|DB 연결| Postgres
     Nginx -.->|서빙| StaticFiles
     Postgres -.->|영속성| Volumes
-
-    style HostPC fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style VM fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style Docker fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style Nginx fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
-    style FastAPI fill:#ffccbc,stroke:#d84315,stroke-width:2px
-    style Postgres fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
 ```
 
 ---
