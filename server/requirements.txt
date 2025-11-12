@@ -22,6 +22,7 @@ alembic>=1.13.0,<2.0.0
 # ===========================
 python-jose[cryptography]>=3.3.0,<4.0.0
 passlib[bcrypt]>=1.7.4,<2.0.0
+bcrypt>=4.0.0,<5.0.0  # passlib 호환성 (5.x와 호환 문제)
 
 # ===========================
 # 환경 변수 및 설정
@@ -30,6 +31,7 @@ python-dotenv>=1.0.0,<2.0.0
 # Pydantic V2 최신 버전 (Python 3.13 호환)
 pydantic>=2.11.0,<3.0.0
 pydantic-settings>=2.7.0,<3.0.0
+email-validator>=2.0.0,<3.0.0  # EmailStr 타입 검증용
 
 # ===========================
 # 유틸리티
