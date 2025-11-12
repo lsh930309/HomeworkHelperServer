@@ -64,8 +64,7 @@ def health_check():
     }
 
 
-# API 라우터 등록 (향후 추가)
-# from app.api import auth, sessions, events
-# app.include_router(auth.router, prefix=settings.API_PREFIX + "/auth", tags=["auth"])
-# app.include_router(sessions.router, prefix=settings.API_PREFIX + "/sessions", tags=["sessions"])
-# app.include_router(events.router, prefix=settings.API_PREFIX + "/events", tags=["events"])
+# API 라우터 등록
+from app.api.v1 import auth
+
+app.include_router(auth.router, prefix=settings.API_PREFIX)
