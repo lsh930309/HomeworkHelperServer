@@ -2,13 +2,21 @@
 
 **프로젝트**: HomeworkHelper
 **작성일**: 2025-10-27
-**버전**: v1.1 (Gemini 피드백 반영)
+**최종 수정**: 2025-11-14
+**버전**: v2.0 (MVP 전략 반영)
 
 ---
 
 ## 개요
 
-HomeworkHelper 프로젝트는 **PC 클라이언트**, **백엔드 서버**, **Android 앱**으로 구성된 크로스 플랫폼 프로젝트입니다. 이 문서는 효율적인 개발과 배포를 위한 Git 브랜치 전략을 정의합니다.
+HomeworkHelper 프로젝트는 **게임 UI 탐지 및 자동화 시스템**을 위한 MVP(Minimum Viable Product) 개발 프로젝트입니다.
+
+**핵심 개발 전략**:
+- **로컬 우선 개발**: 프론트엔드/백엔드 로직을 처음부터 분리하여 개발
+- **빠른 프로토타입**: main 브랜치에서 핵심 기능을 빠르게 구현
+- **서버 배포 최후반**: 클라우드/VM 서버 배포는 MVP 완성 후 진행
+
+이 문서는 1인 개발 MVP에 최적화된 단순하고 효율적인 Git 워크플로우를 정의합니다.
 
 ---
 
@@ -16,17 +24,19 @@ HomeworkHelper 프로젝트는 **PC 클라이언트**, **백엔드 서버**, **A
 
 ### 1. 영구 브랜치 (Permanent Branches)
 
-#### `main`
-- **목적**: 프로덕션 배포 브랜치
-- **보호**: Direct push 금지, PR을 통해서만 merge
-- **배포**: main에 merge 시 자동으로 릴리스 생성 (GitHub Actions)
-- **태깅**: 각 릴리스마다 시맨틱 버저닝 태그 (`v1.0.0`, `v1.1.0` 등)
+#### `main` - MVP 개발 브랜치 ⭐
+- **목적**: MVP 프로토타입 개발의 메인 브랜치
+- **특징**:
+  - 빠른 기능 구현과 반복을 위한 유연한 워크플로우
+  - 1인 개발이므로 직접 push 가능 (작은 변경사항)
+  - 큰 기능은 feature 브랜치 사용 권장
+- **안정성**: 동작하는 코드 유지 (빌드 가능한 상태)
+- **태깅**: 주요 마일스톤 완료 시 태그 (`mvp-v0.1`, `mvp-v0.2` 등)
 
-#### `develop`
-- **목적**: 개발 통합 브랜치
-- **특징**: 모든 feature 브랜치는 develop에서 분기하고 develop으로 merge
-- **안정성**: 항상 빌드 가능한 상태 유지
-- **테스트**: develop에 merge 전 로컬 테스트 필수
+#### `develop` - 현재 보류 ⏸️
+- **상태**: MVP 개발 중에는 사용하지 않음
+- **목적**: 향후 서버 배포 단계에서 활용 예정
+- **계획**: MVP 완성 후 main → develop 분리 고려
 
 ---
 
@@ -35,63 +45,49 @@ HomeworkHelper 프로젝트는 **PC 클라이언트**, **백엔드 서버**, **A
 #### Feature 브랜치
 **네이밍 규칙**: `feature/{component}-{description}` (작은 기능 단위 권장)
 
-**⭐ 1인 개발 최적화 전략**:
-- **작은 단위로 자주 통합**: 큰 feature 브랜치를 오래 유지하면 충돌 위험 증가
-- **권장**: 하나의 기능 완성 시마다 즉시 `develop`에 merge (Squash and Merge)
-- **예**: `feature/phase1-fastapi-api` (큰 브랜치) 대신
-  - `feature/server-auth-api` (인증 API만)
-  - `feature/server-session-upload` (세션 업로드만)
-  - `feature/server-jwt-middleware` (JWT 미들웨어만)
+**⭐ MVP 개발 최적화 전략**:
+- **작은 단위로 빠르게**: 기능을 작은 단위로 나누어 빠르게 구현하고 main에 통합
+- **권장**: 1-2일 내에 완성 가능한 크기의 feature 브랜치
+- **간단한 변경**: main에 직접 커밋 가능 (문서 수정, 버그 픽스 등)
 
-**Phase 1 권장 예시** (작은 단위):
-- `feature/server-initial-setup` - FastAPI 프로젝트 초기 설정
-- `feature/server-auth-api` - 인증 API (회원가입/로그인)
-- `feature/server-session-upload` - 세션 업로드 API
-- `feature/db-schema-setup` - PostgreSQL 스키마 초기 설정
-- `feature/android-project-setup` - Android 프로젝트 생성
-- `feature/android-usage-stats` - UsageStatsManager 구현
-- `feature/label-studio-docker` - Label Studio Docker 설정
+**현재 MVP 브랜치 예시**:
+- `feature/dataset-schema` - 게임별 데이터셋 스키마 정의
+- `feature/label-studio-setup` - Label Studio 환경 구축
+- `feature/video-sampling` - SSIM 기반 스마트 비디오 샘플링
+- `feature/yolo-training-pipeline` - YOLO 학습 파이프라인 구축
+- `feature/ocr-integration` - OCR 엔진 통합 (Tesseract/EasyOCR)
+- `feature/ui-detection-test` - UI 탐지 시스템 테스트
 
-**Phase 1 큰 단위 예시** (비추천, 참고용):
-- `feature/phase1-vm-server` - VM + Docker 서버 전체
-- `feature/phase1-fastapi-api` - FastAPI 백엔드 전체
-- `feature/phase1-android-mvp` - Android 앱 전체
-
-**Phase 2 예시**:
-- `feature/cloud-vercel-deploy` - Vercel 배포 설정
-- `feature/yolo-dataset-prep` - YOLO 데이터셋 준비
-- `feature/yolo-model-training` - YOLO 모델 학습
-- `feature/ai-action-classifier` - AI 행동 분류 모델
-
-**워크플로우** (Rebase 활용):
+**워크플로우** (단순화):
 ```bash
-# develop에서 feature 브랜치 생성
-git checkout develop
-git pull origin develop
-git checkout -b feature/server-auth-api
+# main에서 feature 브랜치 생성
+git checkout main
+git pull origin main
+git checkout -b feature/dataset-schema
 
-# 작업 후 커밋 (여러 번 커밋 가능)
+# 작업 후 커밋
 git add .
-git commit -m "feat(server): 회원가입 API 추가"
-git commit -m "feat(server): 로그인 API 추가"
+git commit -m "feat: 게임별 데이터셋 스키마 정의"
 
-# PR 전에 develop 최신 변경사항 반영 (Rebase 권장)
-git fetch origin
-git rebase origin/develop
-# 충돌 발생 시 해결 후 git rebase --continue
-
-# PR 생성 또는 직접 merge
-git push origin feature/server-auth-api
-# GitHub에서 PR 생성 → Squash and Merge
-
-# 또는 로컬에서 직접 merge (1인 개발 시)
-git checkout develop
-git merge --squash feature/server-auth-api
-git commit -m "feat(server): 인증 API 추가 (#1)"
-git push origin develop
+# main에 직접 merge (1인 개발)
+git checkout main
+git merge feature/dataset-schema
+git push origin main
 
 # feature 브랜치 삭제
-git branch -d feature/server-auth-api
+git branch -d feature/dataset-schema
+```
+
+**더 간단한 워크플로우** (작은 변경):
+```bash
+# main에서 직접 작업
+git checkout main
+git pull origin main
+
+# 작업 후 커밋 및 푸시
+git add .
+git commit -m "docs: update milestone roadmap"
+git push origin main
 ```
 
 #### Bugfix 브랜치
@@ -173,56 +169,50 @@ Android 8.0 이하에서 권한 체크 오류 수정
 
 ---
 
-## Phase별 브랜치 전략
+## MVP 개발 전략
 
-### Phase 0 (완료)
-- `main`: PC 클라이언트 Phase 0 기능 완성
-- Phase 0은 단일 저장소에서 개발 완료
+### 현재 (MVP Phase)
+**목표**: 게임 UI 탐지 엔진 프로토타입 (YOLO + OCR)
 
-### Phase 1 (현재)
-**목표**: VM 서버 + Android 앱 + Label Studio
+**핵심 마일스톤**:
+1. **게임별 데이터셋 정의** (재화, 콘텐츠, 숙제 목록)
+   - `feature/dataset-schema`
+   - `feature/game-resource-definitions`
 
-**⭐ 작은 단위 릴리스 전략** (권장):
-Phase 전체 완료를 기다리지 않고, 기능이 완성될 때마다 `main`에 릴리스합니다.
+2. **Label Studio 데이터셋 구축 시스템**
+   - `feature/label-studio-setup`
+   - `feature/video-sampling` (SSIM 기반)
+   - `feature/labeling-pipeline`
 
-**릴리스 계획**:
-1. **v1.0.0** - VM + Docker + FastAPI 기본 API 완성
-   - `feature/server-initial-setup`
-   - `feature/docker-compose-setup`
-   - `feature/server-auth-api`
-   - `feature/db-schema-setup`
+3. **YOLO 모델 학습 및 테스트**
+   - `feature/yolo-training-pipeline`
+   - `feature/model-evaluation`
+   - `feature/ocr-integration`
 
-2. **v1.1.0** - Android 앱 기본 기능 추가
-   - `feature/android-project-setup`
-   - `feature/android-usage-stats`
-   - `feature/android-server-sync`
-
-3. **v1.2.0** - Label Studio 데이터 수집 환경 완성
-   - `feature/label-studio-docker`
-   - `feature/label-studio-templates`
-
-**브랜치 계획** (작은 단위):
+**브랜치 계획** (main 중심):
 ```
-develop
-├── feature/server-initial-setup → v1.0.0
-├── feature/docker-compose-setup → v1.0.0
-├── feature/server-auth-api → v1.0.0
-├── feature/db-schema-setup → v1.0.0
-├── feature/android-project-setup → v1.1.0
-├── feature/android-usage-stats → v1.1.0
-└── feature/label-studio-docker → v1.2.0
+main
+├── feature/dataset-schema
+├── feature/label-studio-setup
+├── feature/video-sampling
+├── feature/yolo-training-pipeline
+├── feature/ocr-integration
+└── feature/ui-detection-test
 ```
 
-**통합 절차**:
-1. 각 feature 브랜치는 독립적으로 `develop`에 Squash and Merge
-2. `develop`에 릴리스 준비 완료 시 `main`으로 Merge Commit
-3. `main`에 merge 후 즉시 시맨틱 버전 태그 생성 (v1.0.0, v1.1.0...)
-4. 작은 릴리스 주기로 안정성 확보 (빅뱅 머지 방지)
+**릴리스 전략**:
+- 주요 마일스톤 완료 시 태그 생성
+- `mvp-v0.1`: 데이터셋 스키마 완성
+- `mvp-v0.2`: Label Studio 환경 구축
+- `mvp-v0.3`: YOLO 첫 학습 완료
+- `mvp-v1.0`: UI 탐지 시스템 프로토타입 완성
 
-### Phase 2 이후
-- Phase 2 시작 시 `develop` 브랜치에서 새로운 feature 브랜치 생성
-- 클라우드 마이그레이션: `feature/phase2-cloud-migration`
-- YOLO 학습: `feature/phase2-yolo-training`
+### 향후 (서버 배포 Phase)
+- **보류**: MVP 완성 후 진행
+- **계획**:
+  - `develop` 브랜치 재활성화
+  - 서버 배포 관련 feature 브랜치 생성
+  - 클라우드 마이그레이션 작업
 
 ---
 
@@ -425,38 +415,35 @@ pre-commit install
 
 ## 다음 액션 아이템 (우선순위 순)
 
-### 즉시 실행 (Phase 1 시작 전)
-- [ ] **Git LFS 설정**
+### 즉시 실행 (MVP 시작 전)
+- [x] **Git LFS 설정** (이미 완료된 경우 체크)
   - `git lfs install`
-  - `.gitattributes` 파일 생성 (AI 모델, 폰트 추적)
-  - 커밋 및 push
+  - `.gitattributes` 파일 확인 (AI 모델, 폰트 추적)
 
 - [ ] **`.gitignore` 강화**
-  - `.env`, `.env.local`, `.env.*.local` 추가
-  - 빌드 결과물 (`dist/`, `build/`, `*.apk`, `*.exe`) 추가
-  - Android 관련 (`*.iml`, `.gradle/`, `local.properties`) 추가
-
-- [ ] **환경 변수 관리 체계 구축**
-  - `server/.env.example` 파일 생성
-  - `.gitignore`에 `.env` 추가
-
-- [ ] **`develop` 브랜치 생성**
-  ```bash
-  git checkout -b develop
-  git push -u origin develop
-  ```
+  - YOLO 학습 임시 파일 (`runs/`, `weights/`, `*.cache`)
+  - Label Studio 데이터 (`label-studio-data/`)
+  - 비디오 샘플링 출력 (`samples/`, `frames/`)
+  - Python 캐시 (`__pycache__/`, `*.pyc`)
 
 - [ ] **Pre-commit 훅 설정 (권장)**
   - `pip install pre-commit`
   - `.pre-commit-config.yaml` 생성
   - `pre-commit install`
 
-### Phase 1 개발 시작
-- [ ] 첫 번째 feature 브랜치 생성
-  - **권장**: `feature/server-initial-setup` (작은 단위)
-  - **비추천**: `feature/phase1-vm-server` (큰 단위)
+### MVP 개발 시작
+- [ ] **main 브랜치 확인**
+  ```bash
+  git checkout main
+  git pull origin main
+  ```
 
-- [ ] 커밋 메시지 템플릿 작성 (선택)
+- [ ] **첫 번째 feature 브랜치 생성**
+  ```bash
+  git checkout -b feature/dataset-schema
+  ```
+
+- [ ] **커밋 메시지 템플릿 작성** (선택)
   - `.gitmessage` 파일 생성
   - `git config commit.template .gitmessage`
 
