@@ -1,24 +1,61 @@
-# 📚 Homework Helper
+# 📚 HomeworkHelper
 
 <div align="center">
 
-![Python Version](https://img.shields.io/badge/Python-3.13.5-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Python Version](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-00FFFF?style=for-the-badge&logo=yolo&logoColor=black)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.116.2-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0.43-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.9.1-41CD52?style=for-the-badge&logo=qt&logoColor=white)
 
 [![Download Latest Release](https://img.shields.io/badge/Download-Latest_Release-4CAF50?style=for-the-badge&logo=github&logoColor=white)](https://github.com/lsh930309/HomeworkHelperServer/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-**게임 및 웹 일일 루틴을 자동으로 관리하고 추적하는 스마트 도우미**
+**게임 UI 자동 탐지 및 정보 추출 시스템**
 
-[특징](#-주요-기능) • [설치](#-설치-방법) • [사용법](#-사용-가이드) • [API 문서](#-api-문서)
+게임 일일 루틴 관리 + YOLO/OCR 기반 UI 탐지 프로토타입
+
+[현재 개발](#-현재-개발-중-mvp) • [문서](#-프로젝트-문서) • [Phase 0 기능](#-phase-0-완료-pc-클라이언트) • [기여](#-기여하기)
 
 </div>
 
 ---
 
-## 📖 프로그램 목적
+## 🚀 현재 개발 중: MVP
+
+**목표**: YOLO + OCR 기반 게임 UI 탐지 시스템 프로토타입 구축
+
+- **상태**: 데이터 준비 단계
+- **예상 완료**: 2025년 12월 말
+- **자세히**: [MVP 로드맵](docs/mvp-roadmap.md)
+
+### MVP 핵심 기능
+- 🎯 **동적 UI 탐지**: 해상도 독립적 게임 UI 요소 인식 (YOLO)
+- 📝 **텍스트 추출**: 재화, 퀘스트 정보 자동 인식 (OCR)
+- 🎮 **게임 데이터 관리**: 재화/콘텐츠/숙제 스키마 정의 및 추적
+
+---
+
+## 📚 프로젝트 문서
+
+프로젝트의 상세 정보는 다음 문서들을 참조하세요:
+
+### 핵심 문서 (필독)
+1. **[아키텍처 가이드](docs/architecture.md)** - 프로젝트 전체 구조, 기술 스택, 데이터 플로우
+2. **[마일스톤 로드맵](docs/milestone.md)** - 전체 로드맵 및 단계별 상세 계획
+3. **[MVP 로드맵](docs/mvp-roadmap.md)** - 주차별 개발 계획 및 마일스톤
+4. **[Git 워크플로우](docs/git-workflow.md)** - 브랜치 전략 및 커밋 규칙
+
+### 개발 가이드
+- **[개발 환경 설정](docs/dev-setup-guide.md)** - 멀티 PC 개발 환경 구축
+
+### 보류된 문서
+- **[archived/](docs/archived/)** - 향후 참고용 문서 (서버 배포 관련)
+
+**💡 Tip**: 새 Claude 세션 시작 시 위 문서들이 자동으로 참조됩니다. ([.claude/SessionStart](.claude/SessionStart))
+
+---
+
+## 📖 Phase 0 (완료): PC 클라이언트
 
 Homework Helper는 게임과 웹사이트의 **일일 루틴 관리**를 자동화하는 Windows용 애플리케이션입니다.
 
@@ -338,21 +375,67 @@ PUT    /settings               # 전역 설정 수정
 
 ```
 HomeworkHelperServer/
-├── homework_helper.pyw       # 메인 애플리케이션 진입점
-├── main.py                   # FastAPI 서버
-├── api_client.py             # API 클라이언트
-├── database.py               # DB 설정 (WAL 모드)
-├── models.py                 # SQLAlchemy 모델
-├── schemas.py                # Pydantic 스키마
-├── crud.py                   # CRUD 로직 (재시도 포함)
-├── process_monitor.py        # 프로세스 모니터링
-├── data_models.py            # 도메인 모델
-├── notifier.py               # 알림 시스템
-├── scheduler.py              # 스케줄링 로직
-├── dialogs.py                # PyQt6 다이얼로그
-├── requirements.txt          # 의존성 목록
-└── homework_helper_data/     # 데이터 디렉토리 (자동 생성)
-    └── app_data.db          # SQLite 데이터베이스
+├── 📱 Phase 0: PC 클라이언트 (완료)
+│   ├── homework_helper.pyw       # 메인 애플리케이션 진입점
+│   ├── main.py                   # FastAPI 서버
+│   ├── api_client.py             # API 클라이언트
+│   ├── database.py               # DB 설정 (WAL 모드)
+│   ├── models.py                 # SQLAlchemy 모델
+│   ├── schemas.py                # Pydantic 스키마
+│   ├── crud.py                   # CRUD 로직
+│   ├── process_monitor.py        # 프로세스 모니터링
+│   ├── data_models.py            # 도메인 모델
+│   ├── notifier.py               # 알림 시스템
+│   ├── scheduler.py              # 스케줄링 로직
+│   ├── dialogs.py                # PyQt6 다이얼로그
+│   └── requirements.txt          # 의존성 목록
+│
+├── 🤖 MVP: YOLO + OCR 시스템 (개발 중)
+│   ├── core/                     # 백엔드 로직
+│   │   ├── yolo_detector.py      # YOLO 추론 엔진
+│   │   ├── ocr_engine.py         # OCR 처리 엔진
+│   │   └── pipeline.py           # YOLO + OCR 파이프라인
+│   │
+│   ├── models/                   # AI 모델
+│   │   └── yolo/
+│   │       └── best.pt           # 학습된 YOLO 모델 (예정)
+│   │
+│   ├── schemas/                  # 게임 데이터 스키마
+│   │   ├── game_resources.json   # 재화 정의 (예정)
+│   │   ├── game_contents.json    # 콘텐츠 정의 (예정)
+│   │   └── ui_elements.json      # UI 요소 정의 (예정)
+│   │
+│   ├── datasets/                 # 학습 데이터 (Git LFS)
+│   │   ├── raw/                  # 원본 비디오
+│   │   ├── labeled/              # 라벨링 완료 데이터
+│   │   └── processed/            # YOLO 형식 데이터셋
+│   │
+│   ├── training/                 # YOLO 학습
+│   │   ├── train.py              # 학습 스크립트
+│   │   └── data.yaml             # 데이터셋 설정
+│   │
+│   └── tools/                    # 유틸리티
+│       ├── video_sampler.py      # SSIM 기반 샘플링
+│       └── data_converter.py     # 데이터 변환
+│
+├── 📚 문서
+│   ├── docs/
+│   │   ├── architecture.md       # 아키텍처 가이드
+│   │   ├── milestone.md          # 마일스톤 로드맵
+│   │   ├── mvp-roadmap.md        # MVP 로드맵
+│   │   ├── git-workflow.md
+│   │   ├── dev-setup-guide.md
+│   │   └── archived/             # 보류된 문서
+│   │
+│   └── README.md                 # 이 파일
+│
+└── ⚙️ 설정
+    ├── .claude/
+    │   ├── SessionStart          # 세션 시작 hook
+    │   └── settings.json         # Claude Code 설정
+    ├── .gitignore
+    ├── .gitattributes
+    └── pyproject.toml
 ```
 
 ---
