@@ -6,6 +6,7 @@ import ctypes
 import configparser # .url 파일 파싱을 위해 추가
 from typing import Optional, Tuple # 타입 힌트를 위해 추가
 import psutil  # 프로세스 관리를 위해 추가
+from src.utils.launcher_utils import should_restart_launcher
 
 class Launcher:
     def __init__(self, run_as_admin: bool = False):
@@ -727,6 +728,12 @@ class Launcher:
 
                                         # 콜백 함수가 설정되어 있으면 호출 (UI에서 사용자 확인)
                                         if hasattr(self, 'launcher_restart_callback') and callable(self.launcher_restart_callback):
+                                            # 먼저 안전성 검사 수행
+                                            if not should_restart_launcher(launcher_proc):
+                                                print(f"  경고: 현재 {launcher_proc.name()}를 재시작할 수 없습니다.")
+                                                print(f"  사유: 게임 실행 중이거나 다운로드가 진행 중입니다.")
+                                                return False
+
                                             should_restart = self.launcher_restart_callback(launcher_proc.name())
                                             if should_restart:
                                                 # 런처 종료
@@ -751,6 +758,13 @@ class Launcher:
                                         else:
                                             # 콜백이 없으면 자동으로 재시작 (기본 동작)
                                             print(f"  게임 런처를 자동으로 재시작합니다.")
+
+                                            # 안전성 검사 수행
+                                            if not should_restart_launcher(launcher_proc):
+                                                print(f"  경고: 현재 {launcher_proc.name()}를 재시작할 수 없습니다.")
+                                                print(f"  사유: 게임 실행 중이거나 다운로드가 진행 중입니다.")
+                                                return False
+
                                             if self._terminate_launcher_gracefully(launcher_proc):
                                                 import time
                                                 time.sleep(2)
