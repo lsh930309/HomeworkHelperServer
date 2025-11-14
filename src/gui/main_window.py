@@ -1083,12 +1083,16 @@ class MainWindow(QMainWindow):
 
     def _adjust_window_height_for_table_rows(self):
         """테이블 행 추가/삭제 시에만 창 높이를 조절합니다."""
+        # 창 크기 조절 잠금이 활성화되어 있으면 크기 조절 안 함
+        if self.data_manager.global_settings.lock_window_resize:
+            return
+
         # 현재 행 수 확인
         current_row_count = self.process_table.rowCount()
-        
-        print(f"\n=== 창 높이 조절 디버깅 ===")
+
+        print(f"\n=== 창 높이 자동 조절 (adjustSize 방식) ===")
         print(f"현재 행 수: {current_row_count}")
-        
+
         # 행이 없으면 기본 높이 사용
         if current_row_count == 0:
             # 기본 높이 계산 (헤더 + 1행 + 여백)
@@ -1096,85 +1100,43 @@ class MainWindow(QMainWindow):
             header_height = header.height() if header and not header.isHidden() else 0
             default_row_height = self.fontMetrics().height() + 12
             table_height = header_height + default_row_height + self.process_table.frameWidth() * 2
-            print(f"행이 없음 - 헤더 높이: {header_height}, 기본 행 높이: {default_row_height}, 테이블 높이: {table_height}")
+            print(f"행이 없음 - 헤더: {header_height}, 기본 행: {default_row_height}, 테이블: {table_height}px")
         else:
             # 실제 행 높이 계산
             table_height = 0
             header = self.process_table.horizontalHeader()
             if header and not header.isHidden():
                 table_height += header.height()
-                print(f"헤더 높이: {header.height()}")
-            
-            print(f"각 행 높이: ", end="")
+
             for i in range(current_row_count):
-                row_height = self.process_table.rowHeight(i)
-                table_height += row_height
-                print(f"{row_height}px ", end="")
-            print()
-            
-            frame_width = self.process_table.frameWidth() * 2
-            table_height += frame_width
-            print(f"테두리 두께: {frame_width}px")
+                table_height += self.process_table.rowHeight(i)
+
+            table_height += self.process_table.frameWidth() * 2
             print(f"총 테이블 높이: {table_height}px")
-        
-        # 테이블 높이 설정
+
+        # 테이블 고정 높이 설정
         self.process_table.setFixedHeight(table_height)
-        print(f"테이블 고정 높이 설정: {table_height}px")
-        
-        # 창 높이 계산
-        menu_bar = self.menuBar()
-        status_bar = self.statusBar()
-        menu_height = menu_bar.height() if menu_bar else 0
-        status_height = status_bar.height() if status_bar else 0
-        
-        top_button_height = 35
-        layout_margin = 15
-        
-        total_height = menu_height + top_button_height + table_height + status_height + layout_margin
-        
-        print(f"창 높이 구성: 메뉴({menu_height}) + 상단버튼({top_button_height}) + 테이블({table_height}) + 상태바({status_height}) + 여백({layout_margin}) = {total_height}px")
-        
-        # 레이아웃 구조 분석
-        print(f"\n=== 레이아웃 구조 분석 ===")
+
+        # 레이아웃 시스템에 변경사항 알림 및 크기 재계산 요청
         central_widget = self.centralWidget()
-        print(f"중앙 위젯: {central_widget}")
-        if central_widget:
-            print(f"중앙 위젯 크기 정책: {central_widget.sizePolicy()}")
-            print(f"중앙 위젯 최소 크기: {central_widget.minimumSize()}")
-            print(f"중앙 위젯 최대 크기: {central_widget.maximumSize()}")
-            
-            main_layout = central_widget.layout()
-            print(f"메인 레이아웃: {main_layout}")
-            if main_layout:
-                print(f"메인 레이아웃 여백: {main_layout.contentsMargins()}")
-                print(f"메인 레이아웃 간격: {main_layout.spacing()}")
-        
-        print(f"테이블 크기 정책: {self.process_table.sizePolicy()}")
-        print(f"테이블 최소 크기: {self.process_table.minimumSize()}")
-        print(f"테이블 최대 크기: {self.process_table.maximumSize()}")
-        print(f"테이블 sizeHint: {self.process_table.sizeHint()}")
-        print(f"테이블 minimumSizeHint: {self.process_table.minimumSizeHint()}")
-        
-        print(f"창 최소 크기: {self.minimumSize()}")
-        print(f"창 최대 크기: {self.maximumSize()}")
-        print(f"창 sizeHint: {self.sizeHint()}")
-        print("=== 레이아웃 분석 완료 ===\n")
-        
-        # 현재 창 크기와 비교
-        current_height = self.height()
-        print(f"현재 창 높이: {current_height}px -> 목표 높이: {total_height}px")
-        
-        # 창 최소 높이 제거 후 높이 설정
-        current_min_height = self.minimumHeight()
-        self.setMinimumHeight(0)  # 최소 높이 제거
-        self.resize(self.width(), total_height)
-        self.setMinimumHeight(current_min_height)  # 원래 최소 높이 복원
-        
-        # 설정 후 확인
-        new_height = self.height()
-        print(f"설정 후 창 높이: {new_height}px")
-        print(f"테이블 실제 높이: {self.process_table.height()}px")
-        print("=== 디버깅 완료 ===\n")
+        if central_widget and central_widget.layout():
+            # 1. 레이아웃 무효화 (레이아웃 시스템에 다시 계산하도록 알림)
+            central_widget.layout().invalidate()
+
+            # 2. 레이아웃 활성화 (즉시 재계산)
+            central_widget.layout().activate()
+
+        # 3. 테이블의 geometry 업데이트 요청
+        self.process_table.updateGeometry()
+
+        # 4. 창의 이상적인 크기로 자동 조절 (레이아웃 시스템이 계산한 sizeHint 사용)
+        self.adjustSize()
+
+        # 5. 화면 업데이트
+        self.update()
+
+        print(f"조절 후 창 크기: {self.width()}x{self.height()}")
+        print("=== 자동 조절 완료 ===\n")
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
         """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다."""
