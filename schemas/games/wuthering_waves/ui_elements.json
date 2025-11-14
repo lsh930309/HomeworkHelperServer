@@ -1,0 +1,276 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UI Elements",
+  "description": "명조: 워더링 웨이브 UI 요소 정의 (YOLO 탐지 대상)",
+  "version": "1.0.0",
+  "game_id": "ww",
+  "game_name": "Wuthering Waves",
+  "game_name_kr": "명조: 워더링 웨이브",
+  "ui_elements": [
+    {
+      "id": "ww_hud_main",
+      "name": "Main HUD",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "description": "화면 상단 메인 HUD",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "astrite",
+        "shell_credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "ww_hud_main"
+    },
+    {
+      "id": "ww_waveplate_indicator",
+      "name": "Waveplate Indicator",
+      "name_kr": "파동 플레이트 표시기",
+      "category": "hud",
+      "description": "파동 플레이트(스태미나) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "waveplates"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "ww_waveplate_indicator"
+    },
+    {
+      "id": "ww_quest_hud_daily",
+      "name": "Daily Quest HUD",
+      "name_kr": "일일 퀘스트 HUD",
+      "category": "quest",
+      "description": "일일 퀘스트 진행도",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "quest_progress"
+      ],
+      "typical_position": "left_side",
+      "yolo_class_name": "ww_quest_hud_daily"
+    },
+    {
+      "id": "ww_daily_quest_list",
+      "name": "Daily Quest List",
+      "name_kr": "일일 퀘스트 목록",
+      "category": "quest",
+      "description": "일일 퀘스트 상세 목록",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "quest_count"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "ww_daily_quest_list"
+    },
+    {
+      "id": "ww_menu_button",
+      "name": "Menu Button",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "description": "메인 메뉴 버튼",
+      "always_visible": true,
+      "contains_ocr": false,
+      "typical_position": "top_left",
+      "yolo_class_name": "ww_menu_button"
+    },
+    {
+      "id": "ww_resource_astrite",
+      "name": "Astrite Display",
+      "name_kr": "별조각 표시",
+      "category": "resource",
+      "description": "별조각(뽑기 재화) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "astrite"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "ww_resource_astrite"
+    },
+    {
+      "id": "ww_resource_credit",
+      "name": "Shell Credit Display",
+      "name_kr": "쉘 크레딧 표시",
+      "category": "resource",
+      "description": "쉘 크레딧(골드) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "shell_credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "ww_resource_credit"
+    },
+    {
+      "id": "ww_forgery_entry",
+      "name": "Forgery Challenge Entry",
+      "name_kr": "단조 도전 진입",
+      "category": "content",
+      "description": "단조 도전 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_forgery_entry"
+    },
+    {
+      "id": "ww_tacet_field_entry",
+      "name": "Tacet Field Entry",
+      "name_kr": "타짓 필드 진입",
+      "category": "content",
+      "description": "타짓 필드 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_tacet_field_entry"
+    },
+    {
+      "id": "ww_simulation_entry",
+      "name": "Simulation Challenge Entry",
+      "name_kr": "시뮬레이션 도전 진입",
+      "category": "content",
+      "description": "시뮬레이션 도전 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_simulation_entry"
+    },
+    {
+      "id": "ww_weekly_boss_entry",
+      "name": "Weekly Boss Entry",
+      "name_kr": "주간 보스 진입",
+      "category": "content",
+      "description": "주간 보스 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_weekly_boss_entry"
+    },
+    {
+      "id": "ww_weekly_count_display",
+      "name": "Weekly Count Display",
+      "name_kr": "주간 횟수 표시",
+      "category": "progress",
+      "description": "주간 보스 남은 횟수",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "remaining_count"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "ww_weekly_count_display"
+    },
+    {
+      "id": "ww_tower_entry",
+      "name": "Tower of Adversity Entry",
+      "name_kr": "역경의 탑 진입",
+      "category": "content",
+      "description": "역경의 탑 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_tower_entry"
+    },
+    {
+      "id": "ww_floor_progress_indicator",
+      "name": "Floor Progress Indicator",
+      "name_kr": "층수 진행도 표시",
+      "category": "progress",
+      "description": "탑 층수 및 진행도",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "floor_number"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "ww_floor_progress_indicator"
+    },
+    {
+      "id": "ww_realm_entry",
+      "name": "Illusive Realm Entry",
+      "name_kr": "환영의 심연 진입",
+      "category": "content",
+      "description": "환영의 심연 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_realm_entry"
+    },
+    {
+      "id": "ww_depth_indicator",
+      "name": "Depth Indicator",
+      "name_kr": "심도 표시",
+      "category": "progress",
+      "description": "환영의 심연 진행 심도",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "depth_level"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "ww_depth_indicator"
+    },
+    {
+      "id": "ww_convene_button",
+      "name": "Convene Button",
+      "name_kr": "소집 버튼",
+      "category": "button",
+      "description": "뽑기(소집) 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "bottom",
+      "yolo_class_name": "ww_convene_button"
+    },
+    {
+      "id": "ww_reward_popup",
+      "name": "Reward Popup",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "description": "보상 획득 팝업",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "reward_amount"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "ww_reward_popup"
+    },
+    {
+      "id": "ww_character_menu",
+      "name": "Character Menu",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "description": "캐릭터 관리 화면",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_character_menu"
+    },
+    {
+      "id": "ww_union_exp_display",
+      "name": "Union EXP Display",
+      "name_kr": "유니온 경험치 표시",
+      "category": "progress",
+      "description": "유니온 레벨 경험치 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "union_exp"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "ww_union_exp_display"
+    },
+    {
+      "id": "ww_echo_collection",
+      "name": "Echo Collection",
+      "name_kr": "에코 컬렉션",
+      "category": "menu",
+      "description": "에코 수집 화면",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "ww_echo_collection"
+    }
+  ]
+}

@@ -1,0 +1,285 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UI Elements",
+  "description": "젠레스 존 제로 UI 요소 정의 (YOLO 탐지 대상)",
+  "version": "1.0.0",
+  "game_id": "zzz",
+  "game_name": "Zenless Zone Zero",
+  "game_name_kr": "젠레스 존 제로",
+  "ui_elements": [
+    {
+      "id": "zzz_hud_main",
+      "name": "Main HUD",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "description": "화면 상단의 메인 HUD (재화 표시)",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "dennies",
+        "polychrome"
+      ],
+      "typical_position": "top_center",
+      "yolo_class_name": "zzz_hud_main"
+    },
+    {
+      "id": "zzz_battery_indicator",
+      "name": "Battery Indicator",
+      "name_kr": "배터리 표시기",
+      "category": "hud",
+      "description": "스태미나(배터리) 표시 UI",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "battery_charge"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "zzz_battery_indicator"
+    },
+    {
+      "id": "zzz_quest_hud_daily",
+      "name": "Daily Quest HUD",
+      "name_kr": "일일 퀘스트 HUD",
+      "category": "quest",
+      "description": "일일 의뢰 진행도 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "quest_count"
+      ],
+      "typical_position": "left_side",
+      "yolo_class_name": "zzz_quest_hud_daily"
+    },
+    {
+      "id": "zzz_quest_hud_complete",
+      "name": "Quest Complete Indicator",
+      "name_kr": "퀘스트 완료 표시",
+      "category": "quest",
+      "description": "퀘스트 완료 알림 UI",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "left_side",
+      "yolo_class_name": "zzz_quest_hud_complete"
+    },
+    {
+      "id": "zzz_menu_button",
+      "name": "Menu Button",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "description": "메인 메뉴 진입 버튼",
+      "always_visible": true,
+      "contains_ocr": false,
+      "typical_position": "top_left",
+      "yolo_class_name": "zzz_menu_button"
+    },
+    {
+      "id": "zzz_resource_gold",
+      "name": "Dennies Display",
+      "name_kr": "디니 표시",
+      "category": "resource",
+      "description": "디니(골드) 재화 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "dennies"
+      ],
+      "typical_position": "top_center",
+      "yolo_class_name": "zzz_resource_gold"
+    },
+    {
+      "id": "zzz_resource_premium",
+      "name": "Polychrome Display",
+      "name_kr": "폴리크롬 표시",
+      "category": "resource",
+      "description": "폴리크롬(뽑기 재화) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "polychrome"
+      ],
+      "typical_position": "top_center",
+      "yolo_class_name": "zzz_resource_premium"
+    },
+    {
+      "id": "zzz_content_entry_routine",
+      "name": "Routine Cleanup Entry",
+      "name_kr": "루틴 정화 진입",
+      "category": "content",
+      "description": "루틴 정화 콘텐츠 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_content_entry_routine"
+    },
+    {
+      "id": "zzz_content_entry_combat",
+      "name": "Combat Simulation Entry",
+      "name_kr": "전투 시뮬레이션 진입",
+      "category": "content",
+      "description": "전투 시뮬레이션 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_content_entry_combat"
+    },
+    {
+      "id": "zzz_stamina_full_notification",
+      "name": "Battery Full Notification",
+      "name_kr": "배터리 만충 알림",
+      "category": "notification",
+      "description": "스태미나 만충 알림",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_stamina_full_notification"
+    },
+    {
+      "id": "zzz_reward_popup",
+      "name": "Reward Popup",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "description": "보상 획득 팝업창",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "reward_amount"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "zzz_reward_popup"
+    },
+    {
+      "id": "zzz_gacha_banner",
+      "name": "Gacha Banner",
+      "name_kr": "뽑기 배너",
+      "category": "gacha",
+      "description": "신호 탐색(뽑기) 배너",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_gacha_banner"
+    },
+    {
+      "id": "zzz_gacha_currency_display",
+      "name": "Gacha Currency Display",
+      "name_kr": "뽑기 재화 표시",
+      "category": "gacha",
+      "description": "뽑기 화면의 재화 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "master_tape",
+        "polychrome"
+      ],
+      "typical_position": "bottom_right",
+      "yolo_class_name": "zzz_gacha_currency_display"
+    },
+    {
+      "id": "zzz_event_banner",
+      "name": "Event Banner",
+      "name_kr": "이벤트 배너",
+      "category": "event",
+      "description": "기간 한정 이벤트 배너",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_event_banner"
+    },
+    {
+      "id": "zzz_event_progress",
+      "name": "Event Progress Bar",
+      "name_kr": "이벤트 진행도",
+      "category": "event",
+      "description": "이벤트 진행도 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "progress_value"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "zzz_event_progress"
+    },
+    {
+      "id": "zzz_weekly_boss_entry",
+      "name": "Weekly Boss Entry",
+      "name_kr": "주간 보스 진입",
+      "category": "content",
+      "description": "주간 보스 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_weekly_boss_entry"
+    },
+    {
+      "id": "zzz_weekly_count_indicator",
+      "name": "Weekly Count Indicator",
+      "name_kr": "주간 횟수 표시",
+      "category": "progress",
+      "description": "주간 콘텐츠 남은 횟수 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "remaining_count"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "zzz_weekly_count_indicator"
+    },
+    {
+      "id": "zzz_shiyu_defense_entry",
+      "name": "Shiyu Defense Entry",
+      "name_kr": "시유 방어전 진입",
+      "category": "content",
+      "description": "시유 방어전 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_shiyu_defense_entry"
+    },
+    {
+      "id": "zzz_floor_indicator",
+      "name": "Floor Indicator",
+      "name_kr": "층수 표시",
+      "category": "progress",
+      "description": "시유 방어전 층수 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "floor_number"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "zzz_floor_indicator"
+    },
+    {
+      "id": "zzz_hollow_zero_entry",
+      "name": "Hollow Zero Entry",
+      "name_kr": "제로호 진입",
+      "category": "content",
+      "description": "제로호 콘텐츠 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_hollow_zero_entry"
+    },
+    {
+      "id": "zzz_character_menu",
+      "name": "Character Menu",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "description": "캐릭터 관리 메뉴",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "zzz_character_menu"
+    },
+    {
+      "id": "zzz_shop_button",
+      "name": "Shop Button",
+      "name_kr": "상점 버튼",
+      "category": "button",
+      "description": "상점 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "bottom",
+      "yolo_class_name": "zzz_shop_button"
+    }
+  ]
+}

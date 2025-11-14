@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Game Resources",
+  "description": "붕괴: 스타레일 재화 정의",
+  "version": "1.0.0",
+  "game_id": "hsr",
+  "game_name": "Honkai: Star Rail",
+  "game_name_kr": "붕괴: 스타레일",
+  "resources": [
+    {
+      "id": "stellar_jade",
+      "name": "Stellar Jade",
+      "name_kr": "성옥",
+      "category": "premium_currency",
+      "description": "뽑기 재화",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "trailblaze_power",
+      "name": "Trailblaze Power",
+      "name_kr": "개척력",
+      "category": "stamina",
+      "description": "스태미나 (행동력)",
+      "max_value": 240,
+      "ocr_pattern": "^[0-9]+/[0-9]+$"
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "name_kr": "신용 포인트",
+      "category": "currency",
+      "description": "기본 통화",
+      "max_value": 999999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "star_rail_pass",
+      "name": "Star Rail Pass",
+      "name_kr": "별의 궤적",
+      "category": "gacha_ticket",
+      "description": "일반 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "star_rail_special_pass",
+      "name": "Star Rail Special Pass",
+      "name_kr": "별의 길",
+      "category": "gacha_ticket",
+      "description": "한정 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "traveler_guide",
+      "name": "Traveler's Guide",
+      "name_kr": "여행자의 가이드",
+      "category": "material",
+      "description": "경험치 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "lost_gold_fragment",
+      "name": "Lost Gold Fragment",
+      "name_kr": "잃어버린 금편",
+      "category": "material",
+      "description": "흔적 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "shattered_blade",
+      "name": "Shattered Blade",
+      "name_kr": "부서진 검날",
+      "category": "material",
+      "description": "강화 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "tracks_of_destiny",
+      "name": "Tracks of Destiny",
+      "name_kr": "운명의 발자취",
+      "category": "special",
+      "description": "캐릭터 돌파 재료",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "undying_embers",
+      "name": "Undying Embers",
+      "name_kr": "불멸의 잔불",
+      "category": "special",
+      "description": "유물 강화 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "fuel",
+      "name": "Fuel",
+      "name_kr": "연료",
+      "category": "special",
+      "description": "시뮬레이션 우주 재화",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "immersifier",
+      "name": "Immersifier",
+      "name_kr": "몰입 장치",
+      "category": "special",
+      "description": "순수 허구 재화",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Game Resources",
+  "description": "명조: 워더링 웨이브 재화 정의",
+  "version": "1.0.0",
+  "game_id": "ww",
+  "game_name": "Wuthering Waves",
+  "game_name_kr": "명조: 워더링 웨이브",
+  "resources": [
+    {
+      "id": "astrite",
+      "name": "Astrite",
+      "name_kr": "별조각",
+      "category": "premium_currency",
+      "description": "뽑기 재화",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "waveplates",
+      "name": "Waveplates",
+      "name_kr": "파동 플레이트",
+      "category": "stamina",
+      "description": "스태미나 (행동력)",
+      "max_value": 240,
+      "ocr_pattern": "^[0-9]+/[0-9]+$"
+    },
+    {
+      "id": "shell_credit",
+      "name": "Shell Credit",
+      "name_kr": "쉘 크레딧",
+      "category": "currency",
+      "description": "기본 통화",
+      "max_value": 999999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "radiant_tide",
+      "name": "Radiant Tide",
+      "name_kr": "광휘의 조수",
+      "category": "gacha_ticket",
+      "description": "일반 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "lustrous_tide",
+      "name": "Lustrous Tide",
+      "name_kr": "광택의 조수",
+      "category": "gacha_ticket",
+      "description": "한정 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "weapon_enhancement_material",
+      "name": "Weapon Enhancement Material",
+      "name_kr": "무기 강화 재료",
+      "category": "material",
+      "description": "무기 강화용",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "character_exp_material",
+      "name": "Character EXP Material",
+      "name_kr": "캐릭터 경험치 재료",
+      "category": "material",
+      "description": "캐릭터 레벨업 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "forgery_challenge_material",
+      "name": "Forgery Challenge Material",
+      "name_kr": "단조 도전 재료",
+      "category": "material",
+      "description": "무기 돌파 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "echo_development_material",
+      "name": "Echo Development Material",
+      "name_kr": "에코 육성 재료",
+      "category": "material",
+      "description": "에코 강화 재료",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "skill_upgrade_material",
+      "name": "Skill Upgrade Material",
+      "name_kr": "스킬 강화 재료",
+      "category": "material",
+      "description": "스킬 레벨업 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "union_exp",
+      "name": "Union EXP",
+      "name_kr": "유니온 경험치",
+      "category": "special",
+      "description": "유니온 레벨 경험치",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    }
+  ]
+}

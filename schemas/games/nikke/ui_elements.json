@@ -1,0 +1,315 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UI Elements",
+  "description": "승리의 여신: 니케 UI 요소 정의 (YOLO 탐지 대상)",
+  "version": "1.0.0",
+  "game_id": "nikke",
+  "game_name": "Goddess of Victory: NIKKE",
+  "game_name_kr": "승리의 여신: 니케",
+  "ui_elements": [
+    {
+      "id": "nikke_hud_main",
+      "name": "Main HUD",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "description": "홈 화면 상단 HUD",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "gems",
+        "credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "nikke_hud_main"
+    },
+    {
+      "id": "nikke_chip_indicator",
+      "name": "Battle Data Chip Indicator",
+      "name_kr": "전투 데이터 칩 표시기",
+      "category": "hud",
+      "description": "전투 데이터 칩(스태미나) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "battle_data_chip"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "nikke_chip_indicator"
+    },
+    {
+      "id": "nikke_mission_hud",
+      "name": "Mission HUD",
+      "name_kr": "미션 HUD",
+      "category": "quest",
+      "description": "일일 미션 진행도 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "mission_progress"
+      ],
+      "typical_position": "left_side",
+      "yolo_class_name": "nikke_mission_hud"
+    },
+    {
+      "id": "nikke_daily_mission_list",
+      "name": "Daily Mission List",
+      "name_kr": "일일 미션 목록",
+      "category": "quest",
+      "description": "일일 미션 상세 목록",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "mission_count"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "nikke_daily_mission_list"
+    },
+    {
+      "id": "nikke_menu_button",
+      "name": "Menu Button",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "description": "메인 메뉴 버튼",
+      "always_visible": true,
+      "contains_ocr": false,
+      "typical_position": "top_left",
+      "yolo_class_name": "nikke_menu_button"
+    },
+    {
+      "id": "nikke_resource_gems",
+      "name": "Gems Display",
+      "name_kr": "보석 표시",
+      "category": "resource",
+      "description": "보석(유료 재화) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "gems"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "nikke_resource_gems"
+    },
+    {
+      "id": "nikke_resource_credit",
+      "name": "Credit Display",
+      "name_kr": "크레딧 표시",
+      "category": "resource",
+      "description": "크레딧(골드) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "nikke_resource_credit"
+    },
+    {
+      "id": "nikke_interception_entry",
+      "name": "Interception Entry",
+      "name_kr": "요격전 진입",
+      "category": "content",
+      "description": "요격전 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_interception_entry"
+    },
+    {
+      "id": "nikke_daily_entry_count",
+      "name": "Daily Entry Count",
+      "name_kr": "일일 진입 횟수",
+      "category": "progress",
+      "description": "요격전 남은 진입 횟수",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "entry_count"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "nikke_daily_entry_count"
+    },
+    {
+      "id": "nikke_simulation_entry",
+      "name": "Simulation Room Entry",
+      "name_kr": "시뮬레이션 룸 진입",
+      "category": "content",
+      "description": "시뮬레이션 룸 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_simulation_entry"
+    },
+    {
+      "id": "nikke_outpost_ui",
+      "name": "Outpost UI",
+      "name_kr": "전초기지 UI",
+      "category": "content",
+      "description": "전초기지 화면",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_outpost_ui"
+    },
+    {
+      "id": "nikke_collection_timer",
+      "name": "Collection Timer",
+      "name_kr": "수집 타이머",
+      "category": "progress",
+      "description": "전초기지 재화 수집 타이머",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "timer"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "nikke_collection_timer"
+    },
+    {
+      "id": "nikke_tribe_tower_entry",
+      "name": "Tribe Tower Entry",
+      "name_kr": "트라이브 타워 진입",
+      "category": "content",
+      "description": "트라이브 타워 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_tribe_tower_entry"
+    },
+    {
+      "id": "nikke_floor_indicator",
+      "name": "Floor Indicator",
+      "name_kr": "층수 표시",
+      "category": "progress",
+      "description": "타워 층수 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "floor_number"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "nikke_floor_indicator"
+    },
+    {
+      "id": "nikke_arena_entry",
+      "name": "Arena Entry",
+      "name_kr": "아레나 진입",
+      "category": "content",
+      "description": "아레나 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_arena_entry"
+    },
+    {
+      "id": "nikke_rank_indicator",
+      "name": "Rank Indicator",
+      "name_kr": "랭크 표시",
+      "category": "progress",
+      "description": "아레나 랭킹 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "rank"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "nikke_rank_indicator"
+    },
+    {
+      "id": "nikke_rookie_arena_entry",
+      "name": "Rookie Arena Entry",
+      "name_kr": "루키 아레나 진입",
+      "category": "content",
+      "description": "루키 아레나 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_rookie_arena_entry"
+    },
+    {
+      "id": "nikke_solo_raid_entry",
+      "name": "Solo Raid Entry",
+      "name_kr": "솔로 레이드 진입",
+      "category": "content",
+      "description": "솔로 레이드 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_solo_raid_entry"
+    },
+    {
+      "id": "nikke_score_indicator",
+      "name": "Score Indicator",
+      "name_kr": "점수 표시",
+      "category": "progress",
+      "description": "레이드 점수 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "score"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "nikke_score_indicator"
+    },
+    {
+      "id": "nikke_coop_raid_entry",
+      "name": "Co-op Raid Entry",
+      "name_kr": "협동 레이드 진입",
+      "category": "content",
+      "description": "협동 레이드 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_coop_raid_entry"
+    },
+    {
+      "id": "nikke_damage_indicator",
+      "name": "Damage Indicator",
+      "name_kr": "데미지 표시",
+      "category": "progress",
+      "description": "레이드 데미지 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "damage"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "nikke_damage_indicator"
+    },
+    {
+      "id": "nikke_recruit_button",
+      "name": "Recruit Button",
+      "name_kr": "모집 버튼",
+      "category": "button",
+      "description": "뽑기(모집) 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "bottom",
+      "yolo_class_name": "nikke_recruit_button"
+    },
+    {
+      "id": "nikke_reward_popup",
+      "name": "Reward Popup",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "description": "보상 획득 팝업",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "reward_amount"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "nikke_reward_popup"
+    },
+    {
+      "id": "nikke_character_menu",
+      "name": "Character Menu",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "description": "캐릭터 관리 화면",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "nikke_character_menu"
+    }
+  ]
+}
