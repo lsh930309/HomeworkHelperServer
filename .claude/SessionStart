@@ -5,8 +5,8 @@
 ## 📚 필수 읽기 문서 (우선순위 순)
 
 1. **docs/architecture.md** - 프로젝트 전체 구조 및 MVP 개요
-2. **docs/mvp-roadmap.md** - 현재 개발 단계 및 마일스톤
-3. **docs/add_this_to_milestone.md** - 상세 구현 계획
+2. **docs/milestone.md** - 전체 로드맵 및 상세 구현 계획
+3. **docs/mvp-roadmap.md** - 현재 개발 단계 및 주차별 계획
 4. **docs/git-workflow.md** - Git 브랜치 전략
 
 ## 🎯 프로젝트 컨텍스트 요약
