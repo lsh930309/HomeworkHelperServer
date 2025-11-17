@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
-    QTimeEdit, QDoubleSpinBox, QSpinBox
+    QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -15,6 +15,19 @@ from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons direc
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
+
+# MVP 스키마 연동 (선택적 import)
+try:
+    from src.schema import get_available_games, detect_game_from_path, check_schema_exists
+    SCHEMA_SUPPORT = True
+except ImportError:
+    SCHEMA_SUPPORT = False
+    def get_available_games():
+        return []
+    def detect_game_from_path(path):
+        return None
+    def check_schema_exists(game_id):
+        return False
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """ QTableWidgetItem that allows numeric sorting. """
@@ -162,6 +175,9 @@ class ProcessDialog(QDialog):
         self.form_layout.addRow("특정 접속 시각 (HH:MM, 쉼표로 구분):", self.mandatory_times_edit)
         self.form_layout.addRow(self.is_mandatory_time_enabled_checkbox)
 
+        # MVP 스키마 연동 섹션
+        self._setup_mvp_section()
+
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.form_layout.addRow(self.button_box)
 
@@ -172,11 +188,102 @@ class ProcessDialog(QDialog):
         self.launch_path_button.clicked.connect(
             lambda: self.browse_file(self.launch_path_edit)
         )
+        self.monitoring_path_edit.textChanged.connect(self._on_monitoring_path_changed)
         self.button_box.accepted.connect(self.accept_data)
         self.button_box.rejected.connect(self.reject)
 
         if self.existing_process:
             self.populate_fields_from_existing_process()
+
+    def _setup_mvp_section(self):
+        """MVP 스키마 연동 섹션 설정"""
+        self.mvp_group_box = QGroupBox("게임 스키마 연동 (MVP)")
+        mvp_layout = QVBoxLayout()
+
+        # 게임 선택 드롭다운
+        game_select_layout = QHBoxLayout()
+        game_select_layout.addWidget(QLabel("게임:"))
+        self.game_schema_combo = QComboBox()
+        self.game_schema_combo.addItem("없음 (기본 모드)", None)
+
+        # registry.json에서 게임 목록 로드
+        if SCHEMA_SUPPORT:
+            available_games = get_available_games()
+            for game in available_games:
+                game_id = game.get("game_id", "")
+                game_name_kr = game.get("game_name_kr", game_id)
+                self.game_schema_combo.addItem(f"{game_name_kr}", game_id)
+
+        game_select_layout.addWidget(self.game_schema_combo)
+        game_select_layout.addStretch()
+        mvp_layout.addLayout(game_select_layout)
+
+        # MVP 활성화 체크박스
+        self.mvp_enabled_checkbox = QCheckBox("MVP 기능 활성화 (YOLO + OCR)")
+        self.mvp_enabled_checkbox.setEnabled(False)  # Week 6 이후 활성화
+        self.mvp_enabled_checkbox.setToolTip("YOLO 모델 학습 완료 후 활성화됩니다 (Week 6 이후)")
+        mvp_layout.addWidget(self.mvp_enabled_checkbox)
+
+        # 스키마 편집 버튼
+        self.edit_schema_button = QPushButton("스키마 편집...")
+        self.edit_schema_button.setEnabled(False)  # 게임 선택 시 활성화
+        self.edit_schema_button.clicked.connect(self._open_schema_editor)
+        mvp_layout.addWidget(self.edit_schema_button)
+
+        self.mvp_group_box.setLayout(mvp_layout)
+        self.form_layout.addRow(self.mvp_group_box)
+
+        # 게임 선택 변경 시 이벤트
+        self.game_schema_combo.currentIndexChanged.connect(self._on_game_schema_changed)
+
+    def _on_game_schema_changed(self, index: int):
+        """게임 선택 변경 시"""
+        game_id = self.game_schema_combo.currentData()
+        self.edit_schema_button.setEnabled(game_id is not None)
+
+        if game_id and SCHEMA_SUPPORT:
+            if not check_schema_exists(game_id):
+                QMessageBox.warning(
+                    self,
+                    "경고",
+                    f"게임 '{game_id}'의 스키마 파일을 찾을 수 없습니다."
+                )
+
+    def _on_monitoring_path_changed(self, path: str):
+        """모니터링 경로 변경 시 자동 게임 감지"""
+        if not SCHEMA_SUPPORT or not path:
+            return
+
+        # 이미 게임이 선택되어 있으면 자동 감지 안 함
+        current_game_id = self.game_schema_combo.currentData()
+        if current_game_id is not None:
+            return
+
+        detected_game_id = detect_game_from_path(path)
+        if detected_game_id:
+            # 콤보박스에서 해당 게임 찾아 선택
+            for i in range(self.game_schema_combo.count()):
+                if self.game_schema_combo.itemData(i) == detected_game_id:
+                    self.game_schema_combo.setCurrentIndex(i)
+                    break
+
+    def _open_schema_editor(self):
+        """스키마 편집 다이얼로그 열기"""
+        game_id = self.game_schema_combo.currentData()
+        if not game_id:
+            return
+
+        try:
+            from src.gui.schema_editor_dialog import SchemaEditorDialog
+            dialog = SchemaEditorDialog(game_id, self)
+            dialog.exec()
+        except ImportError:
+            QMessageBox.information(
+                self,
+                "준비 중",
+                "스키마 편집기가 아직 구현되지 않았습니다.\n"
+                "Week 6 이후 사용 가능합니다."
+            )
 
     def populate_fields_from_existing_process(self):
         if not self.existing_process:
@@ -191,6 +298,16 @@ class ProcessDialog(QDialog):
         if self.existing_process.mandatory_times_str:
             self.mandatory_times_edit.setText(",".join(self.existing_process.mandatory_times_str))
         self.is_mandatory_time_enabled_checkbox.setChecked(self.existing_process.is_mandatory_time_enabled)
+
+        # MVP 필드 로드
+        if hasattr(self.existing_process, 'game_schema_id') and self.existing_process.game_schema_id:
+            for i in range(self.game_schema_combo.count()):
+                if self.game_schema_combo.itemData(i) == self.existing_process.game_schema_id:
+                    self.game_schema_combo.setCurrentIndex(i)
+                    break
+
+        if hasattr(self.existing_process, 'mvp_enabled'):
+            self.mvp_enabled_checkbox.setChecked(self.existing_process.mvp_enabled)
 
     def open_running_process_selector(self):
         dialog = RunningProcessSelectionDialog(self) # Uses dialog defined above
@@ -312,6 +429,10 @@ class ProcessDialog(QDialog):
 
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
+        # MVP 스키마 연동 필드
+        game_schema_id = self.game_schema_combo.currentData()
+        mvp_enabled = self.mvp_enabled_checkbox.isChecked()
+
         return {
             "name": name,
             "monitoring_path": monitoring_path,
@@ -320,6 +441,8 @@ class ProcessDialog(QDialog):
             "user_cycle_hours": user_cycle_hours,
             "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
+            "game_schema_id": game_schema_id,
+            "mvp_enabled": mvp_enabled,
         }
 
 class GlobalSettingsDialog(QDialog):
