@@ -1,12 +1,110 @@
 # HomeworkHelper MVP 개발 진행 상황
 
 **작성일**: 2025-11-14
+**최종 수정**: 2025-11-14 (스키마 구조 개선)
 **현재 단계**: Phase 1 MVP - Week 1-2 데이터 준비
-**브랜치**: `feature/dataset-schema`
+**브랜치**: `claude/previous-session-work-01Cxa3yNgPuXdqefv5gn2LCZ`
 
 ---
 
 ## 📋 완료된 작업
+
+### 🆕 스키마 구조 개선 (2025-11-14) ✅
+
+기존 통합 JSON 파일을 게임별 디렉토리 구조로 마이그레이션하여 확장성과 관리성을 대폭 개선했습니다.
+
+#### 개선 내용
+
+**1. 디렉토리 구조 개편**
+```
+기존 (Before):
+schemas/
+├── game_resources.json    (450줄, 4개 게임 통합)
+├── game_contents.json     (390줄, 4개 게임 통합)
+└── ui_elements.json       (1000줄+, 4개 게임 통합)
+
+개선 (After):
+schemas/
+├── registry.json          (게임 목록 + 프로세스 매칭)
+├── games/
+│   ├── zenless_zone_zero/
+│   │   ├── metadata.json
+│   │   ├── resources.json      (11개 재화)
+│   │   ├── contents.json       (7개 콘텐츠)
+│   │   └── ui_elements.json    (22개 UI 요소)
+│   ├── honkai_star_rail/
+│   │   ├── metadata.json
+│   │   ├── resources.json      (12개 재화)
+│   │   ├── contents.json       (10개 콘텐츠)
+│   │   └── ui_elements.json    (22개 UI 요소)
+│   ├── wuthering_waves/
+│   │   └── ...
+│   └── nikke/
+│       └── ...
+└── old/  (백업)
+```
+
+**2. 주요 개선 효과**
+- ✅ **확장성**: 새 게임 추가 시 독립된 디렉토리만 생성
+- ✅ **Git 충돌 감소**: 게임별 파일 분리로 동시 작업 가능
+- ✅ **선택적 로딩**: 필요한 게임/타입만 로드 가능
+- ✅ **유지보수 용이**: 한 게임 수정 시 다른 게임 영향 없음
+
+**3. 새로운 파일: registry.json**
+```json
+{
+  "games": [
+    {
+      "game_id": "zzz",
+      "game_name": "Zenless Zone Zero",
+      "game_name_kr": "젠레스 존 제로",
+      "enabled": true,
+      "process_patterns": [
+        "ZenlessZoneZero.exe",
+        "Zenless.exe",
+        "*zenless*.exe"
+      ],
+      "window_title_patterns": [
+        "Zenless Zone Zero",
+        "젠레스 존 제로"
+      ]
+    }
+  ]
+}
+```
+
+**4. 새로운 파일: metadata.json (게임별)**
+- 게임 기본 정보
+- 스키마 버전 관리
+- 검증 상태 추적
+- 프로세스 매칭 패턴 (향후 Phase 0 연동용)
+
+**5. 개발 도구 추가**
+- **tools/migrate_schemas.py**: 스키마 마이그레이션 스크립트
+- **tools/schema_verifier_gui.py**: 한국어 명칭 검증 GUI (PyQt6)
+- **tools/README.md**: 도구 사용법 문서
+
+#### 한국어 명칭 검증 GUI
+
+**실행 방법**:
+```bash
+python tools/schema_verifier_gui.py
+```
+
+**주요 기능**:
+- 📝 게임별/타입별 스키마 항목 표시
+- ✏️ 한국어 명칭 편집
+- ✅ 검증 완료 체크박스
+- 📋 검증 메모 추가
+- 💾 JSON 파일 저장
+- 📊 검증 통계 표시
+
+**향후 작업**:
+- [ ] 게임 실행하여 정확한 한국어 명칭 확인
+- [ ] GUI로 한국어 명칭 수정 및 검증
+- [ ] metadata.json의 verification_status 업데이트
+
+---
 
 ### Week 1-2 Day 1-3: 게임별 데이터셋 스키마 정의 ✅
 

@@ -1,0 +1,287 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UI Elements",
+  "description": "붕괴: 스타레일 UI 요소 정의 (YOLO 탐지 대상)",
+  "version": "1.0.0",
+  "game_id": "hsr",
+  "game_name": "Honkai: Star Rail",
+  "game_name_kr": "붕괴: 스타레일",
+  "ui_elements": [
+    {
+      "id": "hsr_hud_main",
+      "name": "Main HUD",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "description": "화면 상단 메인 HUD",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "stellar_jade",
+        "credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "hsr_hud_main"
+    },
+    {
+      "id": "hsr_trailblaze_power_indicator",
+      "name": "Trailblaze Power Indicator",
+      "name_kr": "개척력 표시기",
+      "category": "hud",
+      "description": "개척력(스태미나) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "trailblaze_power"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "hsr_trailblaze_power_indicator"
+    },
+    {
+      "id": "hsr_quest_hud_daily",
+      "name": "Daily Training HUD",
+      "name_kr": "일일 임무 HUD",
+      "category": "quest",
+      "description": "일일 임무 진행도 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "quest_progress"
+      ],
+      "typical_position": "left_side",
+      "yolo_class_name": "hsr_quest_hud_daily"
+    },
+    {
+      "id": "hsr_daily_mission_list",
+      "name": "Daily Mission List",
+      "name_kr": "일일 미션 목록",
+      "category": "quest",
+      "description": "일일 미션 상세 목록",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "mission_count"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "hsr_daily_mission_list"
+    },
+    {
+      "id": "hsr_menu_button",
+      "name": "Menu Button",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "description": "메인 메뉴 버튼",
+      "always_visible": true,
+      "contains_ocr": false,
+      "typical_position": "top_left",
+      "yolo_class_name": "hsr_menu_button"
+    },
+    {
+      "id": "hsr_resource_stellar_jade",
+      "name": "Stellar Jade Display",
+      "name_kr": "성옥 표시",
+      "category": "resource",
+      "description": "성옥(뽑기 재화) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "stellar_jade"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "hsr_resource_stellar_jade"
+    },
+    {
+      "id": "hsr_resource_credit",
+      "name": "Credit Display",
+      "name_kr": "신용 포인트 표시",
+      "category": "resource",
+      "description": "신용 포인트(골드) 표시",
+      "always_visible": true,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "credit"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "hsr_resource_credit"
+    },
+    {
+      "id": "hsr_calyx_entry",
+      "name": "Calyx Entry",
+      "name_kr": "칼릭스 진입",
+      "category": "content",
+      "description": "칼릭스 던전 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_calyx_entry"
+    },
+    {
+      "id": "hsr_cavern_entry",
+      "name": "Cavern of Corrosion Entry",
+      "name_kr": "침식 터널 진입",
+      "category": "content",
+      "description": "침식 터널 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_cavern_entry"
+    },
+    {
+      "id": "hsr_shadow_entry",
+      "name": "Stagnant Shadow Entry",
+      "name_kr": "응결 그림자 진입",
+      "category": "content",
+      "description": "응결 그림자 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_shadow_entry"
+    },
+    {
+      "id": "hsr_weekly_boss_entry",
+      "name": "Echo of War Entry",
+      "name_kr": "역경의 메아리 진입",
+      "category": "content",
+      "description": "주간 보스 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_weekly_boss_entry"
+    },
+    {
+      "id": "hsr_weekly_reward_indicator",
+      "name": "Weekly Reward Indicator",
+      "name_kr": "주간 보상 표시",
+      "category": "progress",
+      "description": "주간 보상 수령 가능 횟수",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "reward_count"
+      ],
+      "typical_position": "top_right",
+      "yolo_class_name": "hsr_weekly_reward_indicator"
+    },
+    {
+      "id": "hsr_sim_universe_entry",
+      "name": "Simulated Universe Entry",
+      "name_kr": "시뮬레이션 우주 진입",
+      "category": "content",
+      "description": "시뮬레이션 우주 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_sim_universe_entry"
+    },
+    {
+      "id": "hsr_world_indicator",
+      "name": "World Indicator",
+      "name_kr": "월드 표시",
+      "category": "progress",
+      "description": "시뮬레이션 우주 월드 표시",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "world_number"
+      ],
+      "typical_position": "top",
+      "yolo_class_name": "hsr_world_indicator"
+    },
+    {
+      "id": "hsr_moc_entry",
+      "name": "Memory of Chaos Entry",
+      "name_kr": "혼돈의 기억 진입",
+      "category": "content",
+      "description": "혼돈의 기억 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_moc_entry"
+    },
+    {
+      "id": "hsr_floor_star_indicator",
+      "name": "Floor Star Indicator",
+      "name_kr": "층별 별 표시",
+      "category": "progress",
+      "description": "각 층의 별 획득 상태",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "star_count"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "hsr_floor_star_indicator"
+    },
+    {
+      "id": "hsr_pure_fiction_entry",
+      "name": "Pure Fiction Entry",
+      "name_kr": "순수 허구 진입",
+      "category": "content",
+      "description": "순수 허구 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_pure_fiction_entry"
+    },
+    {
+      "id": "hsr_stage_star_indicator",
+      "name": "Stage Star Indicator",
+      "name_kr": "스테이지 별 표시",
+      "category": "progress",
+      "description": "스테이지별 별 획득 상태",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "star_count"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "hsr_stage_star_indicator"
+    },
+    {
+      "id": "hsr_apocalyptic_shadow_entry",
+      "name": "Apocalyptic Shadow Entry",
+      "name_kr": "종말의 그림자 진입",
+      "category": "content",
+      "description": "종말의 그림자 진입 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_apocalyptic_shadow_entry"
+    },
+    {
+      "id": "hsr_warp_button",
+      "name": "Warp Button",
+      "name_kr": "워프 버튼",
+      "category": "button",
+      "description": "뽑기(워프) 버튼",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "bottom",
+      "yolo_class_name": "hsr_warp_button"
+    },
+    {
+      "id": "hsr_reward_popup",
+      "name": "Reward Popup",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "description": "보상 획득 팝업",
+      "always_visible": false,
+      "contains_ocr": true,
+      "ocr_targets": [
+        "reward_amount"
+      ],
+      "typical_position": "center",
+      "yolo_class_name": "hsr_reward_popup"
+    },
+    {
+      "id": "hsr_character_menu",
+      "name": "Character Menu",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "description": "캐릭터 관리 화면",
+      "always_visible": false,
+      "contains_ocr": false,
+      "typical_position": "center",
+      "yolo_class_name": "hsr_character_menu"
+    }
+  ]
+}

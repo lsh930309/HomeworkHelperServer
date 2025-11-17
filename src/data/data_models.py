@@ -14,23 +14,30 @@ class ManagedProcess:
                  mandatory_times_str: Optional[List[str]] = None,
                  is_mandatory_time_enabled: bool = False,
                  last_played_timestamp: Optional[float] = None, # Unix timestamp
-                 original_launch_path: Optional[str] = None): # 원본 실행 경로 보존
-        
+                 original_launch_path: Optional[str] = None, # 원본 실행 경로 보존
+                 # MVP 연동 필드
+                 game_schema_id: Optional[str] = None,  # 게임 스키마 ID (예: "zenless_zone_zero")
+                 mvp_enabled: bool = False):            # MVP 기능 활성화 여부
+
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
         self.monitoring_path = monitoring_path
         self.launch_path = launch_path
-        
+
         self.server_reset_time_str = server_reset_time_str
         self.user_cycle_hours = user_cycle_hours
         self.mandatory_times_str = mandatory_times_str if mandatory_times_str else []
         self.is_mandatory_time_enabled = is_mandatory_time_enabled
-        
+
         self.last_played_timestamp = last_played_timestamp
         self.original_launch_path = original_launch_path if original_launch_path else launch_path
 
+        # MVP 연동 필드 초기화
+        self.game_schema_id = game_schema_id
+        self.mvp_enabled = mvp_enabled
+
     def __repr__(self):
-        return f"<ManagedProcess(id='{self.id}', name='{self.name}')>"
+        return f"<ManagedProcess(id='{self.id}', name='{self.name}', schema='{self.game_schema_id}')>"
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -42,6 +49,11 @@ class ManagedProcess:
         # 이전 버전과의 호환성을 위해 original_launch_path가 없을 경우 launch_path로 설정
         if 'original_launch_path' not in data and 'launch_path' in data:
             data['original_launch_path'] = data['launch_path']
+        # MVP 연동 필드 하위 호환성
+        if 'game_schema_id' not in data:
+            data['game_schema_id'] = None
+        if 'mvp_enabled' not in data:
+            data['mvp_enabled'] = False
         return cls(**data)
 
 class GlobalSettings:

@@ -1,0 +1,12 @@
+{
+  "schema_version": "2.0.0",
+  "last_migration": "2025-11-14T12:00:00Z",
+  "migration_history": [
+    {
+      "from": "1.0.0",
+      "to": "2.0.0",
+      "date": "2025-11-14T12:00:00Z",
+      "description": "통합 JSON 파일 → 게임별 디렉토리 구조로 마이그레이션"
+    }
+  ]
+}

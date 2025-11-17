@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Game Resources",
+  "description": "승리의 여신: 니케 재화 정의",
+  "version": "1.0.0",
+  "game_id": "nikke",
+  "game_name": "Goddess of Victory: NIKKE",
+  "game_name_kr": "승리의 여신: 니케",
+  "resources": [
+    {
+      "id": "gems",
+      "name": "Gems",
+      "name_kr": "보석",
+      "category": "premium_currency",
+      "description": "유료 재화",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "free_gems",
+      "name": "Free Gems",
+      "name_kr": "무료 보석",
+      "category": "premium_currency",
+      "description": "무료 획득 보석",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "name_kr": "크레딧",
+      "category": "currency",
+      "description": "기본 통화",
+      "max_value": 999999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "battle_data_chip",
+      "name": "Battle Data Chip",
+      "name_kr": "전투 데이터 칩",
+      "category": "stamina",
+      "description": "스태미나 (행동력)",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "ordinary_recruit_voucher",
+      "name": "Ordinary Recruit Voucher",
+      "name_kr": "일반 모집권",
+      "category": "gacha_ticket",
+      "description": "일반 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "advanced_recruit_voucher",
+      "name": "Advanced Recruit Voucher",
+      "name_kr": "고급 모집권",
+      "category": "gacha_ticket",
+      "description": "고급 뽑기권",
+      "max_value": 9999,
+      "ocr_pattern": "^[0-9]+$"
+    },
+    {
+      "id": "core_dust",
+      "name": "Core Dust",
+      "name_kr": "코어 더스트",
+      "category": "material",
+      "description": "강화 재료",
+      "max_value": 999999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "skill_manual",
+      "name": "Skill Manual",
+      "name_kr": "스킬 매뉴얼",
+      "category": "material",
+      "description": "스킬 강화 재료",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "module",
+      "name": "Module",
+      "name_kr": "모듈",
+      "category": "material",
+      "description": "장비 재료",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "body_label",
+      "name": "Body Label",
+      "name_kr": "바디 라벨",
+      "category": "material",
+      "description": "한계돌파 재료",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "cube",
+      "name": "Cube",
+      "name_kr": "큐브",
+      "category": "special",
+      "description": "장비 강화 재료",
+      "max_value": 999999,
+      "ocr_pattern": "^[0-9,]+$"
+    },
+    {
+      "id": "social_point",
+      "name": "Social Point",
+      "name_kr": "소셜 포인트",
+      "category": "special",
+      "description": "친구 포인트",
+      "max_value": 99999,
+      "ocr_pattern": "^[0-9,]+$"
+    }
+  ]
+}
