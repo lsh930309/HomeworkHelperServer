@@ -33,6 +33,21 @@
 - 📝 **텍스트 추출**: 재화, 퀘스트 정보 자동 인식 (OCR)
 - 🎮 **게임 데이터 관리**: 재화/콘텐츠/숙제 스키마 정의 및 추적
 
+### 🏷️ MVP 개발 - 빠른 시작 (Windows)
+
+**Label Studio 라벨링**을 프로젝트 루트에서 **더블클릭**으로 시작:
+
+| 파일 | 설명 |
+|------|------|
+| `start-label-studio.bat` | Label Studio 시작 + 브라우저 자동 열림 |
+| `stop-label-studio.bat` | Label Studio 중지 |
+| `open-label-studio.bat` | 브라우저만 열기 (이미 실행 중일 때) |
+| `view-label-studio-logs.bat` | 로그 확인 (문제 해결용) |
+
+**접속 정보**: http://localhost:8080 (admin / homework-helper-2025)
+
+📖 **자세한 사용법**: [README-LABEL-STUDIO.md](README-LABEL-STUDIO.md)
+
 ---
 
 ## 📚 프로젝트 문서
