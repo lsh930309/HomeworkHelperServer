@@ -1,0 +1,717 @@
+{
+  "total_classes": 89,
+  "classes": [
+    {
+      "id": 0,
+      "name": "zzz_hud_main",
+      "display_name": "메인 HUD (zzz_hud_main)",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 1,
+      "name": "zzz_battery_indicator",
+      "display_name": "배터리 표시기 (zzz_battery_indicator)",
+      "name_kr": "배터리 표시기",
+      "category": "hud",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 2,
+      "name": "zzz_quest_hud_daily",
+      "display_name": "일일 퀘스트 HUD (zzz_quest_hud_daily)",
+      "name_kr": "일일 퀘스트 HUD",
+      "category": "quest",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 3,
+      "name": "zzz_quest_hud_complete",
+      "display_name": "퀘스트 완료 표시 (zzz_quest_hud_complete)",
+      "name_kr": "퀘스트 완료 표시",
+      "category": "quest",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 4,
+      "name": "zzz_menu_button",
+      "display_name": "메뉴 버튼 (zzz_menu_button)",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 5,
+      "name": "zzz_resource_gold",
+      "display_name": "디니 표시 (zzz_resource_gold)",
+      "name_kr": "디니 표시",
+      "category": "resource",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 6,
+      "name": "zzz_resource_premium",
+      "display_name": "폴리크롬 표시 (zzz_resource_premium)",
+      "name_kr": "폴리크롬 표시",
+      "category": "resource",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 7,
+      "name": "zzz_content_entry_routine",
+      "display_name": "루틴 정화 진입 (zzz_content_entry_routine)",
+      "name_kr": "루틴 정화 진입",
+      "category": "content",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 8,
+      "name": "zzz_content_entry_combat",
+      "display_name": "전투 시뮬레이션 진입 (zzz_content_entry_combat)",
+      "name_kr": "전투 시뮬레이션 진입",
+      "category": "content",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 9,
+      "name": "zzz_stamina_full_notification",
+      "display_name": "배터리 만충 알림 (zzz_stamina_full_notification)",
+      "name_kr": "배터리 만충 알림",
+      "category": "notification",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 10,
+      "name": "zzz_reward_popup",
+      "display_name": "보상 팝업 (zzz_reward_popup)",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 11,
+      "name": "zzz_gacha_banner",
+      "display_name": "뽑기 배너 (zzz_gacha_banner)",
+      "name_kr": "뽑기 배너",
+      "category": "gacha",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 12,
+      "name": "zzz_gacha_currency_display",
+      "display_name": "뽑기 재화 표시 (zzz_gacha_currency_display)",
+      "name_kr": "뽑기 재화 표시",
+      "category": "gacha",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 13,
+      "name": "zzz_event_banner",
+      "display_name": "이벤트 배너 (zzz_event_banner)",
+      "name_kr": "이벤트 배너",
+      "category": "event",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 14,
+      "name": "zzz_event_progress",
+      "display_name": "이벤트 진행도 (zzz_event_progress)",
+      "name_kr": "이벤트 진행도",
+      "category": "event",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 15,
+      "name": "zzz_weekly_boss_entry",
+      "display_name": "주간 보스 진입 (zzz_weekly_boss_entry)",
+      "name_kr": "주간 보스 진입",
+      "category": "content",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 16,
+      "name": "zzz_weekly_count_indicator",
+      "display_name": "주간 횟수 표시 (zzz_weekly_count_indicator)",
+      "name_kr": "주간 횟수 표시",
+      "category": "progress",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 17,
+      "name": "zzz_shiyu_defense_entry",
+      "display_name": "시유 방어전 진입 (zzz_shiyu_defense_entry)",
+      "name_kr": "시유 방어전 진입",
+      "category": "content",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 18,
+      "name": "zzz_floor_indicator",
+      "display_name": "층수 표시 (zzz_floor_indicator)",
+      "name_kr": "층수 표시",
+      "category": "progress",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 19,
+      "name": "zzz_hollow_zero_entry",
+      "display_name": "제로호 진입 (zzz_hollow_zero_entry)",
+      "name_kr": "제로호 진입",
+      "category": "content",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 20,
+      "name": "zzz_character_menu",
+      "display_name": "캐릭터 메뉴 (zzz_character_menu)",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 21,
+      "name": "zzz_shop_button",
+      "display_name": "상점 버튼 (zzz_shop_button)",
+      "name_kr": "상점 버튼",
+      "category": "button",
+      "game_id": "zenless_zone_zero"
+    },
+    {
+      "id": 22,
+      "name": "hsr_hud_main",
+      "display_name": "메인 HUD (hsr_hud_main)",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 23,
+      "name": "hsr_trailblaze_power_indicator",
+      "display_name": "개척력 표시기 (hsr_trailblaze_power_indicator)",
+      "name_kr": "개척력 표시기",
+      "category": "hud",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 24,
+      "name": "hsr_quest_hud_daily",
+      "display_name": "일일 임무 HUD (hsr_quest_hud_daily)",
+      "name_kr": "일일 임무 HUD",
+      "category": "quest",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 25,
+      "name": "hsr_daily_mission_list",
+      "display_name": "일일 미션 목록 (hsr_daily_mission_list)",
+      "name_kr": "일일 미션 목록",
+      "category": "quest",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 26,
+      "name": "hsr_menu_button",
+      "display_name": "메뉴 버튼 (hsr_menu_button)",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 27,
+      "name": "hsr_resource_stellar_jade",
+      "display_name": "성옥 표시 (hsr_resource_stellar_jade)",
+      "name_kr": "성옥 표시",
+      "category": "resource",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 28,
+      "name": "hsr_resource_credit",
+      "display_name": "신용 포인트 표시 (hsr_resource_credit)",
+      "name_kr": "신용 포인트 표시",
+      "category": "resource",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 29,
+      "name": "hsr_calyx_entry",
+      "display_name": "칼릭스 진입 (hsr_calyx_entry)",
+      "name_kr": "칼릭스 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 30,
+      "name": "hsr_cavern_entry",
+      "display_name": "침식 터널 진입 (hsr_cavern_entry)",
+      "name_kr": "침식 터널 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 31,
+      "name": "hsr_shadow_entry",
+      "display_name": "응결 그림자 진입 (hsr_shadow_entry)",
+      "name_kr": "응결 그림자 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 32,
+      "name": "hsr_weekly_boss_entry",
+      "display_name": "역경의 메아리 진입 (hsr_weekly_boss_entry)",
+      "name_kr": "역경의 메아리 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 33,
+      "name": "hsr_weekly_reward_indicator",
+      "display_name": "주간 보상 표시 (hsr_weekly_reward_indicator)",
+      "name_kr": "주간 보상 표시",
+      "category": "progress",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 34,
+      "name": "hsr_sim_universe_entry",
+      "display_name": "시뮬레이션 우주 진입 (hsr_sim_universe_entry)",
+      "name_kr": "시뮬레이션 우주 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 35,
+      "name": "hsr_world_indicator",
+      "display_name": "월드 표시 (hsr_world_indicator)",
+      "name_kr": "월드 표시",
+      "category": "progress",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 36,
+      "name": "hsr_moc_entry",
+      "display_name": "혼돈의 기억 진입 (hsr_moc_entry)",
+      "name_kr": "혼돈의 기억 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 37,
+      "name": "hsr_floor_star_indicator",
+      "display_name": "층별 별 표시 (hsr_floor_star_indicator)",
+      "name_kr": "층별 별 표시",
+      "category": "progress",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 38,
+      "name": "hsr_pure_fiction_entry",
+      "display_name": "순수 허구 진입 (hsr_pure_fiction_entry)",
+      "name_kr": "순수 허구 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 39,
+      "name": "hsr_stage_star_indicator",
+      "display_name": "스테이지 별 표시 (hsr_stage_star_indicator)",
+      "name_kr": "스테이지 별 표시",
+      "category": "progress",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 40,
+      "name": "hsr_apocalyptic_shadow_entry",
+      "display_name": "종말의 그림자 진입 (hsr_apocalyptic_shadow_entry)",
+      "name_kr": "종말의 그림자 진입",
+      "category": "content",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 41,
+      "name": "hsr_warp_button",
+      "display_name": "워프 버튼 (hsr_warp_button)",
+      "name_kr": "워프 버튼",
+      "category": "button",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 42,
+      "name": "hsr_reward_popup",
+      "display_name": "보상 팝업 (hsr_reward_popup)",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 43,
+      "name": "hsr_character_menu",
+      "display_name": "캐릭터 메뉴 (hsr_character_menu)",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "game_id": "honkai_star_rail"
+    },
+    {
+      "id": 44,
+      "name": "ww_hud_main",
+      "display_name": "메인 HUD (ww_hud_main)",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 45,
+      "name": "ww_waveplate_indicator",
+      "display_name": "파동 플레이트 표시기 (ww_waveplate_indicator)",
+      "name_kr": "파동 플레이트 표시기",
+      "category": "hud",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 46,
+      "name": "ww_quest_hud_daily",
+      "display_name": "일일 퀘스트 HUD (ww_quest_hud_daily)",
+      "name_kr": "일일 퀘스트 HUD",
+      "category": "quest",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 47,
+      "name": "ww_daily_quest_list",
+      "display_name": "일일 퀘스트 목록 (ww_daily_quest_list)",
+      "name_kr": "일일 퀘스트 목록",
+      "category": "quest",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 48,
+      "name": "ww_menu_button",
+      "display_name": "메뉴 버튼 (ww_menu_button)",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 49,
+      "name": "ww_resource_astrite",
+      "display_name": "별조각 표시 (ww_resource_astrite)",
+      "name_kr": "별조각 표시",
+      "category": "resource",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 50,
+      "name": "ww_resource_credit",
+      "display_name": "쉘 크레딧 표시 (ww_resource_credit)",
+      "name_kr": "쉘 크레딧 표시",
+      "category": "resource",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 51,
+      "name": "ww_forgery_entry",
+      "display_name": "단조 도전 진입 (ww_forgery_entry)",
+      "name_kr": "단조 도전 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 52,
+      "name": "ww_tacet_field_entry",
+      "display_name": "타짓 필드 진입 (ww_tacet_field_entry)",
+      "name_kr": "타짓 필드 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 53,
+      "name": "ww_simulation_entry",
+      "display_name": "시뮬레이션 도전 진입 (ww_simulation_entry)",
+      "name_kr": "시뮬레이션 도전 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 54,
+      "name": "ww_weekly_boss_entry",
+      "display_name": "주간 보스 진입 (ww_weekly_boss_entry)",
+      "name_kr": "주간 보스 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 55,
+      "name": "ww_weekly_count_display",
+      "display_name": "주간 횟수 표시 (ww_weekly_count_display)",
+      "name_kr": "주간 횟수 표시",
+      "category": "progress",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 56,
+      "name": "ww_tower_entry",
+      "display_name": "역경의 탑 진입 (ww_tower_entry)",
+      "name_kr": "역경의 탑 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 57,
+      "name": "ww_floor_progress_indicator",
+      "display_name": "층수 진행도 표시 (ww_floor_progress_indicator)",
+      "name_kr": "층수 진행도 표시",
+      "category": "progress",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 58,
+      "name": "ww_realm_entry",
+      "display_name": "환영의 심연 진입 (ww_realm_entry)",
+      "name_kr": "환영의 심연 진입",
+      "category": "content",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 59,
+      "name": "ww_depth_indicator",
+      "display_name": "심도 표시 (ww_depth_indicator)",
+      "name_kr": "심도 표시",
+      "category": "progress",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 60,
+      "name": "ww_convene_button",
+      "display_name": "소집 버튼 (ww_convene_button)",
+      "name_kr": "소집 버튼",
+      "category": "button",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 61,
+      "name": "ww_reward_popup",
+      "display_name": "보상 팝업 (ww_reward_popup)",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 62,
+      "name": "ww_character_menu",
+      "display_name": "캐릭터 메뉴 (ww_character_menu)",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 63,
+      "name": "ww_union_exp_display",
+      "display_name": "유니온 경험치 표시 (ww_union_exp_display)",
+      "name_kr": "유니온 경험치 표시",
+      "category": "progress",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 64,
+      "name": "ww_echo_collection",
+      "display_name": "에코 컬렉션 (ww_echo_collection)",
+      "name_kr": "에코 컬렉션",
+      "category": "menu",
+      "game_id": "wuthering_waves"
+    },
+    {
+      "id": 65,
+      "name": "nikke_hud_main",
+      "display_name": "메인 HUD (nikke_hud_main)",
+      "name_kr": "메인 HUD",
+      "category": "hud",
+      "game_id": "nikke"
+    },
+    {
+      "id": 66,
+      "name": "nikke_chip_indicator",
+      "display_name": "전투 데이터 칩 표시기 (nikke_chip_indicator)",
+      "name_kr": "전투 데이터 칩 표시기",
+      "category": "hud",
+      "game_id": "nikke"
+    },
+    {
+      "id": 67,
+      "name": "nikke_mission_hud",
+      "display_name": "미션 HUD (nikke_mission_hud)",
+      "name_kr": "미션 HUD",
+      "category": "quest",
+      "game_id": "nikke"
+    },
+    {
+      "id": 68,
+      "name": "nikke_daily_mission_list",
+      "display_name": "일일 미션 목록 (nikke_daily_mission_list)",
+      "name_kr": "일일 미션 목록",
+      "category": "quest",
+      "game_id": "nikke"
+    },
+    {
+      "id": 69,
+      "name": "nikke_menu_button",
+      "display_name": "메뉴 버튼 (nikke_menu_button)",
+      "name_kr": "메뉴 버튼",
+      "category": "button",
+      "game_id": "nikke"
+    },
+    {
+      "id": 70,
+      "name": "nikke_resource_gems",
+      "display_name": "보석 표시 (nikke_resource_gems)",
+      "name_kr": "보석 표시",
+      "category": "resource",
+      "game_id": "nikke"
+    },
+    {
+      "id": 71,
+      "name": "nikke_resource_credit",
+      "display_name": "크레딧 표시 (nikke_resource_credit)",
+      "name_kr": "크레딧 표시",
+      "category": "resource",
+      "game_id": "nikke"
+    },
+    {
+      "id": 72,
+      "name": "nikke_interception_entry",
+      "display_name": "요격전 진입 (nikke_interception_entry)",
+      "name_kr": "요격전 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 73,
+      "name": "nikke_daily_entry_count",
+      "display_name": "일일 진입 횟수 (nikke_daily_entry_count)",
+      "name_kr": "일일 진입 횟수",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 74,
+      "name": "nikke_simulation_entry",
+      "display_name": "시뮬레이션 룸 진입 (nikke_simulation_entry)",
+      "name_kr": "시뮬레이션 룸 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 75,
+      "name": "nikke_outpost_ui",
+      "display_name": "전초기지 UI (nikke_outpost_ui)",
+      "name_kr": "전초기지 UI",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 76,
+      "name": "nikke_collection_timer",
+      "display_name": "수집 타이머 (nikke_collection_timer)",
+      "name_kr": "수집 타이머",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 77,
+      "name": "nikke_tribe_tower_entry",
+      "display_name": "트라이브 타워 진입 (nikke_tribe_tower_entry)",
+      "name_kr": "트라이브 타워 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 78,
+      "name": "nikke_floor_indicator",
+      "display_name": "층수 표시 (nikke_floor_indicator)",
+      "name_kr": "층수 표시",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 79,
+      "name": "nikke_arena_entry",
+      "display_name": "아레나 진입 (nikke_arena_entry)",
+      "name_kr": "아레나 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 80,
+      "name": "nikke_rank_indicator",
+      "display_name": "랭크 표시 (nikke_rank_indicator)",
+      "name_kr": "랭크 표시",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 81,
+      "name": "nikke_rookie_arena_entry",
+      "display_name": "루키 아레나 진입 (nikke_rookie_arena_entry)",
+      "name_kr": "루키 아레나 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 82,
+      "name": "nikke_solo_raid_entry",
+      "display_name": "솔로 레이드 진입 (nikke_solo_raid_entry)",
+      "name_kr": "솔로 레이드 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 83,
+      "name": "nikke_score_indicator",
+      "display_name": "점수 표시 (nikke_score_indicator)",
+      "name_kr": "점수 표시",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 84,
+      "name": "nikke_coop_raid_entry",
+      "display_name": "협동 레이드 진입 (nikke_coop_raid_entry)",
+      "name_kr": "협동 레이드 진입",
+      "category": "content",
+      "game_id": "nikke"
+    },
+    {
+      "id": 85,
+      "name": "nikke_damage_indicator",
+      "display_name": "데미지 표시 (nikke_damage_indicator)",
+      "name_kr": "데미지 표시",
+      "category": "progress",
+      "game_id": "nikke"
+    },
+    {
+      "id": 86,
+      "name": "nikke_recruit_button",
+      "display_name": "모집 버튼 (nikke_recruit_button)",
+      "name_kr": "모집 버튼",
+      "category": "button",
+      "game_id": "nikke"
+    },
+    {
+      "id": 87,
+      "name": "nikke_reward_popup",
+      "display_name": "보상 팝업 (nikke_reward_popup)",
+      "name_kr": "보상 팝업",
+      "category": "popup",
+      "game_id": "nikke"
+    },
+    {
+      "id": 88,
+      "name": "nikke_character_menu",
+      "display_name": "캐릭터 메뉴 (nikke_character_menu)",
+      "name_kr": "캐릭터 메뉴",
+      "category": "menu",
+      "game_id": "nikke"
+    }
+  ]
+}

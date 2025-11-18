@@ -120,10 +120,112 @@ pip install PyQt6
 
 ---
 
+### 3. 비디오 샘플링 (`video_sampler.py`)
+
+**용도**: SSIM 기반 스마트 샘플링으로 비디오에서 유의미한 프레임만 추출
+
+**실행 방법**:
+```bash
+python tools/video_sampler.py \
+    --input datasets/raw/session_01.mp4 \
+    --output datasets/processed/session_01/ \
+    --max-frames 500
+```
+
+**주요 기능**:
+- ✅ **SSIM 기반 중복 제거**: 거의 동일한 프레임 자동 스킵
+- ✅ **장면 전환 감지**: SSIM < 0.5일 때 즉시 저장
+- ✅ **주기 샘플링**: 중간 SSIM 구간에서 일정 간격 샘플링
+- ✅ **메타데이터 저장**: 샘플링 통계 및 설정 기록
+
+**알고리즘**:
+1. **장면 전환**: SSIM < 0.5 → 즉시 저장
+2. **유의미한 변화**: SSIM < 0.85 → 저장
+3. **잠수 구간 스킵**: SSIM > 0.98 → 건너뜀
+4. **주기 샘플링**: 0.85 ≤ SSIM ≤ 0.98 → 5초마다
+
+**옵션**:
+- `--max-frames`: 최대 샘플링 프레임 수
+- `--ssim-high`: 높은 임계값 (기본: 0.98)
+- `--ssim-low`: 낮은 임계값 (기본: 0.85)
+- `--interval`: 주기 샘플링 간격 초 (기본: 5.0)
+- `--resize-width`: 리사이즈 너비
+- `--quality`: JPEG 품질 (기본: 95)
+
+**출력**:
+```
+datasets/processed/session_01/
+├── frame_000000.jpg
+├── frame_000045.jpg
+├── ...
+└── sampling_metadata.json
+```
+
+**자세한 사용법**: 별도 섹션 참조 (아래)
+
+---
+
+## 📹 비디오 샘플링 상세 가이드
+
+### 기본 예제
+
+```bash
+# 500 프레임 추출
+python tools/video_sampler.py \
+    --input datasets/raw/zenless_1920x1080.mp4 \
+    --output datasets/processed/zenless/ \
+    --max-frames 500
+```
+
+### 고급 예제
+
+```bash
+# 고품질 + 리사이즈
+python tools/video_sampler.py \
+    --input datasets/raw/honkai_2560x1600.mp4 \
+    --output datasets/processed/honkai/ \
+    --max-frames 300 \
+    --resize-width 1920 \
+    --quality 98
+
+# 공격적인 샘플링 (더 적은 프레임)
+python tools/video_sampler.py \
+    --input datasets/raw/wuthering_3440x1440.mp4 \
+    --output datasets/processed/wuthering/ \
+    --max-frames 200 \
+    --ssim-low 0.90 \
+    --interval 10.0
+```
+
+### 배치 처리
+
+```bash
+#!/bin/bash
+for video in datasets/raw/*.mp4; do
+    basename=$(basename "$video" .mp4)
+    python tools/video_sampler.py \
+        --input "$video" \
+        --output "datasets/processed/$basename/" \
+        --max-frames 500
+done
+```
+
+### 샘플링 결과 확인
+
+```bash
+# 추출된 프레임 수 확인
+ls datasets/processed/session_01/*.jpg | wc -l
+
+# 메타데이터 확인
+cat datasets/processed/session_01/sampling_metadata.json
+```
+
+---
+
 ## 🔧 향후 추가 예정 도구
 
 ### Week 1-2: 데이터 준비
-- [ ] `video_sampler.py` - SSIM 기반 프레임 샘플링
+- [x] `video_sampler.py` - SSIM 기반 프레임 샘플링 ✅
 - [ ] `scene_detector.py` - 장면 전환 감지
 - [ ] `metadata_generator.py` - 비디오 메타데이터 생성
 
@@ -137,5 +239,22 @@ pip install PyQt6
 
 ---
 
+## 📦 MVP 의존성
+
+MVP 개발에 필요한 추가 라이브러리:
+
+```bash
+pip install -r tools/requirements-mvp.txt
+```
+
+**주요 라이브러리**:
+- `opencv-python`: 비디오/이미지 처리
+- `scikit-image`: SSIM 계산
+- `ultralytics`: YOLOv8 학습
+- `torch`: PyTorch (CUDA 버전 권장)
+- `pytesseract`, `easyocr`: OCR
+
+---
+
 **작성자**: HomeworkHelper Dev Team
-**최종 수정**: 2025-11-14
+**최종 수정**: 2025-11-18

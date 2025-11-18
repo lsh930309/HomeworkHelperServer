@@ -94,3 +94,19 @@ android/.cxx/
 # *.h5
 # *.otf
 # *.ttfschemas/old/
+
+# ===========================
+# MVP - 라벨링 및 데이터셋
+# ===========================
+# Label Studio 데이터 (용량 큼)
+label-studio/data/
+
+# 데이터셋 (비디오, 이미지, 라벨)
+datasets/raw/
+datasets/processed/
+datasets/labeled/
+
+# YOLO 학습 결과
+models/yolo/*/weights/
+models/yolo/*/results/
+runs/

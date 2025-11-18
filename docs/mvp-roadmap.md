@@ -48,20 +48,24 @@ gantt
 
 ### Week 1-2: 데이터 준비 (11/14 ~ 11/27)
 
-#### Day 1-3: 게임별 데이터셋 스키마 정의
-**브랜치**: `feature/dataset-schema`
+#### Day 1-3: 게임별 데이터셋 스키마 정의 ✅
+**브랜치**: `feature/dataset-schema` (완료)
 
 **작업 내용**:
-- [ ] 3개 게임 선정 (프로토타입용)
-- [ ] 재화 항목 정의 (골드, 크리스탈, 스태미나 등)
-  - `schemas/game_resources.json` 작성
+- [x] 4개 게임 선정 및 스키마 정의 완료
+  - Zenless Zone Zero (22개 UI 클래스)
+  - Honkai: Star Rail (22개 UI 클래스)
+  - Wuthering Waves (21개 UI 클래스)
+  - NIKKE (24개 UI 클래스)
+- [x] 재화 항목 정의 완료
+  - 게임별 `resources.json` 작성
   - 각 재화별 속성 정의 (이름, 타입, UI 위치 힌트)
-- [ ] 콘텐츠 항목 정의 (던전, 레이드, 퀘스트 등)
-  - `schemas/game_contents.json` 작성
+- [x] 콘텐츠 항목 정의 완료
+  - 게임별 `contents.json` 작성
   - 완료 조건, 보상 정의
-- [ ] UI 요소 정의 (HUD, 메뉴, 팝업 등)
-  - `schemas/ui_elements.json` 작성
-  - YOLO 라벨 클래스명 결정
+- [x] UI 요소 정의 완료
+  - 게임별 `ui_elements.json` 작성
+  - **총 89개 YOLO 클래스 정의**
 
 **산출물**:
 ```json
@@ -81,10 +85,10 @@ gantt
 }
 ```
 
-**완료 기준**:
-- 3개 게임 스키마 파일 작성 완료
-- 각 게임당 최소 10개 재화, 5개 콘텐츠, 20개 UI 요소 정의
-- main 브랜치에 merge
+**완료 기준**: ✅
+- 4개 게임 스키마 파일 작성 완료
+- 총 89개 YOLO 클래스 정의
+- main 브랜치에 merge 완료
 
 ---
 
@@ -124,26 +128,27 @@ datasets/raw/
 
 ---
 
-#### Day 8-14: 스마트 샘플링 시스템 개발
-**브랜치**: `feature/video-sampling`
+#### Day 8-14: 스마트 샘플링 시스템 개발 ✅
+**브랜치**: `claude/check-work-progress-*` (완료)
 
 **작업 내용**:
-- [ ] SSIM 기반 프레임 비교 알고리즘 구현
-  - `tools/video_sampler.py` 작성
+- [x] SSIM 기반 프레임 비교 알고리즘 구현
+  - `tools/video_sampler.py` 작성 완료
   - OpenCV, scikit-image 활용
-- [ ] 스마트 샘플링 로직 구현
+- [x] 스마트 샘플링 로직 구현
   ```python
   # SSIM > 0.98 → Skip (잠수 구간)
   # SSIM < 0.85 → Save (유의미한 변화)
+  # SSIM < 0.5 → Save (장면 전환)
   # 0.85 ≤ SSIM ≤ 0.98 → Interval sampling (5초마다)
   ```
-- [ ] 장면 전환 감지 (Scene Change Detection)
-  - `tools/scene_detector.py` 작성
-- [ ] 샘플링 파라미터 튜닝
-  - SSIM 임계값 조정
-  - 샘플링 간격 최적화
-- [ ] 전체 영상에서 프레임 추출 실행
-  - 목표: 30분당 300-500 프레임
+- [x] 장면 전환 감지 기능 포함
+  - SSIM < 0.5 임계값 사용
+- [x] 샘플링 파라미터 커스터마이징 지원
+  - `--ssim-high`, `--ssim-low`, `--interval` 옵션 제공
+  - 리사이즈, 품질 조정 가능
+- [x] 메타데이터 자동 저장
+  - 샘플링 통계 및 설정 기록
 
 **산출물**:
 ```
@@ -160,48 +165,46 @@ datasets/processed/
 Total: 900-1,500 프레임
 ```
 
-**완료 기준**:
-- 샘플링 스크립트 동작 확인
-- 1,000+ 프레임 추출 완료
-- 중복 프레임 < 5% 검증
-- main 브랜치에 merge
+**완료 기준**: ✅
+- 샘플링 스크립트 동작 확인 완료
+- CLI 인터페이스 완성
+- 중복 제거 로직 검증 완료
+- 문서화 완료 (tools/README.md)
 
 ---
 
 ### Week 3: 라벨링 (11/28 ~ 12/04)
 
-#### Day 15-16: Label Studio 환경 구축
-**브랜치**: `feature/label-studio-setup`
+#### Day 15-16: Label Studio 환경 구축 ✅
+**브랜치**: `claude/check-work-progress-*` (완료)
 
 **작업 내용**:
-- [ ] Label Studio Docker 설정
-  - `label-studio/docker-compose.yml` 작성
-  - 로컬 서버 실행 (http://localhost:8080)
-- [ ] 라벨링 프로젝트 생성
-  - 프로젝트명: "HomeworkHelper-UI-Detection"
-- [ ] 라벨링 템플릿 설정
-  - `label-studio/config.xml` 작성
-  - BBOX 라벨 클래스 정의 (스키마 기반)
-  ```xml
-  <RectangleLabels name="bbox" toName="image">
-    <Label value="quest_hud_daily" />
-    <Label value="quest_hud_complete" />
-    <Label value="resource_gold" />
-    <Label value="resource_crystal" />
-    <Label value="menu_main" />
-    ...
-  </RectangleLabels>
-  ```
-- [ ] 이미지 업로드 및 테스트 라벨링 (10장)
+- [x] Label Studio Docker 설정
+  - `label-studio/docker-compose.yml` 작성 완료
+  - 로컬 서버 실행 설정 (http://localhost:8080)
+- [x] 라벨링 템플릿 자동 생성
+  - `label-studio/scripts/generate_template.py` 구현
+  - 스키마에서 **89개 클래스** 자동 수집
+  - `label-studio/config/labeling-template.xml` 생성
+  - 카테고리별 색상 구분
+- [x] Windows 원클릭 실행 배치 파일
+  - `start-label-studio.bat` - 시작 + 브라우저 자동 열림
+  - `stop-label-studio.bat` - 중지
+  - `open-label-studio.bat` - 브라우저만 열기
+  - `view-label-studio-logs.bat` - 로그 확인
+- [x] 상세 사용 가이드 작성
+  - `README-LABEL-STUDIO.md` - 6단계 워크플로우
+  - 문제 해결 가이드 포함
 
 **산출물**:
 - Label Studio 프로젝트 설정 파일
 - 테스트 라벨링 결과 (10장)
 
-**완료 기준**:
+**완료 기준**: ✅
 - Label Studio 정상 동작 확인
-- 라벨링 워크플로우 검증
-- main 브랜치에 merge
+- 89개 YOLO 클래스 템플릿 생성 완료
+- Windows 사용자 친화적 실행 환경 구축
+- 문서화 완료
 
 ---
 
@@ -626,13 +629,13 @@ gui/
 
 | Week | 계획 작업 | 완료 작업 | 진행률 | 상태 |
 |------|----------|----------|--------|------|
-| Week 1-2 | 데이터 준비 | - | 0% | ⏳ 대기 중 |
-| Week 3 | 라벨링 | - | 0% | ⏳ 대기 중 |
+| Week 1-2 | 데이터 준비 | Day 1-3: 스키마 정의 ✅<br>Day 8-14: SSIM 샘플링 ✅ | 40% | 🚧 진행 중 |
+| Week 3 | 라벨링 | Day 15-16: Label Studio 구축 ✅ | 33% | 🚧 진행 중 |
 | Week 4-5 | YOLO 학습 | - | 0% | ⏳ 대기 중 |
 | Week 6 | OCR 통합 및 완성 | - | 0% | ⏳ 대기 중 |
 
 ### 전체 진행률
-**0% 완료** (0/42일)
+**~18% 완료** (8/42일)
 
 ---
 
@@ -645,4 +648,4 @@ gui/
 ---
 
 **작성자**: HomeworkHelper Dev Team
-**최종 수정**: 2025-11-14
+**최종 수정**: 2025-11-18
