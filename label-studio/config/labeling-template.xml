@@ -1,8 +1,10 @@
 <View>
-  <Header value="HomeworkHelper UI Detection - YOLO 라벨링"/>
-  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <Header value="HomeworkHelper UI Detection - 비디오 타임라인 라벨링"/>
+  <Video name="video" value="$video" sync="audio,chart"/>
   
-  <RectangleLabels name="label" toName="image" strokeWidth="2" smart="true">
+  <VideoRectangle name="box" toName="video" smart="true" showLabels="true"/>
+  
+  <Labels name="label" toName="video">
     <!-- 젠레스 존 제로 (ZENLESS_ZONE_ZERO) -->
     <!-- BUTTON -->
     <Label value="zzz_menu_button" background="#98D8C8">메뉴 버튼 (zzz_menu_button)</Label>
@@ -135,5 +137,5 @@
     <Label value="nikke_resource_gems" background="#CCCCCC">보석 표시 (nikke_resource_gems)</Label>
     <Label value="nikke_resource_credit" background="#CCCCCC">크레딧 표시 (nikke_resource_credit)</Label>
 
-  </RectangleLabels>
+  </Labels>
 </View>
