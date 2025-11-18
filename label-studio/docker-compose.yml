@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  label-studio:
+    image: heartexlabs/label-studio:latest
+    container_name: homework-helper-label-studio
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Label Studio 설정
+      - LABEL_STUDIO_HOST=http://localhost:8080
+      - LABEL_STUDIO_USERNAME=admin
+      - LABEL_STUDIO_PASSWORD=homework-helper-2025
+      # 로컬 파일 저장 경로
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data
+    volumes:
+      # Label Studio 데이터 저장 (프로젝트, 어노테이션 등)
+      - ./data:/label-studio/data
+      # 라벨링할 이미지 디렉토리
+      - ../datasets:/label-studio/datasets:ro
+      # 설정 파일
+      - ./config:/label-studio/config:ro
+    command: label-studio --host 0.0.0.0 --port 8080
+
+  # 선택사항: PostgreSQL (프로덕션 환경에서 사용)
+  # postgres:
+  #   image: postgres:15
+  #   container_name: homework-helper-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_DB=labelstudio
+  #     - POSTGRES_USER=labelstudio
+  #     - POSTGRES_PASSWORD=labelstudio
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+volumes:
+  # postgres_data:

@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "games": [
     {
-      "game_id": "zzz",
+      "game_id": "zenless_zone_zero",
       "game_name": "Zenless Zone Zero",
       "game_name_kr": "젠레스 존 제로",
       "schema_version": "1.0.0",
@@ -22,7 +22,7 @@
       "last_updated": "2025-11-14"
     },
     {
-      "game_id": "hsr",
+      "game_id": "honkai_star_rail",
       "game_name": "Honkai: Star Rail",
       "game_name_kr": "붕괴: 스타레일",
       "schema_version": "1.0.0",
@@ -39,7 +39,7 @@
       "last_updated": "2025-11-14"
     },
     {
-      "game_id": "ww",
+      "game_id": "wuthering_waves",
       "game_name": "Wuthering Waves",
       "game_name_kr": "명조: 워더링 웨이브",
       "schema_version": "1.0.0",
