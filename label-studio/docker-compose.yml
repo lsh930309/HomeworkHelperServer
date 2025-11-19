@@ -24,9 +24,7 @@ services:
       - ../datasets:/label-studio/datasets:ro
       # 설정 파일
       - ./config:/label-studio/config:ro
-      # 초기화 스크립트
-      - ./init-admin.sh:/init-admin.sh:ro
-    entrypoint: ["/bin/bash", "/init-admin.sh"]
+    command: label-studio start --host 0.0.0.0 --port 8080
 
   # 선택사항: PostgreSQL (프로덕션 환경에서 사용)
   # postgres:
