@@ -44,9 +44,9 @@
 | `open-label-studio.bat` | 브라우저만 열기 (이미 실행 중일 때) |
 | `view-label-studio-logs.bat` | 로그 확인 (문제 해결용) |
 
-**접속 정보**: http://localhost:8080 (admin / homework-helper-2025)
+**접속 정보**: http://localhost:8080 (처음 접속 시 Sign Up으로 계정 생성)
 
-📖 **자세한 사용법**: [README-LABEL-STUDIO.md](README-LABEL-STUDIO.md)
+📖 **자세한 사용법**: [Label Studio 가이드](docs/guides/label-studio-guide.md)
 
 ---
 
@@ -61,10 +61,15 @@
 4. **[Git 워크플로우](docs/git-workflow.md)** - 브랜치 전략 및 커밋 규칙
 
 ### 개발 가이드
-- **[개발 환경 설정](docs/dev-setup-guide.md)** - 멀티 PC 개발 환경 구축
+- **[Label Studio 가이드](docs/guides/label-studio-guide.md)** - 라벨링 환경 사용법
+- **[비디오 라벨링 워크플로우](docs/workflows/video-labeling-workflow.md)** - 효율적인 비디오 기반 라벨링
+- **[멀티 PC 동기화](docs/guides/multi-pc-sync-guide.md)** - 여러 PC에서 개발하기
+- **[빌드 가이드](docs/guides/build-guide.md)** - PyInstaller 빌드 방법
+- **[개발 환경 설정](docs/dev-setup-guide.md)** - 초기 개발 환경 구축
 
-### 보류된 문서
-- **[archived/](docs/archived/)** - 향후 참고용 문서 (서버 배포 관련)
+### 과거 작업 기록
+- **[archived/](docs/archived/)** - 보류된 문서 (서버 배포 관련)
+- **[archive/](docs/archive/)** - 과거 세션 작업 기록, PR 설명
 
 **💡 Tip**: 새 Claude 세션 시작 시 위 문서들이 자동으로 참조됩니다. ([.claude/SessionStart](.claude/SessionStart))
 
@@ -438,8 +443,15 @@ HomeworkHelperServer/
 │   │   ├── architecture.md       # 아키텍처 가이드
 │   │   ├── milestone.md          # 마일스톤 로드맵
 │   │   ├── mvp-roadmap.md        # MVP 로드맵
-│   │   ├── git-workflow.md
-│   │   ├── dev-setup-guide.md
+│   │   ├── git-workflow.md       # Git 워크플로우
+│   │   ├── dev-setup-guide.md    # 개발 환경 설정
+│   │   ├── guides/               # 사용 가이드
+│   │   │   ├── label-studio-guide.md
+│   │   │   ├── multi-pc-sync-guide.md
+│   │   │   └── build-guide.md
+│   │   ├── workflows/            # 워크플로우 문서
+│   │   │   └── video-labeling-workflow.md
+│   │   ├── archive/              # 과거 작업 기록
 │   │   └── archived/             # 보류된 문서
 │   │
 │   └── README.md                 # 이 파일
