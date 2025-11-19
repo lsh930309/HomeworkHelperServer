@@ -37,6 +37,8 @@ services:
   #     - postgres_data:/var/lib/postgresql/data
   #   ports:
   #     - "5432:5432"
-
-volumes:
-  # postgres_data:
+  #
+  # 프로덕션 환경에서 PostgreSQL을 사용하려면 위 주석을 해제하고
+  # 아래 volumes 섹션도 함께 주석 해제하세요:
+  # volumes:
+  #   postgres_data:
