@@ -120,81 +120,79 @@ pip install PyQt6
 
 ---
 
-### 3. 비디오 샘플링 (`video_sampler.py`)
+### 3. 비디오 세그멘테이션 (`video_segmenter.py`)
 
-**용도**: SSIM 기반 스마트 샘플링으로 비디오에서 유의미한 프레임만 추출
+**용도**: SSIM 기반 장면 분석으로 안정된 비디오 구간을 클립으로 분할
 
 **실행 방법**:
 ```bash
-python tools/video_sampler.py \
-    --input datasets/raw/session_01.mp4 \
-    --output datasets/processed/session_01/ \
-    --max-frames 500
+python tools/video_segmenter.py \
+    --input datasets/raw/gameplay.mp4 \
+    --output datasets/clips/ \
+    --min-duration 5
 ```
 
 **주요 기능**:
-- ✅ **SSIM 기반 중복 제거**: 거의 동일한 프레임 자동 스킵
-- ✅ **장면 전환 감지**: SSIM < 0.5일 때 즉시 저장
-- ✅ **주기 샘플링**: 중간 SSIM 구간에서 일정 간격 샘플링
-- ✅ **메타데이터 저장**: 샘플링 통계 및 설정 기록
+- ✅ **장면 전환 감지**: SSIM < 0.5일 때 새 세그먼트 시작
+- ✅ **안정 구간 추출**: UI가 일정한 구간만 선택
+- ✅ **자동 분할**: 5-60초 길이의 비디오 클립 생성
+- ✅ **메타데이터 저장**: 세그먼트 정보 및 통계 기록
 
 **알고리즘**:
-1. **장면 전환**: SSIM < 0.5 → 즉시 저장
-2. **유의미한 변화**: SSIM < 0.85 → 저장
-3. **잠수 구간 스킵**: SSIM > 0.98 → 건너뜀
-4. **주기 샘플링**: 0.85 ≤ SSIM ≤ 0.98 → 5초마다
+1. **장면 전환**: SSIM < 0.5 → 새 세그먼트
+2. **안정성 판단**: 평균 SSIM > 0.95 → 유효
+3. **길이 제약**: 5초 ~ 60초 클립만 저장
+4. **불안정 구간 제거**: 로딩, 애니메이션 등 자동 스킵
 
 **옵션**:
-- `--max-frames`: 최대 샘플링 프레임 수
-- `--ssim-high`: 높은 임계값 (기본: 0.98)
-- `--ssim-low`: 낮은 임계값 (기본: 0.85)
-- `--interval`: 주기 샘플링 간격 초 (기본: 5.0)
-- `--resize-width`: 리사이즈 너비
-- `--quality`: JPEG 품질 (기본: 95)
+- `--scene-threshold`: 장면 전환 임계값 (기본: 0.5)
+- `--stability-threshold`: 안정성 임계값 (기본: 0.95)
+- `--min-duration`: 최소 클립 길이 초 (기본: 5.0)
+- `--max-duration`: 최대 클립 길이 초 (기본: 60.0)
+- `--max-segments`: 최대 클립 수 (기본: 무제한)
 
 **출력**:
 ```
-datasets/processed/session_01/
-├── frame_000000.jpg
-├── frame_000045.jpg
-├── ...
-└── sampling_metadata.json
+datasets/clips/
+├── segment_001.mp4  (30초 - 전투 화면)
+├── segment_002.mp4  (45초 - 메뉴 화면)
+├── segment_003.mp4  (20초 - 퀘스트 화면)
+└── segments_metadata.json
 ```
 
 **자세한 사용법**: 별도 섹션 참조 (아래)
 
 ---
 
-## 📹 비디오 샘플링 상세 가이드
+## 📹 비디오 세그멘테이션 상세 가이드
 
 ### 기본 예제
 
 ```bash
-# 500 프레임 추출
-python tools/video_sampler.py \
-    --input datasets/raw/zenless_1920x1080.mp4 \
-    --output datasets/processed/zenless/ \
-    --max-frames 500
+# 30분 비디오 → 안정된 클립들로 분할
+python tools/video_segmenter.py \
+    --input datasets/raw/zenless_gameplay.mp4 \
+    --output datasets/clips/zenless/ \
+    --min-duration 5 \
+    --max-segments 20
 ```
 
 ### 고급 예제
 
 ```bash
-# 고품질 + 리사이즈
-python tools/video_sampler.py \
-    --input datasets/raw/honkai_2560x1600.mp4 \
-    --output datasets/processed/honkai/ \
-    --max-frames 300 \
-    --resize-width 1920 \
-    --quality 98
+# 더 엄격한 안정성 기준
+python tools/video_segmenter.py \
+    --input datasets/raw/honkai_gameplay.mp4 \
+    --output datasets/clips/honkai/ \
+    --stability-threshold 0.98 \
+    --min-duration 10
 
-# 공격적인 샘플링 (더 적은 프레임)
-python tools/video_sampler.py \
-    --input datasets/raw/wuthering_3440x1440.mp4 \
-    --output datasets/processed/wuthering/ \
-    --max-frames 200 \
-    --ssim-low 0.90 \
-    --interval 10.0
+# 짧은 클립 허용 (빠른 장면)
+python tools/video_segmenter.py \
+    --input datasets/raw/wuthering_gameplay.mp4 \
+    --output datasets/clips/wuthering/ \
+    --min-duration 3 \
+    --max-duration 30
 ```
 
 ### 배치 처리
@@ -202,22 +200,23 @@ python tools/video_sampler.py \
 ```bash
 #!/bin/bash
 for video in datasets/raw/*.mp4; do
-    basename=$(basename "$video" .mp4)
-    python tools/video_sampler.py \
+    game_name=$(basename "$video" .mp4)
+    python tools/video_segmenter.py \
         --input "$video" \
-        --output "datasets/processed/$basename/" \
-        --max-frames 500
+        --output "datasets/clips/$game_name/" \
+        --min-duration 5 \
+        --max-segments 20
 done
 ```
 
-### 샘플링 결과 확인
+### 세그멘테이션 결과 확인
 
 ```bash
-# 추출된 프레임 수 확인
-ls datasets/processed/session_01/*.jpg | wc -l
+# 생성된 클립 수 확인
+ls datasets/clips/*.mp4 | wc -l
 
 # 메타데이터 확인
-cat datasets/processed/session_01/sampling_metadata.json
+cat datasets/clips/segments_metadata.json
 ```
 
 ---
@@ -225,12 +224,11 @@ cat datasets/processed/session_01/sampling_metadata.json
 ## 🔧 향후 추가 예정 도구
 
 ### Week 1-2: 데이터 준비
-- [x] `video_sampler.py` - SSIM 기반 프레임 샘플링 ✅
-- [ ] `scene_detector.py` - 장면 전환 감지
-- [ ] `metadata_generator.py` - 비디오 메타데이터 생성
+- [x] `video_segmenter.py` - SSIM 기반 비디오 세그멘테이션 ✅
+- [x] `video_sampler.py` - 프레임 추출 (레거시, video_segmenter로 대체) ✅
 
 ### Week 3: 라벨링
-- [ ] `data_converter.py` - Label Studio → YOLO 형식 변환
+- [x] `video_labels_to_yolo.py` - Label Studio 비디오 라벨 → YOLO 변환 ✅
 - [ ] `label_validator.py` - 라벨 품질 검증
 
 ### Week 4-5: YOLO 학습

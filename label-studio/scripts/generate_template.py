@@ -69,13 +69,15 @@ def collect_all_yolo_classes(schemas_dir: Path) -> Dict[str, List[Dict[str, str]
 
 
 def generate_label_studio_xml(classes_by_game: Dict[str, List[Dict[str, str]]]) -> str:
-    """Label Studio XML 템플릿 생성"""
+    """Label Studio XML 템플릿 생성 (비디오 라벨링용)"""
     xml_lines = [
         '<View>',
-        '  <Header value="HomeworkHelper UI Detection - YOLO 라벨링"/>',
-        '  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>',
+        '  <Header value="HomeworkHelper UI Detection - 비디오 타임라인 라벨링"/>',
+        '  <Video name="video" value="$video" sync="audio,chart"/>',
         '  ',
-        '  <RectangleLabels name="label" toName="image" strokeWidth="2" smart="true">',
+        '  <VideoRectangle name="box" toName="video" smart="true" showLabels="true"/>',
+        '  ',
+        '  <Labels name="label" toName="video">',
     ]
 
     # 게임별로 그룹화된 라벨 추가
@@ -107,7 +109,7 @@ def generate_label_studio_xml(classes_by_game: Dict[str, List[Dict[str, str]]]) 
         xml_lines.append('')  # 게임 사이 빈 줄
 
     xml_lines.extend([
-        '  </RectangleLabels>',
+        '  </Labels>',
         '</View>'
     ])
 
