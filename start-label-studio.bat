@@ -54,8 +54,14 @@ echo ================================
 echo 🌐 Label Studio 접속 정보
 echo ================================
 echo URL: http://localhost:8080
-echo 사용자명: admin
-echo 비밀번호: homework-helper-2025
+echo.
+echo ℹ️  처음 접속 시:
+echo    - Sign Up 페이지에서 계정 생성
+echo    - 첫 가입자가 자동으로 관리자가 됩니다
+echo.
+echo 💡 권장 계정 정보:
+echo    Email: admin@localhost
+echo    Password: homework-helper-2025
 echo ================================
 echo.
 
