@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict
 
+from .utils import get_resource_path
+
 
 @dataclass
 class SSIMPreset:
@@ -82,7 +84,7 @@ class ConfigManager:
         """
         if config_file is None:
             # 기본 설정 파일 경로: label-studio/gui/config.json
-            self.config_file = Path(__file__).parent.parent / "config.json"
+            self.config_file = get_resource_path("gui/config.json")
         else:
             self.config_file = config_file
 
@@ -201,7 +203,7 @@ class ConfigManager:
             return Path(self.config.docker_compose_path)
         else:
             # 기본 경로: label-studio/docker-compose.yml
-            return Path(__file__).parent.parent.parent / "docker-compose.yml"
+            return get_resource_path("docker-compose.yml")
 
     def set_docker_compose_path(self, path: Path):
         """docker-compose.yml 경로 설정"""

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 from enum import Enum
 
+from .utils import get_resource_path
+
 
 class DockerStatus(Enum):
     """Docker 상태"""
@@ -40,7 +42,7 @@ class DockerManager:
         """
         if docker_compose_path is None:
             # 기본 경로: label-studio/docker-compose.yml
-            self.docker_compose_path = Path(__file__).parent.parent.parent / "docker-compose.yml"
+            self.docker_compose_path = get_resource_path("docker-compose.yml")
         else:
             self.docker_compose_path = docker_compose_path
 

@@ -6,7 +6,7 @@ a = Analysis(
     ['homework_helper.pyw'],
     pathex=[],
     binaries=[],
-    datas=[('font', 'font'), ('img', 'img'), ('src', 'src')],
+    datas=[('font', 'font'), ('img', 'img'), ('src', 'src'), ('label-studio', 'label-studio'), ('tools', 'tools'), ('schemas', 'schemas')],
     hiddenimports=['uvicorn', 'fastapi', 'sqlalchemy', 'requests', 'PyQt6', 'psutil', 'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client'],
     hookspath=[],
     hooksconfig={},

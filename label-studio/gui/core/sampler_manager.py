@@ -10,12 +10,23 @@ from typing import Optional, Callable
 from dataclasses import dataclass
 
 # tools 디렉토리를 sys.path에 추가
-tools_dir = Path(__file__).parent.parent.parent.parent / "tools"
+if getattr(sys, 'frozen', False):
+    # PyInstaller 패키징 환경
+    tools_dir = Path(sys.executable).parent / "_internal" / "tools"
+else:
+    # 개발 환경
+    tools_dir = Path(__file__).parent.parent.parent.parent / "tools"
+
 if str(tools_dir) not in sys.path:
     sys.path.insert(0, str(tools_dir))
 
-from tools.video_sampler import VideoSampler, SamplingConfig
-from tools.video_segmenter import VideoSegmenter, SegmenterConfig
+# Lazy import: 함수 내부에서 import (순환 참조 및 경로 문제 방지)
+def _import_tools():
+    """tools 모듈을 lazy import"""
+    global VideoSampler, SamplingConfig, VideoSegmenter, SegmenterConfig
+    if 'VideoSampler' not in globals():
+        from tools.video_sampler import VideoSampler, SamplingConfig
+        from tools.video_segmenter import VideoSegmenter, SegmenterConfig
 
 
 @dataclass
@@ -76,6 +87,9 @@ class SamplerManager:
         Returns:
             SamplingResult
         """
+        # tools 모듈 import (lazy loading)
+        _import_tools()
+
         try:
             # 입력 파일 확인
             if not input_video.exists():
@@ -154,6 +168,9 @@ class SamplerManager:
         Returns:
             SegmentationResult
         """
+        # tools 모듈 import (lazy loading)
+        _import_tools()
+
         try:
             # 입력 파일 확인
             if not input_video.exists():

@@ -44,7 +44,8 @@ class DatasetAnalyzer:
             dataset_root: 데이터셋 루트 디렉토리 (None이면 label-studio/datasets)
         """
         if dataset_root is None:
-            self.dataset_root = Path(__file__).parent.parent.parent / "datasets"
+            from .utils import get_resource_path
+            self.dataset_root = get_resource_path("datasets")
         else:
             self.dataset_root = dataset_root
 

@@ -1436,38 +1436,38 @@ class MainWindow(QMainWindow):
     def open_label_studio_manager(self):
         """Label Studio Manager GUI 툴 실행"""
         try:
-            import subprocess
             from pathlib import Path
 
-            # label-studio/label_studio_launcher.pyw 경로 찾기
+            # label-studio 모듈 경로 설정
             if getattr(sys, 'frozen', False):
-                # 패키징된 환경
-                app_path = Path(sys.executable).parent
+                # 패키징된 환경 (PyInstaller onedir 모드)
+                # 데이터 파일들은 _internal 폴더에 위치
+                label_studio_path = Path(sys.executable).parent / "_internal" / "label-studio"
             else:
                 # 개발 환경
-                app_path = Path(__file__).parent.parent.parent
+                label_studio_path = Path(__file__).parent.parent.parent / "label-studio"
 
-            launcher_path = app_path / "label-studio" / "label_studio_launcher.pyw"
+            # label-studio 경로를 sys.path에 추가
+            if str(label_studio_path) not in sys.path:
+                sys.path.insert(0, str(label_studio_path))
 
-            if not launcher_path.exists():
-                QMessageBox.warning(
-                    self,
-                    "파일 없음",
-                    f"Label Studio Manager를 찾을 수 없습니다:\n{launcher_path}"
-                )
-                return
+            # Label Studio Manager 임포트 및 실행
+            from gui.label_studio_manager import LabelStudioManager
 
-            # Label Studio Manager 실행 (별도 프로세스)
-            if os.name == 'nt':  # Windows
-                # pythonw로 실행 (콘솔 창 안 뜸)
-                subprocess.Popen([sys.executable.replace('python.exe', 'pythonw.exe'), str(launcher_path)])
-            else:
-                subprocess.Popen([sys.executable, str(launcher_path)])
+            # 새 윈도우 생성 (동일 프로세스에서 실행)
+            self.label_studio_window = LabelStudioManager()
+            self.label_studio_window.show()
 
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage("Label Studio Manager 실행됨", 3000)
 
+        except ImportError as e:
+            QMessageBox.critical(
+                self,
+                "모듈 로드 오류",
+                f"Label Studio Manager 모듈을 찾을 수 없습니다:\n{str(e)}\n\n경로: {label_studio_path}"
+            )
         except Exception as e:
             QMessageBox.critical(
                 self,

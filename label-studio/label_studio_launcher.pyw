@@ -13,6 +13,17 @@ gui_dir = Path(__file__).parent / "gui"
 if str(gui_dir.parent) not in sys.path:
     sys.path.insert(0, str(gui_dir.parent))
 
+# tools 디렉토리를 sys.path에 추가 (video_sampler, video_segmenter 사용)
+if getattr(sys, 'frozen', False):
+    # PyInstaller 패키징 환경
+    tools_dir = Path(sys.executable).parent / "_internal" / "tools"
+else:
+    # 개발 환경
+    tools_dir = Path(__file__).parent.parent / "tools"
+
+if str(tools_dir) not in sys.path:
+    sys.path.insert(0, str(tools_dir))
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from gui.label_studio_manager import LabelStudioManager

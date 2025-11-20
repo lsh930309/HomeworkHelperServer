@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 
+from .utils import get_resource_path
+
 
 @dataclass
 class SchemaClass:
@@ -58,7 +60,7 @@ class SchemaManager:
         """
         if class_mapping_path is None:
             # 기본 경로: label-studio/config/class-mapping.json
-            self.class_mapping_path = Path(__file__).parent.parent.parent / "config" / "class-mapping.json"
+            self.class_mapping_path = get_resource_path("config/class-mapping.json")
         else:
             self.class_mapping_path = class_mapping_path
 
