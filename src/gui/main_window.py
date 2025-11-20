@@ -310,6 +310,13 @@ class MainWindow(QMainWindow):
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
 
+        # 도구 메뉴
+        tm = mb.addMenu("도구(&T)")
+        lsm_action = QAction("🎯 Label Studio Manager", self)
+        lsm_action.triggered.connect(self.open_label_studio_manager)
+        if tm:
+            tm.addAction(lsm_action)
+
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
         always_on_top = self.data_manager.global_settings.always_on_top
@@ -1425,3 +1432,44 @@ class MainWindow(QMainWindow):
         result = msg_box.exec()
         return result == QMessageBox.StandardButton.Yes
 
+    def open_label_studio_manager(self):
+        """Label Studio Manager GUI 툴 실행"""
+        try:
+            import subprocess
+            from pathlib import Path
+
+            # label-studio/label_studio_launcher.pyw 경로 찾기
+            if getattr(sys, 'frozen', False):
+                # 패키징된 환경
+                app_path = Path(sys.executable).parent
+            else:
+                # 개발 환경
+                app_path = Path(__file__).parent.parent.parent
+
+            launcher_path = app_path / "label-studio" / "label_studio_launcher.pyw"
+
+            if not launcher_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "파일 없음",
+                    f"Label Studio Manager를 찾을 수 없습니다:\n{launcher_path}"
+                )
+                return
+
+            # Label Studio Manager 실행 (별도 프로세스)
+            if os.name == 'nt':  # Windows
+                # pythonw로 실행 (콘솔 창 안 뜸)
+                subprocess.Popen([sys.executable.replace('python.exe', 'pythonw.exe'), str(launcher_path)])
+            else:
+                subprocess.Popen([sys.executable, str(launcher_path)])
+
+            status_bar = self.statusBar()
+            if status_bar:
+                status_bar.showMessage("Label Studio Manager 실행됨", 3000)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "오류",
+                f"Label Studio Manager 실행 실패:\n{e}"
+            )
