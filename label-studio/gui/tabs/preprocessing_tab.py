@@ -148,20 +148,23 @@ class PreprocessingTab(QWidget):
         # 프리셋에 따른 파라미터
         preset_map = {
             "빠른 세그멘테이션": {
-                "scene_threshold": 0.5,
-                "stability_threshold": 0.95,
+                "scene_threshold": 0.3,
+                "dynamic_low": 0.35,
+                "dynamic_high": 0.85,
                 "min_duration": 5.0,
                 "max_duration": 60.0
             },
             "표준 세그멘테이션": {
-                "scene_threshold": 0.5,
-                "stability_threshold": 0.96,
+                "scene_threshold": 0.3,
+                "dynamic_low": 0.4,
+                "dynamic_high": 0.8,
                 "min_duration": 5.0,
                 "max_duration": 60.0
             },
             "정밀 세그멘테이션": {
-                "scene_threshold": 0.5,
-                "stability_threshold": 0.98,
+                "scene_threshold": 0.3,
+                "dynamic_low": 0.45,
+                "dynamic_high": 0.75,
                 "min_duration": 10.0,
                 "max_duration": 60.0
             }

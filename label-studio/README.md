@@ -57,9 +57,12 @@ label-studio/
 
 ### 1. 비디오 세그멘테이션
 ```bash
-# 원본 비디오를 안정된 클립으로 분할 (SSIM 기반)
+# 원본 비디오를 동적 배경 클립으로 분할 (SSIM 기반)
+# UI는 고정되고 배경만 변하는 구간 선택 → YOLO 과적합 방지
 python tools/video_segmenter.py --input datasets/raw/gameplay_30min.mp4 \
                                  --output datasets/clips/ \
+                                 --dynamic-low 0.4 \
+                                 --dynamic-high 0.8 \
                                  --min-duration 5 \
                                  --max-segments 20
 ```
