@@ -11,8 +11,8 @@ Label Studio 서버 제어 및 데이터 전처리를 위한 통합 GUI 툴
 - ✅ 브라우저 자동 열기
 
 ### 2️⃣ 데이터 전처리
-- ✅ SSIM 기반 스마트 비디오 샘플링
-- ✅ 프리셋 지원 (빠른/표준/정밀)
+- ✅ SSIM 기반 비디오 세그멘테이션
+- ✅ 안정된 장면 자동 분할 (비디오 클립 생성)
 - ✅ 진행률 표시 및 예상 시간
 - ✅ 취소 기능
 
@@ -84,25 +84,25 @@ label-studio/
   },
   "presets": {
     "quick": {
-      "name": "빠른 샘플링",
-      "ssim_high": 0.95,
-      "ssim_low": 0.80,
-      "interval": 3.0,
-      "quality": 90
+      "name": "빠른 세그멘테이션",
+      "scene_threshold": 0.5,
+      "stability_threshold": 0.95,
+      "min_duration": 5.0,
+      "max_duration": 60.0
     },
     "standard": {
-      "name": "표준 샘플링",
-      "ssim_high": 0.98,
-      "ssim_low": 0.85,
-      "interval": 5.0,
-      "quality": 95
+      "name": "표준 세그멘테이션",
+      "scene_threshold": 0.5,
+      "stability_threshold": 0.96,
+      "min_duration": 5.0,
+      "max_duration": 60.0
     },
     "precise": {
-      "name": "정밀 샘플링",
-      "ssim_high": 0.99,
-      "ssim_low": 0.90,
-      "interval": 8.0,
-      "quality": 98
+      "name": "정밀 세그멘테이션",
+      "scene_threshold": 0.5,
+      "stability_threshold": 0.98,
+      "min_duration": 10.0,
+      "max_duration": 60.0
     }
   }
 }
@@ -118,15 +118,15 @@ label-studio/
 4. 로그에서 시작 과정 확인
 5. Label Studio 상태가 "✅ 실행 중"이 되면 **🌐 브라우저 열기** 클릭
 
-### 비디오 샘플링하기
+### 비디오 세그멘테이션하기
 
 1. **전처리** 탭 클릭
 2. **입력 비디오** 선택 (찾아보기 버튼)
 3. **출력 폴더** 선택
 4. **프리셋** 선택 (빠른/표준/정밀)
-5. **🎬 샘플링 시작** 버튼 클릭
+5. **🎬 세그멘테이션 시작** 버튼 클릭
 6. 진행률 바에서 진행 상황 확인
-7. 완료 후 출력 폴더에서 결과 확인
+7. 완료 후 출력 폴더에서 비디오 클립(.mp4) 확인
 
 ## 🔧 개발
 
@@ -170,9 +170,9 @@ class MyNewTab(QWidget):
 3. `docker-compose.yml` 파일 위치 확인
 4. `docker-compose down`으로 기존 컨테이너 제거 후 재시작
 
-### 샘플링이 느립니다
+### 세그멘테이션이 느립니다
 
-- **빠른 샘플링** 프리셋 사용
+- **빠른 세그멘테이션** 프리셋 사용
 - 비디오 해상도 낮추기
 - SSD에서 작업하기
 

@@ -128,48 +128,44 @@ datasets/raw/
 
 ---
 
-#### Day 8-14: 스마트 샘플링 시스템 개발 ✅
+#### Day 8-14: 비디오 세그멘테이션 시스템 개발 ✅
 **브랜치**: `claude/check-work-progress-*` (완료)
 
 **작업 내용**:
-- [x] SSIM 기반 프레임 비교 알고리즘 구현
-  - `tools/video_sampler.py` 작성 완료
+- [x] SSIM 기반 장면 분석 알고리즘 구현
+  - `tools/video_segmenter.py` 작성 완료
   - OpenCV, scikit-image 활용
-- [x] 스마트 샘플링 로직 구현
+- [x] 스마트 세그멘테이션 로직 구현
   ```python
-  # SSIM > 0.98 → Skip (잠수 구간)
-  # SSIM < 0.85 → Save (유의미한 변화)
-  # SSIM < 0.5 → Save (장면 전환)
-  # 0.85 ≤ SSIM ≤ 0.98 → Interval sampling (5초마다)
+  # SSIM < 0.5 → 장면 전환 (새 세그먼트 시작)
+  # 평균 SSIM > 0.95 → 안정 구간 (세그먼트 유지)
+  # 5초 < 길이 < 60초 → 유효 세그먼트
   ```
-- [x] 장면 전환 감지 기능 포함
-  - SSIM < 0.5 임계값 사용
-- [x] 샘플링 파라미터 커스터마이징 지원
-  - `--ssim-high`, `--ssim-low`, `--interval` 옵션 제공
-  - 리사이즈, 품질 조정 가능
+- [x] 안정된 구간 자동 추출 기능
+  - 로딩 화면, 애니메이션 자동 제거
+  - UI가 일정한 구간만 선택
+- [x] 세그멘테이션 파라미터 커스터마이징 지원
+  - `--scene-threshold`, `--stability-threshold` 옵션 제공
+  - `--min-duration`, `--max-duration` 조정 가능
 - [x] 메타데이터 자동 저장
-  - 샘플링 통계 및 설정 기록
+  - 세그먼트 통계 및 설정 기록
 
 **산출물**:
 ```
-datasets/processed/
-  ├── 1920x1080/
-  │   ├── frame_0001.jpg
-  │   ├── frame_0002.jpg
-  │   └── ... (300-500장)
-  ├── 2560x1600/
-  │   └── ... (300-500장)
-  └── 3440x1440/
-      └── ... (300-500장)
+datasets/clips/
+  ├── segment_001.mp4  (30초 - 전투 화면)
+  ├── segment_002.mp4  (45초 - 메뉴 화면)
+  ├── segment_003.mp4  (20초 - 퀘스트 화면)
+  └── segments_metadata.json
 
-Total: 900-1,500 프레임
+Total: 10-20개 비디오 클립 (5-10분 분량)
 ```
 
 **완료 기준**: ✅
-- 샘플링 스크립트 동작 확인 완료
+- 세그멘테이션 스크립트 동작 확인 완료
 - CLI 인터페이스 완성
-- 중복 제거 로직 검증 완료
-- 문서화 완료 (tools/README.md)
+- 안정 구간 감지 로직 검증 완료
+- 문서화 완료 (tools/README.md, docs/workflows/video-labeling-workflow.md)
 
 ---
 
@@ -212,48 +208,49 @@ Total: 900-1,500 프레임
 **브랜치**: `feature/labeling-pipeline`
 
 **작업 내용**:
-- [ ] 1,000+ 이미지 BBOX 라벨링
+- [ ] 10-20개 비디오 클립 타임라인 BBOX 라벨링
   - 비디오 타임라인 기반 일괄 라벨링 활용
-  - `[01:30 ~ 01:35]` 구간에 동일 라벨 적용
+  - `[00:05 ~ 00:30]` 구간에 한 번만 라벨링 → 수백 프레임 자동 적용
+  - 라벨링 시간: 클립당 평균 1-2분 (총 15-30분 작업)
 - [ ] 라벨 품질 관리
-  - 샘플링 검증 (매 100장마다 체크)
-  - 클래스별 균형 확인 (각 클래스 최소 50개)
-- [ ] 데이터셋 분리
-  - Train: 800장 (80%)
-  - Validation: 150장 (15%)
-  - Test: 50장 (5%)
-- [ ] Label Studio → YOLO 형식 변환
-  - `tools/data_converter.py` 작성
-  - YOLO txt 파일 생성
+  - 각 클립의 첫 프레임 샘플링 검증
+  - 클래스별 균형 확인 (각 클래스 최소 50개 프레임)
+- [ ] 비디오 라벨 → YOLO 형식 변환
+  - `label-studio/scripts/video_labels_to_yolo.py` 사용
+  - 프레임 추출 + YOLO txt 파일 생성
+  - Train/Val/Test 자동 분할 (80%/15%/5%)
 
 **산출물**:
 ```
 datasets/labeled/
   ├── train/
   │   ├── images/
-  │   │   ├── img_0001.jpg
-  │   │   └── ...
+  │   │   ├── segment001_frame_000000.jpg
+  │   │   ├── segment001_frame_000001.jpg
+  │   │   └── ... (8,000+장)
   │   └── labels/
-  │       ├── img_0001.txt (YOLO format)
+  │       ├── segment001_frame_000000.txt (YOLO format)
   │       └── ...
   ├── val/
-  │   ├── images/
+  │   ├── images/ (1,500+장)
   │   └── labels/
   └── test/
-      ├── images/
+      ├── images/ (500+장)
       └── labels/
 
 data.yaml:
   train: datasets/labeled/train/images
   val: datasets/labeled/val/images
   test: datasets/labeled/test/images
-  nc: 20  # number of classes
-  names: ['quest_hud_daily', 'quest_hud_complete', ...]
+  nc: 89  # number of classes (4개 게임 전체)
+  names: ['zzz_hud_main', 'zzz_quest_hud_daily', ...]
+
+Total: 10,000+ 프레임 (15-30분 라벨링 작업 → 10,000+ 학습 데이터)
 ```
 
 **완료 기준**:
-- 1,000+ BBOX 라벨링 완료
-- YOLO 형식 데이터셋 생성
+- 10-20개 비디오 클립 타임라인 라벨링 완료
+- 10,000+ 프레임 YOLO 형식 데이터셋 생성
 - data.yaml 작성 완료
 - main 브랜치에 merge
 
