@@ -53,33 +53,36 @@ label-studio/
 
 ---
 
-## 🎯 라벨링 워크플로우
+## 🎯 비디오 라벨링 워크플로우
 
-### 1. 이미지 준비
+### 1. 비디오 세그멘테이션
 ```bash
-# 비디오에서 프레임 추출 (SSIM 기반 샘플링)
-python tools/video_sampler.py --input datasets/raw/session_01.mp4 \
-                               --output datasets/processed/ \
-                               --max-frames 500
+# 원본 비디오를 안정된 클립으로 분할 (SSIM 기반)
+python tools/video_segmenter.py --input datasets/raw/gameplay_30min.mp4 \
+                                 --output datasets/clips/ \
+                                 --min-duration 5 \
+                                 --max-segments 20
 ```
 
-### 2. Label Studio에 업로드
-- 웹 UI에서 "Import" → `datasets/processed/` 선택
-- 또는 로컬 파일 서빙 활용
+### 2. Label Studio에 비디오 클립 업로드
+- 웹 UI에서 "Import" → `datasets/clips/*.mp4` 선택
+- 비디오 파일을 프로젝트에 추가
 
-### 3. BBOX 라벨링
-- 각 UI 요소에 Bounding Box 그리기
+### 3. 비디오 타임라인 BBOX 라벨링
+- 각 비디오 클립에서 UI 요소 시간 구간에 Bounding Box 그리기
+- 타임라인 `[00:05 - 00:30]` 구간에 한 번만 라벨링 → 수백 프레임 자동 적용
 - 올바른 클래스 선택 (예: `zzz_hud_main`, `zzz_quest_hud_daily`)
 - 라벨 검증 및 저장
 
-### 4. YOLO 형식으로 내보내기
+### 4. YOLO 형식으로 변환
 ```bash
 # Label Studio 내보내기 (JSON)
 # Project → Export → JSON 선택
 
-# YOLO 형식 변환
-python label-studio/scripts/export_to_yolo.py \
-    --input label-studio/data/export/project-1-export.json \
+# 비디오 라벨 → YOLO 형식 변환 (프레임 추출 + 라벨 적용)
+python label-studio/scripts/video_labels_to_yolo.py \
+    --labels label-studio/data/export/project-1.json \
+    --clips datasets/clips/ \
     --output datasets/labeled/
 ```
 

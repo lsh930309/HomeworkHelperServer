@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 전처리 탭
-비디오 세그멘테이션 및 SSIM 샘플링
+비디오 세그멘테이션 (SSIM 기반 안정 구간 분할)
 """
 
 from PyQt6.QtWidgets import (
@@ -16,8 +16,8 @@ from ..core.config_manager import get_config_manager
 from ..widgets.progress_widget import ProgressWidget
 
 
-class SamplingWorker(QThread):
-    """샘플링 작업 스레드"""
+class SegmentationWorker(QThread):
+    """세그멘테이션 작업 스레드"""
     progress = pyqtSignal(int, int)
     finished = pyqtSignal(bool, str)
 
@@ -30,7 +30,7 @@ class SamplingWorker(QThread):
 
     def run(self):
         try:
-            result = self.sampler_manager.sample_video(
+            result = self.sampler_manager.segment_video(
                 self.input_path,
                 self.output_path,
                 **self.params,
@@ -58,8 +58,8 @@ class PreprocessingTab(QWidget):
         """UI 초기화"""
         layout = QVBoxLayout()
 
-        # SSIM 샘플링 그룹
-        sampling_group = QGroupBox("SSIM 샘플링")
+        # 비디오 세그멘테이션 그룹
+        sampling_group = QGroupBox("비디오 세그멘테이션")
         sampling_layout = QVBoxLayout()
 
         # 입력 비디오
@@ -88,21 +88,21 @@ class PreprocessingTab(QWidget):
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("프리셋:"))
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["빠른 샘플링", "표준 샘플링", "정밀 샘플링"])
+        self.preset_combo.addItems(["빠른 세그멘테이션", "표준 세그멘테이션", "정밀 세그멘테이션"])
         self.preset_combo.setCurrentIndex(1)  # 기본: 표준
         preset_layout.addWidget(self.preset_combo)
         preset_layout.addStretch()
         sampling_layout.addLayout(preset_layout)
 
-        # 샘플링 시작 버튼
-        self.start_sampling_btn = QPushButton("🎬 샘플링 시작")
+        # 세그멘테이션 시작 버튼
+        self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
         self.start_sampling_btn.setMinimumHeight(40)
-        self.start_sampling_btn.clicked.connect(self.start_sampling)
+        self.start_sampling_btn.clicked.connect(self.start_segmentation)
         sampling_layout.addWidget(self.start_sampling_btn)
 
         # 진행률 위젯
         self.progress_widget = ProgressWidget()
-        self.progress_widget.cancel_requested.connect(self.cancel_sampling)
+        self.progress_widget.cancel_requested.connect(self.cancel_segmentation)
         sampling_layout.addWidget(self.progress_widget)
 
         sampling_group.setLayout(sampling_layout)
@@ -133,8 +133,8 @@ class PreprocessingTab(QWidget):
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
-    def start_sampling(self):
-        """샘플링 시작"""
+    def start_segmentation(self):
+        """세그멘테이션 시작"""
         input_path = Path(self.input_video_edit.text())
         output_path = Path(self.output_dir_edit.text())
 
@@ -147,15 +147,30 @@ class PreprocessingTab(QWidget):
 
         # 프리셋에 따른 파라미터
         preset_map = {
-            "빠른 샘플링": {"ssim_high": 0.95, "ssim_low": 0.80, "interval": 3.0},
-            "표준 샘플링": {"ssim_high": 0.98, "ssim_low": 0.85, "interval": 5.0},
-            "정밀 샘플링": {"ssim_high": 0.99, "ssim_low": 0.90, "interval": 8.0}
+            "빠른 세그멘테이션": {
+                "scene_threshold": 0.5,
+                "stability_threshold": 0.95,
+                "min_duration": 5.0,
+                "max_duration": 60.0
+            },
+            "표준 세그멘테이션": {
+                "scene_threshold": 0.5,
+                "stability_threshold": 0.96,
+                "min_duration": 5.0,
+                "max_duration": 60.0
+            },
+            "정밀 세그멘테이션": {
+                "scene_threshold": 0.5,
+                "stability_threshold": 0.98,
+                "min_duration": 10.0,
+                "max_duration": 60.0
+            }
         }
 
         params = preset_map[self.preset_combo.currentText()]
 
         # 작업 스레드 시작
-        self.worker = SamplingWorker(
+        self.worker = SegmentationWorker(
             self.sampler_manager,
             input_path,
             output_path,
@@ -165,7 +180,7 @@ class PreprocessingTab(QWidget):
         self.worker.finished.connect(self._on_finished)
 
         self.start_sampling_btn.setEnabled(False)
-        self.progress_widget.start_progress(100, "SSIM 샘플링")
+        self.progress_widget.start_progress(100, "비디오 세그멘테이션")
         self.worker.start()
 
     def _on_progress(self, current, total):
@@ -173,13 +188,13 @@ class PreprocessingTab(QWidget):
         self.progress_widget.update_progress(current, f"프레임 처리 중... {current}/{total}")
 
     def _on_finished(self, success, message):
-        """샘플링 완료"""
+        """세그멘테이션 완료"""
         self.progress_widget.finish_progress(success, message)
         self.start_sampling_btn.setEnabled(True)
         self.worker = None
 
-    def cancel_sampling(self):
-        """샘플링 취소"""
+    def cancel_segmentation(self):
+        """세그멘테이션 취소"""
         if self.worker:
             self.worker.terminate()
             self.worker.wait()
