@@ -2,6 +2,7 @@
 """메인 윈도우 및 아이콘 다운로더 클래스"""
 
 import os
+import sys
 import datetime
 import functools
 from typing import Optional
