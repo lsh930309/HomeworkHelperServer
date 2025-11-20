@@ -137,15 +137,16 @@ datasets/raw/
   - OpenCV, scikit-image 활용
 - [x] 스마트 세그멘테이션 로직 구현
   ```python
-  # SSIM < 0.5 → 장면 전환 (새 세그먼트 시작)
-  # 평균 SSIM > 0.95 → 안정 구간 (세그먼트 유지)
+  # SSIM < 0.3 → 장면 전환/컷씬 (제외)
+  # 0.4 ≤ 평균 SSIM ≤ 0.8 → 동적 배경 (선택, YOLO 과적합 방지)
+  # SSIM > 0.8 → 정적 구간 (제외, 메뉴 화면)
   # 5초 < 길이 < 60초 → 유효 세그먼트
   ```
-- [x] 안정된 구간 자동 추출 기능
-  - 로딩 화면, 애니메이션 자동 제거
-  - UI가 일정한 구간만 선택
+- [x] 동적 배경 구간 자동 추출 기능
+  - 메뉴 화면, 로딩 화면, 컷씬 자동 제거
+  - UI 고정 + 배경 변화 구간 선택 (전투, 이동)
 - [x] 세그멘테이션 파라미터 커스터마이징 지원
-  - `--scene-threshold`, `--stability-threshold` 옵션 제공
+  - `--scene-threshold`, `--dynamic-low`, `--dynamic-high` 옵션 제공
   - `--min-duration`, `--max-duration` 조정 가능
 - [x] 메타데이터 자동 저장
   - 세그먼트 통계 및 설정 기록
@@ -153,18 +154,18 @@ datasets/raw/
 **산출물**:
 ```
 datasets/clips/
-  ├── segment_001.mp4  (30초 - 전투 화면)
-  ├── segment_002.mp4  (45초 - 메뉴 화면)
-  ├── segment_003.mp4  (20초 - 퀘스트 화면)
+  ├── segment_001.mp4  (30초 - 전투 화면, SSIM: 0.65)
+  ├── segment_002.mp4  (45초 - 이동 중, SSIM: 0.58)
+  ├── segment_003.mp4  (20초 - 탐험 화면, SSIM: 0.72)
   └── segments_metadata.json
 
-Total: 10-20개 비디오 클립 (5-10분 분량)
+Total: 10-20개 동적 배경 비디오 클립 (5-10분 분량)
 ```
 
 **완료 기준**: ✅
 - 세그멘테이션 스크립트 동작 확인 완료
 - CLI 인터페이스 완성
-- 안정 구간 감지 로직 검증 완료
+- 동적 배경 구간 감지 로직 검증 완료
 - 문서화 완료 (tools/README.md, docs/workflows/video-labeling-workflow.md)
 
 ---

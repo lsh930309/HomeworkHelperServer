@@ -9,9 +9,11 @@ HomeworkHelper MVP의 **효율적인 비디오 기반 라벨링** 전체 워크�
 ```
 원본 비디오 (30분)
     ↓
-[1] 비디오 세그멘테이션
+[1] 비디오 세그멘테이션 (SSIM 기반)
     ↓
-안정된 클립들 (10개 × 30초 = 5분)
+동적 배경 클립들 (10개 × 30초 = 5분)
+  - UI 고정 + 배경 변화 구간 선택
+  - YOLO 과적합 방지
     ↓
 [2] Label Studio 비디오 타임라인 라벨링
     ↓
@@ -29,7 +31,12 @@ HomeworkHelper MVP의 **효율적인 비디오 기반 라벨링** 전체 워크�
 ## Step 1: 비디오 세그멘테이션
 
 ### 목적
-30분 원본 비디오에서 **안정된 UI 구간만** 추출
+30분 원본 비디오에서 **동적 배경 구간만** 추출 (UI는 고정, 배경만 변함)
+
+### 핵심 개념
+- **선택**: 0.4 ≤ SSIM ≤ 0.8 (전투, 이동 - 배경 변화)
+- **제외**: SSIM > 0.8 (메뉴, 일시정지 - 너무 정적, 과적합 위험)
+- **제외**: SSIM < 0.3 (컷씬, 로딩 - 너무 혼란)
 
 ### 실행
 
@@ -37,6 +44,8 @@ HomeworkHelper MVP의 **효율적인 비디오 기반 라벨링** 전체 워크�
 python tools/video_segmenter.py \
     --input datasets/raw/zenless_gameplay_30min.mp4 \
     --output datasets/clips/zenless/ \
+    --dynamic-low 0.4 \
+    --dynamic-high 0.8 \
     --min-duration 5 \
     --max-segments 20
 ```
@@ -45,18 +54,18 @@ python tools/video_segmenter.py \
 
 ```
 datasets/clips/zenless/
-├── segment_001.mp4  (30초 - 전투 화면, SSIM: 0.97)
-├── segment_002.mp4  (45초 - 메뉴 화면, SSIM: 0.98)
-├── segment_003.mp4  (20초 - 퀘스트 화면, SSIM: 0.96)
+├── segment_001.mp4  (30초 - 전투 화면, SSIM: 0.65)
+├── segment_002.mp4  (45초 - 이동 중, SSIM: 0.58)
+├── segment_003.mp4  (20초 - 탐험 화면, SSIM: 0.72)
 ├── ...
-├── segment_010.mp4  (25초 - 인벤토리, SSIM: 0.97)
+├── segment_010.mp4  (25초 - 전투 화면, SSIM: 0.61)
 └── segments_metadata.json
 ```
 
 **결과**:
-- 30분 원본 → 5분 안정된 클립
-- 로딩 화면, 애니메이션 등 자동 제거
-- UI가 일정한 구간만 선택
+- 30분 원본 → 5분 동적 배경 클립
+- 메뉴 화면, 로딩 화면, 컷씬 등 자동 제거
+- UI 고정 + 배경 변화 구간만 선택 → YOLO 과적합 방지
 
 ---
 
@@ -228,7 +237,9 @@ datasets/labeled/
 for game in zenless honkai wuthering nikke; do
     python tools/video_segmenter.py \
         --input datasets/raw/${game}_gameplay.mp4 \
-        --output datasets/clips/${game}/
+        --output datasets/clips/${game}/ \
+        --dynamic-low 0.4 \
+        --dynamic-high 0.8
 
     # Label Studio 라벨링 (수동)
 

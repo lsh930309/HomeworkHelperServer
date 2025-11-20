@@ -23,10 +23,10 @@ if str(tools_dir) not in sys.path:
 # Lazy import: 함수 내부에서 import (순환 참조 및 경로 문제 방지)
 def _import_tools():
     """tools 모듈을 lazy import"""
-    global VideoSampler, SamplingConfig, VideoSegmenter, SegmenterConfig
+    global VideoSampler, SamplingConfig, VideoSegmenter, SegmentConfig
     if 'VideoSampler' not in globals():
         from tools.video_sampler import VideoSampler, SamplingConfig
-        from tools.video_segmenter import VideoSegmenter, SegmenterConfig
+        from tools.video_segmenter import VideoSegmenter, SegmentConfig
 
 
 @dataclass
@@ -145,21 +145,23 @@ class SamplerManager:
         self,
         input_video: Path,
         output_dir: Path,
-        scene_threshold: float = 0.5,
-        stability_threshold: float = 0.95,
+        scene_threshold: float = 0.3,
+        dynamic_low: float = 0.4,
+        dynamic_high: float = 0.8,
         min_duration: float = 5.0,
         max_duration: float = 60.0,
         max_segments: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
-        비디오 세그멘테이션 실행
+        비디오 세그멘테이션 실행 (동적 배경 구간 선택)
 
         Args:
             input_video: 입력 비디오 경로
             output_dir: 출력 디렉토리
-            scene_threshold: 장면 전환 임계값
-            stability_threshold: 안정성 임계값
+            scene_threshold: 장면 전환 임계값 (기본: 0.3)
+            dynamic_low: 동적 범위 최소값 (기본: 0.4)
+            dynamic_high: 동적 범위 최대값 (기본: 0.8)
             min_duration: 최소 클립 길이 (초)
             max_duration: 최대 클립 길이 (초)
             max_segments: 최대 클립 수
@@ -183,29 +185,43 @@ class SamplerManager:
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 세그멘테이션 설정
-            config = SegmenterConfig(
+            config = SegmentConfig(
                 scene_change_threshold=scene_threshold,
-                stability_threshold=stability_threshold,
-                min_segment_duration=min_duration,
-                max_segment_duration=max_duration
+                dynamic_low_threshold=dynamic_low,
+                dynamic_high_threshold=dynamic_high,
+                min_duration=min_duration,
+                max_duration=max_duration,
+                max_segments=max_segments
             )
 
             # 세그멘터 생성
             self.segmenter = VideoSegmenter(config)
 
-            # 세그멘테이션 실행
-            segments = self.segmenter.segment_video(
+            # 세그먼트 탐지
+            segments = self.segmenter.detect_segments(
                 input_video,
+                progress_callback
+            )
+
+            if not segments:
+                return SegmentationResult(
+                    success=False,
+                    message="유효한 세그먼트를 찾을 수 없습니다."
+                )
+
+            # 세그먼트 비디오 생성
+            self.segmenter.export_segments(
+                input_video,
+                segments,
                 output_dir,
-                max_segments,
                 progress_callback
             )
 
             # 메타데이터 저장
-            self.segmenter.save_metadata(output_dir, input_video)
+            self.segmenter.save_metadata(output_dir, input_video, segments)
 
             # 총 길이 계산
-            total_duration = sum(seg['duration'] for seg in segments)
+            total_duration = sum(seg.duration for seg in segments)
 
             # 결과 반환
             return SegmentationResult(

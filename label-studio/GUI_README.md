@@ -12,7 +12,8 @@ Label Studio 서버 제어 및 데이터 전처리를 위한 통합 GUI 툴
 
 ### 2️⃣ 데이터 전처리
 - ✅ SSIM 기반 비디오 세그멘테이션
-- ✅ 안정된 장면 자동 분할 (비디오 클립 생성)
+- ✅ 동적 배경 구간 자동 선택 (비디오 클립 생성)
+- ✅ UI 고정 + 배경 변화 구간 → YOLO 과적합 방지
 - ✅ 진행률 표시 및 예상 시간
 - ✅ 취소 기능
 
@@ -85,22 +86,25 @@ label-studio/
   "presets": {
     "quick": {
       "name": "빠른 세그멘테이션",
-      "scene_threshold": 0.5,
-      "stability_threshold": 0.95,
+      "scene_threshold": 0.3,
+      "dynamic_low": 0.35,
+      "dynamic_high": 0.85,
       "min_duration": 5.0,
       "max_duration": 60.0
     },
     "standard": {
       "name": "표준 세그멘테이션",
-      "scene_threshold": 0.5,
-      "stability_threshold": 0.96,
+      "scene_threshold": 0.3,
+      "dynamic_low": 0.4,
+      "dynamic_high": 0.8,
       "min_duration": 5.0,
       "max_duration": 60.0
     },
     "precise": {
       "name": "정밀 세그멘테이션",
-      "scene_threshold": 0.5,
-      "stability_threshold": 0.98,
+      "scene_threshold": 0.3,
+      "dynamic_low": 0.45,
+      "dynamic_high": 0.75,
       "min_duration": 10.0,
       "max_duration": 60.0
     }

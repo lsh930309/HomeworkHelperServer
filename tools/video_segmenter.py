@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 SSIM 기반 스마트 비디오 세그멘테이션
-비디오를 안정된 장면 구간으로 분할하여 라벨링 효율 극대화
+비디오를 동적 배경 구간으로 분할하여 YOLO 과적합 방지 및 라벨링 효율 극대화
+UI는 고정되고 배경만 변하는 구간 선택
 
 사용법:
     python tools/video_segmenter.py --input datasets/raw/gameplay.mp4 \
                                      --output datasets/clips/ \
+                                     --dynamic-low 0.4 \
+                                     --dynamic-high 0.8 \
                                      --min-duration 5
 """
 
@@ -34,12 +37,13 @@ class VideoSegment:
 @dataclass
 class SegmentConfig:
     """세그멘테이션 설정"""
-    # 장면 전환 감지
-    scene_change_threshold: float = 0.5  # SSIM이 이보다 낮으면 장면 전환
+    # 장면 전환 감지 (너무 낮은 SSIM)
+    scene_change_threshold: float = 0.3  # SSIM이 이보다 낮으면 장면 전환 (제외)
 
-    # 안정 구간 감지
-    stability_threshold: float = 0.95    # SSIM이 이보다 높으면 안정된 구간
-    min_stable_frames: int = 30          # 최소 안정 프레임 수 (1초@30fps)
+    # 동적 구간 감지 (적절한 배경 변화)
+    dynamic_low_threshold: float = 0.4    # SSIM 최소값 (이보다 낮으면 너무 동적)
+    dynamic_high_threshold: float = 0.8   # SSIM 최대값 (이보다 높으면 너무 정적)
+    min_dynamic_frames: int = 30          # 최소 동적 프레임 수 (1초@30fps)
 
     # 세그먼트 제약
     min_duration: float = 5.0            # 최소 세그먼트 길이 (초)
@@ -59,9 +63,10 @@ class VideoSegmenter:
         self.stats = {
             'total_frames': 0,
             'scene_changes': 0,
-            'stable_segments': 0,
+            'dynamic_segments': 0,
             'discarded_short': 0,
-            'discarded_unstable': 0
+            'discarded_static': 0,
+            'discarded_chaotic': 0
         }
 
     def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
@@ -77,7 +82,7 @@ class VideoSegmenter:
         progress_callback=None
     ) -> List[VideoSegment]:
         """
-        비디오에서 안정된 세그먼트 탐지
+        비디오에서 배경이 동적인 세그먼트 탐지 (UI는 고정, 배경만 변함)
 
         Args:
             video_path: 입력 비디오 경로
@@ -101,7 +106,7 @@ class VideoSegmenter:
 
         segments = []
         current_segment_start = 0
-        stable_frame_count = 0
+        dynamic_frame_count = 0
         ssim_buffer = []
 
         ret, prev_frame = cap.read()
@@ -129,7 +134,7 @@ class VideoSegmenter:
                 self.stats['scene_changes'] += 1
 
                 # 이전 세그먼트 저장 (조건 충족 시)
-                if stable_frame_count >= self.config.min_stable_frames:
+                if dynamic_frame_count >= self.config.min_dynamic_frames:
                     segment = self._create_segment(
                         current_segment_start,
                         frame_idx - 1,
@@ -139,28 +144,31 @@ class VideoSegmenter:
 
                     if self._is_valid_segment(segment):
                         segments.append(segment)
-                        self.stats['stable_segments'] += 1
+                        self.stats['dynamic_segments'] += 1
                     else:
                         if segment.duration < self.config.min_duration:
                             self.stats['discarded_short'] += 1
+                        elif segment.avg_ssim > self.config.dynamic_high_threshold:
+                            self.stats['discarded_static'] += 1
                         else:
-                            self.stats['discarded_unstable'] += 1
+                            self.stats['discarded_chaotic'] += 1
 
                 # 새 세그먼트 시작
                 current_segment_start = frame_idx
-                stable_frame_count = 0
+                dynamic_frame_count = 0
                 ssim_buffer = []
 
-            # 안정 구간 카운트
-            elif ssim_score >= self.config.stability_threshold:
-                stable_frame_count += 1
+            # 동적 구간 카운트 (SSIM이 적절한 범위 내)
+            elif (self.config.dynamic_low_threshold <= ssim_score <=
+                  self.config.dynamic_high_threshold):
+                dynamic_frame_count += 1
 
             # 최대 길이 초과 시 세그먼트 분할
             segment_frames = frame_idx - current_segment_start
             segment_duration = segment_frames / fps
 
             if segment_duration >= self.config.max_duration:
-                if stable_frame_count >= self.config.min_stable_frames:
+                if dynamic_frame_count >= self.config.min_dynamic_frames:
                     segment = self._create_segment(
                         current_segment_start,
                         frame_idx,
@@ -170,10 +178,10 @@ class VideoSegmenter:
 
                     if self._is_valid_segment(segment):
                         segments.append(segment)
-                        self.stats['stable_segments'] += 1
+                        self.stats['dynamic_segments'] += 1
 
                 current_segment_start = frame_idx
-                stable_frame_count = 0
+                dynamic_frame_count = 0
                 ssim_buffer = []
 
             # 최대 세그먼트 수 도달
@@ -185,7 +193,7 @@ class VideoSegmenter:
             prev_frame = current_frame
 
         # 마지막 세그먼트 처리
-        if stable_frame_count >= self.config.min_stable_frames:
+        if dynamic_frame_count >= self.config.min_dynamic_frames:
             segment = self._create_segment(
                 current_segment_start,
                 frame_idx,
@@ -195,7 +203,7 @@ class VideoSegmenter:
 
             if self._is_valid_segment(segment):
                 segments.append(segment)
-                self.stats['stable_segments'] += 1
+                self.stats['dynamic_segments'] += 1
 
         cap.release()
 
@@ -232,8 +240,9 @@ class VideoSegmenter:
         if segment.duration < self.config.min_duration:
             return False
 
-        # 안정성 체크 (평균 SSIM)
-        if segment.avg_ssim < self.config.stability_threshold:
+        # 동적 범위 체크 (평균 SSIM이 적절한 범위 내)
+        if not (self.config.dynamic_low_threshold <= segment.avg_ssim <=
+                self.config.dynamic_high_threshold):
             return False
 
         return True
@@ -322,7 +331,8 @@ class VideoSegmenter:
             'timestamp': datetime.now().isoformat(),
             'config': {
                 'scene_change_threshold': self.config.scene_change_threshold,
-                'stability_threshold': self.config.stability_threshold,
+                'dynamic_low_threshold': self.config.dynamic_low_threshold,
+                'dynamic_high_threshold': self.config.dynamic_high_threshold,
                 'min_duration': self.config.min_duration,
                 'max_duration': self.config.max_duration,
             },
@@ -353,9 +363,10 @@ class VideoSegmenter:
         print(f"\n📊 세그멘테이션 통계:")
         print(f"   - 총 프레임: {self.stats['total_frames']:,}개")
         print(f"   - 장면 전환: {self.stats['scene_changes']:,}개")
-        print(f"   - 안정 세그먼트: {self.stats['stable_segments']:,}개")
+        print(f"   - 동적 세그먼트: {self.stats['dynamic_segments']:,}개")
         print(f"   - 제외 (짧음): {self.stats['discarded_short']:,}개")
-        print(f"   - 제외 (불안정): {self.stats['discarded_unstable']:,}개")
+        print(f"   - 제외 (정적): {self.stats['discarded_static']:,}개")
+        print(f"   - 제외 (혼란): {self.stats['discarded_chaotic']:,}개")
 
 
 def main():
@@ -377,14 +388,20 @@ def main():
     parser.add_argument(
         '--scene-threshold',
         type=float,
-        default=0.5,
-        help="장면 전환 임계값 (기본: 0.5)"
+        default=0.3,
+        help="장면 전환 임계값 (기본: 0.3)"
     )
     parser.add_argument(
-        '--stability-threshold',
+        '--dynamic-low',
         type=float,
-        default=0.95,
-        help="안정성 임계값 (기본: 0.95)"
+        default=0.4,
+        help="동적 범위 최소값 (기본: 0.4)"
+    )
+    parser.add_argument(
+        '--dynamic-high',
+        type=float,
+        default=0.8,
+        help="동적 범위 최대값 (기본: 0.8)"
     )
     parser.add_argument(
         '--min-duration',
@@ -410,7 +427,8 @@ def main():
     # 설정 생성
     config = SegmentConfig(
         scene_change_threshold=args.scene_threshold,
-        stability_threshold=args.stability_threshold,
+        dynamic_low_threshold=args.dynamic_low,
+        dynamic_high_threshold=args.dynamic_high,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         max_segments=args.max_segments

@@ -122,31 +122,37 @@ pip install PyQt6
 
 ### 3. 비디오 세그멘테이션 (`video_segmenter.py`)
 
-**용도**: SSIM 기반 장면 분석으로 안정된 비디오 구간을 클립으로 분할
+**용도**: SSIM 기반 장면 분석으로 동적 배경 비디오 구간을 클립으로 분할
+
+**핵심 개념**: UI는 고정되고 배경만 변하는 구간 선택 → YOLO 과적합 방지
 
 **실행 방법**:
 ```bash
 python tools/video_segmenter.py \
     --input datasets/raw/gameplay.mp4 \
     --output datasets/clips/ \
+    --dynamic-low 0.4 \
+    --dynamic-high 0.8 \
     --min-duration 5
 ```
 
 **주요 기능**:
-- ✅ **장면 전환 감지**: SSIM < 0.5일 때 새 세그먼트 시작
-- ✅ **안정 구간 추출**: UI가 일정한 구간만 선택
+- ✅ **장면 전환 감지**: SSIM < 0.3 (컷씬, 로딩) → 제외
+- ✅ **동적 구간 선택**: 0.4 ≤ SSIM ≤ 0.8 (전투, 이동) → 선택
+- ✅ **정적 구간 제외**: SSIM > 0.8 (메뉴, 일시정지) → 제외
 - ✅ **자동 분할**: 5-60초 길이의 비디오 클립 생성
 - ✅ **메타데이터 저장**: 세그먼트 정보 및 통계 기록
 
 **알고리즘**:
-1. **장면 전환**: SSIM < 0.5 → 새 세그먼트
-2. **안정성 판단**: 평균 SSIM > 0.95 → 유효
-3. **길이 제약**: 5초 ~ 60초 클립만 저장
-4. **불안정 구간 제거**: 로딩, 애니메이션 등 자동 스킵
+1. **장면 전환 제외**: SSIM < 0.3 → 너무 혼란스러움 (컷씬)
+2. **동적 범위 선택**: 0.4 ≤ 평균 SSIM ≤ 0.8 → 유효 (UI 고정 + 배경 변화)
+3. **정적 구간 제외**: SSIM > 0.8 → 너무 정적 (메뉴 화면, 과적합 위험)
+4. **길이 제약**: 5초 ~ 60초 클립만 저장
 
 **옵션**:
-- `--scene-threshold`: 장면 전환 임계값 (기본: 0.5)
-- `--stability-threshold`: 안정성 임계값 (기본: 0.95)
+- `--scene-threshold`: 장면 전환 임계값 (기본: 0.3)
+- `--dynamic-low`: 동적 범위 최소값 (기본: 0.4)
+- `--dynamic-high`: 동적 범위 최대값 (기본: 0.8)
 - `--min-duration`: 최소 클립 길이 초 (기본: 5.0)
 - `--max-duration`: 최대 클립 길이 초 (기본: 60.0)
 - `--max-segments`: 최대 클립 수 (기본: 무제한)
@@ -169,10 +175,12 @@ datasets/clips/
 ### 기본 예제
 
 ```bash
-# 30분 비디오 → 안정된 클립들로 분할
+# 30분 비디오 → 동적 배경 클립들로 분할
 python tools/video_segmenter.py \
     --input datasets/raw/zenless_gameplay.mp4 \
     --output datasets/clips/zenless/ \
+    --dynamic-low 0.4 \
+    --dynamic-high 0.8 \
     --min-duration 5 \
     --max-segments 20
 ```
@@ -180,19 +188,21 @@ python tools/video_segmenter.py \
 ### 고급 예제
 
 ```bash
-# 더 엄격한 안정성 기준
+# 더 넓은 동적 범위 (빠른 세그멘테이션)
 python tools/video_segmenter.py \
     --input datasets/raw/honkai_gameplay.mp4 \
     --output datasets/clips/honkai/ \
-    --stability-threshold 0.98 \
-    --min-duration 10
+    --dynamic-low 0.35 \
+    --dynamic-high 0.85 \
+    --min-duration 5
 
-# 짧은 클립 허용 (빠른 장면)
+# 더 좁은 동적 범위 (정밀 세그멘테이션)
 python tools/video_segmenter.py \
     --input datasets/raw/wuthering_gameplay.mp4 \
     --output datasets/clips/wuthering/ \
-    --min-duration 3 \
-    --max-duration 30
+    --dynamic-low 0.45 \
+    --dynamic-high 0.75 \
+    --min-duration 10
 ```
 
 ### 배치 처리
