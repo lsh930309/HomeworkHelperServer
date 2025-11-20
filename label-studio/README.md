@@ -23,8 +23,8 @@ docker-compose up -d
 
 1. "Create Project" 클릭
 2. 프로젝트 이름: `HomeworkHelper-UI-Detection`
-3. "Labeling Setup" → "Object Detection with Bounding Boxes" 선택
-4. 또는 `config/labeling-template.xml` 내용을 복사하여 Custom Template 사용
+3. "Labeling Setup" → "Video Object Tracking" 프리셋 선택 (비디오 타임라인 bbox 라벨링에 최적화)
+4. 또는 "Custom Template" 선택 후 `config/labeling-template.xml` 내용 복사하여 사용
 
 ### 4. 이미지 업로드
 
