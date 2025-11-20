@@ -19,11 +19,11 @@ services:
       - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data
     volumes:
       # Label Studio 데이터 저장 (프로젝트, 어노테이션 등)
-      - ./data:/label-studio/data
+      - ${LS_DATA_DIR:-./data}:/label-studio/data
       # 라벨링할 이미지 디렉토리
-      - ../datasets:/label-studio/datasets:ro
+      - ${LS_DATASETS_DIR:-../datasets}:/label-studio/datasets:ro
       # 설정 파일
-      - ./config:/label-studio/config:ro
+      - ${LS_CONFIG_DIR:-./config}:/label-studio/config:ro
     command: label-studio start --host 0.0.0.0 --port 8080
 
   # 선택사항: PostgreSQL (프로덕션 환경에서 사용)

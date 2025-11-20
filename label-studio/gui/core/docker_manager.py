@@ -8,11 +8,27 @@ import subprocess
 import os
 import time
 import requests
+import sys
 from pathlib import Path
 from typing import Optional, Tuple, List
 from enum import Enum
 
 from .utils import get_resource_path
+
+
+# Windows용 subprocess 설정 (CMD 창 숨기기)
+def _get_subprocess_kwargs():
+    """subprocess 호출 시 사용할 kwargs 반환 (CMD 창 숨기기)"""
+    kwargs = {}
+    if os.name == 'nt':  # Windows
+        if sys.platform == 'win32':
+            # PyInstaller 환경에서도 확실하게 작동하도록 STARTUPINFO 사용
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            kwargs['startupinfo'] = startupinfo
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+    return kwargs
 
 
 class DockerStatus(Enum):
@@ -55,7 +71,8 @@ class DockerManager:
                 ["docker", "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                **_get_subprocess_kwargs()
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -69,7 +86,7 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                **_get_subprocess_kwargs()
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -95,7 +112,7 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                **_get_subprocess_kwargs()
             )
 
             # 컨테이너 ID가 있으면 실행 중
@@ -122,6 +139,42 @@ class DockerManager:
         # 컨테이너는 실행 중이지만 웹 서버 응답 없음 (시작 중 or 에러)
         return LabelStudioStatus.STARTING
 
+    def _create_user_data_dir(self) -> Path:
+        """
+        사용자 홈 디렉토리에 Label Studio 데이터 디렉토리 생성
+
+        Returns:
+            데이터 디렉토리 경로
+        """
+        # 사용자 홈 디렉토리 기반 경로
+        user_data_dir = Path.home() / "AppData" / "Local" / "HomeworkHelper" / "label-studio"
+
+        # 필요한 하위 디렉토리 생성
+        (user_data_dir / "data").mkdir(parents=True, exist_ok=True)
+        (user_data_dir / "config").mkdir(parents=True, exist_ok=True)
+
+        return user_data_dir
+
+    def _get_datasets_dir(self) -> Path:
+        """
+        datasets 디렉토리 경로 반환
+
+        Returns:
+            datasets 디렉토리 경로
+        """
+        # 패키징 환경인지 확인
+        if getattr(sys, 'frozen', False):
+            # 패키징 환경: 사용자 홈 디렉토리 사용
+            datasets_dir = Path.home() / "HomeworkHelper" / "datasets"
+        else:
+            # 개발 환경: 프로젝트 루트의 datasets
+            datasets_dir = self.docker_compose_path.parent.parent / "datasets"
+
+        # 디렉토리 생성
+        datasets_dir.mkdir(parents=True, exist_ok=True)
+
+        return datasets_dir
+
     def start_label_studio(self) -> Tuple[bool, str]:
         """
         Label Studio 컨테이너 시작
@@ -145,6 +198,19 @@ class DockerManager:
             return False, f"docker-compose.yml 파일을 찾을 수 없습니다: {self.docker_compose_path}"
 
         try:
+            # 사용자 데이터 디렉토리 생성
+            user_data_dir = self._create_user_data_dir()
+            datasets_dir = self._get_datasets_dir()
+
+            # config 소스 디렉토리 (docker-compose.yml과 같은 위치)
+            config_source_dir = self.docker_compose_path.parent / "config"
+
+            # 환경변수로 volume 경로 override
+            env = os.environ.copy()
+            env['LS_DATA_DIR'] = str(user_data_dir / "data")
+            env['LS_DATASETS_DIR'] = str(datasets_dir)
+            env['LS_CONFIG_DIR'] = str(config_source_dir) if config_source_dir.exists() else str(user_data_dir / "config")
+
             # docker-compose up -d 실행
             result = subprocess.run(
                 ["docker-compose", "up", "-d"],
@@ -152,7 +218,8 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=60,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                env=env,
+                **_get_subprocess_kwargs()
             )
 
             if result.returncode != 0:
@@ -192,7 +259,7 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                **_get_subprocess_kwargs()
             )
 
             if result.returncode != 0:
@@ -223,7 +290,7 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                **_get_subprocess_kwargs()
             )
 
             if result.returncode == 0:
@@ -265,7 +332,7 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                **_get_subprocess_kwargs()
             )
 
             if result.returncode == 0 and result.stdout.strip():
