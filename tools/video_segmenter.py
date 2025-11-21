@@ -52,6 +52,10 @@ class SegmentConfig:
 
     # 성능 최적화
     ssim_scale: float = 1.0              # SSIM 계산 시 해상도 스케일 (0.25 = 4배 빠름, 출력은 원본 유지)
+    frame_skip: int = 1                  # 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
+
+    # 실험 기능
+    save_discarded: bool = False         # 채택되지 않은 구간도 별도 저장
 
     # 출력 설정
     output_codec: str = "mp4v"           # 출력 코덱
@@ -121,6 +125,8 @@ class VideoSegmenter:
         print(f"   - 길이: {total_frames / fps / 60:.1f}분")
         if self.config.ssim_scale < 1.0:
             print(f"   - SSIM 해상도 스케일: {self.config.ssim_scale:.2f} (성능 최적화 적용, 출력은 원본 유지)")
+        if self.config.frame_skip > 1:
+            print(f"   - 프레임 스킵: {self.config.frame_skip} (빠른 모드, ~{self.config.frame_skip}배 속도 향상)")
 
         segments = []
         current_segment_start = 0
@@ -134,6 +140,13 @@ class VideoSegmenter:
         frame_idx = 0
 
         while True:
+            # 프레임 스킵 적용
+            for _ in range(self.config.frame_skip - 1):
+                ret = cap.grab()  # 프레임 읽지 않고 건너뛰기
+                if not ret:
+                    break
+                frame_idx += 1
+
             ret, current_frame = cap.read()
             if not ret:
                 break
@@ -273,7 +286,7 @@ class VideoSegmenter:
         progress_callback=None
     ) -> List[Path]:
         """
-        세그먼트를 개별 비디오 파일로 저장
+        세그먼트를 개별 비디오 파일로 저장 (ffmpeg 사용)
 
         Args:
             video_path: 원본 비디오 경로
@@ -284,58 +297,114 @@ class VideoSegmenter:
         Returns:
             저장된 비디오 파일 경로 리스트
         """
+        import subprocess
+
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise RuntimeError(f"비디오를 열 수 없습니다: {video_path}")
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        output_fps = self.config.output_fps or fps
-        fourcc = cv2.VideoWriter_fourcc(*self.config.output_codec)
 
         saved_paths = []
 
-        print(f"\n🎬 세그먼트 비디오 생성 중...")
+        print(f"\n🎬 세그먼트 비디오 생성 중 (ffmpeg)...")
 
         for idx, segment in enumerate(segments):
             output_path = output_dir / f"segment_{idx+1:03d}.mp4"
 
-            # VideoWriter 생성
-            writer = cv2.VideoWriter(
-                str(output_path),
-                fourcc,
-                output_fps,
-                (width, height)
-            )
+            # ffmpeg로 비디오 자르기 (재인코딩 없이 빠르게)
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-ss', str(segment.start_time),
+                '-to', str(segment.end_time),
+                '-c', 'copy',
+                '-y',  # 덮어쓰기
+                str(output_path)
+            ]
 
-            # 시작 위치로 이동
-            cap.set(cv2.CAP_PROP_POS_FRAMES, segment.start_frame)
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                saved_paths.append(output_path)
 
-            # 프레임 복사
-            frame_count = segment.end_frame - segment.start_frame
-            for i in range(frame_count):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                writer.write(frame)
+                if progress_callback:
+                    progress_callback(idx + 1, len(segments))
 
-            writer.release()
-            saved_paths.append(output_path)
+                print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초, "
+                      f"SSIM: {segment.avg_ssim:.3f})")
+            except subprocess.CalledProcessError as e:
+                print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
 
-            if progress_callback:
-                progress_callback(idx + 1, len(segments))
-
-            print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초, "
-                  f"SSIM: {segment.avg_ssim:.3f})")
-
-        cap.release()
+        # 채택되지 않은 구간 저장 (실험 기능)
+        if self.config.save_discarded:
+            self._export_discarded_segments(video_path, segments, output_dir)
 
         print(f"\n✅ {len(saved_paths)}개 세그먼트 저장 완료!")
         return saved_paths
+
+    def _export_discarded_segments(
+        self,
+        video_path: Path,
+        accepted_segments: List[VideoSegment],
+        output_dir: Path
+    ):
+        """
+        채택되지 않은 구간을 else 폴더에 저장
+
+        Args:
+            video_path: 원본 비디오 경로
+            accepted_segments: 채택된 세그먼트 리스트
+            output_dir: 출력 디렉토리
+        """
+        import subprocess
+
+        # else 폴더 생성
+        else_dir = output_dir / "else"
+        else_dir.mkdir(exist_ok=True)
+
+        # 비디오 총 길이 가져오기
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_duration = total_frames / fps
+        cap.release()
+
+        print(f"\n📦 채택되지 않은 구간 저장 중...")
+
+        # 채택된 구간을 시간 순으로 정렬
+        sorted_segments = sorted(accepted_segments, key=lambda s: s.start_time)
+
+        # 빈 구간 찾기
+        discarded_segments = []
+        prev_end_time = 0.0
+
+        for segment in sorted_segments:
+            if segment.start_time > prev_end_time + 0.1:  # 0.1초 이상 공백
+                discarded_segments.append((prev_end_time, segment.start_time))
+            prev_end_time = segment.end_time
+
+        # 마지막 구간 이후
+        if prev_end_time < total_duration - 0.1:
+            discarded_segments.append((prev_end_time, total_duration))
+
+        # 빈 구간 저장
+        for idx, (start_time, end_time) in enumerate(discarded_segments):
+            output_path = else_dir / f"discarded_{idx+1:03d}.mp4"
+            duration = end_time - start_time
+
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-ss', str(start_time),
+                '-to', str(end_time),
+                '-c', 'copy',
+                '-y',
+                str(output_path)
+            ]
+
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                print(f"   ✓ discarded_{idx+1:03d}.mp4 ({duration:.1f}초)")
+            except subprocess.CalledProcessError as e:
+                print(f"   ⚠️ discarded_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
+
+        print(f"✅ {len(discarded_segments)}개 채택되지 않은 구간 저장 완료!")
 
     def save_metadata(
         self,
@@ -446,6 +515,17 @@ def main():
         default=1.0,
         help="SSIM 계산 시 해상도 스케일 (0.25=4배 빠름, 1.0=원본, 기본: 1.0, 출력은 항상 원본 해상도)"
     )
+    parser.add_argument(
+        '--frame-skip',
+        type=int,
+        default=1,
+        help="프레임 스킵 (1=모든 프레임, 3=3프레임마다, 기본: 1)"
+    )
+    parser.add_argument(
+        '--save-discarded',
+        action='store_true',
+        help="채택되지 않은 구간도 else 폴더에 저장 (실험 기능)"
+    )
 
     args = parser.parse_args()
 
@@ -457,7 +537,9 @@ def main():
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         max_segments=args.max_segments,
-        ssim_scale=args.ssim_scale
+        ssim_scale=args.ssim_scale,
+        frame_skip=args.frame_skip,
+        save_discarded=args.save_discarded
     )
 
     # 세그멘터 생성
