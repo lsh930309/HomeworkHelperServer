@@ -154,6 +154,8 @@ class SamplerManager:
         ssim_scale: float = 0.25,
         frame_skip: int = 1,
         save_discarded: bool = False,
+        use_multiprocessing: bool = True,
+        num_workers: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
@@ -171,6 +173,8 @@ class SamplerManager:
             ssim_scale: SSIM 계산 해상도 스케일 (기본: 0.25, 4-16배 빠름, 출력은 원본 유지)
             frame_skip: 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
             save_discarded: 채택되지 않은 구간도 저장
+            use_multiprocessing: 멀티프로세싱 사용 (기본: True)
+            num_workers: 워커 수 (기본: CPU 코어 수)
             progress_callback: 진행 상황 콜백 (current, total)
 
         Returns:
@@ -200,7 +204,9 @@ class SamplerManager:
                 max_segments=max_segments,
                 ssim_scale=ssim_scale,
                 frame_skip=frame_skip,
-                save_discarded=save_discarded
+                save_discarded=save_discarded,
+                use_multiprocessing=use_multiprocessing,
+                num_workers=num_workers
             )
 
             # 세그멘터 생성

@@ -164,7 +164,8 @@ class PreprocessingTab(QWidget):
                 "min_duration": 5.0,
                 "max_duration": 60.0,
                 "ssim_scale": 0.25,
-                "frame_skip": 3
+                "frame_skip": 3,
+                "use_multiprocessing": True
             },
             "표준": {
                 "scene_threshold": 0.3,
@@ -173,7 +174,8 @@ class PreprocessingTab(QWidget):
                 "min_duration": 5.0,
                 "max_duration": 60.0,
                 "ssim_scale": 0.25,
-                "frame_skip": 1
+                "frame_skip": 1,
+                "use_multiprocessing": True
             },
             "정밀": {
                 "scene_threshold": 0.3,
@@ -182,7 +184,8 @@ class PreprocessingTab(QWidget):
                 "min_duration": 10.0,
                 "max_duration": 60.0,
                 "ssim_scale": 1.0,
-                "frame_skip": 1
+                "frame_skip": 1,
+                "use_multiprocessing": True
             }
         }
 
