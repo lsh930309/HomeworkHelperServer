@@ -125,6 +125,65 @@ def check_and_install_ffmpeg() -> bool:
         return False
 
 
+def reencode_video_with_ffmpeg(input_path: Path, output_path: Path) -> bool:
+    """
+    OpenCV가 읽을 수 없는 비디오를 FFmpeg로 재인코딩
+
+    Args:
+        input_path: 원본 비디오 경로
+        output_path: 재인코딩된 비디오 저장 경로
+
+    Returns:
+        bool: 재인코딩 성공 여부
+    """
+    if not check_and_install_ffmpeg():
+        print("❌ FFmpeg를 사용할 수 없어 재인코딩을 할 수 없습니다.")
+        return False
+
+    print(f"🔄 비디오를 OpenCV 호환 포맷으로 재인코딩 중...")
+    print(f"   원본: {input_path.name}")
+
+    try:
+        # H.264 + AAC로 재인코딩 (OpenCV가 가장 잘 지원하는 포맷)
+        cmd = [
+            'ffmpeg',
+            '-i', str(input_path),
+            '-c:v', 'libx264',      # H.264 비디오 코덱
+            '-preset', 'medium',     # 적절한 속도/품질 밸런스
+            '-crf', '23',           # 품질 설정 (18-28 권장, 23은 기본값)
+            '-c:a', 'aac',          # AAC 오디오 코덱
+            '-b:a', '128k',         # 오디오 비트레이트
+            '-movflags', '+faststart',  # 웹 스트리밍 최적화
+            '-y',                   # 덮어쓰기
+            str(output_path)
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600  # 1시간 타임아웃
+        )
+
+        if result.returncode == 0 and output_path.exists():
+            print(f"✅ 재인코딩 완료: {output_path.name}")
+            return True
+        else:
+            print(f"❌ 재인코딩 실패")
+            if result.stderr:
+                # stderr의 마지막 몇 줄만 출력 (에러 메시지가 길 수 있음)
+                error_lines = result.stderr.strip().split('\n')
+                print(f"   오류: {error_lines[-1]}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print(f"❌ 재인코딩 시간 초과 (1시간)")
+        return False
+    except Exception as e:
+        print(f"❌ 재인코딩 중 오류 발생: {e}")
+        return False
+
+
 def _process_chunk_worker(chunk_info, video_path, config, fps):
     """
     멀티프로세싱 워커 함수: 청크를 처리하여 세그먼트 탐지
@@ -371,6 +430,10 @@ class VideoSegmenter:
         Returns:
             VideoSegment 리스트
         """
+        # 재인코딩된 임시 파일 추적용
+        temp_video_path = None
+        original_video_path = video_path
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"비디오를 열 수 없습니다: {video_path}")
@@ -393,9 +456,44 @@ class VideoSegmenter:
         dynamic_frame_count = 0
         ssim_buffer = []
 
+        # 첫 프레임 읽기 시도
         ret, prev_frame = cap.read()
         if not ret:
-            raise RuntimeError("첫 프레임을 읽을 수 없습니다")
+            # OpenCV로 첫 프레임 읽기 실패 -> FFmpeg 재인코딩 시도
+            print("⚠️ OpenCV로 첫 프레임을 읽을 수 없습니다.")
+            print("   비디오 코덱이 OpenCV와 호환되지 않을 수 있습니다.")
+            cap.release()
+
+            # 임시 파일 경로 생성
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir())
+            temp_video_path = temp_dir / f"reencoded_{video_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+
+            print(f"🔄 FFmpeg로 재인코딩을 시도합니다...")
+            if not reencode_video_with_ffmpeg(video_path, temp_video_path):
+                raise RuntimeError(
+                    "첫 프레임을 읽을 수 없습니다.\n"
+                    "비디오 파일이 손상되었거나 지원되지 않는 코덱을 사용합니다.\n"
+                    f"문제가 계속되면 다음 도구로 수동 변환을 시도하세요:\n"
+                    f"  ffmpeg -i \"{video_path}\" -c:v libx264 -c:a aac output.mp4"
+                )
+
+            # 재인코딩된 파일로 다시 시도
+            print(f"✅ 재인코딩 완료. 다시 처리를 시도합니다...")
+            video_path = temp_video_path
+            cap = cv2.VideoCapture(str(video_path))
+
+            if not cap.isOpened():
+                if temp_video_path and temp_video_path.exists():
+                    temp_video_path.unlink()
+                raise RuntimeError(f"재인코딩된 비디오도 열 수 없습니다: {video_path}")
+
+            ret, prev_frame = cap.read()
+            if not ret:
+                cap.release()
+                if temp_video_path and temp_video_path.exists():
+                    temp_video_path.unlink()
+                raise RuntimeError("재인코딩 후에도 첫 프레임을 읽을 수 없습니다")
 
         frame_idx = 0
 
@@ -497,6 +595,14 @@ class VideoSegmenter:
                 self.stats['dynamic_segments'] += 1
 
         cap.release()
+
+        # 임시 재인코딩 파일 정리
+        if temp_video_path and temp_video_path.exists():
+            print(f"🗑️ 임시 파일 삭제 중: {temp_video_path.name}")
+            try:
+                temp_video_path.unlink()
+            except Exception as e:
+                print(f"⚠️ 임시 파일 삭제 실패 (무시됨): {e}")
 
         print(f"\n✅ 세그먼트 탐지 완료!")
         self._print_stats()

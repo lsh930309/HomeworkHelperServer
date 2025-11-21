@@ -18,6 +18,19 @@ from dataclasses import dataclass
 import json
 from datetime import datetime
 from skimage.metrics import structural_similarity as ssim
+import tempfile
+
+# video_segmenter에서 FFmpeg 관련 함수 import
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from video_segmenter import check_and_install_ffmpeg, reencode_video_with_ffmpeg
+except ImportError:
+    # 함수들이 없으면 더미 함수 제공
+    def check_and_install_ffmpeg():
+        return False
+    def reencode_video_with_ffmpeg(input_path, output_path):
+        return False
 
 
 @dataclass
@@ -154,6 +167,10 @@ class VideoSampler:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 재인코딩된 임시 파일 추적용
+        temp_video_path = None
+        original_video_path = input_video_path
+
         # 비디오 열기
         cap = cv2.VideoCapture(str(input_video_path))
         if not cap.isOpened():
@@ -173,10 +190,43 @@ class VideoSampler:
 
         self.stats['total_frames'] = total_frames
 
-        # 첫 프레임 읽기
+        # 첫 프레임 읽기 시도
         ret, prev_frame = cap.read()
         if not ret:
-            raise RuntimeError("첫 프레임을 읽을 수 없습니다")
+            # OpenCV로 첫 프레임 읽기 실패 -> FFmpeg 재인코딩 시도
+            print("⚠️ OpenCV로 첫 프레임을 읽을 수 없습니다.")
+            print("   비디오 코덱이 OpenCV와 호환되지 않을 수 있습니다.")
+            cap.release()
+
+            # 임시 파일 경로 생성
+            temp_dir = Path(tempfile.gettempdir())
+            temp_video_path = temp_dir / f"reencoded_{input_video_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+
+            print(f"🔄 FFmpeg로 재인코딩을 시도합니다...")
+            if not reencode_video_with_ffmpeg(input_video_path, temp_video_path):
+                raise RuntimeError(
+                    "첫 프레임을 읽을 수 없습니다.\n"
+                    "비디오 파일이 손상되었거나 지원되지 않는 코덱을 사용합니다.\n"
+                    f"문제가 계속되면 다음 도구로 수동 변환을 시도하세요:\n"
+                    f"  ffmpeg -i \"{input_video_path}\" -c:v libx264 -c:a aac output.mp4"
+                )
+
+            # 재인코딩된 파일로 다시 시도
+            print(f"✅ 재인코딩 완료. 다시 처리를 시도합니다...")
+            input_video_path = temp_video_path
+            cap = cv2.VideoCapture(str(input_video_path))
+
+            if not cap.isOpened():
+                if temp_video_path and temp_video_path.exists():
+                    temp_video_path.unlink()
+                raise RuntimeError(f"재인코딩된 비디오도 열 수 없습니다: {input_video_path}")
+
+            ret, prev_frame = cap.read()
+            if not ret:
+                cap.release()
+                if temp_video_path and temp_video_path.exists():
+                    temp_video_path.unlink()
+                raise RuntimeError("재인코딩 후에도 첫 프레임을 읽을 수 없습니다")
 
         saved_paths = []
         last_sampled_frame_idx = -999999  # 충분히 작은 값
@@ -244,6 +294,14 @@ class VideoSampler:
             prev_frame = current_frame
 
         cap.release()
+
+        # 임시 재인코딩 파일 정리
+        if temp_video_path and temp_video_path.exists():
+            print(f"🗑️ 임시 파일 삭제 중: {temp_video_path.name}")
+            try:
+                temp_video_path.unlink()
+            except Exception as e:
+                print(f"⚠️ 임시 파일 삭제 실패 (무시됨): {e}")
 
         print(f"\n✅ 샘플링 완료!")
         self.print_stats()
