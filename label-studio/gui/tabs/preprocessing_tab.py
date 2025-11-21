@@ -88,11 +88,17 @@ class PreprocessingTab(QWidget):
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("프리셋:"))
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["빠른 세그멘테이션", "표준 세그멘테이션", "정밀 세그멘테이션"])
+        self.preset_combo.addItems(["빠른", "표준", "정밀"])
         self.preset_combo.setCurrentIndex(1)  # 기본: 표준
         preset_layout.addWidget(self.preset_combo)
         preset_layout.addStretch()
         sampling_layout.addLayout(preset_layout)
+
+        # 실험 기능: 채택되지 않은 구간 저장
+        from PyQt6.QtWidgets import QCheckBox
+        self.save_discarded_checkbox = QCheckBox("채택되지 않은 구간도 저장 (실험 기능)")
+        self.save_discarded_checkbox.setToolTip("원본에서 세그먼트로 채택되지 않은 나머지 구간을 else 폴더에 저장합니다.")
+        sampling_layout.addWidget(self.save_discarded_checkbox)
 
         # 세그멘테이션 시작 버튼
         self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
@@ -122,6 +128,10 @@ class PreprocessingTab(QWidget):
         )
         if file_path:
             self.input_video_edit.setText(file_path)
+            # 출력 폴더 자동 설정: {원본파일명}_seg
+            input_path = Path(file_path)
+            output_path = input_path.parent / f"{input_path.stem}_seg"
+            self.output_dir_edit.setText(str(output_path))
 
     def browse_output_dir(self):
         """출력 디렉토리 찾아보기"""
@@ -147,30 +157,37 @@ class PreprocessingTab(QWidget):
 
         # 프리셋에 따른 파라미터
         preset_map = {
-            "빠른 세그멘테이션": {
+            "빠른": {
                 "scene_threshold": 0.3,
                 "dynamic_low": 0.35,
                 "dynamic_high": 0.85,
                 "min_duration": 5.0,
-                "max_duration": 60.0
+                "max_duration": 60.0,
+                "ssim_scale": 0.25,
+                "frame_skip": 3
             },
-            "표준 세그멘테이션": {
+            "표준": {
                 "scene_threshold": 0.3,
                 "dynamic_low": 0.4,
                 "dynamic_high": 0.8,
                 "min_duration": 5.0,
-                "max_duration": 60.0
+                "max_duration": 60.0,
+                "ssim_scale": 0.25,
+                "frame_skip": 1
             },
-            "정밀 세그멘테이션": {
+            "정밀": {
                 "scene_threshold": 0.3,
                 "dynamic_low": 0.45,
                 "dynamic_high": 0.75,
                 "min_duration": 10.0,
-                "max_duration": 60.0
+                "max_duration": 60.0,
+                "ssim_scale": 1.0,
+                "frame_skip": 1
             }
         }
 
         params = preset_map[self.preset_combo.currentText()]
+        params["save_discarded"] = self.save_discarded_checkbox.isChecked()
 
         # 작업 스레드 시작
         self.worker = SegmentationWorker(
