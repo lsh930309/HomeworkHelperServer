@@ -100,6 +100,12 @@ class PreprocessingTab(QWidget):
         self.save_discarded_checkbox.setToolTip("원본에서 세그먼트로 채택되지 않은 나머지 구간을 else 폴더에 저장합니다.")
         sampling_layout.addWidget(self.save_discarded_checkbox)
 
+        # 멀티프로세싱 옵션
+        self.multiprocessing_checkbox = QCheckBox("멀티프로세싱 사용 (8코어 기준 4-8배 빠름)")
+        self.multiprocessing_checkbox.setChecked(True)  # 기본: 활성화
+        self.multiprocessing_checkbox.setToolTip("CPU 멀티코어를 활용하여 병렬 처리합니다. 비활성화 시 싱글 프로세스로 실행됩니다.")
+        sampling_layout.addWidget(self.multiprocessing_checkbox)
+
         # 세그멘테이션 시작 버튼
         self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
         self.start_sampling_btn.setMinimumHeight(40)
@@ -164,8 +170,7 @@ class PreprocessingTab(QWidget):
                 "min_duration": 5.0,
                 "max_duration": 60.0,
                 "ssim_scale": 0.25,
-                "frame_skip": 3,
-                "use_multiprocessing": True
+                "frame_skip": 3
             },
             "표준": {
                 "scene_threshold": 0.3,
@@ -174,8 +179,7 @@ class PreprocessingTab(QWidget):
                 "min_duration": 5.0,
                 "max_duration": 60.0,
                 "ssim_scale": 0.25,
-                "frame_skip": 1,
-                "use_multiprocessing": True
+                "frame_skip": 1
             },
             "정밀": {
                 "scene_threshold": 0.3,
@@ -184,13 +188,13 @@ class PreprocessingTab(QWidget):
                 "min_duration": 10.0,
                 "max_duration": 60.0,
                 "ssim_scale": 1.0,
-                "frame_skip": 1,
-                "use_multiprocessing": True
+                "frame_skip": 1
             }
         }
 
         params = preset_map[self.preset_combo.currentText()]
         params["save_discarded"] = self.save_discarded_checkbox.isChecked()
+        params["use_multiprocessing"] = self.multiprocessing_checkbox.isChecked()
 
         # 작업 스레드 시작
         self.worker = SegmentationWorker(
