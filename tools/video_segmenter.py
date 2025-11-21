@@ -125,6 +125,109 @@ def check_and_install_ffmpeg() -> bool:
         return False
 
 
+class PyAVVideoReader:
+    """
+    PyAV를 사용한 비디오 리더 (OpenCV가 지원하지 않는 코덱 처리)
+    AV1, H.265, VP9 등 모든 FFmpeg 지원 코덱을 무손실로 읽을 수 있음
+    """
+
+    def __init__(self, video_path: Path):
+        """
+        Args:
+            video_path: 비디오 파일 경로
+        """
+        self.video_path = video_path
+        self.container = None
+        self.video_stream = None
+        self.fps = None
+        self.total_frames = None
+        self.width = None
+        self.height = None
+        self._frame_generator = None
+
+    def open(self) -> bool:
+        """
+        비디오 파일 열기
+
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            import av
+
+            self.container = av.open(str(self.video_path))
+            self.video_stream = self.container.streams.video[0]
+
+            # 비디오 정보 추출
+            self.fps = float(self.video_stream.average_rate)
+            self.total_frames = self.video_stream.frames
+            self.width = self.video_stream.width
+            self.height = self.video_stream.height
+
+            # total_frames가 0이면 duration으로 추정
+            if self.total_frames == 0 and self.container.duration:
+                self.total_frames = int(self.container.duration * self.fps / av.time_base)
+
+            # 프레임 제너레이터 초기화
+            self._frame_generator = self.container.decode(video=0)
+
+            print(f"✅ PyAV로 비디오 열기 성공")
+            print(f"   코덱: {self.video_stream.codec_context.name}")
+
+            return True
+
+        except ImportError:
+            print("⚠️ PyAV가 설치되지 않았습니다.")
+            print("   설치 방법: pip install av")
+            return False
+        except Exception as e:
+            print(f"⚠️ PyAV로 비디오 열기 실패: {e}")
+            return False
+
+    def read(self):
+        """
+        다음 프레임 읽기 (OpenCV의 cap.read()와 동일한 인터페이스)
+
+        Returns:
+            tuple: (success, frame_bgr) - OpenCV 형식의 BGR numpy array
+        """
+        try:
+            frame = next(self._frame_generator)
+            # BGR 포맷으로 변환 (OpenCV 호환)
+            img = frame.to_ndarray(format='bgr24')
+            return True, img
+        except StopIteration:
+            return False, None
+        except Exception as e:
+            return False, None
+
+    def grab(self):
+        """
+        프레임을 건너뛰기 (OpenCV의 cap.grab()와 동일한 인터페이스)
+        PyAV는 grab을 직접 지원하지 않으므로 read하고 버림
+
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            frame = next(self._frame_generator)
+            return True
+        except StopIteration:
+            return False
+        except Exception as e:
+            return False
+
+    def release(self):
+        """리소스 해제"""
+        if self.container:
+            self.container.close()
+            self.container = None
+
+    def isOpened(self) -> bool:
+        """비디오가 열려있는지 확인"""
+        return self.container is not None
+
+
 def _process_chunk_worker(chunk_info, video_path, config, fps):
     """
     멀티프로세싱 워커 함수: 청크를 처리하여 세그먼트 탐지
@@ -315,6 +418,60 @@ class VideoSegmenter:
             'discarded_chaotic': 0
         }
 
+    def _calculate_optimal_workers(self, video_duration_minutes: float) -> int:
+        """
+        시스템 사양과 비디오 특성을 고려한 최적 워커 수 계산
+
+        Args:
+            video_duration_minutes: 비디오 길이 (분)
+
+        Returns:
+            최적 워커 수
+        """
+        import multiprocessing as mp
+
+        # 1. 논리 코어 수 (하이퍼스레딩 포함)
+        logical_cores = mp.cpu_count()
+
+        # 2. 물리 코어 수 추정 (psutil 없이)
+        # 일반적으로 물리 코어 = 논리 코어 / 2 (하이퍼스레딩이 있는 경우)
+        try:
+            import psutil
+            physical_cores = psutil.cpu_count(logical=False) or logical_cores
+        except (ImportError, AttributeError):
+            # psutil 없거나 정보 없으면 논리 코어의 50-75%로 추정
+            physical_cores = max(1, int(logical_cores * 0.625))
+
+        # 3. 비디오 길이 기반 조정
+        # 짧은 비디오는 오버헤드가 더 크므로 워커 수 감소
+        if video_duration_minutes < 5:
+            # 5분 미만: 싱글 프로세스가 더 효율적
+            return 1
+        elif video_duration_minutes < 15:
+            # 5-15분: 물리 코어의 50%
+            max_workers = max(1, int(physical_cores * 0.5))
+        elif video_duration_minutes < 30:
+            # 15-30분: 물리 코어의 75%
+            max_workers = max(2, int(physical_cores * 0.75))
+        else:
+            # 30분 이상: 물리 코어 수 (단, 최대 6개로 제한)
+            max_workers = min(physical_cores, 6)
+
+        # 4. 메모리 기반 조정 (선택적)
+        try:
+            import psutil
+            available_gb = psutil.virtual_memory().available / (1024 ** 3)
+            # 워커당 최소 2GB 필요 (안전 마진)
+            memory_based_limit = max(1, int(available_gb / 2))
+            max_workers = min(max_workers, memory_based_limit)
+        except ImportError:
+            pass
+
+        # 5. 최종 제한: 최소 1, 최대 8
+        optimal_workers = max(1, min(max_workers, 8))
+
+        return optimal_workers
+
     def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
         두 이미지 간 SSIM 계산
@@ -371,6 +528,11 @@ class VideoSegmenter:
         Returns:
             VideoSegment 리스트
         """
+        # 비디오 리더 (OpenCV 또는 PyAV)
+        cap = None
+        using_pyav = False
+
+        # 1단계: OpenCV로 열기 시도
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"비디오를 열 수 없습니다: {video_path}")
@@ -393,9 +555,35 @@ class VideoSegmenter:
         dynamic_frame_count = 0
         ssim_buffer = []
 
+        # 첫 프레임 읽기 시도
         ret, prev_frame = cap.read()
         if not ret:
-            raise RuntimeError("첫 프레임을 읽을 수 없습니다")
+            # 2단계: OpenCV 실패 시 PyAV로 전환
+            print("⚠️ OpenCV로 첫 프레임을 읽을 수 없습니다.")
+            print("   비디오 코덱이 OpenCV와 호환되지 않을 수 있습니다.")
+            print("🔄 PyAV로 전환을 시도합니다...")
+            cap.release()
+
+            # PyAV로 열기
+            cap = PyAVVideoReader(video_path)
+            if not cap.open():
+                raise RuntimeError(
+                    "첫 프레임을 읽을 수 없습니다.\n"
+                    "비디오 파일이 손상되었거나 PyAV가 설치되지 않았습니다.\n"
+                    "PyAV 설치: pip install av"
+                )
+
+            # PyAV에서 정보 가져오기
+            fps = cap.fps
+            total_frames = cap.total_frames
+            self.stats['total_frames'] = total_frames
+            using_pyav = True
+
+            # 첫 프레임 다시 읽기
+            ret, prev_frame = cap.read()
+            if not ret:
+                cap.release()
+                raise RuntimeError("PyAV로도 첫 프레임을 읽을 수 없습니다")
 
         frame_idx = 0
 
@@ -530,21 +718,36 @@ class VideoSegmenter:
         self.stats['total_frames'] = total_frames
         cap.release()
 
+        video_duration_minutes = total_frames / fps / 60
         print(f"📹 비디오 분석 중 (멀티프로세싱)...")
         print(f"   - FPS: {fps:.2f}")
         print(f"   - 총 프레임: {total_frames:,}개")
-        print(f"   - 길이: {total_frames / fps / 60:.1f}분")
+        print(f"   - 길이: {video_duration_minutes:.1f}분")
         if self.config.ssim_scale < 1.0:
             print(f"   - SSIM 해상도 스케일: {self.config.ssim_scale:.2f} (성능 최적화 적용, 출력은 원본 유지)")
         if self.config.frame_skip > 1:
             print(f"   - 프레임 스킵: {self.config.frame_skip} (빠른 모드, ~{self.config.frame_skip}배 속도 향상)")
 
-        # 워커 수 결정
-        num_workers = self.config.num_workers or mp.cpu_count()
-        print(f"   - 워커 수: {num_workers}개 (멀티프로세싱)")
+        # 워커 수 결정 (적응형)
+        if self.config.num_workers:
+            # 사용자가 명시적으로 지정한 경우
+            num_workers = self.config.num_workers
+            print(f"   - 워커 수: {num_workers}개 (사용자 지정)")
+        else:
+            # 자동 계산
+            num_workers = self._calculate_optimal_workers(video_duration_minutes)
+            cpu_count = mp.cpu_count()
+            print(f"   - 워커 수: {num_workers}개 / {cpu_count}개 논리 코어 (자동 최적화)")
 
-        # 청크 단위로 분할 (30초씩, 오버랩 5초)
-        chunk_duration = 30.0  # 초
+            # 싱글 프로세스로 전환 권장
+            if num_workers == 1:
+                print(f"   ℹ️ 비디오가 짧아 싱글 프로세스 모드로 자동 전환합니다 (오버헤드 최소화)")
+                return self._detect_segments_single(video_path, progress_callback)
+
+        # 청크 단위로 분할 (비디오 길이에 따라 동적 조정)
+        # 워커당 최소 2분 작업을 보장하여 오버헤드 최소화
+        min_chunk_duration = max(60.0, video_duration_minutes * 60 / num_workers / 2)
+        chunk_duration = min(min_chunk_duration, 120.0)  # 최대 2분
         overlap_duration = 5.0  # 초
         chunk_frames = int(chunk_duration * fps)
         overlap_frames = int(overlap_duration * fps)
@@ -558,7 +761,12 @@ class VideoSegmenter:
             if start_frame >= total_frames - overlap_frames:
                 break
 
-        print(f"   - 청크 수: {len(chunks)}개 (청크당 {chunk_duration}초, 오버랩 {overlap_duration}초)")
+        print(f"   - 청크 수: {len(chunks)}개 (청크당 {chunk_duration/60:.1f}분, 오버랩 {overlap_duration}초)")
+
+        # 청크 수가 워커 수보다 적으면 워커 수 조정
+        if len(chunks) < num_workers:
+            num_workers = max(1, len(chunks))
+            print(f"   ℹ️ 청크 수에 맞춰 워커 수를 {num_workers}개로 조정")
 
         # 병렬 처리
         worker_func = partial(
