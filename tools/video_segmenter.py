@@ -21,6 +21,108 @@ from dataclasses import dataclass
 import json
 from datetime import datetime
 from skimage.metrics import structural_similarity as ssim
+import subprocess
+import shutil
+import sys
+
+
+def refresh_system_path():
+    """
+    시스템 PATH 환경변수를 레지스트리에서 새로고침 (Windows 전용)
+    winget 설치 후 현재 프로세스에서 PATH를 즉시 사용하기 위함
+    """
+    if sys.platform != 'win32':
+        return
+
+    try:
+        import winreg
+        import os
+
+        # 시스템 PATH 읽기
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                           r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+                           0, winreg.KEY_READ) as key:
+            system_path, _ = winreg.QueryValueEx(key, 'Path')
+
+        # 사용자 PATH 읽기
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                           r'Environment',
+                           0, winreg.KEY_READ) as key:
+            try:
+                user_path, _ = winreg.QueryValueEx(key, 'Path')
+            except FileNotFoundError:
+                user_path = ''
+
+        # 현재 프로세스의 PATH 업데이트
+        combined_path = f"{user_path};{system_path}" if user_path else system_path
+        os.environ['PATH'] = combined_path
+
+    except Exception as e:
+        # PATH 새로고침 실패는 치명적이지 않으므로 무시
+        pass
+
+
+def check_and_install_ffmpeg() -> bool:
+    """
+    ffmpeg 설치 여부 확인 및 자동 설치
+
+    Returns:
+        bool: ffmpeg가 사용 가능하면 True, 설치 실패하면 False
+    """
+    # ffmpeg가 이미 PATH에 있는지 확인
+    if shutil.which('ffmpeg') is not None:
+        return True
+
+    print("⚠️ ffmpeg를 찾을 수 없습니다.")
+    print("🔧 ffmpeg를 자동으로 설치합니다 (winget 사용)...")
+
+    try:
+        # winget으로 ffmpeg 설치 시도
+        result = subprocess.run(
+            ['winget', 'install', 'Gyan.FFmpeg', '--accept-source-agreements', '--accept-package-agreements'],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5분 타임아웃
+        )
+
+        if result.returncode == 0:
+            print("✅ ffmpeg 설치 완료!")
+
+            # PATH 새로고침 시도
+            print("🔄 PATH 환경변수 새로고침 중...")
+            refresh_system_path()
+
+            # 설치 후 다시 확인
+            if shutil.which('ffmpeg') is not None:
+                print("✅ ffmpeg를 바로 사용할 수 있습니다!")
+                return True
+            else:
+                print("   ⚠️ 설치는 완료되었으나 PATH에서 ffmpeg를 찾을 수 없습니다.")
+                print("   ℹ️ 다음 중 하나를 시도해주세요:")
+                print("      1. 터미널을 재시작한 후 다시 실행")
+                print("      2. 시스템을 재부팅")
+                return False
+        else:
+            print(f"❌ ffmpeg 설치 실패")
+            if result.stderr:
+                print(f"   오류 메시지: {result.stderr[:200]}")
+            print("   ℹ️ 수동 설치 방법:")
+            print("      1. 터미널에서 'winget install Gyan.FFmpeg' 실행")
+            print("      2. 또는 https://www.gyan.dev/ffmpeg/builds/ 에서 다운로드")
+            return False
+
+    except FileNotFoundError:
+        print("❌ winget을 찾을 수 없습니다.")
+        print("   ℹ️ Windows 10 1809 이상 또는 Windows 11이 필요합니다.")
+        print("   ℹ️ 수동 설치: https://www.gyan.dev/ffmpeg/builds/")
+        return False
+    except subprocess.TimeoutExpired:
+        print("❌ ffmpeg 설치 시간 초과 (5분)")
+        print("   ℹ️ 네트워크 상태를 확인하고 수동으로 설치해주세요.")
+        return False
+    except Exception as e:
+        print(f"❌ ffmpeg 설치 중 예상치 못한 오류: {e}")
+        return False
 
 
 @dataclass
@@ -297,7 +399,12 @@ class VideoSegmenter:
         Returns:
             저장된 비디오 파일 경로 리스트
         """
-        import subprocess
+        # ffmpeg 확인 및 자동 설치
+        if not check_and_install_ffmpeg():
+            raise RuntimeError(
+                "ffmpeg를 사용할 수 없습니다. "
+                "터미널을 재시작하거나 수동으로 설치해주세요."
+            )
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -352,7 +459,10 @@ class VideoSegmenter:
             accepted_segments: 채택된 세그먼트 리스트
             output_dir: 출력 디렉토리
         """
-        import subprocess
+        # ffmpeg 확인 (이미 export_segments에서 체크했으므로 재확인만)
+        if not check_and_install_ffmpeg():
+            print("⚠️ ffmpeg를 사용할 수 없어 채택되지 않은 구간 저장을 건너뜁니다.")
+            return
 
         # else 폴더 생성
         else_dir = output_dir / "else"
