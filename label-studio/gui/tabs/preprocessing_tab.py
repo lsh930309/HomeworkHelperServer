@@ -10,16 +10,20 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
+import sys
+from io import StringIO
 
 from ..core.sampler_manager import SamplerManager
 from ..core.config_manager import get_config_manager
 from ..widgets.progress_widget import ProgressWidget
+from ..widgets.log_viewer import LogViewer
 
 
 class SegmentationWorker(QThread):
     """세그멘테이션 작업 스레드"""
     progress = pyqtSignal(int, int)
     finished = pyqtSignal(bool, str)
+    log_message = pyqtSignal(str, str)  # message, level
 
     def __init__(self, sampler_manager, input_path, output_path, params):
         super().__init__()
@@ -29,16 +33,51 @@ class SegmentationWorker(QThread):
         self.params = params
 
     def run(self):
+        # stdout 캡처 설정
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+
         try:
+            self.log_message.emit(f"세그멘테이션 시작: {self.input_path.name}", "INFO")
+            self.log_message.emit(f"출력 경로: {self.output_path}", "INFO")
+
             result = self.sampler_manager.segment_video(
                 self.input_path,
                 self.output_path,
                 **self.params,
                 progress_callback=lambda c, t: self.progress.emit(c, t)
             )
+
+            # 캡처된 출력 가져오기
+            output = sys.stdout.getvalue()
+            if output:
+                # 줄 단위로 로그 전송
+                for line in output.strip().split('\n'):
+                    if line.strip():
+                        # 로그 레벨 추정
+                        if '❌' in line or '오류' in line or 'ERROR' in line:
+                            level = "ERROR"
+                        elif '⚠️' in line or '경고' in line or 'WARNING' in line:
+                            level = "WARNING"
+                        else:
+                            level = "INFO"
+                        self.log_message.emit(line, level)
+
+            if result.success:
+                self.log_message.emit(f"✅ {result.message}", "INFO")
+            else:
+                self.log_message.emit(f"❌ {result.message}", "ERROR")
+
             self.finished.emit(result.success, result.message)
+
         except Exception as e:
-            self.finished.emit(False, f"오류: {e}")
+            error_msg = f"오류: {e}"
+            self.log_message.emit(error_msg, "ERROR")
+            self.finished.emit(False, error_msg)
+
+        finally:
+            # stdout 복원
+            sys.stdout = old_stdout
 
 
 class PreprocessingTab(QWidget):
@@ -120,7 +159,15 @@ class PreprocessingTab(QWidget):
         sampling_group.setLayout(sampling_layout)
         layout.addWidget(sampling_group)
 
-        layout.addStretch()
+        # 로그 뷰어 그룹
+        log_group = QGroupBox("처리 로그")
+        log_layout = QVBoxLayout()
+
+        self.log_viewer = LogViewer(max_lines=500)
+        log_layout.addWidget(self.log_viewer)
+
+        log_group.setLayout(log_layout)
+        layout.addWidget(log_group)
 
         self.setLayout(layout)
 
@@ -205,26 +252,49 @@ class PreprocessingTab(QWidget):
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
+        self.worker.log_message.connect(self._on_log_message)
 
         self.start_sampling_btn.setEnabled(False)
         self.progress_widget.start_progress(100, "비디오 세그멘테이션")
+
+        # 시작 로그 출력
+        self.log_viewer.add_log("=" * 60, "INFO")
+        self.log_viewer.add_log("비디오 세그멘테이션 시작", "INFO")
+        self.log_viewer.add_log(f"프리셋: {self.preset_combo.currentText()}", "INFO")
+        self.log_viewer.add_log("=" * 60, "INFO")
+
         self.worker.start()
 
     def _on_progress(self, current, total):
         """진행 상황 업데이트"""
         self.progress_widget.update_progress(current, f"프레임 처리 중... {current}/{total}")
 
+    def _on_log_message(self, message, level):
+        """로그 메시지 처리"""
+        self.log_viewer.add_log(message, level)
+
     def _on_finished(self, success, message):
         """세그멘테이션 완료"""
         self.progress_widget.finish_progress(success, message)
         self.start_sampling_btn.setEnabled(True)
+
+        # 완료 로그
+        self.log_viewer.add_log("=" * 60, "INFO")
+        if success:
+            self.log_viewer.add_log("✅ 세그멘테이션 완료!", "INFO")
+        else:
+            self.log_viewer.add_log("❌ 세그멘테이션 실패", "ERROR")
+        self.log_viewer.add_log("=" * 60, "INFO")
+
         self.worker = None
 
     def cancel_segmentation(self):
         """세그멘테이션 취소"""
         if self.worker:
+            self.log_viewer.add_log("사용자 취소 요청...", "WARNING")
             self.worker.terminate()
             self.worker.wait()
             self.progress_widget.finish_progress(False, "사용자가 취소했습니다.")
+            self.log_viewer.add_log("❌ 작업이 취소되었습니다.", "WARNING")
             self.start_sampling_btn.setEnabled(True)
             self.worker = None
