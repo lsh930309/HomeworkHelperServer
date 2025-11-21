@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout,
     QMessageBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from pathlib import Path
 
 from .core.docker_manager import DockerManager
@@ -33,6 +33,9 @@ class LabelStudioManager(QMainWindow):
 
         # 설정 로드
         self.load_settings()
+
+        # 상태 바 자동 업데이트 타이머 시작
+        self.start_status_monitoring()
 
     def init_ui(self):
         """UI 초기화"""
@@ -182,6 +185,15 @@ class LabelStudioManager(QMainWindow):
             }
         """)
 
+    def start_status_monitoring(self):
+        """상태 모니터링 시작 (3초마다)"""
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.update_status_bar)
+        self.status_timer.start(3000)  # 3초
+
+        # 즉시 한 번 실행
+        self.update_status_bar()
+
     def update_status_bar(self):
         """상태 바 업데이트"""
         # Docker 상태
@@ -231,6 +243,10 @@ class LabelStudioManager(QMainWindow):
         """창 닫기 이벤트"""
         # 설정 저장
         self.save_settings()
+
+        # 타이머 정리
+        if hasattr(self, 'status_timer'):
+            self.status_timer.stop()
 
         # 서버 탭 정리
         if hasattr(self.server_tab, 'cleanup'):

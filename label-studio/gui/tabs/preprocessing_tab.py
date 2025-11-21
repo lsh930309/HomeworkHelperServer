@@ -255,7 +255,9 @@ class PreprocessingTab(QWidget):
         self.worker.log_message.connect(self._on_log_message)
 
         self.start_sampling_btn.setEnabled(False)
-        self.progress_widget.start_progress(100, "비디오 세그멘테이션")
+
+        # 초기에는 불확정 모드로 시작 (전체 프레임 수를 아직 모름)
+        self.progress_widget.set_indeterminate("비디오 분석 중...")
 
         # 시작 로그 출력
         self.log_viewer.add_log("=" * 60, "INFO")
@@ -267,7 +269,11 @@ class PreprocessingTab(QWidget):
 
     def _on_progress(self, current, total):
         """진행 상황 업데이트"""
-        self.progress_widget.update_progress(current, f"프레임 처리 중... {current}/{total}")
+        # 첫 번째 진행 업데이트에서 전체 프레임 수를 설정
+        if self.progress_widget.total_items != total:
+            self.progress_widget.start_progress(total, "비디오 세그멘테이션")
+
+        self.progress_widget.update_progress(current, f"프레임 처리 중... {current:,}/{total:,}")
 
     def _on_log_message(self, message, level):
         """로그 메시지 처리"""
