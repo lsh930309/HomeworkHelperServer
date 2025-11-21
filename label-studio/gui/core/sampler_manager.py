@@ -151,6 +151,7 @@ class SamplerManager:
         min_duration: float = 5.0,
         max_duration: float = 60.0,
         max_segments: Optional[int] = None,
+        ssim_scale: float = 0.25,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
@@ -165,6 +166,7 @@ class SamplerManager:
             min_duration: 최소 클립 길이 (초)
             max_duration: 최대 클립 길이 (초)
             max_segments: 최대 클립 수
+            ssim_scale: SSIM 계산 해상도 스케일 (기본: 0.25, 4-16배 빠름, 출력은 원본 유지)
             progress_callback: 진행 상황 콜백 (current, total)
 
         Returns:
@@ -191,7 +193,8 @@ class SamplerManager:
                 dynamic_high_threshold=dynamic_high,
                 min_duration=min_duration,
                 max_duration=max_duration,
-                max_segments=max_segments
+                max_segments=max_segments,
+                ssim_scale=ssim_scale
             )
 
             # 세그멘터 생성

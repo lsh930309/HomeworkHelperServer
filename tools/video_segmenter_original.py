@@ -50,9 +50,6 @@ class SegmentConfig:
     max_duration: float = 60.0           # 최대 세그먼트 길이 (초)
     max_segments: Optional[int] = None   # 최대 세그먼트 수
 
-    # 성능 최적화
-    ssim_scale: float = 1.0              # SSIM 계산 시 해상도 스케일 (0.25 = 4배 빠름, 출력은 원본 유지)
-
     # 출력 설정
     output_codec: str = "mp4v"           # 출력 코덱
     output_fps: Optional[int] = None     # 출력 FPS (None이면 원본)
@@ -73,20 +70,7 @@ class VideoSegmenter:
         }
 
     def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
-        """
-        두 이미지 간 SSIM 계산
-
-        성능 최적화: config.ssim_scale < 1.0이면 해상도 축소 후 계산
-        (segment 구간 결정에만 사용, 출력은 원본 해상도 유지)
-        """
-        # 해상도 축소 (설정된 경우)
-        if self.config.ssim_scale < 1.0:
-            h, w = img1.shape[:2]
-            new_h = int(h * self.config.ssim_scale)
-            new_w = int(w * self.config.ssim_scale)
-            img1 = cv2.resize(img1, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            img2 = cv2.resize(img2, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
+        """두 이미지 간 SSIM 계산"""
         gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         score, _ = ssim(gray1, gray2, full=True)
@@ -119,8 +103,6 @@ class VideoSegmenter:
         print(f"   - FPS: {fps:.2f}")
         print(f"   - 총 프레임: {total_frames:,}개")
         print(f"   - 길이: {total_frames / fps / 60:.1f}분")
-        if self.config.ssim_scale < 1.0:
-            print(f"   - SSIM 해상도 스케일: {self.config.ssim_scale:.2f} (성능 최적화 적용, 출력은 원본 유지)")
 
         segments = []
         current_segment_start = 0
@@ -353,7 +335,6 @@ class VideoSegmenter:
                 'dynamic_high_threshold': self.config.dynamic_high_threshold,
                 'min_duration': self.config.min_duration,
                 'max_duration': self.config.max_duration,
-                'ssim_scale': self.config.ssim_scale,
             },
             'stats': self.stats,
             'segments': [
@@ -440,12 +421,6 @@ def main():
         default=None,
         help="최대 세그먼트 수 (기본: 무제한)"
     )
-    parser.add_argument(
-        '--ssim-scale',
-        type=float,
-        default=1.0,
-        help="SSIM 계산 시 해상도 스케일 (0.25=4배 빠름, 1.0=원본, 기본: 1.0, 출력은 항상 원본 해상도)"
-    )
 
     args = parser.parse_args()
 
@@ -456,8 +431,7 @@ def main():
         dynamic_high_threshold=args.dynamic_high,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
-        max_segments=args.max_segments,
-        ssim_scale=args.ssim_scale
+        max_segments=args.max_segments
     )
 
     # 세그멘터 생성
