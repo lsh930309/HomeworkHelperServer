@@ -42,8 +42,15 @@ class InstallWorker(QThread):
     def run(self):
         """pip 명령어 실행"""
         try:
-            # 명령어 파싱
-            parts = self.command.strip().split()
+            import shlex
+
+            # 명령어 파싱 (경로 공백 처리)
+            try:
+                parts = shlex.split(self.command.strip())
+            except Exception:
+                # shlex 실패 시 기본 split 사용
+                parts = self.command.strip().split()
+
             if not parts or parts[0] not in ['pip', 'pip3', 'python', 'python3']:
                 self.finished.emit(False, "올바른 pip 명령어가 아닙니다. 'pip install ...' 형식이어야 합니다.")
                 return
@@ -67,9 +74,12 @@ class InstallWorker(QThread):
             self.progress.emit("")
 
             # 실제 명령어 구성: python -m pip install ...
+            # parts는 이미 shlex로 파싱되어 경로 공백이 올바르게 처리됨
             cmd = [python_exe, '-m'] + parts
 
-            self.progress.emit(f"실행 명령어: {' '.join(cmd)}")
+            # 로그용 명령어 문자열 (경로에 공백 있으면 따옴표 추가)
+            log_cmd = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in cmd)
+            self.progress.emit(f"실행 명령어: {log_cmd}")
             self.progress.emit("=" * 60)
             self.progress.emit("")
 
@@ -186,10 +196,11 @@ class PyTorchInstallDialog(QDialog):
         layout.addWidget(cmd_label)
 
         # 권장 명령어 (cu129 사용)
+        # 주의: 따옴표 없이 경로만 전달 (subprocess에서 자동으로 처리됨)
         default_cmd = (
             f"pip install torch==2.8.0 torchvision==0.23.0 "
             f"--index-url https://download.pytorch.org/whl/cu129 "
-            f"--target \"{self.installer.site_packages}\""
+            f"--target {self.installer.site_packages}"
         )
 
         self.cmd_edit = QTextEdit()
