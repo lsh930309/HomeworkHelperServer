@@ -328,7 +328,7 @@ def update_installer_script_version(version_info):
         version_string = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
         content = re.sub(
             r'(#define MyAppVersion\s+")[^"]+(")',
-            f'\\1{version_string}\\2',
+            rf'\g<1>{version_string}\g<2>',
             content
         )
 
