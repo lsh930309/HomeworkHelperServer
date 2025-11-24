@@ -228,141 +228,6 @@ class PyAVVideoReader:
         return self.container is not None
 
 
-def _process_chunk_worker(chunk_info, video_path, config, fps):
-    """
-    멀티프로세싱 워커 함수: 청크를 처리하여 세그먼트 탐지
-
-    Args:
-        chunk_info: (start_frame, end_frame) 튜플
-        video_path: 비디오 파일 경로
-        config: SegmentConfig
-        fps: 비디오 FPS
-
-    Returns:
-        세그먼트 리스트
-    """
-    start_frame, end_frame = chunk_info
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return []
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    segments = []
-    current_segment_start = start_frame
-    dynamic_frame_count = 0
-    ssim_buffer = []
-
-    ret, prev_frame = cap.read()
-    if not ret:
-        cap.release()
-        return []
-
-    frame_idx = start_frame
-
-    while frame_idx < end_frame:
-        # 프레임 스킵 적용
-        for _ in range(config.frame_skip - 1):
-            ret = cap.grab()
-            if not ret:
-                break
-            frame_idx += 1
-
-        ret, current_frame = cap.read()
-        if not ret:
-            break
-
-        frame_idx += 1
-
-        # SSIM 계산
-        ssim_score = _calculate_ssim_for_worker(prev_frame, current_frame, config.ssim_scale)
-        ssim_buffer.append(ssim_score)
-
-        # 장면 전환 감지
-        if ssim_score < config.scene_change_threshold:
-            # 이전 세그먼트 저장 (조건 충족 시)
-            if dynamic_frame_count >= config.min_dynamic_frames:
-                segment = _create_segment_for_worker(
-                    current_segment_start,
-                    frame_idx - 1,
-                    fps,
-                    ssim_buffer[:-1],
-                    config
-                )
-
-                if segment:
-                    segments.append(segment)
-
-            # 새 세그먼트 시작
-            current_segment_start = frame_idx
-            dynamic_frame_count = 0
-            ssim_buffer = []
-
-        # 동적 구간 카운트
-        elif (config.dynamic_low_threshold <= ssim_score <= config.dynamic_high_threshold):
-            dynamic_frame_count += 1
-
-        prev_frame = current_frame
-
-    # 마지막 세그먼트 처리
-    if dynamic_frame_count >= config.min_dynamic_frames:
-        segment = _create_segment_for_worker(
-            current_segment_start,
-            frame_idx,
-            fps,
-            ssim_buffer,
-            config
-        )
-
-        if segment:
-            segments.append(segment)
-
-    cap.release()
-    return segments
-
-
-def _calculate_ssim_for_worker(img1, img2, ssim_scale):
-    """워커용 SSIM 계산"""
-    # 해상도 축소
-    if ssim_scale < 1.0:
-        h, w = img1.shape[:2]
-        new_h = int(h * ssim_scale)
-        new_w = int(w * ssim_scale)
-        img1 = cv2.resize(img1, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        img2 = cv2.resize(img2, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-    score, _ = ssim(gray1, gray2, full=True)
-    return score
-
-
-def _create_segment_for_worker(start_frame, end_frame, fps, ssim_scores, config):
-    """워커용 세그먼트 생성 및 검증"""
-    start_time = start_frame / fps
-    end_time = end_frame / fps
-    duration = end_time - start_time
-    avg_ssim = np.mean(ssim_scores) if ssim_scores else 0.0
-
-    # 최소 길이 체크
-    if duration < config.min_duration:
-        return None
-
-    # 동적 범위 체크
-    if not (config.dynamic_low_threshold <= avg_ssim <= config.dynamic_high_threshold):
-        return None
-
-    return VideoSegment(
-        start_frame=start_frame,
-        end_frame=end_frame,
-        start_time=start_time,
-        end_time=end_time,
-        duration=duration,
-        avg_ssim=avg_ssim
-    )
-
-
 @dataclass
 class VideoSegment:
     """비디오 세그먼트 정보"""
@@ -380,10 +245,9 @@ class SegmentConfig:
     # 장면 전환 감지 (너무 낮은 SSIM)
     scene_change_threshold: float = 0.3  # SSIM이 이보다 낮으면 장면 전환 (제외)
 
-    # 동적 구간 감지 (적절한 배경 변화)
-    dynamic_low_threshold: float = 0.4    # SSIM 최소값 (이보다 낮으면 너무 동적)
-    dynamic_high_threshold: float = 0.8   # SSIM 최대값 (이보다 높으면 너무 정적)
-    min_dynamic_frames: int = 30          # 최소 동적 프레임 수 (1초@30fps)
+    # 정적 구간 감지 (너무 높은 SSIM = 잠수 구간)
+    static_threshold: float = 0.95       # SSIM이 이보다 높으면 너무 정적 (제외)
+    min_dynamic_frames: int = 30         # 최소 동적 프레임 수 (1초@30fps)
 
     # 세그먼트 제약
     min_duration: float = 5.0            # 최소 세그먼트 길이 (초)
@@ -393,8 +257,7 @@ class SegmentConfig:
     # 성능 최적화
     ssim_scale: float = 1.0              # SSIM 계산 시 해상도 스케일 (0.25 = 4배 빠름, 출력은 원본 유지)
     frame_skip: int = 1                  # 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
-    use_multiprocessing: bool = True     # 멀티프로세싱 사용 (8코어 기준 4-8배 빠름)
-    num_workers: Optional[int] = None    # 워커 수 (None이면 CPU 코어 수)
+    use_gpu: bool = False                # GPU 가속 사용 (CUDA 사용 가능 시)
 
     # 실험 기능
     save_discarded: bool = False         # 채택되지 않은 구간도 별도 저장
@@ -415,66 +278,39 @@ class VideoSegmenter:
             'dynamic_segments': 0,
             'discarded_short': 0,
             'discarded_static': 0,
-            'discarded_chaotic': 0
         }
 
-    def _calculate_optimal_workers(self, video_duration_minutes: float) -> int:
-        """
-        시스템 사양과 비디오 특성을 고려한 최적 워커 수 계산
+        # GPU 사용 가능 여부 확인
+        self.gpu_available = False
+        self.device = None
+        if self.config.use_gpu:
+            self.gpu_available = self._check_gpu_available()
 
-        Args:
-            video_duration_minutes: 비디오 길이 (분)
+    def _check_gpu_available(self) -> bool:
+        """
+        GPU 사용 가능 여부 확인 (CUDA/PyTorch)
 
         Returns:
-            최적 워커 수
+            bool: GPU 사용 가능하면 True
         """
-        import multiprocessing as mp
-
-        # 1. 논리 코어 수 (하이퍼스레딩 포함)
-        logical_cores = mp.cpu_count()
-
-        # 2. 물리 코어 수 추정 (psutil 없이)
-        # 일반적으로 물리 코어 = 논리 코어 / 2 (하이퍼스레딩이 있는 경우)
         try:
-            import psutil
-            physical_cores = psutil.cpu_count(logical=False) or logical_cores
-        except (ImportError, AttributeError):
-            # psutil 없거나 정보 없으면 논리 코어의 50-75%로 추정
-            physical_cores = max(1, int(logical_cores * 0.625))
-
-        # 3. 비디오 길이 기반 조정
-        # 짧은 비디오는 오버헤드가 더 크므로 워커 수 감소
-        if video_duration_minutes < 5:
-            # 5분 미만: 싱글 프로세스가 더 효율적
-            return 1
-        elif video_duration_minutes < 15:
-            # 5-15분: 물리 코어의 50%
-            max_workers = max(1, int(physical_cores * 0.5))
-        elif video_duration_minutes < 30:
-            # 15-30분: 물리 코어의 75%
-            max_workers = max(2, int(physical_cores * 0.75))
-        else:
-            # 30분 이상: 물리 코어 수 (단, 최대 6개로 제한)
-            max_workers = min(physical_cores, 6)
-
-        # 4. 메모리 기반 조정 (선택적)
-        try:
-            import psutil
-            available_gb = psutil.virtual_memory().available / (1024 ** 3)
-            # 워커당 최소 2GB 필요 (안전 마진)
-            memory_based_limit = max(1, int(available_gb / 2))
-            max_workers = min(max_workers, memory_based_limit)
+            import torch
+            if torch.cuda.is_available():
+                self.device = torch.device('cuda')
+                gpu_name = torch.cuda.get_device_name(0)
+                print(f"✅ GPU 가속 활성화: {gpu_name}")
+                return True
+            else:
+                print("⚠️ CUDA를 사용할 수 없습니다. CPU 모드로 실행합니다.")
+                return False
         except ImportError:
-            pass
-
-        # 5. 최종 제한: 최소 1, 최대 8
-        optimal_workers = max(1, min(max_workers, 8))
-
-        return optimal_workers
+            print("⚠️ PyTorch가 설치되지 않았습니다. CPU 모드로 실행합니다.")
+            print("   GPU 가속을 사용하려면 PyTorch를 설치하세요: pip install torch")
+            return False
 
     def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
-        두 이미지 간 SSIM 계산
+        두 이미지 간 SSIM 계산 (CPU 또는 GPU)
 
         성능 최적화: config.ssim_scale < 1.0이면 해상도 축소 후 계산
         (segment 구간 결정에만 사용, 출력은 원본 해상도 유지)
@@ -487,10 +323,67 @@ class VideoSegmenter:
             img1 = cv2.resize(img1, (new_w, new_h), interpolation=cv2.INTER_AREA)
             img2 = cv2.resize(img2, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-        score, _ = ssim(gray1, gray2, full=True)
-        return score
+        # GPU 가속 사용 (PyTorch 사용 가능 시)
+        if self.gpu_available:
+            return self._calculate_ssim_gpu(img1, img2)
+        else:
+            # CPU 버전 (기존 코드)
+            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+            score, _ = ssim(gray1, gray2, full=True)
+            return score
+
+    def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
+        """
+        GPU를 사용한 SSIM 계산 (PyTorch)
+
+        Args:
+            img1: 첫 번째 이미지 (BGR)
+            img2: 두 번째 이미지 (BGR)
+
+        Returns:
+            SSIM 점수
+        """
+        try:
+            import torch
+            import torch.nn.functional as F
+
+            # BGR to Grayscale
+            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+            # NumPy to Torch Tensor
+            t1 = torch.from_numpy(gray1).float().unsqueeze(0).unsqueeze(0).to(self.device) / 255.0
+            t2 = torch.from_numpy(gray2).float().unsqueeze(0).unsqueeze(0).to(self.device) / 255.0
+
+            # SSIM 계산 (간단한 버전)
+            C1 = 0.01 ** 2
+            C2 = 0.03 ** 2
+
+            mu1 = F.avg_pool2d(t1, 11, 1, 5)
+            mu2 = F.avg_pool2d(t2, 11, 1, 5)
+
+            mu1_sq = mu1 ** 2
+            mu2_sq = mu2 ** 2
+            mu1_mu2 = mu1 * mu2
+
+            sigma1_sq = F.avg_pool2d(t1 ** 2, 11, 1, 5) - mu1_sq
+            sigma2_sq = F.avg_pool2d(t2 ** 2, 11, 1, 5) - mu2_sq
+            sigma12 = F.avg_pool2d(t1 * t2, 11, 1, 5) - mu1_mu2
+
+            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
+                       ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+            score = ssim_map.mean().item()
+            return score
+
+        except Exception as e:
+            # GPU 오류 시 CPU로 폴백
+            print(f"⚠️ GPU SSIM 계산 실패, CPU로 폴백: {e}")
+            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+            score, _ = ssim(gray1, gray2, full=True)
+            return score
 
     def detect_segments(
         self,
@@ -498,7 +391,7 @@ class VideoSegmenter:
         progress_callback=None
     ) -> List[VideoSegment]:
         """
-        비디오에서 배경이 동적인 세그먼트 탐지 (UI는 고정, 배경만 변함)
+        비디오에서 동적인 세그먼트 탐지 (정적인 '잠수 구간'만 제외)
 
         Args:
             video_path: 입력 비디오 경로
@@ -507,11 +400,7 @@ class VideoSegmenter:
         Returns:
             VideoSegment 리스트
         """
-        # 멀티프로세싱 사용 여부 확인
-        if self.config.use_multiprocessing:
-            return self._detect_segments_mp(video_path, progress_callback)
-        else:
-            return self._detect_segments_single(video_path, progress_callback)
+        return self._detect_segments_single(video_path, progress_callback)
 
     def _detect_segments_single(
         self,
@@ -608,7 +497,7 @@ class VideoSegmenter:
             ssim_score = self.calculate_ssim(prev_frame, current_frame)
             ssim_buffer.append(ssim_score)
 
-            # 장면 전환 감지
+            # 장면 전환 감지 (scene_threshold 이하)
             if ssim_score < self.config.scene_change_threshold:
                 self.stats['scene_changes'] += 1
 
@@ -627,19 +516,16 @@ class VideoSegmenter:
                     else:
                         if segment.duration < self.config.min_duration:
                             self.stats['discarded_short'] += 1
-                        elif segment.avg_ssim > self.config.dynamic_high_threshold:
+                        elif segment.avg_ssim >= self.config.static_threshold:
                             self.stats['discarded_static'] += 1
-                        else:
-                            self.stats['discarded_chaotic'] += 1
 
                 # 새 세그먼트 시작
                 current_segment_start = frame_idx
                 dynamic_frame_count = 0
                 ssim_buffer = []
 
-            # 동적 구간 카운트 (SSIM이 적절한 범위 내)
-            elif (self.config.dynamic_low_threshold <= ssim_score <=
-                  self.config.dynamic_high_threshold):
+            # 동적 구간 카운트 (static_threshold 미만이면 모두 동적)
+            elif ssim_score < self.config.static_threshold:
                 dynamic_frame_count += 1
 
             # 최대 길이 초과 시 세그먼트 분할
@@ -691,150 +577,6 @@ class VideoSegmenter:
 
         return segments
 
-    def _detect_segments_mp(
-        self,
-        video_path: Path,
-        progress_callback=None
-    ) -> List[VideoSegment]:
-        """
-        멀티프로세싱을 사용한 세그먼트 탐지
-
-        Args:
-            video_path: 입력 비디오 경로
-            progress_callback: 진행 상황 콜백 함수(current, total)
-
-        Returns:
-            VideoSegment 리스트
-        """
-        import multiprocessing as mp
-        from functools import partial
-
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise RuntimeError(f"비디오를 열 수 없습니다: {video_path}")
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.stats['total_frames'] = total_frames
-        cap.release()
-
-        video_duration_minutes = total_frames / fps / 60
-        print(f"📹 비디오 분석 중 (멀티프로세싱)...")
-        print(f"   - FPS: {fps:.2f}")
-        print(f"   - 총 프레임: {total_frames:,}개")
-        print(f"   - 길이: {video_duration_minutes:.1f}분")
-        if self.config.ssim_scale < 1.0:
-            print(f"   - SSIM 해상도 스케일: {self.config.ssim_scale:.2f} (성능 최적화 적용, 출력은 원본 유지)")
-        if self.config.frame_skip > 1:
-            print(f"   - 프레임 스킵: {self.config.frame_skip} (빠른 모드, ~{self.config.frame_skip}배 속도 향상)")
-
-        # 워커 수 결정 (적응형)
-        if self.config.num_workers:
-            # 사용자가 명시적으로 지정한 경우
-            num_workers = self.config.num_workers
-            print(f"   - 워커 수: {num_workers}개 (사용자 지정)")
-        else:
-            # 자동 계산
-            num_workers = self._calculate_optimal_workers(video_duration_minutes)
-            cpu_count = mp.cpu_count()
-            print(f"   - 워커 수: {num_workers}개 / {cpu_count}개 논리 코어 (자동 최적화)")
-
-            # 싱글 프로세스로 전환 권장
-            if num_workers == 1:
-                print(f"   ℹ️ 비디오가 짧아 싱글 프로세스 모드로 자동 전환합니다 (오버헤드 최소화)")
-                return self._detect_segments_single(video_path, progress_callback)
-
-        # 청크 단위로 분할 (비디오 길이에 따라 동적 조정)
-        # 워커당 최소 2분 작업을 보장하여 오버헤드 최소화
-        min_chunk_duration = max(60.0, video_duration_minutes * 60 / num_workers / 2)
-        chunk_duration = min(min_chunk_duration, 120.0)  # 최대 2분
-        overlap_duration = 5.0  # 초
-        chunk_frames = int(chunk_duration * fps)
-        overlap_frames = int(overlap_duration * fps)
-
-        chunks = []
-        start_frame = 0
-        while start_frame < total_frames:
-            end_frame = min(start_frame + chunk_frames, total_frames)
-            chunks.append((start_frame, end_frame))
-            start_frame = end_frame - overlap_frames
-            if start_frame >= total_frames - overlap_frames:
-                break
-
-        print(f"   - 청크 수: {len(chunks)}개 (청크당 {chunk_duration/60:.1f}분, 오버랩 {overlap_duration}초)")
-
-        # 청크 수가 워커 수보다 적으면 워커 수 조정
-        if len(chunks) < num_workers:
-            num_workers = max(1, len(chunks))
-            print(f"   ℹ️ 청크 수에 맞춰 워커 수를 {num_workers}개로 조정")
-
-        # 병렬 처리
-        worker_func = partial(
-            _process_chunk_worker,
-            video_path=str(video_path),
-            config=self.config,
-            fps=fps
-        )
-
-        with mp.Pool(num_workers) as pool:
-            chunk_results = pool.map(worker_func, chunks)
-
-        # 결과 병합 (오버랩 구간 중복 제거)
-        all_segments = []
-        for chunk_segments in chunk_results:
-            all_segments.extend(chunk_segments)
-
-        # 중복 제거 및 정렬
-        segments = self._merge_overlapping_segments(all_segments)
-
-        # 통계 업데이트
-        self.stats['dynamic_segments'] = len(segments)
-
-        print(f"\n✅ 세그먼트 탐지 완료!")
-        print(f"📊 세그멘테이션 통계:")
-        print(f"   - 총 프레임: {self.stats['total_frames']:,}개")
-        print(f"   - 동적 세그먼트: {len(segments):,}개")
-
-        return segments
-
-    def _merge_overlapping_segments(self, segments: List[VideoSegment]) -> List[VideoSegment]:
-        """
-        오버랩되는 세그먼트 병합
-
-        Args:
-            segments: 세그먼트 리스트
-
-        Returns:
-            병합된 세그먼트 리스트
-        """
-        if not segments:
-            return []
-
-        # 시작 시간순으로 정렬
-        sorted_segments = sorted(segments, key=lambda s: s.start_time)
-
-        merged = [sorted_segments[0]]
-
-        for current in sorted_segments[1:]:
-            last = merged[-1]
-
-            # 오버랩되는 경우 병합
-            if current.start_time <= last.end_time:
-                # 더 긴 세그먼트 선택
-                if current.end_time > last.end_time:
-                    merged[-1] = VideoSegment(
-                        start_frame=last.start_frame,
-                        end_frame=current.end_frame,
-                        start_time=last.start_time,
-                        end_time=current.end_time,
-                        duration=current.end_time - last.start_time,
-                        avg_ssim=(last.avg_ssim + current.avg_ssim) / 2
-                    )
-            else:
-                merged.append(current)
-
-        return merged
-
     def _create_segment(
         self,
         start_frame: int,
@@ -863,9 +605,8 @@ class VideoSegmenter:
         if segment.duration < self.config.min_duration:
             return False
 
-        # 동적 범위 체크 (평균 SSIM이 적절한 범위 내)
-        if not (self.config.dynamic_low_threshold <= segment.avg_ssim <=
-                self.config.dynamic_high_threshold):
+        # 정적 구간 체크 (평균 SSIM이 static_threshold 이상이면 제외)
+        if segment.avg_ssim >= self.config.static_threshold:
             return False
 
         return True
@@ -1018,11 +759,12 @@ class VideoSegmenter:
             'timestamp': datetime.now().isoformat(),
             'config': {
                 'scene_change_threshold': self.config.scene_change_threshold,
-                'dynamic_low_threshold': self.config.dynamic_low_threshold,
-                'dynamic_high_threshold': self.config.dynamic_high_threshold,
+                'static_threshold': self.config.static_threshold,
                 'min_duration': self.config.min_duration,
                 'max_duration': self.config.max_duration,
                 'ssim_scale': self.config.ssim_scale,
+                'frame_skip': self.config.frame_skip,
+                'use_gpu': self.config.use_gpu,
             },
             'stats': self.stats,
             'segments': [
@@ -1053,8 +795,7 @@ class VideoSegmenter:
         print(f"   - 장면 전환: {self.stats['scene_changes']:,}개")
         print(f"   - 동적 세그먼트: {self.stats['dynamic_segments']:,}개")
         print(f"   - 제외 (짧음): {self.stats['discarded_short']:,}개")
-        print(f"   - 제외 (정적): {self.stats['discarded_static']:,}개")
-        print(f"   - 제외 (혼란): {self.stats['discarded_chaotic']:,}개")
+        print(f"   - 제외 (정적/잠수): {self.stats['discarded_static']:,}개")
 
 
 def main():
@@ -1080,16 +821,10 @@ def main():
         help="장면 전환 임계값 (기본: 0.3)"
     )
     parser.add_argument(
-        '--dynamic-low',
+        '--static-threshold',
         type=float,
-        default=0.4,
-        help="동적 범위 최소값 (기본: 0.4)"
-    )
-    parser.add_argument(
-        '--dynamic-high',
-        type=float,
-        default=0.8,
-        help="동적 범위 최대값 (기본: 0.8)"
+        default=0.95,
+        help="정적 구간 임계값 - 이보다 높으면 잠수 구간으로 제외 (기본: 0.95)"
     )
     parser.add_argument(
         '--min-duration',
@@ -1127,15 +862,9 @@ def main():
         help="채택되지 않은 구간도 else 폴더에 저장 (실험 기능)"
     )
     parser.add_argument(
-        '--no-multiprocessing',
+        '--use-gpu',
         action='store_true',
-        help="멀티프로세싱 비활성화 (기본: 활성화)"
-    )
-    parser.add_argument(
-        '--workers',
-        type=int,
-        default=None,
-        help="워커 수 (기본: CPU 코어 수)"
+        help="GPU 가속 사용 (CUDA 사용 가능 시)"
     )
 
     args = parser.parse_args()
@@ -1143,16 +872,14 @@ def main():
     # 설정 생성
     config = SegmentConfig(
         scene_change_threshold=args.scene_threshold,
-        dynamic_low_threshold=args.dynamic_low,
-        dynamic_high_threshold=args.dynamic_high,
+        static_threshold=args.static_threshold,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         max_segments=args.max_segments,
         ssim_scale=args.ssim_scale,
         frame_skip=args.frame_skip,
         save_discarded=args.save_discarded,
-        use_multiprocessing=not args.no_multiprocessing,
-        num_workers=args.workers
+        use_gpu=args.use_gpu
     )
 
     # 세그멘터 생성
