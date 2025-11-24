@@ -193,6 +193,7 @@ class PreprocessingTab(QWidget):
         self.use_gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
         self.use_gpu_checkbox.setChecked(False)  # 기본: 비활성화
         self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 SSIM 계산을 가속합니다. PyTorch가 필요합니다.")
+        self.use_gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
         sampling_layout.addWidget(self.use_gpu_checkbox)
 
         # 실험 기능: 채택되지 않은 구간 저장
@@ -379,3 +380,82 @@ class PreprocessingTab(QWidget):
             self.log_viewer.add_log("❌ 작업이 취소되었습니다.", "WARNING")
             self.start_sampling_btn.setEnabled(True)
             self.worker = None
+
+    def on_gpu_checkbox_changed(self, state):
+        """GPU 가속 체크박스 상태 변경 시"""
+        from PyQt6.QtWidgets import QMessageBox
+
+        if state == Qt.CheckState.Checked.value:
+            # GPU 가속 활성화 시도
+            try:
+                # PyTorch 설치 확인
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
+                from utils.pytorch_installer import PyTorchInstaller
+
+                installer = PyTorchInstaller.get_instance()
+
+                # 이미 설치되어 있는 경우
+                if installer.is_pytorch_installed():
+                    installer.add_to_path()
+                    self.log_viewer.add_log("✅ PyTorch 감지됨, GPU 가속 활성화", "INFO")
+                    return
+
+                # 미설치 시 CUDA 버전 감지
+                cuda_version = installer.detect_cuda_version()
+
+                if cuda_version is None:
+                    # CUDA 감지 실패
+                    QMessageBox.warning(
+                        self,
+                        "CUDA 감지 실패",
+                        "NVIDIA GPU 또는 드라이버를 감지할 수 없습니다.\n\n"
+                        "다음을 확인해주세요:\n"
+                        "1. NVIDIA GPU가 설치되어 있나요?\n"
+                        "2. NVIDIA 드라이버가 설치되어 있나요?\n"
+                        "3. nvidia-smi 명령어가 작동하나요?\n\n"
+                        "드라이버 다운로드:\n"
+                        "https://www.nvidia.com/Download/index.aspx"
+                    )
+                    self.use_gpu_checkbox.setChecked(False)
+                    return
+
+                # 설치 확인 다이얼로그
+                reply = QMessageBox.question(
+                    self,
+                    "PyTorch 설치",
+                    f"GPU 가속을 사용하려면 PyTorch 설치가 필요합니다.\n\n"
+                    f"감지된 CUDA 버전: {cuda_version}\n"
+                    f"설치 위치: {installer.install_dir}\n"
+                    f"예상 크기: 약 2.5GB\n"
+                    f"예상 시간: 5-10분\n\n"
+                    f"자동으로 설치하시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+
+                if reply == QMessageBox.StandardButton.No:
+                    self.use_gpu_checkbox.setChecked(False)
+                    return
+
+                # 설치 다이얼로그 표시
+                from ..dialogs.pytorch_install_dialog import PyTorchInstallDialog
+                dialog = PyTorchInstallDialog(self, cuda_version)
+                result = dialog.exec()
+
+                if result == QMessageBox.DialogCode.Accepted and dialog.was_successful():
+                    self.log_viewer.add_log("✅ PyTorch 설치 완료, GPU 가속 활성화", "INFO")
+                else:
+                    self.log_viewer.add_log("⚠️ PyTorch 설치 실패 또는 취소", "WARNING")
+                    self.use_gpu_checkbox.setChecked(False)
+
+            except Exception as e:
+                self.log_viewer.add_log(f"❌ GPU 가속 초기화 실패: {e}", "ERROR")
+                QMessageBox.critical(
+                    self,
+                    "오류",
+                    f"GPU 가속 초기화 중 오류가 발생했습니다:\n\n{e}"
+                )
+                self.use_gpu_checkbox.setChecked(False)
+        else:
+            # GPU 가속 비활성화
+            self.log_viewer.add_log("GPU 가속 비활성화, CPU 모드로 전환", "INFO")

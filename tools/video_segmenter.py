@@ -294,7 +294,43 @@ class VideoSegmenter:
             bool: GPU 사용 가능하면 True
         """
         try:
+            # 1. PyTorch 설치 경로를 sys.path에 추가
+            import sys
+            from pathlib import Path
+            import os
+
+            # src/utils 경로 추가 (PyTorchInstaller import용)
+            if getattr(sys, 'frozen', False):
+                # PyInstaller 패키징 환경
+                utils_dir = Path(sys.executable).parent / "_internal" / "src"
+            else:
+                # 개발 환경
+                script_dir = Path(__file__).parent.parent
+                utils_dir = script_dir / "src"
+
+            if utils_dir.exists() and str(utils_dir) not in sys.path:
+                sys.path.insert(0, str(utils_dir))
+
+            # 2. PyTorch 설치 확인
+            try:
+                from utils.pytorch_installer import PyTorchInstaller
+                installer = PyTorchInstaller.get_instance()
+
+                if not installer.is_pytorch_installed():
+                    print("⚠️ PyTorch가 설치되지 않았습니다. CPU 모드로 실행합니다.")
+                    print("   GPU 가속을 사용하려면 GUI에서 'GPU 가속' 체크박스를 활성화하세요.")
+                    return False
+
+                # sys.path에 PyTorch 경로 추가
+                installer.add_to_path()
+
+            except ImportError:
+                # PyTorchInstaller를 찾을 수 없는 경우 (이전 버전 호환성)
+                print("⚠️ PyTorchInstaller를 찾을 수 없습니다. 시스템 PyTorch를 사용합니다.")
+
+            # 3. PyTorch import 시도
             import torch
+
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')
                 gpu_name = torch.cuda.get_device_name(0)
@@ -303,9 +339,23 @@ class VideoSegmenter:
             else:
                 print("⚠️ CUDA를 사용할 수 없습니다. CPU 모드로 실행합니다.")
                 return False
+
         except ImportError:
             print("⚠️ PyTorch가 설치되지 않았습니다. CPU 모드로 실행합니다.")
-            print("   GPU 가속을 사용하려면 PyTorch를 설치하세요: pip install torch")
+            print("   GPU 가속을 사용하려면 GUI에서 'GPU 가속' 체크박스를 활성화하세요.")
+            return False
+        except (OSError, RuntimeError) as e:
+            # DLL 로딩 실패 또는 CUDA 초기화 오류
+            print(f"⚠️ PyTorch 로딩 실패: {e}")
+            print("   CPU 모드로 실행합니다.")
+            print("   해결 방법:")
+            print("   1. GUI에서 'GPU 가속' 체크박스를 다시 활성화하세요.")
+            print("   2. PyTorch 재설치: 설정 메뉴에서 'PyTorch 재설치' 클릭")
+            return False
+        except Exception as e:
+            # 기타 모든 예외
+            print(f"⚠️ GPU 초기화 중 예상치 못한 오류: {e}")
+            print("   CPU 모드로 실행합니다.")
             return False
 
     def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
@@ -325,13 +375,18 @@ class VideoSegmenter:
 
         # GPU 가속 사용 (PyTorch 사용 가능 시)
         if self.gpu_available:
-            return self._calculate_ssim_gpu(img1, img2)
-        else:
-            # CPU 버전 (기존 코드)
-            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-            score, _ = ssim(gray1, gray2, full=True)
-            return score
+            try:
+                return self._calculate_ssim_gpu(img1, img2)
+            except (OSError, RuntimeError, Exception) as e:
+                # GPU 계산 실패 시 CPU로 자동 폴백
+                print(f"⚠️ GPU SSIM 계산 실패, CPU로 전환: {e}")
+                self.gpu_available = False  # 이후 모든 계산은 CPU 사용
+
+        # CPU 버전 (기존 코드)
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+        score, _ = ssim(gray1, gray2, full=True)
+        return score
 
     def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """

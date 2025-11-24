@@ -7,11 +7,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('font', 'font'), ('img', 'img'), ('src', 'src'), ('label-studio', 'label-studio'), ('tools', 'tools'), ('schemas', 'schemas')],
-    hiddenimports=['uvicorn', 'fastapi', 'sqlalchemy', 'requests', 'PyQt6', 'psutil', 'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client', 'cv2', 'av', 'skimage', 'skimage.metrics', 'skimage._shared', 'skimage._shared.utils', 'torch', 'torch.nn', 'torch.nn.functional'],
+    hiddenimports=['uvicorn', 'fastapi', 'sqlalchemy', 'requests', 'PyQt6', 'psutil', 'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client', 'cv2', 'av', 'skimage', 'skimage.metrics', 'skimage._shared', 'skimage._shared.utils'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['torch', 'torchvision', 'torchaudio', 'torch.nn', 'torch.cuda', 'torch.distributed', 'torch.optim', 'torch.utils', 'torch.jit', 'torch.autograd'],
     noarchive=False,
     optimize=0,
 )
