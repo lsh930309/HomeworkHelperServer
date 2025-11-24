@@ -23,9 +23,9 @@ class PyTorchInstaller:
     # 싱글톤 인스턴스
     _instance: Optional['PyTorchInstaller'] = None
 
-    # PyQt6 호환 버전 (WinError 1114 DLL 충돌 방지)
-    PYTORCH_VERSION = "2.8.0"
-    TORCHVISION_VERSION = "0.23.0"
+    # 최대 PyQt6 호환 버전 (WinError 1114 DLL 충돌 방지)
+    MAX_COMPATIBLE_PYTORCH_VERSION = "2.8.0"
+    MAX_COMPATIBLE_TORCHVISION_VERSION = "0.23.0"
 
     # NVIDIA 드라이버 버전 → CUDA 버전 매핑
     CUDA_DRIVER_MAP = {
@@ -42,6 +42,24 @@ class PyTorchInstaller:
         "515": "11.7",
         "510": "11.6",
     }
+
+    # CUDA 버전별 PyTorch 호환성 테이블 (PyQt6 호환 버전 <= 2.8.0 기준)
+    # 각 CUDA 버전에서 사용 가능한 최신 PyQt6 호환 PyTorch 버전
+    CUDA_PYTORCH_COMPATIBILITY = {
+        "13.0": None,  # CUDA 13.0은 PyTorch 2.9.0부터 지원 (PyQt6 비호환)
+        "12.6": {"pytorch": "2.8.0", "torchvision": "0.23.0"},
+        "12.4": {"pytorch": "2.8.0", "torchvision": "0.23.0"},
+        "12.1": {"pytorch": "2.8.0", "torchvision": "0.23.0"},
+        "12.0": {"pytorch": "2.4.0", "torchvision": "0.19.0"},
+        "11.8": {"pytorch": "2.4.0", "torchvision": "0.19.0"},
+        "11.7": {"pytorch": "2.0.0", "torchvision": "0.15.0"},
+        "11.6": {"pytorch": "1.13.1", "torchvision": "0.14.1"},
+    }
+
+    # CUDA 버전 폴백 체인 (상위 버전 → 하위 버전)
+    CUDA_FALLBACK_CHAIN = [
+        "13.0", "12.6", "12.4", "12.1", "12.0", "11.8", "11.7", "11.6"
+    ]
 
     def __init__(self, install_dir: Optional[Path] = None):
         """
@@ -67,6 +85,52 @@ class PyTorchInstaller:
         if cls._instance is None:
             cls._instance = cls(install_dir)
         return cls._instance
+
+    def get_compatible_pytorch_version(self, cuda_version: str) -> Optional[dict]:
+        """
+        CUDA 버전에 맞는 PyQt6 호환 PyTorch 버전 찾기 (폴백 포함)
+
+        알고리즘:
+        1. 요청된 CUDA 버전에서 호환 버전 확인
+        2. 없으면 하위 CUDA 버전으로 폴백하여 재검색
+        3. PyQt6 호환 버전(<=2.8.0)이 있으면 반환
+
+        Args:
+            cuda_version: "12.1", "13.0" 등
+
+        Returns:
+            {"pytorch": "2.8.0", "torchvision": "0.23.0", "cuda": "12.6"}
+            또는 None (호환 버전 없음)
+        """
+        # 1. 현재 CUDA 버전에서 호환 버전 확인
+        if cuda_version in self.CUDA_PYTORCH_COMPATIBILITY:
+            version_info = self.CUDA_PYTORCH_COMPATIBILITY[cuda_version]
+            if version_info is not None:
+                return {**version_info, "cuda": cuda_version}
+
+        # 2. 폴백 체인에서 하위 CUDA 버전 검색
+        try:
+            cuda_idx = self.CUDA_FALLBACK_CHAIN.index(cuda_version)
+        except ValueError:
+            # CUDA 버전이 체인에 없으면 가장 가까운 하위 버전 찾기
+            cuda_float = float(cuda_version)
+            cuda_idx = -1
+            for i, fallback_version in enumerate(self.CUDA_FALLBACK_CHAIN):
+                if float(fallback_version) <= cuda_float:
+                    cuda_idx = i
+                    break
+
+        if cuda_idx == -1:
+            return None
+
+        # 3. 하위 CUDA 버전들을 순회하며 호환 버전 찾기
+        for fallback_cuda in self.CUDA_FALLBACK_CHAIN[cuda_idx + 1:]:
+            if fallback_cuda in self.CUDA_PYTORCH_COMPATIBILITY:
+                version_info = self.CUDA_PYTORCH_COMPATIBILITY[fallback_cuda]
+                if version_info is not None:
+                    return {**version_info, "cuda": fallback_cuda}
+
+        return None
 
     def detect_cuda_version(self) -> Optional[str]:
         """
@@ -178,10 +242,10 @@ class PyTorchInstaller:
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> bool:
         """
-        pip를 사용하여 PyTorch 설치 (PyQt6 호환 버전)
+        pip를 사용하여 PyTorch 설치 (PyQt6 호환 버전, CUDA 폴백 지원)
 
         Args:
-            cuda_version: "12.1", "13.0" 등
+            cuda_version: "12.1", "13.0" 등 (감지된 CUDA 버전)
             progress_callback: 진행 상황 메시지 콜백
 
         Returns:
@@ -201,24 +265,44 @@ class PyTorchInstaller:
             if progress_callback:
                 progress_callback(f"Python 경로: {python_exe}")
 
-            # 2. 설치 디렉토리 준비
+            # 2. 호환 가능한 PyTorch 버전 찾기 (폴백 포함)
+            version_info = self.get_compatible_pytorch_version(cuda_version)
+
+            if version_info is None:
+                if progress_callback:
+                    progress_callback(f"❌ CUDA {cuda_version}와 호환되는 PyQt6 호환 PyTorch를 찾을 수 없습니다.")
+                    progress_callback("   가장 낮은 CUDA 11.6 이상이 필요합니다.")
+                return False
+
+            pytorch_version = version_info["pytorch"]
+            torchvision_version = version_info["torchvision"]
+            target_cuda = version_info["cuda"]
+
+            if progress_callback:
+                if target_cuda != cuda_version:
+                    progress_callback(f"⚠️ CUDA {cuda_version}는 PyQt6 호환 PyTorch를 지원하지 않습니다.")
+                    progress_callback(f"   CUDA {target_cuda} 호환 버전으로 폴백합니다.")
+                    progress_callback(f"   (하위 호환성으로 정상 작동합니다)")
+                progress_callback(f"설치 버전: PyTorch {pytorch_version}, torchvision {torchvision_version}")
+
+            # 3. 설치 디렉토리 준비
             self.install_dir.mkdir(parents=True, exist_ok=True)
             self.site_packages.mkdir(parents=True, exist_ok=True)
 
             if progress_callback:
                 progress_callback(f"설치 디렉토리 준비: {self.install_dir}")
 
-            # 3. pip 설치 명령어 생성 (PyQt6 호환 버전 사용)
-            cuda_tag = cuda_version.replace(".", "")  # "13.0" → "cu130"
+            # 4. pip 설치 명령어 생성 (PyQt6 호환 버전 사용)
+            cuda_tag = target_cuda.replace(".", "")  # "12.6" → "cu126"
             index_url = f"https://download.pytorch.org/whl/cu{cuda_tag}"
 
             if progress_callback:
-                progress_callback(f"PyTorch {self.PYTORCH_VERSION} (PyQt6 호환) 다운로드 중...")
+                progress_callback(f"PyTorch {pytorch_version} (PyQt6 호환) 다운로드 중...")
 
             cmd = [
                 python_exe, "-m", "pip", "install",
-                f"torch=={self.PYTORCH_VERSION}",
-                f"torchvision=={self.TORCHVISION_VERSION}",
+                f"torch=={pytorch_version}",
+                f"torchvision=={torchvision_version}",
                 "--index-url", index_url,
                 "--target", str(self.site_packages),
                 "--no-warn-script-location",
@@ -265,18 +349,19 @@ class PyTorchInstaller:
 
                 # 7. 버전 정보 저장
                 from datetime import datetime
-                version_info = {
+                save_version_info = {
                     "pytorch": installed_version,
-                    "cuda": cuda_version,
+                    "cuda": target_cuda,  # 실제 설치된 CUDA 버전
+                    "detected_cuda": cuda_version,  # 감지된 CUDA 버전
                     "installed_at": datetime.now().isoformat(),
                     "pyqt6_compatible": True  # PyQt6 호환 버전임을 표시
                 }
 
                 with open(self.version_file, 'w', encoding='utf-8') as f:
-                    json.dump(version_info, f, indent=2, ensure_ascii=False)
+                    json.dump(save_version_info, f, indent=2, ensure_ascii=False)
 
                 with open(self.cuda_file, 'w', encoding='utf-8') as f:
-                    f.write(cuda_version)
+                    f.write(target_cuda)
 
                 if progress_callback:
                     progress_callback(f"✅ PyTorch {installed_version} 설치 완료!")

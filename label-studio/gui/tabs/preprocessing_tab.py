@@ -471,25 +471,7 @@ class PreprocessingTab(QWidget):
                     self.use_gpu_checkbox.setChecked(False)
                     return
 
-                # 설치 확인 다이얼로그
-                reply = QMessageBox.question(
-                    self,
-                    "PyTorch 설치",
-                    f"GPU 가속을 사용하려면 PyTorch 설치가 필요합니다.\n\n"
-                    f"감지된 CUDA 버전: {cuda_version}\n"
-                    f"설치 위치: {installer.install_dir}\n"
-                    f"예상 크기: 약 2.5GB\n"
-                    f"예상 시간: 5-10분\n\n"
-                    f"자동으로 설치하시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
-                )
-
-                if reply == QMessageBox.StandardButton.No:
-                    self.use_gpu_checkbox.setChecked(False)
-                    return
-
-                # 설치 다이얼로그 표시
+                # 설치 가이드 다이얼로그 표시
                 from ..dialogs.pytorch_install_dialog import PyTorchInstallDialog
                 dialog = PyTorchInstallDialog(self, cuda_version)
                 result = dialog.exec()
@@ -505,7 +487,7 @@ class PreprocessingTab(QWidget):
                         self.log_viewer.add_log("⚠️ GPU 검증 실패, CPU 모드로 전환합니다.", "WARNING")
                         self.use_gpu_checkbox.setChecked(False)
                 else:
-                    self.log_viewer.add_log("⚠️ PyTorch 설치 실패 또는 취소", "WARNING")
+                    self.log_viewer.add_log("⚠️ PyTorch 설치 취소", "WARNING")
                     self.use_gpu_checkbox.setChecked(False)
 
             except Exception as e:
