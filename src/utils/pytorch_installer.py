@@ -23,6 +23,10 @@ class PyTorchInstaller:
     # 싱글톤 인스턴스
     _instance: Optional['PyTorchInstaller'] = None
 
+    # PyQt6 호환 버전 (WinError 1114 DLL 충돌 방지)
+    PYTORCH_VERSION = "2.8.0"
+    TORCHVISION_VERSION = "0.23.0"
+
     # NVIDIA 드라이버 버전 → CUDA 버전 매핑
     CUDA_DRIVER_MAP = {
         "581": "13.0",  # Driver 581.x → CUDA 13.0
@@ -136,13 +140,45 @@ class PyTorchInstaller:
             print(f"⚠️ 버전 파일 읽기 실패: {e}")
             return None
 
+    def _get_python_executable(self) -> Optional[str]:
+        """
+        실제 Python 실행 파일 경로 반환 (PyInstaller 환경 대응)
+
+        Returns:
+            Python 경로 또는 None
+        """
+        import shutil
+
+        if getattr(sys, 'frozen', False):
+            # PyInstaller 환경: 시스템 Python 찾기
+            python_exe = shutil.which('python')
+            if python_exe:
+                # 버전 확인
+                try:
+                    result = subprocess.run(
+                        [python_exe, "--version"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    if result.returncode == 0:
+                        return python_exe
+                except:
+                    pass
+
+            return None
+        else:
+            # 개발 환경
+            return sys.executable
+
     def install_pytorch(
         self,
         cuda_version: str,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> bool:
         """
-        pip를 사용하여 PyTorch 설치
+        pip를 사용하여 PyTorch 설치 (PyQt6 호환 버전)
 
         Args:
             cuda_version: "12.1", "13.0" 등
@@ -152,27 +188,41 @@ class PyTorchInstaller:
             성공 여부
         """
         try:
-            # 1. 설치 디렉토리 준비
+            # 1. Python 실행 파일 찾기
+            python_exe = self._get_python_executable()
+
+            if python_exe is None:
+                if progress_callback:
+                    progress_callback("❌ 시스템 Python을 찾을 수 없습니다.")
+                    progress_callback("   해결: Python을 설치하고 PATH에 추가해주세요.")
+                    progress_callback("   다운로드: https://www.python.org/downloads/")
+                return False
+
+            if progress_callback:
+                progress_callback(f"Python 경로: {python_exe}")
+
+            # 2. 설치 디렉토리 준비
             self.install_dir.mkdir(parents=True, exist_ok=True)
             self.site_packages.mkdir(parents=True, exist_ok=True)
 
             if progress_callback:
                 progress_callback(f"설치 디렉토리 준비: {self.install_dir}")
 
-            # 2. pip 설치 명령어 생성
+            # 3. pip 설치 명령어 생성 (PyQt6 호환 버전 사용)
             cuda_tag = cuda_version.replace(".", "")  # "13.0" → "cu130"
             index_url = f"https://download.pytorch.org/whl/cu{cuda_tag}"
 
             if progress_callback:
-                progress_callback(f"PyTorch CUDA {cuda_version} 다운로드 중...")
+                progress_callback(f"PyTorch {self.PYTORCH_VERSION} (PyQt6 호환) 다운로드 중...")
 
             cmd = [
-                sys.executable, "-m", "pip", "install",
-                "torch", "torchvision",
+                python_exe, "-m", "pip", "install",
+                f"torch=={self.PYTORCH_VERSION}",
+                f"torchvision=={self.TORCHVISION_VERSION}",
                 "--index-url", index_url,
                 "--target", str(self.site_packages),
                 "--no-warn-script-location",
-                "--no-cache-dir"  # 캐시 사용 안 함 (항상 최신 다운로드)
+                "--no-cache-dir"
             ]
 
             # 3. 서브프로세스 실행 및 진행률 추적
@@ -201,24 +251,43 @@ class PyTorchInstaller:
                     progress_callback(f"❌ 설치 실패 (종료 코드: {process.returncode})")
                 return False
 
-            # 6. 버전 정보 저장
-            from datetime import datetime
-            version_info = {
-                "pytorch": "latest",  # pip가 설치한 최신 버전
-                "cuda": cuda_version,
-                "installed_at": datetime.now().isoformat()
-            }
-
-            with open(self.version_file, 'w', encoding='utf-8') as f:
-                json.dump(version_info, f, indent=2, ensure_ascii=False)
-
-            with open(self.cuda_file, 'w', encoding='utf-8') as f:
-                f.write(cuda_version)
-
+            # 6. 설치 검증 (중요!)
             if progress_callback:
-                progress_callback(f"✅ PyTorch 설치 완료: {self.install_dir}")
+                progress_callback("🔍 설치 검증 중...")
 
-            return True
+            sys.path.insert(0, str(self.site_packages))
+            try:
+                import torch
+                installed_version = torch.__version__
+
+                if progress_callback:
+                    progress_callback(f"✅ 검증: PyTorch {installed_version} 로드 성공")
+
+                # 7. 버전 정보 저장
+                from datetime import datetime
+                version_info = {
+                    "pytorch": installed_version,
+                    "cuda": cuda_version,
+                    "installed_at": datetime.now().isoformat(),
+                    "pyqt6_compatible": True  # PyQt6 호환 버전임을 표시
+                }
+
+                with open(self.version_file, 'w', encoding='utf-8') as f:
+                    json.dump(version_info, f, indent=2, ensure_ascii=False)
+
+                with open(self.cuda_file, 'w', encoding='utf-8') as f:
+                    f.write(cuda_version)
+
+                if progress_callback:
+                    progress_callback(f"✅ PyTorch {installed_version} 설치 완료!")
+
+                return True
+
+            except ImportError as e:
+                if progress_callback:
+                    progress_callback(f"❌ 설치 검증 실패: {e}")
+                    progress_callback("   pip 설치는 완료되었으나 import에 실패했습니다.")
+                return False
 
         except Exception as e:
             error_msg = f"❌ PyTorch 설치 중 오류: {e}"

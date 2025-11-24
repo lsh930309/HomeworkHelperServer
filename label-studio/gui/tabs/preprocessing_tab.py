@@ -381,6 +381,50 @@ class PreprocessingTab(QWidget):
             self.start_sampling_btn.setEnabled(True)
             self.worker = None
 
+    def _verify_gpu_acceleration(self) -> bool:
+        """
+        GPU 가속 기능 검증 (실제 텐서 생성 및 연산 테스트)
+
+        Returns:
+            bool: GPU 가속이 정상 작동하면 True
+        """
+        try:
+            import torch
+
+            # CUDA 사용 가능 여부 확인
+            if not torch.cuda.is_available():
+                self.log_viewer.add_log("❌ CUDA를 사용할 수 없습니다.", "ERROR")
+                return False
+
+            # GPU 디바이스 생성
+            device = torch.device('cuda')
+            gpu_name = torch.cuda.get_device_name(0)
+            self.log_viewer.add_log(f"   GPU 감지: {gpu_name}", "INFO")
+
+            # 실제 GPU 텐서 생성 및 연산 테스트
+            test_tensor = torch.randn(100, 100, device=device)
+            result = test_tensor @ test_tensor.T
+            torch.cuda.synchronize()
+
+            # 메모리 정보 확인
+            memory_allocated = torch.cuda.memory_allocated(0) / 1024 / 1024  # MB
+            memory_reserved = torch.cuda.memory_reserved(0) / 1024 / 1024    # MB
+
+            self.log_viewer.add_log(f"   GPU 메모리 할당: {memory_allocated:.1f} MB", "INFO")
+            self.log_viewer.add_log(f"   GPU 메모리 예약: {memory_reserved:.1f} MB", "INFO")
+
+            return True
+
+        except ImportError:
+            self.log_viewer.add_log("❌ PyTorch를 import할 수 없습니다.", "ERROR")
+            return False
+        except RuntimeError as e:
+            self.log_viewer.add_log(f"❌ GPU 텐서 생성 실패: {e}", "ERROR")
+            return False
+        except Exception as e:
+            self.log_viewer.add_log(f"❌ GPU 검증 실패: {e}", "ERROR")
+            return False
+
     def on_gpu_checkbox_changed(self, state):
         """GPU 가속 체크박스 상태 변경 시"""
         from PyQt6.QtWidgets import QMessageBox
@@ -398,6 +442,14 @@ class PreprocessingTab(QWidget):
                 if installer.is_pytorch_installed():
                     installer.add_to_path()
                     self.log_viewer.add_log("✅ PyTorch 감지됨, GPU 가속 활성화", "INFO")
+
+                    # 즉시 GPU 검증 수행
+                    self.log_viewer.add_log("🔍 GPU 가속 기능 검증 중...", "INFO")
+                    if self._verify_gpu_acceleration():
+                        self.log_viewer.add_log("✅ GPU 가속 검증 완료! 정상 작동합니다.", "INFO")
+                    else:
+                        self.log_viewer.add_log("⚠️ GPU 검증 실패, CPU 모드로 전환합니다.", "WARNING")
+                        self.use_gpu_checkbox.setChecked(False)
                     return
 
                 # 미설치 시 CUDA 버전 감지
@@ -444,6 +496,14 @@ class PreprocessingTab(QWidget):
 
                 if result == QMessageBox.DialogCode.Accepted and dialog.was_successful():
                     self.log_viewer.add_log("✅ PyTorch 설치 완료, GPU 가속 활성화", "INFO")
+
+                    # 즉시 GPU 검증 수행
+                    self.log_viewer.add_log("🔍 GPU 가속 기능 검증 중...", "INFO")
+                    if self._verify_gpu_acceleration():
+                        self.log_viewer.add_log("✅ GPU 가속 검증 완료! 정상 작동합니다.", "INFO")
+                    else:
+                        self.log_viewer.add_log("⚠️ GPU 검증 실패, CPU 모드로 전환합니다.", "WARNING")
+                        self.use_gpu_checkbox.setChecked(False)
                 else:
                     self.log_viewer.add_log("⚠️ PyTorch 설치 실패 또는 취소", "WARNING")
                     self.use_gpu_checkbox.setChecked(False)

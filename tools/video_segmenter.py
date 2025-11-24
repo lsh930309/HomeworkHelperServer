@@ -278,6 +278,10 @@ class VideoSegmenter:
             'dynamic_segments': 0,
             'discarded_short': 0,
             'discarded_static': 0,
+            'ssim_gpu_count': 0,      # GPU로 계산한 SSIM 횟수
+            'ssim_cpu_count': 0,      # CPU로 계산한 SSIM 횟수
+            'ssim_gpu_time': 0.0,     # GPU SSIM 총 시간 (초)
+            'ssim_cpu_time': 0.0,     # CPU SSIM 총 시간 (초)
         }
 
         # GPU 사용 가능 여부 확인
@@ -334,8 +338,33 @@ class VideoSegmenter:
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')
                 gpu_name = torch.cuda.get_device_name(0)
-                print(f"✅ GPU 가속 활성화: {gpu_name}")
-                return True
+                print(f"✅ GPU 감지됨: {gpu_name}")
+
+                # 4. 실제 GPU 텐서 생성 및 연산 테스트
+                print("🔍 GPU 초기화 테스트 중...")
+                try:
+                    # 작은 행렬 곱셈으로 GPU 작동 확인
+                    test_tensor = torch.randn(100, 100, device=self.device)
+                    result = test_tensor @ test_tensor.T
+                    torch.cuda.synchronize()  # GPU 작업 완료 대기
+
+                    # 메모리 정보 확인
+                    memory_allocated = torch.cuda.memory_allocated(0) / 1024 / 1024  # MB
+                    memory_reserved = torch.cuda.memory_reserved(0) / 1024 / 1024    # MB
+
+                    print(f"✅ GPU 가속 활성화 성공!")
+                    print(f"   - GPU 메모리 할당: {memory_allocated:.1f} MB")
+                    print(f"   - GPU 메모리 예약: {memory_reserved:.1f} MB")
+                    return True
+
+                except RuntimeError as e:
+                    print(f"❌ GPU 텐서 생성 실패: {e}")
+                    print("   CPU 모드로 실행합니다.")
+                    return False
+                except Exception as e:
+                    print(f"❌ GPU 초기화 테스트 실패: {e}")
+                    print("   CPU 모드로 실행합니다.")
+                    return False
             else:
                 print("⚠️ CUDA를 사용할 수 없습니다. CPU 모드로 실행합니다.")
                 return False
@@ -365,6 +394,8 @@ class VideoSegmenter:
         성능 최적화: config.ssim_scale < 1.0이면 해상도 축소 후 계산
         (segment 구간 결정에만 사용, 출력은 원본 해상도 유지)
         """
+        import time
+
         # 해상도 축소 (설정된 경우)
         if self.config.ssim_scale < 1.0:
             h, w = img1.shape[:2]
@@ -376,16 +407,27 @@ class VideoSegmenter:
         # GPU 가속 사용 (PyTorch 사용 가능 시)
         if self.gpu_available:
             try:
-                return self._calculate_ssim_gpu(img1, img2)
+                start_time = time.perf_counter()
+                score = self._calculate_ssim_gpu(img1, img2)
+                elapsed = time.perf_counter() - start_time
+
+                self.stats['ssim_gpu_count'] += 1
+                self.stats['ssim_gpu_time'] += elapsed
+                return score
             except (OSError, RuntimeError, Exception) as e:
                 # GPU 계산 실패 시 CPU로 자동 폴백
                 print(f"⚠️ GPU SSIM 계산 실패, CPU로 전환: {e}")
                 self.gpu_available = False  # 이후 모든 계산은 CPU 사용
 
         # CPU 버전 (기존 코드)
+        start_time = time.perf_counter()
         gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         score, _ = ssim(gray1, gray2, full=True)
+        elapsed = time.perf_counter() - start_time
+
+        self.stats['ssim_cpu_count'] += 1
+        self.stats['ssim_cpu_time'] += elapsed
         return score
 
     def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
@@ -851,6 +893,24 @@ class VideoSegmenter:
         print(f"   - 동적 세그먼트: {self.stats['dynamic_segments']:,}개")
         print(f"   - 제외 (짧음): {self.stats['discarded_short']:,}개")
         print(f"   - 제외 (정적/잠수): {self.stats['discarded_static']:,}개")
+
+        # SSIM 성능 통계
+        gpu_count = self.stats['ssim_gpu_count']
+        cpu_count = self.stats['ssim_cpu_count']
+        gpu_time = self.stats['ssim_gpu_time']
+        cpu_time = self.stats['ssim_cpu_time']
+
+        if gpu_count > 0 or cpu_count > 0:
+            print(f"\n⚡ SSIM 성능 통계:")
+            if gpu_count > 0:
+                avg_gpu_time = (gpu_time / gpu_count) * 1000  # ms
+                print(f"   - GPU SSIM: {gpu_count:,}회, 평균 {avg_gpu_time:.2f}ms/프레임, 총 {gpu_time:.2f}초")
+            if cpu_count > 0:
+                avg_cpu_time = (cpu_time / cpu_count) * 1000  # ms
+                print(f"   - CPU SSIM: {cpu_count:,}회, 평균 {avg_cpu_time:.2f}ms/프레임, 총 {cpu_time:.2f}초")
+            if gpu_count > 0 and cpu_count > 0:
+                speedup = (cpu_time / cpu_count) / (gpu_time / gpu_count)
+                print(f"   - GPU 가속 배율: {speedup:.1f}x")
 
 
 def main():

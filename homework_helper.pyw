@@ -1,3 +1,26 @@
+# PyTorch를 가장 먼저 import (PyQt6 DLL 충돌 방지 - WinError 1114 해결)
+try:
+    import sys
+    import os
+    from pathlib import Path
+
+    # PyTorch 경로 추가
+    appdata = os.getenv('APPDATA') or os.path.expanduser('~')
+    pytorch_dir = Path(appdata) / "HomeworkHelper" / "pytorch" / "Lib" / "site-packages"
+
+    if pytorch_dir.exists() and str(pytorch_dir) not in sys.path:
+        sys.path.insert(0, str(pytorch_dir))
+
+    # PyTorch를 최우선으로 import
+    import torch
+    print(f"✅ PyTorch {torch.__version__} 사전 로드 완료 (PyQt6 DLL 충돌 방지)")
+except ImportError:
+    # PyTorch 미설치 시 무시
+    pass
+except Exception as e:
+    print(f"⚠️ PyTorch 사전 로드 실패 (무시됨): {e}")
+
+# 이제 표준 라이브러리 및 PyQt6 import
 import sys
 import datetime
 import os
