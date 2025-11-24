@@ -50,35 +50,31 @@ class SamplerManager:
         input_video: Path,
         output_dir: Path,
         scene_threshold: float = 0.3,
-        dynamic_low: float = 0.4,
-        dynamic_high: float = 0.8,
+        static_threshold: float = 0.95,
         min_duration: float = 5.0,
         max_duration: float = 60.0,
         max_segments: Optional[int] = None,
         ssim_scale: float = 0.25,
         frame_skip: int = 1,
         save_discarded: bool = False,
-        use_multiprocessing: bool = True,
-        num_workers: Optional[int] = None,
+        use_gpu: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
-        비디오 세그멘테이션 실행 (동적 배경 구간 선택)
+        비디오 세그멘테이션 실행 (정적인 '잠수 구간'만 제외)
 
         Args:
             input_video: 입력 비디오 경로
             output_dir: 출력 디렉토리
             scene_threshold: 장면 전환 임계값 (기본: 0.3)
-            dynamic_low: 동적 범위 최소값 (기본: 0.4)
-            dynamic_high: 동적 범위 최대값 (기본: 0.8)
+            static_threshold: 정적 구간 임계값 (기본: 0.95, 이보다 높으면 잠수 구간으로 제외)
             min_duration: 최소 클립 길이 (초)
             max_duration: 최대 클립 길이 (초)
             max_segments: 최대 클립 수
             ssim_scale: SSIM 계산 해상도 스케일 (기본: 0.25, 4-16배 빠름, 출력은 원본 유지)
             frame_skip: 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
             save_discarded: 채택되지 않은 구간도 저장
-            use_multiprocessing: 멀티프로세싱 사용 (기본: True)
-            num_workers: 워커 수 (기본: CPU 코어 수)
+            use_gpu: GPU 가속 사용 (기본: False, CUDA 필요)
             progress_callback: 진행 상황 콜백 (current, total)
 
         Returns:
@@ -101,16 +97,14 @@ class SamplerManager:
             # 세그멘테이션 설정
             config = SegmentConfig(
                 scene_change_threshold=scene_threshold,
-                dynamic_low_threshold=dynamic_low,
-                dynamic_high_threshold=dynamic_high,
+                static_threshold=static_threshold,
                 min_duration=min_duration,
                 max_duration=max_duration,
                 max_segments=max_segments,
                 ssim_scale=ssim_scale,
                 frame_skip=frame_skip,
                 save_discarded=save_discarded,
-                use_multiprocessing=use_multiprocessing,
-                num_workers=num_workers
+                use_gpu=use_gpu
             )
 
             # 세그멘터 생성

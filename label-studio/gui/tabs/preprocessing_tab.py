@@ -6,7 +6,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QGroupBox, QLineEdit, QFileDialog, QSlider, QComboBox
+    QLabel, QGroupBox, QLineEdit, QFileDialog, QSlider, QComboBox,
+    QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
@@ -127,23 +128,77 @@ class PreprocessingTab(QWidget):
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("프리셋:"))
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["빠른", "표준", "정밀"])
+        self.preset_combo.addItems(["빠른", "표준", "정밀", "사용자 정의"])
         self.preset_combo.setCurrentIndex(1)  # 기본: 표준
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         preset_layout.addWidget(self.preset_combo)
         preset_layout.addStretch()
         sampling_layout.addLayout(preset_layout)
 
+        # 사용자 정의 파라미터 그룹 (처음에는 숨김)
+        self.custom_params_group = QGroupBox("사용자 정의 파라미터")
+        custom_params_layout = QFormLayout()
+
+        # scene_threshold
+        self.scene_threshold_spin = QDoubleSpinBox()
+        self.scene_threshold_spin.setRange(0.0, 1.0)
+        self.scene_threshold_spin.setSingleStep(0.05)
+        self.scene_threshold_spin.setValue(0.3)
+        self.scene_threshold_spin.setDecimals(2)
+        custom_params_layout.addRow("장면 전환 임계값:", self.scene_threshold_spin)
+
+        # static_threshold
+        self.static_threshold_spin = QDoubleSpinBox()
+        self.static_threshold_spin.setRange(0.0, 1.0)
+        self.static_threshold_spin.setSingleStep(0.05)
+        self.static_threshold_spin.setValue(0.95)
+        self.static_threshold_spin.setDecimals(2)
+        custom_params_layout.addRow("정적 구간 임계값:", self.static_threshold_spin)
+
+        # min_duration
+        self.min_duration_spin = QDoubleSpinBox()
+        self.min_duration_spin.setRange(1.0, 60.0)
+        self.min_duration_spin.setSingleStep(1.0)
+        self.min_duration_spin.setValue(5.0)
+        self.min_duration_spin.setSuffix(" 초")
+        custom_params_layout.addRow("최소 길이:", self.min_duration_spin)
+
+        # max_duration
+        self.max_duration_spin = QDoubleSpinBox()
+        self.max_duration_spin.setRange(10.0, 300.0)
+        self.max_duration_spin.setSingleStep(5.0)
+        self.max_duration_spin.setValue(60.0)
+        self.max_duration_spin.setSuffix(" 초")
+        custom_params_layout.addRow("최대 길이:", self.max_duration_spin)
+
+        # ssim_scale
+        self.ssim_scale_spin = QDoubleSpinBox()
+        self.ssim_scale_spin.setRange(0.1, 1.0)
+        self.ssim_scale_spin.setSingleStep(0.05)
+        self.ssim_scale_spin.setValue(0.25)
+        self.ssim_scale_spin.setDecimals(2)
+        custom_params_layout.addRow("SSIM 해상도 스케일:", self.ssim_scale_spin)
+
+        # frame_skip
+        self.frame_skip_spin = QSpinBox()
+        self.frame_skip_spin.setRange(1, 10)
+        self.frame_skip_spin.setValue(1)
+        custom_params_layout.addRow("프레임 스킵:", self.frame_skip_spin)
+
+        self.custom_params_group.setLayout(custom_params_layout)
+        self.custom_params_group.setVisible(False)  # 기본적으로 숨김
+        sampling_layout.addWidget(self.custom_params_group)
+
+        # GPU 가속 옵션
+        self.use_gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
+        self.use_gpu_checkbox.setChecked(False)  # 기본: 비활성화
+        self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 SSIM 계산을 가속합니다. PyTorch가 필요합니다.")
+        sampling_layout.addWidget(self.use_gpu_checkbox)
+
         # 실험 기능: 채택되지 않은 구간 저장
-        from PyQt6.QtWidgets import QCheckBox
         self.save_discarded_checkbox = QCheckBox("채택되지 않은 구간도 저장 (실험 기능)")
         self.save_discarded_checkbox.setToolTip("원본에서 세그먼트로 채택되지 않은 나머지 구간을 else 폴더에 저장합니다.")
         sampling_layout.addWidget(self.save_discarded_checkbox)
-
-        # 멀티프로세싱 옵션
-        self.multiprocessing_checkbox = QCheckBox("멀티프로세싱 사용 (8코어 기준 4-8배 빠름)")
-        self.multiprocessing_checkbox.setChecked(True)  # 기본: 활성화
-        self.multiprocessing_checkbox.setToolTip("CPU 멀티코어를 활용하여 병렬 처리합니다. 비활성화 시 싱글 프로세스로 실행됩니다.")
-        sampling_layout.addWidget(self.multiprocessing_checkbox)
 
         # 세그멘테이션 시작 버튼
         self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
@@ -170,6 +225,14 @@ class PreprocessingTab(QWidget):
         layout.addWidget(log_group)
 
         self.setLayout(layout)
+
+    def _on_preset_changed(self, index):
+        """프리셋 변경 시 사용자 정의 파라미터 표시/숨김"""
+        preset_name = self.preset_combo.currentText()
+        if preset_name == "사용자 정의":
+            self.custom_params_group.setVisible(True)
+        else:
+            self.custom_params_group.setVisible(False)
 
     def browse_input_video(self):
         """입력 비디오 찾아보기"""
@@ -208,40 +271,52 @@ class PreprocessingTab(QWidget):
         if not output_path.exists():
             output_path.mkdir(parents=True, exist_ok=True)
 
-        # 프리셋에 따른 파라미터
-        preset_map = {
-            "빠른": {
-                "scene_threshold": 0.3,
-                "dynamic_low": 0.35,
-                "dynamic_high": 0.85,
-                "min_duration": 5.0,
-                "max_duration": 60.0,
-                "ssim_scale": 0.25,
-                "frame_skip": 3
-            },
-            "표준": {
-                "scene_threshold": 0.3,
-                "dynamic_low": 0.4,
-                "dynamic_high": 0.8,
-                "min_duration": 5.0,
-                "max_duration": 60.0,
-                "ssim_scale": 0.25,
-                "frame_skip": 1
-            },
-            "정밀": {
-                "scene_threshold": 0.3,
-                "dynamic_low": 0.45,
-                "dynamic_high": 0.75,
-                "min_duration": 10.0,
-                "max_duration": 60.0,
-                "ssim_scale": 1.0,
-                "frame_skip": 1
-            }
-        }
+        preset_name = self.preset_combo.currentText()
 
-        params = preset_map[self.preset_combo.currentText()]
+        # 프리셋에 따른 파라미터
+        if preset_name == "사용자 정의":
+            # 사용자 정의 파라미터 사용
+            params = {
+                "scene_threshold": self.scene_threshold_spin.value(),
+                "static_threshold": self.static_threshold_spin.value(),
+                "min_duration": self.min_duration_spin.value(),
+                "max_duration": self.max_duration_spin.value(),
+                "ssim_scale": self.ssim_scale_spin.value(),
+                "frame_skip": self.frame_skip_spin.value()
+            }
+        else:
+            # 프리셋 파라미터
+            preset_map = {
+                "빠른": {
+                    "scene_threshold": 0.3,
+                    "static_threshold": 0.95,
+                    "min_duration": 5.0,
+                    "max_duration": 60.0,
+                    "ssim_scale": 0.25,
+                    "frame_skip": 3
+                },
+                "표준": {
+                    "scene_threshold": 0.3,
+                    "static_threshold": 0.95,
+                    "min_duration": 5.0,
+                    "max_duration": 60.0,
+                    "ssim_scale": 0.25,
+                    "frame_skip": 1
+                },
+                "정밀": {
+                    "scene_threshold": 0.3,
+                    "static_threshold": 0.97,
+                    "min_duration": 10.0,
+                    "max_duration": 60.0,
+                    "ssim_scale": 1.0,
+                    "frame_skip": 1
+                }
+            }
+            params = preset_map[preset_name]
+
+        # 공통 파라미터
         params["save_discarded"] = self.save_discarded_checkbox.isChecked()
-        params["use_multiprocessing"] = self.multiprocessing_checkbox.isChecked()
+        params["use_gpu"] = self.use_gpu_checkbox.isChecked()
 
         # 작업 스레드 시작
         self.worker = SegmentationWorker(
