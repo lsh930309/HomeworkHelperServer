@@ -31,7 +31,7 @@ RELEASE_DIR = PROJECT_ROOT / "release"
 ARCHIVES_DIR = RELEASE_DIR / "archives"
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
-INSTALLER_OUTPUT_DIR = PROJECT_ROOT / "installer_output"
+# INSTALLER_OUTPUT_DIR 제거: installer.iss에서 자동 생성
 
 # 빌드 대상
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
@@ -239,7 +239,7 @@ def clean_build_artifacts():
     """빌드 산출물 폴더 삭제"""
     print_section("이전 빌드 산출물 정리")
 
-    for folder in [BUILD_DIR, DIST_DIR, INSTALLER_OUTPUT_DIR]:
+    for folder in [BUILD_DIR, DIST_DIR]:
         if folder.exists():
             try:
                 shutil.rmtree(folder)
@@ -248,6 +248,16 @@ def clean_build_artifacts():
                 print(f"[경고] 삭제 실패 ({folder.name}): {e}")
         else:
             print(f"  (없음: {folder.name}/)")
+
+    # installer_output은 Inno Setup이 자동 생성하므로 미리 만들 필요 없음
+    # 하지만 이전 빌드의 잔여 파일은 정리
+    installer_output_dir = PROJECT_ROOT / "installer_output"
+    if installer_output_dir.exists():
+        try:
+            shutil.rmtree(installer_output_dir)
+            print(f"[OK] 삭제: installer_output/")
+        except Exception as e:
+            print(f"[경고] 삭제 실패 (installer_output): {e}")
 
 
 def ensure_release_dir():
@@ -375,8 +385,9 @@ def create_installer(version_info):
         print("\n[OK] 인스톨러 생성 성공!")
 
         # 생성된 인스톨러를 release 폴더로 이동 및 이름 변경
-        if INSTALLER_OUTPUT_DIR.exists():
-            for setup_file in INSTALLER_OUTPUT_DIR.glob("*.exe"):
+        installer_output_dir = PROJECT_ROOT / "installer_output"
+        if installer_output_dir.exists():
+            for setup_file in installer_output_dir.glob("*.exe"):
                 # 새 파일명: HomeworkHelper_vX.Y.Z.timestamp_Setup.exe
                 new_name = f"HomeworkHelper_{version_info['string']}_Setup.exe"
                 dest = RELEASE_DIR / new_name
@@ -477,6 +488,13 @@ def main():
     if success_count == 0:
         print("\n[경고] 배포 파일이 생성되지 않았습니다.")
         return 1
+
+    # 8. release 폴더를 Windows Explorer로 열기
+    try:
+        subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
+        print(f"[OK] release 폴더를 열었습니다: {RELEASE_DIR.absolute()}")
+    except Exception as e:
+        print(f"[경고] release 폴더 열기 실패: {e}")
 
     print("\n" + "=" * 70 + "\n")
     return 0

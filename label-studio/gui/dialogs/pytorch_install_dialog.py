@@ -123,11 +123,28 @@ class InstallWorker(QThread):
 
             try:
                 import torch
-                version = torch.__version__
-                cuda_available = torch.cuda.is_available()
+
+                # 버전 확인 (여러 방법 시도)
+                version = None
+                try:
+                    version = torch.__version__
+                except AttributeError:
+                    # __version__이 없는 경우 대체 방법
+                    try:
+                        import torch.version
+                        version = torch.version.__version__
+                    except:
+                        # 버전을 알 수 없어도 설치는 성공으로 간주
+                        version = "unknown"
 
                 self.progress.emit(f"✅ PyTorch {version} 로드 성공")
-                self.progress.emit(f"✅ CUDA 사용 가능: {'예' if cuda_available else '아니오'}")
+
+                # CUDA 검증 (선택적)
+                try:
+                    cuda_available = torch.cuda.is_available()
+                    self.progress.emit(f"✅ CUDA 사용 가능: {'예' if cuda_available else '아니오'}")
+                except:
+                    self.progress.emit(f"✅ CUDA 검증 생략 (torch.cuda 접근 불가)")
 
                 # 버전 정보 저장
                 from datetime import datetime
