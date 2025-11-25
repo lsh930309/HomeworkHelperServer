@@ -316,13 +316,14 @@ class Scheduler:
             for p in self.data_manager.managed_processes
         }
 
-        current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"\n[{current_time_str}] 스케줄러 검사 실행...")
+        # 주기적 로그 제거 (GUI 성능 개선)
+        # current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # print(f"\n[{current_time_str}] 스케줄러 검사 실행...")
         self.check_daily_reset_tasks()
         self.check_sleep_corrected_cycles()
         self.check_mandatory_times()
         self.check_user_cycles()
-        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 스케줄러 검사 완료.")
+        # print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 스케줄러 검사 완료.")
 
         # 검사 실행 후 상태를 다시 확인하여 변경 여부 감지
         final_statuses = {

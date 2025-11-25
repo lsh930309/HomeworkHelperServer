@@ -89,7 +89,7 @@ class LogViewer(QWidget):
 
     def add_log(self, message: str, level: str = "INFO"):
         """
-        로그 추가
+        로그 추가 (성능 최적화: 증분 추가 방식)
 
         Args:
             message: 로그 메시지
@@ -103,9 +103,41 @@ class LogViewer(QWidget):
         # 최대 줄 수 제한
         if len(self.log_buffer) > self.max_lines:
             self.log_buffer.pop(0)
+            # 버퍼 초과 시에만 전체 재렌더링
+            self.apply_filter()
+            return
 
-        # 필터 적용하여 표시
-        self.apply_filter()
+        # 필터 확인 (전체 재렌더링 없이 직접 추가)
+        filter_level = self.level_filter.currentText()
+        should_show = self._check_filter(log_line, filter_level)
+
+        if should_show:
+            self._append_colored_log(log_line)
+
+            # 자동 스크롤
+            if self.auto_scroll:
+                self.scroll_to_bottom()
+
+    def _check_filter(self, log_line: str, filter_level: str) -> bool:
+        """
+        필터 확인 (성능 최적화를 위한 헬퍼 메소드)
+
+        Args:
+            log_line: 로그 라인
+            filter_level: 필터 레벨
+
+        Returns:
+            표시 여부
+        """
+        if filter_level == self.LOG_LEVEL_ALL:
+            return True
+        elif filter_level == self.LOG_LEVEL_ERROR:
+            return "[ERROR]" in log_line
+        elif filter_level == self.LOG_LEVEL_WARNING:
+            return "[WARNING]" in log_line
+        elif filter_level == self.LOG_LEVEL_INFO:
+            return "[INFO]" in log_line
+        return True
 
     def add_log_lines(self, lines: List[str]):
         """

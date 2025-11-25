@@ -430,6 +430,75 @@ class VideoSegmenter:
         self.stats['ssim_cpu_time'] += elapsed
         return score
 
+    def _calculate_ssim_gpu_batch(self, frame_pairs: list) -> list:
+        """
+        GPU를 사용한 배치 SSIM 계산 (PyTorch) - 성능 최적화
+
+        Args:
+            frame_pairs: [(img1, img2), ...] 프레임 쌍 리스트
+
+        Returns:
+            SSIM 점수 리스트
+        """
+        try:
+            import torch
+            import torch.nn.functional as F
+
+            if not frame_pairs:
+                return []
+
+            batch_size = len(frame_pairs)
+
+            # BGR to Grayscale (CPU에서 배치 처리)
+            gray1_list = []
+            gray2_list = []
+
+            for img1, img2 in frame_pairs:
+                gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+                gray1_list.append(gray1)
+                gray2_list.append(gray2)
+
+            # NumPy to Torch Tensor (배치)
+            gray1_batch = np.stack(gray1_list)
+            gray2_batch = np.stack(gray2_list)
+
+            t1 = torch.from_numpy(gray1_batch).float().unsqueeze(1).to(self.device) / 255.0
+            t2 = torch.from_numpy(gray2_batch).float().unsqueeze(1).to(self.device) / 255.0
+
+            # SSIM 계산 (배치)
+            C1 = 0.01 ** 2
+            C2 = 0.03 ** 2
+
+            mu1 = F.avg_pool2d(t1, 11, 1, 5)
+            mu2 = F.avg_pool2d(t2, 11, 1, 5)
+
+            mu1_sq = mu1 ** 2
+            mu2_sq = mu2 ** 2
+            mu1_mu2 = mu1 * mu2
+
+            sigma1_sq = F.avg_pool2d(t1 ** 2, 11, 1, 5) - mu1_sq
+            sigma2_sq = F.avg_pool2d(t2 ** 2, 11, 1, 5) - mu2_sq
+            sigma12 = F.avg_pool2d(t1 * t2, 11, 1, 5) - mu1_mu2
+
+            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
+                       ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+            # 배치별 평균 SSIM 점수
+            scores = ssim_map.mean(dim=(1, 2, 3)).cpu().tolist()
+            return scores
+
+        except Exception as e:
+            # GPU 오류 시 CPU로 폴백 (단일 프레임 처리)
+            print(f"⚠️ GPU 배치 SSIM 계산 실패, CPU로 폴백: {e}")
+            scores = []
+            for img1, img2 in frame_pairs:
+                gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+                score, _ = ssim(gray1, gray2, full=True)
+                scores.append(score)
+            return scores
+
     def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
         GPU를 사용한 SSIM 계산 (PyTorch)
@@ -573,6 +642,21 @@ class VideoSegmenter:
 
         frame_idx = 0
 
+        # Progress update 시간 기반 제어
+        import time
+        last_update_time = time.time()
+        UPDATE_INTERVAL = 0.1  # 0.1초(100ms)마다 업데이트
+
+        # GPU 배치 처리 설정
+        BATCH_SIZE = 32  # GPU 메모리에 따라 조정 가능
+        frame_batch = []  # [(prev_frame, current_frame), ...]
+        frame_indices = []  # 각 배치 프레임의 인덱스
+
+        use_batch_processing = (self.device and self.device.type == 'cuda')
+
+        if use_batch_processing:
+            print(f"🚀 GPU 배치 처리 모드 (배치 크기: {BATCH_SIZE})")
+
         while True:
             # 프레임 스킵 적용
             for _ in range(self.config.frame_skip - 1):
@@ -587,10 +671,81 @@ class VideoSegmenter:
 
             frame_idx += 1
 
-            if progress_callback and frame_idx % 100 == 0:
+            # 시간 기반 진행률 업데이트 (0.1초마다)
+            current_time = time.time()
+            if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
                 progress_callback(frame_idx, total_frames)
+                last_update_time = current_time
 
-            # SSIM 계산
+            # 배치 처리 모드
+            if use_batch_processing:
+                # 배치에 프레임 추가
+                frame_batch.append((prev_frame.copy(), current_frame.copy()))
+                frame_indices.append(frame_idx)
+
+                # 배치가 가득 차면 처리
+                if len(frame_batch) >= BATCH_SIZE:
+                    try:
+                        # GPU 배치 SSIM 계산
+                        ssim_scores = self._calculate_ssim_gpu_batch(frame_batch)
+
+                        # 결과 처리
+                        for batch_idx, ssim_score in enumerate(ssim_scores):
+                            ssim_buffer.append(ssim_score)
+
+                            # 장면 전환 감지 처리 (아래에서 통합)
+                            batch_frame_idx = frame_indices[batch_idx]
+                            if ssim_score < self.config.scene_change_threshold:
+                                self.stats['scene_changes'] += 1
+
+                                if dynamic_frame_count >= self.config.min_dynamic_frames:
+                                    segment = self._create_segment(
+                                        current_segment_start,
+                                        batch_frame_idx - 1,
+                                        fps,
+                                        ssim_buffer[:-1]
+                                    )
+
+                                    if self._is_valid_segment(segment):
+                                        segments.append(segment)
+                                        self.stats['dynamic_segments'] += 1
+                                    else:
+                                        if segment.duration < self.config.min_duration:
+                                            self.stats['discarded_short'] += 1
+                                        elif segment.avg_ssim >= self.config.static_threshold:
+                                            self.stats['discarded_static'] += 1
+
+                                current_segment_start = batch_frame_idx
+                                dynamic_frame_count = 0
+                                ssim_buffer = []
+                            else:
+                                dynamic_frame_count += 1
+
+                        # 배치 초기화
+                        frame_batch.clear()
+                        frame_indices.clear()
+
+                    except Exception as e:
+                        # GPU 오류 처리 (OOM 등)
+                        import torch
+                        if isinstance(e, torch.cuda.OutOfMemoryError):
+                            print(f"⚠️ GPU 메모리 부족, 배치 크기 {BATCH_SIZE} → {BATCH_SIZE // 2}로 감소")
+                            BATCH_SIZE = max(1, BATCH_SIZE // 2)
+                        else:
+                            print(f"⚠️ GPU 배치 처리 오류: {e}")
+
+                        # 현재 배치 단일 처리로 폴백
+                        for i, (pf, cf) in enumerate(frame_batch):
+                            ssim_score = self.calculate_ssim(pf, cf)
+                            ssim_buffer.append(ssim_score)
+                        frame_batch.clear()
+                        frame_indices.clear()
+
+                # prev_frame 업데이트 (배치 모드)
+                prev_frame = current_frame
+                continue  # 배치 모드에서는 아래 단일 처리 스킵
+
+            # 단일 프레임 처리 모드 (CPU 또는 배치 미사용)
             ssim_score = self.calculate_ssim(prev_frame, current_frame)
             ssim_buffer.append(ssim_score)
 
@@ -653,6 +808,40 @@ class VideoSegmenter:
                 break
 
             prev_frame = current_frame
+
+        # 배치 모드에서 남은 프레임 처리
+        if use_batch_processing and len(frame_batch) > 0:
+            try:
+                import torch
+                ssim_scores = self._calculate_ssim_gpu_batch(frame_batch)
+
+                for batch_idx, ssim_score in enumerate(ssim_scores):
+                    ssim_buffer.append(ssim_score)
+
+                    batch_frame_idx = frame_indices[batch_idx]
+                    if ssim_score < self.config.scene_change_threshold:
+                        self.stats['scene_changes'] += 1
+
+                        if dynamic_frame_count >= self.config.min_dynamic_frames:
+                            segment = self._create_segment(
+                                current_segment_start,
+                                batch_frame_idx - 1,
+                                fps,
+                                ssim_buffer[:-1]
+                            )
+
+                            if self._is_valid_segment(segment):
+                                segments.append(segment)
+                                self.stats['dynamic_segments'] += 1
+
+                        current_segment_start = batch_frame_idx
+                        dynamic_frame_count = 0
+                        ssim_buffer = []
+                    else:
+                        dynamic_frame_count += 1
+
+            except Exception as e:
+                print(f"⚠️ 남은 배치 처리 실패: {e}")
 
         # 마지막 세그먼트 처리
         if dynamic_frame_count >= self.config.min_dynamic_frames:

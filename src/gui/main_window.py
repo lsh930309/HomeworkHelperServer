@@ -434,7 +434,8 @@ class MainWindow(QMainWindow):
         status_changed = self.scheduler.run_all_checks() # 게임 관련 스케줄 검사
         
         if status_changed:
-            print("스케줄러에 의해 상태 변경 감지됨. 테이블 UI 업데이트.")
+            # 주기적 로그 제거 (GUI 성능 개선)
+            # print("스케줄러에 의해 상태 변경 감지됨. 테이블 UI 업데이트.")
             self.update_process_statuses_only()
         
         # 웹 버튼 상태는 별도 타이머(_refresh_web_button_states)로 주기적으로 체크하므로 여기서 호출하지 않음
