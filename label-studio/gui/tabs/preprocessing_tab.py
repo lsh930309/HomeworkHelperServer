@@ -171,48 +171,40 @@ class PreprocessingTab(QWidget):
         self.custom_params_group = QGroupBox("사용자 정의 파라미터")
         custom_params_layout = QFormLayout()
 
-        # motion_low_threshold
-        self.motion_low_spin = QDoubleSpinBox()
-        self.motion_low_spin.setRange(0.5, 10.0)
-        self.motion_low_spin.setSingleStep(0.5)
-        self.motion_low_spin.setValue(2.0)
-        self.motion_low_spin.setDecimals(1)
-        self.motion_low_spin.setToolTip("이보다 낮은 움직임은 제외 (오버피팅 방지)")
-        custom_params_layout.addRow("저동적 구간 임계값:", self.motion_low_spin)
+        # motion_threshold
+        self.motion_threshold_spin = QDoubleSpinBox()
+        self.motion_threshold_spin.setRange(0.5, 10.0)
+        self.motion_threshold_spin.setSingleStep(0.5)
+        self.motion_threshold_spin.setValue(2.0)
+        self.motion_threshold_spin.setDecimals(1)
+        self.motion_threshold_spin.setToolTip("이보다 낮은 움직임은 정적 구간으로 판단 (제거됨)")
+        custom_params_layout.addRow("정적 구간 임계값:", self.motion_threshold_spin)
 
-        # motion_high_threshold
-        self.motion_high_spin = QDoubleSpinBox()
-        self.motion_high_spin.setRange(10.0, 50.0)
-        self.motion_high_spin.setSingleStep(1.0)
-        self.motion_high_spin.setValue(15.0)
-        self.motion_high_spin.setDecimals(1)
-        self.motion_high_spin.setToolTip("이보다 높은 움직임은 제외 (과도한 움직임)")
-        custom_params_layout.addRow("고동적 구간 임계값:", self.motion_high_spin)
+        # target_duration
+        self.target_duration_spin = QDoubleSpinBox()
+        self.target_duration_spin.setRange(10.0, 300.0)
+        self.target_duration_spin.setSingleStep(5.0)
+        self.target_duration_spin.setValue(30.0)
+        self.target_duration_spin.setSuffix(" 초")
+        self.target_duration_spin.setToolTip("최종 클립 길이 (동적 구간 병합 후 분할)")
+        custom_params_layout.addRow("목표 클립 길이:", self.target_duration_spin)
 
-        # scene_threshold
-        self.scene_threshold_spin = QDoubleSpinBox()
-        self.scene_threshold_spin.setRange(0.0, 1.0)
-        self.scene_threshold_spin.setSingleStep(0.05)
-        self.scene_threshold_spin.setValue(0.5)
-        self.scene_threshold_spin.setDecimals(2)
-        self.scene_threshold_spin.setToolTip("히스토그램 차이 기반 장면 전환 감지")
-        custom_params_layout.addRow("장면 전환 임계값:", self.scene_threshold_spin)
+        # min_dynamic_duration
+        self.min_dynamic_duration_spin = QDoubleSpinBox()
+        self.min_dynamic_duration_spin.setRange(1.0, 30.0)
+        self.min_dynamic_duration_spin.setSingleStep(0.5)
+        self.min_dynamic_duration_spin.setValue(3.0)
+        self.min_dynamic_duration_spin.setSuffix(" 초")
+        self.min_dynamic_duration_spin.setToolTip("최소 동적 구간 길이 (이보다 짧으면 무시)")
+        custom_params_layout.addRow("최소 동적 구간:", self.min_dynamic_duration_spin)
 
-        # min_duration
-        self.min_duration_spin = QDoubleSpinBox()
-        self.min_duration_spin.setRange(1.0, 60.0)
-        self.min_duration_spin.setSingleStep(1.0)
-        self.min_duration_spin.setValue(5.0)
-        self.min_duration_spin.setSuffix(" 초")
-        custom_params_layout.addRow("최소 길이:", self.min_duration_spin)
-
-        # max_duration
-        self.max_duration_spin = QDoubleSpinBox()
-        self.max_duration_spin.setRange(10.0, 300.0)
-        self.max_duration_spin.setSingleStep(5.0)
-        self.max_duration_spin.setValue(60.0)
-        self.max_duration_spin.setSuffix(" 초")
-        custom_params_layout.addRow("최대 길이:", self.max_duration_spin)
+        # batch_size
+        self.batch_size_spin = QSpinBox()
+        self.batch_size_spin.setRange(8, 128)
+        self.batch_size_spin.setSingleStep(8)
+        self.batch_size_spin.setValue(32)
+        self.batch_size_spin.setToolTip("GPU 배치 크기 (VRAM에 따라 자동 조정됨)")
+        custom_params_layout.addRow("배치 크기:", self.batch_size_spin)
 
         # flow_scale
         self.flow_scale_spin = QDoubleSpinBox()
@@ -234,16 +226,11 @@ class PreprocessingTab(QWidget):
         sampling_layout.addWidget(self.custom_params_group)
 
         # GPU 가속 옵션
-        self.use_gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
-        self.use_gpu_checkbox.setChecked(False)  # 기본: 비활성화
-        self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 Optical Flow 계산을 가속합니다. PyTorch가 필요합니다.")
-        self.use_gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
-        sampling_layout.addWidget(self.use_gpu_checkbox)
-
-        # 실험 기능: 채택되지 않은 구간 저장
-        self.save_discarded_checkbox = QCheckBox("채택되지 않은 구간도 저장 (실험 기능)")
-        self.save_discarded_checkbox.setToolTip("원본에서 세그먼트로 채택되지 않은 나머지 구간을 else 폴더에 저장합니다.")
-        sampling_layout.addWidget(self.save_discarded_checkbox)
+        self.gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
+        self.gpu_checkbox.setChecked(False)  # 기본: 비활성화
+        self.gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 Optical Flow 계산을 가속합니다. PyTorch가 필요합니다.")
+        self.gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
+        sampling_layout.addWidget(self.gpu_checkbox)
 
         # 세그멘테이션 시작 버튼
         self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
@@ -322,50 +309,45 @@ class PreprocessingTab(QWidget):
         if preset_name == "사용자 정의":
             # 사용자 정의 파라미터 사용
             params = {
-                "motion_low_threshold": self.motion_low_spin.value(),
-                "motion_high_threshold": self.motion_high_spin.value(),
-                "scene_threshold": self.scene_threshold_spin.value(),
-                "min_duration": self.min_duration_spin.value(),
-                "max_duration": self.max_duration_spin.value(),
+                "motion_threshold": self.motion_threshold_spin.value(),
+                "target_duration": self.target_duration_spin.value(),
+                "min_dynamic_duration": self.min_dynamic_duration_spin.value(),
+                "batch_size": self.batch_size_spin.value(),
                 "flow_scale": self.flow_scale_spin.value(),
                 "frame_skip": self.frame_skip_spin.value()
             }
         else:
-            # 프리셋 파라미터 (Optical Flow 기반)
+            # 프리셋 파라미터 (정적 구간 제거 + 고정 길이 분할)
             preset_map = {
                 "빠른": {
-                    "motion_low_threshold": 2.0,
-                    "motion_high_threshold": 15.0,
-                    "scene_threshold": 0.5,
-                    "min_duration": 5.0,
-                    "max_duration": 60.0,
+                    "motion_threshold": 2.0,
+                    "target_duration": 30.0,
+                    "min_dynamic_duration": 3.0,
+                    "batch_size": 64,
                     "flow_scale": 0.5,
                     "frame_skip": 3
                 },
                 "표준": {
-                    "motion_low_threshold": 2.0,
-                    "motion_high_threshold": 15.0,
-                    "scene_threshold": 0.5,
-                    "min_duration": 5.0,
-                    "max_duration": 60.0,
+                    "motion_threshold": 2.0,
+                    "target_duration": 30.0,
+                    "min_dynamic_duration": 3.0,
+                    "batch_size": 32,
                     "flow_scale": 0.5,
-                    "frame_skip": 1
+                    "frame_skip": 2
                 },
                 "정밀": {
-                    "motion_low_threshold": 1.5,
-                    "motion_high_threshold": 20.0,
-                    "scene_threshold": 0.4,
-                    "min_duration": 10.0,
-                    "max_duration": 60.0,
-                    "flow_scale": 1.0,
+                    "motion_threshold": 1.0,
+                    "target_duration": 30.0,
+                    "min_dynamic_duration": 3.0,
+                    "batch_size": 16,
+                    "flow_scale": 0.5,
                     "frame_skip": 1
                 }
             }
             params = preset_map[preset_name]
 
         # 공통 파라미터
-        params["save_discarded"] = self.save_discarded_checkbox.isChecked()
-        params["use_gpu"] = self.use_gpu_checkbox.isChecked()
+        params["use_gpu"] = self.gpu_checkbox.isChecked()
 
         # 작업 스레드 시작
         self.worker = SegmentationWorker(
