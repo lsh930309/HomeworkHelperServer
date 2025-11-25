@@ -249,13 +249,13 @@ class VideoSegment:
     duration: float
     avg_motion: float
 
-
 @dataclass
 class SegmentConfig:
-    """세그멘테이션 설정 (간소화)"""
+    """세그멘테이션 설정"""
     # Motion 감지
     motion_threshold: float = 2.0        # 이보다 낮으면 정적 구간 (제거)
-
+    # motion_high_threshold: float = 15.0 # (현재 로직엔 미반영, 필요 시 로직 추가)
+    
     # 최종 분할
     target_duration: float = 30.0        # 최종 클립 길이 (초)
     min_dynamic_duration: float = 3.0    # 최소 동적 구간 길이 (이보다 짧으면 무시)
@@ -265,10 +265,14 @@ class SegmentConfig:
     flow_scale: float = 0.5              # Optical Flow 계산 시 해상도 스케일
     frame_skip: int = 1                  # 프레임 스킵 (1=모든 프레임)
     use_gpu: bool = False                # GPU 가속 사용
-
-    # 출력 설정
-    output_codec: str = "mp4v"           # 출력 코덱
-    output_fps: Optional[int] = None     # 출력 FPS (None이면 원본)
+    
+    # 기타 (main에서 넘기는데 dataclass에 없던 것들 추가)
+    scene_change_threshold: float = 0.5 
+    motion_low_threshold: float = 2.0 
+    motion_high_threshold: float = 15.0
+    max_duration: float = 60.0
+    max_segments: Optional[int] = None
+    save_discarded: bool = False
 
 
 class VideoSegmenter:
