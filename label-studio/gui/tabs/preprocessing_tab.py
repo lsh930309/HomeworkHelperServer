@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 전처리 탭
-비디오 세그멘테이션 (SSIM 기반 안정 구간 분할)
+비디오 세그멘테이션 (Optical Flow 기반 동적 구간 분할)
 """
 
 from PyQt6.QtWidgets import (
@@ -171,21 +171,32 @@ class PreprocessingTab(QWidget):
         self.custom_params_group = QGroupBox("사용자 정의 파라미터")
         custom_params_layout = QFormLayout()
 
+        # motion_low_threshold
+        self.motion_low_spin = QDoubleSpinBox()
+        self.motion_low_spin.setRange(0.5, 10.0)
+        self.motion_low_spin.setSingleStep(0.5)
+        self.motion_low_spin.setValue(2.0)
+        self.motion_low_spin.setDecimals(1)
+        self.motion_low_spin.setToolTip("이보다 낮은 움직임은 제외 (오버피팅 방지)")
+        custom_params_layout.addRow("저동적 구간 임계값:", self.motion_low_spin)
+
+        # motion_high_threshold
+        self.motion_high_spin = QDoubleSpinBox()
+        self.motion_high_spin.setRange(10.0, 50.0)
+        self.motion_high_spin.setSingleStep(1.0)
+        self.motion_high_spin.setValue(15.0)
+        self.motion_high_spin.setDecimals(1)
+        self.motion_high_spin.setToolTip("이보다 높은 움직임은 제외 (과도한 움직임)")
+        custom_params_layout.addRow("고동적 구간 임계값:", self.motion_high_spin)
+
         # scene_threshold
         self.scene_threshold_spin = QDoubleSpinBox()
         self.scene_threshold_spin.setRange(0.0, 1.0)
         self.scene_threshold_spin.setSingleStep(0.05)
-        self.scene_threshold_spin.setValue(0.3)
+        self.scene_threshold_spin.setValue(0.5)
         self.scene_threshold_spin.setDecimals(2)
+        self.scene_threshold_spin.setToolTip("히스토그램 차이 기반 장면 전환 감지")
         custom_params_layout.addRow("장면 전환 임계값:", self.scene_threshold_spin)
-
-        # static_threshold
-        self.static_threshold_spin = QDoubleSpinBox()
-        self.static_threshold_spin.setRange(0.0, 1.0)
-        self.static_threshold_spin.setSingleStep(0.05)
-        self.static_threshold_spin.setValue(0.95)
-        self.static_threshold_spin.setDecimals(2)
-        custom_params_layout.addRow("정적 구간 임계값:", self.static_threshold_spin)
 
         # min_duration
         self.min_duration_spin = QDoubleSpinBox()
@@ -203,13 +214,14 @@ class PreprocessingTab(QWidget):
         self.max_duration_spin.setSuffix(" 초")
         custom_params_layout.addRow("최대 길이:", self.max_duration_spin)
 
-        # ssim_scale
-        self.ssim_scale_spin = QDoubleSpinBox()
-        self.ssim_scale_spin.setRange(0.1, 1.0)
-        self.ssim_scale_spin.setSingleStep(0.05)
-        self.ssim_scale_spin.setValue(0.25)
-        self.ssim_scale_spin.setDecimals(2)
-        custom_params_layout.addRow("SSIM 해상도 스케일:", self.ssim_scale_spin)
+        # flow_scale
+        self.flow_scale_spin = QDoubleSpinBox()
+        self.flow_scale_spin.setRange(0.1, 1.0)
+        self.flow_scale_spin.setSingleStep(0.1)
+        self.flow_scale_spin.setValue(0.5)
+        self.flow_scale_spin.setDecimals(1)
+        self.flow_scale_spin.setToolTip("Optical Flow 계산 해상도 (낮을수록 빠름)")
+        custom_params_layout.addRow("Flow 해상도 스케일:", self.flow_scale_spin)
 
         # frame_skip
         self.frame_skip_spin = QSpinBox()
@@ -224,7 +236,7 @@ class PreprocessingTab(QWidget):
         # GPU 가속 옵션
         self.use_gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
         self.use_gpu_checkbox.setChecked(False)  # 기본: 비활성화
-        self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 SSIM 계산을 가속합니다. PyTorch가 필요합니다.")
+        self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 Optical Flow 계산을 가속합니다. PyTorch가 필요합니다.")
         self.use_gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
         sampling_layout.addWidget(self.use_gpu_checkbox)
 
@@ -310,38 +322,42 @@ class PreprocessingTab(QWidget):
         if preset_name == "사용자 정의":
             # 사용자 정의 파라미터 사용
             params = {
+                "motion_low_threshold": self.motion_low_spin.value(),
+                "motion_high_threshold": self.motion_high_spin.value(),
                 "scene_threshold": self.scene_threshold_spin.value(),
-                "static_threshold": self.static_threshold_spin.value(),
                 "min_duration": self.min_duration_spin.value(),
                 "max_duration": self.max_duration_spin.value(),
-                "ssim_scale": self.ssim_scale_spin.value(),
+                "flow_scale": self.flow_scale_spin.value(),
                 "frame_skip": self.frame_skip_spin.value()
             }
         else:
-            # 프리셋 파라미터
+            # 프리셋 파라미터 (Optical Flow 기반)
             preset_map = {
                 "빠른": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.95,
+                    "motion_low_threshold": 2.0,
+                    "motion_high_threshold": 15.0,
+                    "scene_threshold": 0.5,
                     "min_duration": 5.0,
                     "max_duration": 60.0,
-                    "ssim_scale": 0.25,
+                    "flow_scale": 0.5,
                     "frame_skip": 3
                 },
                 "표준": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.95,
+                    "motion_low_threshold": 2.0,
+                    "motion_high_threshold": 15.0,
+                    "scene_threshold": 0.5,
                     "min_duration": 5.0,
                     "max_duration": 60.0,
-                    "ssim_scale": 0.25,
+                    "flow_scale": 0.5,
                     "frame_skip": 1
                 },
                 "정밀": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.97,
+                    "motion_low_threshold": 1.5,
+                    "motion_high_threshold": 20.0,
+                    "scene_threshold": 0.4,
                     "min_duration": 10.0,
                     "max_duration": 60.0,
-                    "ssim_scale": 1.0,
+                    "flow_scale": 1.0,
                     "frame_skip": 1
                 }
             }

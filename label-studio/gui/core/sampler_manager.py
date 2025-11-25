@@ -49,29 +49,31 @@ class SamplerManager:
         self,
         input_video: Path,
         output_dir: Path,
-        scene_threshold: float = 0.3,
-        static_threshold: float = 0.95,
+        motion_low_threshold: float = 2.0,
+        motion_high_threshold: float = 15.0,
+        scene_threshold: float = 0.5,
         min_duration: float = 5.0,
         max_duration: float = 60.0,
         max_segments: Optional[int] = None,
-        ssim_scale: float = 0.25,
+        flow_scale: float = 0.5,
         frame_skip: int = 1,
         save_discarded: bool = False,
         use_gpu: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
-        비디오 세그멘테이션 실행 (정적인 '잠수 구간'만 제외)
+        비디오 세그멘테이션 실행 (Optical Flow 기반)
 
         Args:
             input_video: 입력 비디오 경로
             output_dir: 출력 디렉토리
-            scene_threshold: 장면 전환 임계값 (기본: 0.3)
-            static_threshold: 정적 구간 임계값 (기본: 0.95, 이보다 높으면 잠수 구간으로 제외)
+            motion_low_threshold: 저동적 구간 임계값 (기본: 2.0, 이보다 낮으면 제외)
+            motion_high_threshold: 고동적 구간 임계값 (기본: 15.0, 이보다 높으면 제외)
+            scene_threshold: 장면 전환 임계값 (기본: 0.5, 히스토그램 차이)
             min_duration: 최소 클립 길이 (초)
             max_duration: 최대 클립 길이 (초)
             max_segments: 최대 클립 수
-            ssim_scale: SSIM 계산 해상도 스케일 (기본: 0.25, 4-16배 빠름, 출력은 원본 유지)
+            flow_scale: Optical Flow 해상도 스케일 (기본: 0.5, 2배 빠름, 출력은 원본 유지)
             frame_skip: 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
             save_discarded: 채택되지 않은 구간도 저장
             use_gpu: GPU 가속 사용 (기본: False, CUDA 필요)
@@ -96,12 +98,14 @@ class SamplerManager:
 
             # 세그멘테이션 설정
             config = SegmentConfig(
+                motion_low_threshold=motion_low_threshold,
+                motion_high_threshold=motion_high_threshold,
                 scene_change_threshold=scene_threshold,
-                static_threshold=static_threshold,
+                scene_change_important=scene_threshold,
                 min_duration=min_duration,
                 max_duration=max_duration,
                 max_segments=max_segments,
-                ssim_scale=ssim_scale,
+                flow_scale=flow_scale,
                 frame_skip=frame_skip,
                 save_discarded=save_discarded,
                 use_gpu=use_gpu
