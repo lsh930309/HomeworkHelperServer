@@ -94,6 +94,38 @@ class PreprocessingTab(QWidget):
 
         self.init_ui()
 
+        # 앱 시작 시 기존 PyTorch 자동 감지
+        self._auto_detect_pytorch()
+
+    def _auto_detect_pytorch(self):
+        """앱 시작 시 기존 PyTorch 자동 감지 및 GPU 체크박스 상태 업데이트"""
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
+            from utils.pytorch_installer import PyTorchInstaller
+
+            installer = PyTorchInstaller.get_instance()
+
+            if installer.is_pytorch_installed():
+                version_info = installer.get_installed_version()
+                pytorch_version = version_info.get("pytorch", "unknown") if version_info else "unknown"
+
+                # PyTorch 경로를 sys.path에 추가
+                installer.add_to_path()
+
+                # GPU 체크박스를 자동으로 활성화 (단, 체크는 하지 않음 - 사용자가 선택하도록)
+                self.log_viewer.add_log(f"✅ 기존 PyTorch {pytorch_version} 감지됨", "INFO")
+                self.log_viewer.add_log(f"   설치 위치: {installer.install_dir}", "INFO")
+                self.log_viewer.add_log(f"   💡 'GPU 가속 사용' 체크박스를 활성화하여 사용할 수 있습니다.", "INFO")
+
+                # GPU 체크박스 활성화 (선택은 사용자가)
+                self.gpu_checkbox.setEnabled(True)
+            else:
+                self.log_viewer.add_log("⚠️ PyTorch가 설치되지 않았습니다.", "WARNING")
+                self.log_viewer.add_log("   'GPU 가속 사용' 체크박스를 클릭하여 설치할 수 있습니다.", "INFO")
+        except Exception as e:
+            # 감지 실패 시 무시 (기존 동작 유지)
+            pass
+
     def init_ui(self):
         """UI 초기화"""
         layout = QVBoxLayout()
@@ -441,7 +473,9 @@ class PreprocessingTab(QWidget):
                 # 이미 설치되어 있는 경우
                 if installer.is_pytorch_installed():
                     installer.add_to_path()
-                    self.log_viewer.add_log("✅ PyTorch 감지됨, GPU 가속 활성화", "INFO")
+                    version_info = installer.get_installed_version()
+                    pytorch_version = version_info.get("pytorch", "unknown") if version_info else "unknown"
+                    self.log_viewer.add_log(f"✅ PyTorch {pytorch_version} 감지됨, GPU 가속 활성화", "INFO")
 
                     # 즉시 GPU 검증 수행
                     self.log_viewer.add_log("🔍 GPU 가속 기능 검증 중...", "INFO")

@@ -617,6 +617,7 @@ class VideoSegmenter:
             print("⚠️ OpenCV로 첫 프레임을 읽을 수 없습니다.")
             print("   비디오 코덱이 OpenCV와 호환되지 않을 수 있습니다.")
             print("🔄 PyAV로 전환을 시도합니다...")
+            print("   💡 아래 'Failed to decode frame' 경고는 PyAV 내부 로그이며 무시해도 됩니다.")
             cap.release()
 
             # PyAV로 열기
@@ -858,6 +859,28 @@ class VideoSegmenter:
 
         cap.release()
 
+        # GPU 메모리 정리 (GPU 가속 사용 시)
+        if self.gpu_available and self.device and self.device.type == 'cuda':
+            try:
+                import torch
+                print(f"\n🧹 GPU 메모리 정리 중...")
+
+                # 1. 캐시된 메모리 해제
+                torch.cuda.empty_cache()
+
+                # 2. GPU 작업 완료 대기
+                torch.cuda.synchronize()
+
+                # 3. 메모리 통계 출력
+                memory_allocated = torch.cuda.memory_allocated(0) / 1024 / 1024  # MB
+                memory_reserved = torch.cuda.memory_reserved(0) / 1024 / 1024    # MB
+
+                print(f"   GPU 메모리 할당: {memory_allocated:.1f} MB")
+                print(f"   GPU 메모리 예약: {memory_reserved:.1f} MB")
+                print(f"   ✅ GPU 메모리 정리 완료")
+            except Exception as e:
+                print(f"   ⚠️ GPU 메모리 정리 실패 (무시됨): {e}")
+
         print(f"\n✅ 세그먼트 탐지 완료!")
         self._print_stats()
 
@@ -944,7 +967,13 @@ class VideoSegmenter:
             ]
 
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
                 saved_paths.append(output_path)
 
                 if progress_callback:
@@ -958,6 +987,15 @@ class VideoSegmenter:
         # 채택되지 않은 구간 저장 (실험 기능)
         if self.config.save_discarded:
             self._export_discarded_segments(video_path, segments, output_dir)
+
+        # GPU 메모리 정리 (GPU 가속 사용 시)
+        if self.gpu_available and self.device and self.device.type == 'cuda':
+            try:
+                import torch
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            except:
+                pass
 
         print(f"\n✅ {len(saved_paths)}개 세그먼트 저장 완료!")
         return saved_paths
@@ -1026,7 +1064,13 @@ class VideoSegmenter:
             ]
 
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
                 print(f"   ✓ discarded_{idx+1:03d}.mp4 ({duration:.1f}초)")
             except subprocess.CalledProcessError as e:
                 print(f"   ⚠️ discarded_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
