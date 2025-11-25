@@ -850,27 +850,40 @@ class VideoSegmenter:
                 if not batch_frames:
                     break
 
-                # flow_scale 적용
+                # flow_scale 적용 (첫 루프에서 frame_buffer도 처리)
                 if self.config.flow_scale < 1.0:
-                    batch_frames = [cv2.resize(f, None, fx=self.config.flow_scale,
-                                               fy=self.config.flow_scale,
-                                               interpolation=cv2.INTER_LINEAR)
-                                   for f in batch_frames]
-                    if len(frame_buffer) > 0:
+                    # 원본 크기 프레임만 리사이즈 (이미 리사이즈된 frame_buffer는 제외)
+                    batch_frames_resized = [cv2.resize(f, None, fx=self.config.flow_scale,
+                                                       fy=self.config.flow_scale,
+                                                       interpolation=cv2.INTER_LINEAR)
+                                           for f in batch_frames]
+
+                    # 첫 루프라면 frame_buffer도 리사이즈
+                    if frame_buffer and frame_buffer[0].shape != batch_frames_resized[0].shape:
                         frame_buffer = [cv2.resize(f, None, fx=self.config.flow_scale,
                                                    fy=self.config.flow_scale,
                                                    interpolation=cv2.INTER_LINEAR)
                                        for f in frame_buffer]
 
+                    batch_frames = batch_frames_resized
+
                 # 이전 프레임 + 현재 배치 결합
                 full_batch = frame_buffer + batch_frames
 
                 # GPU 배치 처리
-                frames_tensor = torch.from_numpy(np.stack(full_batch)).float().to(self.device)
-                motion_scores = self._calculate_flow_gpu_batch(frames_tensor)
+                try:
+                    frames_tensor = torch.from_numpy(np.stack(full_batch)).float().to(self.device)
+                    motion_scores = self._calculate_flow_gpu_batch(frames_tensor)
 
-                # 메모리 해제
-                del frames_tensor
+                    # 메모리 해제
+                    del frames_tensor
+                except ValueError as e:
+                    # 프레임 크기 불일치 오류
+                    print(f"⚠️ 배치 스택 오류: {e}")
+                    print(f"   프레임 크기 확인:")
+                    for i, f in enumerate(full_batch):
+                        print(f"     Frame {i}: {f.shape}")
+                    motion_scores = torch.tensor([], device=self.device)
 
                 if motion_scores.numel() == 0:
                     # 배치 처리 실패, 단일 처리로 fallback
