@@ -110,10 +110,11 @@ class InstallWorker(QThread):
             self.progress.emit("✅ pip 설치 완료!")
             self.progress.emit("")
 
-            # 설치 검증
+            # 설치 검증 (torch 폴더만 확인, version.txt는 아직 생성 전)
             self.progress.emit("🔍 PyTorch 검증 중...")
 
-            if not self.installer.is_pytorch_installed():
+            torch_path = self.installer.site_packages / "torch"
+            if not torch_path.exists():
                 self.finished.emit(False, "torch 폴더를 찾을 수 없습니다. 설치가 올바르게 완료되지 않았을 수 있습니다.")
                 return
 
@@ -196,11 +197,11 @@ class PyTorchInstallDialog(QDialog):
         layout.addWidget(cmd_label)
 
         # 권장 명령어 (cu129 사용)
-        # 주의: 따옴표 없이 경로만 전달 (subprocess에서 자동으로 처리됨)
+        # 주의: 경로에 공백이 있을 수 있으므로 따옴표로 감싸야 함
         default_cmd = (
             f"pip install torch==2.8.0 torchvision==0.23.0 "
             f"--index-url https://download.pytorch.org/whl/cu129 "
-            f"--target {self.installer.site_packages}"
+            f'--target "{self.installer.site_packages}"'
         )
 
         self.cmd_edit = QTextEdit()
