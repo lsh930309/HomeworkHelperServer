@@ -403,6 +403,60 @@ class VideoSegmenter:
             print("   CPU 모드로 실행합니다.")
             return False
 
+    def _determine_batch_size(self, frame_shape: tuple) -> int:
+        """
+        GPU VRAM에 맞게 배치 크기 자동 결정
+
+        Args:
+            frame_shape: (height, width, channels) 프레임 해상도
+
+        Returns:
+            int: 최적 배치 크기
+        """
+        if not self.gpu_available:
+            return 1  # CPU는 배치 처리 안 함
+
+        try:
+            import torch
+
+            # VRAM 여유 공간 확인 (bytes)
+            free_vram, total_vram = torch.cuda.mem_get_info()
+            free_vram_gb = free_vram / 1024**3  # GB
+
+            # 프레임당 메모리 추정 (RGB float32 기준)
+            # frame_shape = (H, W, C)
+            H, W = frame_shape[0], frame_shape[1]
+
+            # Lucas-Kanade에서 필요한 메모리:
+            # - 입력 프레임 배치: [B, H, W, 3] * 4 bytes
+            # - Grayscale: [B, 1, H, W] * 4 bytes
+            # - Gradients (Ix, Iy, It): [B, 1, H, W] * 3 * 4 bytes
+            # - 중간 연산 버퍼: 약 2배 여유
+            bytes_per_frame = H * W * (3 + 1 + 3) * 4 * 2  # 여유 2배
+            frame_mem_gb = bytes_per_frame / 1024**3
+
+            # 안전 마진 50% 적용 (다른 프로세스 고려)
+            safe_batch_size = int(free_vram_gb * 0.5 / frame_mem_gb)
+
+            # 최소 4, 최대 128로 제한
+            safe_batch_size = max(4, min(128, safe_batch_size))
+
+            # 설정값과 비교하여 더 작은 값 선택
+            final_batch_size = min(self.config.batch_size, safe_batch_size)
+
+            print(f"📊 배치 크기 자동 조정:")
+            print(f"   - VRAM 여유: {free_vram_gb:.1f} GB")
+            print(f"   - 프레임당 메모리: {frame_mem_gb * 1024:.1f} MB")
+            print(f"   - 권장 배치 크기: {safe_batch_size}")
+            print(f"   - 최종 배치 크기: {final_batch_size}")
+
+            return final_batch_size
+
+        except Exception as e:
+            print(f"⚠️ 배치 크기 자동 조정 실패: {e}")
+            print(f"   기본값 사용: {self.config.batch_size}")
+            return self.config.batch_size
+
     def calculate_motion(
         self,
         prev_frame: np.ndarray,
@@ -572,6 +626,78 @@ class VideoSegmenter:
 
             return motion_score
 
+    def _calculate_flow_gpu_batch(
+        self,
+        frames_batch: 'torch.Tensor'
+    ) -> 'torch.Tensor':
+        """
+        배치 단위 Lucas-Kanade Optical Flow 계산
+
+        Args:
+            frames_batch: [B, H, W, 3] - B개의 프레임 (numpy에서 변환된 torch tensor)
+
+        Returns:
+            motion_scores: [B-1] - 각 연속 프레임 쌍의 motion score
+        """
+        try:
+            import torch
+            import torch.nn.functional as F
+
+            B = frames_batch.shape[0]
+            if B < 2:
+                return torch.tensor([], device=self.device)
+
+            # BGR -> Grayscale (배치)
+            # frames_batch: [B, H, W, 3]
+            gray_batch = (frames_batch[..., 0] * 0.114 +
+                         frames_batch[..., 1] * 0.587 +
+                         frames_batch[..., 2] * 0.299)
+
+            # [B, H, W] -> [B, 1, H, W]
+            gray_batch = gray_batch.unsqueeze(1)
+
+            # Spatial gradients (Ix, Iy) - 현재 프레임 기준
+            Ix = F.conv2d(gray_batch, self.sobel_x, padding=1)  # [B, 1, H, W]
+            Iy = F.conv2d(gray_batch, self.sobel_y, padding=1)
+
+            # Temporal gradient (연속 프레임 쌍)
+            It = gray_batch[1:] - gray_batch[:-1]  # [B-1, 1, H, W]
+
+            # Ix, Iy도 [B-1]로 맞춤 (현재 프레임 기준)
+            Ix = Ix[1:]
+            Iy = Iy[1:]
+
+            # Lucas-Kanade 윈도우 기반 최소제곱법
+            window_size = 5
+            window_area = window_size * window_size
+
+            # 윈도우 내 합 계산
+            Ix2 = F.avg_pool2d(Ix * Ix, window_size, stride=1, padding=window_size//2) * window_area
+            Iy2 = F.avg_pool2d(Iy * Iy, window_size, stride=1, padding=window_size//2) * window_area
+            IxIy = F.avg_pool2d(Ix * Iy, window_size, stride=1, padding=window_size//2) * window_area
+            IxIt = F.avg_pool2d(Ix * It, window_size, stride=1, padding=window_size//2) * window_area
+            IyIt = F.avg_pool2d(Iy * It, window_size, stride=1, padding=window_size//2) * window_area
+
+            # 2x2 행렬의 역행렬 계산
+            det = Ix2 * Iy2 - IxIy * IxIy + 1e-6
+
+            # Flow 벡터 계산
+            u = -(Iy2 * IxIt - IxIy * IyIt) / det
+            v = -(-IxIy * IxIt + Ix2 * IyIt) / det
+
+            # Magnitude 계산 (픽셀 단위)
+            magnitude = torch.sqrt(u*u + v*v)
+
+            # 각 프레임 쌍의 평균 motion score
+            motion_scores = magnitude.mean(dim=(1, 2, 3))  # [B-1]
+
+            return motion_scores
+
+        except Exception as e:
+            print(f"⚠️ 배치 GPU Flow 계산 실패: {e}")
+            # 빈 텐서 반환 (호출측에서 단일 처리로 fallback)
+            return torch.tensor([], device=self.device)
+
     def detect_segments(
         self,
         video_path: Path,
@@ -672,6 +798,20 @@ class VideoSegmenter:
                 cap.release()
                 raise RuntimeError("PyAV로도 첫 프레임을 읽을 수 없습니다")
 
+        # 배치 크기 결정 (GPU만 해당, flow_scale 적용 후 크기)
+        if self.gpu_available:
+            # 첫 프레임으로 해상도 확인
+            h, w = prev_frame.shape[:2]
+            if self.config.flow_scale < 1.0:
+                h = int(h * self.config.flow_scale)
+                w = int(w * self.config.flow_scale)
+
+            batch_size = self._determine_batch_size((h, w, 3))
+            print(f"   - GPU 배치 처리: {batch_size} 프레임/배치")
+        else:
+            batch_size = 1  # CPU는 단일 처리
+            print(f"   - CPU 단일 처리 모드")
+
         # 동적 구간 추적
         dynamic_ranges = []
         current_range_start = None
@@ -682,62 +822,194 @@ class VideoSegmenter:
         last_update_time = time.time()
         UPDATE_INTERVAL = 0.1
 
-        while True:
-            # 프레임 스킵
-            for _ in range(self.config.frame_skip - 1):
-                ret = cap.grab()
+        # 배치 처리를 위한 프레임 버퍼
+        if self.gpu_available and batch_size > 1:
+            import torch
+            frame_buffer = [prev_frame]  # 첫 프레임부터 시작
+
+            while True:
+                # 배치 크기만큼 프레임 수집
+                batch_frames = []
+                batch_start_idx = frame_idx
+
+                for _ in range(batch_size):
+                    # 프레임 스킵
+                    for _ in range(self.config.frame_skip - 1):
+                        ret = cap.grab()
+                        if not ret:
+                            break
+                        frame_idx += 1
+
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    frame_idx += 1
+                    batch_frames.append(frame)
+
+                if not batch_frames:
+                    break
+
+                # flow_scale 적용
+                if self.config.flow_scale < 1.0:
+                    batch_frames = [cv2.resize(f, None, fx=self.config.flow_scale,
+                                               fy=self.config.flow_scale,
+                                               interpolation=cv2.INTER_LINEAR)
+                                   for f in batch_frames]
+                    if len(frame_buffer) > 0:
+                        frame_buffer = [cv2.resize(f, None, fx=self.config.flow_scale,
+                                                   fy=self.config.flow_scale,
+                                                   interpolation=cv2.INTER_LINEAR)
+                                       for f in frame_buffer]
+
+                # 이전 프레임 + 현재 배치 결합
+                full_batch = frame_buffer + batch_frames
+
+                # GPU 배치 처리
+                frames_tensor = torch.from_numpy(np.stack(full_batch)).float().to(self.device)
+                motion_scores = self._calculate_flow_gpu_batch(frames_tensor)
+
+                # 메모리 해제
+                del frames_tensor
+
+                if motion_scores.numel() == 0:
+                    # 배치 처리 실패, 단일 처리로 fallback
+                    print("⚠️ 배치 처리 실패, 단일 처리로 전환")
+                    for i, frame in enumerate(batch_frames):
+                        if len(frame_buffer) > 0:
+                            motion_score = self.calculate_motion(frame_buffer[-1], frame)
+                        else:
+                            continue
+
+                        # 동적 프레임 판정
+                        is_dynamic = motion_score >= self.config.motion_threshold
+
+                        if is_dynamic:
+                            self.stats['dynamic_frames'] += 1
+                            motion_buffer.append(motion_score)
+
+                            if current_range_start is None:
+                                current_range_start = (batch_start_idx + i - 1) / fps
+                        else:
+                            self.stats['static_frames'] += 1
+
+                            if current_range_start is not None and motion_buffer:
+                                end_time = (batch_start_idx + i - 1) / fps
+                                duration = end_time - current_range_start
+
+                                if duration >= self.config.min_dynamic_duration:
+                                    avg_motion = sum(motion_buffer) / len(motion_buffer)
+                                    dynamic_ranges.append(DynamicRange(
+                                        start_time=current_range_start,
+                                        end_time=end_time,
+                                        duration=duration,
+                                        avg_motion=avg_motion
+                                    ))
+
+                                current_range_start = None
+                                motion_buffer = []
+
+                        frame_buffer = [frame]
+                else:
+                    # 배치 처리 성공
+                    motion_scores_cpu = motion_scores.cpu().numpy()
+
+                    for i, motion_score in enumerate(motion_scores_cpu):
+                        actual_frame_idx = batch_start_idx + i
+
+                        # 동적 프레임 판정
+                        is_dynamic = motion_score >= self.config.motion_threshold
+
+                        if is_dynamic:
+                            self.stats['dynamic_frames'] += 1
+                            motion_buffer.append(float(motion_score))
+
+                            if current_range_start is None:
+                                current_range_start = (actual_frame_idx - 1) / fps
+                        else:
+                            self.stats['static_frames'] += 1
+
+                            if current_range_start is not None and motion_buffer:
+                                end_time = (actual_frame_idx - 1) / fps
+                                duration = end_time - current_range_start
+
+                                if duration >= self.config.min_dynamic_duration:
+                                    avg_motion = sum(motion_buffer) / len(motion_buffer)
+                                    dynamic_ranges.append(DynamicRange(
+                                        start_time=current_range_start,
+                                        end_time=end_time,
+                                        duration=duration,
+                                        avg_motion=avg_motion
+                                    ))
+
+                                current_range_start = None
+                                motion_buffer = []
+
+                # 진행률 업데이트
+                current_time = time.time()
+                if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
+                    progress_callback(frame_idx, total_frames)
+                    last_update_time = current_time
+
+                # 다음 배치를 위해 마지막 프레임 저장
+                frame_buffer = [batch_frames[-1]] if batch_frames else []
+
+        else:
+            # CPU 단일 처리 모드
+            prev_frame_single = prev_frame
+
+            while True:
+                # 프레임 스킵
+                for _ in range(self.config.frame_skip - 1):
+                    ret = cap.grab()
+                    if not ret:
+                        break
+                    frame_idx += 1
+
+                ret, current_frame = cap.read()
                 if not ret:
                     break
+
                 frame_idx += 1
 
-            ret, current_frame = cap.read()
-            if not ret:
-                break
+                # 진행률 업데이트
+                current_time = time.time()
+                if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
+                    progress_callback(frame_idx, total_frames)
+                    last_update_time = current_time
 
-            frame_idx += 1
+                # Motion 계산
+                motion_score = self.calculate_motion(prev_frame_single, current_frame)
 
-            # 진행률 업데이트
-            current_time = time.time()
-            if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
-                progress_callback(frame_idx, total_frames)
-                last_update_time = current_time
+                # 동적 프레임 판정
+                is_dynamic = motion_score >= self.config.motion_threshold
 
-            # Motion 계산
-            motion_score = self.calculate_motion(prev_frame, current_frame)
+                if is_dynamic:
+                    self.stats['dynamic_frames'] += 1
+                    motion_buffer.append(motion_score)
 
-            # 동적 프레임 판정
-            is_dynamic = motion_score >= self.config.motion_threshold
+                    if current_range_start is None:
+                        current_range_start = (frame_idx - 1) / fps
+                else:
+                    self.stats['static_frames'] += 1
 
-            if is_dynamic:
-                self.stats['dynamic_frames'] += 1
-                motion_buffer.append(motion_score)
+                    if current_range_start is not None and motion_buffer:
+                        end_time = (frame_idx - 1) / fps
+                        duration = end_time - current_range_start
 
-                # 새로운 동적 구간 시작
-                if current_range_start is None:
-                    current_range_start = (frame_idx - 1) / fps  # 시작 시간
-            else:
-                self.stats['static_frames'] += 1
+                        if duration >= self.config.min_dynamic_duration:
+                            avg_motion = sum(motion_buffer) / len(motion_buffer)
+                            dynamic_ranges.append(DynamicRange(
+                                start_time=current_range_start,
+                                end_time=end_time,
+                                duration=duration,
+                                avg_motion=avg_motion
+                            ))
 
-                # 동적 구간 종료
-                if current_range_start is not None and motion_buffer:
-                    end_time = (frame_idx - 1) / fps
-                    duration = end_time - current_range_start
+                        current_range_start = None
+                        motion_buffer = []
 
-                    # 최소 길이 체크
-                    if duration >= self.config.min_dynamic_duration:
-                        avg_motion = sum(motion_buffer) / len(motion_buffer)
-                        dynamic_ranges.append(DynamicRange(
-                            start_time=current_range_start,
-                            end_time=end_time,
-                            duration=duration,
-                            avg_motion=avg_motion
-                        ))
-
-                    # 리셋
-                    current_range_start = None
-                    motion_buffer = []
-
-            prev_frame = current_frame
+                prev_frame_single = current_frame
 
         # 마지막 동적 구간 처리
         if current_range_start is not None and motion_buffer:
