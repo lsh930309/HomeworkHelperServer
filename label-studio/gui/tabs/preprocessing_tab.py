@@ -304,10 +304,11 @@ class PreprocessingTab(QWidget):
             output_path.mkdir(parents=True, exist_ok=True)
 
         preset_name = self.preset_combo.currentText()
+        use_gpu = self.gpu_checkbox.isChecked()
 
         # 프리셋에 따른 파라미터
         if preset_name == "사용자 정의":
-            # 사용자 정의 파라미터 사용
+            # 사용자 정의 모드: 사용자가 입력한 값 그대로 사용 (의도적인 제한 허용)
             params = {
                 "motion_threshold": self.motion_threshold_spin.value(),
                 "target_duration": self.target_duration_spin.value(),
@@ -317,13 +318,17 @@ class PreprocessingTab(QWidget):
                 "frame_skip": self.frame_skip_spin.value()
             }
         else:
-            # 프리셋 파라미터 (정적 구간 제거 + 고정 길이 분할)
+            # 프리셋 파라미터
+            # GPU 사용 시: batch_size를 128(백엔드 MAX)로 설정하여 
+            # 백엔드의 _determine_batch_size가 VRAM에 맞춰 자동으로 깎도록 유도 (Auto Mode)
+            auto_batch_size = 128 if use_gpu else 32
+
             preset_map = {
                 "빠른": {
                     "motion_threshold": 2.0,
                     "target_duration": 30.0,
                     "min_dynamic_duration": 3.0,
-                    "batch_size": 64,
+                    "batch_size": auto_batch_size, # 여기가 핵심! GPU면 128, 아니면 32
                     "flow_scale": 0.5,
                     "frame_skip": 3
                 },
@@ -331,7 +336,7 @@ class PreprocessingTab(QWidget):
                     "motion_threshold": 2.0,
                     "target_duration": 30.0,
                     "min_dynamic_duration": 3.0,
-                    "batch_size": 32,
+                    "batch_size": auto_batch_size, # 핵심!
                     "flow_scale": 0.5,
                     "frame_skip": 2
                 },
@@ -339,15 +344,19 @@ class PreprocessingTab(QWidget):
                     "motion_threshold": 1.0,
                     "target_duration": 30.0,
                     "min_dynamic_duration": 3.0,
-                    "batch_size": 16,
+                    "batch_size": auto_batch_size, # 핵심!
                     "flow_scale": 0.5,
                     "frame_skip": 1
                 }
             }
             params = preset_map[preset_name]
 
-        # 공통 파라미터
-        params["use_gpu"] = self.gpu_checkbox.isChecked()
+        # 공통 파라미터 추가
+        params["use_gpu"] = use_gpu
+
+        # (로그 출력 부분: 사용자에게 알림)
+        if use_gpu and preset_name != "사용자 정의":
+             self.log_viewer.add_log(f"💡 GPU 자동 최적화: 배치 크기를 최대({params['batch_size']})로 설정합니다.", "INFO")
 
         # 작업 스레드 시작
         self.worker = SegmentationWorker(
@@ -362,13 +371,15 @@ class PreprocessingTab(QWidget):
 
         self.start_sampling_btn.setEnabled(False)
 
-        # 초기에는 불확정 모드로 시작 (전체 프레임 수를 아직 모름)
+        # 초기에는 불확정 모드로 시작
         self.progress_widget.set_indeterminate("비디오 분석 중...")
 
         # 시작 로그 출력
         self.log_viewer.add_log("=" * 60, "INFO")
         self.log_viewer.add_log("비디오 세그멘테이션 시작", "INFO")
-        self.log_viewer.add_log(f"프리셋: {self.preset_combo.currentText()}", "INFO")
+        self.log_viewer.add_log(f"프리셋: {preset_name}", "INFO")
+        if use_gpu:
+             self.log_viewer.add_log(f"가속 모드: GPU (CUDA)", "INFO")
         self.log_viewer.add_log("=" * 60, "INFO")
 
         self.worker.start()
