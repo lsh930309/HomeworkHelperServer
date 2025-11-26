@@ -29,6 +29,7 @@ import bisect
 import atexit
 import signal
 import gc
+import time
 import threading
 import queue
 from contextlib import contextmanager
@@ -167,7 +168,10 @@ class GPUResourceManager:
 
 def extract_keyframes(video_path: Path) -> List[float]:
     """
-    ffprobe를 사용하여 비디오의 모든 I-Frame(Keyframe) 타임스탬프 추출
+    비디오의 모든 I-Frame(Keyframe) 타임스탬프 추출
+    
+    1. 고속 모드 (Packet Header): 컨테이너의 패킷 플래그만 확인 (매우 빠름)
+    2. 정밀 모드 (Frame Decode): 실제 프레임 디코딩 (느림, 고속 모드 실패 시 Fallback)
 
     Args:
         video_path: 비디오 파일 경로
@@ -175,6 +179,81 @@ def extract_keyframes(video_path: Path) -> List[float]:
     Returns:
         Keyframe 타임스탬프 리스트 (초 단위, 정렬됨)
     """
+    print("🔍 Keyframe 인덱싱 시작 (고속 모드)...")
+    
+    # 1. 고속 모드 시도 (Packet)
+    try:
+        cmd = [
+            'ffprobe',
+            '-select_streams', 'v:0',
+            '-show_entries', 'packet=pts_time,flags',
+            '-of', 'csv=print_section=0',
+            str(video_path)
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        keyframes = []
+        last_log_time = time.time()
+        
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            
+            if not line:
+                continue
+
+            # pts_time, flags (e.g., "12.345,K__")
+            parts = line.strip().split(',')
+            if len(parts) >= 2:
+                pts_time, flags = parts[0], parts[1]
+                # 'K' 플래그가 있으면 Keyframe
+                if 'K' in flags and pts_time != 'N/A':
+                    try:
+                        keyframes.append(float(pts_time))
+                    except ValueError:
+                        continue
+            
+            current_time = time.time()
+            if current_time - last_log_time > 5.0:
+                print(f"   키프레임 인덱싱 중 (고속)... ({len(keyframes)}개 발견)", flush=True)
+                last_log_time = current_time
+
+        process.wait(timeout=60) # 패킷 스캔은 매우 빠르므로 타임아웃 짧게
+
+        if process.returncode == 0 and keyframes:
+            keyframes.sort()
+            print(f"✅ Keyframe {len(keyframes)}개 인덱싱 완료 (고속 모드)", flush=True)
+            return keyframes
+        
+        print("⚠️ 고속 모드 인덱싱 실패 또는 키프레임 없음. 정밀 모드로 전환합니다.")
+
+    except Exception as e:
+        print(f"⚠️ 고속 모드 오류: {e}. 정밀 모드로 전환합니다.")
+        if 'process' in locals() and process:
+            try:
+                process.kill()
+            except:
+                pass
+
+    # 2. 정밀 모드 (Fallback)
+    return _extract_keyframes_deep_scan(video_path)
+
+
+def _extract_keyframes_deep_scan(video_path: Path) -> List[float]:
+    """
+    정밀 모드: ffprobe frame 디코딩을 통한 Keyframe 추출 (느림)
+    """
+    print("🔍 Keyframe 인덱싱 시작 (정밀 모드 - 시간이 걸릴 수 있습니다)...")
     try:
         cmd = [
             'ffprobe',
@@ -184,24 +263,30 @@ def extract_keyframes(video_path: Path) -> List[float]:
             str(video_path)
         ]
 
-        result = subprocess.run(
+        # Popen으로 프로세스 실행 (스트리밍 출력)
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=60,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            encoding='utf-8',
+            errors='replace'
         )
 
-        if result.returncode != 0:
-            print(f"⚠️ Keyframe 추출 실패 (ffprobe 오류), Keyframe 정렬 비활성화")
-            return []
-
-        # I-Frame만 필터링
         keyframes = []
-        for line in result.stdout.strip().split('\n'):
+        last_log_time = time.time()
+        
+        # stdout 라인별 읽기
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            
             if not line:
                 continue
-            parts = line.split(',')
+
+            parts = line.strip().split(',')
             if len(parts) >= 2:
                 pts_time, pict_type = parts[0], parts[1]
                 if pict_type == 'I' and pts_time != 'N/A':
@@ -209,14 +294,29 @@ def extract_keyframes(video_path: Path) -> List[float]:
                         keyframes.append(float(pts_time))
                     except ValueError:
                         continue
+            
+            # 5초마다 진행 상황 로깅
+            current_time = time.time()
+            if current_time - last_log_time > 5.0:
+                print(f"   키프레임 인덱싱 중 (정밀)... ({len(keyframes)}개 발견)", flush=True)
+                last_log_time = current_time
+
+        # 타임아웃 처리 (300초)
+        try:
+            process.wait(timeout=300)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            print("⚠️ Keyframe 추출 시간 초과 (5분), 부분 결과만 사용합니다.")
+        
+        if process.returncode != 0 and process.returncode is not None:
+             # stderr 읽기
+            stderr_output = process.stderr.read()
+            print(f"⚠️ Keyframe 추출 경고 (ffprobe): {stderr_output[:200]}")
 
         keyframes.sort()
-        print(f"✅ Keyframe {len(keyframes)}개 인덱싱 완료")
+        print(f"✅ Keyframe {len(keyframes)}개 인덱싱 완료 (정밀 모드)", flush=True)
         return keyframes
 
-    except subprocess.TimeoutExpired:
-        print("⚠️ Keyframe 추출 시간 초과, Keyframe 정렬 비활성화")
-        return []
     except Exception as e:
         print(f"⚠️ Keyframe 추출 실패: {e}, Keyframe 정렬 비활성화")
         return []
@@ -477,8 +577,30 @@ class VideoSegmenter:
         if self.config.mode == "auto":
             self._apply_auto_config()
 
+        # 초기 상태 출력
+        self._print_initial_status()
+
         # atexit/signal handler 등록 (VRAM 정리)
         self._register_cleanup_handlers()
+
+    def _print_initial_status(self):
+        """초기 설정 및 상태 출력"""
+        print("=" * 60)
+        print(f"🎥 비디오 세그멘터 초기화")
+        print(f"   - 모드: {self.config.mode.upper()}")
+        print(f"   - GPU 가속: {'활성화' if self.gpu_available else '비활성화'}")
+        if self.gpu_available:
+            import torch
+            print(f"     • 장치: {torch.cuda.get_device_name(0)}")
+            print(f"     • VRAM 제한: {self.config.max_vram_usage * 100:.0f}%")
+        
+        print(f"   - 설정:")
+        print(f"     • 정적 임계값: {self.config.static_threshold}")
+        print(f"     • 최소 정적 길이: {self.config.min_static_duration}초")
+        print(f"     • 목표 세그먼트: {self.config.target_segment_duration}초")
+        print(f"     • SSIM 스케일: {self.config.ssim_scale}")
+        print(f"     • 프레임 스킵: {self.config.frame_skip}")
+        print("=" * 60, flush=True)
 
     def _apply_auto_config(self):
         """
@@ -487,8 +609,10 @@ class VideoSegmenter:
         """
         print("🤖 Auto 모드 활성화: 최적 설정 자동 적용")
         # 기본 자동 설정값
-        self.config.ssim_scale = 0.5  # 성능 향상
-        self.config.frame_skip = 2    # 2프레임마다 샘플링
+        self.config.min_static_duration = 1.0    # 1.0초 (기존 2.0)
+        self.config.target_segment_duration = 30.0 # 30초 (기존 600)
+        self.config.ssim_scale = 0.25            # 0.25 (기존 0.5) - 성능 최적화
+        self.config.frame_skip = 1               # 1 (기존 2) - 정확도 향상
 
     def _register_cleanup_handlers(self):
         """atexit 및 signal handler 등록"""
@@ -685,12 +809,13 @@ class VideoSegmenter:
                     old_size = self.current_batch_size
                     self.current_batch_size = max(1, self.current_batch_size // 2)
                     self.stats['batch_size_adjustments'] += 1
+                    torch.cuda.empty_cache()  # 중요: 캐시 비우기
                     print(f"⚠️ VRAM 여유 부족 ({free_ratio*100:.1f}%), 배치 크기 감소: {old_size} → {self.current_batch_size}")
                 return
 
             # 2. 메모리 여유 시 배치 크기 증가
-            # 남은 메모리가 40% 이상이고 현재 배치가 최대가 아니면 증가
-            if free_ratio > 0.4 and self.current_batch_size < 128:
+            # 남은 메모리가 60% 이상이고 (보수적 접근) 현재 배치가 최대가 아니면 증가
+            if free_ratio > 0.6 and self.current_batch_size < 128:
                 old_size = self.current_batch_size
                 self.current_batch_size = min(128, self.current_batch_size * 2)
                 if old_size != self.current_batch_size:

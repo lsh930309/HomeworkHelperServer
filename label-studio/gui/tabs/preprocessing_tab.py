@@ -20,75 +20,22 @@ from ..widgets.progress_widget import ProgressWidget
 from ..widgets.log_viewer import LogViewer
 
 
-class SegmentationWorker(QThread):
-    """세그멘테이션 작업 스레드"""
-    progress = pyqtSignal(int, int)
-    finished = pyqtSignal(bool, str)
-    log_message = pyqtSignal(str, str)  # message, level
+class StreamToSignal:
+    """stdout 출력을 시그널로 실시간 전송하는 스트림 클래스"""
+    def __init__(self, signal):
+        self.signal = signal
 
-    def __init__(self, sampler_manager, input_path, output_path, params):
-        super().__init__()
-        self.sampler_manager = sampler_manager
-        self.input_path = input_path
-        self.output_path = output_path
-        self.params = params
+    def write(self, text):
+        if text.strip():
+            level = "INFO"
+            if '❌' in text or '오류' in text or 'ERROR' in text:
+                level = "ERROR"
+            elif '⚠️' in text or '경고' in text or 'WARNING' in text:
+                level = "WARNING"
+            self.signal.emit(text.strip(), level)
 
-    def run(self):
-        old_stdout = sys.stdout
-        sys.stdout = StringIO()
-
-        try:
-            self.log_message.emit(f"세그멘테이션 시작: {self.input_path.name}", "INFO")
-            self.log_message.emit(f"모드: {self.params.get('mode', 'unknown')}", "INFO")
-
-            result = self.sampler_manager.segment_video(
-                self.input_path,
-                self.output_path,
-                **self.params,
-                progress_callback=lambda c, t: self.progress.emit(c, t)
-            )
-
-            output = sys.stdout.getvalue()
-            if output:
-                for line in output.strip().split('\n'):
-                    if line.strip():
-                        level = "INFO"
-                        if '❌' in line or '오류' in line or 'ERROR' in line:
-                            level = "ERROR"
-                        elif '⚠️' in line or '경고' in line or 'WARNING' in line:
-                            level = "WARNING"
-                        self.log_message.emit(line, level)
-
-            if result.success:
-                self.log_message.emit(f"✅ {result.message}", "INFO")
-            else:
-                self.log_message.emit(f"❌ {result.message}", "ERROR")
-
-            self.finished.emit(result.success, result.message)
-
-        except Exception as e:
-            error_msg = f"오류: {e}"
-            self.log_message.emit(error_msg, "ERROR")
-#!/usr/bin/env python3
-"""
-전처리 탭
-비디오 세그멘테이션 (SSIM 기반 안정 구간 분할)
-"""
-
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QGroupBox, QLineEdit, QFileDialog, QComboBox,
-    QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout, QMessageBox
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from pathlib import Path
-import sys
-from io import StringIO
-
-from ..core.sampler_manager import SamplerManager
-from ..core.config_manager import get_config_manager
-from ..widgets.progress_widget import ProgressWidget
-from ..widgets.log_viewer import LogViewer
+    def flush(self):
+        pass
 
 
 class SegmentationWorker(QThread):
@@ -105,12 +52,18 @@ class SegmentationWorker(QThread):
         self.params = params
 
     def run(self):
-        old_stdout = sys.stdout
-        sys.stdout = StringIO()
+        # stdout을 가로채서 실시간 로깅
+        original_stdout = sys.stdout
+        sys.stdout = StreamToSignal(self.log_message)
 
         try:
             self.log_message.emit(f"세그멘테이션 시작: {self.input_path.name}", "INFO")
-            self.log_message.emit(f"모드: {self.params.get('mode', 'unknown')}", "INFO")
+            
+            # 초기 설정 정보 로깅
+            mode_str = "Auto" if self.params.get('mode') == 'auto' else "Custom"
+            self.log_message.emit(f"설정 모드: {mode_str}", "INFO")
+            if self.params.get('use_gpu'):
+                self.log_message.emit("GPU 가속: 활성화", "INFO")
 
             result = self.sampler_manager.segment_video(
                 self.input_path,
@@ -118,17 +71,6 @@ class SegmentationWorker(QThread):
                 **self.params,
                 progress_callback=lambda c, t: self.progress.emit(c, t)
             )
-
-            output = sys.stdout.getvalue()
-            if output:
-                for line in output.strip().split('\n'):
-                    if line.strip():
-                        level = "INFO"
-                        if '❌' in line or '오류' in line or 'ERROR' in line:
-                            level = "ERROR"
-                        elif '⚠️' in line or '경고' in line or 'WARNING' in line:
-                            level = "WARNING"
-                        self.log_message.emit(line, level)
 
             if result.success:
                 self.log_message.emit(f"✅ {result.message}", "INFO")
@@ -143,7 +85,8 @@ class SegmentationWorker(QThread):
             self.finished.emit(False, error_msg)
 
         finally:
-            sys.stdout = old_stdout
+            # stdout 복구
+            sys.stdout = original_stdout
 
 
 class PreprocessingTab(QWidget):
