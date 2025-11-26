@@ -28,6 +28,8 @@ import subprocess
 import shutil
 import sys
 import os
+import threading
+from queue import Queue
 
 
 def refresh_system_path():
@@ -159,7 +161,11 @@ class PyAVVideoReader:
         try:
             import av
 
-            self.container = av.open(str(self.video_path))
+            # ★ PyAV 멀티스레드 디코딩 활성화 (10-20% 추가 성능)
+            self.container = av.open(
+                str(self.video_path),
+                options={'threads': 'auto'}  # CPU 멀티코어 활용
+            )
             self.video_stream = self.container.streams.video[0]
 
             # 비디오 정보 추출
@@ -230,6 +236,168 @@ class PyAVVideoReader:
     def isOpened(self) -> bool:
         """비디오가 열려있는지 확인"""
         return self.container is not None
+
+
+class AsyncFrameLoader:
+    """
+    백그라운드 프레임 로더 (Producer-Consumer 패턴)
+    - PyAV GIL 해제 활용한 진정한 멀티스레딩
+    - CPU 리사이징 선행 처리 (PCIe 대역폭 절약)
+    - Queue 버퍼링 (GPU 유휴 시간 제거)
+    """
+
+    def __init__(self, video_path, batch_size, flow_scale,
+                 frame_skip, queue_size=8):
+        """
+        Args:
+            video_path: 비디오 파일 경로
+            batch_size: 배치당 프레임 수
+            flow_scale: 리사이징 스케일 (0.5 = 50%)
+            frame_skip: 프레임 건너뛰기 (1 = 모든 프레임)
+            queue_size: 큐 크기 (배치 단위, 8 = 메모리 ~700MB, 최대 성능 추구)
+        """
+        self.video_path = video_path
+        self.batch_size = batch_size
+        self.flow_scale = flow_scale
+        self.frame_skip = frame_skip
+
+        # Queue: maxsize로 메모리 사용량 제한
+        self.queue = Queue(maxsize=queue_size)
+        self.stopped = False
+        self.error = None  # 스레드 내부 에러 전파용
+        self.thread = None
+
+        # 메타데이터 (start()에서 초기화)
+        self.fps = 0
+        self.total_frames = 0
+
+    def start(self) -> bool:
+        """
+        비디오 메타데이터 읽기 및 백그라운드 스레드 시작
+
+        Returns:
+            bool: 성공 여부
+        """
+        # 임시 리더로 메타데이터 읽기
+        tmp_reader = PyAVVideoReader(self.video_path)
+        if not tmp_reader.open():
+            return False
+
+        self.fps = tmp_reader.fps
+        self.total_frames = tmp_reader.total_frames
+        tmp_reader.release()
+
+        # 백그라운드 스레드 시작 (daemon=True: 메인 종료 시 함께 종료)
+        self.thread = threading.Thread(
+            target=self._loader_worker,
+            daemon=True
+        )
+        self.thread.start()
+        return True
+
+    def _loader_worker(self):
+        """
+        백그라운드 워커 (Producer)
+        - 독립 PyAVVideoReader 인스턴스 생성 (스레드 안전)
+        - 프레임 읽기 → CPU 리사이징 → Queue 적재
+        """
+        try:
+            # ★ 중요: 스레드마다 독립 Container 생성 (스레드 안전)
+            cap = PyAVVideoReader(self.video_path)
+            if not cap.open():
+                self.error = RuntimeError("PyAV 열기 실패")
+                self.queue.put(None)
+                return
+
+            frame_idx = 0
+            import gc
+
+            while not self.stopped:
+                # Queue가 꽉 차면 자동 대기 (put이 블로킹됨)
+                # → GPU 처리 속도에 맞춰 자동 조절
+
+                batch_frames = []
+
+                # 배치 크기만큼 프레임 수집
+                for _ in range(self.batch_size):
+                    # 프레임 스킵 처리
+                    for _ in range(self.frame_skip - 1):
+                        if not cap.grab():
+                            break
+                        frame_idx += 1
+
+                    # 실제 프레임 읽기
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    frame_idx += 1
+
+                    # ★ CPU 리사이징 (핵심 최적화!)
+                    # QHD 원본을 GPU로 보내면 PCIe 대역폭 포화
+                    # CPU에서 미리 축소 → 데이터 양 1/16 감소
+                    if self.flow_scale < 1.0:
+                        frame = cv2.resize(
+                            frame, None,
+                            fx=self.flow_scale,
+                            fy=self.flow_scale,
+                            interpolation=cv2.INTER_LINEAR  # 빠른 보간
+                        )
+
+                    batch_frames.append(frame)
+
+                # 배치 적재
+                if batch_frames:
+                    self.queue.put(batch_frames)  # 블로킹 가능
+
+                    # ★ 주기적 메모리 정리 (500 프레임마다)
+                    if frame_idx % 500 == 0:
+                        gc.collect()
+                else:
+                    # 영상 끝 도달
+                    break
+
+            # 종료 신호 (Sentinel 값)
+            self.queue.put(None)
+            cap.release()
+
+        except Exception as e:
+            # 스레드 내부 에러를 메인 스레드로 전파
+            self.error = e
+            self.queue.put(None)
+
+    def get_batch(self):
+        """
+        메인 스레드(Consumer)에서 호출
+        - Queue에서 배치 가져오기 (블로킹)
+
+        Returns:
+            list[np.ndarray] or None: 프레임 배치 or 종료 신호
+        """
+        batch = self.queue.get()  # 블로킹 대기
+
+        # 스레드 내부 에러 확인
+        if self.error:
+            raise self.error
+
+        return batch
+
+    def stop(self):
+        """
+        로더 정지 및 스레드 종료 대기
+        """
+        self.stopped = True
+
+        # Queue 비우기 (스레드가 put에서 블로킹되지 않도록)
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except:
+                break
+
+        # 스레드 종료 대기 (최대 5초)
+        if self.thread:
+            self.thread.join(timeout=5.0)
 
 
 @dataclass
@@ -826,76 +994,84 @@ class VideoSegmenter:
         last_update_time = time.time()
         UPDATE_INTERVAL = 0.1
 
-        # 배치 처리를 위한 프레임 버퍼
+        # 배치 처리 - AsyncFrameLoader 사용
         if self.gpu_available and batch_size > 1:
             import torch
-            frame_buffer = [prev_frame]  # 첫 프레임부터 시작
+
+            # ★ AsyncFrameLoader 시작
+            loader = AsyncFrameLoader(
+                video_path=video_path,
+                batch_size=batch_size,
+                flow_scale=self.config.flow_scale,  # CPU 리사이징용
+                frame_skip=self.config.frame_skip,
+                queue_size=8  # 메모리 약 700MB, 최대 성능 (사용자 선택)
+            )
+
+            if not loader.start():
+                # fallback to CPU mode
+                print("⚠️ AsyncFrameLoader 시작 실패, CPU 모드로 전환")
+                self.gpu_available = False
+                loader = None
+            else:
+                print(f"✅ AsyncFrameLoader 시작 (queue_size=8, 메모리 ~700MB)")
+
+        else:
+            loader = None
+
+        # GPU 배치 모드 (AsyncFrameLoader 사용)
+        if loader is not None:
+            import torch
+            import gc  # 가비지 컬렉션
+            prev_last_frame = None
+            iteration_count = 0  # 메모리 정리 주기 카운터
 
             while True:
-                # 배치 크기만큼 프레임 수집
-                batch_frames = []
-                batch_start_idx = frame_idx
+                # ★ Queue에서 배치 가져오기 (I/O 대기 제거!)
+                batch_frames = loader.get_batch()
 
-                for _ in range(batch_size):
-                    # 프레임 스킵
-                    for _ in range(self.config.frame_skip - 1):
-                        ret = cap.grab()
-                        if not ret:
-                            break
-                        frame_idx += 1
-
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-
-                    frame_idx += 1
-                    batch_frames.append(frame)
-
-                if not batch_frames:
+                # 종료 신호 확인
+                if batch_frames is None:
                     break
 
-                # flow_scale 적용 (첫 루프에서 frame_buffer도 처리)
-                if self.config.flow_scale < 1.0:
-                    # 원본 크기 프레임만 리사이즈 (이미 리사이즈된 frame_buffer는 제외)
-                    batch_frames_resized = [cv2.resize(f, None, fx=self.config.flow_scale,
-                                                       fy=self.config.flow_scale,
-                                                       interpolation=cv2.INTER_LINEAR)
-                                           for f in batch_frames]
+                # 이전 프레임과 연결 (연속성 유지)
+                full_batch = []
+                if prev_last_frame is not None:
+                    full_batch.append(prev_last_frame)
+                full_batch.extend(batch_frames)
 
-                    # 첫 루프라면 frame_buffer도 리사이즈
-                    if frame_buffer and frame_buffer[0].shape != batch_frames_resized[0].shape:
-                        frame_buffer = [cv2.resize(f, None, fx=self.config.flow_scale,
-                                                   fy=self.config.flow_scale,
-                                                   interpolation=cv2.INTER_LINEAR)
-                                       for f in frame_buffer]
+                if len(full_batch) < 2:
+                    break
 
-                    batch_frames = batch_frames_resized
-
-                # 이전 프레임 + 현재 배치 결합
-                full_batch = frame_buffer + batch_frames
+                # ★ 리사이징 단계 제거 (로더에서 이미 완료됨)
+                # 기존 라인 1020-1035 삭제됨
 
                 # GPU 배치 처리
                 try:
-                    frames_tensor = torch.from_numpy(np.stack(full_batch)).float().to(self.device)
+                    frames_tensor = torch.from_numpy(
+                        np.stack(full_batch)
+                    ).float().to(self.device)
+
                     motion_scores = self._calculate_flow_gpu_batch(frames_tensor)
 
-                    # 메모리 해제
+                    # 메모리 즉시 해제
                     del frames_tensor
+
                 except ValueError as e:
-                    # 프레임 크기 불일치 오류
                     print(f"⚠️ 배치 스택 오류: {e}")
                     print(f"   프레임 크기 확인:")
                     for i, f in enumerate(full_batch):
                         print(f"     Frame {i}: {f.shape}")
                     motion_scores = torch.tensor([], device=self.device)
 
+                # 배치 처리 실패 시 fallback (기존 로직 유지)
                 if motion_scores.numel() == 0:
-                    # 배치 처리 실패, 단일 처리로 fallback
+                    # 단일 처리로 fallback
                     print("⚠️ 배치 처리 실패, 단일 처리로 전환")
                     for i, frame in enumerate(batch_frames):
-                        if len(frame_buffer) > 0:
-                            motion_score = self.calculate_motion(frame_buffer[-1], frame)
+                        if prev_last_frame is not None:
+                            motion_score = self.calculate_motion(prev_last_frame, frame)
                         else:
+                            prev_last_frame = frame.copy()
                             continue
 
                         # 동적 프레임 판정
@@ -906,12 +1082,12 @@ class VideoSegmenter:
                             motion_buffer.append(motion_score)
 
                             if current_range_start is None:
-                                current_range_start = (batch_start_idx + i - 1) / fps
+                                current_range_start = (frame_idx + i) / fps
                         else:
                             self.stats['static_frames'] += 1
 
                             if current_range_start is not None and motion_buffer:
-                                end_time = (batch_start_idx + i - 1) / fps
+                                end_time = (frame_idx + i) / fps
                                 duration = end_time - current_range_start
 
                                 if duration >= self.config.min_dynamic_duration:
@@ -926,13 +1102,13 @@ class VideoSegmenter:
                                 current_range_start = None
                                 motion_buffer = []
 
-                        frame_buffer = [frame]
+                        prev_last_frame = frame.copy()  # 복사본 저장
                 else:
                     # 배치 처리 성공
                     motion_scores_cpu = motion_scores.cpu().numpy()
 
                     for i, motion_score in enumerate(motion_scores_cpu):
-                        actual_frame_idx = batch_start_idx + i
+                        actual_frame_idx = frame_idx + i
 
                         # 동적 프레임 판정
                         is_dynamic = motion_score >= self.config.motion_threshold
@@ -942,12 +1118,12 @@ class VideoSegmenter:
                             motion_buffer.append(float(motion_score))
 
                             if current_range_start is None:
-                                current_range_start = (actual_frame_idx - 1) / fps
+                                current_range_start = actual_frame_idx / fps
                         else:
                             self.stats['static_frames'] += 1
 
                             if current_range_start is not None and motion_buffer:
-                                end_time = (actual_frame_idx - 1) / fps
+                                end_time = actual_frame_idx / fps
                                 duration = end_time - current_range_start
 
                                 if duration >= self.config.min_dynamic_duration:
@@ -963,13 +1139,34 @@ class VideoSegmenter:
                                 motion_buffer = []
 
                 # 진행률 업데이트
+                frame_idx += len(batch_frames)
                 current_time = time.time()
                 if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
                     progress_callback(frame_idx, total_frames)
                     last_update_time = current_time
 
-                # 다음 배치를 위해 마지막 프레임 저장
-                frame_buffer = [batch_frames[-1]] if batch_frames else []
+                # 다음 배치를 위해 마지막 프레임 저장 (복사본 생성)
+                prev_last_frame = batch_frames[-1].copy()
+
+                # ★ 메모리 명시적 해제 (메모리 누수 방지)
+                del batch_frames
+                del full_batch
+                if 'motion_scores' in locals():
+                    del motion_scores
+                if 'motion_scores_cpu' in locals():
+                    del motion_scores_cpu
+
+                # ★ 주기적 메모리 정리 (100 iteration마다)
+                iteration_count += 1
+                if iteration_count % 100 == 0:
+                    gc.collect()  # Python 가비지 컬렉션
+                    if self.device and self.device.type == 'cuda':
+                        torch.cuda.empty_cache()  # GPU 메모리 캐시 비우기
+                        torch.cuda.synchronize()  # GPU 작업 완료 대기
+
+            # 로더 정지
+            loader.stop()
+            cap.release()
 
         else:
             # CPU 단일 처리 모드
