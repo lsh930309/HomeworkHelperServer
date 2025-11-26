@@ -58,6 +58,9 @@ class SamplerManager:
         use_gpu: bool = False,
         enable_keyframe_snap: bool = True,
         save_discarded: bool = False,
+        re_encode: bool = False,
+        encode_quality: int = 23,
+        encode_preset: str = 'fast',
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
@@ -76,7 +79,11 @@ class SamplerManager:
             frame_skip: 프레임 스킵 (1=모든 프레임, auto 모드에서는 2로 자동 설정)
             use_gpu: GPU 가속 사용 (기본: False, CUDA 필요)
             enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True, 검은 화면 방지)
+            enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True, 검은 화면 방지)
             save_discarded: 채택되지 않은 구간도 저장 (기본: False)
+            re_encode: 재인코딩 여부 (기본: False)
+            encode_quality: 인코딩 품질 (CRF, 기본: 23)
+            encode_preset: 인코딩 프리셋 (기본: 'fast')
             progress_callback: 진행 상황 콜백 (current, total)
 
         Returns:
@@ -106,7 +113,10 @@ class SamplerManager:
                 frame_skip=frame_skip,
                 use_gpu=use_gpu,
                 enable_keyframe_snap=enable_keyframe_snap,
-                save_discarded=save_discarded
+                save_discarded=save_discarded,
+                re_encode=re_encode,
+                encode_quality=encode_quality,
+                encode_preset=encode_preset
             )
 
             # 세그멘터 생성

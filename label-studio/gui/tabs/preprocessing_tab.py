@@ -69,6 +69,77 @@ class SegmentationWorker(QThread):
         except Exception as e:
             error_msg = f"오류: {e}"
             self.log_message.emit(error_msg, "ERROR")
+#!/usr/bin/env python3
+"""
+전처리 탭
+비디오 세그멘테이션 (SSIM 기반 안정 구간 분할)
+"""
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QGroupBox, QLineEdit, QFileDialog, QComboBox,
+    QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout, QMessageBox
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from pathlib import Path
+import sys
+from io import StringIO
+
+from ..core.sampler_manager import SamplerManager
+from ..core.config_manager import get_config_manager
+from ..widgets.progress_widget import ProgressWidget
+from ..widgets.log_viewer import LogViewer
+
+
+class SegmentationWorker(QThread):
+    """세그멘테이션 작업 스레드"""
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(bool, str)
+    log_message = pyqtSignal(str, str)  # message, level
+
+    def __init__(self, sampler_manager, input_path, output_path, params):
+        super().__init__()
+        self.sampler_manager = sampler_manager
+        self.input_path = input_path
+        self.output_path = output_path
+        self.params = params
+
+    def run(self):
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+
+        try:
+            self.log_message.emit(f"세그멘테이션 시작: {self.input_path.name}", "INFO")
+            self.log_message.emit(f"모드: {self.params.get('mode', 'unknown')}", "INFO")
+
+            result = self.sampler_manager.segment_video(
+                self.input_path,
+                self.output_path,
+                **self.params,
+                progress_callback=lambda c, t: self.progress.emit(c, t)
+            )
+
+            output = sys.stdout.getvalue()
+            if output:
+                for line in output.strip().split('\n'):
+                    if line.strip():
+                        level = "INFO"
+                        if '❌' in line or '오류' in line or 'ERROR' in line:
+                            level = "ERROR"
+                        elif '⚠️' in line or '경고' in line or 'WARNING' in line:
+                            level = "WARNING"
+                        self.log_message.emit(line, level)
+
+            if result.success:
+                self.log_message.emit(f"✅ {result.message}", "INFO")
+            else:
+                self.log_message.emit(f"❌ {result.message}", "ERROR")
+
+            self.finished.emit(result.success, result.message)
+
+        except Exception as e:
+            error_msg = f"오류: {e}"
+            self.log_message.emit(error_msg, "ERROR")
             self.finished.emit(False, error_msg)
 
         finally:
@@ -170,18 +241,18 @@ class PreprocessingTab(QWidget):
 
         # min_static_duration
         self.min_static_duration_spin = QDoubleSpinBox()
-        self.min_static_duration_spin.setRange(0.1, 60.0)
-        self.min_static_duration_spin.setSingleStep(0.5)
-        self.min_static_duration_spin.setValue(2.0)
+        self.min_static_duration_spin.setRange(0.1, 10.0)
+        self.min_static_duration_spin.setSingleStep(0.1)
+        self.min_static_duration_spin.setValue(1.0)
         self.min_static_duration_spin.setSuffix(" 초")
         self.min_static_duration_spin.setToolTip("이 시간보다 짧은 정적 구간은 무시하고 이어 붙입니다.")
         custom_params_layout.addRow("최소 정적 유지 시간:", self.min_static_duration_spin)
 
         # target_segment_duration
         self.target_duration_spin = QDoubleSpinBox()
-        self.target_duration_spin.setRange(10.0, 3600.0)
-        self.target_duration_spin.setSingleStep(60.0)
-        self.target_duration_spin.setValue(600.0)
+        self.target_duration_spin.setRange(10.0, 60.0)
+        self.target_duration_spin.setSingleStep(1.0)
+        self.target_duration_spin.setValue(30.0)
         self.target_duration_spin.setSuffix(" 초")
         self.target_duration_spin.setToolTip("생성될 세그먼트 하나의 목표 길이입니다.")
         custom_params_layout.addRow("목표 세그먼트 길이:", self.target_duration_spin)
@@ -196,7 +267,7 @@ class PreprocessingTab(QWidget):
 
         # frame_skip
         self.frame_skip_spin = QSpinBox()
-        self.frame_skip_spin.setRange(1, 30)
+        self.frame_skip_spin.setRange(1, 5)
         self.frame_skip_spin.setValue(1)
         self.frame_skip_spin.setToolTip("SSIM 계산 시 건너뛸 프레임 수입니다.")
         custom_params_layout.addRow("프레임 스킵:", self.frame_skip_spin)
@@ -210,6 +281,9 @@ class PreprocessingTab(QWidget):
         self.custom_params_group.setLayout(custom_params_layout)
         self.custom_params_group.setVisible(False)
         sampling_layout.addWidget(self.custom_params_group)
+        
+        sampling_group.setLayout(sampling_layout)
+        layout.addWidget(sampling_group)
 
         # 4. 공통 옵션
         options_layout = QVBoxLayout()
@@ -220,90 +294,87 @@ class PreprocessingTab(QWidget):
 
         self.save_discarded_checkbox = QCheckBox("버려진 구간(Discarded) 별도 저장")
         options_layout.addWidget(self.save_discarded_checkbox)
-        
-        sampling_layout.addLayout(options_layout)
+        layout.addLayout(options_layout)
 
-        # 시작 버튼
-        self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
+        # 실행 버튼
+        self.start_sampling_btn = QPushButton("비디오 세그멘테이션 시작")
         self.start_sampling_btn.setMinimumHeight(40)
-        self.start_sampling_btn.clicked.connect(self.start_segmentation)
-        sampling_layout.addWidget(self.start_sampling_btn)
-
-        # 진행률
-        self.progress_widget = ProgressWidget()
-        self.progress_widget.cancel_requested.connect(self.cancel_segmentation)
-        sampling_layout.addWidget(self.progress_widget)
-
-        sampling_group.setLayout(sampling_layout)
-        layout.addWidget(sampling_group)
+        self.start_sampling_btn.clicked.connect(self.start_sampling)
+        layout.addWidget(self.start_sampling_btn)
 
         # 로그 뷰어
-        log_group = QGroupBox("처리 로그")
-        log_layout = QVBoxLayout()
-        self.log_viewer = LogViewer(max_lines=500)
-        log_layout.addWidget(self.log_viewer)
-        log_group.setLayout(log_layout)
-        layout.addWidget(log_group)
+        self.log_viewer = LogViewer()
+        layout.addWidget(self.log_viewer)
+
+        # 진행률 표시
+        self.progress_widget = ProgressWidget()
+        layout.addWidget(self.progress_widget)
 
         self.setLayout(layout)
 
-    def _on_mode_changed(self, index):
-        """모드 변경 시 UI 갱신 (0: Auto, 1: Custom)"""
-        is_custom = (index == 1)
-        self.custom_params_group.setVisible(is_custom)
-
     def browse_input_video(self):
+        """입력 비디오 파일 선택"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "입력 비디오 선택", "", "Video Files (*.mp4 *.avi *.mov *.mkv *.ts *.webm)"
+            self,
+            "입력 비디오 선택",
+            "",
+            "Video Files (*.mp4 *.mkv *.avi *.mov);;All Files (*)"
         )
         if file_path:
             self.input_video_edit.setText(file_path)
+            
+            # 출력 폴더 자동 설정 (입력 파일과 같은 폴더의 'segments' 하위 폴더)
             input_path = Path(file_path)
-            output_path = input_path.parent / f"{input_path.stem}_clips"
-            self.output_dir_edit.setText(str(output_path))
+            default_output = input_path.parent / "segments"
+            if not self.output_dir_edit.text():
+                self.output_dir_edit.setText(str(default_output))
 
     def browse_output_dir(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "출력 폴더 선택", "")
+        """출력 디렉토리 선택"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "출력 폴더 선택",
+            ""
+        )
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
-    def start_segmentation(self):
-        input_path = Path(self.input_video_edit.text())
-        output_path = Path(self.output_dir_edit.text())
+    def _on_mode_changed(self, index):
+        """모드 변경 시 UI 업데이트"""
+        is_custom = (index == 1)  # 0: Auto, 1: Custom
+        self.custom_params_group.setVisible(is_custom)
 
-        if not input_path.exists():
-            self.progress_widget.finish_progress(False, "입력 비디오 파일이 없습니다.")
+    def start_sampling(self):
+        """세그멘테이션 시작"""
+        input_path_str = self.input_video_edit.text().strip()
+        output_path_str = self.output_dir_edit.text().strip()
+
+        if not input_path_str:
+            QMessageBox.warning(self, "경고", "입력 비디오를 선택해주세요.")
             return
 
-        if not str(output_path):
-             output_path = input_path.parent / f"{input_path.stem}_clips"
+        if not output_path_str:
+            QMessageBox.warning(self, "경고", "출력 폴더를 선택해주세요.")
+            return
 
-        if not output_path.exists():
-            output_path.mkdir(parents=True, exist_ok=True)
-            self.output_dir_edit.setText(str(output_path))
+        input_path = Path(input_path_str)
+        output_path = Path(output_path_str)
 
-        # 모드 확인 (0: Auto, 1: Custom)
+        if not input_path.exists():
+            QMessageBox.critical(self, "오류", f"입력 파일을 찾을 수 없습니다:\n{input_path}")
+            return
+
+        # 파라미터 수집
         is_auto_mode = (self.mode_combo.currentIndex() == 0)
-
-        # 기본 공통 옵션
+        
         params = {
-            "save_discarded": self.save_discarded_checkbox.isChecked(),
-            "use_gpu": self.gpu_checkbox.isChecked()
+            "mode": "auto" if is_auto_mode else "custom",
+            "use_gpu": self.gpu_checkbox.isChecked(),
+            "save_discarded": self.save_discarded_checkbox.isChecked()
         }
 
-        if is_auto_mode:
+        if not is_auto_mode:
             params.update({
-                "mode": "auto",
-                "static_threshold": 0.95,
-                "min_static_duration": 2.0,
-                "target_segment_duration": 600.0,
-                "ssim_scale": 0.5,
-                "frame_skip": 2,
-                "enable_keyframe_snap": True
-            })
-        else:
-            params.update({
-                "mode": "custom",
                 "static_threshold": self.static_threshold_spin.value(),
                 "min_static_duration": self.min_static_duration_spin.value(),
                 "target_segment_duration": self.target_duration_spin.value(),
@@ -312,16 +383,21 @@ class PreprocessingTab(QWidget):
                 "enable_keyframe_snap": self.enable_keyframe_snap.isChecked()
             })
 
-        self.worker = SegmentationWorker(self.sampler_manager, input_path, output_path, params)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_finished)
-        self.worker.log_message.connect(self._on_log_message)
-
+        # UI 비활성화
         self.start_sampling_btn.setEnabled(False)
-        self.progress_widget.set_indeterminate("비디오 분석 및 초기화 중...")
-        
         self.log_viewer.clear_logs()
-        self.log_viewer.add_log("=" * 60, "INFO")
+        
+        # 워커 스레드 시작
+        self.worker = SegmentationWorker(
+            self.sampler_manager,
+            input_path,
+            output_path,
+            params
+        )
+        self.worker.progress.connect(self._on_progress)
+        self.worker.log_message.connect(self._on_log_message)
+        self.worker.finished.connect(self._on_finished)
+        
         self.log_viewer.add_log(f"🎬 비디오 세그멘테이션 시작 ({'Auto' if is_auto_mode else 'Custom'})", "INFO")
         if params["use_gpu"]:
             self.log_viewer.add_log("   🚀 GPU 가속 활성화됨", "INFO")

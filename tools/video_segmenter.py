@@ -240,6 +240,10 @@ def snap_to_keyframe(time: float, keyframes: List[float], direction: str = 'befo
     idx = bisect.bisect_left(keyframes, time)
 
     if direction == 'before':
+        # 정확히 일치하는 경우 해당 Keyframe 반환
+        if idx < len(keyframes) and abs(keyframes[idx] - time) < 1e-5:
+            return keyframes[idx]
+            
         # 이전 Keyframe
         if idx == 0:
             return keyframes[0]
@@ -354,6 +358,54 @@ class PyAVVideoReader:
         return self.container is not None
 
 
+class FrameReader(threading.Thread):
+    """
+    별도 스레드에서 프레임을 미리 읽어오는 클래스 (I/O 병목 해결)
+    Producer-Consumer 패턴 사용
+    """
+    def __init__(self, cap, queue_size=64):
+        super().__init__()
+        self.cap = cap
+        self.queue = queue.Queue(maxsize=queue_size)
+        self.stop_event = threading.Event()
+        self.daemon = True  # 메인 스레드 종료 시 자동 종료
+
+    def run(self):
+        """프레임 읽기 루프 (Producer)"""
+        while not self.stop_event.is_set():
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    # EOF 도달 시 None을 넣어 알림
+                    self.queue.put((False, None))
+                    break
+                
+                # 큐에 넣기 (꽉 차면 대기)
+                self.queue.put((True, frame))
+            except Exception as e:
+                print(f"⚠️ FrameReader 오류: {e}")
+                self.queue.put((False, None))
+                break
+
+    def read(self):
+        """프레임 가져오기 (Consumer)"""
+        try:
+            # 큐에서 가져오기 (타임아웃 5초)
+            return self.queue.get(timeout=5)
+        except queue.Empty:
+            return False, None
+
+    def stop(self):
+        """스레드 종료 요청"""
+        self.stop_event.set()
+        # 큐 비우기 (데드락 방지)
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
+
+
 @dataclass
 class VideoSegment:
     """비디오 세그먼트 정보"""
@@ -384,11 +436,16 @@ class SegmentConfig:
     frame_skip: int = 1                  # 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
     use_gpu: bool = False                # GPU 가속 사용 (CUDA 사용 가능 시)
     initial_batch_size: int = 8          # 초기 배치 크기 (동적 조정됨)
-    max_vram_usage: float = 0.85         # 최대 VRAM 사용률 (0~1)
+    max_vram_usage: float = 0.75         # 최대 VRAM 사용률 (0~1) - 75%로 하향 조정
 
     # 실험 기능
     save_discarded: bool = False         # 채택되지 않은 구간도 별도 저장
     enable_keyframe_snap: bool = True    # Keyframe 정렬 활성화
+
+    # 인코딩 설정
+    re_encode: bool = False              # 재인코딩 여부 (True=재인코딩, False=스트림 복사)
+    encode_quality: int = 23             # 인코딩 품질 (CRF, 0~51, 낮을수록 고화질)
+    encode_preset: str = 'fast'          # 인코딩 프리셋 (ultrafast ~ veryslow)
 
 
 class VideoSegmenter:
@@ -617,17 +674,28 @@ class VideoSegmenter:
                 print(f"⚠️ GPU 메모리 부족, 배치 크기 감소: {self.current_batch_size * 2} → {self.current_batch_size}")
                 return
 
-            # 가용 VRAM 체크 및 배치 크기 증가 시도
+            # 가용 VRAM 체크 및 배치 크기 조정
             free_mem, total_mem = torch.cuda.mem_get_info(0)
             free_ratio = free_mem / total_mem
+            
+            # 1. 메모리 부족 시 배치 크기 감소 (Proactive)
+            # 남은 메모리가 25% 미만이면 배치 크기 감소
+            if free_ratio < (1 - self.config.max_vram_usage):
+                if self.current_batch_size > 1:
+                    old_size = self.current_batch_size
+                    self.current_batch_size = max(1, self.current_batch_size // 2)
+                    self.stats['batch_size_adjustments'] += 1
+                    print(f"⚠️ VRAM 여유 부족 ({free_ratio*100:.1f}%), 배치 크기 감소: {old_size} → {self.current_batch_size}")
+                return
 
-            # 가용 메모리가 충분하면 배치 크기 증가 (최대 128)
-            if free_ratio > (1 - self.config.max_vram_usage) and self.current_batch_size < 128:
+            # 2. 메모리 여유 시 배치 크기 증가
+            # 남은 메모리가 40% 이상이고 현재 배치가 최대가 아니면 증가
+            if free_ratio > 0.4 and self.current_batch_size < 128:
                 old_size = self.current_batch_size
                 self.current_batch_size = min(128, self.current_batch_size * 2)
                 if old_size != self.current_batch_size:
                     self.stats['batch_size_adjustments'] += 1
-                    print(f"🚀 GPU 여유 메모리 확보, 배치 크기 증가: {old_size} → {self.current_batch_size}")
+                    print(f"🚀 GPU 여유 메모리 확보 ({free_ratio*100:.1f}%), 배치 크기 증가: {old_size} → {self.current_batch_size}")
 
         except Exception as e:
             # VRAM 조정 실패는 무시
@@ -652,11 +720,23 @@ class VideoSegmenter:
 
             batch_size = len(frame_pairs)
 
-            # BGR to Grayscale (CPU에서 배치 처리)
+            # BGR to Grayscale & Resize (CPU에서 배치 처리)
             gray1_list = []
             gray2_list = []
 
+            # 해상도 축소 (설정된 경우)
+            target_size = None
+            if self.config.ssim_scale < 1.0:
+                h, w = frame_pairs[0][0].shape[:2]
+                new_h = int(h * self.config.ssim_scale)
+                new_w = int(w * self.config.ssim_scale)
+                target_size = (new_w, new_h)
+
             for img1, img2 in frame_pairs:
+                if target_size:
+                    img1 = cv2.resize(img1, target_size, interpolation=cv2.INTER_AREA)
+                    img2 = cv2.resize(img2, target_size, interpolation=cv2.INTER_AREA)
+                
                 gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
                 gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
                 gray1_list.append(gray1)
@@ -855,83 +935,93 @@ class VideoSegmenter:
         frame_batch = []
         frame_indices = []
 
-        while True:
-            ret, current_frame = cap.read()
-            if not ret:
-                break
+        # FrameReader 시작 (I/O 병렬 처리)
+        reader = FrameReader(cap, queue_size=64)
+        reader.start()
 
-            frame_idx += 1
+        try:
+            while True:
+                # FrameReader에서 프레임 가져오기
+                ret, current_frame = reader.read()
+                if not ret:
+                    break
 
-            # 진행률 업데이트
-            current_time = time.time()
-            if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
-                progress_callback(frame_idx, total_frames)
-                last_update_time = current_time
+                frame_idx += 1
 
-            if use_batch:
-                frame_batch.append((prev_frame.copy(), current_frame.copy()))
-                frame_indices.append(frame_idx)
+                # 진행률 업데이트
+                current_time = time.time()
+                if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
+                    progress_callback(frame_idx, total_frames)
+                    last_update_time = current_time
 
-                if len(frame_batch) >= self.current_batch_size:
-                    try:
-                        ssim_scores = self._calculate_ssim_gpu_batch(frame_batch)
+                if use_batch:
+                    frame_batch.append((prev_frame.copy(), current_frame.copy()))
+                    frame_indices.append(frame_idx)
 
-                        for batch_idx, ssim_score in enumerate(ssim_scores):
-                            if ssim_score >= self.config.static_threshold:
-                                if static_start is None:
-                                    static_start = (frame_indices[batch_idx] - 1) / fps
-                                consecutive_static_frames += 1
-                            else:
-                                if static_start is not None and consecutive_static_frames * self.config.frame_skip / fps >= self.config.min_static_duration:
-                                    static_end = frame_indices[batch_idx] / fps
-                                    static_intervals.append((static_start, static_end))
-                                    self.stats['static_segments_removed'] += 1
-                                static_start = None
-                                consecutive_static_frames = 0
+                    if len(frame_batch) >= self.current_batch_size:
+                        try:
+                            ssim_scores = self._calculate_ssim_gpu_batch(frame_batch)
 
-                        # 배치 크기 동적 조정
-                        self._adjust_batch_size()
+                            for batch_idx, ssim_score in enumerate(ssim_scores):
+                                if ssim_score >= self.config.static_threshold:
+                                    if static_start is None:
+                                        static_start = (frame_indices[batch_idx] - 1) / fps
+                                    consecutive_static_frames += 1
+                                else:
+                                    if static_start is not None and consecutive_static_frames * self.config.frame_skip / fps >= self.config.min_static_duration:
+                                        static_end = frame_indices[batch_idx] / fps
+                                        static_intervals.append((static_start, static_end))
+                                        self.stats['static_segments_removed'] += 1
+                                    static_start = None
+                                    consecutive_static_frames = 0
 
-                        frame_batch.clear()
-                        frame_indices.clear()
+                            # 배치 크기 동적 조정
+                            self._adjust_batch_size()
 
-                    except Exception as e:
-                        import torch
-                        if isinstance(e, torch.cuda.OutOfMemoryError):
-                            self._adjust_batch_size(e)
                             frame_batch.clear()
                             frame_indices.clear()
-                            continue
-                        else:
-                            raise
+
+                        except Exception as e:
+                            import torch
+                            if isinstance(e, torch.cuda.OutOfMemoryError):
+                                self._adjust_batch_size(e)
+                                frame_batch.clear()
+                                frame_indices.clear()
+                                continue
+                            else:
+                                raise
+
+                    prev_frame = current_frame
+                    continue
+
+                # CPU 단일 처리
+                ssim_score = self.calculate_ssim(prev_frame, current_frame)
+
+                if ssim_score >= self.config.static_threshold:
+                    if static_start is None:
+                        static_start = (frame_idx - 1) / fps
+                    consecutive_static_frames += 1
+                else:
+                    if static_start is not None and consecutive_static_frames / fps >= self.config.min_static_duration:
+                        static_end = frame_idx / fps
+                        static_intervals.append((static_start, static_end))
+                        self.stats['static_segments_removed'] += 1
+                    static_start = None
+                    consecutive_static_frames = 0
 
                 prev_frame = current_frame
-                continue
 
-            # CPU 단일 처리
-            ssim_score = self.calculate_ssim(prev_frame, current_frame)
-
-            if ssim_score >= self.config.static_threshold:
-                if static_start is None:
-                    static_start = (frame_idx - 1) / fps
-                consecutive_static_frames += 1
-            else:
-                if static_start is not None and consecutive_static_frames / fps >= self.config.min_static_duration:
-                    static_end = frame_idx / fps
-                    static_intervals.append((static_start, static_end))
-                    self.stats['static_segments_removed'] += 1
-                static_start = None
-                consecutive_static_frames = 0
-
-            prev_frame = current_frame
+        finally:
+            # FrameReader 정리
+            reader.stop()
+            reader.join(timeout=1.0)
+            cap.release()
 
         # 마지막 정적 구간 처리
         if static_start is not None and consecutive_static_frames / fps >= self.config.min_static_duration:
             static_end = frame_idx / fps
             static_intervals.append((static_start, static_end))
             self.stats['static_segments_removed'] += 1
-
-        cap.release()
 
         print(f"\n✅ 정적 구간 {len(static_intervals)}개 탐지 완료")
         return static_intervals
@@ -1000,28 +1090,51 @@ class VideoSegmenter:
                 end = snap_to_keyframe(end, self.keyframes, 'after')
                 interval_duration = end - start
 
-            # 누적 시간이 목표 도달 시 세그먼트 생성
-            if accumulated_time + interval_duration >= self.config.target_segment_duration and segment_intervals:
-                # 현재까지 누적된 구간으로 세그먼트 생성
-                seg_start = segment_intervals[0][0]
-                seg_end = segment_intervals[-1][1]
-                segments.append(VideoSegment(
-                    start_frame=int(seg_start * fps),
-                    end_frame=int(seg_end * fps),
-                    start_time=seg_start,
-                    end_time=seg_end,
-                    duration=accumulated_time,
-                    avg_ssim=0.0,  # Virtual Timeline에서는 avg_ssim 불필요
-                    intervals=list(segment_intervals)  # 여러 구간 정보 저장
-                ))
-
-                # 리셋
+            # 현재 구간이 남은 목표 시간을 초과하는지 확인
+            remaining_time = self.config.target_segment_duration - accumulated_time
+            
+            while interval_duration >= remaining_time:
+                # 현재 구간을 잘라서 세그먼트 완성
+                split_point = start + remaining_time
+                
+                # Keyframe 정렬 (자르는 지점)
+                if self.config.enable_keyframe_snap and self.keyframes:
+                    split_point = snap_to_keyframe(split_point, self.keyframes, 'before')
+                    # 너무 짧게 잘리는 것 방지 (최소 1초)
+                    if split_point <= start + 1.0:
+                         split_point = snap_to_keyframe(start + remaining_time, self.keyframes, 'after')
+                
+                # 실제 잘린 길이
+                actual_duration = split_point - start
+                
+                if actual_duration > 0:
+                    segment_intervals.append((start, split_point))
+                    accumulated_time += actual_duration
+                    
+                    # 세그먼트 생성
+                    seg_start = segment_intervals[0][0]
+                    seg_end = segment_intervals[-1][1]
+                    segments.append(VideoSegment(
+                        start_frame=int(seg_start * fps),
+                        end_frame=int(seg_end * fps),
+                        start_time=seg_start,
+                        end_time=seg_end,
+                        duration=accumulated_time,
+                        avg_ssim=0.0,
+                        intervals=list(segment_intervals)
+                    ))
+                
+                # 다음 세그먼트 준비
+                start = split_point
+                interval_duration = end - start
                 accumulated_time = 0.0
                 segment_intervals = []
+                remaining_time = self.config.target_segment_duration
 
-            # 현재 구간 추가
-            segment_intervals.append((start, end))
-            accumulated_time += interval_duration
+            # 남은 구간 추가
+            if interval_duration > 0:
+                segment_intervals.append((start, end))
+                accumulated_time += interval_duration
 
         # 마지막 세그먼트
         if segment_intervals:
@@ -1107,34 +1220,53 @@ class VideoSegmenter:
         output_dir.mkdir(parents=True, exist_ok=True)
         saved_paths = []
 
-        print(f"\n🎬 세그먼트 비디오 생성 중 (FFmpeg concat demuxer)...")
+        print(f"\n🎬 세그먼트 비디오 생성 중 (FFmpeg {'재인코딩' if self.config.re_encode else 'concat demuxer'})...")
 
         for idx, segment in enumerate(segments):
             output_path = output_dir / f"segment_{idx+1:03d}.mp4"
 
-            # 여러 구간을 concat해야 하는 경우
-            if segment.intervals and len(segment.intervals) > 1:
-                # concat demuxer용 임시 파일 리스트 생성
-                concat_list_path = output_dir / f"_concat_{idx+1:03d}.txt"
-
-                with open(concat_list_path, 'w', encoding='utf-8') as f:
-                    for interval_start, interval_end in segment.intervals:
-                        # 각 구간마다 file, inpoint, outpoint 지정
-                        # Windows 경로 이스케이프 처리 (.as_posix())
-                        f.write(f"file '{video_path.absolute().as_posix()}'\n")
-                        f.write(f"inpoint {interval_start}\n")
-                        f.write(f"outpoint {interval_end}\n")
-
-                # FFmpeg concat demuxer 실행
-                cmd = [
-                    'ffmpeg',
-                    '-f', 'concat',
-                    '-safe', '0',
-                    '-i', str(concat_list_path),
-                    '-c', 'copy',
-                    '-y',
-                    str(output_path)
-                ]
+            # 재인코딩 모드
+            if self.config.re_encode:
+                # 필터 복잡도 생성 (여러 구간 병합 시)
+                filter_complex = ""
+                inputs = []
+                
+                if segment.intervals:
+                    # 여러 구간이 있는 경우
+                    for i, (start, end) in enumerate(segment.intervals):
+                        inputs.extend(['-ss', str(start), '-to', str(end), '-i', str(video_path)])
+                        filter_complex += f"[{i}:v:0][{i}:a:0]"
+                    
+                    filter_complex += f"concat=n={len(segment.intervals)}:v=1:a=1[outv][outa]"
+                    
+                    cmd = [
+                        'ffmpeg',
+                        *inputs,
+                        '-filter_complex', filter_complex,
+                        '-map', '[outv]', '-map', '[outa]',
+                        '-c:v', 'libx264',
+                        '-crf', str(self.config.encode_quality),
+                        '-preset', self.config.encode_preset,
+                        '-c:a', 'aac',
+                        '-b:a', '192k',
+                        '-y',
+                        str(output_path)
+                    ]
+                else:
+                    # 단일 구간 (이론상 intervals가 없는 경우는 없어야 하지만 방어 코드)
+                    cmd = [
+                        'ffmpeg',
+                        '-ss', str(segment.start_time),
+                        '-to', str(segment.end_time),
+                        '-i', str(video_path),
+                        '-c:v', 'libx264',
+                        '-crf', str(self.config.encode_quality),
+                        '-preset', self.config.encode_preset,
+                        '-c:a', 'aac',
+                        '-b:a', '192k',
+                        '-y',
+                        str(output_path)
+                    ]
 
                 try:
                     subprocess.run(
@@ -1149,45 +1281,89 @@ class VideoSegmenter:
                     if progress_callback:
                         progress_callback(idx + 1, len(segments))
 
-                    print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초, {len(segment.intervals)}개 구간 병합)")
-
-                    # 임시 파일 삭제
-                    concat_list_path.unlink()
+                    print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초, 재인코딩 완료)")
 
                 except subprocess.CalledProcessError as e:
                     print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
-                    if concat_list_path.exists():
+
+            # 스트림 복사 모드 (기존 방식)
+            else:
+                # 여러 구간을 concat해야 하는 경우
+                if segment.intervals and len(segment.intervals) > 1:
+                    # concat demuxer용 임시 파일 리스트 생성
+                    concat_list_path = output_dir / f"_concat_{idx+1:03d}.txt"
+
+                    with open(concat_list_path, 'w', encoding='utf-8') as f:
+                        for interval_start, interval_end in segment.intervals:
+                            # 각 구간마다 file, inpoint, outpoint 지정
+                            # Windows 경로 이스케이프 처리 (.as_posix())
+                            f.write(f"file '{video_path.absolute().as_posix()}'\n")
+                            f.write(f"inpoint {interval_start}\n")
+                            f.write(f"outpoint {interval_end}\n")
+
+                    # FFmpeg concat demuxer 실행
+                    cmd = [
+                        'ffmpeg',
+                        '-f', 'concat',
+                        '-safe', '0',
+                        '-i', str(concat_list_path),
+                        '-c', 'copy',
+                        '-y',
+                        str(output_path)
+                    ]
+
+                    try:
+                        subprocess.run(
+                            cmd,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                        )
+                        saved_paths.append(output_path)
+
+                        if progress_callback:
+                            progress_callback(idx + 1, len(segments))
+
+                        print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초, {len(segment.intervals)}개 구간 병합)")
+
+                        # 임시 파일 삭제
                         concat_list_path.unlink()
 
-            else:
-                # 단일 구간인 경우 기존 방식 사용
-                cmd = [
-                    'ffmpeg',
-                    '-i', str(video_path),
-                    '-ss', str(segment.start_time),
-                    '-to', str(segment.end_time),
-                    '-c', 'copy',
-                    '-y',
-                    str(output_path)
-                ]
+                    except subprocess.CalledProcessError as e:
+                        print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
+                        if concat_list_path.exists():
+                            concat_list_path.unlink()
 
-                try:
-                    subprocess.run(
-                        cmd,
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-                    )
-                    saved_paths.append(output_path)
+                else:
+                    # 단일 구간인 경우 기존 방식 사용
+                    cmd = [
+                        'ffmpeg',
+                        '-i', str(video_path),
+                        '-ss', str(segment.start_time),
+                        '-to', str(segment.end_time),
+                        '-c', 'copy',
+                        '-y',
+                        str(output_path)
+                    ]
 
-                    if progress_callback:
-                        progress_callback(idx + 1, len(segments))
+                    try:
+                        subprocess.run(
+                            cmd,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                        )
+                        saved_paths.append(output_path)
 
-                    print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초)")
+                        if progress_callback:
+                            progress_callback(idx + 1, len(segments))
 
-                except subprocess.CalledProcessError as e:
-                    print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
+                        print(f"   ✓ segment_{idx+1:03d}.mp4 ({segment.duration:.1f}초)")
+
+                    except subprocess.CalledProcessError as e:
+                        print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
 
         print(f"\n✅ {len(saved_paths)}개 세그먼트 저장 완료!")
         return saved_paths
@@ -1288,6 +1464,8 @@ class VideoSegmenter:
                 'frame_skip': self.config.frame_skip,
                 'use_gpu': self.config.use_gpu,
                 'enable_keyframe_snap': self.config.enable_keyframe_snap,
+                're_encode': self.config.re_encode,
+                'encode_quality': self.config.encode_quality,
             },
             'stats': self.stats,
             'segments': [
@@ -1407,6 +1585,23 @@ def main():
         action='store_true',
         help="Keyframe 정렬 비활성화 (기본: 활성화)"
     )
+    parser.add_argument(
+        '--re-encode',
+        action='store_true',
+        help="출력 시 재인코딩 수행 (버벅임 방지, 속도 느림)"
+    )
+    parser.add_argument(
+        '--quality',
+        type=int,
+        default=23,
+        help="인코딩 품질 (CRF, 0~51, 기본: 23, 낮을수록 고화질)"
+    )
+    parser.add_argument(
+        '--preset',
+        type=str,
+        default='fast',
+        help="인코딩 프리셋 (ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)"
+    )
 
     args = parser.parse_args()
 
@@ -1419,7 +1614,10 @@ def main():
         ssim_scale=args.ssim_scale,
         frame_skip=args.frame_skip,
         use_gpu=args.use_gpu,
-        enable_keyframe_snap=not args.disable_keyframe_snap
+        enable_keyframe_snap=not args.disable_keyframe_snap,
+        re_encode=args.re_encode,
+        encode_quality=args.quality,
+        encode_preset=args.preset
     )
 
     # 세그멘터 생성
