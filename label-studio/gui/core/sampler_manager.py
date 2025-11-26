@@ -49,32 +49,34 @@ class SamplerManager:
         self,
         input_video: Path,
         output_dir: Path,
-        scene_threshold: float = 0.3,
+        mode: str = "auto",
         static_threshold: float = 0.95,
-        min_duration: float = 5.0,
-        max_duration: float = 60.0,
-        max_segments: Optional[int] = None,
-        ssim_scale: float = 0.25,
+        min_static_duration: float = 2.0,
+        target_segment_duration: float = 600.0,
+        ssim_scale: float = 1.0,
         frame_skip: int = 1,
-        save_discarded: bool = False,
         use_gpu: bool = False,
+        enable_keyframe_snap: bool = True,
+        save_discarded: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> SegmentationResult:
         """
-        비디오 세그멘테이션 실행 (정적인 '잠수 구간'만 제외)
+        비디오 세그멘테이션 실행 (Virtual Timeline 기반)
 
         Args:
             input_video: 입력 비디오 경로
             output_dir: 출력 디렉토리
-            scene_threshold: 장면 전환 임계값 (기본: 0.3)
-            static_threshold: 정적 구간 임계값 (기본: 0.95, 이보다 높으면 잠수 구간으로 제외)
-            min_duration: 최소 클립 길이 (초)
-            max_duration: 최대 클립 길이 (초)
-            max_segments: 최대 클립 수
-            ssim_scale: SSIM 계산 해상도 스케일 (기본: 0.25, 4-16배 빠름, 출력은 원본 유지)
-            frame_skip: 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
-            save_discarded: 채택되지 않은 구간도 저장
+            mode: 동작 모드 ("auto" 또는 "custom")
+                - "auto": ssim_scale=0.5, frame_skip=2 자동 설정 (빠른 처리)
+                - "custom": 사용자 지정 파라미터 사용
+            static_threshold: 정적 구간 임계값 (기본: 0.95, SSIM이 이보다 높으면 잠수 구간으로 제외)
+            min_static_duration: 최소 정적 구간 길이 (초, 기본: 2.0)
+            target_segment_duration: 목표 세그먼트 길이 (초, 기본: 600=10분)
+            ssim_scale: SSIM 계산 해상도 스케일 (기본: 1.0, auto 모드에서는 0.5로 자동 설정)
+            frame_skip: 프레임 스킵 (1=모든 프레임, auto 모드에서는 2로 자동 설정)
             use_gpu: GPU 가속 사용 (기본: False, CUDA 필요)
+            enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True, 검은 화면 방지)
+            save_discarded: 채택되지 않은 구간도 저장 (기본: False)
             progress_callback: 진행 상황 콜백 (current, total)
 
         Returns:
@@ -96,15 +98,15 @@ class SamplerManager:
 
             # 세그멘테이션 설정
             config = SegmentConfig(
-                scene_change_threshold=scene_threshold,
+                mode=mode,
                 static_threshold=static_threshold,
-                min_duration=min_duration,
-                max_duration=max_duration,
-                max_segments=max_segments,
+                min_static_duration=min_static_duration,
+                target_segment_duration=target_segment_duration,
                 ssim_scale=ssim_scale,
                 frame_skip=frame_skip,
-                save_discarded=save_discarded,
-                use_gpu=use_gpu
+                use_gpu=use_gpu,
+                enable_keyframe_snap=enable_keyframe_snap,
+                save_discarded=save_discarded
             )
 
             # 세그멘터 생성
