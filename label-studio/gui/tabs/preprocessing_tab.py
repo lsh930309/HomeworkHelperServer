@@ -6,8 +6,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QGroupBox, QLineEdit, QFileDialog, QSlider, QComboBox,
-    QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout
+    QLabel, QGroupBox, QLineEdit, QFileDialog, QComboBox,
+    QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout, QMessageBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
@@ -34,13 +34,12 @@ class SegmentationWorker(QThread):
         self.params = params
 
     def run(self):
-        # stdout 캡처 설정
         old_stdout = sys.stdout
         sys.stdout = StringIO()
 
         try:
             self.log_message.emit(f"세그멘테이션 시작: {self.input_path.name}", "INFO")
-            self.log_message.emit(f"출력 경로: {self.output_path}", "INFO")
+            self.log_message.emit(f"모드: {self.params.get('mode', 'unknown')}", "INFO")
 
             result = self.sampler_manager.segment_video(
                 self.input_path,
@@ -49,19 +48,15 @@ class SegmentationWorker(QThread):
                 progress_callback=lambda c, t: self.progress.emit(c, t)
             )
 
-            # 캡처된 출력 가져오기
             output = sys.stdout.getvalue()
             if output:
-                # 줄 단위로 로그 전송
                 for line in output.strip().split('\n'):
                     if line.strip():
-                        # 로그 레벨 추정
+                        level = "INFO"
                         if '❌' in line or '오류' in line or 'ERROR' in line:
                             level = "ERROR"
                         elif '⚠️' in line or '경고' in line or 'WARNING' in line:
                             level = "WARNING"
-                        else:
-                            level = "INFO"
                         self.log_message.emit(line, level)
 
             if result.success:
@@ -77,7 +72,6 @@ class SegmentationWorker(QThread):
             self.finished.emit(False, error_msg)
 
         finally:
-            # stdout 복원
             sys.stdout = old_stdout
 
 
@@ -85,16 +79,13 @@ class PreprocessingTab(QWidget):
     """전처리 탭"""
 
     def __init__(self, parent=None):
-        """전처리 탭 초기화"""
         super().__init__(parent)
-
         self.sampler_manager = SamplerManager()
         self.config_manager = get_config_manager()
         self.worker = None
-
         self.init_ui()
-
-        # 앱 시작 시 기존 PyTorch 자동 감지
+        
+        # 앱 시작 시 기존 PyTorch 자동 감지 (복원됨)
         self._auto_detect_pytorch()
 
     def _auto_detect_pytorch(self):
@@ -123,14 +114,13 @@ class PreprocessingTab(QWidget):
                 self.log_viewer.add_log("⚠️ PyTorch가 설치되지 않았습니다.", "WARNING")
                 self.log_viewer.add_log("   'GPU 가속 사용' 체크박스를 클릭하여 설치할 수 있습니다.", "INFO")
         except Exception as e:
-            # 감지 실패 시 무시 (기존 동작 유지)
+            # 감지 실패 시 무시
             pass
 
     def init_ui(self):
-        """UI 초기화"""
         layout = QVBoxLayout()
 
-        # 비디오 세그멘테이션 그룹
+        # 1. 비디오 세그멘테이션 그룹
         sampling_group = QGroupBox("비디오 세그멘테이션")
         sampling_layout = QVBoxLayout()
 
@@ -156,90 +146,90 @@ class PreprocessingTab(QWidget):
         output_layout.addWidget(browse_output_btn)
         sampling_layout.addLayout(output_layout)
 
-        # 프리셋 선택
-        preset_layout = QHBoxLayout()
-        preset_layout.addWidget(QLabel("프리셋:"))
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["빠른", "표준", "정밀", "사용자 정의"])
-        self.preset_combo.setCurrentIndex(1)  # 기본: 표준
-        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
-        preset_layout.addWidget(self.preset_combo)
-        preset_layout.addStretch()
-        sampling_layout.addLayout(preset_layout)
+        # 2. 모드 선택 (Auto vs Custom)
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("동작 모드:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["자동 설정 (Auto - 권장)", "사용자 정의 (Custom)"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_layout.addWidget(self.mode_combo)
+        mode_layout.addStretch()
+        sampling_layout.addLayout(mode_layout)
 
-        # 사용자 정의 파라미터 그룹 (처음에는 숨김)
-        self.custom_params_group = QGroupBox("사용자 정의 파라미터")
+        # 3. 상세 파라미터 (Custom 모드에서만 보임)
+        self.custom_params_group = QGroupBox("상세 파라미터 설정")
         custom_params_layout = QFormLayout()
-
-        # scene_threshold
-        self.scene_threshold_spin = QDoubleSpinBox()
-        self.scene_threshold_spin.setRange(0.0, 1.0)
-        self.scene_threshold_spin.setSingleStep(0.05)
-        self.scene_threshold_spin.setValue(0.3)
-        self.scene_threshold_spin.setDecimals(2)
-        custom_params_layout.addRow("장면 전환 임계값:", self.scene_threshold_spin)
 
         # static_threshold
         self.static_threshold_spin = QDoubleSpinBox()
         self.static_threshold_spin.setRange(0.0, 1.0)
-        self.static_threshold_spin.setSingleStep(0.05)
+        self.static_threshold_spin.setSingleStep(0.01)
         self.static_threshold_spin.setValue(0.95)
-        self.static_threshold_spin.setDecimals(2)
-        custom_params_layout.addRow("정적 구간 임계값:", self.static_threshold_spin)
+        self.static_threshold_spin.setToolTip("SSIM 점수가 이보다 높으면 '정적(멈춘 화면)'으로 간주합니다.")
+        custom_params_layout.addRow("정적 구간 임계값 (Static Threshold):", self.static_threshold_spin)
 
-        # min_duration
-        self.min_duration_spin = QDoubleSpinBox()
-        self.min_duration_spin.setRange(1.0, 60.0)
-        self.min_duration_spin.setSingleStep(1.0)
-        self.min_duration_spin.setValue(5.0)
-        self.min_duration_spin.setSuffix(" 초")
-        custom_params_layout.addRow("최소 길이:", self.min_duration_spin)
+        # min_static_duration
+        self.min_static_duration_spin = QDoubleSpinBox()
+        self.min_static_duration_spin.setRange(0.1, 60.0)
+        self.min_static_duration_spin.setSingleStep(0.5)
+        self.min_static_duration_spin.setValue(2.0)
+        self.min_static_duration_spin.setSuffix(" 초")
+        self.min_static_duration_spin.setToolTip("이 시간보다 짧은 정적 구간은 무시하고 이어 붙입니다.")
+        custom_params_layout.addRow("최소 정적 유지 시간:", self.min_static_duration_spin)
 
-        # max_duration
-        self.max_duration_spin = QDoubleSpinBox()
-        self.max_duration_spin.setRange(10.0, 300.0)
-        self.max_duration_spin.setSingleStep(5.0)
-        self.max_duration_spin.setValue(60.0)
-        self.max_duration_spin.setSuffix(" 초")
-        custom_params_layout.addRow("최대 길이:", self.max_duration_spin)
+        # target_segment_duration
+        self.target_duration_spin = QDoubleSpinBox()
+        self.target_duration_spin.setRange(10.0, 3600.0)
+        self.target_duration_spin.setSingleStep(60.0)
+        self.target_duration_spin.setValue(600.0)
+        self.target_duration_spin.setSuffix(" 초")
+        self.target_duration_spin.setToolTip("생성될 세그먼트 하나의 목표 길이입니다.")
+        custom_params_layout.addRow("목표 세그먼트 길이:", self.target_duration_spin)
 
         # ssim_scale
         self.ssim_scale_spin = QDoubleSpinBox()
         self.ssim_scale_spin.setRange(0.1, 1.0)
         self.ssim_scale_spin.setSingleStep(0.05)
-        self.ssim_scale_spin.setValue(0.25)
-        self.ssim_scale_spin.setDecimals(2)
+        self.ssim_scale_spin.setValue(1.0)
+        self.ssim_scale_spin.setToolTip("SSIM 계산 시 해상도 비율입니다 (1.0=원본).")
         custom_params_layout.addRow("SSIM 해상도 스케일:", self.ssim_scale_spin)
 
         # frame_skip
         self.frame_skip_spin = QSpinBox()
-        self.frame_skip_spin.setRange(1, 10)
+        self.frame_skip_spin.setRange(1, 30)
         self.frame_skip_spin.setValue(1)
+        self.frame_skip_spin.setToolTip("SSIM 계산 시 건너뛸 프레임 수입니다.")
         custom_params_layout.addRow("프레임 스킵:", self.frame_skip_spin)
+        
+        # Keyframe snap
+        self.enable_keyframe_snap = QCheckBox("Keyframe 정렬 사용 (권장)")
+        self.enable_keyframe_snap.setChecked(True)
+        self.enable_keyframe_snap.setToolTip("자르는 지점을 I-Frame에 맞춰 깨짐을 방지합니다.")
+        custom_params_layout.addRow("", self.enable_keyframe_snap)
 
         self.custom_params_group.setLayout(custom_params_layout)
-        self.custom_params_group.setVisible(False)  # 기본적으로 숨김
+        self.custom_params_group.setVisible(False)
         sampling_layout.addWidget(self.custom_params_group)
 
-        # GPU 가속 옵션
-        self.use_gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
-        self.use_gpu_checkbox.setChecked(False)  # 기본: 비활성화
-        self.use_gpu_checkbox.setToolTip("CUDA가 설치된 GPU를 사용하여 SSIM 계산을 가속합니다. PyTorch가 필요합니다.")
-        self.use_gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
-        sampling_layout.addWidget(self.use_gpu_checkbox)
+        # 4. 공통 옵션
+        options_layout = QVBoxLayout()
+        self.gpu_checkbox = QCheckBox("GPU 가속 사용 (CUDA 사용 가능 시)")
+        self.gpu_checkbox.setChecked(False)
+        self.gpu_checkbox.stateChanged.connect(self.on_gpu_checkbox_changed)
+        options_layout.addWidget(self.gpu_checkbox)
 
-        # 실험 기능: 채택되지 않은 구간 저장
-        self.save_discarded_checkbox = QCheckBox("채택되지 않은 구간도 저장 (실험 기능)")
-        self.save_discarded_checkbox.setToolTip("원본에서 세그먼트로 채택되지 않은 나머지 구간을 else 폴더에 저장합니다.")
-        sampling_layout.addWidget(self.save_discarded_checkbox)
+        self.save_discarded_checkbox = QCheckBox("버려진 구간(Discarded) 별도 저장")
+        options_layout.addWidget(self.save_discarded_checkbox)
+        
+        sampling_layout.addLayout(options_layout)
 
-        # 세그멘테이션 시작 버튼
+        # 시작 버튼
         self.start_sampling_btn = QPushButton("🎬 세그멘테이션 시작")
         self.start_sampling_btn.setMinimumHeight(40)
         self.start_sampling_btn.clicked.connect(self.start_segmentation)
         sampling_layout.addWidget(self.start_sampling_btn)
 
-        # 진행률 위젯
+        # 진행률
         self.progress_widget = ProgressWidget()
         self.progress_widget.cancel_requested.connect(self.cancel_segmentation)
         sampling_layout.addWidget(self.progress_widget)
@@ -247,53 +237,37 @@ class PreprocessingTab(QWidget):
         sampling_group.setLayout(sampling_layout)
         layout.addWidget(sampling_group)
 
-        # 로그 뷰어 그룹
+        # 로그 뷰어
         log_group = QGroupBox("처리 로그")
         log_layout = QVBoxLayout()
-
         self.log_viewer = LogViewer(max_lines=500)
         log_layout.addWidget(self.log_viewer)
-
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
 
         self.setLayout(layout)
 
-    def _on_preset_changed(self, index):
-        """프리셋 변경 시 사용자 정의 파라미터 표시/숨김"""
-        preset_name = self.preset_combo.currentText()
-        if preset_name == "사용자 정의":
-            self.custom_params_group.setVisible(True)
-        else:
-            self.custom_params_group.setVisible(False)
+    def _on_mode_changed(self, index):
+        """모드 변경 시 UI 갱신 (0: Auto, 1: Custom)"""
+        is_custom = (index == 1)
+        self.custom_params_group.setVisible(is_custom)
 
     def browse_input_video(self):
-        """입력 비디오 찾아보기"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "입력 비디오 선택",
-            "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv)"
+            self, "입력 비디오 선택", "", "Video Files (*.mp4 *.avi *.mov *.mkv *.ts *.webm)"
         )
         if file_path:
             self.input_video_edit.setText(file_path)
-            # 출력 폴더 자동 설정: {원본파일명}_seg
             input_path = Path(file_path)
-            output_path = input_path.parent / f"{input_path.stem}_seg"
+            output_path = input_path.parent / f"{input_path.stem}_clips"
             self.output_dir_edit.setText(str(output_path))
 
     def browse_output_dir(self):
-        """출력 디렉토리 찾아보기"""
-        dir_path = QFileDialog.getExistingDirectory(
-            self,
-            "출력 폴더 선택",
-            ""
-        )
+        dir_path = QFileDialog.getExistingDirectory(self, "출력 폴더 선택", "")
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
     def start_segmentation(self):
-        """세그멘테이션 시작"""
         input_path = Path(self.input_video_edit.text())
         output_path = Path(self.output_dir_edit.text())
 
@@ -301,125 +275,92 @@ class PreprocessingTab(QWidget):
             self.progress_widget.finish_progress(False, "입력 비디오 파일이 없습니다.")
             return
 
+        if not str(output_path):
+             output_path = input_path.parent / f"{input_path.stem}_clips"
+
         if not output_path.exists():
             output_path.mkdir(parents=True, exist_ok=True)
+            self.output_dir_edit.setText(str(output_path))
 
-        preset_name = self.preset_combo.currentText()
+        # 모드 확인 (0: Auto, 1: Custom)
+        is_auto_mode = (self.mode_combo.currentIndex() == 0)
 
-        # 프리셋에 따른 파라미터
-        if preset_name == "사용자 정의":
-            # 사용자 정의 파라미터 사용
-            params = {
-                "scene_threshold": self.scene_threshold_spin.value(),
-                "static_threshold": self.static_threshold_spin.value(),
-                "min_duration": self.min_duration_spin.value(),
-                "max_duration": self.max_duration_spin.value(),
-                "ssim_scale": self.ssim_scale_spin.value(),
-                "frame_skip": self.frame_skip_spin.value()
-            }
+        # 기본 공통 옵션
+        params = {
+            "save_discarded": self.save_discarded_checkbox.isChecked(),
+            "use_gpu": self.gpu_checkbox.isChecked()
+        }
+
+        if is_auto_mode:
+            params.update({
+                "mode": "auto",
+                "static_threshold": 0.95,
+                "min_static_duration": 2.0,
+                "target_segment_duration": 600.0,
+                "ssim_scale": 0.5,
+                "frame_skip": 2,
+                "enable_keyframe_snap": True
+            })
         else:
-            # 프리셋 파라미터
-            preset_map = {
-                "빠른": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.95,
-                    "min_duration": 5.0,
-                    "max_duration": 60.0,
-                    "ssim_scale": 0.25,
-                    "frame_skip": 3
-                },
-                "표준": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.95,
-                    "min_duration": 5.0,
-                    "max_duration": 60.0,
-                    "ssim_scale": 0.25,
-                    "frame_skip": 1
-                },
-                "정밀": {
-                    "scene_threshold": 0.3,
-                    "static_threshold": 0.97,
-                    "min_duration": 10.0,
-                    "max_duration": 60.0,
-                    "ssim_scale": 1.0,
-                    "frame_skip": 1
-                }
-            }
-            params = preset_map[preset_name]
+            params.update({
+                "mode": "custom",
+                "static_threshold": self.static_threshold_spin.value(),
+                "min_static_duration": self.min_static_duration_spin.value(),
+                "target_segment_duration": self.target_duration_spin.value(),
+                "ssim_scale": self.ssim_scale_spin.value(),
+                "frame_skip": self.frame_skip_spin.value(),
+                "enable_keyframe_snap": self.enable_keyframe_snap.isChecked()
+            })
 
-        # 공통 파라미터
-        params["save_discarded"] = self.save_discarded_checkbox.isChecked()
-        params["use_gpu"] = self.use_gpu_checkbox.isChecked()
-
-        # 작업 스레드 시작
-        self.worker = SegmentationWorker(
-            self.sampler_manager,
-            input_path,
-            output_path,
-            params
-        )
+        self.worker = SegmentationWorker(self.sampler_manager, input_path, output_path, params)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.log_message.connect(self._on_log_message)
 
         self.start_sampling_btn.setEnabled(False)
-
-        # 초기에는 불확정 모드로 시작 (전체 프레임 수를 아직 모름)
-        self.progress_widget.set_indeterminate("비디오 분석 중...")
-
-        # 시작 로그 출력
+        self.progress_widget.set_indeterminate("비디오 분석 및 초기화 중...")
+        
+        self.log_viewer.clear_logs()
         self.log_viewer.add_log("=" * 60, "INFO")
-        self.log_viewer.add_log("비디오 세그멘테이션 시작", "INFO")
-        self.log_viewer.add_log(f"프리셋: {self.preset_combo.currentText()}", "INFO")
+        self.log_viewer.add_log(f"🎬 비디오 세그멘테이션 시작 ({'Auto' if is_auto_mode else 'Custom'})", "INFO")
+        if params["use_gpu"]:
+            self.log_viewer.add_log("   🚀 GPU 가속 활성화됨", "INFO")
         self.log_viewer.add_log("=" * 60, "INFO")
 
         self.worker.start()
 
     def _on_progress(self, current, total):
-        """진행 상황 업데이트"""
-        # 첫 번째 진행 업데이트에서 전체 프레임 수를 설정
         if self.progress_widget.total_items != total:
-            self.progress_widget.start_progress(total, "비디오 세그멘테이션")
-
+            self.progress_widget.start_progress(total, "비디오 처리 중")
         self.progress_widget.update_progress(current, f"프레임 처리 중... {current:,}/{total:,}")
 
     def _on_log_message(self, message, level):
-        """로그 메시지 처리"""
         self.log_viewer.add_log(message, level)
 
     def _on_finished(self, success, message):
-        """세그멘테이션 완료"""
         self.progress_widget.finish_progress(success, message)
         self.start_sampling_btn.setEnabled(True)
-
-        # 완료 로그
         self.log_viewer.add_log("=" * 60, "INFO")
         if success:
-            self.log_viewer.add_log("✅ 세그멘테이션 완료!", "INFO")
+            self.log_viewer.add_log("✅ 작업 완료!", "INFO")
         else:
-            self.log_viewer.add_log("❌ 세그멘테이션 실패", "ERROR")
+            self.log_viewer.add_log("❌ 작업 실패", "ERROR")
         self.log_viewer.add_log("=" * 60, "INFO")
-
         self.worker = None
 
     def cancel_segmentation(self):
-        """세그멘테이션 취소"""
         if self.worker:
-            self.log_viewer.add_log("사용자 취소 요청...", "WARNING")
-            self.worker.terminate()
-            self.worker.wait()
+            self.log_viewer.add_log("🛑 사용자 취소 요청...", "WARNING")
+            if self.worker.isRunning():
+                self.worker.terminate()
+                self.worker.wait()
             self.progress_widget.finish_progress(False, "사용자가 취소했습니다.")
             self.log_viewer.add_log("❌ 작업이 취소되었습니다.", "WARNING")
             self.start_sampling_btn.setEnabled(True)
             self.worker = None
 
     def _verify_gpu_acceleration(self) -> bool:
-        """
-        GPU 가속 기능 검증 (실제 텐서 생성 및 연산 테스트)
-
-        Returns:
-            bool: GPU 가속이 정상 작동하면 True
-        """
+        """GPU 가속 기능 검증 및 메모리 로깅 (복원됨)"""
         try:
             import torch
 
@@ -458,9 +399,8 @@ class PreprocessingTab(QWidget):
             return False
 
     def on_gpu_checkbox_changed(self, state):
-        """GPU 가속 체크박스 상태 변경 시"""
-        from PyQt6.QtWidgets import QMessageBox
-
+        """GPU 가속 체크박스 상태 변경 시 (복원됨: 설치 다이얼로그 연동)"""
+        
         if state == Qt.CheckState.Checked.value:
             # GPU 가속 활성화 시도
             try:
@@ -483,7 +423,7 @@ class PreprocessingTab(QWidget):
                         self.log_viewer.add_log("✅ GPU 가속 검증 완료! 정상 작동합니다.", "INFO")
                     else:
                         self.log_viewer.add_log("⚠️ GPU 검증 실패, CPU 모드로 전환합니다.", "WARNING")
-                        self.use_gpu_checkbox.setChecked(False)
+                        self.gpu_checkbox.setChecked(False)
                     return
 
                 # 미설치 시 CUDA 버전 감지
@@ -502,7 +442,7 @@ class PreprocessingTab(QWidget):
                         "드라이버 다운로드:\n"
                         "https://www.nvidia.com/Download/index.aspx"
                     )
-                    self.use_gpu_checkbox.setChecked(False)
+                    self.gpu_checkbox.setChecked(False)
                     return
 
                 # 설치 가이드 다이얼로그 표시
@@ -519,10 +459,10 @@ class PreprocessingTab(QWidget):
                         self.log_viewer.add_log("✅ GPU 가속 검증 완료! 정상 작동합니다.", "INFO")
                     else:
                         self.log_viewer.add_log("⚠️ GPU 검증 실패, CPU 모드로 전환합니다.", "WARNING")
-                        self.use_gpu_checkbox.setChecked(False)
+                        self.gpu_checkbox.setChecked(False)
                 else:
                     self.log_viewer.add_log("⚠️ PyTorch 설치 취소", "WARNING")
-                    self.use_gpu_checkbox.setChecked(False)
+                    self.gpu_checkbox.setChecked(False)
 
             except Exception as e:
                 self.log_viewer.add_log(f"❌ GPU 가속 초기화 실패: {e}", "ERROR")
@@ -531,7 +471,7 @@ class PreprocessingTab(QWidget):
                     "오류",
                     f"GPU 가속 초기화 중 오류가 발생했습니다:\n\n{e}"
                 )
-                self.use_gpu_checkbox.setChecked(False)
+                self.gpu_checkbox.setChecked(False)
         else:
             # GPU 가속 비활성화
             self.log_viewer.add_log("GPU 가속 비활성화, CPU 모드로 전환", "INFO")
