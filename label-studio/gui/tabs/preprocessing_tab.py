@@ -251,6 +251,7 @@ class PreprocessingTab(QWidget):
 
         # 진행률 표시
         self.progress_widget = ProgressWidget()
+        self.progress_widget.cancel_requested.connect(self.cancel_segmentation)
         layout.addWidget(self.progress_widget)
 
         self.setLayout(layout)
@@ -326,10 +327,10 @@ class PreprocessingTab(QWidget):
                 "enable_keyframe_snap": self.enable_keyframe_snap.isChecked()
             })
 
-        # UI 비활성화
+        # UI 상태 업데이트
         self.start_sampling_btn.setEnabled(False)
         self.log_viewer.clear_logs()
-        
+
         # 워커 스레드 시작
         self.worker = SegmentationWorker(
             self.sampler_manager,

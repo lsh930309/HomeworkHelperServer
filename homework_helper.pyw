@@ -8,8 +8,14 @@ try:
     appdata = os.getenv('APPDATA') or os.path.expanduser('~')
     pytorch_dir = Path(appdata) / "HomeworkHelper" / "pytorch" / "Lib" / "site-packages"
 
-    if pytorch_dir.exists() and str(pytorch_dir) not in sys.path:
-        sys.path.insert(0, str(pytorch_dir))
+    # PermissionError 방지: exists() 체크를 try-except로 감싸기
+    try:
+        if pytorch_dir.exists() and str(pytorch_dir) not in sys.path:
+            sys.path.insert(0, str(pytorch_dir))
+    except (PermissionError, OSError):
+        # 권한 오류 발생 시 경로만 추가 시도
+        if str(pytorch_dir) not in sys.path:
+            sys.path.insert(0, str(pytorch_dir))
 
     # PyTorch를 최우선으로 import
     import torch
