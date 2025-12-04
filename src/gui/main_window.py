@@ -122,6 +122,10 @@ class MainWindow(QMainWindow):
 
         self.setMinimumWidth(450) # 최소 너비 설정
         self.setGeometry(100, 100, 450, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
+
+        # 창 크기 조절 비활성화 (자동 크기 조정만 허용)
+        self.setFixedWidth(450)  # 고정 너비 설정
+
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
         self._create_menu_bar() # 메뉴 바 생성
@@ -207,9 +211,6 @@ class MainWindow(QMainWindow):
         self.populate_process_list() # 프로세스 목록 채우기
         self._load_and_display_web_buttons() # 웹 바로가기 버튼 로드 및 표시
         self._adjust_window_height_for_table_rows() # 테이블 내용에 맞게 창 높이 조절
-        
-        # 창 크기 조절 잠금 설정 적용
-        self._apply_window_resize_lock()
 
         # 시그널 및 타이머 설정
         self.request_table_refresh_signal.connect(self.populate_process_list_slot) # 테이블 새로고침 시그널 연결
@@ -368,7 +369,6 @@ class MainWindow(QMainWindow):
             self.populate_process_list() # 전체 테이블 새로고침 (전역 설정 변경)
             self._refresh_web_button_states() # 웹 버튼 상태 새로고침 (전역 설정 변경이 웹 버튼에 영향을 줄 수 있는 경우)
             self._adjust_window_height_for_table_rows() # 창 높이 조절
-            self._update_window_resize_lock() # 창 크기 조절 잠금 업데이트
 
             # 시작 프로그램 상태 확인 및 메시지 표시
             current_status = get_startup_shortcut_status()
@@ -595,7 +595,8 @@ class MainWindow(QMainWindow):
                                        original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]))  # 원본 경로 보존
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     self.populate_process_list() # 전체 테이블 새로고침 (프로세스 정보 변경)
-                    self._adjust_window_height_for_table_rows() # 창 높이 조절
+                    # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
+                    QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                     status_bar = self.statusBar()
                     if status_bar:
                         status_bar.showMessage(f"'{upd_p.name}' 수정 완료.", 3000)
@@ -613,7 +614,8 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_process(pid): # 프로세스 삭제
                 self.populate_process_list() # 전체 테이블 새로고침 (프로세스 삭제)
-                self._adjust_window_height_for_table_rows() # 창 높이 조절
+                # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
+                QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage(f"'{p_del.name}' 삭제 완료.", 3000)
@@ -659,7 +661,8 @@ class MainWindow(QMainWindow):
                                        original_launch_path=data["launch_path"])  # 원본 경로 보존
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
                 self.populate_process_list() # 전체 테이블 새로고침 (프로세스 추가)
-                self._adjust_window_height_for_table_rows() # 창 높이 조절
+                # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
+                QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage(f"'{new_p.name}' 추가 완료.", 3000)
@@ -1092,10 +1095,6 @@ class MainWindow(QMainWindow):
 
     def _adjust_window_height_for_table_rows(self):
         """테이블 행 추가/삭제 시에만 창 높이를 조절합니다."""
-        # 창 크기 조절 잠금이 활성화되어 있으면 크기 조절 안 함
-        if self.data_manager.global_settings.lock_window_resize:
-            return
-
         # 현재 행 수 확인
         current_row_count = self.process_table.rowCount()
 
@@ -1138,13 +1137,41 @@ class MainWindow(QMainWindow):
         # 3. 테이블의 geometry 업데이트 요청
         self.process_table.updateGeometry()
 
-        # 4. 창의 이상적인 크기로 자동 조절 (레이아웃 시스템이 계산한 sizeHint 사용)
-        self.adjustSize()
+        # 4. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
+        total_height = 0
 
-        # 5. 화면 업데이트
+        # 메뉴바 높이
+        menu_bar = self.menuBar()
+        if menu_bar and not menu_bar.isHidden():
+            total_height += menu_bar.sizeHint().height()
+
+        # 상단 버튼 영역 높이 (central_widget의 top_button_area_layout)
+        if hasattr(self, 'top_button_area_layout'):
+            total_height += self.top_button_area_layout.sizeHint().height()
+            total_height += 10  # 레이아웃 여백
+
+        # 테이블 높이 (이미 setFixedHeight로 설정됨)
+        total_height += table_height
+
+        # 상태바 높이
+        status_bar = self.statusBar()
+        if status_bar and not status_bar.isHidden():
+            total_height += status_bar.sizeHint().height()
+
+        # 창 프레임 및 레이아웃 여백 추가
+        total_height += 20  # 여유 공간
+
+        # 5. 창 높이를 고정 (너비는 이미 고정되어 있음)
+        self.setFixedHeight(total_height)
+
+        # 6. 화면 업데이트
         self.update()
 
-        print(f"조절 후 창 크기: {self.width()}x{self.height()}")
+        print(f"조절 후 창 크기: {self.width()}x{total_height}")
+        print(f"  - 메뉴바: {menu_bar.sizeHint().height() if menu_bar else 0}px")
+        print(f"  - 상단 버튼: {self.top_button_area_layout.sizeHint().height() if hasattr(self, 'top_button_area_layout') else 0}px")
+        print(f"  - 테이블: {table_height}px")
+        print(f"  - 상태바: {status_bar.sizeHint().height() if status_bar else 0}px")
         print("=== 자동 조절 완료 ===\n")
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
@@ -1380,26 +1407,6 @@ class MainWindow(QMainWindow):
             elif isinstance(current_widget, QLabel):
                 current_widget.setText(time_str)
 
-    def _apply_window_resize_lock(self):
-        """창 크기 조절 잠금 설정을 적용합니다."""
-        lock_enabled = self.data_manager.global_settings.lock_window_resize
-        
-        if lock_enabled:
-            # 창 크기 조절을 고정 (사용자가 드래그로 크기 조절 불가)
-            # 자동 크기 조절은 허용하기 위해 최소/최대 크기를 현재 크기로 설정
-            current_size = self.size()
-            self.setMinimumSize(current_size)
-            self.setMaximumSize(current_size)
-            print("창 크기 조절 잠금 활성화됨")
-        else:
-            # 창 크기 조절 허용 (기본 동작)
-            self.setMinimumSize(300, 0)  # 원래 최소 너비만 유지
-            self.setMaximumSize(16777215, 16777215)  # 최대 크기 해제
-            print("창 크기 조절 잠금 비활성화됨")
-
-    def _update_window_resize_lock(self):
-        """전역 설정 변경 시 창 크기 조절 잠금을 업데이트합니다."""
-        self._apply_window_resize_lock()
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:
         """

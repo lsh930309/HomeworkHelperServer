@@ -49,7 +49,6 @@ class GlobalSettingsSchema(BaseModel):
     sleep_correction_advance_notify_hours: float = 1.0
     cycle_deadline_advance_notify_hours: float = 2.0
     run_on_startup: bool = False
-    lock_window_resize: bool = False
     always_on_top: bool = False
     run_as_admin: bool = False
     notify_on_launch_success: bool = True

@@ -46,7 +46,6 @@ class GlobalSettings(Base):
     sleep_correction_advance_notify_hours = Column(Float, default=1.0)
     cycle_deadline_advance_notify_hours = Column(Float, default=2.0)
     run_on_startup = Column(Boolean, default=False)
-    lock_window_resize = Column(Boolean, default=False)
     always_on_top = Column(Boolean, default=False)
     run_as_admin = Column(Boolean, default=False)
     notify_on_launch_success = Column(Boolean, default=True)

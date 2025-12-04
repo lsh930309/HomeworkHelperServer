@@ -63,7 +63,6 @@ class GlobalSettings:
                  sleep_correction_advance_notify_hours: float = 1.0,
                  cycle_deadline_advance_notify_hours: float = 2.0,
                  run_on_startup: bool = False,
-                 lock_window_resize: bool = False,
                  always_on_top: bool = False,
                  run_as_admin: bool = False,
                  notify_on_launch_success: bool = True,
@@ -78,7 +77,6 @@ class GlobalSettings:
         self.sleep_correction_advance_notify_hours = sleep_correction_advance_notify_hours
         self.cycle_deadline_advance_notify_hours = cycle_deadline_advance_notify_hours
         self.run_on_startup = run_on_startup
-        self.lock_window_resize = lock_window_resize
         self.always_on_top = always_on_top
         self.run_as_admin = run_as_admin # <<< 새 속성 초기화
         # 알림 옵션
@@ -97,9 +95,9 @@ class GlobalSettings:
         # 이전 버전과의 호환성을 위해 run_on_startup이 없을 경우 기본값 False 사용
         if 'run_on_startup' not in data:
             data['run_on_startup'] = False
-        # 이전 버전과의 호환성을 위해 lock_window_resize가 없을 경우 기본값 False 사용
-        if 'lock_window_resize' not in data:
-            data['lock_window_resize'] = False
+        # 이전 버전의 lock_window_resize 필드는 제거됨 (무시)
+        if 'lock_window_resize' in data:
+            del data['lock_window_resize']
         # 이전 버전과의 호환성을 위해 always_on_top이 없을 경우 기본값 False 사용
         if 'always_on_top' not in data:
             data['always_on_top'] = False

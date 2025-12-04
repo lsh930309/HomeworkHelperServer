@@ -468,7 +468,6 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setSingleStep(0.25)
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
         self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
-        self.lock_window_resize_checkbox = QCheckBox("창 크기 조절 잠금")
         self.always_on_top_checkbox = QCheckBox("창을 항상 위에 표시") # <<< 항상 위 체크박스 추가
         self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
         # --- 알림 설정 체크박스들 ---
@@ -484,7 +483,6 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
         self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
         self.form_layout.addRow(self.run_on_startup_checkbox)
-        self.form_layout.addRow(self.lock_window_resize_checkbox)
         self.form_layout.addRow(self.always_on_top_checkbox) # <<< 레이아웃에 추가
         self.form_layout.addRow(self.run_as_admin_checkbox)
         # 알림 설정 섹션
@@ -510,7 +508,6 @@ class GlobalSettingsDialog(QDialog):
         self.sleep_correction_hours_spinbox.setValue(self.current_settings.sleep_correction_advance_notify_hours)
         self.cycle_advance_hours_spinbox.setValue(self.current_settings.cycle_deadline_advance_notify_hours)
         self.run_on_startup_checkbox.setChecked(self.current_settings.run_on_startup)
-        self.lock_window_resize_checkbox.setChecked(self.current_settings.lock_window_resize)
         self.always_on_top_checkbox.setChecked(self.current_settings.always_on_top) # <<< 값 로드
         self.run_as_admin_checkbox.setChecked(self.current_settings.run_as_admin)
         # 알림 설정
@@ -528,7 +525,6 @@ class GlobalSettingsDialog(QDialog):
             sleep_correction_advance_notify_hours=self.sleep_correction_hours_spinbox.value(),
             cycle_deadline_advance_notify_hours=self.cycle_advance_hours_spinbox.value(),
             run_on_startup=self.run_on_startup_checkbox.isChecked(),
-            lock_window_resize=self.lock_window_resize_checkbox.isChecked(),
             always_on_top=self.always_on_top_checkbox.isChecked(), # <<< 값 반환
             run_as_admin=self.run_as_admin_checkbox.isChecked(),
             notify_on_launch_success=self.notify_on_launch_success_checkbox.isChecked(),
