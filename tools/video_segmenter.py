@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-SSIM 기반 스마트 비디오 세그멘테이션
-비디오를 동적 배경 구간으로 분할하여 YOLO 과적합 방지 및 라벨링 효율 극대화
-UI는 고정되고 배경만 변하는 구간 선택
+ResNet 기반 스마트 비디오 세그멘테이션
+비디오를 의미적 유사도 기반으로 분할하여 정적 구간 제거 및 라벨링 효율 극대화
+코사인 유사도를 사용한 프레임 간 비교로 더 정확한 장면 전환 감지
 
 사용법:
     python tools/video_segmenter.py --input datasets/raw/gameplay.mp4 \
                                      --output datasets/clips/ \
-                                     --dynamic-low 0.4 \
-                                     --dynamic-high 0.8 \
-                                     --min-duration 5
+                                     --mode auto \
+                                     --use-gpu
 """
 
 import argparse
@@ -524,19 +523,23 @@ class SegmentConfig:
     # 모드 설정
     mode: str = "auto"                   # "auto" 또는 "custom"
 
-    # 정적 구간 감지 (너무 높은 SSIM = 잠수 구간)
-    static_threshold: float = 0.95       # SSIM이 이보다 높으면 너무 정적 (제외)
-    min_static_duration: float = 2.0     # 최소 정적 구간 길이 (초) - 이보다 짧은 정적 구간은 무시
+    # 정적 구간 감지 (ResNet 코사인 유사도 기준)
+    static_threshold: float = 0.95       # 코사인 유사도가 이보다 높으면 너무 정적 (제외)
+    min_static_duration: float = 0.25    # 최소 정적 구간 길이 (초) - 15프레임 @ 60fps
 
     # 출력 세그먼트 설정
-    target_segment_duration: float = 600.0  # 목표 세그먼트 길이 (초, 기본: 10분)
+    target_segment_duration: float = 30.0  # 목표 세그먼트 길이 (초) - 1800프레임 @ 60fps
 
-    # 성능 최적화
-    ssim_scale: float = 1.0              # SSIM 계산 시 해상도 스케일 (0.25 = 4배 빠름, 출력은 원본 유지)
-    frame_skip: int = 1                  # 프레임 스킵 (1=모든 프레임, 3=3프레임마다)
+    # ResNet Feature 추출 설정
+    feature_sample_rate: int = 1         # N프레임마다 feature 추출 (성능 최적화)
+    enable_visualization: bool = True    # 유사도 그래프 출력 여부
+
+    # 성능 최적화 (deprecated, 호환성 유지)
+    ssim_scale: float = 1.0              # (사용 안 함, 호환성 유지)
+    frame_skip: int = 1                  # (사용 안 함, feature_sample_rate로 대체됨)
     use_gpu: bool = False                # GPU 가속 사용 (CUDA 사용 가능 시)
-    initial_batch_size: int = 8          # 초기 배치 크기 (동적 조정됨)
-    max_vram_usage: float = 0.75         # 최대 VRAM 사용률 (0~1) - 75%로 하향 조정
+    initial_batch_size: int = 64          # 초기 배치 크기 (동적 조정됨)
+    max_vram_usage: float = 0.9         # 최대 VRAM 사용률 (0~1) - 75%로 하향 조정
 
     # 실험 기능
     save_discarded: bool = False         # 채택되지 않은 구간도 별도 저장
@@ -544,24 +547,24 @@ class SegmentConfig:
 
     # 인코딩 설정
     re_encode: bool = False              # 재인코딩 여부 (True=재인코딩, False=스트림 복사)
-    encode_quality: int = 23             # 인코딩 품질 (CRF, 0~51, 낮을수록 고화질)
+    encode_quality: int = 0             # 인코딩 품질 (CRF, 0~51, 낮을수록 고화질)
     encode_preset: str = 'fast'          # 인코딩 프리셋 (ultrafast ~ veryslow)
 
 
 class VideoSegmenter:
-    """SSIM 기반 비디오 세그멘테이션"""
+    """ResNet 기반 비디오 세그멘테이션 (코사인 유사도)"""
 
     def __init__(self, config: SegmentConfig = None):
         self.config = config or SegmentConfig()
         self.stats = {
             'total_frames': 0,
-            'static_segments_removed': 0,  # 제거된 정적 구간 수
-            'output_segments': 0,          # 최종 출력 세그먼트 수
-            'ssim_gpu_count': 0,           # GPU로 계산한 SSIM 횟수
-            'ssim_cpu_count': 0,           # CPU로 계산한 SSIM 횟수
-            'ssim_gpu_time': 0.0,          # GPU SSIM 총 시간 (초)
-            'ssim_cpu_time': 0.0,          # CPU SSIM 총 시간 (초)
-            'batch_size_adjustments': 0,   # 배치 크기 조정 횟수
+            'static_segments_removed': 0,     # 제거된 정적 구간 수
+            'output_segments': 0,             # 최종 출력 세그먼트 수
+            'similarity_gpu_count': 0,        # GPU로 계산한 유사도 횟수
+            'similarity_cpu_count': 0,        # CPU로 계산한 유사도 횟수
+            'similarity_gpu_time': 0.0,       # GPU 유사도 총 시간 (초)
+            'similarity_cpu_time': 0.0,       # CPU 유사도 총 시간 (초)
+            'batch_size_adjustments': 0,      # 배치 크기 조정 횟수
         }
 
         # GPU 사용 가능 여부 확인
@@ -569,9 +572,21 @@ class VideoSegmenter:
         self.device = None
         self.current_batch_size = self.config.initial_batch_size
         self.keyframes = []  # Keyframe 타임스탬프 캐시
+        self.feature_extractor = None  # ResNet Feature Extractor
+        self.similarity_scores_cache = []  # 유사도 점수 캐시 (시각화용)
 
         if self.config.use_gpu:
             self.gpu_available = self._check_gpu_available()
+
+        # Feature Extractor 초기화
+        if self.gpu_available:
+            try:
+                from tools.feature_extractor import FeatureExtractor
+                self.feature_extractor = FeatureExtractor(device=self.device, use_fp16=True)
+            except Exception as e:
+                print(f"⚠️ Feature Extractor 초기화 실패: {e}")
+                print("   CPU 모드로 전환합니다.")
+                self.gpu_available = False
 
         # Auto 모드: 해상도 기반 자동 설정
         if self.config.mode == "auto":
@@ -586,20 +601,20 @@ class VideoSegmenter:
     def _print_initial_status(self):
         """초기 설정 및 상태 출력"""
         print("=" * 60)
-        print(f"🎥 비디오 세그멘터 초기화")
+        print(f"🎥 비디오 세그멘터 초기화 (ResNet 기반)")
         print(f"   - 모드: {self.config.mode.upper()}")
         print(f"   - GPU 가속: {'활성화' if self.gpu_available else '비활성화'}")
         if self.gpu_available:
             import torch
             print(f"     • 장치: {torch.cuda.get_device_name(0)}")
             print(f"     • VRAM 제한: {self.config.max_vram_usage * 100:.0f}%")
-        
+
         print(f"   - 설정:")
         print(f"     • 정적 임계값: {self.config.static_threshold}")
         print(f"     • 최소 정적 길이: {self.config.min_static_duration}초")
         print(f"     • 목표 세그먼트: {self.config.target_segment_duration}초")
-        print(f"     • SSIM 스케일: {self.config.ssim_scale}")
-        print(f"     • 프레임 스킵: {self.config.frame_skip}")
+        print(f"     • Feature 샘플링: {self.config.feature_sample_rate}프레임마다")
+        print(f"     • 시각화: {'활성화' if self.config.enable_visualization else '비활성화'}")
         print("=" * 60, flush=True)
 
     def _apply_auto_config(self):
@@ -607,12 +622,12 @@ class VideoSegmenter:
         Auto 모드: 비디오 특성에 따라 자동 설정
         (실제 비디오 정보는 detect_segments에서 사용 가능하므로 여기서는 기본값만 설정)
         """
-        print("🤖 Auto 모드 활성화: 최적 설정 자동 적용")
+        print("🤖 Auto 모드 활성화: 최적 설정 자동 적용 (ResNet 기반)")
         # 기본 자동 설정값
-        self.config.min_static_duration = 1.0    # 1.0초 (기존 2.0)
-        self.config.target_segment_duration = 30.0 # 30초 (기존 600)
-        self.config.ssim_scale = 0.25            # 0.25 (기존 0.5) - 성능 최적화
-        self.config.frame_skip = 1               # 1 (기존 2) - 정확도 향상
+        self.config.min_static_duration = 0.25   # 15프레임 @ 60fps
+        self.config.target_segment_duration = 30.0 # 1800프레임 @ 60fps
+        self.config.feature_sample_rate = 1      # 5프레임마다 feature 추출
+        self.config.enable_visualization = True  # 유사도 그래프 출력
 
     def _register_cleanup_handlers(self):
         """atexit 및 signal handler 등록"""
@@ -734,47 +749,52 @@ class VideoSegmenter:
             print("   CPU 모드로 실행합니다.")
             return False
 
-    def calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
+    def calculate_similarity(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
-        두 이미지 간 SSIM 계산 (CPU 또는 GPU)
+        두 프레임 간 코사인 유사도 계산 (ResNet 기반)
 
-        성능 최적화: config.ssim_scale < 1.0이면 해상도 축소 후 계산
-        (segment 구간 결정에만 사용, 출력은 원본 해상도 유지)
+        1. 이미지 → ResNet feature 추출 (512차원)
+        2. L2 정규화
+        3. 코사인 유사도 = 내적
+
+        Returns:
+            유사도 (0~1, 높을수록 유사)
         """
         import time
 
-        # 해상도 축소 (설정된 경우)
-        if self.config.ssim_scale < 1.0:
-            h, w = img1.shape[:2]
-            new_h = int(h * self.config.ssim_scale)
-            new_w = int(w * self.config.ssim_scale)
-            img1 = cv2.resize(img1, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            img2 = cv2.resize(img2, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-        # GPU 가속 사용 (PyTorch 사용 가능 시)
-        if self.gpu_available:
+        # GPU 가속 사용 (Feature Extractor 사용 가능 시)
+        if self.feature_extractor is not None:
             try:
                 start_time = time.perf_counter()
-                score = self._calculate_ssim_gpu(img1, img2)
-                elapsed = time.perf_counter() - start_time
 
-                self.stats['ssim_gpu_count'] += 1
-                self.stats['ssim_gpu_time'] += elapsed
-                return score
+                # Feature 추출 (배치 크기 2)
+                features = self.feature_extractor.extract_frame_features([img1, img2])
+
+                if len(features) >= 2:
+                    # 코사인 유사도 계산
+                    score = self.feature_extractor.calculate_cosine_similarity(features[0], features[1])
+                    elapsed = time.perf_counter() - start_time
+
+                    self.stats['similarity_gpu_count'] += 1
+                    self.stats['similarity_gpu_time'] += elapsed
+                    return score
+                else:
+                    raise RuntimeError("Feature 추출 실패")
+
             except (OSError, RuntimeError, Exception) as e:
                 # GPU 계산 실패 시 CPU로 자동 폴백
-                print(f"⚠️ GPU SSIM 계산 실패, CPU로 전환: {e}")
-                self.gpu_available = False  # 이후 모든 계산은 CPU 사용
+                print(f"⚠️ GPU Feature 추출 실패, CPU SSIM으로 전환: {e}")
+                self.feature_extractor = None  # 이후 모든 계산은 CPU SSIM 사용
 
-        # CPU 버전 (기존 코드)
+        # CPU 버전 (SSIM Fallback)
         start_time = time.perf_counter()
         gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         score, _ = ssim(gray1, gray2, full=True)
         elapsed = time.perf_counter() - start_time
 
-        self.stats['ssim_cpu_count'] += 1
-        self.stats['ssim_cpu_time'] += elapsed
+        self.stats['similarity_cpu_count'] += 1
+        self.stats['similarity_cpu_time'] += elapsed
         return score
 
     def _adjust_batch_size(self, error: Exception = None):
@@ -815,9 +835,9 @@ class VideoSegmenter:
 
             # 2. 메모리 여유 시 배치 크기 증가
             # 남은 메모리가 60% 이상이고 (보수적 접근) 현재 배치가 최대가 아니면 증가
-            if free_ratio > 0.6 and self.current_batch_size < 128:
+            if free_ratio > 0.6 and self.current_batch_size < 512:
                 old_size = self.current_batch_size
-                self.current_batch_size = min(128, self.current_batch_size * 2)
+                self.current_batch_size = min(512, self.current_batch_size * 2)
                 if old_size != self.current_batch_size:
                     self.stats['batch_size_adjustments'] += 1
                     print(f"🚀 GPU 여유 메모리 확보 ({free_ratio*100:.1f}%), 배치 크기 증가: {old_size} → {self.current_batch_size}")
@@ -826,86 +846,43 @@ class VideoSegmenter:
             # VRAM 조정 실패는 무시
             pass
 
-    def _calculate_ssim_gpu_batch(self, frame_pairs: list) -> list:
+    def _calculate_similarity_batch(self, frame_pairs: list) -> list:
         """
-        GPU를 사용한 배치 SSIM 계산 (PyTorch) - 성능 최적화
+        배치 단위 유사도 계산 (ResNet 기반, GPU 최적화)
+
+        1. 모든 프레임을 배치로 묶기
+        2. ResNet forward pass (배치 처리)
+        3. L2 정규화
+        4. 페어별 코사인 유사도 계산
 
         Args:
             frame_pairs: [(img1, img2), ...] 프레임 쌍 리스트
 
         Returns:
-            SSIM 점수 리스트
+            유사도 점수 리스트
         """
-        try:
-            import torch
-            import torch.nn.functional as F
+        if not frame_pairs:
+            return []
 
-            if not frame_pairs:
-                return []
+        # Feature Extractor 사용 (GPU)
+        if self.feature_extractor is not None:
+            try:
+                similarities = self.feature_extractor.calculate_similarity_batch(frame_pairs)
+                return similarities
 
-            batch_size = len(frame_pairs)
+            except Exception as e:
+                # GPU 오류 시 CPU로 폴백
+                print(f"⚠️ GPU 배치 유사도 계산 실패, CPU SSIM으로 폴백: {e}")
+                self.feature_extractor = None
 
-            # BGR to Grayscale & Resize (CPU에서 배치 처리)
-            gray1_list = []
-            gray2_list = []
-
-            # 해상도 축소 (설정된 경우)
-            target_size = None
-            if self.config.ssim_scale < 1.0:
-                h, w = frame_pairs[0][0].shape[:2]
-                new_h = int(h * self.config.ssim_scale)
-                new_w = int(w * self.config.ssim_scale)
-                target_size = (new_w, new_h)
-
-            for img1, img2 in frame_pairs:
-                if target_size:
-                    img1 = cv2.resize(img1, target_size, interpolation=cv2.INTER_AREA)
-                    img2 = cv2.resize(img2, target_size, interpolation=cv2.INTER_AREA)
-                
-                gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-                gray1_list.append(gray1)
-                gray2_list.append(gray2)
-
-            # NumPy to Torch Tensor (배치)
-            gray1_batch = np.stack(gray1_list)
-            gray2_batch = np.stack(gray2_list)
-
-            t1 = torch.from_numpy(gray1_batch).float().unsqueeze(1).to(self.device) / 255.0
-            t2 = torch.from_numpy(gray2_batch).float().unsqueeze(1).to(self.device) / 255.0
-
-            # SSIM 계산 (배치)
-            C1 = 0.01 ** 2
-            C2 = 0.03 ** 2
-
-            mu1 = F.avg_pool2d(t1, 11, 1, 5)
-            mu2 = F.avg_pool2d(t2, 11, 1, 5)
-
-            mu1_sq = mu1 ** 2
-            mu2_sq = mu2 ** 2
-            mu1_mu2 = mu1 * mu2
-
-            sigma1_sq = F.avg_pool2d(t1 ** 2, 11, 1, 5) - mu1_sq
-            sigma2_sq = F.avg_pool2d(t2 ** 2, 11, 1, 5) - mu2_sq
-            sigma12 = F.avg_pool2d(t1 * t2, 11, 1, 5) - mu1_mu2
-
-            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
-                       ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-
-            # 배치별 평균 SSIM 점수
-            scores = ssim_map.mean(dim=(1, 2, 3)).cpu().tolist()
-            return scores
-
-        except Exception as e:
-            # GPU 오류 시 CPU로 폴백 (단일 프레임 처리)
-            print(f"⚠️ GPU 배치 SSIM 계산 실패, CPU로 폴백: {e}")
-            scores = []
-            for img1, img2 in frame_pairs:
-                gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-                score, _ = ssim(gray1, gray2, full=True)
-                scores.append(score)
-            return scores
+        # CPU Fallback (SSIM)
+        scores = []
+        for img1, img2 in frame_pairs:
+            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+            score, _ = ssim(gray1, gray2, full=True)
+            scores.append(score)
+        return scores
 
     def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
@@ -988,6 +965,9 @@ class VideoSegmenter:
             # 1단계: 정적 구간 탐지
             static_intervals = self._scan_static_intervals(video_path, progress_callback)
 
+            # static_intervals 저장 (시각화용)
+            self.static_intervals_cache = static_intervals
+
             # 2단계: 유효 구간 계산
             valid_intervals = self._compute_valid_intervals(static_intervals, video_path)
 
@@ -1026,6 +1006,7 @@ class VideoSegmenter:
         print(f"   - FPS: {fps:.2f}")
         print(f"   - 총 프레임: {total_frames:,}개")
         print(f"   - 길이: {total_frames / fps / 60:.1f}분")
+        print(f"   - Feature 샘플링: {self.config.feature_sample_rate}프레임마다")
         print(f"   - 동적 배치 크기: {self.current_batch_size} (자동 조정)")
 
         # 2단계: 첫 프레임 읽기 검증
@@ -1056,9 +1037,12 @@ class VideoSegmenter:
         UPDATE_INTERVAL = 0.1
 
         # GPU 배치 처리
-        use_batch = self.gpu_available and self.device.type == 'cuda'
+        use_batch = self.feature_extractor is not None
         frame_batch = []
         frame_indices = []
+
+        # 유사도 점수 캐시 초기화
+        self.similarity_scores_cache = []
 
         # FrameReader 시작 (I/O 병렬 처리)
         reader = FrameReader(cap, queue_size=64)
@@ -1073,6 +1057,11 @@ class VideoSegmenter:
 
                 frame_idx += 1
 
+                # 프레임 샘플링 (feature_sample_rate 사용)
+                if frame_idx % self.config.feature_sample_rate != 0:
+                    prev_frame = current_frame
+                    continue
+
                 # 진행률 업데이트
                 current_time = time.time()
                 if progress_callback and (current_time - last_update_time >= UPDATE_INTERVAL):
@@ -1085,15 +1074,18 @@ class VideoSegmenter:
 
                     if len(frame_batch) >= self.current_batch_size:
                         try:
-                            ssim_scores = self._calculate_ssim_gpu_batch(frame_batch)
+                            similarity_scores = self._calculate_similarity_batch(frame_batch)
 
-                            for batch_idx, ssim_score in enumerate(ssim_scores):
-                                if ssim_score >= self.config.static_threshold:
+                            for batch_idx, similarity_score in enumerate(similarity_scores):
+                                # 유사도 점수 캐시에 저장 (시각화용)
+                                self.similarity_scores_cache.append((frame_indices[batch_idx], similarity_score))
+
+                                if similarity_score >= self.config.static_threshold:
                                     if static_start is None:
                                         static_start = (frame_indices[batch_idx] - 1) / fps
                                     consecutive_static_frames += 1
                                 else:
-                                    if static_start is not None and consecutive_static_frames * self.config.frame_skip / fps >= self.config.min_static_duration:
+                                    if static_start is not None and consecutive_static_frames * self.config.feature_sample_rate / fps >= self.config.min_static_duration:
                                         static_end = frame_indices[batch_idx] / fps
                                         static_intervals.append((static_start, static_end))
                                         self.stats['static_segments_removed'] += 1
@@ -1107,27 +1099,32 @@ class VideoSegmenter:
                             frame_indices.clear()
 
                         except Exception as e:
-                            import torch
-                            if isinstance(e, torch.cuda.OutOfMemoryError):
-                                self._adjust_batch_size(e)
-                                frame_batch.clear()
-                                frame_indices.clear()
-                                continue
-                            else:
-                                raise
+                            try:
+                                import torch
+                                if isinstance(e, torch.cuda.OutOfMemoryError):
+                                    self._adjust_batch_size(e)
+                                    frame_batch.clear()
+                                    frame_indices.clear()
+                                    continue
+                            except ImportError:
+                                pass
+                            raise
 
                     prev_frame = current_frame
                     continue
 
                 # CPU 단일 처리
-                ssim_score = self.calculate_ssim(prev_frame, current_frame)
+                similarity_score = self.calculate_similarity(prev_frame, current_frame)
 
-                if ssim_score >= self.config.static_threshold:
+                # 유사도 점수 캐시에 저장
+                self.similarity_scores_cache.append((frame_idx, similarity_score))
+
+                if similarity_score >= self.config.static_threshold:
                     if static_start is None:
                         static_start = (frame_idx - 1) / fps
                     consecutive_static_frames += 1
                 else:
-                    if static_start is not None and consecutive_static_frames / fps >= self.config.min_static_duration:
+                    if static_start is not None and consecutive_static_frames * self.config.feature_sample_rate / fps >= self.config.min_static_duration:
                         static_end = frame_idx / fps
                         static_intervals.append((static_start, static_end))
                         self.stats['static_segments_removed'] += 1
@@ -1143,12 +1140,13 @@ class VideoSegmenter:
             cap.release()
 
         # 마지막 정적 구간 처리
-        if static_start is not None and consecutive_static_frames / fps >= self.config.min_static_duration:
+        if static_start is not None and consecutive_static_frames * self.config.feature_sample_rate / fps >= self.config.min_static_duration:
             static_end = frame_idx / fps
             static_intervals.append((static_start, static_end))
             self.stats['static_segments_removed'] += 1
 
         print(f"\n✅ 정적 구간 {len(static_intervals)}개 탐지 완료")
+        print(f"   - 유사도 점수 {len(self.similarity_scores_cache)}개 수집됨")
         return static_intervals
 
     def _compute_valid_intervals(
@@ -1302,6 +1300,75 @@ class VideoSegmenter:
             avg_ssim=avg_ssim
         )
 
+    def _visualize_similarity_scores(
+        self,
+        output_dir: Path,
+        fps: float,
+        static_intervals: List[Tuple[float, float]],
+        segments: List[VideoSegment]
+    ):
+        """
+        유사도 점수 시각화 (./result_seg/similarity_graph.png)
+
+        그래프 구성:
+        - X축: 시간(초)
+        - Y축: 유사도 점수 (0~1)
+        - 빨간 영역: 정적 구간 (제거될 부분)
+        - 녹색 영역: 유효 구간 (사용될 부분)
+        - 파란 선: 세그먼트 경계 (30초 단위)
+        """
+        if not self.similarity_scores_cache:
+            print("⚠️ 유사도 점수가 없어 시각화를 건너뜁니다.")
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # GUI 없는 환경 지원
+            import matplotlib.pyplot as plt
+
+            # 데이터 준비
+            frame_numbers = [frame_idx for frame_idx, _ in self.similarity_scores_cache]
+            scores = [score for _, score in self.similarity_scores_cache]
+            times = [frame_idx / fps for frame_idx in frame_numbers]
+
+            # 그래프 생성
+            fig, ax = plt.subplots(figsize=(16, 6))
+
+            # 유사도 점수 플롯
+            ax.plot(times, scores, 'b-', linewidth=0.5, label='Cosine Similarity', alpha=0.7)
+
+            # 정적 구간 표시 (빨간 배경)
+            for start_time, end_time in static_intervals:
+                ax.axvspan(start_time, end_time, color='red', alpha=0.2, label='Static Interval' if static_intervals.index((start_time, end_time)) == 0 else '')
+
+            # 세그먼트 경계 표시 (파란 세로선)
+            for idx, segment in enumerate(segments):
+                ax.axvline(x=segment.start_time, color='blue', linestyle='--', linewidth=1.5, alpha=0.7, label='Segment Boundary' if idx == 0 else '')
+
+            # 임계값 선 표시
+            ax.axhline(y=self.config.static_threshold, color='orange', linestyle=':', linewidth=2, label=f'Static Threshold ({self.config.static_threshold})')
+
+            # 레이블 및 제목
+            ax.set_xlabel('Time (seconds)', fontsize=12)
+            ax.set_ylabel('Cosine Similarity', fontsize=12)
+            ax.set_title('Video Similarity Analysis (ResNet-based)', fontsize=14, fontweight='bold')
+            ax.set_ylim(0, 1.05)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right', fontsize=10)
+
+            # 저장
+            output_path = output_dir / 'similarity_graph.png'
+            plt.tight_layout()
+            plt.savefig(output_path, dpi=150)
+            plt.close()
+
+            print(f"📊 유사도 그래프 저장: {output_path}")
+
+        except ImportError:
+            print("⚠️ matplotlib가 설치되지 않아 시각화를 건너뜁니다.")
+        except Exception as e:
+            print(f"⚠️ 시각화 생성 실패: {e}")
+
     def _is_valid_segment(self, segment: VideoSegment) -> bool:
         """세그먼트 유효성 검증"""
         # 최소 길이 체크
@@ -1335,6 +1402,23 @@ class VideoSegmenter:
         Returns:
             저장된 비디오 파일 경로 리스트
         """
+        # 시각화 생성 (활성화된 경우)
+        if self.config.enable_visualization:
+            # FPS 가져오기
+            cap = cv2.VideoCapture(str(video_path))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+
+            # static_intervals가 캐시되어 있는 경우에만 시각화
+            static_intervals = getattr(self, 'static_intervals_cache', [])
+
+            self._visualize_similarity_scores(
+                output_dir=output_dir,
+                fps=fps,
+                static_intervals=static_intervals,
+                segments=segments
+            )
+
         # ffmpeg 확인 및 자동 설치
         if not check_and_install_ffmpeg():
             raise RuntimeError(
@@ -1622,20 +1706,20 @@ class VideoSegmenter:
         print(f"   - 제거된 정적 구간: {self.stats['static_segments_removed']:,}개")
         print(f"   - 최종 출력 세그먼트: {self.stats['output_segments']:,}개")
 
-        # SSIM 성능 통계
-        gpu_count = self.stats['ssim_gpu_count']
-        cpu_count = self.stats['ssim_cpu_count']
-        gpu_time = self.stats['ssim_gpu_time']
-        cpu_time = self.stats['ssim_cpu_time']
+        # 유사도 성능 통계
+        gpu_count = self.stats['similarity_gpu_count']
+        cpu_count = self.stats['similarity_cpu_count']
+        gpu_time = self.stats['similarity_gpu_time']
+        cpu_time = self.stats['similarity_cpu_time']
 
         if gpu_count > 0 or cpu_count > 0:
-            print(f"\n⚡ SSIM 성능 통계:")
+            print(f"\n⚡ 유사도 계산 성능 통계:")
             if gpu_count > 0:
                 avg_gpu_time = (gpu_time / gpu_count) * 1000  # ms
-                print(f"   - GPU SSIM: {gpu_count:,}회, 평균 {avg_gpu_time:.2f}ms/프레임, 총 {gpu_time:.2f}초")
+                print(f"   - GPU (ResNet): {gpu_count:,}회, 평균 {avg_gpu_time:.2f}ms/프레임, 총 {gpu_time:.2f}초")
             if cpu_count > 0:
                 avg_cpu_time = (cpu_time / cpu_count) * 1000  # ms
-                print(f"   - CPU SSIM: {cpu_count:,}회, 평균 {avg_cpu_time:.2f}ms/프레임, 총 {cpu_time:.2f}초")
+                print(f"   - CPU (SSIM Fallback): {cpu_count:,}회, 평균 {avg_cpu_time:.2f}ms/프레임, 총 {cpu_time:.2f}초")
             if gpu_count > 0 and cpu_count > 0:
                 speedup = (cpu_time / cpu_count) / (gpu_time / gpu_count)
                 print(f"   - GPU 가속 배율: {speedup:.1f}x")

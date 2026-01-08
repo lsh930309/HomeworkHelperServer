@@ -179,8 +179,8 @@ class PreprocessingTab(QWidget):
         self.static_threshold_spin.setRange(0.0, 1.0)
         self.static_threshold_spin.setSingleStep(0.01)
         self.static_threshold_spin.setValue(0.95)
-        self.static_threshold_spin.setToolTip("SSIM 점수가 이보다 높으면 '정적(멈춘 화면)'으로 간주합니다.")
-        custom_params_layout.addRow("정적 구간 임계값 (Static Threshold):", self.static_threshold_spin)
+        self.static_threshold_spin.setToolTip("코사인 유사도가 이보다 높으면 '정적(멈춘 화면)'으로 간주합니다. (ResNet 기반)")
+        custom_params_layout.addRow("정적 구간 임계값 (Similarity Threshold):", self.static_threshold_spin)
 
         # min_static_duration
         self.min_static_duration_spin = QDoubleSpinBox()
@@ -200,20 +200,18 @@ class PreprocessingTab(QWidget):
         self.target_duration_spin.setToolTip("생성될 세그먼트 하나의 목표 길이입니다.")
         custom_params_layout.addRow("목표 세그먼트 길이:", self.target_duration_spin)
 
-        # ssim_scale
-        self.ssim_scale_spin = QDoubleSpinBox()
-        self.ssim_scale_spin.setRange(0.1, 1.0)
-        self.ssim_scale_spin.setSingleStep(0.05)
-        self.ssim_scale_spin.setValue(1.0)
-        self.ssim_scale_spin.setToolTip("SSIM 계산 시 해상도 비율입니다 (1.0=원본).")
-        custom_params_layout.addRow("SSIM 해상도 스케일:", self.ssim_scale_spin)
+        # feature_sample_rate (기존 ssim_scale 대체)
+        self.feature_sample_rate_spin = QSpinBox()
+        self.feature_sample_rate_spin.setRange(1, 10)
+        self.feature_sample_rate_spin.setValue(5)
+        self.feature_sample_rate_spin.setToolTip("N프레임마다 ResNet feature를 추출합니다. (5 = 5프레임마다)")
+        custom_params_layout.addRow("Feature 샘플링 비율:", self.feature_sample_rate_spin)
 
-        # frame_skip
-        self.frame_skip_spin = QSpinBox()
-        self.frame_skip_spin.setRange(1, 5)
-        self.frame_skip_spin.setValue(1)
-        self.frame_skip_spin.setToolTip("SSIM 계산 시 건너뛸 프레임 수입니다.")
-        custom_params_layout.addRow("프레임 스킵:", self.frame_skip_spin)
+        # enable_visualization
+        self.enable_visualization_checkbox = QCheckBox("유사도 그래프 출력")
+        self.enable_visualization_checkbox.setChecked(True)
+        self.enable_visualization_checkbox.setToolTip("./result_seg/similarity_graph.png 생성")
+        custom_params_layout.addRow("", self.enable_visualization_checkbox)
         
         # Keyframe snap
         self.enable_keyframe_snap = QCheckBox("Keyframe 정렬 사용 (권장)")
@@ -322,8 +320,8 @@ class PreprocessingTab(QWidget):
                 "static_threshold": self.static_threshold_spin.value(),
                 "min_static_duration": self.min_static_duration_spin.value(),
                 "target_segment_duration": self.target_duration_spin.value(),
-                "ssim_scale": self.ssim_scale_spin.value(),
-                "frame_skip": self.frame_skip_spin.value(),
+                "feature_sample_rate": self.feature_sample_rate_spin.value(),
+                "enable_visualization": self.enable_visualization_checkbox.isChecked(),
                 "enable_keyframe_snap": self.enable_keyframe_snap.isChecked()
             })
 
