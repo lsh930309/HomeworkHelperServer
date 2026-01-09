@@ -1148,105 +1148,159 @@ class VideoSegmenter:
         video_path: Path
     ) -> List[VideoSegment]:
         """
-        3단계: Virtual Timeline 기반 세그먼트 분할
+        3단계: Virtual Timeline 기반 세그먼트 분할 (개선된 로직)
 
-        누적 시간이 target_segment_duration에 도달할 때마다 분할
+        1. 모든 유효 구간에 Keyframe 스냅 적용
+        2. 중복/겹침 제거 및 병합 → clean_intervals
+        3. clean_intervals를 target_duration에 맞게 분할
+        4. 최종 세그먼트 생성
         """
         cap = cv2.VideoCapture(str(video_path))
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
 
-        segments = []
-        accumulated_time = 0.0
-        segment_intervals = []  # 현재 세그먼트에 포함될 구간들
-
+        # ===== 1단계: Keyframe 스냅 적용 =====
+        snapped_intervals = []
         for start, end in valid_intervals:
-            interval_duration = end - start
-
-            # Keyframe 정렬
             if self.config.enable_keyframe_snap and self.keyframes:
                 start = snap_to_keyframe(start, self.keyframes, 'before')
                 end = snap_to_keyframe(end, self.keyframes, 'after')
-                interval_duration = end - start
-                
-            # interval_duration이 0 이하면 건너뜀
-            if interval_duration <= 0:
-                continue
-
-            # 현재 구간이 남은 목표 시간을 초과하는지 확인
-            remaining_time = self.config.target_segment_duration - accumulated_time
             
-            while interval_duration >= remaining_time:
-                # 현재 구간을 잘라서 세그먼트 완성
-                split_point = start + remaining_time
+            if end > start:
+                snapped_intervals.append((start, end))
+
+        if not snapped_intervals:
+            return []
+
+        # ===== 2단계: 중복 제거 및 병합 =====
+        clean_intervals = self._merge_overlapping_intervals(snapped_intervals)
+        
+        total_clean_duration = sum(e - s for s, e in clean_intervals)
+        print(f"🔧 Keyframe 스냅 후 구간 병합: {len(snapped_intervals)}개 → {len(clean_intervals)}개 (총 {total_clean_duration / 60:.1f}분)")
+
+        # ===== 3단계: target_duration에 맞게 분할 =====
+        segments = []
+        accumulated_time = 0.0
+        segment_intervals = []
+        target = self.config.target_segment_duration
+
+        for start, end in clean_intervals:
+            current_pos = start
+            
+            while current_pos < end:
+                remaining_for_segment = target - accumulated_time
+                remaining_in_interval = end - current_pos
                 
-                # Keyframe 정렬 (자르는 지점)
-                if self.config.enable_keyframe_snap and self.keyframes:
-                    split_point = snap_to_keyframe(split_point, self.keyframes, 'before')
-                    # 너무 짧게 잘리는 것 방지 (최소 1초)
-                    if split_point <= start + 1.0:
-                         split_point = snap_to_keyframe(start + remaining_time, self.keyframes, 'after')
-                
-                # 실제 잘린 길이
-                actual_duration = split_point - start
-                
-                if actual_duration > 0:
-                    segment_intervals.append((start, split_point))
-                    accumulated_time += actual_duration
+                if remaining_in_interval <= remaining_for_segment:
+                    # 현재 interval을 전부 사용
+                    segment_intervals.append((current_pos, end))
+                    accumulated_time += remaining_in_interval
+                    current_pos = end
+                else:
+                    # 현재 interval을 잘라서 세그먼트 완성
+                    cut_point = current_pos + remaining_for_segment
+                    
+                    # Keyframe 스냅 (커팅 지점)
+                    if self.config.enable_keyframe_snap and self.keyframes:
+                        cut_point = snap_to_keyframe(cut_point, self.keyframes, 'before')
+                        # 너무 짧으면 다음 keyframe으로
+                        if cut_point <= current_pos + 1.0:
+                            cut_point = snap_to_keyframe(current_pos + remaining_for_segment, self.keyframes, 'after')
+                        # end를 넘지 않도록
+                        cut_point = min(cut_point, end)
+                    
+                    actual_duration = cut_point - current_pos
+                    
+                    if actual_duration > 0:
+                        segment_intervals.append((current_pos, cut_point))
+                        accumulated_time += actual_duration
                     
                     # 세그먼트 생성
-                    seg_start = segment_intervals[0][0]
-                    seg_end = segment_intervals[-1][1]
-                    segments.append(VideoSegment(
-                        start_frame=int(seg_start * fps),
-                        end_frame=int(seg_end * fps),
-                        start_time=seg_start,
-                        end_time=seg_end,
-                        duration=accumulated_time,
-                        avg_ssim=0.0,
-                        intervals=list(segment_intervals)
-                    ))
+                    if segment_intervals:
+                        seg_start = segment_intervals[0][0]
+                        seg_end = segment_intervals[-1][1]
+                        seg_duration = sum(e - s for s, e in segment_intervals)
+                        
+                        segments.append(VideoSegment(
+                            start_frame=int(seg_start * fps),
+                            end_frame=int(seg_end * fps),
+                            start_time=seg_start,
+                            end_time=seg_end,
+                            duration=seg_duration,
+                            avg_ssim=0.0,
+                            intervals=list(segment_intervals)
+                        ))
+                    
+                    # 다음 세그먼트 준비
+                    current_pos = cut_point
+                    accumulated_time = 0.0
+                    segment_intervals = []
                 
-                # 다음 세그먼트 준비
-                start = split_point
-                interval_duration = end - start
-                accumulated_time = 0.0
-                segment_intervals = []  # 중요: 새 리스트로 초기화
-                remaining_time = self.config.target_segment_duration
-                
-                # interval_duration이 0 이하면 루프 탈출
-                if interval_duration <= 0:
+                # 무한 루프 방지
+                if current_pos >= end:
                     break
-
-            # 남은 구간 추가
-            if interval_duration > 0:
-                segment_intervals.append((start, end))
-                accumulated_time += interval_duration
 
         # 마지막 세그먼트
         if segment_intervals:
             seg_start = segment_intervals[0][0]
             seg_end = segment_intervals[-1][1]
+            seg_duration = sum(e - s for s, e in segment_intervals)
+            
             segments.append(VideoSegment(
                 start_frame=int(seg_start * fps),
                 end_frame=int(seg_end * fps),
                 start_time=seg_start,
                 end_time=seg_end,
-                duration=accumulated_time,
+                duration=seg_duration,
                 avg_ssim=0.0,
                 intervals=list(segment_intervals)
             ))
 
-        # ===== Intervals 중복 제거 및 병합 =====
-        segments = self._deduplicate_segment_intervals(segments, fps)
-
         self.stats['output_segments'] = len(segments)
         if segments:
-            print(f"✅ 최종 세그먼트 {len(segments)}개 생성 (평균 {sum(s.duration for s in segments) / len(segments) / 60:.1f}분)")
+            avg_duration = sum(s.duration for s in segments) / len(segments)
+            print(f"✅ 최종 세그먼트 {len(segments)}개 생성 (평균 {avg_duration:.1f}초)")
         else:
             print("⚠️ 유효한 세그먼트가 없습니다.")
 
         return segments
+
+    def _merge_overlapping_intervals(
+        self,
+        intervals: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+        """
+        겹치거나 인접한 구간 병합
+        """
+        if not intervals:
+            return []
+        
+        # 중복 제거 (소수점 3자리 반올림)
+        seen = set()
+        unique = []
+        for s, e in intervals:
+            key = (round(s, 3), round(e, 3))
+            if key not in seen:
+                seen.add(key)
+                unique.append((s, e))
+        
+        # 정렬
+        unique.sort(key=lambda x: x[0])
+        
+        # 병합
+        merged = []
+        for start, end in unique:
+            if not merged:
+                merged.append([start, end])
+            else:
+                last_start, last_end = merged[-1]
+                # 겹치거나 인접 (0.1초 이내)
+                if start <= last_end + 0.1:
+                    merged[-1][1] = max(last_end, end)
+                else:
+                    merged.append([start, end])
+        
+        return [(s, e) for s, e in merged]
 
     def _deduplicate_segment_intervals(
         self,
