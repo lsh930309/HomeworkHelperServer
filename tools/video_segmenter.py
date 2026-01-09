@@ -19,7 +19,7 @@ from typing import List, Tuple, Optional
 from dataclasses import dataclass
 import json
 from datetime import datetime
-from skimage.metrics import structural_similarity as ssim
+from skimage.metrics import structural_similarity as ssim  # Legacy, 사용 안함
 import subprocess
 import shutil
 import sys
@@ -521,14 +521,14 @@ class VideoSegment:
 class SegmentConfig:
     """세그멘테이션 설정"""
     # 모드 설정
-    mode: str = "auto"                   # "auto" 또는 "custom"
+    mode: str = "custom"                 # "custom" 고정
 
     # 정적 구간 감지 (ResNet 코사인 유사도 기준)
     static_threshold: float = 0.95       # 코사인 유사도가 이보다 높으면 너무 정적 (제외)
-    min_static_duration: float = 0.25    # 최소 정적 구간 길이 (초) - 15프레임 @ 60fps
+    min_static_duration: float = 1.0     # 최소 정적 구간 길이 (초)
 
     # 출력 세그먼트 설정
-    target_segment_duration: float = 30.0  # 목표 세그먼트 길이 (초) - 1800프레임 @ 60fps
+    target_segment_duration: float = 30.0  # 목표 세그먼트 길이 (초)
 
     # ResNet Feature 추출 설정
     feature_sample_rate: int = 1         # N프레임마다 feature 추출 (성능 최적화)
@@ -537,9 +537,9 @@ class SegmentConfig:
     # 성능 최적화 (deprecated, 호환성 유지)
     ssim_scale: float = 1.0              # (사용 안 함, 호환성 유지)
     frame_skip: int = 1                  # (사용 안 함, feature_sample_rate로 대체됨)
-    use_gpu: bool = False                # GPU 가속 사용 (CUDA 사용 가능 시)
-    initial_batch_size: int = 64          # 초기 배치 크기 (동적 조정됨)
-    max_vram_usage: float = 0.9         # 최대 VRAM 사용률 (0~1) - 75%로 하향 조정
+    use_gpu: bool = False                # GPU 가속 사용 (CUDA 필수)
+    initial_batch_size: int = 128        # 초기 배치 크기 (동적 조정됨)
+    max_vram_usage: float = 0.85         # 최대 VRAM 사용률 (85%)
 
     # 실험 기능
     save_discarded: bool = False         # 채택되지 않은 구간도 별도 저장
@@ -588,10 +588,6 @@ class VideoSegmenter:
                 print("   CPU 모드로 전환합니다.")
                 self.gpu_available = False
 
-        # Auto 모드: 해상도 기반 자동 설정
-        if self.config.mode == "auto":
-            self._apply_auto_config()
-
         # 초기 상태 출력
         self._print_initial_status()
 
@@ -617,17 +613,6 @@ class VideoSegmenter:
         print(f"     • 시각화: {'활성화' if self.config.enable_visualization else '비활성화'}")
         print("=" * 60, flush=True)
 
-    def _apply_auto_config(self):
-        """
-        Auto 모드: 비디오 특성에 따라 자동 설정
-        (실제 비디오 정보는 detect_segments에서 사용 가능하므로 여기서는 기본값만 설정)
-        """
-        print("🤖 Auto 모드 활성화: 최적 설정 자동 적용 (ResNet 기반)")
-        # 기본 자동 설정값
-        self.config.min_static_duration = 0.25   # 15프레임 @ 60fps
-        self.config.target_segment_duration = 30.0 # 1800프레임 @ 60fps
-        self.config.feature_sample_rate = 1      # 5프레임마다 feature 추출
-        self.config.enable_visualization = True  # 유사도 그래프 출력
 
     def _register_cleanup_handlers(self):
         """atexit 및 signal handler 등록"""
@@ -760,42 +745,25 @@ class VideoSegmenter:
         Returns:
             유사도 (0~1, 높을수록 유사)
         """
-        import time
-
-        # GPU 가속 사용 (Feature Extractor 사용 가능 시)
+        # GPU 가속 필수 (Feature Extractor 사용)
         if self.feature_extractor is not None:
-            try:
-                start_time = time.perf_counter()
+            import time
+            start_time = time.perf_counter()
 
-                # Feature 추출 (배치 크기 2)
-                features = self.feature_extractor.extract_frame_features([img1, img2])
+            # Feature 추출 (배치 크기 2)
+            features = self.feature_extractor.extract_frame_features([img1, img2])
 
-                if len(features) >= 2:
-                    # 코사인 유사도 계산
-                    score = self.feature_extractor.calculate_cosine_similarity(features[0], features[1])
-                    elapsed = time.perf_counter() - start_time
+            if len(features) >= 2:
+                # 코사인 유사도 계산
+                score = self.feature_extractor.calculate_cosine_similarity(features[0], features[1])
+                elapsed = time.perf_counter() - start_time
 
-                    self.stats['similarity_gpu_count'] += 1
-                    self.stats['similarity_gpu_time'] += elapsed
-                    return score
-                else:
-                    raise RuntimeError("Feature 추출 실패")
+                self.stats['similarity_gpu_count'] += 1
+                self.stats['similarity_gpu_time'] += elapsed
+                return score
 
-            except (OSError, RuntimeError, Exception) as e:
-                # GPU 계산 실패 시 CPU로 자동 폴백
-                print(f"⚠️ GPU Feature 추출 실패, CPU SSIM으로 전환: {e}")
-                self.feature_extractor = None  # 이후 모든 계산은 CPU SSIM 사용
-
-        # CPU 버전 (SSIM Fallback)
-        start_time = time.perf_counter()
-        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-        score, _ = ssim(gray1, gray2, full=True)
-        elapsed = time.perf_counter() - start_time
-
-        self.stats['similarity_cpu_count'] += 1
-        self.stats['similarity_cpu_time'] += elapsed
-        return score
+        # GPU 사용 불가 시 오류 발생
+        raise RuntimeError("GPU Feature Extractor를 사용할 수 없습니다. GPU 가속을 활성화해주세요.")
 
     def _adjust_batch_size(self, error: Exception = None):
         """
@@ -864,25 +832,13 @@ class VideoSegmenter:
         if not frame_pairs:
             return []
 
-        # Feature Extractor 사용 (GPU)
+        # Feature Extractor 필수 (GPU)
         if self.feature_extractor is not None:
-            try:
-                similarities = self.feature_extractor.calculate_similarity_batch(frame_pairs)
-                return similarities
+            similarities = self.feature_extractor.calculate_similarity_batch(frame_pairs)
+            return similarities
 
-            except Exception as e:
-                # GPU 오류 시 CPU로 폴백
-                print(f"⚠️ GPU 배치 유사도 계산 실패, CPU SSIM으로 폴백: {e}")
-                self.feature_extractor = None
-
-        # CPU Fallback (SSIM)
-        scores = []
-        for img1, img2 in frame_pairs:
-            gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-            gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-            score, _ = ssim(gray1, gray2, full=True)
-            scores.append(score)
-        return scores
+        # GPU 사용 불가 시 오류 발생
+        raise RuntimeError("GPU Feature Extractor를 사용할 수 없습니다. GPU 가속을 활성화해주세요.")
 
     def _calculate_ssim_gpu(self, img1: np.ndarray, img2: np.ndarray) -> float:
         """
@@ -1212,6 +1168,10 @@ class VideoSegmenter:
                 start = snap_to_keyframe(start, self.keyframes, 'before')
                 end = snap_to_keyframe(end, self.keyframes, 'after')
                 interval_duration = end - start
+                
+            # interval_duration이 0 이하면 건너뜀
+            if interval_duration <= 0:
+                continue
 
             # 현재 구간이 남은 목표 시간을 초과하는지 확인
             remaining_time = self.config.target_segment_duration - accumulated_time
@@ -1251,8 +1211,12 @@ class VideoSegmenter:
                 start = split_point
                 interval_duration = end - start
                 accumulated_time = 0.0
-                segment_intervals = []
+                segment_intervals = []  # 중요: 새 리스트로 초기화
                 remaining_time = self.config.target_segment_duration
+                
+                # interval_duration이 0 이하면 루프 탈출
+                if interval_duration <= 0:
+                    break
 
             # 남은 구간 추가
             if interval_duration > 0:
@@ -1483,6 +1447,8 @@ class VideoSegmenter:
                         check=True,
                         capture_output=True,
                         text=True,
+                        encoding='utf-8',
+                        errors='replace',
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                     )
                     saved_paths.append(output_path)
@@ -1527,6 +1493,8 @@ class VideoSegmenter:
                             check=True,
                             capture_output=True,
                             text=True,
+                            encoding='utf-8',
+                            errors='replace',
                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                         )
                         saved_paths.append(output_path)
@@ -1562,6 +1530,8 @@ class VideoSegmenter:
                             check=True,
                             capture_output=True,
                             text=True,
+                            encoding='utf-8',
+                            errors='replace',
                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                         )
                         saved_paths.append(output_path)
@@ -1575,6 +1545,11 @@ class VideoSegmenter:
                         print(f"   ⚠️ segment_{idx+1:03d}.mp4 생성 실패: {e.stderr}")
 
         print(f"\n✅ {len(saved_paths)}개 세그먼트 저장 완료!")
+        
+        # 버려진 구간 저장 (활성화된 경우)
+        if self.config.save_discarded:
+            self._export_discarded_segments(video_path, segments, output_dir)
+        
         return saved_paths
 
     def _export_discarded_segments(
@@ -1646,6 +1621,8 @@ class VideoSegmenter:
                     check=True,
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
                 print(f"   ✓ discarded_{idx+1:03d}.mp4 ({duration:.1f}초)")

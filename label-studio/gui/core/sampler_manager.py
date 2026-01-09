@@ -49,12 +49,12 @@ class SamplerManager:
         self,
         input_video: Path,
         output_dir: Path,
-        mode: str = "auto",
+        mode: str = "custom",
         static_threshold: float = 0.95,
-        min_static_duration: float = 2.0,
-        target_segment_duration: float = 600.0,
-        ssim_scale: float = 1.0,
-        frame_skip: int = 1,
+        min_static_duration: float = 1.0,
+        target_segment_duration: float = 30.0,
+        feature_sample_rate: int = 5,
+        enable_visualization: bool = True,
         use_gpu: bool = False,
         enable_keyframe_snap: bool = True,
         save_discarded: bool = False,
@@ -69,17 +69,14 @@ class SamplerManager:
         Args:
             input_video: 입력 비디오 경로
             output_dir: 출력 디렉토리
-            mode: 동작 모드 ("auto" 또는 "custom")
-                - "auto": ssim_scale=0.5, frame_skip=2 자동 설정 (빠른 처리)
-                - "custom": 사용자 지정 파라미터 사용
-            static_threshold: 정적 구간 임계값 (기본: 0.95, SSIM이 이보다 높으면 잠수 구간으로 제외)
-            min_static_duration: 최소 정적 구간 길이 (초, 기본: 2.0)
-            target_segment_duration: 목표 세그먼트 길이 (초, 기본: 600=10분)
-            ssim_scale: SSIM 계산 해상도 스케일 (기본: 1.0, auto 모드에서는 0.5로 자동 설정)
-            frame_skip: 프레임 스킵 (1=모든 프레임, auto 모드에서는 2로 자동 설정)
+            mode: 동작 모드 ("custom" 고정)
+            static_threshold: 정적 구간 임계값 (기본: 0.95, 코사인 유사도 기준)
+            min_static_duration: 최소 정적 구간 길이 (초, 기본: 1.0)
+            target_segment_duration: 목표 세그먼트 길이 (초, 기본: 30)
+            feature_sample_rate: Feature 샘플링 비율 (기본: 5, N프레임마다)
+            enable_visualization: 유사도 그래프 출력 (기본: True)
             use_gpu: GPU 가속 사용 (기본: False, CUDA 필요)
-            enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True, 검은 화면 방지)
-            enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True, 검은 화면 방지)
+            enable_keyframe_snap: Keyframe 정렬 활성화 (기본: True)
             save_discarded: 채택되지 않은 구간도 저장 (기본: False)
             re_encode: 재인코딩 여부 (기본: False)
             encode_quality: 인코딩 품질 (CRF, 기본: 23)
@@ -109,8 +106,8 @@ class SamplerManager:
                 static_threshold=static_threshold,
                 min_static_duration=min_static_duration,
                 target_segment_duration=target_segment_duration,
-                ssim_scale=ssim_scale,
-                frame_skip=frame_skip,
+                feature_sample_rate=feature_sample_rate,
+                enable_visualization=enable_visualization,
                 use_gpu=use_gpu,
                 enable_keyframe_snap=enable_keyframe_snap,
                 save_discarded=save_discarded,
@@ -162,6 +159,15 @@ class SamplerManager:
                 success=False,
                 message=f"세그멘테이션 중 오류 발생: {e}"
             )
+        finally:
+            # 리소스 정리 (연속 작업 안정성)
+            if self.segmenter:
+                try:
+                    if hasattr(self.segmenter, 'feature_extractor') and self.segmenter.feature_extractor:
+                        self.segmenter.feature_extractor.cleanup()
+                except:
+                    pass
+                self.segmenter = None
 
     def cancel_current_operation(self):
         """현재 진행 중인 작업 취소"""

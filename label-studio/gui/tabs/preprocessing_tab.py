@@ -6,10 +6,11 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QGroupBox, QLineEdit, QFileDialog, QComboBox,
+    QLabel, QGroupBox, QLineEdit, QFileDialog,
     QCheckBox, QDoubleSpinBox, QSpinBox, QFormLayout, QMessageBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
+
 from pathlib import Path
 import sys
 from io import StringIO
@@ -92,14 +93,26 @@ class SegmentationWorker(QThread):
 class PreprocessingTab(QWidget):
     """전처리 탭"""
 
+    # Preference 기본값
+    DEFAULT_PREFS = {
+        "static_threshold": 0.95,
+        "min_static_duration": 1.0,
+        "target_segment_duration": 30.0,
+        "feature_sample_rate": 5,
+        "enable_visualization": True,
+        "enable_keyframe_snap": True,
+        "use_gpu": False,
+        "save_discarded": False
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.sampler_manager = SamplerManager()
         self.config_manager = get_config_manager()
+        self.settings = QSettings("HomeworkHelper", "VideoSegmenter")
         self.worker = None
         self.init_ui()
-        
-        # 앱 시작 시 기존 PyTorch 자동 감지 (복원됨)
+        self._load_preferences()
         self._auto_detect_pytorch()
 
     def _auto_detect_pytorch(self):
@@ -160,18 +173,8 @@ class PreprocessingTab(QWidget):
         output_layout.addWidget(browse_output_btn)
         sampling_layout.addLayout(output_layout)
 
-        # 2. 모드 선택 (Auto vs Custom)
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("동작 모드:"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["자동 설정 (Auto - 권장)", "사용자 정의 (Custom)"])
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        mode_layout.addWidget(self.mode_combo)
-        mode_layout.addStretch()
-        sampling_layout.addLayout(mode_layout)
-
-        # 3. 상세 파라미터 (Custom 모드에서만 보임)
-        self.custom_params_group = QGroupBox("상세 파라미터 설정")
+        # 파라미터 설정 그룹 (항상 표시)
+        self.custom_params_group = QGroupBox("세그멘테이션 파라미터")
         custom_params_layout = QFormLayout()
 
         # static_threshold
@@ -220,7 +223,6 @@ class PreprocessingTab(QWidget):
         custom_params_layout.addRow("", self.enable_keyframe_snap)
 
         self.custom_params_group.setLayout(custom_params_layout)
-        self.custom_params_group.setVisible(False)
         sampling_layout.addWidget(self.custom_params_group)
         
         sampling_group.setLayout(sampling_layout)
@@ -281,10 +283,36 @@ class PreprocessingTab(QWidget):
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
-    def _on_mode_changed(self, index):
-        """모드 변경 시 UI 업데이트"""
-        is_custom = (index == 1)  # 0: Auto, 1: Custom
-        self.custom_params_group.setVisible(is_custom)
+    def _save_preferences(self):
+        """현재 설정값을 Preference에 저장"""
+        self.settings.setValue("static_threshold", self.static_threshold_spin.value())
+        self.settings.setValue("min_static_duration", self.min_static_duration_spin.value())
+        self.settings.setValue("target_segment_duration", self.target_duration_spin.value())
+        self.settings.setValue("feature_sample_rate", self.feature_sample_rate_spin.value())
+        self.settings.setValue("enable_visualization", self.enable_visualization_checkbox.isChecked())
+        self.settings.setValue("enable_keyframe_snap", self.enable_keyframe_snap.isChecked())
+        self.settings.setValue("use_gpu", self.gpu_checkbox.isChecked())
+        self.settings.setValue("save_discarded", self.save_discarded_checkbox.isChecked())
+        self.settings.sync()
+
+    def _load_preferences(self):
+        """저장된 Preference 불러오기 (없으면 기본값 사용)"""
+        self.static_threshold_spin.setValue(
+            float(self.settings.value("static_threshold", self.DEFAULT_PREFS["static_threshold"])))
+        self.min_static_duration_spin.setValue(
+            float(self.settings.value("min_static_duration", self.DEFAULT_PREFS["min_static_duration"])))
+        self.target_duration_spin.setValue(
+            float(self.settings.value("target_segment_duration", self.DEFAULT_PREFS["target_segment_duration"])))
+        self.feature_sample_rate_spin.setValue(
+            int(self.settings.value("feature_sample_rate", self.DEFAULT_PREFS["feature_sample_rate"])))
+        self.enable_visualization_checkbox.setChecked(
+            self.settings.value("enable_visualization", self.DEFAULT_PREFS["enable_visualization"]) in [True, "true"])
+        self.enable_keyframe_snap.setChecked(
+            self.settings.value("enable_keyframe_snap", self.DEFAULT_PREFS["enable_keyframe_snap"]) in [True, "true"])
+        self.gpu_checkbox.setChecked(
+            self.settings.value("use_gpu", self.DEFAULT_PREFS["use_gpu"]) in [True, "true"])
+        self.save_discarded_checkbox.setChecked(
+            self.settings.value("save_discarded", self.DEFAULT_PREFS["save_discarded"]) in [True, "true"])
 
     def start_sampling(self):
         """세그멘테이션 시작"""
@@ -306,24 +334,21 @@ class PreprocessingTab(QWidget):
             QMessageBox.critical(self, "오류", f"입력 파일을 찾을 수 없습니다:\n{input_path}")
             return
 
-        # 파라미터 수집
-        is_auto_mode = (self.mode_combo.currentIndex() == 0)
-        
+        # 설정값 저장
+        self._save_preferences()
+
+        # 파라미터 수집 (항상 수동 모드)
         params = {
-            "mode": "auto" if is_auto_mode else "custom",
+            "mode": "custom",
+            "static_threshold": self.static_threshold_spin.value(),
+            "min_static_duration": self.min_static_duration_spin.value(),
+            "target_segment_duration": self.target_duration_spin.value(),
+            "feature_sample_rate": self.feature_sample_rate_spin.value(),
+            "enable_visualization": self.enable_visualization_checkbox.isChecked(),
+            "enable_keyframe_snap": self.enable_keyframe_snap.isChecked(),
             "use_gpu": self.gpu_checkbox.isChecked(),
             "save_discarded": self.save_discarded_checkbox.isChecked()
         }
-
-        if not is_auto_mode:
-            params.update({
-                "static_threshold": self.static_threshold_spin.value(),
-                "min_static_duration": self.min_static_duration_spin.value(),
-                "target_segment_duration": self.target_duration_spin.value(),
-                "feature_sample_rate": self.feature_sample_rate_spin.value(),
-                "enable_visualization": self.enable_visualization_checkbox.isChecked(),
-                "enable_keyframe_snap": self.enable_keyframe_snap.isChecked()
-            })
 
         # UI 상태 업데이트
         self.start_sampling_btn.setEnabled(False)
@@ -340,7 +365,7 @@ class PreprocessingTab(QWidget):
         self.worker.log_message.connect(self._on_log_message)
         self.worker.finished.connect(self._on_finished)
         
-        self.log_viewer.add_log(f"🎬 비디오 세그멘테이션 시작 ({'Auto' if is_auto_mode else 'Custom'})", "INFO")
+        self.log_viewer.add_log("🎬 비디오 세그멘테이션 시작", "INFO")
         if params["use_gpu"]:
             self.log_viewer.add_log("   🚀 GPU 가속 활성화됨", "INFO")
         self.log_viewer.add_log("=" * 60, "INFO")
