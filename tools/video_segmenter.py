@@ -1237,10 +1237,96 @@ class VideoSegmenter:
                 intervals=list(segment_intervals)
             ))
 
+        # ===== Intervals 중복 제거 및 병합 =====
+        segments = self._deduplicate_segment_intervals(segments, fps)
+
         self.stats['output_segments'] = len(segments)
-        print(f"✅ 최종 세그먼트 {len(segments)}개 생성 (평균 {sum(s.duration for s in segments) / len(segments) / 60:.1f}분)")
+        if segments:
+            print(f"✅ 최종 세그먼트 {len(segments)}개 생성 (평균 {sum(s.duration for s in segments) / len(segments) / 60:.1f}분)")
+        else:
+            print("⚠️ 유효한 세그먼트가 없습니다.")
 
         return segments
+
+    def _deduplicate_segment_intervals(
+        self,
+        segments: List[VideoSegment],
+        fps: float
+    ) -> List[VideoSegment]:
+        """
+        세그먼트의 intervals 중복 제거 및 병합
+        
+        Keyframe 스냅으로 인해 같은 구간이 여러 번 포함될 수 있으므로:
+        1. 각 세그먼트 내 중복 interval 제거
+        2. 겹치거나 인접한 interval 병합
+        3. 빈 세그먼트 제거
+        4. duration 재계산
+        """
+        cleaned_segments = []
+        
+        for seg in segments:
+            if not seg.intervals:
+                continue
+            
+            # 1. 중복 제거 (순서 유지)
+            seen = set()
+            unique_intervals = []
+            for interval in seg.intervals:
+                # 튜플을 소수점 3자리로 반올림하여 비교 (부동소수점 오차 방지)
+                key = (round(interval[0], 3), round(interval[1], 3))
+                if key not in seen:
+                    seen.add(key)
+                    unique_intervals.append(interval)
+            
+            # 2. 정렬
+            unique_intervals.sort(key=lambda x: x[0])
+            
+            # 3. 겹치거나 인접한 구간 병합
+            merged_intervals = []
+            for start, end in unique_intervals:
+                if not merged_intervals:
+                    merged_intervals.append([start, end])
+                else:
+                    last_start, last_end = merged_intervals[-1]
+                    # 겹치거나 인접한 경우 (0.1초 이내)
+                    if start <= last_end + 0.1:
+                        merged_intervals[-1][1] = max(last_end, end)
+                    else:
+                        merged_intervals.append([start, end])
+            
+            # 튜플로 변환
+            merged_intervals = [(s, e) for s, e in merged_intervals]
+            
+            # 4. 빈 구간 제거 및 duration 재계산
+            valid_intervals = [(s, e) for s, e in merged_intervals if e > s]
+            
+            if not valid_intervals:
+                continue
+            
+            # duration 재계산
+            total_duration = sum(e - s for s, e in valid_intervals)
+            
+            # 새 세그먼트 생성
+            seg_start = valid_intervals[0][0]
+            seg_end = valid_intervals[-1][1]
+            
+            cleaned_segments.append(VideoSegment(
+                start_frame=int(seg_start * fps),
+                end_frame=int(seg_end * fps),
+                start_time=seg_start,
+                end_time=seg_end,
+                duration=total_duration,
+                avg_ssim=seg.avg_ssim,
+                intervals=valid_intervals
+            ))
+        
+        # 중복 제거 결과 로깅
+        original_count = len(segments)
+        cleaned_count = len(cleaned_segments)
+        if original_count != cleaned_count:
+            print(f"🔧 중복 제거: {original_count}개 → {cleaned_count}개 세그먼트")
+        
+        return cleaned_segments
 
     def _create_segment(
         self,
