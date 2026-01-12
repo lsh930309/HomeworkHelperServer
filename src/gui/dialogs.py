@@ -175,6 +175,9 @@ class ProcessDialog(QDialog):
         self.form_layout.addRow("특정 접속 시각 (HH:MM, 쉼표로 구분):", self.mandatory_times_edit)
         self.form_layout.addRow(self.is_mandatory_time_enabled_checkbox)
 
+        # 실행 방식 선택 섹션
+        self._setup_launch_type_section()
+
         # MVP 스키마 연동 섹션
         self._setup_mvp_section()
 
@@ -194,6 +197,45 @@ class ProcessDialog(QDialog):
 
         if self.existing_process:
             self.populate_fields_from_existing_process()
+
+    def _setup_launch_type_section(self):
+        """실행 방식 선택 섹션 설정"""
+        launch_type_layout = QHBoxLayout()
+        launch_type_layout.addWidget(QLabel("실행 방식:"))
+        
+        self.launch_type_combo = QComboBox()
+        self.launch_type_combo.addItem("자동 (기본)", "auto")
+        self.launch_type_combo.addItem("바로가기 우선", "shortcut")
+        self.launch_type_combo.addItem("직접 실행 우선", "direct")
+        self.launch_type_combo.setToolTip(
+            "모니터링 경로와 실행 경로가 다를 때 어떤 방식으로 실행할지 선택합니다.\n"
+            "• 자동: 실행 경로가 있으면 실행 경로, 없으면 모니터링 경로 사용\n"
+            "• 바로가기 우선: 항상 실행 경로(바로가기) 사용\n"
+            "• 직접 실행 우선: 항상 모니터링 경로(프로세스) 사용"
+        )
+        launch_type_layout.addWidget(self.launch_type_combo)
+        launch_type_layout.addStretch()
+        
+        self.form_layout.addRow(launch_type_layout)
+        
+        # 경로 변경 시 콤보박스 활성화 상태 업데이트
+        self.monitoring_path_edit.textChanged.connect(self._update_launch_type_enabled)
+        self.launch_path_edit.textChanged.connect(self._update_launch_type_enabled)
+        
+        # 초기 상태 설정 (비활성화 - 경로가 같으면)
+        self._update_launch_type_enabled()
+
+    def _update_launch_type_enabled(self):
+        """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
+        monitoring = self.monitoring_path_edit.text().strip()
+        launch = self.launch_path_edit.text().strip()
+        
+        # 실행 경로가 비어있거나 모니터링 경로와 같으면 비활성화
+        is_different = launch and monitoring != launch
+        self.launch_type_combo.setEnabled(is_different)
+        
+        if not is_different:
+            self.launch_type_combo.setCurrentIndex(0)  # 자동으로 초기화
 
     def _setup_mvp_section(self):
         """MVP 스키마 연동 섹션 설정"""
@@ -299,6 +341,16 @@ class ProcessDialog(QDialog):
             self.mandatory_times_edit.setText(",".join(self.existing_process.mandatory_times_str))
         self.is_mandatory_time_enabled_checkbox.setChecked(self.existing_process.is_mandatory_time_enabled)
 
+        # 실행 방식 선택 로드
+        if hasattr(self.existing_process, 'preferred_launch_type'):
+            launch_type = self.existing_process.preferred_launch_type
+            for i in range(self.launch_type_combo.count()):
+                if self.launch_type_combo.itemData(i) == launch_type:
+                    self.launch_type_combo.setCurrentIndex(i)
+                    break
+            # 활성화 상태 업데이트
+            self._update_launch_type_enabled()
+
         # MVP 필드 로드
         if hasattr(self.existing_process, 'game_schema_id') and self.existing_process.game_schema_id:
             for i in range(self.game_schema_combo.count()):
@@ -347,7 +399,9 @@ class ProcessDialog(QDialog):
             # 바로가기 파일인 경우 자동으로 복사
             file_ext = os.path.splitext(file_path)[1].lower()
             if file_ext in ['.lnk', '.url']:
-                copied_path = copy_shortcut_file(file_path)
+                # 편집 모드일 때 기존 프로세스 ID 사용 (중복 방지)
+                process_id = self.existing_process.id if self.existing_process else None
+                copied_path = copy_shortcut_file(file_path, process_id)
                 if copied_path:
                     # 복사된 파일 경로를 입력 필드에 설정
                     path_edit_widget.setText(copied_path)
@@ -429,6 +483,9 @@ class ProcessDialog(QDialog):
 
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
+        # 실행 방식 선택
+        preferred_launch_type = self.launch_type_combo.currentData() or "auto"
+
         # MVP 스키마 연동 필드
         game_schema_id = self.game_schema_combo.currentData()
         mvp_enabled = self.mvp_enabled_checkbox.isChecked()
@@ -441,6 +498,7 @@ class ProcessDialog(QDialog):
             "user_cycle_hours": user_cycle_hours,
             "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
+            "preferred_launch_type": preferred_launch_type,
             "game_schema_id": game_schema_id,
             "mvp_enabled": mvp_enabled,
         }

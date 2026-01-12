@@ -53,9 +53,16 @@ def ensure_shortcuts_directory() -> bool:
         print(f"shortcuts 디렉토리 생성 실패: {e}")
         return False
 
-def copy_shortcut_file(source_path: str) -> Optional[str]:
+def copy_shortcut_file(source_path: str, process_id: Optional[str] = None) -> Optional[str]:
     """
     바로가기 파일을 shortcuts 디렉토리에 복사하고 복사된 경로를 반환합니다.
+    
+    Args:
+        source_path: 원본 바로가기 파일 경로
+        process_id: 프로세스 ID (제공 시 해당 ID로 파일명 고정, 덮어쓰기 방식)
+    
+    Returns:
+        복사된 파일 경로 또는 None
     """
     if not os.path.exists(source_path):
         print(f"원본 파일이 존재하지 않습니다: {source_path}")
@@ -77,15 +84,28 @@ def copy_shortcut_file(source_path: str) -> Optional[str]:
     original_filename = os.path.basename(source_path)
     name, ext = os.path.splitext(original_filename)
     
-    # 중복 방지를 위한 파일명 생성
-    counter = 1
-    new_filename = original_filename
-    new_path = os.path.join(shortcuts_dir, new_filename)
-    
-    while os.path.exists(new_path):
-        new_filename = f"{name}_{counter}{ext}"
+    if process_id:
+        # 프로세스 ID 제공 시: 고정 파일명 사용 (덮어쓰기)
+        new_filename = f"{process_id}{ext}"
         new_path = os.path.join(shortcuts_dir, new_filename)
-        counter += 1
+        
+        # 기존 파일이 있으면 삭제 후 복사 (갱신)
+        if os.path.exists(new_path):
+            try:
+                os.remove(new_path)
+                print(f"기존 바로가기 파일 삭제: {new_path}")
+            except Exception as e:
+                print(f"기존 바로가기 파일 삭제 실패: {e}")
+    else:
+        # 프로세스 ID 미제공 시: 기존 방식 (중복 방지 카운터)
+        counter = 1
+        new_filename = original_filename
+        new_path = os.path.join(shortcuts_dir, new_filename)
+        
+        while os.path.exists(new_path):
+            new_filename = f"{name}_{counter}{ext}"
+            new_path = os.path.join(shortcuts_dir, new_filename)
+            counter += 1
     
     try:
         # 파일 복사

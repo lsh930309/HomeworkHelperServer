@@ -33,6 +33,7 @@ from src.utils.windows import set_startup_shortcut, get_startup_shortcut_status
 from src.core.launcher import Launcher
 from src.core.notifier import Notifier
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
+from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 
 # ==================== 서버 종료 설정 ====================
 # API 서버 Graceful Shutdown 타임아웃 (초 단위)
@@ -340,20 +341,36 @@ class MainWindow(QMainWindow):
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
             self.data_manager.save_global_settings(upd_gs)
 
-            # 관리자 권한 설정이 False에서 True로 변경되었는지 확인
-            if not previous_run_as_admin and upd_gs.run_as_admin and not is_admin():
-                # 관리자 권한으로 재시작 필요
-                print("관리자 권한으로 실행 설정이 활성화되었습니다. 앱을 재시작합니다...")
-                if run_as_admin():
-                    # 재시작 성공 시 현재 인스턴스 종료
-                    QApplication.quit()
-                    sys.exit(0)
-                else:
-                    # 재시작 실패 시 상태 표시
-                    status_bar = self.statusBar()
-                    if status_bar:
-                        status_bar.showMessage("관리자 권한으로 재시작 실패. 일반 권한으로 계속 실행합니다.", 5000)
-                    return
+            # 관리자 권한 설정이 변경되었는지 확인
+            if previous_run_as_admin != upd_gs.run_as_admin:
+                if upd_gs.run_as_admin and not is_admin():
+                    # 일반 → 관리자: UAC 프롬프트로 관리자 권한 재시작
+                    print("관리자 권한으로 실행 설정이 활성화되었습니다. 앱을 재시작합니다...")
+                    if run_as_admin():
+                        # 재시작 성공 시 현재 인스턴스 종료 (지연 후 종료하여 새 프로세스 시작 보장)
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(500, lambda: sys.exit(0))
+                        return
+                    else:
+                        # 재시작 실패 시 설정 롤백
+                        upd_gs.run_as_admin = False
+                        self.data_manager.save_global_settings(upd_gs)
+                        status_bar = self.statusBar()
+                        if status_bar:
+                            status_bar.showMessage("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
+                        return
+                elif not upd_gs.run_as_admin and is_admin():
+                    # 관리자 → 일반: 일반 권한으로 재시작
+                    print("관리자 권한 해제됨. 일반 권한으로 앱을 재시작합니다...")
+                    if restart_as_normal():
+                        # 재시작 성공 시 현재 인스턴스 종료
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(500, lambda: sys.exit(0))
+                        return
+                    else:
+                        status_bar = self.statusBar()
+                        if status_bar:
+                            status_bar.showMessage("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
 
             # Launcher 인스턴스의 관리자 권한 설정 업데이트
             self.launcher.run_as_admin = upd_gs.run_as_admin
@@ -531,6 +548,15 @@ class MainWindow(QMainWindow):
             # 실행 버튼 컬럼
             btn = QPushButton("실행")
             btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id)) # 버튼 클릭 시그널 연결
+            
+            # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
+            if p.monitoring_path != p.launch_path and p.launch_path:
+                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(
+                    functools.partial(self._show_launch_context_menu, p.id, btn)
+                )
+                btn.setToolTip("우클릭하여 실행 방식 선택")
+            
             self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, btn) # 셀에 버튼 위젯 설정
 
             # 상태 컬럼
@@ -592,7 +618,10 @@ class MainWindow(QMainWindow):
                                        user_cycle_hours=data["user_cycle_hours"], mandatory_times_str=data["mandatory_times_str"],
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
                                        last_played_timestamp=p_edit.last_played_timestamp,  # 마지막 플레이 시간은 유지
-                                       original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]))  # 원본 경로 보존
+                                       original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]),  # 원본 경로 보존
+                                       preferred_launch_type=data.get("preferred_launch_type", "auto"),  # 실행 방식 선택
+                                       game_schema_id=data.get("game_schema_id"),  # MVP 필드
+                                       mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     self.populate_process_list() # 전체 테이블 새로고침 (프로세스 정보 변경)
                     # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
@@ -625,9 +654,22 @@ class MainWindow(QMainWindow):
         """선택된 게임 프로세스를 실행합니다."""
         p_launch = self.data_manager.get_process_by_id(pid) # ID로 프로세스 정보 가져오기
         if not p_launch: QMessageBox.warning(self, "오류", f"ID '{pid}' 프로세스 없음."); return
-        if not p_launch.launch_path: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
+        
+        # preferred_launch_type에 따라 실행 경로 결정
+        launch_type = getattr(p_launch, 'preferred_launch_type', 'auto')
+        if launch_type == 'direct':
+            # 직접 실행 우선: 모니터링 경로 사용
+            launch_target = p_launch.monitoring_path
+        elif launch_type == 'shortcut':
+            # 바로가기 우선: 실행 경로 사용
+            launch_target = p_launch.launch_path or p_launch.monitoring_path
+        else:
+            # 자동(기본): 실행 경로가 있으면 사용, 없으면 모니터링 경로
+            launch_target = p_launch.launch_path or p_launch.monitoring_path
+        
+        if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
-        if self.launcher.launch_process(p_launch.launch_path): # 프로세스 실행 시도
+        if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
             # 설정에 따라 실행 성공 알림 전송
             if self.data_manager.global_settings.notify_on_launch_success:
                 self.system_notifier.send_notification(title="프로세스 실행", message=f"'{p_launch.name}' 실행함.", task_id_to_highlight=None)
@@ -642,6 +684,55 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
+
+    def _launch_with_specific_path(self, pid: str, use_shortcut: bool):
+        """특정 경로로 프로세스 실행 (우클릭 메뉴용)"""
+        p_launch = self.data_manager.get_process_by_id(pid)
+        if not p_launch: return
+        
+        launch_target = p_launch.launch_path if use_shortcut else p_launch.monitoring_path
+        if not launch_target:
+            QMessageBox.warning(self, "오류", f"해당 경로가 없습니다.")
+            return
+        
+        if self.launcher.launch_process(launch_target):
+            status_bar = self.statusBar()
+            if status_bar:
+                path_type = "바로가기" if use_shortcut else "직접 실행"
+                status_bar.showMessage(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
+            self.update_process_statuses_only()
+        else:
+            status_bar = self.statusBar()
+            if status_bar:
+                status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
+
+    def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
+        """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
+        from PyQt6.QtWidgets import QMenu
+        
+        p = self.data_manager.get_process_by_id(pid)
+        if not p: return
+        
+        menu = QMenu(button)
+        
+        # 바로가기로 실행
+        shortcut_action = menu.addAction("📁 바로가기로 실행")
+        shortcut_action.triggered.connect(
+            functools.partial(self._launch_with_specific_path, pid, True)
+        )
+        if not p.launch_path:
+            shortcut_action.setEnabled(False)
+        
+        # 직접 실행
+        direct_action = menu.addAction("🎮 직접 실행 (프로세스)")
+        direct_action.triggered.connect(
+            functools.partial(self._launch_with_specific_path, pid, False)
+        )
+        if not p.monitoring_path:
+            direct_action.setEnabled(False)
+        
+        # 메뉴 표시
+        menu.exec(button.mapToGlobal(pos))
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
         """새 게임 프로세스를 추가하는 대화 상자를 엽니다."""
@@ -658,7 +749,10 @@ class MainWindow(QMainWindow):
                                        launch_path=data["launch_path"], server_reset_time_str=data["server_reset_time_str"],
                                        user_cycle_hours=data["user_cycle_hours"], mandatory_times_str=data["mandatory_times_str"],
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
-                                       original_launch_path=data["launch_path"])  # 원본 경로 보존
+                                       original_launch_path=data["launch_path"],  # 원본 경로 보존
+                                       preferred_launch_type=data.get("preferred_launch_type", "auto"),  # 실행 방식 선택
+                                       game_schema_id=data.get("game_schema_id"),  # MVP 필드
+                                       mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
                 self.populate_process_list() # 전체 테이블 새로고침 (프로세스 추가)
                 # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)

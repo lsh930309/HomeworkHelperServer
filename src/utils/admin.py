@@ -48,6 +48,35 @@ def run_as_admin():
         return False
 
 
+def restart_as_normal():
+    """현재 스크립트를 일반 권한으로 재시작합니다 (관리자→일반 전환용)."""
+    if not os.name == 'nt':
+        return False
+
+    try:
+        import subprocess
+        
+        if getattr(sys, 'frozen', False):
+            # PyInstaller로 패키징된 경우
+            script = sys.executable
+            args = [script] + sys.argv[1:]
+        else:
+            # 일반 파이썬 스크립트인 경우
+            script = sys.executable
+            args = [script, sys.argv[0]] + sys.argv[1:]
+
+        # 새 프로세스를 일반 권한으로 시작 (현재 프로세스와 분리)
+        subprocess.Popen(
+            args,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+        print("일반 권한으로 재시작을 요청했습니다.")
+        return True
+    except Exception as e:
+        print(f"일반 권한으로 재시작 중 오류 발생: {e}")
+        return False
+
+
 def check_admin_requirement():
     """관리자 권한이 필요한지 확인하고, 필요시 자동으로 재시작합니다."""
     if not os.name == 'nt':
