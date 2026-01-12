@@ -194,6 +194,10 @@ class ProcessDialog(QDialog):
         self.monitoring_path_edit.textChanged.connect(self._on_monitoring_path_changed)
         self.button_box.accepted.connect(self.accept_data)
         self.button_box.rejected.connect(self.reject)
+        
+        # 실행 방식 선택 콤보박스 활성화 상태 업데이트 (경로 변경 시)
+        self.monitoring_path_edit.textChanged.connect(self._update_launch_type_enabled)
+        self.launch_path_edit.textChanged.connect(self._update_launch_type_enabled)
 
         if self.existing_process:
             self.populate_fields_from_existing_process()
@@ -218,20 +222,21 @@ class ProcessDialog(QDialog):
         
         self.form_layout.addRow(launch_type_layout)
         
-        # 경로 변경 시 콤보박스 활성화 상태 업데이트
-        self.monitoring_path_edit.textChanged.connect(self._update_launch_type_enabled)
-        self.launch_path_edit.textChanged.connect(self._update_launch_type_enabled)
-        
         # 초기 상태 설정 (비활성화 - 경로가 같으면)
+        # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
 
-    def _update_launch_type_enabled(self):
+    def _update_launch_type_enabled(self, _=None):
         """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
+        # 콤보박스가 아직 생성되지 않은 경우 무시
+        if not hasattr(self, 'launch_type_combo'):
+            return
+            
         monitoring = self.monitoring_path_edit.text().strip()
         launch = self.launch_path_edit.text().strip()
         
         # 실행 경로가 비어있거나 모니터링 경로와 같으면 비활성화
-        is_different = launch and monitoring != launch
+        is_different = bool(launch and monitoring != launch)
         self.launch_type_combo.setEnabled(is_different)
         
         if not is_different:
