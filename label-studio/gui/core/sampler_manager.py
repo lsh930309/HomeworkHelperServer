@@ -155,6 +155,10 @@ class SamplerManager:
             )
 
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            self.logger.error(f"❌ 세그멘테이션 중 오류 발생: {e}")
+            self.logger.error(f"상세 오류:\n{error_traceback}")
             return SegmentationResult(
                 success=False,
                 message=f"세그멘테이션 중 오류 발생: {e}"

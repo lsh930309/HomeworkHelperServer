@@ -107,9 +107,23 @@ class FeatureExtractor:
                 self.device = torch.device('cuda')
 
             # ResNet18 모델 로드 (fc layer를 Identity로 변경 → 512차원 출력)
-            self.model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+            print("🔄 ResNet18 모델 로딩 중...")
+            try:
+                self.model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+                print("✅ ResNet18 weights 로드 완료")
+            except Exception as e:
+                print(f"⚠️ ResNet18 weights 로드 실패: {e}")
+                print("   기본 모델로 대체 시도...")
+                # weights 다운로드 실패 시 pretrained=False로 시도
+                self.model = models.resnet18(weights=None)
+                print("⚠️ 사전 학습되지 않은 모델 사용 (정확도 낮음)")
+
             self.model.fc = nn.Identity()
-            self.model.eval().to(self.device)
+            self.model.eval()
+
+            print(f"🔄 모델을 GPU로 이동 중... (device: {self.device})")
+            self.model = self.model.to(self.device)
+            print("✅ 모델 GPU 이동 완료")
 
             # FP16 사용 시 모델도 FP16으로
             if self.use_fp16 and self.device.type == 'cuda':
@@ -214,20 +228,27 @@ class FeatureExtractor:
         if not frames:
             return np.array([])
 
-        # GPU에서 전처리
-        batch_tensor = self._preprocess_frames_gpu(frames)
+        try:
+            # GPU에서 전처리
+            batch_tensor = self._preprocess_frames_gpu(frames)
 
-        # Feature 추출
-        with torch.inference_mode():
-            features = self.model(batch_tensor)
-            
-            # L2 정규화 (코사인 유사도 계산용)
-            features = torch.nn.functional.normalize(features, dim=1)
-            
-            # CPU로 이동 및 numpy 변환
-            features_np = features.float().cpu().numpy()
+            # Feature 추출
+            with torch.inference_mode():
+                features = self.model(batch_tensor)
 
-        return features_np
+                # L2 정규화 (코사인 유사도 계산용)
+                features = torch.nn.functional.normalize(features, dim=1)
+
+                # CPU로 이동 및 numpy 변환
+                features_np = features.float().cpu().numpy()
+
+            return features_np
+
+        except Exception as e:
+            print(f"❌ Feature 추출 중 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def _extract_features_gpu(self, frames: List[np.ndarray]):
         """
