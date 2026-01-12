@@ -32,8 +32,12 @@ a = Analysis(
         # 기본 의존성
         'uvicorn', 'fastapi', 'sqlalchemy', 'requests', 'PyQt6', 'psutil',
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
-        'cv2', 'av', 'skimage', 'skimage.metrics', 'skimage._shared', 'skimage._shared.utils',
+        'cv2', 'skimage', 'skimage.metrics', 'skimage._shared', 'skimage._shared.utils',
         'timeit', 'pickletools', 'pickle', 'copyreg', 'types', 'weakref', 'struct', 'matplotlib',
+        # PyAV (av) 및 모든 서브모듈
+        'av', 'av.logging', 'av.audio', 'av.video', 'av.container', 'av.codec',
+        'av.stream', 'av.format', 'av.filter', 'av.packet', 'av.frame', 'av.option',
+        'av.subtitles', 'av.data', 'av.buffer', 'av.error', 'av.utils', 'av._core',
         # Python 표준 라이브러리 (PyTorch import에 필수)
         'modulefinder', 'importlib', 'importlib.util', 'importlib.machinery',
         'importlib.metadata', 'importlib.resources', 'importlib.abc',

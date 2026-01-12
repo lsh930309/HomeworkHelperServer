@@ -64,8 +64,13 @@ class FeatureExtractor:
                 raise RuntimeError(f"PyTorch를 import할 수 없습니다:{error_details}")
 
             import torch.nn as nn
-            import torchvision.models as models
-            import torchvision.transforms as T
+
+            # torchvision import 시 PyAV 관련 경고 무시
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                import torchvision.models as models
+                import torchvision.transforms as T
 
             # 디바이스 자동 감지
             if self.device is None:
