@@ -16,7 +16,7 @@ class ManagedProcess:
                  last_played_timestamp: Optional[float] = None, # Unix timestamp
                  original_launch_path: Optional[str] = None, # 원본 실행 경로 보존
                  # 실행 방식 선택: "auto" (기본), "shortcut" (바로가기 우선), "direct" (직접 실행 우선)
-                 preferred_launch_type: str = "auto",
+                 preferred_launch_type: str = "shortcut",
                  # MVP 연동 필드
                  game_schema_id: Optional[str] = None,  # 게임 스키마 ID (예: "zenless_zone_zero")
                  mvp_enabled: bool = False):            # MVP 기능 활성화 여부
@@ -56,7 +56,7 @@ class ManagedProcess:
             data['original_launch_path'] = data['launch_path']
         # 실행 방식 선택 하위 호환성
         if 'preferred_launch_type' not in data:
-            data['preferred_launch_type'] = 'auto'
+            data['preferred_launch_type'] = 'shortcut'
         # MVP 연동 필드 하위 호환성
         if 'game_schema_id' not in data:
             data['game_schema_id'] = None

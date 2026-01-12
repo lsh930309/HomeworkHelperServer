@@ -208,14 +208,12 @@ class ProcessDialog(QDialog):
         launch_type_layout.addWidget(QLabel("실행 방식:"))
         
         self.launch_type_combo = QComboBox()
-        self.launch_type_combo.addItem("자동 (기본)", "auto")
-        self.launch_type_combo.addItem("바로가기 우선", "shortcut")
-        self.launch_type_combo.addItem("직접 실행 우선", "direct")
+        self.launch_type_combo.addItem("바로가기 선호 (기본)", "shortcut")
+        self.launch_type_combo.addItem("프로세스 선호", "direct")
         self.launch_type_combo.setToolTip(
-            "모니터링 경로와 실행 경로가 다를 때 어떤 방식으로 실행할지 선택합니다.\n"
-            "• 자동: 실행 경로가 있으면 실행 경로, 없으면 모니터링 경로 사용\n"
-            "• 바로가기 우선: 항상 실행 경로(바로가기) 사용\n"
-            "• 직접 실행 우선: 항상 모니터링 경로(프로세스) 사용"
+            "모니터링 경로와 실행 경로가 다를 때 기본 실행 대상을 선택합니다.\n"
+            "• 바로가기 선호: 실행 경로(바로가기)를 우선 사용, 없으면 모니터링 경로 사용\n"
+            "• 프로세스 선호: 모니터링 경로(실행 파일)를 우선 사용, 없으면 실행 경로 사용"
         )
         launch_type_layout.addWidget(self.launch_type_combo)
         launch_type_layout.addStretch()
@@ -239,9 +237,6 @@ class ProcessDialog(QDialog):
         is_different = bool(launch and monitoring != launch)
         self.launch_type_combo.setEnabled(is_different)
         
-        if not is_different:
-            self.launch_type_combo.setCurrentIndex(0)  # 자동으로 초기화
-
     def _setup_mvp_section(self):
         """MVP 스키마 연동 섹션 설정"""
         self.mvp_group_box = QGroupBox("게임 스키마 연동 (MVP)")
@@ -349,6 +344,8 @@ class ProcessDialog(QDialog):
         # 실행 방식 선택 로드
         if hasattr(self.existing_process, 'preferred_launch_type'):
             launch_type = self.existing_process.preferred_launch_type
+            if launch_type == "auto":
+                launch_type = "shortcut"
             for i in range(self.launch_type_combo.count()):
                 if self.launch_type_combo.itemData(i) == launch_type:
                     self.launch_type_combo.setCurrentIndex(i)
@@ -489,7 +486,7 @@ class ProcessDialog(QDialog):
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
         # 실행 방식 선택
-        preferred_launch_type = self.launch_type_combo.currentData() or "auto"
+        preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
 
         # MVP 스키마 연동 필드
         game_schema_id = self.game_schema_combo.currentData()

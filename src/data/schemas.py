@@ -12,6 +12,9 @@ class ProcessSchema(BaseModel):
     is_mandatory_time_enabled: bool = False
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
+    preferred_launch_type: str = "shortcut"
+    game_schema_id: Optional[str] = None
+    mvp_enabled: bool = False
     
     class Config:
         from_attributes = True
@@ -27,6 +30,9 @@ class ProcessCreateSchema(BaseModel):
     is_mandatory_time_enabled: bool = False
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
+    preferred_launch_type: str = "shortcut"
+    game_schema_id: Optional[str] = None
+    mvp_enabled: bool = False
 
 class WebShortcutBase(BaseModel):
     name: str = ""

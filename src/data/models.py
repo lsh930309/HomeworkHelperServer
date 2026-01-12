@@ -23,6 +23,9 @@ class Process(Base):
     is_mandatory_time_enabled = Column(Boolean, default=False)
     last_played_timestamp = Column(Float, nullable=True)
     original_launch_path = Column(String, nullable=True)
+    preferred_launch_type = Column(String, default="shortcut")  # 실행 방식 선호도
+    game_schema_id = Column(String, nullable=True)  # 게임 스키마 ID
+    mvp_enabled = Column(Boolean, default=False)    # MVP 기능 플래그
 
 
 class WebShortcut(Base):

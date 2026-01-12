@@ -336,6 +336,12 @@ def run_server_main():
         logger.error(f"데이터베이스 복구 중 오류: {e}", exc_info=True)
 
     # 데이터베이스 테이블 생성
+    # 기존 데이터 호환을 위해 필요한 컬럼이 없으면 추가
+    try:
+        ensure_process_table_schema()
+    except Exception as e:
+        logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
+
     models.Base.metadata.create_all(bind=engine)
 
     # 주기적 WAL checkpoint 백그라운드 스레드
@@ -593,6 +599,35 @@ def stop_api_server():
         # 더 이상 서버를 종료하지 않음
         # api_server_process.terminate()
         # api_server_process.wait()
+
+def ensure_process_table_schema():
+    """
+    managed_processes 테이블에 신규 컬럼이 없으면 추가합니다.
+    기존 사용자 데이터가 손실되지 않도록 ALTER TABLE을 사용합니다.
+    """
+    try:
+        from sqlalchemy import text
+        from src.data.database import engine
+
+        with engine.connect() as conn:
+            table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='managed_processes'")
+            ).fetchone()
+            if not table_exists:
+                return
+
+            existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(managed_processes)"))}
+
+            if 'preferred_launch_type' not in existing_cols:
+                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN preferred_launch_type TEXT DEFAULT 'shortcut'"))
+            if 'game_schema_id' not in existing_cols:
+                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN game_schema_id TEXT"))
+            if 'mvp_enabled' not in existing_cols:
+                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN mvp_enabled BOOLEAN DEFAULT 0"))
+
+            conn.commit()
+    except Exception as e:
+        print(f"테이블 스키마 확인/수정 중 오류: {e}")
 
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""

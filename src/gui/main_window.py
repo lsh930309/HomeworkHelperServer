@@ -555,7 +555,11 @@ class MainWindow(QMainWindow):
                 btn.customContextMenuRequested.connect(
                     functools.partial(self._show_launch_context_menu, p.id, btn)
                 )
-                btn.setToolTip("우클릭하여 실행 방식 선택")
+                current_pref = getattr(p, "preferred_launch_type", "shortcut")
+                if current_pref == "auto":
+                    current_pref = "shortcut"
+                pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
+                btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
             
             self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, btn) # 셀에 버튼 위젯 설정
 
@@ -619,7 +623,7 @@ class MainWindow(QMainWindow):
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
                                        last_played_timestamp=p_edit.last_played_timestamp,  # 마지막 플레이 시간은 유지
                                        original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]),  # 원본 경로 보존
-                                       preferred_launch_type=data.get("preferred_launch_type", "auto"),  # 실행 방식 선택
+                                       preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
                                        game_schema_id=data.get("game_schema_id"),  # MVP 필드
                                        mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
@@ -656,15 +660,15 @@ class MainWindow(QMainWindow):
         if not p_launch: QMessageBox.warning(self, "오류", f"ID '{pid}' 프로세스 없음."); return
         
         # preferred_launch_type에 따라 실행 경로 결정
-        launch_type = getattr(p_launch, 'preferred_launch_type', 'auto')
+        launch_type = getattr(p_launch, 'preferred_launch_type', 'shortcut') or 'shortcut'
         if launch_type == 'direct':
-            # 직접 실행 우선: 모니터링 경로 사용
-            launch_target = p_launch.monitoring_path
+            # 직접 실행 선호: 모니터링 경로 사용, 없으면 실행 경로 사용
+            launch_target = p_launch.monitoring_path or p_launch.launch_path
         elif launch_type == 'shortcut':
-            # 바로가기 우선: 실행 경로 사용
+            # 바로가기 선호: 실행 경로 사용, 없으면 모니터링 경로 사용
             launch_target = p_launch.launch_path or p_launch.monitoring_path
         else:
-            # 자동(기본): 실행 경로가 있으면 사용, 없으면 모니터링 경로
+            # 레거시 'auto' 등: 실행 경로가 있으면 사용, 없으면 모니터링 경로
             launch_target = p_launch.launch_path or p_launch.monitoring_path
         
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
@@ -706,32 +710,68 @@ class MainWindow(QMainWindow):
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
 
+    def _set_launch_preference(self, pid: str, preference: str):
+        """기본 실행 방식을 영구 저장"""
+        p = self.data_manager.get_process_by_id(pid)
+        if not p or preference not in ("shortcut", "direct"):
+            return
+
+        current_pref = getattr(p, "preferred_launch_type", "shortcut") or "shortcut"
+        if current_pref == "auto":
+            current_pref = "shortcut"
+
+        if current_pref == preference:
+            status_bar = self.statusBar()
+            if status_bar:
+                status_bar.showMessage(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
+            return
+
+        updated_data = p.to_dict() if hasattr(p, "to_dict") else p.__dict__.copy()
+        updated_data["preferred_launch_type"] = preference
+        updated_process = ManagedProcess(**updated_data)
+
+        if self.data_manager.update_process(updated_process):
+            self.populate_process_list()
+            status_bar = self.statusBar()
+            if status_bar:
+                status_bar.showMessage(
+                    f"기본 실행 방식이 '{('바로가기 선호' if preference == 'shortcut' else '프로세스 선호')}'로 저장되었습니다.",
+                    4000
+                )
+        else:
+            QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
+
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
         from PyQt6.QtWidgets import QMenu
         
         p = self.data_manager.get_process_by_id(pid)
         if not p: return
-        
+
+        current_pref = getattr(p, "preferred_launch_type", "shortcut") or "shortcut"
+        if current_pref == "auto":
+            current_pref = "shortcut"
+
         menu = QMenu(button)
-        
-        # 바로가기로 실행
-        shortcut_action = menu.addAction("📁 바로가기로 실행")
+
+        shortcut_action = menu.addAction("바로가기 선호 (기본 실행)")
+        shortcut_action.setCheckable(True)
+        shortcut_action.setChecked(current_pref == "shortcut")
         shortcut_action.triggered.connect(
-            functools.partial(self._launch_with_specific_path, pid, True)
+            functools.partial(self._set_launch_preference, pid, "shortcut")
         )
         if not p.launch_path:
             shortcut_action.setEnabled(False)
-        
-        # 직접 실행
-        direct_action = menu.addAction("🎮 직접 실행 (프로세스)")
+
+        direct_action = menu.addAction("프로세스 선호 (직접 실행)")
+        direct_action.setCheckable(True)
+        direct_action.setChecked(current_pref == "direct")
         direct_action.triggered.connect(
-            functools.partial(self._launch_with_specific_path, pid, False)
+            functools.partial(self._set_launch_preference, pid, "direct")
         )
         if not p.monitoring_path:
             direct_action.setEnabled(False)
-        
-        # 메뉴 표시
+
         menu.exec(button.mapToGlobal(pos))
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
@@ -750,7 +790,7 @@ class MainWindow(QMainWindow):
                                        user_cycle_hours=data["user_cycle_hours"], mandatory_times_str=data["mandatory_times_str"],
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
                                        original_launch_path=data["launch_path"],  # 원본 경로 보존
-                                       preferred_launch_type=data.get("preferred_launch_type", "auto"),  # 실행 방식 선택
+                                       preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
                                        game_schema_id=data.get("game_schema_id"),  # MVP 필드
                                        mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
