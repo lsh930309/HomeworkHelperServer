@@ -5,8 +5,8 @@
 import sys
 from pathlib import Path
 
-# Python 표준 라이브러리 경로
-python_lib = Path(sys.prefix) / 'Lib'
+# Python 표준 라이브러리 경로 (가상환경이 아닌 실제 Python 경로)
+python_lib = Path(sys.base_prefix) / 'Lib'
 
 a = Analysis(
     ['homework_helper.pyw'],
