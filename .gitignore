@@ -30,7 +30,6 @@ env/
 # ===========================
 build/
 dist/
-*.spec
 installer_output/
 release/
 

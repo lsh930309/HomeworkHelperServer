@@ -1,12 +1,10 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 
-# onedir 모드: 모든 파일을 폴더에 배포하여 MEI 임시 폴더 문제 해결
+# HomeworkHelper - PyInstaller spec (onedir 모드)
+# Label Studio Helper 분리 후 정리된 버전
 
 import sys
 from pathlib import Path
-
-# Python 표준 라이브러리 경로 (가상환경이 아닌 실제 Python 경로)
-python_lib = Path(sys.base_prefix) / 'Lib'
 
 a = Analysis(
     ['homework_helper.pyw'],
@@ -16,56 +14,48 @@ a = Analysis(
         ('font', 'font'),
         ('img', 'img'),
         ('src', 'src'),
-        ('label-studio', 'label-studio'),
         ('tools', 'tools'),
         ('schemas', 'schemas'),
-        # Python 표준 라이브러리 (PyTorch import에 필수)
-        (str(python_lib / 'modulefinder.py'), 'Lib'),
-        (str(python_lib / 'importlib'), 'Lib/importlib'),
-        (str(python_lib / 'pkgutil.py'), 'Lib'),
-        (str(python_lib / 'inspect.py'), 'Lib'),
-        (str(python_lib / 'dis.py'), 'Lib'),
-        (str(python_lib / 'opcode.py'), 'Lib'),
-        (str(python_lib / 'ast.py'), 'Lib'),
     ],
     hiddenimports=[
-        # 기본 의존성
-        'uvicorn', 'fastapi', 'sqlalchemy', 'requests', 'PyQt6', 'psutil',
+        # FastAPI/Backend
+        'uvicorn', 'fastapi', 'sqlalchemy', 'starlette',
+        
+        # GUI
+        'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui',
+        
+        # Windows
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
-        'cv2', 'skimage', 'skimage.metrics', 'skimage._shared', 'skimage._shared.utils',
-        'timeit', 'pickletools', 'pickle', 'copyreg', 'types', 'weakref', 'struct', 'matplotlib',
-        # PyAV (av) 및 모든 서브모듈
-        'av', 'av.logging', 'av.audio', 'av.video', 'av.container', 'av.codec',
-        'av.stream', 'av.format', 'av.filter', 'av.packet', 'av.frame', 'av.option',
-        'av.subtitles', 'av.data', 'av.buffer', 'av.error', 'av.utils', 'av._core',
-        # Python 표준 라이브러리 (PyTorch import에 필수)
-        'modulefinder', 'importlib', 'importlib.util', 'importlib.machinery',
-        'importlib.metadata', 'importlib.resources', 'importlib.abc',
-        'pkgutil', 'inspect', 'typing', 'typing_extensions',
-        'collections', 'collections.abc', 'functools', 'operator', 'itertools',
-        'contextlib', 'warnings', 'dis', 'opcode', 'token', 'tokenize',
-        'linecache', 'traceback', 'ast', 'keyword', 'reprlib',
-        # 추가 표준 라이브러리
-        'io', 'sys', 'os', 'os.path', 'pathlib', 're', 'json', 'math',
-        'platform', 'subprocess', 'threading', 'queue', 'time', 'datetime',
-        'email', 'email.mime', 'email.mime.text', 'mimetypes'
+        'winshell', 'psutil',
+        
+        # Network
+        'requests', 'httpx',
+        
+        # Data
+        'pydantic', 'jsonschema',
     ],
-    hookspath=['hooks'],
+    hookspath=[],
     hooksconfig={},
-    runtime_hooks=['hooks/runtime_hook_stdlib.py'],
-    excludes=['torch', 'torchvision', 'torchaudio', 'torch.nn', 'torch.cuda', 'torch.distributed', 'torch.optim', 'torch.utils', 'torch.jit', 'torch.autograd'],
+    runtime_hooks=[],
+    excludes=[
+        # PyTorch 관련 (LSH로 이동)
+        'torch', 'torchvision', 'torchaudio',
+        
+        # 영상/이미지 처리 (LSH로 이동)
+        'cv2', 'av', 'skimage', 'scipy', 'PIL', 'matplotlib',
+        'numpy', 'imageio',
+    ],
     noarchive=False,
     optimize=0,
 )
 
 pyz = PYZ(a.pure)
 
-# EXE: onedir 모드에서는 실행 파일만 생성
 exe = EXE(
     pyz,
     a.scripts,
-    [],  # onefile과 다른 점: binaries, datas 제거
-    exclude_binaries=True,  # 중요: 별도 수집하도록 지정
+    [],
+    exclude_binaries=True,
     name='homework_helper',
     debug=False,
     bootloader_ignore_signals=False,
@@ -80,7 +70,6 @@ exe = EXE(
     icon=['img/app_icon.ico'],
 )
 
-# COLLECT: 모든 파일을 하나의 폴더에 수집 (onedir의 핵심)
 coll = COLLECT(
     exe,
     a.binaries,
@@ -88,5 +77,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='homework_helper'  # 최종 폴더: dist/homework_helper/
+    name='homework_helper'
 )

@@ -314,7 +314,7 @@ class MainWindow(QMainWindow):
 
         # 도구 메뉴
         tm = mb.addMenu("도구(&T)")
-        lsm_action = QAction("🎯 Label Studio Manager", self)
+        lsm_action = QAction("🎬 Label Studio Helper", self)
         lsm_action.triggered.connect(self.open_label_studio_manager)
         if tm:
             tm.addAction(lsm_action)
@@ -1442,43 +1442,35 @@ class MainWindow(QMainWindow):
         return result == QMessageBox.StandardButton.Yes
 
     def open_label_studio_manager(self):
-        """Label Studio Manager GUI 툴 실행"""
+        """Label Studio Helper 설치/관리 다이얼로그 표시"""
         try:
-            from pathlib import Path
-
-            # label-studio 모듈 경로 설정
-            if getattr(sys, 'frozen', False):
-                # 패키징된 환경 (PyInstaller onedir 모드)
-                # 데이터 파일들은 _internal 폴더에 위치
-                label_studio_path = Path(sys.executable).parent / "_internal" / "label-studio"
-            else:
-                # 개발 환경
-                label_studio_path = Path(__file__).parent.parent.parent / "label-studio"
-
-            # label-studio 경로를 sys.path에 추가
-            if str(label_studio_path) not in sys.path:
-                sys.path.insert(0, str(label_studio_path))
-
-            # Label Studio Manager 임포트 및 실행
-            from gui.label_studio_manager import LabelStudioManager
-
-            # 새 윈도우 생성 (동일 프로세스에서 실행)
-            self.label_studio_window = LabelStudioManager()
-            self.label_studio_window.show()
+            from src.utils.lsh_installer import LabelStudioHelperDialog
+            
+            if LabelStudioHelperDialog is None:
+                QMessageBox.warning(
+                    self,
+                    "기능 없음",
+                    "Label Studio Helper 설치 도우미를 사용할 수 없습니다."
+                )
+                return
+            
+            dialog = LabelStudioHelperDialog(self)
+            dialog.exec()
 
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage("Label Studio Manager 실행됨", 3000)
+                status_bar.showMessage("Label Studio Helper 다이얼로그 닫힘", 2000)
 
         except ImportError as e:
             QMessageBox.critical(
                 self,
                 "모듈 로드 오류",
-                f"Label Studio Manager 모듈을 찾을 수 없습니다:\n{str(e)}\n\n경로: {label_studio_path}"
+                f"Label Studio Helper 설치 도우미를 로드할 수 없습니다:\n{str(e)}"
             )
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "오류",
-                f"Label Studio Manager 실행 실패:\n{e}"
+                f"Label Studio Helper 다이얼로그 실행 실패:\n{e}"
             )
+
