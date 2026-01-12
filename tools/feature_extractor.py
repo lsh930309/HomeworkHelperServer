@@ -47,16 +47,15 @@ class FeatureExtractor:
 
             # PyAV import 문제 우회 (torchvision이 PyAV를 체크하기 전에 처리)
             # PyAV가 패키징 환경에서 제대로 로드되지 않을 때를 대비
+            import types
             try:
                 import av
                 # av.logging이 없으면 추가
                 if not hasattr(av, 'logging'):
-                    import types
                     av.logging = types.ModuleType('av.logging')
                     sys.modules['av.logging'] = av.logging
             except ImportError:
                 # av가 없으면 가짜 모듈 생성
-                import types
                 fake_av = types.ModuleType('av')
                 fake_av.logging = types.ModuleType('av.logging')
                 sys.modules['av'] = fake_av
@@ -67,7 +66,6 @@ class FeatureExtractor:
                 import torch
             except ImportError as e:
                 # 더 상세한 에러 정보 수집
-                import sys
                 error_details = f"\n   - 에러 메시지: {str(e)}"
                 error_details += f"\n   - sys.path 개수: {len(sys.path)}"
 
