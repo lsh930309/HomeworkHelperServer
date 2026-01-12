@@ -45,7 +45,24 @@ class FeatureExtractor:
         try:
             self._add_pytorch_path()
 
-            import torch
+            # PyTorch import 시도 (상세한 에러 메시지)
+            try:
+                import torch
+            except ImportError as e:
+                # 더 상세한 에러 정보 수집
+                import sys
+                error_details = f"\n   - 에러 메시지: {str(e)}"
+                error_details += f"\n   - sys.path 개수: {len(sys.path)}"
+
+                # PyTorch 경로 확인
+                pytorch_paths = [p for p in sys.path if 'pytorch' in p.lower()]
+                if pytorch_paths:
+                    error_details += f"\n   - PyTorch 경로: {pytorch_paths[0]}"
+                else:
+                    error_details += "\n   - PyTorch 경로를 sys.path에서 찾을 수 없음"
+
+                raise RuntimeError(f"PyTorch를 import할 수 없습니다:{error_details}")
+
             import torch.nn as nn
             import torchvision.models as models
             import torchvision.transforms as T
@@ -82,6 +99,18 @@ class FeatureExtractor:
     def _add_pytorch_path(self):
         """PyTorch 설치 경로를 sys.path에 추가"""
         try:
+            # PyTorch import에 필요한 표준 라이브러리 모듈들을 미리 import
+            # (PyInstaller 패키징 환경에서 발생할 수 있는 import 에러 방지)
+            try:
+                import modulefinder
+                import importlib
+                import importlib.util
+                import importlib.machinery
+                import pkgutil
+                import inspect
+            except ImportError as e:
+                print(f"⚠️ 표준 라이브러리 import 실패: {e}")
+
             if getattr(sys, 'frozen', False):
                 utils_dir = Path(sys.executable).parent / "_internal" / "src"
             else:
