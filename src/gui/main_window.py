@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QSize, QThread
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette
 
 # --- 로컬 모듈 임포트 ---
@@ -35,14 +35,6 @@ from src.core.notifier import Notifier
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 
-# ==================== 서버 종료 설정 ====================
-# API 서버 Graceful Shutdown 타임아웃 (초 단위)
-# - GUI 종료 시 서버가 안전하게 종료될 때까지 대기하는 최대 시간
-# - 서버는 이 시간 내에 DB 체크포인트 등 정리 작업을 완료해야 함
-# - 기본값: 10초 (일반적으로 충분함)
-# - 타임아웃 초과 시: 서버를 독립 프로세스로 남겨두고 GUI만 종료
-API_SERVER_SHUTDOWN_TIMEOUT = 10  # 초 단위
-# ========================================================
 
 class IconDownloader(QThread):
     """
@@ -341,18 +333,36 @@ class MainWindow(QMainWindow):
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
             self.data_manager.save_global_settings(upd_gs)
 
-            # 관리자 권한 설정이 변경되었는지 확인
+            # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
+            def _log_admin_debug(msg):
+                """디버깅 로그를 파일에 기록"""
+                try:
+                    import datetime
+                    log_dir = os.path.join(os.getenv('APPDATA', ''), 'HomeworkHelper')
+                    os.makedirs(log_dir, exist_ok=True)
+                    log_file = os.path.join(log_dir, 'admin_debug.log')
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"[{datetime.datetime.now()}] {msg}\n")
+                except:
+                    pass
+
+            _log_admin_debug(f"previous_run_as_admin: {previous_run_as_admin}, upd_gs.run_as_admin: {upd_gs.run_as_admin}, is_admin(): {is_admin()}")
             if previous_run_as_admin != upd_gs.run_as_admin:
                 if upd_gs.run_as_admin and not is_admin():
                     # 일반 → 관리자: UAC 프롬프트로 관리자 권한 재시작
-                    print("관리자 권한으로 실행 설정이 활성화되었습니다. 앱을 재시작합니다...")
-                    if run_as_admin():
-                        # 재시작 성공 시 현재 인스턴스 종료 (지연 후 종료하여 새 프로세스 시작 보장)
-                        from PyQt6.QtCore import QTimer
-                        QTimer.singleShot(500, lambda: sys.exit(0))
+                    _log_admin_debug("일반 → 관리자 권한 재시작 시도")
+                    result = run_as_admin()
+                    _log_admin_debug(f"run_as_admin() 반환값: {result}")
+                    if result:
+                        # 재시작 플래그 설정 후 즉시 종료
+                        import homework_helper
+                        homework_helper._restart_in_progress = True
+                        _log_admin_debug("QApplication.quit() 호출")
+                        QApplication.quit()
                         return
                     else:
                         # 재시작 실패 시 설정 롤백
+                        _log_admin_debug("재시작 실패, 설정 롤백")
                         upd_gs.run_as_admin = False
                         self.data_manager.save_global_settings(upd_gs)
                         status_bar = self.statusBar()
@@ -361,16 +371,22 @@ class MainWindow(QMainWindow):
                         return
                 elif not upd_gs.run_as_admin and is_admin():
                     # 관리자 → 일반: 일반 권한으로 재시작
-                    print("관리자 권한 해제됨. 일반 권한으로 앱을 재시작합니다...")
-                    if restart_as_normal():
-                        # 재시작 성공 시 현재 인스턴스 종료
-                        from PyQt6.QtCore import QTimer
-                        QTimer.singleShot(500, lambda: sys.exit(0))
+                    _log_admin_debug("관리자 → 일반 권한 재시작 시도")
+                    result = restart_as_normal()
+                    _log_admin_debug(f"restart_as_normal() 반환값: {result}")
+                    if result:
+                        # 재시작 플래그 설정 후 즉시 종료
+                        import homework_helper
+                        homework_helper._restart_in_progress = True
+                        _log_admin_debug("QApplication.quit() 호출")
+                        QApplication.quit()
                         return
                     else:
                         status_bar = self.statusBar()
                         if status_bar:
                             status_bar.showMessage("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
+            else:
+                _log_admin_debug("권한 설정 변경 없음 - 조건문 통과하지 않음")
 
             # Launcher 인스턴스의 관리자 권한 설정 업데이트
             self.launcher.run_as_admin = upd_gs.run_as_admin
@@ -1066,42 +1082,9 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
-        import homework_helper
-        import subprocess
-
         print("=== 애플리케이션 종료 절차 시작 ===")
 
-        # 1. FastAPI 서버에 Graceful Shutdown 요청
-        server_shutdown_success = False
-        # multiprocessing.Process는 is_alive()로 프로세스 실행 여부 확인
-        if homework_helper.api_server_process and homework_helper.api_server_process.is_alive():
-            try:
-                print("서버에 graceful shutdown 요청 중...")
-                response = requests.post("http://127.0.0.1:8000/shutdown", timeout=3)
-                if response.status_code == 200:
-                    print("✓ 서버가 종료 신호를 수신했습니다.")
-
-                    # 서버 프로세스가 완전히 종료될 때까지 대기 (타임아웃: 전역 변수 사용)
-                    # multiprocessing.Process는 join() 사용 (subprocess.Popen의 wait()와 동일한 의미)
-                    homework_helper.api_server_process.join(timeout=API_SERVER_SHUTDOWN_TIMEOUT)
-
-                    # join() 후에도 프로세스가 살아있는지 확인
-                    if not homework_helper.api_server_process.is_alive():
-                        print("[OK] 서버 프로세스 정상 종료 완료")
-                        server_shutdown_success = True
-
-                        # 추가 안전장치: 서버가 리소스를 완전히 해제할 시간 제공
-                        import time
-                        time.sleep(2)
-                        print("[OK] 서버 리소스 해제 대기 완료 (2초)")
-                    else:
-                        print(f"[경고] 서버 종료 타임아웃 ({API_SERVER_SHUTDOWN_TIMEOUT}초 초과)")
-                        print("   서버를 독립 프로세스로 남겨두고 GUI만 종료합니다.")
-                        # 강제 종료하지 않음 - 서버가 DB 정리 중일 수 있으므로 안전을 위해 독립 실행 유지
-            except requests.exceptions.RequestException as e:
-                print(f"⚠ 서버 종료 요청 실패 (서버가 이미 종료되었을 수 있음): {e}")
-
-        # 2. 활성화된 타이머들 중지
+        # 1. 활성화된 타이머들 중지
         if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
             self.monitor_timer.stop()
         if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive():
@@ -1113,15 +1096,15 @@ class MainWindow(QMainWindow):
             self.status_column_refresh_timer.stop()
             print("상태 컬럼 자동 업데이트 타이머 중지됨.")
 
-        # 3. 트레이 아이콘 숨기기
+        # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
             self.tray_manager.hide_tray_icon()
 
-        # 4. 인스턴스 매니저 리소스 정리 (단일 인스턴스 실행 관련)
+        # 3. 인스턴스 매니저 리소스 정리 (단일 인스턴스 실행 관련)
         if self._instance_manager and hasattr(self._instance_manager, 'cleanup'):
             self._instance_manager.cleanup()
 
-        # 5. QApplication 종료
+        # 4. QApplication 종료
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.quit()

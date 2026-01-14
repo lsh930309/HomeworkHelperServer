@@ -29,7 +29,7 @@ a = Analysis(
         'winshell', 'psutil',
         
         # Network
-        'requests', 'httpx',
+        'requests',
         
         # Data
         'pydantic', 'jsonschema',

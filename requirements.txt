@@ -1,31 +1,28 @@
 ﻿# HomeworkHelper 의존성
-# Label Studio Helper 분리 후 정리된 버전
 
-# === Core ===
-PyQt6>=6.9.0
-pywin32>=311
-winshell>=0.6
-psutil>=7.0.0
+# === GUI ===
+PyQt6
 
-# === API/Server (FastAPI 백엔드 개발용) ===
-fastapi>=0.100.0
-uvicorn>=0.30.0
-SQLAlchemy>=2.0.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+# === Windows ===
+pywin32
+winshell
+psutil
+
+# === API Server ===
+fastapi
+uvicorn
+SQLAlchemy
+pydantic
 
 # === Network ===
-requests>=2.31.0
-httpx>=0.25.0
+requests
 
 # === Data Validation ===
-jsonschema>=4.20.0
+jsonschema
 
 # === Windows Notifications ===
-Windows-Toasts>=1.3.0
+Windows-Toasts
 
-# === Build Tools ===
-pyinstaller>=6.0.0
-
-# === Dev/Test ===
-pytest>=8.0.0
+# === Build/Dev ===
+pyinstaller
+pytest

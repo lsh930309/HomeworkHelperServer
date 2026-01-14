@@ -1,32 +1,4 @@
-# PyTorch를 가장 먼저 import (PyQt6 DLL 충돌 방지 - WinError 1114 해결)
-try:
-    import sys
-    import os
-    from pathlib import Path
-
-    # PyTorch 경로 추가
-    appdata = os.getenv('APPDATA') or os.path.expanduser('~')
-    pytorch_dir = Path(appdata) / "HomeworkHelper" / "pytorch" / "Lib" / "site-packages"
-
-    # PermissionError 방지: exists() 체크를 try-except로 감싸기
-    try:
-        if pytorch_dir.exists() and str(pytorch_dir) not in sys.path:
-            sys.path.insert(0, str(pytorch_dir))
-    except (PermissionError, OSError):
-        # 권한 오류 발생 시 경로만 추가 시도
-        if str(pytorch_dir) not in sys.path:
-            sys.path.insert(0, str(pytorch_dir))
-
-    # PyTorch를 최우선으로 import
-    import torch
-    print(f"✅ PyTorch {torch.__version__} 사전 로드 완료 (PyQt6 DLL 충돌 방지)")
-except ImportError:
-    # PyTorch 미설치 시 무시
-    pass
-except Exception as e:
-    print(f"⚠️ PyTorch 사전 로드 실패 (무시됨): {e}")
-
-# 이제 표준 라이브러리 및 PyQt6 import
+# 표준 라이브러리 import
 import sys
 import datetime
 import os
@@ -43,6 +15,7 @@ import threading
 from typing import List, Optional, Dict, Any
 
 api_server_process = None
+_restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로 설정
 
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
@@ -536,52 +509,6 @@ def run_server_main():
         """모든 세션 조회"""
         return crud.get_all_sessions(db=db, skip=skip, limit=limit)
 
-    # ==================== Graceful Shutdown API ====================
-    from fastapi import BackgroundTasks
-
-    @app.post("/shutdown")
-    async def shutdown_server(background_tasks: BackgroundTasks):
-        """
-        서버를 안전하게 종료합니다.
-        1. DB 체크포인트 수행 (.wal → .db)
-        2. DB 연결 정리
-        3. 서버 프로세스 종료
-        """
-
-        def perform_graceful_shutdown():
-            print("=== Graceful Shutdown 시작 ===")
-
-            # 1. 데이터베이스 WAL 체크포인트 실행 (가장 중요!)
-            try:
-                from src.data.database import engine
-                from sqlalchemy import text
-                with engine.connect() as conn:
-                    # TRUNCATE: WAL 파일의 모든 내용을 .db에 기록하고 WAL 파일을 삭제
-                    conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
-                    conn.commit()
-                print("✓ WAL 체크포인트 완료 (.wal → .db 이동)")
-            except Exception as e:
-                print(f"WAL 체크포인트 경고 (무시 가능): {e}")
-
-            # 2. 데이터베이스 엔진 정리
-            try:
-                from src.data.database import engine
-                engine.dispose()
-                print("✓ 데이터베이스 엔진 정리 완료")
-            except Exception as e:
-                print(f"엔진 정리 경고: {e}")
-
-            # 3. uvicorn 서버 종료
-            # Windows에서 SIGTERM은 강제 종료로 동작하므로, sys.exit() 사용
-            # 이미 등록된 shutdown_handler가 정리 작업을 수행했으므로 안전하게 종료
-            print("✓ 서버 종료 신호 전송")
-            import sys
-            sys.exit(0)
-
-        # 백그라운드에서 종료 작업 수행 (응답은 즉시 반환)
-        background_tasks.add_task(perform_graceful_shutdown)
-        return {"status": "shutting_down"}
-    # ===============================================================
 
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
