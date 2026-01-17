@@ -558,6 +558,22 @@ def ensure_process_table_schema():
 
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
+    from PyQt6.QtCore import Qt
+    
+    # === High DPI 스케일링 설정 (QApplication 생성 전에 반드시 설정해야 함) ===
+    # 패키지(PyInstaller) 환경과 개발 환경 모두에서 일관된 DPI 스케일링을 보장합니다.
+    # 절전모드/최대절전모드 복구 시에도 OS 디스플레이 배율을 올바르게 유지합니다.
+    
+    # 환경 변수 설정 (Qt 내부에서 사용, 가장 먼저 설정해야 함)
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+    
+    # PyQt6 High DPI 스케일링 정책 설정
+    # PassThrough: OS에서 설정한 스케일 팩터를 그대로 사용 (가장 정확한 렌더링)
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+    
     app = QApplication(sys.argv)
     app.setApplicationName("숙제 관리자") # 애플리케이션 이름 설정
     app.setOrganizationName("HomeworkHelperOrg") # 조직 이름 설정 (설정 파일 경로 등에 사용될 수 있음)

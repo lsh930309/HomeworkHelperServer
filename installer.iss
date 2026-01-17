@@ -74,7 +74,54 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; 필요 시 사용자에게 안내 메시지만 표시
 
 [Code]
-// 이전 버전 확인 및 제거
+// 실행 중인 프로세스 확인 함수
+function IsProcessRunning(ProcessName: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  // tasklist로 프로세스 확인 (ERRORLEVEL 0 = 프로세스 존재)
+  Result := Exec('tasklist', '/FI "IMAGENAME eq ' + ProcessName + '" /NH | find /I "' + ProcessName + '"', 
+                 '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  
+  // 위 방법이 동작하지 않을 경우를 대비한 대체 방식
+  // cmd /c 를 사용하여 파이프 명령 실행
+  Exec('cmd.exe', '/c tasklist /FI "IMAGENAME eq ' + ProcessName + '" 2>NUL | find /I "' + ProcessName + '" >NUL',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := (ResultCode = 0);
+end;
+
+// 프로세스 종료 함수
+function KillProcess(ProcessName: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  // taskkill로 프로세스 종료 (/F = 강제, /IM = 이미지 이름)
+  Exec('taskkill', '/F /IM ' + ProcessName, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := (ResultCode = 0) or (ResultCode = 128); // 128 = 프로세스 없음
+end;
+
+// 모든 HomeworkHelper 관련 프로세스 종료
+procedure KillAllAppProcesses();
+var
+  ResultCode: Integer;
+begin
+  // 메인 GUI 프로세스 종료
+  Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  
+  // 잠시 대기 (프로세스 종료 완료 대기)
+  Sleep(500);
+  
+  // 혹시 남아있을 수 있는 Python 서버 프로세스 종료 (같은 경로에서 실행된 경우)
+  // 참고: API 서버는 homework_helper.exe의 자식 프로세스로 실행되므로 부모 종료 시 함께 종료됨
+end;
+
+// HomeworkHelper 관련 프로세스가 실행 중인지 확인
+function IsAppRunning(): Boolean;
+begin
+  Result := IsProcessRunning('homework_helper.exe');
+end;
+
+// 이전 버전 확인 및 제거, 실행 중인 프로세스 종료
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
@@ -82,19 +129,70 @@ var
 begin
   Result := True;
 
-  // 레지스트리에서 이전 버전 확인
+  // === 1. 실행 중인 HomeworkHelper 프로세스 종료 ===
+  if IsAppRunning() then
+  begin
+    if MsgBox('HomeworkHelper가 현재 실행 중입니다.' + #13#10 + #13#10 +
+              '설치를 계속하려면 프로그램을 종료해야 합니다.' + #13#10 +
+              '자동으로 종료하고 계속 진행하시겠습니까?',
+              mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      // 프로세스 종료
+      KillAllAppProcesses();
+      
+      // 종료 확인을 위해 잠시 대기
+      Sleep(1000);
+      
+      // 아직도 실행 중인지 확인
+      if IsAppRunning() then
+      begin
+        MsgBox('프로그램을 종료하지 못했습니다.' + #13#10 +
+               '수동으로 HomeworkHelper를 종료한 후 설치를 다시 시도해주세요.',
+               mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+    end
+    else
+    begin
+      MsgBox('설치가 취소되었습니다.' + #13#10 +
+             'HomeworkHelper를 종료한 후 다시 시도해주세요.',
+             mbInformation, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  // === 2. 레지스트리에서 이전 버전 확인 및 업그레이드 ===
   if RegQueryStringValue(HKEY_LOCAL_MACHINE,
     'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1',
     'UninstallString', UninstallString) then
   begin
-    if MsgBox('HomeworkHelper가 이미 설치되어 있습니다. 이전 버전을 제거하시겠습니까?',
-      mbConfirmation, MB_YESNO) = IDYES then
+    // 이전 버전이 있으면 자동으로 업그레이드 (사일런트 제거 후 설치)
+    // 사용자에게 물어보지 않고 바로 업그레이드 진행 (더 매끄러운 UX)
+    Exec(RemoveQuotes(UninstallString), '/SILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    
+    // 제거 완료 대기
+    Sleep(500);
+  end;
+end;
+
+// 설치 전 준비 단계에서 추가 확인 (PrepareToInstall)
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  
+  // 마지막으로 프로세스가 종료되었는지 확인
+  if IsAppRunning() then
+  begin
+    // 한 번 더 종료 시도
+    KillAllAppProcesses();
+    Sleep(1000);
+    
+    if IsAppRunning() then
     begin
-      Exec(UninstallString, '/SILENT', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    end
-    else
-    begin
-      Result := False;
+      Result := 'HomeworkHelper가 아직 실행 중입니다. 프로그램을 종료한 후 다시 시도해주세요.';
     end;
   end;
 end;
