@@ -1,7 +1,8 @@
 # data_models.py
 import datetime
+import time
 import uuid # 프로세스 ID 생성을 위해 추가
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 class ManagedProcess:
     def __init__(self,
@@ -19,7 +20,11 @@ class ManagedProcess:
                  preferred_launch_type: str = "shortcut",
                  # MVP 연동 필드
                  game_schema_id: Optional[str] = None,  # 게임 스키마 ID (예: "zenless_zone_zero")
-                 mvp_enabled: bool = False):            # MVP 기능 활성화 여부
+                 mvp_enabled: bool = False,             # MVP 기능 활성화 여부
+                 # HoYoLab 스태미나 연동 필드
+                 stamina_current: Optional[int] = None,
+                 stamina_max: Optional[int] = None,
+                 stamina_updated_at: Optional[float] = None):
 
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
@@ -40,6 +45,11 @@ class ManagedProcess:
         # MVP 연동 필드 초기화
         self.game_schema_id = game_schema_id
         self.mvp_enabled = mvp_enabled
+        
+        # HoYoLab 스태미나 연동 필드 초기화
+        self.stamina_current = stamina_current
+        self.stamina_max = stamina_max
+        self.stamina_updated_at = stamina_updated_at
 
     def __repr__(self):
         return f"<ManagedProcess(id='{self.id}', name='{self.name}', schema='{self.game_schema_id}')>"
@@ -62,7 +72,47 @@ class ManagedProcess:
             data['game_schema_id'] = None
         if 'mvp_enabled' not in data:
             data['mvp_enabled'] = False
+        # 스태미나 필드 하위 호환성
+        if 'stamina_current' not in data:
+            data['stamina_current'] = None
+        if 'stamina_max' not in data:
+            data['stamina_max'] = None
+        if 'stamina_updated_at' not in data:
+            data['stamina_updated_at'] = None
         return cls(**data)
+    
+    def is_hoyoverse_game(self) -> bool:
+        """호요버스 게임인지 확인"""
+        return self.game_schema_id in ("honkai_starrail", "zenless_zone_zero")
+    
+    def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
+        """현재 시점의 예측 스태미나와 최대치를 반환.
+        
+        6분에 1씩 회복되는 것을 기준으로 로컬 연산합니다.
+        
+        Returns:
+            (predicted_current, max_stamina) 또는 스태미나 정보가 없으면 None
+        """
+        if self.stamina_current is None or self.stamina_max is None:
+            return None
+        
+        if self.stamina_updated_at is None:
+            return (self.stamina_current, self.stamina_max)
+        
+        # 6분에 1씩 회복
+        elapsed_seconds = time.time() - self.stamina_updated_at
+        recovered = int(elapsed_seconds / 360)  # 360초 = 6분
+        predicted = min(self.stamina_current + recovered, self.stamina_max)
+        
+        return (predicted, self.stamina_max)
+    
+    def get_stamina_percentage(self) -> Optional[float]:
+        """스태미나 백분율 반환 (0.0 ~ 100.0)"""
+        stamina_info = self.get_predicted_stamina()
+        if stamina_info is None or stamina_info[1] == 0:
+            return None
+        predicted, max_stamina = stamina_info
+        return (predicted / max_stamina) * 100
 
 class GlobalSettings:
     def __init__(self,
@@ -78,7 +128,10 @@ class GlobalSettings:
                  notify_on_mandatory_time: bool = True,
                  notify_on_cycle_deadline: bool = True,
                  notify_on_sleep_correction: bool = True,
-                 notify_on_daily_reset: bool = True): # 알림 설정 옵션 추가
+                 notify_on_daily_reset: bool = True,
+                 # 스태미나 알림 설정 (호요버스 게임)
+                 stamina_notify_enabled: bool = True,
+                 stamina_notify_threshold: int = 20):  # 최대 - N 이상일 때 알림
         
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -94,6 +147,9 @@ class GlobalSettings:
         self.notify_on_cycle_deadline = notify_on_cycle_deadline
         self.notify_on_sleep_correction = notify_on_sleep_correction
         self.notify_on_daily_reset = notify_on_daily_reset
+        # 스태미나 알림 설정
+        self.stamina_notify_enabled = stamina_notify_enabled
+        self.stamina_notify_threshold = stamina_notify_threshold
 
     def to_dict(self) -> Dict:
         return self.__dict__.copy()
@@ -125,6 +181,11 @@ class GlobalSettings:
             data['notify_on_sleep_correction'] = True
         if 'notify_on_daily_reset' not in data:
             data['notify_on_daily_reset'] = True
+        # 스태미나 알림 설정 하위 호환성
+        if 'stamina_notify_enabled' not in data:
+            data['stamina_notify_enabled'] = True
+        if 'stamina_notify_threshold' not in data:
+            data['stamina_notify_threshold'] = 20
         return cls(**data)
     
 class WebShortcut:

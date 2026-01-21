@@ -6,9 +6,14 @@ from sqlalchemy.orm import Session
 from src.data import models
 from src.data import crud
 from src.data import schemas
-from src.data.database import SessionLocal, engine
+from src.data.database import SessionLocal, engine, auto_migrate_database
 
+# 앱 시작 시 자동 마이그레이션 실행 (기존 DB에 새 컬럼 추가)
+auto_migrate_database()
+
+# 테이블 생성 (새 DB인 경우)
 models.Base.metadata.create_all(bind=engine)
+
 
 app = FastAPI()
 

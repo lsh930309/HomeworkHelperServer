@@ -28,6 +28,8 @@ class Scheduler:
         self.notified_sleep_corrected_tasks: Dict[Tuple[str, float], bool] = {}
         self.notified_daily_reset_tasks: Set[Tuple[str, str]] = set()
         self.daily_task_reminder_before_reset_hours: float = 1.0
+        # 스태미나 알림 추적
+        self.notified_stamina_full: Set[str] = set()  # 스태미나 알림을 보낸 프로세스 ID
 
     def _get_time_from_str(self, time_str: str) -> Optional[datetime.time]:
         try:
@@ -309,6 +311,54 @@ class Scheduler:
                     )
                 self.notified_daily_reset_tasks.add(notification_key)
 
+    def check_stamina_notifications(self):
+        """호요버스 게임의 스태미나 알림 체크"""
+        now_dt = datetime.datetime.now()
+        gs = self.data_manager.global_settings
+        
+        # 스태미나 알림이 비활성화된 경우 건너뛰기
+        if not gs.stamina_notify_enabled:
+            return
+        
+        threshold = gs.stamina_notify_threshold
+        
+        for process in self.data_manager.managed_processes:
+            # 호요버스 게임이 아니면 건너뛰기
+            if not process.is_hoyoverse_game():
+                continue
+            
+            # 스태미나 정보 가져오기
+            stamina_info = process.get_predicted_stamina()
+            if stamina_info is None:
+                continue
+            
+            predicted, max_stamina = stamina_info
+            
+            # 임계값 체크: 스태미나가 (최대 - threshold) 이상인 경우
+            if predicted >= max_stamina - threshold:
+                # 이미 알림을 보낸 경우 건너뛰기
+                if process.id in self.notified_stamina_full:
+                    continue
+                
+                # 게임별 스태미나 이름
+                stamina_name = "개척력" if process.game_schema_id == "honkai_starrail" else "배터리"
+                remaining = max_stamina - predicted
+                
+                print(f"[{now_dt.strftime('%Y-%m-%d %H:%M:%S')}] 스태미나 알림: '{process.name}' - {stamina_name} {predicted}/{max_stamina}")
+                self.notifier.send_notification(
+                    title=f"{process.name} - {stamina_name} 가득 참",
+                    message=f"'{process.name}'의 {stamina_name}이 곷 가득 찉니다! ({predicted}/{max_stamina}, {remaining}개 남음)",
+                    task_id_to_highlight=process.id,
+                    button_text="실행",
+                    button_action="run"
+                )
+                self.notified_stamina_full.add(process.id)
+            
+            else:
+                # 스태미나가 임계값 미만이면 알림 상태 초기화
+                # (스태미나를 소비하고 다시 차오르면 알림)
+                self.notified_stamina_full.discard(process.id)
+
     def run_all_checks(self) -> bool:
         """모든 스케줄러 검사를 실행하고, 프로세스 상태의 시각적 변경 여부를 반환합니다."""
         initial_statuses = {
@@ -323,6 +373,7 @@ class Scheduler:
         self.check_sleep_corrected_cycles()
         self.check_mandatory_times()
         self.check_user_cycles()
+        self.check_stamina_notifications()  # 스태미나 알림 체크 추가
         # print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 스케줄러 검사 완료.")
 
         # 검사 실행 후 상태를 다시 확인하여 변경 여부 감지

@@ -537,6 +537,12 @@ class GlobalSettingsDialog(QDialog):
         self.notify_on_cycle_deadline_checkbox = QCheckBox("사용자 주기 만료 임박 알림")
         self.notify_on_sleep_correction_checkbox = QCheckBox("수면 보정(잠들기 전 미리) 알림")
         self.notify_on_daily_reset_checkbox = QCheckBox("일일 과제 마감 임박 알림")
+        # 스태미나 알림 설정
+        self.stamina_notify_checkbox = QCheckBox("스태미나 가득 찰 알림 (호요버스 게임)")
+        self.stamina_threshold_spinbox = QSpinBox()
+        self.stamina_threshold_spinbox.setRange(1, 100)
+        self.stamina_threshold_spinbox.setSuffix(" 개 전")
+        self.stamina_threshold_spinbox.setToolTip("스태미나가 (최대 - 이 값) 이상일 때 알림")
 
         self.form_layout.addRow("수면 시작 시각:", self.sleep_start_edit)
         self.form_layout.addRow("수면 종료 시각:", self.sleep_end_edit)
@@ -553,6 +559,10 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow(self.notify_on_cycle_deadline_checkbox)
         self.form_layout.addRow(self.notify_on_sleep_correction_checkbox)
         self.form_layout.addRow(self.notify_on_daily_reset_checkbox)
+        # 스태미나 알림 섹션
+        self.form_layout.addRow(QLabel("\n스태미나 알림 (호요버스 게임):"))
+        self.form_layout.addRow(self.stamina_notify_checkbox)
+        self.form_layout.addRow("알림 시점:", self.stamina_threshold_spinbox)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.form_layout.addRow(self.button_box)
@@ -577,6 +587,9 @@ class GlobalSettingsDialog(QDialog):
         self.notify_on_cycle_deadline_checkbox.setChecked(self.current_settings.notify_on_cycle_deadline)
         self.notify_on_sleep_correction_checkbox.setChecked(self.current_settings.notify_on_sleep_correction)
         self.notify_on_daily_reset_checkbox.setChecked(self.current_settings.notify_on_daily_reset)
+        # 스태미나 설정
+        self.stamina_notify_checkbox.setChecked(self.current_settings.stamina_notify_enabled)
+        self.stamina_threshold_spinbox.setValue(self.current_settings.stamina_notify_threshold)
 
     def get_updated_settings(self) -> GlobalSettings:
         return GlobalSettings(
@@ -592,7 +605,9 @@ class GlobalSettingsDialog(QDialog):
             notify_on_mandatory_time=self.notify_on_mandatory_time_checkbox.isChecked(),
             notify_on_cycle_deadline=self.notify_on_cycle_deadline_checkbox.isChecked(),
             notify_on_sleep_correction=self.notify_on_sleep_correction_checkbox.isChecked(),
-            notify_on_daily_reset=self.notify_on_daily_reset_checkbox.isChecked()
+            notify_on_daily_reset=self.notify_on_daily_reset_checkbox.isChecked(),
+            stamina_notify_enabled=self.stamina_notify_checkbox.isChecked(),
+            stamina_notify_threshold=self.stamina_threshold_spinbox.value()
         )
         
 class WebShortcutDialog(QDialog):
@@ -686,3 +701,234 @@ class WebShortcutDialog(QDialog):
                 # last_reset_timestamp는 여기서 설정하지 않음 (기존 값 유지 또는 로직에서 초기화)
             }
         return None
+
+
+class HoYoLabSettingsDialog(QDialog):
+    """HoYoLab 인증 정보 설정 다이얼로그
+    
+    브라우저 쿠키 자동 추출 또는 수동 입력을 통해 HoYoLab 인증 정보를 설정합니다.
+    """
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("HoYoLab 설정")
+        self.setMinimumWidth(450)
+        
+        layout = QVBoxLayout(self)
+        
+        # 안내 문구
+        info_label = QLabel(
+            "HoYoLab 게임 스태미나(개척력/배터리) 조회를 위해\n"
+            "HoYoLab 쿠키 정보가 필요합니다.\n\n"
+            "방법 1: 브라우저(Chrome/Edge)에서 자동 추출\n"
+            "방법 2: 직접 쿠키 값 입력"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # 자동 추출 버튼
+        auto_group = QGroupBox("자동 추출")
+        auto_layout = QVBoxLayout()
+        
+        extract_btn_layout = QHBoxLayout()
+        self.extract_chrome_btn = QPushButton("Chrome에서 추출")
+        self.extract_edge_btn = QPushButton("Edge에서 추출")
+        self.open_hoyolab_btn = QPushButton("HoYoLab 로그인 열기")
+        
+        extract_btn_layout.addWidget(self.extract_chrome_btn)
+        extract_btn_layout.addWidget(self.extract_edge_btn)
+        extract_btn_layout.addWidget(self.open_hoyolab_btn)
+        auto_layout.addLayout(extract_btn_layout)
+        
+        self.extract_status_label = QLabel("")
+        auto_layout.addWidget(self.extract_status_label)
+        
+        auto_group.setLayout(auto_layout)
+        layout.addWidget(auto_group)
+        
+        # 수동 입력
+        manual_group = QGroupBox("수동 입력 (고급)")
+        manual_layout = QFormLayout()
+        
+        self.ltuid_edit = QLineEdit()
+        self.ltuid_edit.setPlaceholderText("숫자로 된 사용자 ID")
+        self.ltoken_edit = QLineEdit()
+        self.ltoken_edit.setPlaceholderText("ltoken_v2 쿠키 값")
+        self.ltmid_edit = QLineEdit()
+        self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값")
+        
+        manual_layout.addRow("LTUID:", self.ltuid_edit)
+        manual_layout.addRow("LTOKEN_V2:", self.ltoken_edit)
+        manual_layout.addRow("LTMID_V2:", self.ltmid_edit)
+        
+        manual_group.setLayout(manual_layout)
+        layout.addWidget(manual_group)
+        
+        # 상태 표시
+        self.status_label = QLabel()
+        self._update_status()
+        layout.addWidget(self.status_label)
+        
+        # 버튼박스
+        button_layout = QHBoxLayout()
+        self.clear_btn = QPushButton("인증 정보 삭제")
+        self.clear_btn.setStyleSheet("color: #ff6666;")
+        button_layout.addWidget(self.clear_btn)
+        button_layout.addStretch()
+        
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_layout.addWidget(self.button_box)
+        layout.addLayout(button_layout)
+        
+        # 시그널 연결
+        self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
+        self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
+        self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
+        self.clear_btn.clicked.connect(self._clear_credentials)
+        self.button_box.accepted.connect(self._save_and_accept)
+        self.button_box.rejected.connect(self.reject)
+        
+        # 기존 설정 로드
+        self._load_existing_credentials()
+    
+    def _update_status(self):
+        """현재 인증 상태 업데이트"""
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            config = HoYoLabConfig()
+            if config.is_configured():
+                self.status_label.setText("✅ HoYoLab 인증 정보가 설정되어 있습니다.")
+                self.status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.status_label.setText("❌ HoYoLab 인증 정보가 없습니다.")
+                self.status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.status_label.setText(f"⚠️ 상태 확인 실패: {e}")
+            self.status_label.setStyleSheet("color: #ffcc00;")
+    
+    def _load_existing_credentials(self):
+        """기존 저장된 인증 정보 로드"""
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            config = HoYoLabConfig()
+            creds = config.load_credentials()
+            if creds:
+                self.ltuid_edit.setText(str(creds.get("ltuid", "")))
+                # 보안상 토큰은 마스킹
+                if creds.get("ltoken_v2"):
+                    self.ltoken_edit.setText("••••••••")
+                    self.ltoken_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
+                if creds.get("ltmid_v2"):
+                    self.ltmid_edit.setText("••••••••")
+                    self.ltmid_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
+        except Exception:
+            pass
+    
+    def _extract_cookies(self, browser: str):
+        """브라우저에서 쿠키 자동 추출"""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            
+            extractor = BrowserCookieExtractor()
+            if not extractor.is_available():
+                QMessageBox.warning(
+                    self, "라이브러리 없음",
+                    "쿠키 추출을 위한 라이브러리(pywin32, pycryptodome)가 설치되지 않았습니다."
+                )
+                return
+            
+            self.extract_status_label.setText(f"{browser}에서 쿠키 추출 중...")
+            self.extract_status_label.repaint()
+            
+            cookies = extractor.extract_from_browser(browser)
+            
+            if cookies:
+                self.ltuid_edit.setText(str(cookies.get("ltuid", "")))
+                self.ltoken_edit.setText(cookies.get("ltoken_v2", ""))
+                self.ltmid_edit.setText(cookies.get("ltmid_v2", ""))
+                self.extract_status_label.setText(f"✅ {browser}에서 쿠키 추출 성공!")
+                self.extract_status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.extract_status_label.setText(
+                    f"❌ {browser}에서 HoYoLab 쿠키를 찾을 수 없습니다.\n"
+                    "HoYoLab에 로그인한 후 다시 시도하세요."
+                )
+                self.extract_status_label.setStyleSheet("color: #ff6666;")
+                
+        except Exception as e:
+            self.extract_status_label.setText(f"❌ 추출 실패: {e}")
+            self.extract_status_label.setStyleSheet("color: #ff6666;")
+    
+    def _open_hoyolab(self):
+        """HoYoLab 웹사이트 열기"""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            extractor = BrowserCookieExtractor()
+            extractor.open_hoyolab_login()
+            self.extract_status_label.setText("브라우저에서 HoYoLab에 로그인한 후 쿠키를 추출하세요.")
+        except Exception as e:
+            import webbrowser
+            webbrowser.open("https://www.hoyolab.com/home")
+    
+    def _clear_credentials(self):
+        """저장된 인증 정보 삭제"""
+        reply = QMessageBox.question(
+            self, "인증 정보 삭제",
+            "저장된 HoYoLab 인증 정보를 삭제하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                from src.utils.hoyolab_config import HoYoLabConfig
+                config = HoYoLabConfig()
+                config.clear_credentials()
+                
+                self.ltuid_edit.clear()
+                self.ltoken_edit.clear()
+                self.ltmid_edit.clear()
+                self._update_status()
+                
+                QMessageBox.information(self, "완료", "인증 정보가 삭제되었습니다.")
+            except Exception as e:
+                QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
+    
+    def _save_and_accept(self):
+        """인증 정보 저장"""
+        ltuid_str = self.ltuid_edit.text().strip()
+        ltoken = self.ltoken_edit.text().strip()
+        ltmid = self.ltmid_edit.text().strip()
+        
+        # 마스킹된 값인지 확인 (변경 안 한 경우)
+        if ltoken == "••••••••" or ltmid == "••••••••":
+            self.accept()  # 변경 없이 닫기
+            return
+        
+        if not ltuid_str or not ltoken or not ltmid:
+            QMessageBox.warning(
+                self, "입력 오류",
+                "모든 필드를 입력하거나 자동 추출을 사용하세요."
+            )
+            return
+        
+        try:
+            ltuid = int(ltuid_str)
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", "LTUID는 숫자여야 합니다.")
+            return
+        
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            from src.services.hoyolab import reset_hoyolab_service
+            
+            config = HoYoLabConfig()
+            if config.save_credentials(ltuid, ltoken, ltmid):
+                reset_hoyolab_service()  # 서비스 인스턴스 리셋
+                QMessageBox.information(self, "저장 완료", "HoYoLab 인증 정보가 저장되었습니다.")
+                self.accept()
+            else:
+                QMessageBox.warning(self, "저장 실패", "인증 정보 저장에 실패했습니다.")
+                
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"저장 실패: {e}")

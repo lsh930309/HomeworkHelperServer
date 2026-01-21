@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette
 
 # --- 로컬 모듈 임포트 ---
-from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog
+from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
@@ -302,8 +302,10 @@ class MainWindow(QMainWindow):
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
+        hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
+            sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
 
         # 도구 메뉴
         tm = mb.addMenu("도구(&T)")
@@ -412,7 +414,13 @@ class MainWindow(QMainWindow):
                 else:
                     status_bar.showMessage("시작 프로그램에 등록되어 있지 않습니다.", 3000)
 
+    def open_hoyolab_settings_dialog(self):
+        """HoYoLab 인증 정보 설정 다이얼로그를 엽니다."""
+        dlg = HoYoLabSettingsDialog(self)
+        dlg.exec()
+
     def apply_startup_setting(self):
+
         """시작 프로그램 자동 실행 설정을 적용합니다."""
         run = self.data_manager.global_settings.run_on_startup # 자동 실행 여부 가져오기
         print(f"apply_startup_setting 호출됨 - run_on_startup: {run}")
@@ -1292,7 +1300,20 @@ class MainWindow(QMainWindow):
         print("=== 자동 조절 완료 ===\n")
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
-        """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다."""
+        """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다.
+        
+        호요버스 게임의 경우 스태미나 기반으로 계산합니다.
+        """
+        # 호요버스 게임인 경우 스태미나 기반 계산
+        if process.is_hoyoverse_game():
+            stamina_info = process.get_predicted_stamina()
+            if stamina_info:
+                predicted, max_stamina = stamina_info
+                percentage = (predicted / max_stamina) * 100 if max_stamina > 0 else 0
+                # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
+                return percentage, f"STAMINA:{process.game_schema_id}:{predicted}/{max_stamina}"
+        
+        # 기존 시간 기반 계산
         if not process.last_played_timestamp or not process.user_cycle_hours:
             return 0.0, "기록 없음"
         
@@ -1331,26 +1352,74 @@ class MainWindow(QMainWindow):
             print(f"진행률 계산 중 오류: {e}")
             return 0.0, "계산 오류"
 
+
     def _create_progress_bar_widget(self, percentage: float, time_str: str) -> QWidget:
         """진행률을 표시하는 QProgressBar 위젯을 생성합니다."""
-        if percentage == 0.0:
+        if percentage == 0.0 and not time_str.startswith("STAMINA:"):
             # 기록이 없는 경우 텍스트 라벨 반환
             label = QLabel(time_str)
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             return label
         
-        # QProgressBar 생성
+        # 스태미나 형식 감지: "STAMINA:game_id:current/max"
+        if time_str.startswith("STAMINA:"):
+            parts = time_str.split(":")
+            if len(parts) >= 3:
+                game_id = parts[1]
+                stamina_text = parts[2]
+                
+                # 아이콘 + Progress Bar를 포함하는 컨테이너 위젯 생성
+                container = QWidget()
+                layout = QHBoxLayout(container)
+                layout.setContentsMargins(2, 0, 2, 0)
+                layout.setSpacing(4)
+                
+                # 아이콘 라벨
+                icon_label = QLabel()
+                icon_path = self._get_stamina_icon_path(game_id)
+                if icon_path and os.path.exists(icon_path):
+                    pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    icon_label.setPixmap(pixmap)
+                    icon_label.setFixedSize(18, 18)
+                layout.addWidget(icon_label)
+                
+                # Progress Bar
+                progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
+                layout.addWidget(progress_bar, 1)
+                
+                return container
+        
+        # 일반 시간 기반 Progress Bar
+        progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
+        return progress_bar
+    
+    def _get_stamina_icon_path(self, game_schema_id: str) -> Optional[str]:
+        """게임 ID에 해당하는 스태미나 아이콘 경로 반환"""
+        icon_map = {
+            "honkai_starrail": "img/stamina_starrail.png",
+            "zenless_zone_zero": "img/stamina_zzz.png",
+        }
+        relative_path = icon_map.get(game_schema_id)
+        if relative_path:
+            # 실행 파일 기준 경로로 변환
+            return get_bundle_resource_path(relative_path)
+        return None
+    
+    def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
+        """스타일이 적용된 QProgressBar 생성"""
         progress_bar = QProgressBar()
-        progress_bar.setValue(int(percentage))
+        progress_bar.setValue(int(min(percentage, 100)))
         progress_bar.setMaximum(100)
         progress_bar.setMinimum(0)
         
         # 높이 설정 (행 높이에 맞게 자동 조절)
-        progress_bar.setMinimumHeight(20)  # 최소 높이만 설정
+        progress_bar.setMinimumHeight(20)
         
         # 텍스트 표시 설정
         progress_bar.setTextVisible(True)
-        progress_bar.setFormat(f"{percentage:.1f}%")
+        progress_bar.setFormat(format_text)
+        
+
         
         # 진행률에 따른 색상 설정 (다크 모드 배경)
         if percentage >= 100:

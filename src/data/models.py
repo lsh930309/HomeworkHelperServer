@@ -26,6 +26,11 @@ class Process(Base):
     preferred_launch_type = Column(String, default="shortcut")  # 실행 방식 선호도
     game_schema_id = Column(String, nullable=True)  # 게임 스키마 ID
     mvp_enabled = Column(Boolean, default=False)    # MVP 기능 플래그
+    
+    # HoYoLab 스태미나 연동 필드
+    stamina_current = Column(Integer, nullable=True)      # 현재 스태미나
+    stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
+    stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
 
 class WebShortcut(Base):
@@ -57,6 +62,10 @@ class GlobalSettings(Base):
     notify_on_cycle_deadline = Column(Boolean, default=True)
     notify_on_sleep_correction = Column(Boolean, default=True)
     notify_on_daily_reset = Column(Boolean, default=True)
+    
+    # 스태미나 알림 설정 (호요버스 게임)
+    stamina_notify_enabled = Column(Boolean, default=True)
+    stamina_notify_threshold = Column(Integer, default=20)  # 최대 - N 이상일 때 알림
 
 
 class ProcessSession(Base):

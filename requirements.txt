@@ -23,6 +23,10 @@ jsonschema
 # === Windows Notifications ===
 Windows-Toasts
 
+# === HoYoLab Integration ===
+genshin>=1.6.0
+pycryptodome>=3.20.0
+
 # === Build/Dev ===
 pyinstaller
 pytest

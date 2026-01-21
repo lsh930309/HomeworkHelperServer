@@ -2,9 +2,13 @@
 import psutil
 import time
 import os
+import logging
 from typing import Dict, Any, Optional, List
 from typing import Protocol
 from src.data.data_models import ManagedProcess
+
+logger = logging.getLogger(__name__)
+
 
 class ProcessesDataPort(Protocol):
     managed_processes: list[ManagedProcess]
@@ -12,10 +16,23 @@ class ProcessesDataPort(Protocol):
     def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Any: ...
     def end_session(self, session_id: int, end_timestamp: float) -> Any: ...
 
+
 class ProcessMonitor:
     def __init__(self, data_manager: ProcessesDataPort):
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
+        self._hoyolab_service = None  # Lazy initialization
+
+    def _get_hoyolab_service(self):
+        """HoYoLab 서비스 인스턴스 (lazy init)"""
+        if self._hoyolab_service is None:
+            try:
+                from src.services.hoyolab import get_hoyolab_service
+                self._hoyolab_service = get_hoyolab_service()
+            except ImportError:
+                logger.warning("HoYoLab 서비스를 로드할 수 없습니다.")
+                return None
+        return self._hoyolab_service
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
         if not path: 
@@ -96,9 +113,41 @@ class ProcessMonitor:
                     else:
                         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
 
+                    # 호요버스 게임인 경우 스태미나 조회
+                    if managed_proc.is_hoyoverse_game():
+                        self._update_stamina_on_game_exit(managed_proc)
+
                     if self.data_manager.update_process(managed_proc):
                          changed_occurred = True
 
                     print(f"    Last played updated: {time.ctime(termination_time)}")
         
         return changed_occurred
+
+    def _update_stamina_on_game_exit(self, process: ManagedProcess) -> None:
+        """게임 종료 시 HoYoLab에서 스태미나 정보 조회 및 저장"""
+        service = self._get_hoyolab_service()
+        if not service:
+            return
+        
+        if not service.is_available():
+            logger.debug("[HoYoLab] genshin.py 라이브러리가 설치되지 않았습니다.")
+            return
+        
+        if not service.is_configured():
+            logger.info(f"[HoYoLab] 인증 정보가 설정되지 않아 '{process.name}' 스태미나 조회를 건너뜁니다.")
+            return
+        
+        try:
+            print(f"[HoYoLab] '{process.name}' 스태미나 조회 중...")
+            stamina = service.get_stamina(process.game_schema_id)
+            if stamina:
+                process.stamina_current = stamina.current
+                process.stamina_max = stamina.max
+                process.stamina_updated_at = time.time()
+                print(f"[HoYoLab] '{process.name}' 스태미나 업데이트: {stamina.current}/{stamina.max}")
+            else:
+                print(f"[HoYoLab] '{process.name}' 스태미나 조회 결과 없음")
+        except Exception as e:
+            logger.error(f"[HoYoLab] 스태미나 조회 실패: {e}")
+            print(f"[HoYoLab] '{process.name}' 스태미나 조회 실패: {e}")

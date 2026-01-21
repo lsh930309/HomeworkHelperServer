@@ -68,6 +68,56 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 # 앞으로 만들 DB 테이블 모델들은 모두 이 Base 클래스를 상속받아 만들어집니다.
 
+
+def auto_migrate_database():
+    """
+    자동 마이그레이션 실행 - 새 컬럼이 없으면 추가합니다.
+    
+    SQLAlchemy의 create_all()은 기존 테이블에 새 컬럼을 추가하지 않으므로,
+    앱 시작 시 이 함수를 호출하여 스키마를 동기화합니다.
+    """
+    from sqlalchemy import text, inspect
+    
+    migrations = [
+        # (테이블명, 컬럼명, SQL 타입, 기본값)
+        # Process 테이블 - 스태미나 필드
+        ("managed_processes", "stamina_current", "INTEGER", None),
+        ("managed_processes", "stamina_max", "INTEGER", None),
+        ("managed_processes", "stamina_updated_at", "REAL", None),
+        # GlobalSettings 테이블 - 스태미나 알림 설정
+        ("global_settings", "stamina_notify_enabled", "INTEGER", "1"),  # Boolean -> INTEGER
+        ("global_settings", "stamina_notify_threshold", "INTEGER", "20"),
+    ]
+    
+    try:
+        inspector = inspect(engine)
+        
+        with engine.connect() as conn:
+            for table_name, column_name, column_type, default_value in migrations:
+                # 테이블 존재 여부 확인
+                if table_name not in inspector.get_table_names():
+                    continue
+                
+                # 컬럼 존재 여부 확인
+                existing_columns = [col['name'] for col in inspector.get_columns(table_name)]
+                if column_name in existing_columns:
+                    continue
+                
+                # 컬럼 추가
+                if default_value is not None:
+                    sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {default_value}"
+                else:
+                    sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"[Migration] {table_name}.{column_name} 컬럼 추가됨")
+        
+        print("[Migration] 자동 마이그레이션 완료")
+    except Exception as e:
+        print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")
+
+
 # 5. 안전한 데이터베이스 종료 함수 (선택사항 - 추가 안전장치)
 def safe_shutdown_database():
     """

@@ -15,6 +15,10 @@ class ProcessSchema(BaseModel):
     preferred_launch_type: str = "shortcut"
     game_schema_id: Optional[str] = None
     mvp_enabled: bool = False
+    # HoYoLab 스태미나 필드
+    stamina_current: Optional[int] = None
+    stamina_max: Optional[int] = None
+    stamina_updated_at: Optional[float] = None
     
     class Config:
         from_attributes = True
@@ -33,6 +37,10 @@ class ProcessCreateSchema(BaseModel):
     preferred_launch_type: str = "shortcut"
     game_schema_id: Optional[str] = None
     mvp_enabled: bool = False
+    # HoYoLab 스태미나 필드
+    stamina_current: Optional[int] = None
+    stamina_max: Optional[int] = None
+    stamina_updated_at: Optional[float] = None
 
 class WebShortcutBase(BaseModel):
     name: str = ""
@@ -63,6 +71,9 @@ class GlobalSettingsSchema(BaseModel):
     notify_on_cycle_deadline: bool = True
     notify_on_sleep_correction: bool = True
     notify_on_daily_reset: bool = True
+    # 스태미나 알림 설정
+    stamina_notify_enabled: bool = True
+    stamina_notify_threshold: int = 20
 
 
 class ProcessSessionCreate(BaseModel):
