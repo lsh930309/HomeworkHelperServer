@@ -718,26 +718,34 @@ class HoYoLabSettingsDialog(QDialog):
         # 안내 문구
         info_label = QLabel(
             "HoYoLab 게임 스태미나(개척력/배터리) 조회를 위해\n"
-            "HoYoLab 쿠키 정보가 필요합니다.\n\n"
-            "방법 1: 브라우저(Chrome/Edge)에서 자동 추출\n"
-            "방법 2: 직접 쿠키 값 입력"
+            "HoYoLab 쿠키 정보가 필요합니다."
         )
+
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
+
         # 자동 추출 버튼
         auto_group = QGroupBox("자동 추출")
         auto_layout = QVBoxLayout()
         
         extract_btn_layout = QHBoxLayout()
-        self.extract_chrome_btn = QPushButton("Chrome에서 추출")
-        self.extract_edge_btn = QPushButton("Edge에서 추출")
-        self.open_hoyolab_btn = QPushButton("HoYoLab 로그인 열기")
+        self.extract_chrome_btn = QPushButton("크롬에서 추출")
+        self.extract_edge_btn = QPushButton("엣지에서 추출")
+        self.extract_firefox_btn = QPushButton("파이어폭스에서 추출")
         
         extract_btn_layout.addWidget(self.extract_chrome_btn)
         extract_btn_layout.addWidget(self.extract_edge_btn)
-        extract_btn_layout.addWidget(self.open_hoyolab_btn)
+        extract_btn_layout.addWidget(self.extract_firefox_btn)
         auto_layout.addLayout(extract_btn_layout)
+        
+        # HoYoLab 로그인 버튼
+        login_btn_layout = QHBoxLayout()
+        self.open_hoyolab_btn = QPushButton("호요랩 로그인 열기")
+        self.show_guide_btn = QPushButton("📖 수동 추출 가이드")
+        login_btn_layout.addWidget(self.open_hoyolab_btn)
+        login_btn_layout.addWidget(self.show_guide_btn)
+        auto_layout.addLayout(login_btn_layout)
         
         self.extract_status_label = QLabel("")
         auto_layout.addWidget(self.extract_status_label)
@@ -784,7 +792,9 @@ class HoYoLabSettingsDialog(QDialog):
         # 시그널 연결
         self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
         self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
+        self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
         self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
+        self.show_guide_btn.clicked.connect(self._show_manual_guide)
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.button_box.accepted.connect(self._save_and_accept)
         self.button_box.rejected.connect(self.reject)
@@ -871,6 +881,47 @@ class HoYoLabSettingsDialog(QDialog):
             import webbrowser
             webbrowser.open("https://www.hoyolab.com/home")
     
+    def _show_manual_guide(self):
+        """수동 쿠키 추출 가이드 표시"""
+        guide_text = """<h3>수동 쿠키 추출 가이드</h3>
+
+<p>자동 추출이 실패할 경우 아래 방법으로 직접 쿠키를 추출할 수 있습니다.</p>
+
+<h4>1. HoYoLab 로그인</h4>
+<ol>
+<li><a href="https://www.hoyolab.com">www.hoyolab.com</a>에 접속하여 로그인합니다.</li>
+</ol>
+
+<h4>2. 개발자 도구 열기</h4>
+<ol>
+<li>F12 키를 눌러 개발자 도구를 엽니다.</li>
+<li><b>Application</b> 탭 (또는 Storage 탭)을 클릭합니다.</li>
+<li>좌측 메뉴에서 <b>Cookies → www.hoyolab.com</b>을 선택합니다.</li>
+</ol>
+
+<h4>3. 쿠키 값 복사</h4>
+<p>아래 3개의 쿠키를 찾아 값을 복사하세요:</p>
+<ul>
+<li><b>ltuid_v2</b> (또는 ltuid) → LTUID 필드에 입력</li>
+<li><b>ltoken_v2</b> (또는 ltoken) → LTOKEN_V2 필드에 입력</li>
+<li><b>ltmid_v2</b> (또는 ltmid) → LTMID_V2 필드에 입력</li>
+</ul>
+
+<h4>⚠️ 주의사항</h4>
+<ul>
+<li>쿠키 값은 절대 다른 사람과 공유하지 마세요!</li>
+<li>쿠키가 유출되면 계정 보안이 위험해집니다.</li>
+<li>이 앱은 쿠키를 로컬에만 저장하며 외부 서버로 전송하지 않습니다.</li>
+</ul>
+"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("수동 쿠키 추출 가이드")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(guide_text)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
+
+
     def _clear_credentials(self):
         """저장된 인증 정보 삭제"""
         reply = QMessageBox.question(

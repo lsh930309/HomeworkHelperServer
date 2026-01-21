@@ -1,7 +1,8 @@
 """브라우저에서 HoYoLab 쿠키 자동 추출 유틸리티
 
-Chrome/Edge 브라우저의 쿠키 데이터베이스에서 HoYoLab 관련 쿠키를 추출합니다.
+Chrome/Edge/Firefox 브라우저의 쿠키 데이터베이스에서 HoYoLab 관련 쿠키를 추출합니다.
 Windows DPAPI와 AES-GCM을 사용하여 암호화된 쿠키 값을 복호화합니다.
+(Firefox는 암호화되지 않은 쿠키를 사용)
 """
 import base64
 import json
@@ -11,8 +12,9 @@ import shutil
 import sqlite3
 import tempfile
 import webbrowser
+from configparser import ConfigParser
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +53,18 @@ class BrowserCookieExtractor:
         self._encryption_keys: dict = {}  # 브라우저별 암호화 키 캐시
     
     def extract_from_browser(self, browser: str = "chrome") -> Optional[dict]:
-        """Chrome/Edge에서 HoYoLab 쿠키 추출
+        """Chrome/Edge/Firefox에서 HoYoLab 쿠키 추출
         
         Args:
-            browser: 브라우저 종류 ("chrome" 또는 "edge")
+            browser: 브라우저 종류 ("chrome", "edge", 또는 "firefox")
             
         Returns:
             {"ltuid": int, "ltoken_v2": str, "ltmid_v2": str} 또는 None
         """
+        # Firefox는 별도 처리
+        if browser == "firefox":
+            return self._extract_from_firefox()
+        
         if not DPAPI_AVAILABLE:
             logger.error("pywin32가 설치되지 않아 쿠키 추출이 불가능합니다.")
             return None
@@ -113,6 +119,129 @@ class BrowserCookieExtractor:
             return Path(user_profile) / "AppData/Local/Microsoft/Edge/User Data/Default/Network/Cookies"
         else:
             return None
+    
+    def _get_firefox_profiles_dir(self) -> Optional[Path]:
+        """Firefox 프로필 디렉토리 경로 반환"""
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return None
+        return Path(appdata) / "Mozilla/Firefox/Profiles"
+    
+    def _get_firefox_default_profile(self) -> Optional[Path]:
+        """Firefox 기본 프로필 경로 반환"""
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return None
+        
+        profiles_ini = Path(appdata) / "Mozilla/Firefox/profiles.ini"
+        if not profiles_ini.exists():
+            return None
+        
+        try:
+            config = ConfigParser()
+            config.read(profiles_ini, encoding="utf-8")
+            
+            # Default=1인 프로필 찾기 또는 첫 번째 프로필 사용
+            for section in config.sections():
+                if section.startswith("Profile"):
+                    if config.get(section, "Default", fallback="0") == "1":
+                        path = config.get(section, "Path", fallback="")
+                        is_relative = config.get(section, "IsRelative", fallback="1") == "1"
+                        if is_relative:
+                            return Path(appdata) / "Mozilla/Firefox" / path
+                        else:
+                            return Path(path)
+            
+            # Default 프로필이 없으면 첫 번째 프로필 사용
+            for section in config.sections():
+                if section.startswith("Profile"):
+                    path = config.get(section, "Path", fallback="")
+                    is_relative = config.get(section, "IsRelative", fallback="1") == "1"
+                    if path:
+                        if is_relative:
+                            return Path(appdata) / "Mozilla/Firefox" / path
+                        else:
+                            return Path(path)
+        except Exception as e:
+            logger.error(f"Firefox 프로필 파싱 실패: {e}")
+        
+        return None
+    
+    def _extract_from_firefox(self) -> Optional[dict]:
+        """Firefox에서 HoYoLab 쿠키 추출
+        
+        Firefox는 쿠키를 암호화하지 않으므로 직접 읽을 수 있습니다.
+        
+        Returns:
+            추출된 쿠키 딕셔너리 또는 None
+        """
+        profile_path = self._get_firefox_default_profile()
+        if not profile_path:
+            logger.warning("Firefox 프로필을 찾을 수 없습니다.")
+            return None
+        
+        cookie_db = profile_path / "cookies.sqlite"
+        if not cookie_db.exists():
+            logger.warning(f"Firefox 쿠키 데이터베이스를 찾을 수 없습니다: {cookie_db}")
+            return None
+        
+        # 임시 파일로 복사 (Firefox가 DB를 잠그고 있을 수 있음)
+        temp_db_path = None
+        try:
+            temp_fd, temp_db_path = tempfile.mkstemp(suffix=".db")
+            os.close(temp_fd)
+            shutil.copy2(cookie_db, temp_db_path)
+            
+            conn = sqlite3.connect(temp_db_path)
+            cursor = conn.cursor()
+            
+            # Firefox 쿠키 테이블 구조: moz_cookies
+            cursor.execute("""
+                SELECT name, value
+                FROM moz_cookies
+                WHERE host LIKE ?
+            """, (f"%{self.HOYOLAB_DOMAIN}%",))
+            
+            cookies_found = {}
+            for name, value in cursor.fetchall():
+                target_key = None
+                for key, aliases in self.COOKIE_ALIASES.items():
+                    if name in aliases:
+                        target_key = key
+                        break
+                
+                if not target_key:
+                    continue
+                
+                if value:
+                    cookies_found[target_key] = value
+                    logger.debug(f"Firefox 쿠키 발견: {name}")
+            
+            conn.close()
+            
+            # 모든 필수 쿠키가 있는지 확인
+            if all(key in cookies_found for key in self.REQUIRED_COOKIES):
+                try:
+                    cookies_found["ltuid"] = int(cookies_found["ltuid_v2"])
+                except (ValueError, KeyError):
+                    cookies_found["ltuid"] = 0
+                
+                logger.info("Firefox에서 HoYoLab 쿠키 추출 성공")
+                return cookies_found
+            else:
+                missing = [k for k in self.REQUIRED_COOKIES if k not in cookies_found]
+                logger.warning(f"Firefox에서 일부 필수 쿠키가 없습니다: {missing}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Firefox 쿠키 추출 오류: {e}")
+            return None
+        finally:
+            if temp_db_path and os.path.exists(temp_db_path):
+                try:
+                    os.unlink(temp_db_path)
+                except Exception:
+                    pass
     
     def _get_local_state_path(self, browser: str) -> Optional[Path]:
         """브라우저 Local State 파일 경로 반환
