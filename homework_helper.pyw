@@ -529,7 +529,7 @@ def stop_api_server():
 
 def ensure_process_table_schema():
     """
-    managed_processes 테이블에 신규 컬럼이 없으면 추가합니다.
+    managed_processes 및 global_settings 테이블에 신규 컬럼이 없으면 추가합니다.
     기존 사용자 데이터가 손실되지 않도록 ALTER TABLE을 사용합니다.
     """
     try:
@@ -537,24 +537,46 @@ def ensure_process_table_schema():
         from src.data.database import engine
 
         with engine.connect() as conn:
+            # === managed_processes 테이블 마이그레이션 ===
             table_exists = conn.execute(
                 text("SELECT name FROM sqlite_master WHERE type='table' AND name='managed_processes'")
             ).fetchone()
-            if not table_exists:
-                return
+            if table_exists:
+                existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(managed_processes)"))}
 
-            existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(managed_processes)"))}
+                if 'preferred_launch_type' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN preferred_launch_type TEXT DEFAULT 'shortcut'"))
+                if 'game_schema_id' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN game_schema_id TEXT"))
+                if 'mvp_enabled' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN mvp_enabled BOOLEAN DEFAULT 0"))
+                # HoYoLab 스태미나 컬럼 추가
+                if 'stamina_current' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_current INTEGER"))
+                if 'stamina_max' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_max INTEGER"))
+                if 'stamina_updated_at' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_updated_at REAL"))
 
-            if 'preferred_launch_type' not in existing_cols:
-                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN preferred_launch_type TEXT DEFAULT 'shortcut'"))
-            if 'game_schema_id' not in existing_cols:
-                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN game_schema_id TEXT"))
-            if 'mvp_enabled' not in existing_cols:
-                conn.execute(text("ALTER TABLE managed_processes ADD COLUMN mvp_enabled BOOLEAN DEFAULT 0"))
+            # === global_settings 테이블 마이그레이션 ===
+            gs_table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='global_settings'")
+            ).fetchone()
+            if gs_table_exists:
+                gs_existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(global_settings)"))}
+
+                # 스태미나 알림 설정 컬럼 추가
+                if 'stamina_notify_enabled' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN stamina_notify_enabled INTEGER DEFAULT 1"))
+                    print("[Migration] global_settings.stamina_notify_enabled 컬럼 추가됨")
+                if 'stamina_notify_threshold' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN stamina_notify_threshold INTEGER DEFAULT 20"))
+                    print("[Migration] global_settings.stamina_notify_threshold 컬럼 추가됨")
 
             conn.commit()
     except Exception as e:
         print(f"테이블 스키마 확인/수정 중 오류: {e}")
+
 
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
