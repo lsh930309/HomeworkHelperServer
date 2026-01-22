@@ -251,13 +251,13 @@ def clean_build_artifacts():
 
     # installer_output은 Inno Setup이 자동 생성하므로 미리 만들 필요 없음
     # 하지만 이전 빌드의 잔여 파일은 정리
-    installer_output_dir = PROJECT_ROOT / "installer_output"
-    if installer_output_dir.exists():
-        try:
-            shutil.rmtree(installer_output_dir)
-            print(f"[OK] 삭제: installer_output/")
-        except Exception as e:
-            print(f"[경고] 삭제 실패 (installer_output): {e}")
+    # installer_output_dir = PROJECT_ROOT / "installer_output"
+    # if installer_output_dir.exists():
+    #     try:
+    #         shutil.rmtree(installer_output_dir)
+    #         print(f"[OK] 삭제: installer_output/")
+    #     except Exception as e:
+    #         print(f"[경고] 삭제 실패 (installer_output): {e}")
 
 
 def ensure_release_dir():
@@ -384,18 +384,25 @@ def create_installer(version_info):
         print(result.stdout)
         print("\n[OK] 인스톨러 생성 성공!")
 
-        # 생성된 인스톨러를 release 폴더로 이동 및 이름 변경
-        installer_output_dir = PROJECT_ROOT / "installer_output"
-        if installer_output_dir.exists():
-            for setup_file in installer_output_dir.glob("*.exe"):
-                # 새 파일명: HomeworkHelper_vX.Y.Z.timestamp_Setup.exe
-                new_name = f"HomeworkHelper_{version_info['string']}_Setup.exe"
-                dest = RELEASE_DIR / new_name
+        # 생성된 인스톨러 파일명 변경 (타임스탬프 추가)
+        # installer.iss의 OutputBaseFilename=HomeworkHelper_Setup_vX.Y.Z
+        base_version = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
+        expected_filename = f"HomeworkHelper_Setup_v{base_version}.exe"
+        generated_file = RELEASE_DIR / expected_filename
+        
+        if generated_file.exists():
+            # 새 파일명: HomeworkHelper_vX.Y.Z.timestamp_Setup.exe
+            new_name = f"HomeworkHelper_{version_info['string']}_Setup.exe"
+            dest = RELEASE_DIR / new_name
 
-                shutil.move(str(setup_file), str(dest))
-                size_mb = dest.stat().st_size / (1024 * 1024)
-                print(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
-                print(f"  저장 위치: {dest}")
+            # 이름 변경
+            shutil.move(str(generated_file), str(dest))
+            
+            size_mb = dest.stat().st_size / (1024 * 1024)
+            print(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
+            print(f"  저장 위치: {dest}")
+        else:
+            print(f"[경고] 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}")
 
         return True
     except subprocess.CalledProcessError as e:
