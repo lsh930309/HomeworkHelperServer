@@ -158,6 +158,10 @@ class ProcessDialog(QDialog):
         self.is_mandatory_time_enabled_checkbox = QCheckBox("특정 접속 시간 알림 활성화")
 
         self.form_layout.addRow(self.select_running_button)
+        
+        # --- 프리셋 선택 섹션 추가 ---
+        self._setup_preset_section()
+        
         self.form_layout.addRow("이름 (비워두면 자동 생성):", self.name_edit)
 
         monitor_path_layout = QHBoxLayout()
@@ -201,6 +205,167 @@ class ProcessDialog(QDialog):
 
         if self.existing_process:
             self.populate_fields_from_existing_process()
+
+    def _setup_preset_section(self):
+        """프리셋 선택 및 저장 섹션 설정"""
+        from src.utils.game_preset_manager import GamePresetManager
+        
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("프리셋:"))
+        
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("선택 안 함", None)
+        
+        # 프리셋 목록 로드
+        try:
+            self.preset_manager = GamePresetManager()
+            presets = self.preset_manager.get_all_presets()
+            
+            # 정렬: 시스템 프리셋 먼저, 그 다음 이름순
+            # (여기서는 간단히 이름순으로 정렬하되, 원본 순서도 고려할 수 있음)
+            presets.sort(key=lambda p: p.get("display_name", ""))
+            
+            for preset in presets:
+                display_name = preset.get("display_name", "Unknown")
+                preset_id = preset.get("id")
+                # 사용자 정의 프리셋 표시
+                if not preset_id:
+                     continue
+                self.preset_combo.addItem(display_name, preset)
+                
+        except Exception as e:
+            print(f"프리셋 로드 실패: {e}")
+            
+        preset_layout.addWidget(self.preset_combo, 1) # 늘어나도록 설정
+        
+        # 적용 버튼
+        self.apply_preset_button = QPushButton("적용")
+        self.apply_preset_button.setToolTip("선택한 프리셋의 설정을 현재 입력창에 적용합니다.")
+        self.apply_preset_button.clicked.connect(self._on_apply_preset_clicked)
+        preset_layout.addWidget(self.apply_preset_button)
+        
+        # 저장 버튼 (현재 설정을 프리셋으로 저장)
+        # 저장 버튼 (현재 설정을 프리셋으로 저장/관리)
+        self.manage_presets_button = QPushButton("프리셋 관리...")
+        self.manage_presets_button.clicked.connect(self._open_preset_manager)
+        preset_layout.addWidget(self.manage_presets_button)
+        
+        self.save_as_preset_button = QPushButton("현재 설정을 신규 프리셋으로 저장")
+        self.save_as_preset_button.clicked.connect(self._on_save_as_preset_clicked)
+        preset_layout.addWidget(self.save_as_preset_button)
+        
+        self.form_layout.addRow(preset_layout)
+
+    def _open_preset_manager(self):
+        """프리셋 관리자 열기"""
+        from src.gui.preset_editor_dialog import PresetEditorDialog
+        dialog = PresetEditorDialog(self)
+        dialog.exec()
+        self._refresh_preset_combo()
+
+    def _on_save_as_preset_clicked(self):
+        """현재 설정을 신규 프리셋으로 저장 (프리셋 에디터 호출)"""
+        # 현재 입력값 수집
+        name = self.name_edit.text().strip()
+        exe_path = self.monitoring_path_edit.text().strip()
+        reset_time = self.server_reset_time_edit.text().strip()
+        cycle_hours = self.user_cycle_hours_edit.text().strip()
+        
+        # 전달할 데이터 구성
+        initial_data = {
+            "name": name,
+            "exe_path": exe_path,
+            "reset_time": reset_time,
+            "cycle_hours": cycle_hours
+        }
+        
+        # 프리셋 에디터를 신규 추가 모드로 열기
+        from src.gui.preset_editor_dialog import PresetEditorDialog
+        dialog = PresetEditorDialog(self, initial_data=initial_data)
+        dialog.exec()
+        
+        # 다이얼로그 종료 후 목록 갱신
+        self._refresh_preset_combo()
+
+    def _on_apply_preset_clicked(self):
+        """선택한 프리셋 적용"""
+        preset = self.preset_combo.currentData()
+        if not preset:
+            return
+            
+        reply = QMessageBox.question(
+            self,
+            "프리셋 적용",
+            f"프리셋 '{preset.get('display_name')}' 설정을 적용하시겠습니까?\n"
+            "현재 입력된 내용이 덮어씌워질 수 있습니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self._apply_preset_data(preset)
+            QMessageBox.information(self, "적용 완료", "프리셋 설정이 적용되었습니다.")
+
+    def _apply_preset_data(self, preset: Dict[str, Any]):
+        """프리셋 데이터를 UI 필드에 적용"""
+        # 이름 적용 (비어있거나 덮어쓰기)
+        if hasattr(self, 'name_edit'):
+            self.name_edit.setText(preset.get("display_name", ""))
+            
+        # 서버 초기화 시간
+        if "server_reset_time" in preset:
+            self.server_reset_time_edit.setText(preset["server_reset_time"])
+            
+        # 사용자 주기
+        if "default_cycle_hours" in preset:
+            self.user_cycle_hours_edit.setText(str(preset["default_cycle_hours"]))
+            
+        # 게임 스키마 (MVP)
+        game_id = preset.get("id")
+        if game_id and hasattr(self, 'game_schema_combo'):
+            # ID가 콤보박스에 있는지 확인 후 선택
+            index = self.game_schema_combo.findData(game_id)
+            if index >= 0:
+                self.game_schema_combo.setCurrentIndex(index)
+        
+        # 호요버스 게임 설정
+        if preset.get("is_hoyoverse", False):
+            if hasattr(self, 'stamina_tracking_checkbox'):
+                self.stamina_tracking_checkbox.setChecked(True)
+                
+            # 호요랩 게임 자동 선택 (ID 매칭 시도)
+            if hasattr(self, 'hoyolab_game_combo'):
+                index = self.hoyolab_game_combo.findData(game_id)
+                if index >= 0:
+                    self.hoyolab_game_combo.setCurrentIndex(index)
+
+    # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만, 
+    # multi_replace는 덮어쓰기이므로, 기존 _on_save_as_preset_clicked 메서드 전체를 이 청크로 대체하는 게 나을 수도 있음.
+    # 하지만 여기서는 _apply_preset_data 뒤에 오는 _on_save_as_preset_clicked를 제거해야 함.
+    # 해당 메서드는 파일 뒷부분에 있음. 
+    # 차라리 별도 청크로 삭제 처리.
+
+    def _refresh_preset_combo(self):
+        """프리셋 콤보박스 목록 갱신"""
+        current_data = self.preset_combo.currentData()
+        
+        self.preset_combo.clear()
+        self.preset_combo.addItem("선택 안 함", None)
+        
+        self.preset_manager.reload()
+        presets = self.preset_manager.get_all_presets()
+        presets.sort(key=lambda p: p.get("display_name", ""))
+        
+        for preset in presets:
+            display_name = preset.get("display_name", "Unknown")
+            preset_id = preset.get("id")
+            if not preset_id: continue
+            self.preset_combo.addItem(display_name, preset)
+            
+        # 이전에 선택했던 항목 복구 시도
+        if current_data:
+            index = self.preset_combo.findData(current_data)
+            if index >= 0:
+                self.preset_combo.setCurrentIndex(index)
 
     def _setup_launch_type_section(self):
         """실행 방식 선택 섹션 설정"""
@@ -585,13 +750,15 @@ class ProcessDialog(QDialog):
                 self.monitoring_path_edit.setText(exe_path)
                 self.launch_path_edit.setText(exe_path)
 
-                # 프리셋 자동 감지 및 적용
+                # 프리셋 자동 감지 및 적용 (GamePresetManager 사용)
                 try:
-                    from src.utils.preset_manager import PresetManager
-                    preset = PresetManager.detect_preset_from_path(exe_path)
+                    from src.utils.game_preset_manager import GamePresetManager
+                    manager = GamePresetManager()
+                    preset = manager.detect_game_from_exe(exe_path)
+                    
                     if preset:
-                        PresetManager.apply_preset_to_dialog(preset, self)
-                        print(f"[ProcessDialog] 프리셋 '{preset.get('id')}' 자동 적용 완료")
+                        self._apply_preset_data(preset)
+                        print(f"[ProcessDialog] 프리셋 '{preset.get('id')}' 자동 감지 및 적용 완료")
                 except Exception as e:
                     print(f"[ProcessDialog] 프리셋 자동 적용 실패: {e}")
 
