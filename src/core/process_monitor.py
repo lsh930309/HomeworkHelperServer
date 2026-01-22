@@ -129,18 +129,18 @@ class ProcessMonitor:
         service = self._get_hoyolab_service()
         if not service:
             return
-        
+
         if not service.is_available():
             logger.debug("[HoYoLab] genshin.py 라이브러리가 설치되지 않았습니다.")
             return
-        
+
         if not service.is_configured():
             logger.info(f"[HoYoLab] 인증 정보가 설정되지 않아 '{process.name}' 스태미나 조회를 건너뜁니다.")
             return
-        
+
         try:
             print(f"[HoYoLab] '{process.name}' 스태미나 조회 중...")
-            stamina = service.get_stamina(process.game_schema_id)
+            stamina = service.get_stamina(process.hoyolab_game_id)
             if stamina:
                 process.stamina_current = stamina.current
                 process.stamina_max = stamina.max

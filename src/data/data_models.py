@@ -90,8 +90,8 @@ class ManagedProcess:
         return cls(**data)
     
     def is_hoyoverse_game(self) -> bool:
-        """호요버스 게임인지 확인"""
-        return self.game_schema_id in ("honkai_starrail", "zenless_zone_zero")
+        """호요버스 게임 스태미나 추적이 활성화되어 있는지 확인"""
+        return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
     
     def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.

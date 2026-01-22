@@ -1317,17 +1317,13 @@ class MainWindow(QMainWindow):
         stamina_tracking_enabled = getattr(process, 'stamina_tracking_enabled', False)
         hoyolab_game_id = getattr(process, 'hoyolab_game_id', None)
 
-        print(f"[DEBUG] 진행률 계산: {process.name}, stamina_tracking={stamina_tracking_enabled}, game_id={hoyolab_game_id}")
-
         if stamina_tracking_enabled and hoyolab_game_id:
             stamina_info = process.get_predicted_stamina()
-            print(f"[DEBUG] 스태미나 정보: {stamina_info}")
             if stamina_info:
                 predicted, max_stamina = stamina_info
                 percentage = (predicted / max_stamina) * 100 if max_stamina > 0 else 0
                 # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
                 result = f"STAMINA:{hoyolab_game_id}:{predicted}/{max_stamina}"
-                print(f"[DEBUG] 스태미나 포맷 반환: {result}")
                 return percentage, result
         
         # 기존 시간 기반 계산
@@ -1386,8 +1382,6 @@ class MainWindow(QMainWindow):
                     game_id = parts[1]
                     stamina_text = parts[2]
 
-                    print(f"[DEBUG] 스태미나 위젯 생성: game_id={game_id}, stamina={stamina_text}, percentage={percentage}")
-
                     # 아이콘 + Progress Bar를 포함하는 컨테이너 위젯 생성
                     container = QWidget()
                     layout = QHBoxLayout(container)
@@ -1397,7 +1391,6 @@ class MainWindow(QMainWindow):
                     # 아이콘 라벨
                     icon_label = QLabel()
                     icon_path = self._get_stamina_icon_path(game_id)
-                    print(f"[DEBUG] 아이콘 경로: {icon_path}, 존재: {icon_path and os.path.exists(icon_path)}")
 
                     if icon_path and os.path.exists(icon_path):
                         pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
