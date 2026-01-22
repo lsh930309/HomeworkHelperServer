@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, IntegrityError
 from src.data import models
 from src.data import schemas
+from typing import Optional
 import uuid
 import time
 import logging
@@ -156,12 +157,14 @@ def create_session(db: Session, session: schemas.ProcessSessionCreate):
 
 
 @db_retry_on_lock
-def end_session(db: Session, session_id: int, end_timestamp: float):
+def end_session(db: Session, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None):
     """프로세스 세션 종료 기록"""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
+        if stamina_at_end is not None:
+            db_session.stamina_at_end = stamina_at_end
         db.commit()
         db.refresh(db_session)
     return db_session

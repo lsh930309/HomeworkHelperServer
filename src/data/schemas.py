@@ -16,10 +16,12 @@ class ProcessSchema(BaseModel):
     game_schema_id: Optional[str] = None
     mvp_enabled: bool = False
     # HoYoLab 스태미나 필드
+    stamina_tracking_enabled: bool = False
+    hoyolab_game_id: Optional[str] = None
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
-    
+
     class Config:
         from_attributes = True
 
@@ -38,6 +40,8 @@ class ProcessCreateSchema(BaseModel):
     game_schema_id: Optional[str] = None
     mvp_enabled: bool = False
     # HoYoLab 스태미나 필드
+    stamina_tracking_enabled: bool = False
+    hoyolab_game_id: Optional[str] = None
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
@@ -81,12 +85,14 @@ class ProcessSessionCreate(BaseModel):
     process_id: str
     process_name: str
     start_timestamp: float
+    game_schema_id: Optional[str] = None  # 게임 스키마 ID
 
 
 class ProcessSessionUpdate(BaseModel):
     """세션 종료 업데이트용 스키마"""
     end_timestamp: float
     session_duration: float
+    stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
 
 
 class ProcessSessionSchema(BaseModel):
@@ -97,6 +103,8 @@ class ProcessSessionSchema(BaseModel):
     start_timestamp: float
     end_timestamp: Optional[float] = None
     session_duration: Optional[float] = None
+    game_schema_id: Optional[str] = None  # 게임 스키마 ID
+    stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
 
     class Config:
         from_attributes = True

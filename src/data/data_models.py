@@ -22,6 +22,8 @@ class ManagedProcess:
                  game_schema_id: Optional[str] = None,  # 게임 스키마 ID (예: "zenless_zone_zero")
                  mvp_enabled: bool = False,             # MVP 기능 활성화 여부
                  # HoYoLab 스태미나 연동 필드
+                 stamina_tracking_enabled: bool = False, # 스태미나 자동 추적 활성화
+                 hoyolab_game_id: Optional[str] = None,  # 추적할 호요버스 게임 ID
                  stamina_current: Optional[int] = None,
                  stamina_max: Optional[int] = None,
                  stamina_updated_at: Optional[float] = None):
@@ -45,8 +47,10 @@ class ManagedProcess:
         # MVP 연동 필드 초기화
         self.game_schema_id = game_schema_id
         self.mvp_enabled = mvp_enabled
-        
+
         # HoYoLab 스태미나 연동 필드 초기화
+        self.stamina_tracking_enabled = stamina_tracking_enabled
+        self.hoyolab_game_id = hoyolab_game_id
         self.stamina_current = stamina_current
         self.stamina_max = stamina_max
         self.stamina_updated_at = stamina_updated_at
@@ -73,6 +77,10 @@ class ManagedProcess:
         if 'mvp_enabled' not in data:
             data['mvp_enabled'] = False
         # 스태미나 필드 하위 호환성
+        if 'stamina_tracking_enabled' not in data:
+            data['stamina_tracking_enabled'] = False
+        if 'hoyolab_game_id' not in data:
+            data['hoyolab_game_id'] = None
         if 'stamina_current' not in data:
             data['stamina_current'] = None
         if 'stamina_max' not in data:

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
-    QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox
+    QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -278,6 +278,9 @@ class ProcessDialog(QDialog):
         # 게임 선택 변경 시 이벤트
         self.game_schema_combo.currentIndexChanged.connect(self._on_game_schema_changed)
 
+        # 스태미나 추적 섹션 (호요버스 게임 전용)
+        self._setup_stamina_section()
+
     def _on_game_schema_changed(self, index: int):
         """게임 선택 변경 시"""
         game_id = self.game_schema_combo.currentData()
@@ -290,6 +293,9 @@ class ProcessDialog(QDialog):
                     "경고",
                     f"게임 '{game_id}'의 스키마 파일을 찾을 수 없습니다."
                 )
+
+        # 스태미나 섹션 활성화/비활성화 (호요버스 게임만)
+        self._update_stamina_section_enabled()
 
     def _on_monitoring_path_changed(self, path: str):
         """모니터링 경로 변경 시 자동 게임 감지"""
@@ -308,6 +314,196 @@ class ProcessDialog(QDialog):
                 if self.game_schema_combo.itemData(i) == detected_game_id:
                     self.game_schema_combo.setCurrentIndex(i)
                     break
+
+    def _setup_stamina_section(self):
+        """스태미나 추적 섹션 설정 (호요버스 게임 전용)"""
+        self.stamina_group_box = QGroupBox("스태미나 자동 추적 (호요버스 게임)")
+        stamina_layout = QVBoxLayout()
+
+        # 스태미나 자동 추적 활성화 체크박스
+        self.stamina_tracking_checkbox = QCheckBox("스태미나 자동 추적 활성화")
+        self.stamina_tracking_checkbox.setToolTip(
+            "게임 종료 시 HoYoLab API를 통해 스태미나(개척력/배터리)를 자동으로 조회합니다."
+        )
+        stamina_layout.addWidget(self.stamina_tracking_checkbox)
+
+        # 호요버스 게임 선택 콤보박스
+        hoyolab_game_layout = QHBoxLayout()
+        hoyolab_game_layout.addWidget(QLabel("추적할 게임:"))
+        self.hoyolab_game_combo = QComboBox()
+        self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
+        self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
+        self.hoyolab_game_combo.setToolTip("스태미나를 추적할 호요버스 게임을 선택하세요.")
+        hoyolab_game_layout.addWidget(self.hoyolab_game_combo)
+        hoyolab_game_layout.addStretch()
+        stamina_layout.addLayout(hoyolab_game_layout)
+
+        # 스태미나 조회 테스트 버튼
+        self.stamina_test_button = QPushButton("스태미나 조회 테스트")
+        self.stamina_test_button.setToolTip("HoYoLab API 연결을 테스트하고 현재 스태미나를 조회합니다.")
+        self.stamina_test_button.clicked.connect(self._test_stamina_connection)
+        stamina_layout.addWidget(self.stamina_test_button)
+
+        self.stamina_group_box.setLayout(stamina_layout)
+        self.form_layout.addRow(self.stamina_group_box)
+
+        # 초기 상태: 활성화 (자유롭게 사용 가능)
+        self.stamina_group_box.setEnabled(True)
+
+        # 게임 스키마 콤보박스와 연동
+        self.game_schema_combo.currentIndexChanged.connect(self._sync_hoyolab_game_combo)
+
+    def _update_stamina_section_enabled(self):
+        """스태미나 섹션 활성화 상태 업데이트 (항상 활성화)"""
+        # 모든 게임에 대해 자유롭게 사용 가능하도록 항상 활성화
+        self.stamina_group_box.setEnabled(True)
+
+    def _sync_hoyolab_game_combo(self):
+        """게임 스키마 콤보박스와 호요랩 게임 콤보박스 동기화"""
+        game_id = self.game_schema_combo.currentData()
+
+        # 게임 스키마가 호요버스 게임이면 자동으로 선택
+        if game_id == "honkai_starrail":
+            self.hoyolab_game_combo.setCurrentIndex(0)  # 붕괴: 스타레일
+        elif game_id == "zenless_zone_zero":
+            self.hoyolab_game_combo.setCurrentIndex(1)  # 젠레스 존 제로
+
+    def _test_stamina_connection(self):
+        """스태미나 조회 테스트"""
+        # 호요랩 게임 콤보박스에서 선택된 게임 사용
+        game_id = self.hoyolab_game_combo.currentData()
+        if not game_id:
+            QMessageBox.warning(self, "오류", "추적할 호요버스 게임을 선택해주세요.")
+            return
+
+        try:
+            from src.services.hoyolab import get_hoyolab_service
+
+            service = get_hoyolab_service()
+
+            # 라이브러리 확인
+            if not service.is_available():
+                QMessageBox.warning(
+                    self,
+                    "라이브러리 없음",
+                    "HoYoLab API 연동을 위한 genshin.py 라이브러리가 설치되지 않았습니다.\n\n"
+                    "설치 방법: pip install genshin"
+                )
+                return
+
+            # 인증 정보 확인
+            if not service.is_configured():
+                reply = QMessageBox.question(
+                    self,
+                    "인증 정보 없음",
+                    "HoYoLab 인증 정보가 설정되지 않았습니다.\n"
+                    "지금 설정하시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    from src.gui.dialogs import HoYoLabSettingsDialog
+                    dialog = HoYoLabSettingsDialog(self)
+                    dialog.exec()
+                    # 설정 후 다시 확인
+                    if not service.is_configured():
+                        return
+                else:
+                    return
+
+            # 스태미나 조회
+            game_names = {
+                "honkai_starrail": "붕괴: 스타레일",
+                "zenless_zone_zero": "젠레스 존 제로"
+            }
+            game_name = game_names.get(game_id, game_id)
+
+            # 커서를 대기 커서로 변경
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents()  # UI 업데이트
+
+            try:
+                stamina_info = service.get_stamina(game_id)
+
+                if stamina_info:
+                    full_time_str = ""
+                    if stamina_info.full_time:
+                        full_time_str = f"\n완전 회복 예상: {stamina_info.full_time.strftime('%Y-%m-%d %H:%M:%S')}"
+
+                    stamina_name = "개척력" if game_id == "honkai_starrail" else "배터리"
+
+                    # 편집 모드인 경우 프로세스에 스태미나 정보 즉시 저장
+                    save_result = ""
+                    if self.existing_process:
+                        try:
+                            # 로컬 객체 업데이트
+                            self.existing_process.stamina_current = stamina_info.current
+                            self.existing_process.stamina_max = stamina_info.max
+                            self.existing_process.stamina_updated_at = stamina_info.updated_at.timestamp()
+
+                            # API를 통해 전체 프로세스 업데이트
+                            parent_window = self.parent()
+                            if parent_window and hasattr(parent_window, 'data_manager'):
+                                result = parent_window.data_manager.update_process(self.existing_process)
+                                if result:
+                                    save_result = "\n\n💾 스태미나 정보가 저장되었습니다."
+                                    # GUI 새로고침
+                                    if hasattr(parent_window, 'populate_process_list'):
+                                        parent_window.populate_process_list()
+                                else:
+                                    save_result = "\n\n⚠️ 스태미나 정보 저장 실패"
+                            else:
+                                save_result = "\n\n💾 스태미나 정보가 임시 저장되었습니다."
+                        except Exception as e:
+                            print(f"[ERROR] 스태미나 저장 오류: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            save_result = f"\n\n⚠️ 저장 오류: {e}"
+                    else:
+                        save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
+
+                    QMessageBox.information(
+                        self,
+                        "스태미나 조회 성공",
+                        f"✅ {game_name} 스태미나 조회 성공!\n\n"
+                        f"{stamina_name}: {stamina_info.current} / {stamina_info.max}\n"
+                        f"회복까지: {stamina_info.recover_time // 60}분{full_time_str}\n"
+                        f"조회 시각: {stamina_info.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"{save_result}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "조회 실패",
+                        f"❌ {game_name} 스태미나 조회에 실패했습니다.\n\n"
+                        "가능한 원인:\n"
+                        "• HoYoLab 쿠키가 만료되었습니다.\n"
+                        "• 해당 게임을 플레이하지 않았습니다.\n"
+                        "• API 서버에 문제가 있습니다.\n\n"
+                        "HoYoLab 설정에서 쿠키를 다시 설정해보세요."
+                    )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "오류",
+                    f"스태미나 조회 중 오류가 발생했습니다:\n{str(e)}"
+                )
+            finally:
+                # 커서를 원래대로 복원
+                QApplication.restoreOverrideCursor()
+
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "모듈 없음",
+                "HoYoLab 서비스 모듈을 찾을 수 없습니다."
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "오류",
+                f"스태미나 테스트 중 오류가 발생했습니다:\n{str(e)}"
+            )
 
     def _open_schema_editor(self):
         """스키마 편집 다이얼로그 열기"""
@@ -363,6 +559,17 @@ class ProcessDialog(QDialog):
         if hasattr(self.existing_process, 'mvp_enabled'):
             self.mvp_enabled_checkbox.setChecked(self.existing_process.mvp_enabled)
 
+        # 스태미나 추적 필드 로드
+        if hasattr(self.existing_process, 'stamina_tracking_enabled'):
+            self.stamina_tracking_checkbox.setChecked(self.existing_process.stamina_tracking_enabled)
+
+        # 호요랩 게임 선택 로드
+        if hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
+            for i in range(self.hoyolab_game_combo.count()):
+                if self.hoyolab_game_combo.itemData(i) == self.existing_process.hoyolab_game_id:
+                    self.hoyolab_game_combo.setCurrentIndex(i)
+                    break
+
     def open_running_process_selector(self):
         dialog = RunningProcessSelectionDialog(self) # Uses dialog defined above
         if dialog.exec():
@@ -377,6 +584,16 @@ class ProcessDialog(QDialog):
                 self.name_edit.setText(default_name or '')
                 self.monitoring_path_edit.setText(exe_path)
                 self.launch_path_edit.setText(exe_path)
+
+                # 프리셋 자동 감지 및 적용
+                try:
+                    from src.utils.preset_manager import PresetManager
+                    preset = PresetManager.detect_preset_from_path(exe_path)
+                    if preset:
+                        PresetManager.apply_preset_to_dialog(preset, self)
+                        print(f"[ProcessDialog] 프리셋 '{preset.get('id')}' 자동 적용 완료")
+                except Exception as e:
+                    print(f"[ProcessDialog] 프리셋 자동 적용 실패: {e}")
 
     def browse_file(self, path_edit_widget: QLineEdit):
         """ 파일 대화상자를 열어 파일을 선택하고, 선택된 파일의 경로를 입력 위젯에 설정합니다. """
@@ -492,6 +709,10 @@ class ProcessDialog(QDialog):
         game_schema_id = self.game_schema_combo.currentData()
         mvp_enabled = self.mvp_enabled_checkbox.isChecked()
 
+        # 스태미나 추적 필드
+        stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked()
+        hoyolab_game_id = self.hoyolab_game_combo.currentData()
+
         return {
             "name": name,
             "monitoring_path": monitoring_path,
@@ -503,6 +724,8 @@ class ProcessDialog(QDialog):
             "preferred_launch_type": preferred_launch_type,
             "game_schema_id": game_schema_id,
             "mvp_enabled": mvp_enabled,
+            "stamina_tracking_enabled": stamina_tracking_enabled,
+            "hoyolab_game_id": hoyolab_game_id,
         }
 
 class GlobalSettingsDialog(QDialog):

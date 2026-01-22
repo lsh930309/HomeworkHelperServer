@@ -26,8 +26,10 @@ class Process(Base):
     preferred_launch_type = Column(String, default="shortcut")  # 실행 방식 선호도
     game_schema_id = Column(String, nullable=True)  # 게임 스키마 ID
     mvp_enabled = Column(Boolean, default=False)    # MVP 기능 플래그
-    
+
     # HoYoLab 스태미나 연동 필드
+    stamina_tracking_enabled = Column(Boolean, default=False)  # 스태미나 자동 추적 활성화
+    hoyolab_game_id = Column(String, nullable=True)      # 추적할 호요버스 게임 ID
     stamina_current = Column(Integer, nullable=True)      # 현재 스태미나
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
@@ -78,3 +80,5 @@ class ProcessSession(Base):
     start_timestamp = Column(Float, nullable=False, index=True)  # 실행 시작 시간
     end_timestamp = Column(Float, nullable=True)  # 종료 시간 (실행 중이면 NULL)
     session_duration = Column(Float, nullable=True)  # 세션 길이 (초 단위, 종료 시 계산)
+    game_schema_id = Column(String, nullable=True)  # 게임 스키마 ID
+    stamina_at_end = Column(Integer, nullable=True)  # 종료 시점 스태미나

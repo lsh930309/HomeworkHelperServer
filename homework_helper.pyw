@@ -288,7 +288,13 @@ def run_server_main():
     from fastapi import FastAPI, Depends, HTTPException
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas
-    from src.data.database import SessionLocal, engine
+    from src.data.database import SessionLocal, engine, auto_migrate_database
+
+    # 자동 마이그레이션 실행 (새 컬럼 추가)
+    auto_migrate_database()
+
+    # 테이블 생성 (새 DB인 경우)
+    models.Base.metadata.create_all(bind=engine)
 
     # 데이터베이스 무결성 확인 및 복구
     logger.info("데이터베이스 무결성 확인 중...")
@@ -314,8 +320,6 @@ def run_server_main():
         ensure_process_table_schema()
     except Exception as e:
         logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
-
-    models.Base.metadata.create_all(bind=engine)
 
     # 주기적 WAL checkpoint 백그라운드 스레드
     def periodic_checkpoint(interval=60):

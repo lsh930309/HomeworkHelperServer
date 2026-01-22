@@ -14,7 +14,12 @@
             "default_cycle_hours": 24,
             "is_hoyoverse": true,
             "stamina_max_default": 240,
-            "stamina_recovery_minutes": 6
+            "stamina_recovery_minutes": 6,
+            "server_reset_time": "04:00",
+            "launcher_patterns": [
+                "launcher.exe",
+                "HYP.exe"
+            ]
         },
         {
             "id": "zenless_zone_zero",
@@ -29,7 +34,12 @@
             "default_cycle_hours": 24,
             "is_hoyoverse": true,
             "stamina_max_default": 240,
-            "stamina_recovery_minutes": 6
+            "stamina_recovery_minutes": 6,
+            "server_reset_time": "04:00",
+            "launcher_patterns": [
+                "launcher.exe",
+                "HYP.exe"
+            ]
         }
     ]
 }

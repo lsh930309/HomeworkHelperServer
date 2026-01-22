@@ -81,12 +81,17 @@ def auto_migrate_database():
     migrations = [
         # (테이블명, 컬럼명, SQL 타입, 기본값)
         # Process 테이블 - 스태미나 필드
+        ("managed_processes", "stamina_tracking_enabled", "INTEGER", "0"),  # Boolean -> INTEGER
+        ("managed_processes", "hoyolab_game_id", "TEXT", None),  # 추적할 호요버스 게임 ID
         ("managed_processes", "stamina_current", "INTEGER", None),
         ("managed_processes", "stamina_max", "INTEGER", None),
         ("managed_processes", "stamina_updated_at", "REAL", None),
         # GlobalSettings 테이블 - 스태미나 알림 설정
         ("global_settings", "stamina_notify_enabled", "INTEGER", "1"),  # Boolean -> INTEGER
         ("global_settings", "stamina_notify_threshold", "INTEGER", "20"),
+        # ProcessSession 테이블 - 게임 스키마 및 스태미나 정보
+        ("process_sessions", "game_schema_id", "TEXT", None),
+        ("process_sessions", "stamina_at_end", "INTEGER", None),
     ]
     
     try:

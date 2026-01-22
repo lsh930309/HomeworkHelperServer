@@ -113,11 +113,11 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
-        self.setMinimumWidth(450) # 최소 너비 설정
-        self.setGeometry(100, 100, 450, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
+        self.setMinimumWidth(500) # 최소 너비 설정
+        self.setGeometry(100, 100, 500, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
 
         # 창 크기 조절 비활성화 (자동 크기 조정만 허용)
-        self.setFixedWidth(450)  # 고정 너비 설정
+        self.setFixedWidth(500)  # 고정 너비 설정
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
@@ -277,7 +277,8 @@ class MainWindow(QMainWindow):
         if h:
             h.setSectionResizeMode(self.COL_ICON, QHeaderView.ResizeMode.ResizeToContents) # 아이콘 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_NAME, QHeaderView.ResizeMode.Stretch) # 이름 컬럼: 남은 공간 채우기
-            h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.ResizeToContents) # 마지막 플레이 컬럼: 내용에 맞게
+            h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.Fixed) # 진행률 컬럼: 고정 폭
+            h.resizeSection(self.COL_LAST_PLAYED, 150)  # 진행률 컬럼 폭 150px로 고정
             h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
 
@@ -649,7 +650,13 @@ class MainWindow(QMainWindow):
                                        original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]),  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
                                        game_schema_id=data.get("game_schema_id"),  # MVP 필드
-                                       mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
+                                       mvp_enabled=data.get("mvp_enabled", False),  # MVP 필드
+                                       stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
+                                       hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID
+                                       stamina_current=getattr(p_edit, 'stamina_current', None),  # 기존 스태미나 정보 유지
+                                       stamina_max=getattr(p_edit, 'stamina_max', None),
+                                       stamina_updated_at=getattr(p_edit, 'stamina_updated_at', None))
+
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     self.populate_process_list() # 전체 테이블 새로고침 (프로세스 정보 변경)
                     # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
@@ -816,7 +823,9 @@ class MainWindow(QMainWindow):
                                        original_launch_path=data["launch_path"],  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
                                        game_schema_id=data.get("game_schema_id"),  # MVP 필드
-                                       mvp_enabled=data.get("mvp_enabled", False))  # MVP 필드
+                                       mvp_enabled=data.get("mvp_enabled", False),  # MVP 필드
+                                       stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
+                                       hoyolab_game_id=data.get("hoyolab_game_id"))  # 호요랩 게임 ID
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
                 self.populate_process_list() # 전체 테이블 새로고침 (프로세스 추가)
                 # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
@@ -1301,17 +1310,25 @@ class MainWindow(QMainWindow):
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
         """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다.
-        
+
         호요버스 게임의 경우 스태미나 기반으로 계산합니다.
         """
-        # 호요버스 게임인 경우 스태미나 기반 계산
-        if process.is_hoyoverse_game():
+        # 스태미나 자동 추적이 활성화된 경우 스태미나 기반 계산
+        stamina_tracking_enabled = getattr(process, 'stamina_tracking_enabled', False)
+        hoyolab_game_id = getattr(process, 'hoyolab_game_id', None)
+
+        print(f"[DEBUG] 진행률 계산: {process.name}, stamina_tracking={stamina_tracking_enabled}, game_id={hoyolab_game_id}")
+
+        if stamina_tracking_enabled and hoyolab_game_id:
             stamina_info = process.get_predicted_stamina()
+            print(f"[DEBUG] 스태미나 정보: {stamina_info}")
             if stamina_info:
                 predicted, max_stamina = stamina_info
                 percentage = (predicted / max_stamina) * 100 if max_stamina > 0 else 0
                 # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
-                return percentage, f"STAMINA:{process.game_schema_id}:{predicted}/{max_stamina}"
+                result = f"STAMINA:{hoyolab_game_id}:{predicted}/{max_stamina}"
+                print(f"[DEBUG] 스태미나 포맷 반환: {result}")
+                return percentage, result
         
         # 기존 시간 기반 계산
         if not process.last_played_timestamp or not process.user_cycle_hours:
@@ -1360,34 +1377,46 @@ class MainWindow(QMainWindow):
             label = QLabel(time_str)
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             return label
-        
+
         # 스태미나 형식 감지: "STAMINA:game_id:current/max"
         if time_str.startswith("STAMINA:"):
-            parts = time_str.split(":")
-            if len(parts) >= 3:
-                game_id = parts[1]
-                stamina_text = parts[2]
-                
-                # 아이콘 + Progress Bar를 포함하는 컨테이너 위젯 생성
-                container = QWidget()
-                layout = QHBoxLayout(container)
-                layout.setContentsMargins(2, 0, 2, 0)
-                layout.setSpacing(4)
-                
-                # 아이콘 라벨
-                icon_label = QLabel()
-                icon_path = self._get_stamina_icon_path(game_id)
-                if icon_path and os.path.exists(icon_path):
-                    pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                    icon_label.setPixmap(pixmap)
-                    icon_label.setFixedSize(18, 18)
-                layout.addWidget(icon_label)
-                
-                # Progress Bar
-                progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
-                layout.addWidget(progress_bar, 1)
-                
-                return container
+            try:
+                parts = time_str.split(":")
+                if len(parts) >= 3:
+                    game_id = parts[1]
+                    stamina_text = parts[2]
+
+                    print(f"[DEBUG] 스태미나 위젯 생성: game_id={game_id}, stamina={stamina_text}, percentage={percentage}")
+
+                    # 아이콘 + Progress Bar를 포함하는 컨테이너 위젯 생성
+                    container = QWidget()
+                    layout = QHBoxLayout(container)
+                    layout.setContentsMargins(2, 0, 2, 0)
+                    layout.setSpacing(4)
+
+                    # 아이콘 라벨
+                    icon_label = QLabel()
+                    icon_path = self._get_stamina_icon_path(game_id)
+                    print(f"[DEBUG] 아이콘 경로: {icon_path}, 존재: {icon_path and os.path.exists(icon_path)}")
+
+                    if icon_path and os.path.exists(icon_path):
+                        pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_label.setPixmap(pixmap)
+                        icon_label.setFixedSize(18, 18)
+                    else:
+                        # 아이콘이 없어도 공간 확보
+                        icon_label.setFixedSize(18, 18)
+                    layout.addWidget(icon_label)
+
+                    # Progress Bar
+                    progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
+                    layout.addWidget(progress_bar, 1)
+
+                    return container
+            except Exception as e:
+                print(f"[ERROR] 스태미나 위젯 생성 오류: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 일반 시간 기반 Progress Bar
         progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
