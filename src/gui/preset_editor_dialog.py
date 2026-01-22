@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QWidget, QFormLayout, QLineEdit, QTextEdit, QPushButton, QCheckBox,
-    QMessageBox, QSplitter, QGroupBox, QSpinBox, QTimeEdit
+    QMessageBox, QSplitter, QGroupBox, QSpinBox, QTimeEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor, QBrush
@@ -19,7 +19,7 @@ class PresetEditorDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None, initial_data: Optional[Dict[str, Any]] = None):
         super().__init__(parent)
         self.setWindowTitle("게임 프리셋 관리")
-        self.resize(800, 600)
+        self.resize(800, 650)
         
         self.manager = GamePresetManager()
         self.initial_data = initial_data
@@ -93,8 +93,25 @@ class PresetEditorDialog(QDialog):
         self.cycle_hours_spin.setRange(0, 168)
         self.cycle_hours_spin.setSpecialValueText("설정 안 함")
         
+        # [NEW] Mandatory Times
+        self.mandatory_times_edit = QLineEdit()
+        self.mandatory_times_edit.setPlaceholderText("예: 12:00, 18:00 (쉼표로 구분)")
+        
+        # [NEW] Launch Type
+        self.launch_type_combo = QComboBox()
+        self.launch_type_combo.addItem("기본 (바로가기 우선)", "shortcut")
+        self.launch_type_combo.addItem("프로세스 직접 실행 우선", "direct")
+        
         # 호요버스 관련
         self.is_hoyoverse_check = QCheckBox("호요버스 게임 (스태미나 추적 지원)")
+        self.is_hoyoverse_check.toggled.connect(self._update_hoyolab_combo_state)
+        
+        # [NEW] HoYoLab Game ID
+        self.hoyolab_game_combo = QComboBox()
+        self.hoyolab_game_combo.addItem("선택 안 함", None)
+        self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
+        self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
+        
         self.mvp_enabled_check = QCheckBox("MVP 기능 사용 (YOLO 학습 필요)")
         
         self.form_layout.addRow("ID (고유 식별자):", self.id_edit)
@@ -102,7 +119,10 @@ class PresetEditorDialog(QDialog):
         self.form_layout.addRow("실행 파일 (EXE):", self.exe_patterns_edit)
         self.form_layout.addRow("서버 초기화 시각:", self.reset_time_edit)
         self.form_layout.addRow("기본 실행 주기 (시간):", self.cycle_hours_spin)
+        self.form_layout.addRow("특정 접속 시각:", self.mandatory_times_edit)
+        self.form_layout.addRow("실행 방식 선호:", self.launch_type_combo)
         self.form_layout.addRow("", self.is_hoyoverse_check)
+        self.form_layout.addRow("HoYoLab 게임 ID:", self.hoyolab_game_combo)
         self.form_layout.addRow("", self.mvp_enabled_check)
         
         right_layout.addWidget(self.form_group)
@@ -124,44 +144,25 @@ class PresetEditorDialog(QDialog):
         
         # 초기 분할 비율 설정
         splitter.setSizes([250, 550])
+        
+        self._update_hoyolab_combo_state(False)
+
+    def _update_hoyolab_combo_state(self, checked: bool):
+        """호요버스 체크 여부에 따라 콤보박스 활성화"""
+        self.hoyolab_game_combo.setEnabled(checked)
 
     def _load_presets(self):
         """프리셋 목록 로드 및 표시"""
         self.preset_list_widget.clear()
         
         presets = self.manager.get_all_presets()
-        # 정렬: 시스템 프리셋 -> 사용자 프리셋
-        # 하지만 명확한 구분이 없으므로, user_presets에 있는 ID인지 확인해야 함
-        
-        # 현재 로드된 사용자 프리셋 ID 목록 가져오기 (manager 내부 변수 접근 대신 간접 확인)
-        # GamePresetManager에 public 메서드가 없으므로, 파일 내용을 직접 확인하거나
-        # load 시에 user_preset인지 표시를 해뒀어야 함.
-        # 여기서는 편의상 manager의 _user_presets 속성을 참조하거나 (비공개지만),
-        # 구조를 변경하지 않고 'is_system' 같은 플래그를 추론해야 함.
-        # 사용자 프리셋 파일에 있는 ID 목록을 다시 로드해서 확인
-        user_ids = set()
-        user_presets_data = self.manager._user_presets # 백도어 접근 (실용적 해결)
-        for p in user_presets_data:
-            user_ids.add(p.get("id"))
-            
         presets.sort(key=lambda p: p.get("display_name", ""))
         
         for preset in presets:
-            pid = preset.get("id")
             name = preset.get("display_name", "Unknown")
             
-            is_user = pid in user_ids
-            
-            display_text = f"{name}"
-            if is_user:
-                display_text += " (사용자)"
-            
-            item = QListWidgetItem(display_text)
+            item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, preset)
-            item.setData(Qt.ItemDataRole.UserRole + 1, is_user) # 사용자 정의 여부
-            
-            if is_user:
-                item.setForeground(QBrush(QColor("#0066cc"))) # 파란색
             
             self.preset_list_widget.addItem(item)
 
@@ -174,9 +175,12 @@ class PresetEditorDialog(QDialog):
         self.name_edit.clear()
         self.exe_patterns_edit.clear()
         
-        # 시간/주기 초기화 (SpecialValueText가 나오도록)
+        # 시간/주기 초기화
         self.reset_time_edit.setTime(self.reset_time_edit.minimumTime())
         self.cycle_hours_spin.setValue(0)
+        self.mandatory_times_edit.clear()
+        self.launch_type_combo.setCurrentIndex(0)
+        self.hoyolab_game_combo.setCurrentIndex(0)
         
         self.is_hoyoverse_check.setChecked(False)
         self.mvp_enabled_check.setChecked(False)
@@ -209,7 +213,24 @@ class PresetEditorDialog(QDialog):
                     pass
                     
             if "cycle_hours" in prefill_data and prefill_data["cycle_hours"]:
-                self.cycle_hours_spin.setValue(int(prefill_data["cycle_hours"]))
+                try:
+                    self.cycle_hours_spin.setValue(int(prefill_data["cycle_hours"]))
+                except:
+                    pass
+            
+            # [NEW] Prefill new fields
+            if "mandatory_times" in prefill_data:
+                self.mandatory_times_edit.setText(str(prefill_data["mandatory_times"]))
+                
+            if "launch_type" in prefill_data:
+                idx = self.launch_type_combo.findData(prefill_data["launch_type"])
+                if idx >= 0:
+                    self.launch_type_combo.setCurrentIndex(idx)
+            
+            # HoYoLab Logic: If is_hoyoverse is implied (e.g. checkbox state passed), use it
+            # Currently dialogs.py passes specialized keys, handled there.
+            # But specific HoYoLab ID might not be passed unless we infer it.
+            # For now, just leave default.
 
     def _on_preset_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
@@ -217,9 +238,8 @@ class PresetEditorDialog(QDialog):
             return
             
         preset = current.data(Qt.ItemDataRole.UserRole)
-        is_user = current.data(Qt.ItemDataRole.UserRole + 1)
         
-        self.form_group.setTitle(f"프리셋 정보 ({'사용자' if is_user else '시스템'})")
+        self.form_group.setTitle("프리셋 정보")
         
         # 데이터 바인딩
         self.id_edit.setText(preset.get("id", ""))
@@ -241,35 +261,53 @@ class PresetEditorDialog(QDialog):
         # Cycle Hours
         self.cycle_hours_spin.setValue(preset.get("default_cycle_hours", 0))
         
-        self.is_hoyoverse_check.setChecked(preset.get("is_hoyoverse", False))
+        # [NEW] Mandatory Times
+        mandatory = preset.get("mandatory_times", [])
+        if isinstance(mandatory, list):
+            self.mandatory_times_edit.setText(", ".join(mandatory))
+        else:
+            self.mandatory_times_edit.clear()
+            
+        # [NEW] Launch Type
+        launch_type = preset.get("preferred_launch_type", "shortcut")
+        idx = self.launch_type_combo.findData(launch_type)
+        if idx >= 0:
+            self.launch_type_combo.setCurrentIndex(idx)
+        else:
+            self.launch_type_combo.setCurrentIndex(0)
+        
+        # HoYoVerse & MVP
+        is_hoyo = preset.get("is_hoyoverse", False)
+        self.is_hoyoverse_check.setChecked(is_hoyo)
         self.mvp_enabled_check.setChecked(preset.get("mvp_enabled", False))
         
-        # 편집 가능 여부 설정
-        if is_user:
-            self.id_edit.setEnabled(False) # ID는 수정 불가
-            self.name_edit.setEnabled(True)
-            self.exe_patterns_edit.setEnabled(True)
-            self.reset_time_edit.setEnabled(True)
-            self.cycle_hours_spin.setEnabled(True)
-            self.is_hoyoverse_check.setEnabled(True)
-            self.mvp_enabled_check.setEnabled(True)
-            
-            self.save_btn.setText("변경사항 저장")
-            self.save_btn.setEnabled(True)
-            self.delete_btn.setEnabled(True)
+        # [NEW] HoYoLab ID
+        hoyolab_id = preset.get("hoyolab_game_id")
+        if hoyolab_id:
+            idx = self.hoyolab_game_combo.findData(hoyolab_id)
+            if idx >= 0:
+                self.hoyolab_game_combo.setCurrentIndex(idx)
+            else:
+                # 데이터엔 있지만 콤보에 없으면 추가 후 선택? or ignore
+                self.hoyolab_game_combo.setCurrentIndex(0)
         else:
-            # 시스템 프리셋은 읽기 전용
-            self.id_edit.setEnabled(False)
-            self.name_edit.setEnabled(False)
-            self.exe_patterns_edit.setEnabled(False)
-            self.reset_time_edit.setEnabled(False)
-            self.cycle_hours_spin.setEnabled(False)
-            self.is_hoyoverse_check.setEnabled(False)
-            self.mvp_enabled_check.setEnabled(False)
-            
-            self.save_btn.setText("시스템 프리셋은 수정 불가")
-            self.save_btn.setEnabled(False)
-            self.delete_btn.setEnabled(False)
+            self.hoyolab_game_combo.setCurrentIndex(0)
+        
+        # 모든 프리셋 편집 가능
+        self.id_edit.setEnabled(False) # ID는 여전히 키값이므로 수정 불가
+        self.name_edit.setEnabled(True)
+        self.exe_patterns_edit.setEnabled(True)
+        self.reset_time_edit.setEnabled(True)
+        self.cycle_hours_spin.setEnabled(True)
+        self.mandatory_times_edit.setEnabled(True)
+        self.launch_type_combo.setEnabled(True)
+        self.is_hoyoverse_check.setEnabled(True)
+        self.hoyolab_game_combo.setEnabled(is_hoyo) # Checkbox state syncs this, but ensure consistency
+        self.mvp_enabled_check.setEnabled(True)
+        
+        self.save_btn.setText("변경사항 저장")
+        self.save_btn.setEnabled(True)
+        self.delete_btn.setEnabled(True)
 
     def _save_preset(self):
         """프리셋 저장/업데이트"""
@@ -290,14 +328,37 @@ class PresetEditorDialog(QDialog):
         
         exe_patterns = [line.strip() for line in exe_patterns_str.splitlines() if line.strip()]
         
+        # [NEW] Mandatory Times Parse
+        mandatory_times_str = self.mandatory_times_edit.text().strip()
+        mandatory_times = []
+        if mandatory_times_str:
+            parts = [p.strip() for p in mandatory_times_str.split(",")]
+            # 간단한 포맷 검증 (HH:MM)
+            import re
+            time_pat = re.compile(r"^\d{1,2}:\d{2}$")
+            for t in parts:
+                if not time_pat.match(t):
+                    QMessageBox.warning(self, "입력 오류", f"시간 형식이 올바르지 않습니다: {t}\nHH:MM 형식으로 입력해주세요.")
+                    return
+                # 정규화 (09:00 -> 09:00)
+                mandatory_times.append(t)
+        
         # 데이터 구성
         new_data = {
             "id": preset_id,
             "display_name": display_name,
             "exe_patterns": exe_patterns,
             "is_hoyoverse": self.is_hoyoverse_check.isChecked(),
-            "mvp_enabled": self.mvp_enabled_check.isChecked()
+            "mvp_enabled": self.mvp_enabled_check.isChecked(),
+            "preferred_launch_type": self.launch_type_combo.currentData(),
+            "mandatory_times": mandatory_times
         }
+        
+        # HoYoLab ID
+        if self.is_hoyoverse_check.isChecked():
+            hid = self.hoyolab_game_combo.currentData()
+            if hid:
+                new_data["hoyolab_game_id"] = hid
         
         # 시간/주기 (설정 안 함이 아니면 추가)
         if self.reset_time_edit.time() != self.reset_time_edit.minimumTime():
@@ -307,14 +368,24 @@ class PresetEditorDialog(QDialog):
             new_data["default_cycle_hours"] = self.cycle_hours_spin.value()
             
         # 신규인지 수정인지 확인
-        # 현재 선택된 아이템이 있고 ID가 같으면 수정 (하지만 ID 수정은 막았으므로...)
-        # 사용자 목록에 ID가 있는지 확인하여 Update 또는 Add 호출
-        
-        user_ids = {p.get("id") for p in self.manager._user_presets}
+        existing_preset = self.manager.get_preset_by_id(preset_id)
         
         success = False
-        if preset_id in user_ids:
-            # 수정
+        if existing_preset:
+            # 수정 (기존 ID가 존재하면 업데이트)
+            # 단, 현재 선택된 아이템이 아닌 다른 아이템의 ID를 입력했을 경우 덮어쓰기 경고가 필요할 수 있음
+            # 하지만 ID 수정은 막혀있으므로, 현재 선택된 아이템의 업데이트이거나
+            # 신규 추가 모드에서 기존 ID를 입력한 경우임.
+            if self.id_edit.isEnabled(): # 신규 추가 모드였다면
+                 reply = QMessageBox.question(
+                    self, 
+                    "덮어쓰기 확인", 
+                    f"이미 존재하는 ID '{preset_id}' 입니다. 덮어쓰시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                 if reply == QMessageBox.StandardButton.No:
+                     return
+
             success = self.manager.update_user_preset(preset_id, new_data)
             action = "수정"
         else:
@@ -344,11 +415,7 @@ class PresetEditorDialog(QDialog):
             return
             
         preset = current_item.data(Qt.ItemDataRole.UserRole)
-        is_user = current_item.data(Qt.ItemDataRole.UserRole + 1)
         
-        if not is_user:
-            return
-            
         reply = QMessageBox.question(
             self, 
             "삭제 확인", 

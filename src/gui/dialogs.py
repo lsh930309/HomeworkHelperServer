@@ -271,13 +271,23 @@ class ProcessDialog(QDialog):
         reset_time = self.server_reset_time_edit.text().strip()
         cycle_hours = self.user_cycle_hours_edit.text().strip()
         
+        # [NEW] Additional fields
+        mandatory_times = self.mandatory_times_edit.text().strip()
+        launch_type = self.launch_type_combo.currentData() if hasattr(self, 'launch_type_combo') else "shortcut"
+        
         # 전달할 데이터 구성
         initial_data = {
             "name": name,
             "exe_path": exe_path,
             "reset_time": reset_time,
-            "cycle_hours": cycle_hours
+            "cycle_hours": cycle_hours,
+            "mandatory_times": mandatory_times,
+            "launch_type": launch_type
         }
+        
+        # HoYoLab settings implied if section enabled? 
+        # Actually PresetEditorDialog infers HoYoLab support via checkboxes, 
+        # we can just let user configure details in Editor.
         
         # 프리셋 에디터를 신규 추가 모드로 열기
         from src.gui.preset_editor_dialog import PresetEditorDialog
@@ -319,6 +329,21 @@ class ProcessDialog(QDialog):
         if "default_cycle_hours" in preset:
             self.user_cycle_hours_edit.setText(str(preset["default_cycle_hours"]))
             
+        # [NEW] Mandatory Times
+        if "mandatory_times" in preset and hasattr(self, 'mandatory_times_edit'):
+            m_times = preset["mandatory_times"]
+            if isinstance(m_times, list):
+                self.mandatory_times_edit.setText(", ".join(m_times))
+            else:
+                self.mandatory_times_edit.setText(str(m_times))
+                
+        # [NEW] Launch Type
+        if "preferred_launch_type" in preset and hasattr(self, 'launch_type_combo'):
+            l_type = preset["preferred_launch_type"]
+            idx = self.launch_type_combo.findData(l_type)
+            if idx >= 0:
+                self.launch_type_combo.setCurrentIndex(idx)
+            
         # 게임 스키마 (MVP)
         game_id = preset.get("id")
         if game_id and hasattr(self, 'game_schema_combo'):
@@ -332,11 +357,19 @@ class ProcessDialog(QDialog):
             if hasattr(self, 'stamina_tracking_checkbox'):
                 self.stamina_tracking_checkbox.setChecked(True)
                 
-            # 호요랩 게임 자동 선택 (ID 매칭 시도)
+            # 호요랩 게임 자동 선택 (ID 매칭 시도 OR preset explicit ID)
             if hasattr(self, 'hoyolab_game_combo'):
-                index = self.hoyolab_game_combo.findData(game_id)
-                if index >= 0:
-                    self.hoyolab_game_combo.setCurrentIndex(index)
+                # First try explicit ID
+                hid = preset.get("hoyolab_game_id")
+                if hid:
+                     index = self.hoyolab_game_combo.findData(hid)
+                     if index >= 0:
+                         self.hoyolab_game_combo.setCurrentIndex(index)
+                else:
+                    # Fallback to game_id match
+                    index = self.hoyolab_game_combo.findData(game_id)
+                    if index >= 0:
+                        self.hoyolab_game_combo.setCurrentIndex(index)
 
     # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만, 
     # multi_replace는 덮어쓰기이므로, 기존 _on_save_as_preset_clicked 메서드 전체를 이 청크로 대체하는 게 나을 수도 있음.
