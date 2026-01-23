@@ -113,11 +113,11 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
-        self.setMinimumWidth(500) # 최소 너비 설정
-        self.setGeometry(100, 100, 500, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
+        self.setMinimumWidth(470) # 최소 너비 설정
+        self.setGeometry(1600, 900, 470, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
 
         # 창 크기 조절 비활성화 (자동 크기 조정만 허용)
-        self.setFixedWidth(500)  # 고정 너비 설정
+        self.setFixedWidth(470)  # 고정 너비 설정
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
@@ -316,7 +316,7 @@ class MainWindow(QMainWindow):
             h.setSectionResizeMode(self.COL_ICON, QHeaderView.ResizeMode.ResizeToContents) # 아이콘 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_NAME, QHeaderView.ResizeMode.Stretch) # 이름 컬럼: 남은 공간 채우기
             h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.Fixed) # 진행률 컬럼: 고정 폭
-            h.resizeSection(self.COL_LAST_PLAYED, 150)  # 진행률 컬럼 폭 150px로 고정
+            h.resizeSection(self.COL_LAST_PLAYED, 120)  # 진행률 컬럼 폭 120px로 고정
             h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
 
