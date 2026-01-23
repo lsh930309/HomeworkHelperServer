@@ -113,17 +113,20 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
-        self.setMinimumWidth(470) # 최소 너비 설정
-        self.setGeometry(1600, 900, 470, 300) # 창 초기 위치 및 크기 설정 (고정 너비)
-
-        # 창 크기 조절 비활성화 (자동 크기 조정만 허용)
+        # 창 너비 설정: 고정 너비 (절전 복귀 시 안정성 확보)
+        self.setMinimumWidth(470)
         self.setFixedWidth(470)  # 고정 너비 설정
+        self.setGeometry(100, 100, 470, 300) # 창 초기 위치 및 크기 설정
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
         self._create_menu_bar() # 메뉴 바 생성
 
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
+        
+        # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
+        self._saved_geometry = None
+        self._saved_size = None
 
         # --- UI 구성 ---
         central_widget = QWidget(self) # 중앙 위젯 생성
@@ -196,7 +199,7 @@ class MainWindow(QMainWindow):
         # 테이블 행 높이 설정 (기본값 유지)
         vh = self.process_table.verticalHeader()
         if vh:
-            vh.setDefaultSectionSize(30)  # 기본 행 높이를 30px로 설정 (기존과 비슷하게)
+            vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
         
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
 
@@ -225,11 +228,7 @@ class MainWindow(QMainWindow):
         self.progress_bar_refresh_timer.timeout.connect(self._refresh_progress_bars)
         self.progress_bar_refresh_timer.start(1000) # 1초마다 프로그레스 바 갱신
 
-        # 화면 DPI 변경 시그널 연결 (절전 모드 복귀 등에서 DPI 변경 감지)
-        screen = QApplication.primaryScreen()
-        if screen:
-            screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
-            print(f"[DPI] 현재 DPI: {screen.logicalDotsPerInch()}")
+        # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
         # statusBar()가 None이 아닌지 확인 후 메시지 설정
         status_bar = self.statusBar()
@@ -245,44 +244,61 @@ class MainWindow(QMainWindow):
             self.github_button.setText("") # 아이콘이 설정되면 텍스트는 지웁니다.
 
     def changeEvent(self, event: QEvent):
-        """창 상태 변경 이벤트를 처리합니다 (최소화 시 트레이로 보내는 로직 포함)."""
+        """창 상태 변경 이벤트를 처리합니다 (최소화 시 트레이로 보내기 + 절전 복귀 대응)."""
         if event.type() == QEvent.Type.WindowStateChange:
             if self.windowState() & Qt.WindowState.WindowMinimized: # 창이 최소화 상태로 변경될 때
                 if hasattr(self, 'tray_manager') and self.tray_manager.is_tray_icon_visible(): # 트레이 아이콘이 보이는 경우
                     self.tray_manager.handle_minimize_event() # 트레이 관리자에게 최소화 처리 위임
+        
+        # 창 활성화 시 geometry 복원 (절전 복귀 대응)
+        elif event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow() and self._saved_size:
+                # 저장된 크기와 현재 크기 비교
+                current_size = self.size()
+                if current_size != self._saved_size:
+                    print(f"[창 상태 복원] 현재 크기: {current_size.width()}x{current_size.height()}, 저장된 크기: {self._saved_size.width()}x{self._saved_size.height()}")
+                    QTimer.singleShot(100, self._restore_window_state)
+        
         super().changeEvent(event)
 
     def showEvent(self, event):
-        """창이 표시될 때 레이아웃을 강제로 새로고침합니다 (절전 모드 복귀 후 배율 문제 대응)."""
+        """창이 표시될 때 호출됩니다."""
         super().showEvent(event)
-        # 창이 표시될 때 레이아웃 업데이트 (다음 이벤트 루프에서 실행)
-        QTimer.singleShot(0, self._force_layout_refresh)
+        # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
 
-    def _on_dpi_changed(self, dpi):
-        """DPI가 변경되었을 때 호출됩니다."""
-        print(f"[DPI 변경 감지] 새 DPI: {dpi}")
-        # DPI 변경 후 레이아웃 새로고침 (약간의 지연 후 실행)
-        QTimer.singleShot(100, self._force_layout_refresh)
-
-    def _force_layout_refresh(self):
-        """레이아웃을 강제로 새로고침합니다 (DPI 변경 또는 절전 모드 복귀 후 호출)."""
-        # 중앙 위젯 레이아웃 재계산
+    def _restore_window_state(self):
+        """절전 복귀 후 창 상태를 복원합니다.
+        
+        핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
+        이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
+        """
+        print("[창 상태 복원] 복원 시작...")
+        
+        # 1. 강제 다시 그리기
+        self.repaint()
+        self.update()
+        
+        # 2. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
+        #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
+        w, h = self.width(), self.height()
+        self.setFixedSize(w + 1, h + 1)  # 고정 크기 모드에서는 setFixedSize 사용
+        self.setFixedSize(w, h)
+        print(f"[창 상태 복원] 크기 +1/-1 조정 완료: {w}x{h}")
+        
+        # 3. 저장된 geometry가 있으면 위치도 복원
+        if self._saved_geometry:
+            self.move(self._saved_geometry.x(), self._saved_geometry.y())
+        
+        # 4. 레이아웃 강제 업데이트
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
         
-        # 테이블 geometry 업데이트
-        self.process_table.updateGeometry()
-        
-        # 창 크기 재조정 (고정 높이 해제 후 재설정)
-        self.setMaximumHeight(16777215)  # 최대 높이 제한 해제
-        self.setMinimumHeight(0)  # 최소 높이 제한 해제
-        self._adjust_window_height_for_table_rows()
-        
-        # UI 강제 업데이트
+        # 5. UI 강제 다시 그리기
         self.update()
         self.repaint()
+        print("[창 상태 복원] 복원 완료")
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
@@ -1260,85 +1276,76 @@ class MainWindow(QMainWindow):
             # print(f"웹 버튼에 따른 창 너비 조절: {current_width} -> {target_width}")
 
     def _adjust_window_height_for_table_rows(self):
-        """테이블 행 추가/삭제 시에만 창 높이를 조절합니다."""
-        # 현재 행 수 확인
+        """테이블 내용에 맞게 창 높이를 조절합니다.
+        
+        명시적으로 크기를 계산하고 setFixedHeight로 설정하여 절전 복귀 시 안정성 확보.
+        """
+        # 1. 테이블 높이 계산
         current_row_count = self.process_table.rowCount()
-
-        print(f"\n=== 창 높이 자동 조절 (adjustSize 방식) ===")
-        print(f"현재 행 수: {current_row_count}")
-
-        # 행이 없으면 기본 높이 사용
-        if current_row_count == 0:
-            # 기본 높이 계산 (헤더 + 1행 + 여백)
-            header = self.process_table.horizontalHeader()
-            header_height = header.height() if header and not header.isHidden() else 0
-            default_row_height = self.fontMetrics().height() + 12
-            table_height = header_height + default_row_height + self.process_table.frameWidth() * 2
-            print(f"행이 없음 - 헤더: {header_height}, 기본 행: {default_row_height}, 테이블: {table_height}px")
-        else:
-            # 실제 행 높이 계산
-            table_height = 0
-            header = self.process_table.horizontalHeader()
-            if header and not header.isHidden():
-                table_height += header.height()
-
+        table_height = 0
+        
+        # 헤더 높이 추가
+        header = self.process_table.horizontalHeader()
+        if header and not header.isHidden():
+            table_height += header.height()
+        
+        # 행 높이 계산
+        if current_row_count > 0:
             for i in range(current_row_count):
                 table_height += self.process_table.rowHeight(i)
-
-            table_height += self.process_table.frameWidth() * 2
-            print(f"총 테이블 높이: {table_height}px")
-
-        # 테이블 고정 높이 설정
+        else:
+            # 행이 없을 경우 기본 행 높이 추가
+            table_height += self.fontMetrics().height() + 12
+        
+        # 테이블 테두리 두께 고려
+        table_height += self.process_table.frameWidth() * 2
+        
+        # 2. 테이블 고정 높이 설정
         self.process_table.setFixedHeight(table_height)
-
-        # 레이아웃 시스템에 변경사항 알림 및 크기 재계산 요청
+        
+        # 3. 레이아웃 재계산 요청
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
-            # 1. 레이아웃 무효화 (레이아웃 시스템에 다시 계산하도록 알림)
             central_widget.layout().invalidate()
-
-            # 2. 레이아웃 활성화 (즉시 재계산)
             central_widget.layout().activate()
-
-        # 3. 테이블의 geometry 업데이트 요청
+        
+        # 4. 테이블 geometry 업데이트 요청
         self.process_table.updateGeometry()
-
-        # 4. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
+        
+        # 5. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
         total_height = 0
-
+        
         # 메뉴바 높이
         menu_bar = self.menuBar()
         if menu_bar and not menu_bar.isHidden():
             total_height += menu_bar.sizeHint().height()
-
-        # 상단 버튼 영역 높이 (central_widget의 top_button_area_layout)
+        
+        # 상단 버튼 영역 높이
         if hasattr(self, 'top_button_area_layout'):
             total_height += self.top_button_area_layout.sizeHint().height()
             total_height += 10  # 레이아웃 여백
-
-        # 테이블 높이 (이미 setFixedHeight로 설정됨)
+        
+        # 테이블 높이
         total_height += table_height
-
+        
         # 상태바 높이
         status_bar = self.statusBar()
         if status_bar and not status_bar.isHidden():
             total_height += status_bar.sizeHint().height()
-
+        
         # 창 프레임 및 레이아웃 여백 추가
         total_height += 20  # 여유 공간
-
-        # 5. 창 높이를 고정 (너비는 이미 고정되어 있음)
+        
+        # 6. 창 높이를 고정 (너비는 이미 고정되어 있음)
         self.setFixedHeight(total_height)
-
-        # 6. 화면 업데이트
+        
+        # 7. 화면 업데이트
         self.update()
+        
+        # 8. 정상 상태의 창 크기/위치 저장 (절전 복귀 시 복원에 사용)
+        self._saved_size = self.size()
+        self._saved_geometry = self.geometry()
 
-        print(f"조절 후 창 크기: {self.width()}x{total_height}")
-        print(f"  - 메뉴바: {menu_bar.sizeHint().height() if menu_bar else 0}px")
-        print(f"  - 상단 버튼: {self.top_button_area_layout.sizeHint().height() if hasattr(self, 'top_button_area_layout') else 0}px")
-        print(f"  - 테이블: {table_height}px")
-        print(f"  - 상태바: {status_bar.sizeHint().height() if status_bar else 0}px")
-        print("=== 자동 조절 완료 ===\n")
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:
         """마지막 실행 시각을 기준으로 다음 접속까지의 진행률을 계산합니다.

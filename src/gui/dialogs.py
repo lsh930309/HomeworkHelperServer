@@ -1011,6 +1011,23 @@ class GlobalSettingsDialog(QDialog):
 
         self.form_layout = QFormLayout(self)  # 변수명 변경
 
+        # === 화면 배율 설정 (OS DPI 무시) ===
+        self.scale_combo = QComboBox()
+        self.scale_combo.addItem("100%", 100)
+        self.scale_combo.addItem("125%", 125)
+        self.scale_combo.addItem("150%", 150)
+        self.scale_combo.addItem("175%", 175)
+        self.scale_combo.addItem("200%", 200)
+        
+        scale_info_label = QLabel("※ 변경 시 앱 재시작 필요")
+        scale_info_label.setStyleSheet("color: #888888; font-size: 9pt;")
+        
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(self.scale_combo)
+        scale_layout.addWidget(scale_info_label)
+        scale_layout.addStretch()
+        # =====================================
+
         self.sleep_start_edit = QTimeEdit()
         self.sleep_start_edit.setDisplayFormat("HH:mm")
         self.sleep_end_edit = QTimeEdit()
@@ -1040,6 +1057,10 @@ class GlobalSettingsDialog(QDialog):
         self.stamina_threshold_spinbox.setSuffix(" 개 전")
         self.stamina_threshold_spinbox.setToolTip("스태미나가 (최대 - 이 값) 이상일 때 알림")
 
+        # 화면 배율 섹션 (맨 위에 배치)
+        self.form_layout.addRow("화면 배율:", scale_layout)
+        self.form_layout.addRow(QLabel(""))  # 구분선
+
         self.form_layout.addRow("수면 시작 시각:", self.sleep_start_edit)
         self.form_layout.addRow("수면 종료 시각:", self.sleep_end_edit)
         self.form_layout.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
@@ -1067,6 +1088,94 @@ class GlobalSettingsDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
 
         self.populate_settings()
+        
+        # 배율 초기값 로드 (ini 파일에서)
+        self._load_scale_setting()
+
+    def _load_scale_setting(self):
+        """ini 파일에서 배율 설정 로드"""
+        try:
+            import configparser
+            if os.name == 'nt':
+                app_data = os.getenv('APPDATA', os.path.expanduser('~'))
+            else:
+                app_data = os.path.expanduser('~/.config')
+            
+            config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
+            
+            if os.path.exists(config_path):
+                config = configparser.ConfigParser()
+                config.read(config_path, encoding='utf-8')
+                scale_percent = config.getint('Display', 'scale_percent', fallback=100)
+            else:
+                scale_percent = 100
+            
+            # 콤보박스에서 해당 값 선택
+            for i in range(self.scale_combo.count()):
+                if self.scale_combo.itemData(i) == scale_percent:
+                    self.scale_combo.setCurrentIndex(i)
+                    break
+        except Exception as e:
+            print(f"[GlobalSettingsDialog] 배율 설정 로드 실패: {e}")
+    
+    def _save_scale_setting(self, scale_percent: int):
+        """ini 파일에 배율 설정 저장"""
+        try:
+            import configparser
+            if os.name == 'nt':
+                app_data = os.getenv('APPDATA', os.path.expanduser('~'))
+            else:
+                app_data = os.path.expanduser('~/.config')
+            
+            config_dir = os.path.join(app_data, 'HomeworkHelper')
+            os.makedirs(config_dir, exist_ok=True)
+            config_path = os.path.join(config_dir, 'display_settings.ini')
+            
+            config = configparser.ConfigParser()
+            config['Display'] = {'scale_percent': str(scale_percent)}
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                config.write(f)
+            
+            print(f"[GlobalSettingsDialog] 배율 설정 저장: {scale_percent}%")
+            return True
+        except Exception as e:
+            print(f"[GlobalSettingsDialog] 배율 설정 저장 실패: {e}")
+            return False
+    
+    def accept(self):
+        """설정 저장 시 배율 변경 확인 및 재시작 안내"""
+        new_scale = self.scale_combo.currentData()
+        
+        # 기존 배율과 비교
+        try:
+            import configparser
+            if os.name == 'nt':
+                app_data = os.getenv('APPDATA', os.path.expanduser('~'))
+            else:
+                app_data = os.path.expanduser('~/.config')
+            
+            config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
+            old_scale = 100
+            if os.path.exists(config_path):
+                config = configparser.ConfigParser()
+                config.read(config_path, encoding='utf-8')
+                old_scale = config.getint('Display', 'scale_percent', fallback=100)
+            
+            # 배율이 변경된 경우
+            if new_scale != old_scale:
+                self._save_scale_setting(new_scale)
+                QMessageBox.information(
+                    self,
+                    "재시작 필요",
+                    f"화면 배율이 {old_scale}% → {new_scale}%로 변경되었습니다.\n\n"
+                    "변경 사항을 적용하려면 앱을 재시작해주세요."
+                )
+        except Exception as e:
+            print(f"[GlobalSettingsDialog] 배율 변경 확인 실패: {e}")
+            self._save_scale_setting(new_scale)
+        
+        super().accept()
 
     def populate_settings(self):
         self.sleep_start_edit.setTime(QTime.fromString(self.current_settings.sleep_start_time_str, "HH:mm"))

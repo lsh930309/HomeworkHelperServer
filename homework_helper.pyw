@@ -14,6 +14,52 @@ import shutil
 import threading
 from typing import List, Optional, Dict, Any
 
+# =============================================================================
+# [핵심 해결책] OS DPI 무시 + 사용자 지정 배율 적용
+# 절전 모드 복구 시 Qt가 배율을 착각하는 문제를 원천 차단
+# =============================================================================
+
+def get_user_scale_factor() -> float:
+    """QSettings에서 사용자 지정 배율을 읽어옵니다.
+    
+    Returns:
+        float: 배율 (예: 1.0, 1.25, 1.5, 1.75, 2.0)
+    """
+    try:
+        # QSettings를 직접 사용하지 않고 ini 파일 직접 읽기
+        # (QApplication 생성 전이므로 QSettings 사용 불가)
+        import configparser
+        
+        if sys.platform == "win32":
+            app_data = os.getenv('APPDATA', os.path.expanduser('~'))
+        else:
+            app_data = os.path.expanduser('~/.config')
+        
+        config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
+        
+        if os.path.exists(config_path):
+            config = configparser.ConfigParser()
+            config.read(config_path, encoding='utf-8')
+            scale_percent = config.getint('Display', 'scale_percent', fallback=100)
+            return scale_percent / 100.0
+    except Exception as e:
+        print(f"[DPI] 사용자 배율 설정 읽기 실패: {e}")
+    
+    return 1.0  # 기본값 100%
+
+# OS의 High DPI 스케일링 비활성화 (무시)
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+
+# 사용자 지정 배율 적용
+_user_scale = get_user_scale_factor()
+os.environ["QT_SCALE_FACTOR"] = str(_user_scale)
+
+# 폰트 DPI 고정 (표준 96 DPI)
+os.environ["QT_FONT_DPI"] = "96"
+
+print(f"[DPI] OS DPI 무시, 사용자 배율 적용: {_user_scale * 100:.0f}%")
+# =============================================================================
+
 api_server_process = None
 _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로 설정
 
@@ -584,21 +630,7 @@ def ensure_process_table_schema():
 
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
-    from PyQt6.QtCore import Qt
-    
-    # === High DPI 스케일링 설정 (QApplication 생성 전에 반드시 설정해야 함) ===
-    # 패키지(PyInstaller) 환경과 개발 환경 모두에서 일관된 DPI 스케일링을 보장합니다.
-    # 절전모드/최대절전모드 복구 시에도 OS 디스플레이 배율을 올바르게 유지합니다.
-    
-    # 환경 변수 설정 (Qt 내부에서 사용, 가장 먼저 설정해야 함)
-    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-    os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
-    
-    # PyQt6 High DPI 스케일링 정책 설정
-    # PassThrough: OS에서 설정한 스케일 팩터를 그대로 사용 (가장 정확한 렌더링)
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
     
     app = QApplication(sys.argv)
     app.setApplicationName("숙제 관리자") # 애플리케이션 이름 설정
