@@ -225,6 +225,12 @@ class MainWindow(QMainWindow):
         self.progress_bar_refresh_timer.timeout.connect(self._refresh_progress_bars)
         self.progress_bar_refresh_timer.start(1000) # 1초마다 프로그레스 바 갱신
 
+        # 화면 DPI 변경 시그널 연결 (절전 모드 복귀 등에서 DPI 변경 감지)
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen.logicalDotsPerInchChanged.connect(self._on_dpi_changed)
+            print(f"[DPI] 현재 DPI: {screen.logicalDotsPerInch()}")
+
         # statusBar()가 None이 아닌지 확인 후 메시지 설정
         status_bar = self.statusBar()
         if status_bar:
@@ -245,6 +251,38 @@ class MainWindow(QMainWindow):
                 if hasattr(self, 'tray_manager') and self.tray_manager.is_tray_icon_visible(): # 트레이 아이콘이 보이는 경우
                     self.tray_manager.handle_minimize_event() # 트레이 관리자에게 최소화 처리 위임
         super().changeEvent(event)
+
+    def showEvent(self, event):
+        """창이 표시될 때 레이아웃을 강제로 새로고침합니다 (절전 모드 복귀 후 배율 문제 대응)."""
+        super().showEvent(event)
+        # 창이 표시될 때 레이아웃 업데이트 (다음 이벤트 루프에서 실행)
+        QTimer.singleShot(0, self._force_layout_refresh)
+
+    def _on_dpi_changed(self, dpi):
+        """DPI가 변경되었을 때 호출됩니다."""
+        print(f"[DPI 변경 감지] 새 DPI: {dpi}")
+        # DPI 변경 후 레이아웃 새로고침 (약간의 지연 후 실행)
+        QTimer.singleShot(100, self._force_layout_refresh)
+
+    def _force_layout_refresh(self):
+        """레이아웃을 강제로 새로고침합니다 (DPI 변경 또는 절전 모드 복귀 후 호출)."""
+        # 중앙 위젯 레이아웃 재계산
+        central_widget = self.centralWidget()
+        if central_widget and central_widget.layout():
+            central_widget.layout().invalidate()
+            central_widget.layout().activate()
+        
+        # 테이블 geometry 업데이트
+        self.process_table.updateGeometry()
+        
+        # 창 크기 재조정 (고정 높이 해제 후 재설정)
+        self.setMaximumHeight(16777215)  # 최대 높이 제한 해제
+        self.setMinimumHeight(0)  # 최소 높이 제한 해제
+        self._adjust_window_height_for_table_rows()
+        
+        # UI 강제 업데이트
+        self.update()
+        self.repaint()
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
@@ -604,11 +642,8 @@ class MainWindow(QMainWindow):
         self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
         self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
         
-        # 다른 컬럼들을 내용에 맞게 조정하고, 이름 컬럼은 남은 공간 채우기
-        self.process_table.resizeColumnsToContents() # 먼저 모든 컬럼을 내용에 맞게 조정
-        header = self.process_table.horizontalHeader()
-        if header:
-            header.setSectionResizeMode(self.COL_NAME, QHeaderView.ResizeMode.Stretch) # 이름 컬럼은 남은 공간 채우도록 설정
+        # 컬럼 resize 모드는 _configure_table_header()에서 이미 설정됨
+        # resizeColumnsToContents() 호출 제거로 시각적 점프 방지
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
