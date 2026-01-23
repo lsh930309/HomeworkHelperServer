@@ -16,23 +16,18 @@ logger = logging.getLogger(__name__)
 class PresetEditorDialog(QDialog):
     """게임 프리셋 관리/편집 다이얼로그"""
     
-    def __init__(self, parent: Optional[QWidget] = None, initial_data: Optional[Dict[str, Any]] = None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("게임 프리셋 관리")
         self.resize(800, 650)
         
         self.manager = GamePresetManager()
-        self.initial_data = initial_data
         
         # UI 초기화
         self._init_ui()
         
-        # 데이터 로드
+        # 프리셋 로드
         self._load_presets()
-        
-        # 초기 데이터가 있으면 신규 추가 모드로 시작
-        if self.initial_data:
-            self._start_add_new_mode(self.initial_data)
 
     def _init_ui(self):
         main_layout = QHBoxLayout(self)
@@ -166,7 +161,7 @@ class PresetEditorDialog(QDialog):
             
             self.preset_list_widget.addItem(item)
 
-    def _start_add_new_mode(self, prefill_data: Optional[Dict[str, Any]] = None):
+    def _start_add_new_mode(self):
         """신규 추가 모드로 전환"""
         self.preset_list_widget.clearSelection()
         self.form_group.setTitle("새 프리셋 추가")
@@ -188,49 +183,6 @@ class PresetEditorDialog(QDialog):
         self.save_btn.setText("신규 프리셋 등록")
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
-        
-        # 자동 완성 데이터 적용
-        if prefill_data:
-            if "name" in prefill_data:
-                self.name_edit.setText(prefill_data["name"])
-                # 이름 기반 ID 추천
-                import re
-                safe_id = re.sub(r'[^a-zA-Z0-9]', '_', prefill_data["name"]).lower().strip('_')
-                self.id_edit.setText(safe_id)
-                
-            if "exe_path" in prefill_data and prefill_data["exe_path"]:
-                import os
-                exe_name = os.path.basename(prefill_data["exe_path"])
-                self.exe_patterns_edit.setPlainText(exe_name)
-                
-            if "reset_time" in prefill_data and prefill_data["reset_time"]:
-                from PyQt6.QtCore import QTime
-                try:
-                    t = QTime.fromString(prefill_data["reset_time"], "HH:mm")
-                    if t.isValid():
-                        self.reset_time_edit.setTime(t)
-                except:
-                    pass
-                    
-            if "cycle_hours" in prefill_data and prefill_data["cycle_hours"]:
-                try:
-                    self.cycle_hours_spin.setValue(int(prefill_data["cycle_hours"]))
-                except:
-                    pass
-            
-            # [NEW] Prefill new fields
-            if "mandatory_times" in prefill_data:
-                self.mandatory_times_edit.setText(str(prefill_data["mandatory_times"]))
-                
-            if "launch_type" in prefill_data:
-                idx = self.launch_type_combo.findData(prefill_data["launch_type"])
-                if idx >= 0:
-                    self.launch_type_combo.setCurrentIndex(idx)
-            
-            # HoYoLab Logic: If is_hoyoverse is implied (e.g. checkbox state passed), use it
-            # Currently dialogs.py passes specialized keys, handled there.
-            # But specific HoYoLab ID might not be passed unless we infer it.
-            # For now, just leave default.
 
     def _on_preset_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
