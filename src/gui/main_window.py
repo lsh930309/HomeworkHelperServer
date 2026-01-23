@@ -642,8 +642,13 @@ class MainWindow(QMainWindow):
         self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
         self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
         
-        # 컬럼 resize 모드는 _configure_table_header()에서 이미 설정됨
-        # resizeColumnsToContents() 호출 제거로 시각적 점프 방지
+        # 이름 컬럼(Stretch)을 제외한 다른 컬럼들만 내용에 맞게 크기 조정
+        # 이렇게 하면 시각적 점프 없이 다른 컬럼들이 적절한 크기를 갖고,
+        # 이름 컬럼은 남은 공간을 채우게 됨
+        header = self.process_table.horizontalHeader()
+        if header:
+            for col in [self.COL_ICON, self.COL_LAUNCH_BTN, self.COL_STATUS]:
+                header.resizeSections(QHeaderView.ResizeMode.ResizeToContents)
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
