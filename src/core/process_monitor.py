@@ -106,14 +106,14 @@ class ProcessMonitor:
                                 'start_time_approx': start_timestamp,
                                 'session_id': session.id if session else None
                             }
-                            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Process STARTED: '{managed_proc.name}' (PID: {actual_process_instance.pid}, Session ID: {session.id if session else 'N/A'})")
+                            logger.info(f"Process STARTED: '{managed_proc.name}' (PID: {actual_process_instance.pid}, Session ID: {session.id if session else 'N/A'})")
                             changed_occurred = True # <<< 프로세스 시작 시에도 변경으로 간주
                         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                            print(f"'{managed_proc.name}' 시작 정보 가져오는 중 오류: {e}")
+                            logger.error(f"'{managed_proc.name}' 시작 정보 가져오는 중 오류: {e}")
                             if managed_proc.id in self.active_monitored_processes:
                                 self.active_monitored_processes.pop(managed_proc.id)
                     else:
-                        print(f"경고: '{managed_proc.name}'이 실행 중으로 감지되었으나, 프로세스 인스턴스 정보를 찾을 수 없습니다.")
+                        logger.warning(f"'{managed_proc.name}'이 실행 중으로 감지되었으나, 프로세스 인스턴스 정보를 찾을 수 없습니다.")
             else:
                 if was_previously_active:
                     termination_time = time.time()
@@ -134,16 +134,16 @@ class ProcessMonitor:
                         ended_session = self.data_manager.end_session(session_id, termination_time, stamina_at_end)
                         if ended_session:
                             stamina_info = f", Stamina: {stamina_at_end}" if stamina_at_end is not None else ""
-                            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info})")
+                            logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info})")
                         else:
-                            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
+                            logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
                     else:
-                        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
+                        logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
 
                     if self.data_manager.update_process(managed_proc):
                          changed_occurred = True
 
-                    print(f"    Last played updated: {time.ctime(termination_time)}")
+                    logger.info(f"Last played updated: {time.ctime(termination_time)}")
         
         return changed_occurred
 
@@ -166,20 +166,19 @@ class ProcessMonitor:
             return None
 
         try:
-            print(f"[HoYoLab] '{process.name}' 스태미나 조회 중...")
+            logger.info(f"[HoYoLab] '{process.name}' 스태미나 조회 중...")
             stamina = service.get_stamina(process.hoyolab_game_id)
             if stamina:
                 process.stamina_current = stamina.current
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = time.time()
-                print(f"[HoYoLab] '{process.name}' 스태미나 업데이트: {stamina.current}/{stamina.max}")
+                logger.info(f"[HoYoLab] '{process.name}' 스태미나 업데이트: {stamina.current}/{stamina.max}")
                 return stamina.current
             else:
-                print(f"[HoYoLab] '{process.name}' 스태미나 조회 결과 없음")
+                logger.info(f"[HoYoLab] '{process.name}' 스태미나 조회 결과 없음")
                 return None
         except Exception as e:
-            logger.error(f"[HoYoLab] 스태미나 조회 실패: {e}")
-            print(f"[HoYoLab] '{process.name}' 스태미나 조회 실패: {e}")
+            logger.error(f"[HoYoLab] '{process.name}' 스태미나 조회 실패: {e}")
             return None
 
     def _calibrate_stamina_on_game_start(self, process: ManagedProcess) -> None:
@@ -197,7 +196,7 @@ class ProcessMonitor:
 
         try:
             # 1. API에서 현재 실제 스태미나 조회
-            print(f"[HoYoLab] '{process.name}' 스태미나 보정 체크 중...")
+            logger.info(f"[HoYoLab] '{process.name}' 스태미나 보정 체크 중...")
             stamina = service.get_stamina(process.hoyolab_game_id)
             if not stamina:
                 return
@@ -210,7 +209,7 @@ class ProcessMonitor:
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = time.time()
                 self.data_manager.update_process(process)
-                print(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
+                logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 return
 
             # 3. 로컬 예상값 계산 (마지막 기록 + 시간 기반 회복량)
@@ -236,7 +235,7 @@ class ProcessMonitor:
                         last_session.id,
                         stamina_at_end=corrected_stamina
                     )
-                    print(f"[HoYoLab] '{process.name}' 스태미나 보정: "
+                    logger.info(f"[HoYoLab] '{process.name}' 스태미나 보정: "
                           f"예상 {expected_current} → 실제 {actual_current} "
                           f"(이전 세션 종료값 {last_session.stamina_at_end} → {corrected_stamina})")
 
@@ -247,5 +246,4 @@ class ProcessMonitor:
             self.data_manager.update_process(process)
 
         except Exception as e:
-            logger.error(f"[HoYoLab] 스태미나 보정 실패: {e}")
-            print(f"[HoYoLab] '{process.name}' 스태미나 보정 실패: {e}")
+            logger.error(f"[HoYoLab] '{process.name}' 스태미나 보정 실패: {e}")

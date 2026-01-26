@@ -114,21 +114,21 @@ class HoYoLabService:
             logger.error(f"비동기 실행 오류: {e}")
             raise
     
-    def get_stamina(self, game_schema_id: str) -> Optional[StaminaInfo]:
+    def get_stamina(self, hoyolab_game_id: str) -> Optional[StaminaInfo]:
         """게임 타입에 따른 스태미나 조회
-        
+
         Args:
-            game_schema_id: 게임 식별자 ("honkai_starrail" 또는 "zenless_zone_zero")
-        
+            hoyolab_game_id: HoYoLab 게임 식별자 ("honkai_starrail" 또는 "zenless_zone_zero")
+
         Returns:
             StaminaInfo 또는 None (조회 실패 시)
         """
-        if game_schema_id == "honkai_starrail":
+        if hoyolab_game_id == "honkai_starrail":
             return self.get_starrail_stamina()
-        elif game_schema_id == "zenless_zone_zero":
+        elif hoyolab_game_id == "zenless_zone_zero":
             return self.get_zzz_stamina()
         else:
-            logger.warning(f"지원하지 않는 게임 타입: {game_schema_id}")
+            logger.warning(f"지원하지 않는 게임 타입: {hoyolab_game_id}")
             return None
     
     def get_starrail_stamina(self) -> Optional[StaminaInfo]:

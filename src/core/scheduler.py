@@ -1,9 +1,12 @@
 # scheduler.py
 import datetime
 import time
+import logging
 from typing import Optional, Dict, Set, Tuple
 
 from src.data.manager import DataManager
+
+logger = logging.getLogger(__name__)
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.core.notifier import Notifier
 from src.core.process_monitor import ProcessMonitor # ProcessMonitor 클래스 추가
@@ -162,7 +165,7 @@ class Scheduler:
                             current_time.minute == mandatory_time_obj.minute):
                         notification_key = (process.id, mandatory_time_str, today_date_str)
                         if notification_key not in self.already_notified_mandatory_today:
-                            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 고정 접속 시간 알림: '{process.name}' - {mandatory_time_str}")
+                            logger.info(f"고정 접속 시간 알림: '{process.name}' - {mandatory_time_str}")
                             # 설정에 따라 고정 접속 시간 알림
                             if self.data_manager.global_settings.notify_on_mandatory_time:
                                 self.notifier.send_notification(
@@ -206,7 +209,7 @@ class Scheduler:
                         else:
                             remaining_str = f"{minutes_remaining:.0f}분"
 
-                        print(f"[{now_dt.strftime('%Y-%m-%d %H:%M:%S')}] 사용자 주기 만료 임박 알림: '{process.name}'. 마감: {deadline_dt.strftime('%H:%M')}")
+                        logger.info(f"사용자 주기 만료 임박 알림: '{process.name}'. 마감: {deadline_dt.strftime('%H:%M')}")
                         if self.data_manager.global_settings.notify_on_cycle_deadline:
                             self.notifier.send_notification(
                                 title=f"{process.name} - 접속 권장",
@@ -243,7 +246,7 @@ class Scheduler:
                         corrected_notify_trigger_dt <= now_dt < next_sleep_start_dt):
                     notification_key = (process.id, original_deadline_dt.timestamp())
                     if notification_key not in self.notified_sleep_corrected_tasks:
-                        print(f"[{now_dt.strftime('%Y-%m-%d %H:%M:%S')}] 수면 보정 알림: '{process.name}'. 원래 마감: {original_deadline_dt.strftime('%H:%M')}")
+                        logger.info(f"수면 보정 알림: '{process.name}'. 원래 마감: {original_deadline_dt.strftime('%H:%M')}")
                         if self.data_manager.global_settings.notify_on_sleep_correction:
                             self.notifier.send_notification(
                                 title=f"{process.name} - 미리 접속 권장!",
@@ -300,7 +303,7 @@ class Scheduler:
             reminder_trigger_dt = current_server_day_end_dt - datetime.timedelta(hours=self.daily_task_reminder_before_reset_hours)
 
             if reminder_trigger_dt <= now_dt < current_server_day_end_dt:
-                print(f"[{now_dt.strftime('%Y-%m-%d %H:%M:%S')}] 일일 과제 마감 임박 알림: '{process.name}'. 서버 하루 마감: {current_server_day_end_dt.strftime('%H:%M')}")
+                logger.info(f"일일 과제 마감 임박 알림: '{process.name}'. 서버 하루 마감: {current_server_day_end_dt.strftime('%H:%M')}")
                 if self.data_manager.global_settings.notify_on_daily_reset:
                     self.notifier.send_notification(
                         title=f"{process.name} - 일일 과제!",
@@ -343,8 +346,9 @@ class Scheduler:
                 # 게임별 스태미나 이름
                 stamina_name = "개척력" if process.game_schema_id == "honkai_starrail" else "배터리"
                 remaining = max_stamina - predicted
-                
-                print(f"[{now_dt.strftime('%Y-%m-%d %H:%M:%S')}] 스태미나 알림: '{process.name}' - {stamina_name} {predicted}/{max_stamina}")
+
+
+                logger.info(f"스태미나 알림: '{process.name}' - {stamina_name} {predicted}/{max_stamina}")
                 self.notifier.send_notification(
                     title=f"{process.name} - {stamina_name} 가득 참",
                     message=f"'{process.name}'의 {stamina_name}이 곷 가득 찉니다! ({predicted}/{max_stamina}, {remaining}개 남음)",
@@ -392,7 +396,5 @@ class Scheduler:
 
 def example_global_on_click_handler(received_task_id: Optional[str]):
     """ Example handler for notification clicks, for testing purposes. """
-    if received_task_id:
-        print(f"Scheduler 테스트 알림 콜백 실행됨! 전달받은 Task ID: {received_task_id}")
-    else:
-        print("Scheduler 테스트 알림 콜백 실행됨! (전달받은 Task ID 없음)")
+    # 테스트용 핸들러 - 실제 사용 시 로직 구현
+    pass

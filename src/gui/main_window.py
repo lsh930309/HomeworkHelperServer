@@ -6,7 +6,10 @@ import sys
 import time
 import datetime
 import functools
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # PyQt6 임포트
 from PyQt6.QtWidgets import (
@@ -62,8 +65,8 @@ class IconDownloader(QThread):
                 # 성공적으로 로드되면 QIcon 객체를 시그널로 전달
                 self.icon_ready.emit(QIcon(pixmap))
         except Exception as e:
-            # 오류 발생 시 콘솔에 로그 출력 (시그널은 발생하지 않음)
-            print(f"아이콘 다운로드 실패 ({self.url}): {e}")
+            # 오류 발생 시 로그 출력 (시그널은 발생하지 않음)
+            logger.error(f"아이콘 다운로드 실패 ({self.url}): {e}")
 
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
@@ -262,7 +265,6 @@ class MainWindow(QMainWindow):
                     # 저장된 크기와 현재 크기 비교
                     current_size = self.size()
                     if current_size != self._saved_size:
-                        print(f"[창 상태 복원] 현재 크기: {current_size.width()}x{current_size.height()}, 저장된 크기: {self._saved_size.width()}x{self._saved_size.height()}")
                         QTimer.singleShot(100, self._restore_window_state)
 
         super().changeEvent(event)
@@ -279,7 +281,6 @@ class MainWindow(QMainWindow):
 
         # 5초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격)
         if elapsed > 5:
-            print(f"[절전 복귀 감지] 타이머 간격: {elapsed:.1f}초 (예상: 1초)")
             self._on_sleep_wake()
 
         self._last_timer_tick = current_time
@@ -287,8 +288,6 @@ class MainWindow(QMainWindow):
 
     def _on_sleep_wake(self):
         """절전 복귀 시 호출되는 메서드"""
-        print("[절전 복귀] UI 갱신 시작...")
-
         # 타이머 상태 확인 및 재시작
         self._ensure_timers_running()
 
@@ -300,8 +299,6 @@ class MainWindow(QMainWindow):
         # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
         if self._saved_size:
             QTimer.singleShot(100, self._restore_window_state)
-
-        print("[절전 복귀] UI 갱신 완료")
 
     def _ensure_timers_running(self):
         """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
@@ -331,46 +328,38 @@ class MainWindow(QMainWindow):
             self.progress_bar_refresh_timer.start(1000)
             timers_restarted.append('progress_bar_refresh_timer')
 
-        if timers_restarted:
-            print(f"[절전 복귀] 타이머 재시작됨: {', '.join(timers_restarted)}")
-
     def _restore_window_state(self):
         """절전 복귀 후 창 상태를 복원합니다.
 
         핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
         이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
         """
-        print("[창 상태 복원] 복원 시작...")
-        
         # 1. 강제 다시 그리기
         self.repaint()
         self.update()
-        
+
         # 2. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
         #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
         w, h = self.width(), self.height()
         self.setFixedSize(w + 1, h + 1)  # 고정 크기 모드에서는 setFixedSize 사용
         self.setFixedSize(w, h)
-        print(f"[창 상태 복원] 크기 +1/-1 조정 완료: {w}x{h}")
-        
+
         # 3. 저장된 geometry가 있으면 위치도 복원
         if self._saved_geometry:
             self.move(self._saved_geometry.x(), self._saved_geometry.y())
-        
+
         # 4. 레이아웃 강제 업데이트
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
-        
+
         # 5. UI 강제 다시 그리기
         self.update()
         self.repaint()
-        print("[창 상태 복원] 복원 완료")
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
-        print("MainWindow: activate_and_show() 호출됨.")
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
@@ -384,10 +373,7 @@ class MainWindow(QMainWindow):
         """창 아이콘을 설정합니다."""
         # .ico 파일 먼저 확인
         icon_path_ico = get_bundle_resource_path(r"img\app_icon.ico")
-        print("아이콘 경로:", icon_path_ico)
-        print("존재 여부:", os.path.exists(icon_path_ico))
         icon = QIcon(icon_path_ico)
-        print("QIcon isNull:", icon.isNull())
         if os.path.exists(icon_path_ico) and not icon.isNull():
             self.setWindowIcon(icon)
         else:
@@ -546,7 +532,6 @@ class MainWindow(QMainWindow):
 
         """시작 프로그램 자동 실행 설정을 적용합니다."""
         run = self.data_manager.global_settings.run_on_startup # 자동 실행 여부 가져오기
-        print(f"apply_startup_setting 호출됨 - run_on_startup: {run}")
         status_bar = self.statusBar()
         if set_startup_shortcut(run): # 바로가기 설정 시도
             if status_bar:
@@ -578,7 +563,6 @@ class MainWindow(QMainWindow):
         if any_game_running and not self._is_game_mode_active:
             # 게임이 실행되었고, 아직 게임 모드가 활성화되지 않았다면
             self._is_game_mode_active = True
-            print("게임 실행 감지: 창을 트레이로 숨깁니다.")
             self.tray_manager.handle_minimize_event() # 창을 트레이로 숨김
             status_bar = self.statusBar()
             if status_bar:
@@ -586,7 +570,6 @@ class MainWindow(QMainWindow):
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
-            print("모든 게임 종료 감지: 창을 다시 표시합니다.")
             self.activate_and_show() # 창을 다시 표시
             status_bar = self.statusBar()
             if status_bar:
@@ -1064,13 +1047,9 @@ class MainWindow(QMainWindow):
                     status_item.setBackground(self.COLOR_INCOMPLETE)
                 elif new_status == PROC_STATE_COMPLETED:
                     status_item.setBackground(self.COLOR_COMPLETED)
-                
-                # 상태 변경 로그 출력
-                print(f"[{current_dt.strftime('%H:%M:%S')}] 상태 변경: '{process.name}' {old_status} → {new_status}")
-        
-        # 상태 변경이 있었을 때만 로그 출력
-        if status_changes > 0:
-            print(f"[{current_dt.strftime('%H:%M:%S')}] 상태 컬럼 새로고침 완료: {status_changes}개 항목 상태 변경됨")
+
+                # 상태 변경됨
+                status_changes += 1
 
     def _refresh_status_columns_immediate(self):
         """상태 컬럼을 즉시 새로고침합니다 (중요한 시각 변경 시 호출)."""
@@ -1102,7 +1081,6 @@ class MainWindow(QMainWindow):
 
     def _handle_web_button_clicked(self, shortcut_id: str, url: str):
         """웹 바로가기 버튼 클릭 시 호출됩니다. URL을 열고, 필요한 경우 상태를 업데이트합니다."""
-        print(f"웹 버튼 클릭 (ID: {shortcut_id}): {url} 열기 시도")
         shortcut = self.data_manager.get_web_shortcut_by_id(shortcut_id) # 바로가기 정보 가져오기
         if not shortcut: # 바로가기 정보 없으면 경고 후 URL 열기 시도
             QMessageBox.warning(self, "오류", "해당 웹 바로 가기 정보를 찾을 수 없습니다.")
@@ -1115,10 +1093,7 @@ class MainWindow(QMainWindow):
         if shortcut.refresh_time_str:
             shortcut.last_reset_timestamp = datetime.datetime.now().timestamp() # 현재 시각으로 업데이트
             if self.data_manager.update_web_shortcut(shortcut): # 데이터 매니저 통해 정보 업데이트
-                print(f"웹 바로 가기 '{shortcut.name}' 상태 업데이트 (last_reset_timestamp).")
                 self._refresh_web_button_states() # 버튼 상태 즉시 새로고침
-            else:
-                print(f"웹 바로 가기 '{shortcut.name}' 상태 업데이트 실패.")
 
     def _open_add_web_shortcut_dialog(self):
         """새 웹 바로가기를 추가하는 대화 상자를 엽니다."""
@@ -1215,7 +1190,6 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
-        print("=== 애플리케이션 종료 절차 시작 ===")
 
         # 1. 활성화된 타이머들 중지
         if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
@@ -1224,10 +1198,8 @@ class MainWindow(QMainWindow):
             self.scheduler_timer.stop()
         if hasattr(self, 'web_button_refresh_timer') and self.web_button_refresh_timer.isActive():
             self.web_button_refresh_timer.stop()
-            print("웹 버튼 상태 새로고침 타이머 중지됨.")
         if hasattr(self, 'status_column_refresh_timer') and self.status_column_refresh_timer.isActive():
             self.status_column_refresh_timer.stop()
-            print("상태 컬럼 자동 업데이트 타이머 중지됨.")
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
@@ -1241,8 +1213,6 @@ class MainWindow(QMainWindow):
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.quit()
-
-        print("=== GUI 종료 완료 ===")
 
     def _adjust_window_size_to_content(self):
         """테이블 내용에 맞춰 메인 윈도우의 높이를 자동으로 조절합니다. 너비는 고정합니다."""
@@ -1467,19 +1437,33 @@ class MainWindow(QMainWindow):
                 time_str = f"{remaining_minutes}분"
             
             return percentage, time_str
-            
+
+
         except Exception as e:
-            print(f"진행률 계산 중 오류: {e}")
+            logger.error(f"진행률 계산 중 오류: {e}")
             return 0.0, "계산 오류"
 
 
     def _create_progress_bar_widget(self, percentage: float, time_str: str) -> QWidget:
         """진행률을 표시하는 QProgressBar 위젯을 생성합니다."""
         if percentage == 0.0 and not time_str.startswith("STAMINA:"):
-            # 기록이 없는 경우 텍스트 라벨 반환
-            label = QLabel(time_str)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            return label
+            # 기록이 없는 경우 - 동일한 레이아웃 구조 유지
+            container = QWidget()
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(2, 0, 2, 0)
+            layout.setSpacing(4)
+
+            # 빈 아이콘 공간 확보
+            icon_label = QLabel()
+            icon_label.setFixedSize(18, 18)
+            layout.addWidget(icon_label)
+
+            # 텍스트 라벨
+            text_label = QLabel(time_str)
+            text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
+
+            return container
 
         # 스태미나 형식 감지: "STAMINA:game_id:current/max"
         if time_str.startswith("STAMINA:"):
@@ -1514,13 +1498,24 @@ class MainWindow(QMainWindow):
 
                     return container
             except Exception as e:
-                print(f"[ERROR] 스태미나 위젯 생성 오류: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # 일반 시간 기반 Progress Bar
+                logger.error(f"스태미나 위젯 생성 오류: {e}", exc_info=True)
+
+        # 일반 시간 기반 Progress Bar (호요버스 게임과 동일한 레이아웃 적용)
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(4)
+
+        # 빈 아이콘 공간 확보 (호요버스 게임과 동일한 크기)
+        icon_label = QLabel()
+        icon_label.setFixedSize(18, 18)
+        layout.addWidget(icon_label)
+
+        # Progress Bar
         progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
-        return progress_bar
+        layout.addWidget(progress_bar, 1)  # stretch factor 1로 남은 공간 채움
+
+        return container
     
     def _get_stamina_icon_path(self, game_schema_id: str) -> Optional[str]:
         """게임 ID에 해당하는 스태미나 아이콘 경로 반환"""

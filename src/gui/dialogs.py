@@ -1,6 +1,9 @@
 import os
 import datetime
+import logging
 from typing import List, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from PyQt6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
@@ -232,10 +235,11 @@ class ProcessDialog(QDialog):
                 if not preset_id:
                      continue
                 self.preset_combo.addItem(display_name, preset)
-                
+
+
         except Exception as e:
-            print(f"프리셋 로드 실패: {e}")
-            
+            logger.warning(f"프리셋 로드 실패: {e}")
+
         preset_layout.addWidget(self.preset_combo, 1) # 늘어나도록 설정
         
         # 적용 버튼
@@ -726,9 +730,7 @@ class ProcessDialog(QDialog):
                             else:
                                 save_result = "\n\n💾 스태미나 정보가 임시 저장되었습니다."
                         except Exception as e:
-                            print(f"[ERROR] 스태미나 저장 오류: {e}")
-                            import traceback
-                            traceback.print_exc()
+                            logger.error(f"스태미나 저장 오류: {e}", exc_info=True)
                             save_result = f"\n\n⚠️ 저장 오류: {e}"
                     else:
                         save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
@@ -864,9 +866,9 @@ class ProcessDialog(QDialog):
                     
                     if preset:
                         self._apply_preset_data(preset)
-                        print(f"[ProcessDialog] 프리셋 '{preset.get('id')}' 자동 감지 및 적용 완료")
+                        logger.debug(f"프리셋 '{preset.get('id')}' 자동 감지 및 적용 완료")
                 except Exception as e:
-                    print(f"[ProcessDialog] 프리셋 자동 적용 실패: {e}")
+                    logger.warning(f"프리셋 자동 적용 실패: {e}")
 
     def browse_file(self, path_edit_widget: QLineEdit):
         """ 파일 대화상자를 열어 파일을 선택하고, 선택된 파일의 경로를 입력 위젯에 설정합니다. """
@@ -1116,7 +1118,7 @@ class GlobalSettingsDialog(QDialog):
                     self.scale_combo.setCurrentIndex(i)
                     break
         except Exception as e:
-            print(f"[GlobalSettingsDialog] 배율 설정 로드 실패: {e}")
+            logger.warning(f"배율 설정 로드 실패: {e}")
     
     def _save_scale_setting(self, scale_percent: int):
         """ini 파일에 배율 설정 저장"""
@@ -1136,11 +1138,11 @@ class GlobalSettingsDialog(QDialog):
             
             with open(config_path, 'w', encoding='utf-8') as f:
                 config.write(f)
-            
-            print(f"[GlobalSettingsDialog] 배율 설정 저장: {scale_percent}%")
+
+            logger.debug(f"배율 설정 저장: {scale_percent}%")
             return True
         except Exception as e:
-            print(f"[GlobalSettingsDialog] 배율 설정 저장 실패: {e}")
+            logger.warning(f"배율 설정 저장 실패: {e}")
             return False
     
     def accept(self):
@@ -1172,7 +1174,7 @@ class GlobalSettingsDialog(QDialog):
                     "변경 사항을 적용하려면 앱을 재시작해주세요."
                 )
         except Exception as e:
-            print(f"[GlobalSettingsDialog] 배율 변경 확인 실패: {e}")
+            logger.warning(f"배율 변경 확인 실패: {e}")
             self._save_scale_setting(new_scale)
         
         super().accept()
