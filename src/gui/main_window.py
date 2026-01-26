@@ -249,16 +249,20 @@ class MainWindow(QMainWindow):
             if self.windowState() & Qt.WindowState.WindowMinimized: # 창이 최소화 상태로 변경될 때
                 if hasattr(self, 'tray_manager') and self.tray_manager.is_tray_icon_visible(): # 트레이 아이콘이 보이는 경우
                     self.tray_manager.handle_minimize_event() # 트레이 관리자에게 최소화 처리 위임
-        
-        # 창 활성화 시 geometry 복원 (절전 복귀 대응)
+
+        # 창 활성화 시 geometry 복원 및 타이머 재시작 (절전 복귀 대응)
         elif event.type() == QEvent.Type.ActivationChange:
-            if self.isActiveWindow() and self._saved_size:
-                # 저장된 크기와 현재 크기 비교
-                current_size = self.size()
-                if current_size != self._saved_size:
-                    print(f"[창 상태 복원] 현재 크기: {current_size.width()}x{current_size.height()}, 저장된 크기: {self._saved_size.width()}x{self._saved_size.height()}")
-                    QTimer.singleShot(100, self._restore_window_state)
-        
+            if self.isActiveWindow():
+                # 타이머 상태 확인 및 재시작 (절전 복귀 대응)
+                self._ensure_timers_running()
+
+                if self._saved_size:
+                    # 저장된 크기와 현재 크기 비교
+                    current_size = self.size()
+                    if current_size != self._saved_size:
+                        print(f"[창 상태 복원] 현재 크기: {current_size.width()}x{current_size.height()}, 저장된 크기: {self._saved_size.width()}x{self._saved_size.height()}")
+                        QTimer.singleShot(100, self._restore_window_state)
+
         super().changeEvent(event)
 
     def showEvent(self, event):
@@ -266,9 +270,42 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
 
+    def _ensure_timers_running(self):
+        """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
+
+        Windows 절전 모드(슬립/최대 절전)에서 복귀할 때 QTimer가 중단될 수 있으므로,
+        창 활성화 시 타이머 상태를 확인하고 필요시 재시작합니다.
+        """
+        timers_restarted = []
+
+        if hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
+            self.monitor_timer.start(1000)
+            timers_restarted.append('monitor_timer')
+
+        if hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
+            self.scheduler_timer.start(1000)
+            timers_restarted.append('scheduler_timer')
+
+        if hasattr(self, 'status_column_refresh_timer') and not self.status_column_refresh_timer.isActive():
+            self.status_column_refresh_timer.start(1000 * 30)
+            timers_restarted.append('status_column_refresh_timer')
+
+        if hasattr(self, 'web_button_refresh_timer') and not self.web_button_refresh_timer.isActive():
+            self.web_button_refresh_timer.start(1000 * 60)
+            timers_restarted.append('web_button_refresh_timer')
+
+        if hasattr(self, 'progress_bar_refresh_timer') and not self.progress_bar_refresh_timer.isActive():
+            self.progress_bar_refresh_timer.start(1000)
+            timers_restarted.append('progress_bar_refresh_timer')
+
+        if timers_restarted:
+            print(f"[절전 복귀] 타이머 재시작됨: {', '.join(timers_restarted)}")
+            # 즉시 UI 갱신
+            self.update_process_statuses_only()
+
     def _restore_window_state(self):
         """절전 복귀 후 창 상태를 복원합니다.
-        
+
         핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
         이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
         """

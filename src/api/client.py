@@ -201,13 +201,15 @@ class ApiClient:
             print(f"세션 시작 실패: {e}")
             return None
 
-    def end_session(self, session_id: int, end_timestamp: float) -> Optional[ProcessSession]:
+    def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Optional[ProcessSession]:
         """프로세스 세션 종료"""
         try:
             data = {
                 "end_timestamp": end_timestamp,
                 "session_duration": 0  # 서버에서 자동 계산됨
             }
+            if stamina_at_end is not None:
+                data["stamina_at_end"] = stamina_at_end
             response = requests.put(
                 f"{self.base_url}/sessions/{session_id}/end",
                 json=data
@@ -256,3 +258,28 @@ class ApiClient:
         except requests.RequestException as e:
             print(f"전체 세션 조회 실패: {e}")
             return []
+
+    def get_last_session(self, process_id: str) -> Optional[ProcessSession]:
+        """특정 프로세스의 가장 최근 완료된 세션 조회"""
+        try:
+            response = requests.get(f"{self.base_url}/sessions/process/{process_id}/last")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return ProcessSession.from_dict(response.json())
+        except requests.RequestException as e:
+            print(f"마지막 세션 조회 실패: {e}")
+            return None
+
+    def update_session_stamina(self, session_id: int, stamina_at_end: int) -> bool:
+        """세션의 종료 스태미나 값을 업데이트합니다."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/sessions/{session_id}/stamina",
+                params={"stamina_at_end": stamina_at_end}
+            )
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            print(f"세션 스태미나 업데이트 실패: {e}")
+            return False

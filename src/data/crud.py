@@ -190,3 +190,23 @@ def get_all_sessions(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.ProcessSession).order_by(
         models.ProcessSession.start_timestamp.desc()
     ).offset(skip).limit(limit).all()
+
+
+def get_last_session(db: Session, process_id: str):
+    """특정 프로세스의 가장 최근 완료된 세션을 반환합니다."""
+    return db.query(models.ProcessSession).filter(
+        models.ProcessSession.process_id == process_id,
+        models.ProcessSession.end_timestamp != None
+    ).order_by(models.ProcessSession.end_timestamp.desc()).first()
+
+
+@db_retry_on_lock
+def update_session_stamina(db: Session, session_id: int, stamina_at_end: int) -> bool:
+    """세션의 종료 스태미나 값을 업데이트합니다."""
+    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+    if db_session:
+        db_session.stamina_at_end = stamina_at_end
+        db.commit()
+        db.refresh(db_session)
+        return True
+    return False

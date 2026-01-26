@@ -107,7 +107,12 @@ def create_new_session(session_data: schemas.ProcessSessionCreate, db: Session =
 @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
 def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
     """프로세스 세션 종료"""
-    ended_session = crud.end_session(db=db, session_id=session_id, end_timestamp=end_data.end_timestamp)
+    ended_session = crud.end_session(
+        db=db,
+        session_id=session_id,
+        end_timestamp=end_data.end_timestamp,
+        stamina_at_end=end_data.stamina_at_end
+    )
     if ended_session is None:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     return ended_session
@@ -132,3 +137,21 @@ def get_active_session(process_id: str, db: Session = Depends(get_db)):
 def get_all_sessions_list(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """모든 세션 조회"""
     return crud.get_all_sessions(db=db, skip=skip, limit=limit)
+
+
+@app.get("/sessions/process/{process_id}/last", response_model=schemas.ProcessSessionSchema)
+def get_last_session(process_id: str, db: Session = Depends(get_db)):
+    """특정 프로세스의 가장 최근 완료된 세션 조회"""
+    session = crud.get_last_session(db=db, process_id=process_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="완료된 세션이 없습니다.")
+    return session
+
+
+@app.patch("/sessions/{session_id}/stamina")
+def update_session_stamina(session_id: int, stamina_at_end: int, db: Session = Depends(get_db)):
+    """세션의 종료 스태미나 값을 업데이트합니다."""
+    success = crud.update_session_stamina(db=db, session_id=session_id, stamina_at_end=stamina_at_end)
+    if not success:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    return {"success": True, "session_id": session_id, "stamina_at_end": stamina_at_end}
