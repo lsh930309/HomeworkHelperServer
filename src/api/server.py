@@ -2,11 +2,25 @@ from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from pathlib import Path
+import time
 
 from src.data import models
 from src.data import crud
 from src.data import schemas
 from src.data.database import SessionLocal, engine, auto_migrate_database
+
+# 디버깅용 파일 로그
+def _server_debug_log(message: str):
+    """API 서버 디버깅 메시지를 파일에 기록"""
+    try:
+        log_dir = Path.home() / ".HomeworkHelper" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "server_debug.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except Exception:
+        pass
 
 # 앱 시작 시 자동 마이그레이션 실행 (기존 DB에 새 컬럼 추가)
 auto_migrate_database()
@@ -107,6 +121,7 @@ def create_new_session(session_data: schemas.ProcessSessionCreate, db: Session =
 @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
 def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
     """프로세스 세션 종료"""
+    _server_debug_log(f"[end_session 요청] session_id={session_id}, end_data={end_data.model_dump()}")
     ended_session = crud.end_session(
         db=db,
         session_id=session_id,
@@ -115,6 +130,7 @@ def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate,
     )
     if ended_session is None:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    _server_debug_log(f"[end_session 완료] session_id={session_id}, stamina_at_end={ended_session.stamina_at_end}")
     return ended_session
 
 
