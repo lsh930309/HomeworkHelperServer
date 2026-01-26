@@ -3,10 +3,23 @@ import psutil
 import time
 import os
 import logging
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Protocol
 from src.data.data_models import ManagedProcess
 
 logger = logging.getLogger(__name__)
+
+# 디버깅용 파일 로그
+def _debug_log(message: str):
+    """디버깅 메시지를 파일에 기록"""
+    try:
+        log_dir = Path.home() / ".HomeworkHelper" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "stamina_debug.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except Exception:
+        pass
 
 
 class ProcessesDataPort(Protocol):
@@ -108,12 +121,15 @@ class ProcessMonitor:
 
                     # 호요버스 게임인 경우 스태미나 조회를 세션 종료 전에 먼저 수행
                     stamina_at_end = None
+                    _debug_log(f"[종료 감지] '{managed_proc.name}' - is_hoyoverse_game={managed_proc.is_hoyoverse_game()}, tracking={managed_proc.stamina_tracking_enabled}, game_id={managed_proc.hoyolab_game_id}")
                     if managed_proc.is_hoyoverse_game():
                         stamina_at_end = self._update_stamina_on_game_exit(managed_proc)
+                        _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
 
                     # 세션 종료 기록 (스태미나 값 포함)
                     cached_info = self.active_monitored_processes.pop(managed_proc.id)
                     session_id = cached_info.get('session_id')
+                    _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:
                         ended_session = self.data_manager.end_session(session_id, termination_time, stamina_at_end)
                         if ended_session:

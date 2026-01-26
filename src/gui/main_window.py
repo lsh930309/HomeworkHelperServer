@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 import datetime
 import functools
 from typing import Optional
@@ -210,7 +211,8 @@ class MainWindow(QMainWindow):
 
         # 시그널 및 타이머 설정
         self.request_table_refresh_signal.connect(self.populate_process_list_slot) # 테이블 새로고침 시그널 연결
-        self.monitor_timer = QTimer(self); self.monitor_timer.timeout.connect(self.run_process_monitor_check); self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
+        self._last_timer_tick = time.time()  # 절전 복귀 감지용 마지막 타이머 틱 시간
+        self.monitor_timer = QTimer(self); self.monitor_timer.timeout.connect(self._on_monitor_timer_tick); self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
         self.scheduler_timer = QTimer(self); self.scheduler_timer.timeout.connect(self.run_scheduler_check); self.scheduler_timer.start(1000) # 스케줄러 타이머 (1초)
 
         # 웹 버튼 상태 새로고침 타이머
@@ -270,11 +272,42 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
 
+    def _on_monitor_timer_tick(self):
+        """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
+        current_time = time.time()
+        elapsed = current_time - self._last_timer_tick
+
+        # 5초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격)
+        if elapsed > 5:
+            print(f"[절전 복귀 감지] 타이머 간격: {elapsed:.1f}초 (예상: 1초)")
+            self._on_sleep_wake()
+
+        self._last_timer_tick = current_time
+        self.run_process_monitor_check()
+
+    def _on_sleep_wake(self):
+        """절전 복귀 시 호출되는 메서드"""
+        print("[절전 복귀] UI 갱신 시작...")
+
+        # 타이머 상태 확인 및 재시작
+        self._ensure_timers_running()
+
+        # 즉시 UI 갱신
+        self._refresh_status_columns()
+        self._refresh_progress_bars()
+        self._refresh_web_button_states()
+
+        # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
+        if self._saved_size:
+            QTimer.singleShot(100, self._restore_window_state)
+
+        print("[절전 복귀] UI 갱신 완료")
+
     def _ensure_timers_running(self):
         """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
 
         Windows 절전 모드(슬립/최대 절전)에서 복귀할 때 QTimer가 중단될 수 있으므로,
-        창 활성화 시 타이머 상태를 확인하고 필요시 재시작합니다.
+        타이머 상태를 확인하고 필요시 재시작합니다.
         """
         timers_restarted = []
 
@@ -300,8 +333,6 @@ class MainWindow(QMainWindow):
 
         if timers_restarted:
             print(f"[절전 복귀] 타이머 재시작됨: {', '.join(timers_restarted)}")
-            # 즉시 UI 갱신
-            self.update_process_statuses_only()
 
     def _restore_window_state(self):
         """절전 복귀 후 창 상태를 복원합니다.
