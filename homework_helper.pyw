@@ -536,7 +536,12 @@ def run_server_main():
     @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
     def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
         """프로세스 세션 종료"""
-        ended_session = crud.end_session(db=db, session_id=session_id, end_timestamp=end_data.end_timestamp)
+        ended_session = crud.end_session(
+            db=db,
+            session_id=session_id,
+            end_timestamp=end_data.end_timestamp,
+            stamina_at_end=end_data.stamina_at_end
+        )
         if ended_session is None:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
         return ended_session
