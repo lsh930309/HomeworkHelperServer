@@ -601,11 +601,13 @@ def ensure_process_table_schema():
 
                 if 'preferred_launch_type' not in existing_cols:
                     conn.execute(text("ALTER TABLE managed_processes ADD COLUMN preferred_launch_type TEXT DEFAULT 'shortcut'"))
-                if 'game_schema_id' not in existing_cols:
-                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN game_schema_id TEXT"))
-                if 'mvp_enabled' not in existing_cols:
-                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN mvp_enabled BOOLEAN DEFAULT 0"))
+                if 'user_preset_id' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN user_preset_id TEXT"))
                 # HoYoLab 스태미나 컬럼 추가
+                if 'stamina_tracking_enabled' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_tracking_enabled BOOLEAN DEFAULT 0"))
+                if 'hoyolab_game_id' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN hoyolab_game_id TEXT"))
                 if 'stamina_current' not in existing_cols:
                     conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_current INTEGER"))
                 if 'stamina_max' not in existing_cols:
