@@ -78,6 +78,18 @@
     * 프로세스 편집 시 기존 프리셋이 자동으로 선택됨
     * 코드 간소화 (약 100줄 제거)
     * user_preset_id로 일관성 있는 네이밍
+- **17:00**: 프로젝트 정리 - 미사용 server/ 폴더 및 Docker 파일 제거
+  - **제거된 파일**:
+    * server/ 폴더 전체 (PostgreSQL 기반, 미구현 스켈레톤 코드)
+    * docker-compose.yml (Docker 배포용 설정, 미사용)
+  - **homework_helper.pyw 마이그레이션 수정**:
+    * ensure_process_table_schema() 함수 업데이트
+    * game_schema_id, mvp_enabled → user_preset_id로 변경
+    * stamina_tracking_enabled, hoyolab_game_id 추가
+  - **실제 사용 중인 서버**: homework_helper.pyw의 run_server_main() 함수
+    * SQLite 로컬 DB (127.0.0.1:8000)
+    * multiprocessing으로 GUI와 독립 실행
+  - **결과**: 약 360줄의 미사용 코드 제거, 프로젝트 구조 단순화
 
 ---
 
