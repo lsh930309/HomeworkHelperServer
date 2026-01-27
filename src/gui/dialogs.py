@@ -495,12 +495,14 @@ class ProcessDialog(QDialog):
         self.stamina_tracking_checkbox.setToolTip(
             "게임 종료 시 HoYoLab API를 통해 스태미나(개척력/배터리)를 자동으로 조회합니다."
         )
+        self.stamina_tracking_checkbox.toggled.connect(self._on_stamina_tracking_toggled)
         stamina_layout.addWidget(self.stamina_tracking_checkbox)
 
         # 호요버스 게임 선택 콤보박스
         hoyolab_game_layout = QHBoxLayout()
         hoyolab_game_layout.addWidget(QLabel("추적할 게임:"))
         self.hoyolab_game_combo = QComboBox()
+        self.hoyolab_game_combo.addItem("(없음)", None)
         self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
         self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
         self.hoyolab_game_combo.setToolTip("스태미나를 추적할 호요버스 게임을 선택하세요.")
@@ -517,13 +519,18 @@ class ProcessDialog(QDialog):
         self.stamina_group_box.setLayout(stamina_layout)
         self.form_layout.addRow(self.stamina_group_box)
 
-        # 초기 상태: 활성화 (자유롭게 사용 가능)
-        self.stamina_group_box.setEnabled(True)
+        # 초기 상태: 체크박스 상태에 따라 콤보박스 활성화
+        self._on_stamina_tracking_toggled(False)
 
-    def _update_stamina_section_enabled(self):
-        """스태미나 섹션 활성화 상태 업데이트 (항상 활성화)"""
-        # 모든 게임에 대해 자유롭게 사용 가능하도록 항상 활성화
-        self.stamina_group_box.setEnabled(True)
+    def _on_stamina_tracking_toggled(self, checked: bool):
+        """스태미나 추적 체크박스 상태 변경 시"""
+        if checked:
+            # 체크박스 활성화 시 콤보박스 활성화
+            self.hoyolab_game_combo.setEnabled(True)
+        else:
+            # 체크박스 비활성화 시 콤보박스를 '(없음)'으로 설정하고 비활성화
+            self.hoyolab_game_combo.setCurrentIndex(0)  # '(없음)' 선택
+            self.hoyolab_game_combo.setEnabled(False)
 
     def _test_stamina_connection(self):
         """스태미나 조회 테스트"""
@@ -695,16 +702,22 @@ class ProcessDialog(QDialog):
                     logger.debug(f"프리셋 자동 선택: {self.existing_process.user_preset_id}")
                     break
 
-        # 스태미나 추적 필드 로드
-        if hasattr(self.existing_process, 'stamina_tracking_enabled'):
-            self.stamina_tracking_checkbox.setChecked(self.existing_process.stamina_tracking_enabled)
-
-        # 호요랩 게임 선택 로드
+        # 호요랩 게임 선택 로드 (스태미나 추적보다 먼저 설정)
         if hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
             for i in range(self.hoyolab_game_combo.count()):
                 if self.hoyolab_game_combo.itemData(i) == self.existing_process.hoyolab_game_id:
                     self.hoyolab_game_combo.setCurrentIndex(i)
                     break
+        else:
+            # hoyolab_game_id가 None이면 '(없음)' 선택
+            self.hoyolab_game_combo.setCurrentIndex(0)
+
+        # 스태미나 추적 필드 로드 (콤보박스 설정 후 체크박스 설정)
+        if hasattr(self.existing_process, 'stamina_tracking_enabled'):
+            self.stamina_tracking_checkbox.setChecked(self.existing_process.stamina_tracking_enabled)
+
+        # 체크박스 상태에 따라 콤보박스 활성화/비활성화
+        self._on_stamina_tracking_toggled(self.stamina_tracking_checkbox.isChecked())
 
     def open_running_process_selector(self):
         dialog = RunningProcessSelectionDialog(self) # Uses dialog defined above
@@ -848,8 +861,9 @@ class ProcessDialog(QDialog):
         user_preset_id = preset_data.get("id") if preset_data else None
 
         # 스태미나 추적 필드
-        stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked()
         hoyolab_game_id = self.hoyolab_game_combo.currentData()
+        # hoyolab_game_id가 None이면 스태미나 추적도 자동으로 비활성화
+        stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked() and hoyolab_game_id is not None
 
         return {
             "name": name,
