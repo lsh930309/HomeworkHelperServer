@@ -276,29 +276,52 @@ class MainWindow(QMainWindow):
 
     def _on_monitor_timer_tick(self):
         """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
+        start_time = time.time()
         current_time = time.time()
         elapsed = current_time - self._last_timer_tick
 
-        # 5초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격)
-        if elapsed > 5:
+        # 10초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격, 이전 5초 → 10초로 증가하여 오탐 방지)
+        if elapsed > 10:
+            logger.warning(f"절전 복귀 감지: 타이머 간격 {elapsed:.1f}초 (정상: 1초)")
             self._on_sleep_wake()
 
         self._last_timer_tick = current_time
         self.run_process_monitor_check()
 
+        # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
+        execution_time = (time.time() - start_time) * 1000
+        if execution_time > 100:
+            logger.warning(f"monitor_timer 실행 시간 초과: {execution_time:.1f}ms")
+
     def _on_sleep_wake(self):
-        """절전 복귀 시 호출되는 메서드"""
+        """절전 복귀 시 호출되는 메서드
+
+        절전모드 복귀 후 UI 갱신이 멈추는 문제 해결:
+        - 타이머는 작동하지만 Qt 렌더링이 트리거되지 않는 문제 대응
+        - 테이블 전체를 다시 채워서 모든 셀이 강제로 다시 그려지도록 함
+        """
+        logger.info("절전 복귀 감지 - UI 전체 갱신 시작")
+
         # 타이머 상태 확인 및 재시작
         self._ensure_timers_running()
 
-        # 즉시 UI 갱신
-        self._refresh_status_columns()
-        self._refresh_progress_bars()
+        # 테이블 전체 다시 채우기 (모든 위젯 강제 재생성)
+        # 이렇게 하면 Progress Bar, 상태 컬럼 등 모든 셀이 현재 시간에 맞게 다시 그려짐
+        self.populate_process_list()
+
+        # 웹 버튼 상태 갱신
         self._refresh_web_button_states()
+
+        # 테이블 viewport 강제 업데이트 (화면 다시 그리기)
+        if self.process_table.viewport():
+            self.process_table.viewport().update()
+            self.process_table.viewport().repaint()
 
         # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
         if self._saved_size:
             QTimer.singleShot(100, self._restore_window_state)
+
+        logger.info("절전 복귀 UI 갱신 완료")
 
     def _ensure_timers_running(self):
         """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
@@ -542,14 +565,16 @@ class MainWindow(QMainWindow):
 
     def run_process_monitor_check(self):
         """실행 중인 프로세스를 확인하고 상태 변경 시 테이블을 새로고침합니다."""
-        if self.process_monitor.check_and_update_statuses(): # 상태 변경 감지 시
+        status_changed = self.process_monitor.check_and_update_statuses() # 상태 변경 감지
+
+        if status_changed:
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only() # 상태 컬럼만 업데이트
 
-        # 게임 모드 (실행 중인 게임이 있는지) 확인 및 창 상태 변경
-        self._check_and_toggle_game_mode()
+            # 게임 모드 체크 (최적화: 상태 변경이 있을 때만 확인)
+            self._check_and_toggle_game_mode()
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
@@ -577,15 +602,20 @@ class MainWindow(QMainWindow):
 
     def run_scheduler_check(self):
         """스케줄러 검사를 실행하고 상태 변경이 있을 때만 테이블을 업데이트합니다."""
+        start_time = time.time()
+
         # 스케줄러 검사 실행 (알림 발송 등)
         status_changed = self.scheduler.run_all_checks() # 게임 관련 스케줄 검사
-        
+
         if status_changed:
-            # 주기적 로그 제거 (GUI 성능 개선)
-            # print("스케줄러에 의해 상태 변경 감지됨. 테이블 UI 업데이트.")
             self.update_process_statuses_only()
-        
+
         # 웹 버튼 상태는 별도 타이머(_refresh_web_button_states)로 주기적으로 체크하므로 여기서 호출하지 않음
+
+        # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
+        execution_time = (time.time() - start_time) * 1000
+        if execution_time > 100:
+            logger.warning(f"scheduler_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def populate_process_list_slot(self):
         """테이블 새로고침 시그널에 연결된 슬롯입니다."""
@@ -1001,6 +1031,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_status_columns(self):
         """테이블의 상태 컬럼만 새로고침합니다."""
+        start_time = time.time()
         current_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
         status_changes = 0
@@ -1048,8 +1079,15 @@ class MainWindow(QMainWindow):
                 elif new_status == PROC_STATE_COMPLETED:
                     status_item.setBackground(self.COLOR_COMPLETED)
 
-                # 상태 변경됨
-                status_changes += 1
+        # 상태 변경이 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
+        if status_changes > 0:
+            if self.process_table.viewport():
+                self.process_table.viewport().update()
+
+        # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
+        execution_time = (time.time() - start_time) * 1000
+        if execution_time > 100:
+            logger.warning(f"status_column_refresh_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def _refresh_status_columns_immediate(self):
         """상태 컬럼을 즉시 새로고침합니다 (중요한 시각 변경 시 호출)."""
@@ -1614,109 +1652,164 @@ class MainWindow(QMainWindow):
         return progress_bar
 
     def _refresh_progress_bars(self):
-        """프로그레스 바들을 실시간으로 갱신합니다."""
+        """프로그레스 바들을 실시간으로 갱신합니다.
+
+        최적화:
+        - 값이 실제로 변경되었을 때만 업데이트
+        - 스타일시트는 색상 구간 변경 시에만 적용
+        - 컨테이너 내부의 Progress Bar 처리
+        """
+        start_time = time.time()
         now_dt = datetime.datetime.now()
         processes = self.data_manager.managed_processes
-        
+        updated_count = 0
+
         # 테이블의 각 행을 순회하면서 해당 행의 프로세스 ID를 찾아서 갱신
         for row in range(self.process_table.rowCount()):
             # 해당 행의 이름 컬럼에서 프로세스 ID 가져오기
             name_item = self.process_table.item(row, self.COL_NAME)
             if not name_item:
                 continue
-                
+
             process_id = name_item.data(Qt.ItemDataRole.UserRole)
             if not process_id:
                 continue
-                
+
             # 프로세스 ID로 해당 프로세스 찾기
             process = None
             for p in processes:
                 if p.id == process_id:
                     process = p
                     break
-                    
+
             if not process:
                 continue
-                
+
             # 현재 셀의 위젯 가져오기
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-                
+
             # 새로운 진행률 계산
             percentage, time_str = self._calculate_progress_percentage(process, now_dt)
-            
-            # QProgressBar인 경우 값 업데이트
-            if isinstance(current_widget, QProgressBar):
-                current_widget.setValue(int(percentage))
-                current_widget.setFormat(f"{percentage:.1f}%")
-                
-                # 진행률에 따른 색상 업데이트
-                if percentage >= 100:
-                    current_widget.setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #404040;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                            color: white;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #ff4444;
-                            border-radius: 1px;
-                        }
-                    """)
-                elif percentage >= 80:
-                    current_widget.setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #404040;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                            color: white;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #ff8800;
-                            border-radius: 1px;
-                        }
-                    """)
-                elif percentage >= 50:
-                    current_widget.setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #404040;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                            color: white;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #ffcc00;
-                            border-radius: 1px;
-                        }
-                    """)
-                else:
-                    current_widget.setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #404040;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                            color: white;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #44cc44;
-                            border-radius: 1px;
-                        }
-                    """)
-            # QLabel인 경우 (기록 없음) 텍스트 업데이트
-            elif isinstance(current_widget, QLabel):
-                current_widget.setText(time_str)
 
+            # 컨테이너 위젯인 경우 내부 Progress Bar 찾기 (Task #2에서 변경된 구조)
+            progress_bar = None
+            if isinstance(current_widget, QWidget):
+                # 컨테이너 내부에서 QProgressBar 찾기
+                for child in current_widget.findChildren(QProgressBar):
+                    progress_bar = child
+                    break
+            elif isinstance(current_widget, QProgressBar):
+                # 직접 QProgressBar인 경우 (하위 호환)
+                progress_bar = current_widget
+
+            # Progress Bar 업데이트
+            if progress_bar:
+                old_value = progress_bar.value()
+                new_value = int(percentage)
+
+                # 값이 변경되었을 때만 업데이트 (최적화)
+                if old_value != new_value:
+                    progress_bar.setValue(new_value)
+                    progress_bar.setFormat(f"{percentage:.1f}%")
+                    updated_count += 1
+
+                    # 색상 구간 결정 (0-49: 초록, 50-79: 노랑, 80-99: 주황, 100+: 빨강)
+                    def get_color_range(pct):
+                        if pct >= 100:
+                            return 3  # 빨강
+                        elif pct >= 80:
+                            return 2  # 주황
+                        elif pct >= 50:
+                            return 1  # 노랑
+                        else:
+                            return 0  # 초록
+
+                    # 색상 구간이 바뀌었을 때만 스타일시트 업데이트 (최적화)
+                    old_range = get_color_range(old_value)
+                    new_range = get_color_range(percentage)
+
+                    if old_range != new_range:
+                        # 진행률에 따른 색상 업데이트
+                        if percentage >= 100:
+                            progress_bar.setStyleSheet("""
+                                QProgressBar {
+                                    border: 1px solid #404040;
+                                    border-radius: 2px;
+                                    text-align: center;
+                                    background-color: #2d2d2d;
+                                    color: white;
+                                    font-weight: bold;
+                                }
+                                QProgressBar::chunk {
+                                    background-color: #ff4444;
+                                    border-radius: 1px;
+                                }
+                            """)
+                        elif percentage >= 80:
+                            progress_bar.setStyleSheet("""
+                                QProgressBar {
+                                    border: 1px solid #404040;
+                                    border-radius: 2px;
+                                    text-align: center;
+                                    background-color: #2d2d2d;
+                                    color: white;
+                                    font-weight: bold;
+                                }
+                                QProgressBar::chunk {
+                                    background-color: #ff8800;
+                                    border-radius: 1px;
+                                }
+                            """)
+                        elif percentage >= 50:
+                            progress_bar.setStyleSheet("""
+                                QProgressBar {
+                                    border: 1px solid #404040;
+                                    border-radius: 2px;
+                                    text-align: center;
+                                    background-color: #2d2d2d;
+                                    color: white;
+                                    font-weight: bold;
+                                }
+                                QProgressBar::chunk {
+                                    background-color: #ffcc00;
+                                    border-radius: 1px;
+                                }
+                            """)
+                        else:
+                            progress_bar.setStyleSheet("""
+                                QProgressBar {
+                                    border: 1px solid #404040;
+                                    border-radius: 2px;
+                                    text-align: center;
+                                    background-color: #2d2d2d;
+                                    color: white;
+                                    font-weight: bold;
+                                }
+                                QProgressBar::chunk {
+                                    background-color: #44cc44;
+                                    border-radius: 1px;
+                                }
+                            """)
+
+            # QLabel 업데이트 (컨테이너 내부의 라벨 - "기록 없음" 표시)
+            else:
+                for child in current_widget.findChildren(QLabel):
+                    if child.text() != time_str:
+                        child.setText(time_str)
+                        updated_count += 1
+                    break
+
+        # 업데이트가 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
+        if updated_count > 0:
+            if self.process_table.viewport():
+                self.process_table.viewport().update()
+
+        # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
+        execution_time = (time.time() - start_time) * 1000
+        if execution_time > 100:
+            logger.warning(f"progress_bar_refresh_timer 실행 시간 초과: {execution_time:.1f}ms (업데이트: {updated_count}개)")
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:
         """

@@ -11,7 +11,7 @@
 
 ### Medium Priority (계획 후 작업)
 - [ ] Task #4: game_schema_id 저장 문제 조사 및 필요성 검토
-- [ ] Task #5: UI 갱신 멈춤 현상 재현 및 수정
+- [x] Task #5: UI 갱신 멈춤 현상 재현 및 수정 ✅
 - [ ] Task #6: 창 위치 기억 및 마그넷 기능 구현
 
 ### Low Priority (대규모 작업)
@@ -45,7 +45,21 @@
   - 일반 동작 추적용 print() 완전 제거
   - 중요 이벤트는 logging.info()로 변환
   - 에러는 logging.error()로 변환 (exc_info=True 옵션 사용)
-- **다음 단계**: High Priority 작업 완료, Medium Priority 검토
+- **15:30**: 커밋 완료 (4038c8a)
+- **16:00**: Task #5 완료 - UI 갱신 멈춤 현상 수정 및 최적화
+  - 변경 파일: src/gui/main_window.py
+  - **절전 복귀 문제 해결**:
+    * _on_sleep_wake()에서 테이블 전체 다시 채우기 (populate_process_list)
+    * viewport 강제 업데이트 (update() + repaint())
+    * 절전 복귀 감지 임계값 5초 → 10초로 증가 (오탐 방지)
+  - **UI 갱신 최적화**:
+    * _refresh_progress_bars(): 값 변경 시에만 업데이트, 색상 구간 변경 시에만 스타일시트 적용
+    * _refresh_status_columns(): 상태 변경 시 viewport 강제 갱신
+    * run_process_monitor_check(): game mode 체크를 상태 변경 시에만 수행
+  - **타이머 성능 모니터링**:
+    * 모든 타이머 콜백에 실행 시간 로깅 추가 (100ms 초과 시 경고)
+    * monitor_timer, scheduler_timer, progress_bar_refresh_timer, status_column_refresh_timer
+- **다음 단계**: Task #4 (game_schema_id 조사)
 
 ---
 
