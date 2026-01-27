@@ -86,11 +86,13 @@ def auto_migrate_database():
         ("managed_processes", "stamina_current", "INTEGER", None),
         ("managed_processes", "stamina_max", "INTEGER", None),
         ("managed_processes", "stamina_updated_at", "REAL", None),
+        # Process 테이블 - 사용자 프리셋 ID
+        ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         # GlobalSettings 테이블 - 스태미나 알림 설정
         ("global_settings", "stamina_notify_enabled", "INTEGER", "1"),  # Boolean -> INTEGER
         ("global_settings", "stamina_notify_threshold", "INTEGER", "20"),
-        # ProcessSession 테이블 - 게임 스키마 및 스태미나 정보
-        ("process_sessions", "game_schema_id", "TEXT", None),
+        # ProcessSession 테이블 - 사용자 프리셋 ID 및 스태미나 정보
+        ("process_sessions", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         ("process_sessions", "stamina_at_end", "INTEGER", None),
     ]
     
@@ -117,7 +119,33 @@ def auto_migrate_database():
                 conn.execute(text(sql))
                 conn.commit()
                 print(f"[Migration] {table_name}.{column_name} 컬럼 추가됨")
-        
+
+        # 데이터 마이그레이션: game_schema_id → user_preset_id 복사
+        with engine.connect() as conn:
+            # managed_processes 테이블
+            existing_columns = [col['name'] for col in inspector.get_columns("managed_processes")]
+            if "game_schema_id" in existing_columns and "user_preset_id" in existing_columns:
+                # game_schema_id 값을 user_preset_id로 복사 (NULL이 아닌 것만)
+                result = conn.execute(text(
+                    "UPDATE managed_processes SET user_preset_id = game_schema_id "
+                    "WHERE game_schema_id IS NOT NULL AND user_preset_id IS NULL"
+                ))
+                conn.commit()
+                if result.rowcount > 0:
+                    print(f"[Migration] managed_processes: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+
+            # process_sessions 테이블
+            existing_columns = [col['name'] for col in inspector.get_columns("process_sessions")]
+            if "game_schema_id" in existing_columns and "user_preset_id" in existing_columns:
+                # game_schema_id 값을 user_preset_id로 복사 (NULL이 아닌 것만)
+                result = conn.execute(text(
+                    "UPDATE process_sessions SET user_preset_id = game_schema_id "
+                    "WHERE game_schema_id IS NOT NULL AND user_preset_id IS NULL"
+                ))
+                conn.commit()
+                if result.rowcount > 0:
+                    print(f"[Migration] process_sessions: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:
         print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")

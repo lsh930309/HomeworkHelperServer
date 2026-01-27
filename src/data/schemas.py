@@ -13,8 +13,7 @@ class ProcessSchema(BaseModel):
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
     preferred_launch_type: str = "shortcut"
-    game_schema_id: Optional[str] = None
-    mvp_enabled: bool = False
+    user_preset_id: Optional[str] = None
     # HoYoLab 스태미나 필드
     stamina_tracking_enabled: bool = False
     hoyolab_game_id: Optional[str] = None
@@ -37,8 +36,7 @@ class ProcessCreateSchema(BaseModel):
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
     preferred_launch_type: str = "shortcut"
-    game_schema_id: Optional[str] = None
-    mvp_enabled: bool = False
+    user_preset_id: Optional[str] = None
     # HoYoLab 스태미나 필드
     stamina_tracking_enabled: bool = False
     hoyolab_game_id: Optional[str] = None
@@ -85,7 +83,7 @@ class ProcessSessionCreate(BaseModel):
     process_id: str
     process_name: str
     start_timestamp: float
-    game_schema_id: Optional[str] = None  # 게임 스키마 ID
+    user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
 
 
 class ProcessSessionUpdate(BaseModel):
@@ -103,7 +101,7 @@ class ProcessSessionSchema(BaseModel):
     start_timestamp: float
     end_timestamp: Optional[float] = None
     session_duration: Optional[float] = None
-    game_schema_id: Optional[str] = None  # 게임 스키마 ID
+    user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
     stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
 
     class Config:

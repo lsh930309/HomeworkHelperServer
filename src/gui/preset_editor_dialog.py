@@ -106,9 +106,7 @@ class PresetEditorDialog(QDialog):
         self.hoyolab_game_combo.addItem("선택 안 함", None)
         self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
         self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
-        
-        self.mvp_enabled_check = QCheckBox("MVP 기능 사용 (YOLO 학습 필요)")
-        
+
         self.form_layout.addRow("ID (고유 식별자):", self.id_edit)
         self.form_layout.addRow("표시 이름:", self.name_edit)
         self.form_layout.addRow("실행 파일 (EXE):", self.exe_patterns_edit)
@@ -118,8 +116,7 @@ class PresetEditorDialog(QDialog):
         self.form_layout.addRow("실행 방식 선호:", self.launch_type_combo)
         self.form_layout.addRow("", self.is_hoyoverse_check)
         self.form_layout.addRow("HoYoLab 게임 ID:", self.hoyolab_game_combo)
-        self.form_layout.addRow("", self.mvp_enabled_check)
-        
+
         right_layout.addWidget(self.form_group)
         
         # 저장 버튼
@@ -176,10 +173,9 @@ class PresetEditorDialog(QDialog):
         self.mandatory_times_edit.clear()
         self.launch_type_combo.setCurrentIndex(0)
         self.hoyolab_game_combo.setCurrentIndex(0)
-        
+
         self.is_hoyoverse_check.setChecked(False)
-        self.mvp_enabled_check.setChecked(False)
-        
+
         self.save_btn.setText("신규 프리셋 등록")
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
@@ -228,11 +224,10 @@ class PresetEditorDialog(QDialog):
         else:
             self.launch_type_combo.setCurrentIndex(0)
         
-        # HoYoVerse & MVP
+        # HoYoVerse
         is_hoyo = preset.get("is_hoyoverse", False)
         self.is_hoyoverse_check.setChecked(is_hoyo)
-        self.mvp_enabled_check.setChecked(preset.get("mvp_enabled", False))
-        
+
         # [NEW] HoYoLab ID
         hoyolab_id = preset.get("hoyolab_game_id")
         if hoyolab_id:
@@ -255,8 +250,7 @@ class PresetEditorDialog(QDialog):
         self.launch_type_combo.setEnabled(True)
         self.is_hoyoverse_check.setEnabled(True)
         self.hoyolab_game_combo.setEnabled(is_hoyo) # Checkbox state syncs this, but ensure consistency
-        self.mvp_enabled_check.setEnabled(True)
-        
+
         self.save_btn.setText("변경사항 저장")
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
@@ -301,7 +295,6 @@ class PresetEditorDialog(QDialog):
             "display_name": display_name,
             "exe_patterns": exe_patterns,
             "is_hoyoverse": self.is_hoyoverse_check.isChecked(),
-            "mvp_enabled": self.mvp_enabled_check.isChecked(),
             "preferred_launch_type": self.launch_type_combo.currentData(),
             "mandatory_times": mandatory_times
         }

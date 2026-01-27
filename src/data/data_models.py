@@ -18,9 +18,8 @@ class ManagedProcess:
                  original_launch_path: Optional[str] = None, # 원본 실행 경로 보존
                  # 실행 방식 선택: "auto" (기본), "shortcut" (바로가기 우선), "direct" (직접 실행 우선)
                  preferred_launch_type: str = "shortcut",
-                 # MVP 연동 필드
-                 game_schema_id: Optional[str] = None,  # 게임 스키마 ID (예: "zenless_zone_zero")
-                 mvp_enabled: bool = False,             # MVP 기능 활성화 여부
+                 # 사용자 설정 프리셋 ID
+                 user_preset_id: Optional[str] = None,  # 사용자 설정 프리셋 ID (예: "zenless_zone_zero")
                  # HoYoLab 스태미나 연동 필드
                  stamina_tracking_enabled: bool = False, # 스태미나 자동 추적 활성화
                  hoyolab_game_id: Optional[str] = None,  # 추적할 호요버스 게임 ID
@@ -44,9 +43,8 @@ class ManagedProcess:
         # 실행 방식 선택 (auto, shortcut, direct)
         self.preferred_launch_type = preferred_launch_type
 
-        # MVP 연동 필드 초기화
-        self.game_schema_id = game_schema_id
-        self.mvp_enabled = mvp_enabled
+        # 사용자 설정 프리셋 ID
+        self.user_preset_id = user_preset_id
 
         # HoYoLab 스태미나 연동 필드 초기화
         self.stamina_tracking_enabled = stamina_tracking_enabled
@@ -56,7 +54,7 @@ class ManagedProcess:
         self.stamina_updated_at = stamina_updated_at
 
     def __repr__(self):
-        return f"<ManagedProcess(id='{self.id}', name='{self.name}', schema='{self.game_schema_id}')>"
+        return f"<ManagedProcess(id='{self.id}', name='{self.name}', preset='{self.user_preset_id}')>"
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -71,11 +69,9 @@ class ManagedProcess:
         # 실행 방식 선택 하위 호환성
         if 'preferred_launch_type' not in data:
             data['preferred_launch_type'] = 'shortcut'
-        # MVP 연동 필드 하위 호환성
-        if 'game_schema_id' not in data:
-            data['game_schema_id'] = None
-        if 'mvp_enabled' not in data:
-            data['mvp_enabled'] = False
+        # 사용자 프리셋 ID 하위 호환성 (game_schema_id → user_preset_id 마이그레이션)
+        if 'user_preset_id' not in data:
+            data['user_preset_id'] = data.get('game_schema_id')  # 기존 game_schema_id 값 복사
         # 스태미나 필드 하위 호환성
         if 'stamina_tracking_enabled' not in data:
             data['stamina_tracking_enabled'] = False

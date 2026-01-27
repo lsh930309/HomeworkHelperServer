@@ -344,7 +344,7 @@ class Scheduler:
                     continue
                 
                 # 게임별 스태미나 이름
-                stamina_name = "개척력" if process.game_schema_id == "honkai_starrail" else "배터리"
+                stamina_name = "개척력" if process.hoyolab_game_id == "honkai_starrail" else "배터리"
                 remaining = max_stamina - predicted
 
 

@@ -778,8 +778,7 @@ class MainWindow(QMainWindow):
                                        last_played_timestamp=p_edit.last_played_timestamp,  # 마지막 플레이 시간은 유지
                                        original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]),  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
-                                       game_schema_id=data.get("game_schema_id"),  # MVP 필드
-                                       mvp_enabled=data.get("mvp_enabled", False),  # MVP 필드
+                                       user_preset_id=data.get("user_preset_id"),  # 사용자 프리셋 ID
                                        stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
                                        hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID
                                        stamina_current=getattr(p_edit, 'stamina_current', None),  # 기존 스태미나 정보 유지
@@ -951,8 +950,7 @@ class MainWindow(QMainWindow):
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
                                        original_launch_path=data["launch_path"],  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
-                                       game_schema_id=data.get("game_schema_id"),  # MVP 필드
-                                       mvp_enabled=data.get("mvp_enabled", False),  # MVP 필드
+                                       user_preset_id=data.get("user_preset_id"),  # 사용자 프리셋 ID
                                        stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
                                        hoyolab_game_id=data.get("hoyolab_game_id"))  # 호요랩 게임 ID
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
@@ -1555,13 +1553,13 @@ class MainWindow(QMainWindow):
 
         return container
     
-    def _get_stamina_icon_path(self, game_schema_id: str) -> Optional[str]:
+    def _get_stamina_icon_path(self, hoyolab_game_id: str) -> Optional[str]:
         """게임 ID에 해당하는 스태미나 아이콘 경로 반환"""
         icon_map = {
             "honkai_starrail": "img/stamina_starrail.png",
             "zenless_zone_zero": "img/stamina_zzz.png",
         }
-        relative_path = icon_map.get(game_schema_id)
+        relative_path = icon_map.get(hoyolab_game_id)
         if relative_path:
             # 실행 파일 기준 경로로 변환
             return get_bundle_resource_path(relative_path)

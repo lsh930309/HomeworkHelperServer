@@ -19,19 +19,6 @@ from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 
-# MVP 스키마 연동 (선택적 import)
-try:
-    from src.schema import get_available_games, detect_game_from_path, check_schema_exists
-    SCHEMA_SUPPORT = True
-except ImportError:
-    SCHEMA_SUPPORT = False
-    def get_available_games():
-        return []
-    def detect_game_from_path(path):
-        return None
-    def check_schema_exists(game_id):
-        return False
-
 class NumericTableWidgetItem(QTableWidgetItem):
     """ QTableWidgetItem that allows numeric sorting. """
     def __lt__(self, other: QTableWidgetItem) -> bool:
@@ -185,8 +172,8 @@ class ProcessDialog(QDialog):
         # 실행 방식 선택 섹션
         self._setup_launch_type_section()
 
-        # MVP 스키마 연동 섹션
-        self._setup_mvp_section()
+        # 스태미나 추적 섹션 (호요버스 게임 전용)
+        self._setup_stamina_section()
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.form_layout.addRow(self.button_box)
@@ -198,7 +185,6 @@ class ProcessDialog(QDialog):
         self.launch_path_button.clicked.connect(
             lambda: self.browse_file(self.launch_path_edit)
         )
-        self.monitoring_path_edit.textChanged.connect(self._on_monitoring_path_changed)
         self.button_box.accepted.connect(self.accept_data)
         self.button_box.rejected.connect(self.reject)
         
@@ -420,31 +406,17 @@ class ProcessDialog(QDialog):
             idx = self.launch_type_combo.findData(l_type)
             if idx >= 0:
                 self.launch_type_combo.setCurrentIndex(idx)
-            
-        # 게임 스키마 (MVP)
-        game_id = preset.get("id")
-        if game_id and hasattr(self, 'game_schema_combo'):
-            # ID가 콤보박스에 있는지 확인 후 선택
-            index = self.game_schema_combo.findData(game_id)
-            if index >= 0:
-                self.game_schema_combo.setCurrentIndex(index)
-        
+
         # 호요버스 게임 설정
         if preset.get("is_hoyoverse", False):
             if hasattr(self, 'stamina_tracking_checkbox'):
                 self.stamina_tracking_checkbox.setChecked(True)
-                
-            # 호요랩 게임 자동 선택 (ID 매칭 시도 OR preset explicit ID)
+
+            # 호요랩 게임 자동 선택
             if hasattr(self, 'hoyolab_game_combo'):
-                # First try explicit ID
                 hid = preset.get("hoyolab_game_id")
                 if hid:
-                     index = self.hoyolab_game_combo.findData(hid)
-                     if index >= 0:
-                         self.hoyolab_game_combo.setCurrentIndex(index)
-                else:
-                    # Fallback to game_id match
-                    index = self.hoyolab_game_combo.findData(game_id)
+                    index = self.hoyolab_game_combo.findData(hid)
                     if index >= 0:
                         self.hoyolab_game_combo.setCurrentIndex(index)
 
@@ -512,83 +484,6 @@ class ProcessDialog(QDialog):
         is_different = bool(launch and monitoring != launch)
         self.launch_type_combo.setEnabled(is_different)
         
-    def _setup_mvp_section(self):
-        """MVP 스키마 연동 섹션 설정"""
-        self.mvp_group_box = QGroupBox("게임 스키마 연동 (MVP)")
-        mvp_layout = QVBoxLayout()
-
-        # 게임 선택 드롭다운
-        game_select_layout = QHBoxLayout()
-        game_select_layout.addWidget(QLabel("게임:"))
-        self.game_schema_combo = QComboBox()
-        self.game_schema_combo.addItem("없음 (기본 모드)", None)
-
-        # registry.json에서 게임 목록 로드
-        if SCHEMA_SUPPORT:
-            available_games = get_available_games()
-            for game in available_games:
-                game_id = game.get("game_id", "")
-                game_name_kr = game.get("game_name_kr", game_id)
-                self.game_schema_combo.addItem(f"{game_name_kr}", game_id)
-
-        game_select_layout.addWidget(self.game_schema_combo)
-        game_select_layout.addStretch()
-        mvp_layout.addLayout(game_select_layout)
-
-        # MVP 활성화 체크박스
-        self.mvp_enabled_checkbox = QCheckBox("MVP 기능 활성화 (YOLO + OCR)")
-        self.mvp_enabled_checkbox.setEnabled(False)  # Week 6 이후 활성화
-        self.mvp_enabled_checkbox.setToolTip("YOLO 모델 학습 완료 후 활성화됩니다 (Week 6 이후)")
-        mvp_layout.addWidget(self.mvp_enabled_checkbox)
-
-        # 스키마 편집 버튼
-        self.edit_schema_button = QPushButton("스키마 편집...")
-        self.edit_schema_button.setEnabled(False)  # 게임 선택 시 활성화
-        self.edit_schema_button.clicked.connect(self._open_schema_editor)
-        mvp_layout.addWidget(self.edit_schema_button)
-
-        self.mvp_group_box.setLayout(mvp_layout)
-        self.form_layout.addRow(self.mvp_group_box)
-
-        # 게임 선택 변경 시 이벤트
-        self.game_schema_combo.currentIndexChanged.connect(self._on_game_schema_changed)
-
-        # 스태미나 추적 섹션 (호요버스 게임 전용)
-        self._setup_stamina_section()
-
-    def _on_game_schema_changed(self, index: int):
-        """게임 선택 변경 시"""
-        game_id = self.game_schema_combo.currentData()
-        self.edit_schema_button.setEnabled(game_id is not None)
-
-        if game_id and SCHEMA_SUPPORT:
-            if not check_schema_exists(game_id):
-                QMessageBox.warning(
-                    self,
-                    "경고",
-                    f"게임 '{game_id}'의 스키마 파일을 찾을 수 없습니다."
-                )
-
-        # 스태미나 섹션 활성화/비활성화 (호요버스 게임만)
-        self._update_stamina_section_enabled()
-
-    def _on_monitoring_path_changed(self, path: str):
-        """모니터링 경로 변경 시 자동 게임 감지"""
-        if not SCHEMA_SUPPORT or not path:
-            return
-
-        # 이미 게임이 선택되어 있으면 자동 감지 안 함
-        current_game_id = self.game_schema_combo.currentData()
-        if current_game_id is not None:
-            return
-
-        detected_game_id = detect_game_from_path(path)
-        if detected_game_id:
-            # 콤보박스에서 해당 게임 찾아 선택
-            for i in range(self.game_schema_combo.count()):
-                if self.game_schema_combo.itemData(i) == detected_game_id:
-                    self.game_schema_combo.setCurrentIndex(i)
-                    break
 
     def _setup_stamina_section(self):
         """스태미나 추적 섹션 설정 (호요버스 게임 전용)"""
@@ -625,23 +520,10 @@ class ProcessDialog(QDialog):
         # 초기 상태: 활성화 (자유롭게 사용 가능)
         self.stamina_group_box.setEnabled(True)
 
-        # 게임 스키마 콤보박스와 연동
-        self.game_schema_combo.currentIndexChanged.connect(self._sync_hoyolab_game_combo)
-
     def _update_stamina_section_enabled(self):
         """스태미나 섹션 활성화 상태 업데이트 (항상 활성화)"""
         # 모든 게임에 대해 자유롭게 사용 가능하도록 항상 활성화
         self.stamina_group_box.setEnabled(True)
-
-    def _sync_hoyolab_game_combo(self):
-        """게임 스키마 콤보박스와 호요랩 게임 콤보박스 동기화"""
-        game_id = self.game_schema_combo.currentData()
-
-        # 게임 스키마가 호요버스 게임이면 자동으로 선택
-        if game_id == "honkai_starrail":
-            self.hoyolab_game_combo.setCurrentIndex(0)  # 붕괴: 스타레일
-        elif game_id == "zenless_zone_zero":
-            self.hoyolab_game_combo.setCurrentIndex(1)  # 젠레스 존 제로
 
     def _test_stamina_connection(self):
         """스태미나 조회 테스트"""
@@ -778,24 +660,6 @@ class ProcessDialog(QDialog):
                 f"스태미나 테스트 중 오류가 발생했습니다:\n{str(e)}"
             )
 
-    def _open_schema_editor(self):
-        """스키마 편집 다이얼로그 열기"""
-        game_id = self.game_schema_combo.currentData()
-        if not game_id:
-            return
-
-        try:
-            from src.gui.schema_editor_dialog import SchemaEditorDialog
-            dialog = SchemaEditorDialog(game_id, self)
-            dialog.exec()
-        except ImportError:
-            QMessageBox.information(
-                self,
-                "준비 중",
-                "스키마 편집기가 아직 구현되지 않았습니다.\n"
-                "Week 6 이후 사용 가능합니다."
-            )
-
     def populate_fields_from_existing_process(self):
         if not self.existing_process:
             return
@@ -822,15 +686,14 @@ class ProcessDialog(QDialog):
             # 활성화 상태 업데이트
             self._update_launch_type_enabled()
 
-        # MVP 필드 로드
-        if hasattr(self.existing_process, 'game_schema_id') and self.existing_process.game_schema_id:
-            for i in range(self.game_schema_combo.count()):
-                if self.game_schema_combo.itemData(i) == self.existing_process.game_schema_id:
-                    self.game_schema_combo.setCurrentIndex(i)
+        # 프리셋 자동 선택
+        if hasattr(self.existing_process, 'user_preset_id') and self.existing_process.user_preset_id:
+            for i in range(self.preset_combo.count()):
+                preset_data = self.preset_combo.itemData(i)
+                if preset_data and preset_data.get("id") == self.existing_process.user_preset_id:
+                    self.preset_combo.setCurrentIndex(i)
+                    logger.debug(f"프리셋 자동 선택: {self.existing_process.user_preset_id}")
                     break
-
-        if hasattr(self.existing_process, 'mvp_enabled'):
-            self.mvp_enabled_checkbox.setChecked(self.existing_process.mvp_enabled)
 
         # 스태미나 추적 필드 로드
         if hasattr(self.existing_process, 'stamina_tracking_enabled'):
@@ -980,9 +843,9 @@ class ProcessDialog(QDialog):
         # 실행 방식 선택
         preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
 
-        # MVP 스키마 연동 필드
-        game_schema_id = self.game_schema_combo.currentData()
-        mvp_enabled = self.mvp_enabled_checkbox.isChecked()
+        # 프리셋 ID 추출
+        preset_data = self.preset_combo.currentData()
+        user_preset_id = preset_data.get("id") if preset_data else None
 
         # 스태미나 추적 필드
         stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked()
@@ -997,8 +860,7 @@ class ProcessDialog(QDialog):
             "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
             "preferred_launch_type": preferred_launch_type,
-            "game_schema_id": game_schema_id,
-            "mvp_enabled": mvp_enabled,
+            "user_preset_id": user_preset_id,
             "stamina_tracking_enabled": stamina_tracking_enabled,
             "hoyolab_game_id": hoyolab_game_id,
         }

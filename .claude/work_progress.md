@@ -10,7 +10,7 @@
 - [x] Task #3: 불필요한 디버깅 코드 정리 및 로깅 표준화 ✅
 
 ### Medium Priority (계획 후 작업)
-- [ ] Task #4: game_schema_id 저장 문제 조사 및 필요성 검토
+- [x] Task #4: game_schema_id 저장 문제 조사 및 필요성 검토 ✅
 - [x] Task #5: UI 갱신 멈춤 현상 재현 및 수정 ✅
 - [ ] Task #6: 창 위치 기억 및 마그넷 기능 구현
 
@@ -59,7 +59,25 @@
   - **타이머 성능 모니터링**:
     * 모든 타이머 콜백에 실행 시간 로깅 추가 (100ms 초과 시 경고)
     * monitor_timer, scheduler_timer, progress_bar_refresh_timer, status_column_refresh_timer
-- **다음 단계**: Task #4 (game_schema_id 조사)
+- **16:30**: Task #4 완료 - game_schema_id → user_preset_id 재정의 및 MVP 완전 제거
+  - 조사 완료: game_schema_id는 사용자 프리셋 관리용, MVP는 미구현
+  - **완료된 작업**:
+    * DB 모델 변경: game_schema_id → user_preset_id, mvp_enabled 제거
+    * DB 마이그레이션: 자동 컬럼 추가 + 데이터 복사 (game_schema_id → user_preset_id)
+    * data_models.py: ManagedProcess 파라미터/속성 변경
+    * schemas.py: ProcessSchema, ProcessSessionCreate/Schema 변경
+    * scheduler.py: game_schema_id → hoyolab_game_id 사용
+    * main_window.py: _get_stamina_icon_path 파라미터 변경, ManagedProcess 생성 시 user_preset_id 사용
+    * dialogs.py: MVP UI 섹션 완전 제거 + 프리셋 자동 선택 구현
+      - MVP import 제거 (SCHEMA_SUPPORT 등)
+      - 6개 MVP 메서드 삭제 (_setup_mvp_section, _on_game_schema_changed, _on_monitoring_path_changed, _open_schema_editor, _sync_hoyolab_game_combo, _update_stamina_section_enabled)
+      - populate_fields_from_existing_process()에 user_preset_id로 프리셋 자동 선택 기능 추가
+      - get_data()에서 user_preset_id 사용
+    * preset_editor_dialog.py: MVP 체크박스 및 관련 로직 제거
+  - **주요 개선사항**:
+    * 프로세스 편집 시 기존 프리셋이 자동으로 선택됨
+    * 코드 간소화 (약 100줄 제거)
+    * user_preset_id로 일관성 있는 네이밍
 
 ---
 
