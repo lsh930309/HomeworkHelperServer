@@ -12,7 +12,7 @@
 ### Medium Priority (계획 후 작업)
 - [x] Task #4: game_schema_id 저장 문제 조사 및 필요성 검토 ✅
 - [x] Task #5: UI 갱신 멈춤 현상 재현 및 수정 ✅
-- [ ] Task #6: 창 위치 기억 및 마그넷 기능 구현
+- [x] Task #6: 창 위치 기억 및 마그넷 기능 구현 ✅
 
 ### Low Priority (대규모 작업)
 - [ ] Task #7: main_window.py 리팩토링 (기능별 모듈 분리)
@@ -90,6 +90,22 @@
     * SQLite 로컬 DB (127.0.0.1:8000)
     * multiprocessing으로 GUI와 독립 실행
   - **결과**: 약 360줄의 미사용 코드 제거, 프로젝트 구조 단순화
+- **17:30**: 소규모 이슈 수정 - 스태미나 추적 설정 UI 개선
+  - 호요랩 게임 콤보박스에 '(없음)' 옵션 추가
+  - 체크박스 해제 시 콤보박스 자동 잠금 및 '(없음)' 선택
+  - hoyolab_game_id가 None이면 stamina_tracking_enabled 자동 False 처리
+- **18:00**: Task #6 완료 - 창 위치 기억 및 마그넷 스냅 기능 구현
+  - **창 위치 영구 저장**:
+    * QSettings 사용 (display_settings.ini)
+    * window_geometry와 window_position 저장
+    * 앱 시작 시 자동 복원 (_restore_window_geometry)
+    * 앱 종료 시 자동 저장 (closeEvent, initiate_quit_sequence)
+  - **마그넷 스냅 기능**:
+    * moveEvent() 오버라이드 구현
+    * 화면 가장자리 15px 이내 접근 시 자동 정렬
+    * 멀티 모니터 환경 지원 (QApplication.screenAt)
+    * 좌/우/상/하 모든 가장자리 지원
+  - **Import 추가**: QSettings, QPoint, QRect, QScreen
 
 ---
 
