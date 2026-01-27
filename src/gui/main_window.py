@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread
-from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect
+from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
 from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog
@@ -121,6 +121,13 @@ class MainWindow(QMainWindow):
         self.setMinimumWidth(470)
         self.setFixedWidth(470)  # 고정 너비 설정
         self.setGeometry(100, 100, 470, 300) # 창 초기 위치 및 크기 설정
+
+        # QSettings 초기화 (창 위치/크기 저장용)
+        self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
+                                    "HomeworkHelper", "display_settings")
+
+        # 저장된 창 위치 복원
+        self._restore_window_geometry()
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
@@ -1216,8 +1223,87 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "삭제 실패", "웹 바로 가기 삭제에 실패했습니다.")
 
+    def _save_window_geometry(self):
+        """현재 창 위치와 크기를 QSettings에 저장합니다."""
+        try:
+            self._settings.setValue("window_geometry", self.saveGeometry())
+            self._settings.setValue("window_position", self.pos())
+            self._settings.sync()
+            logger.debug(f"창 위치 저장: {self.pos()}, 크기: {self.size()}")
+        except Exception as e:
+            logger.error(f"창 위치 저장 실패: {e}", exc_info=True)
+
+    def _restore_window_geometry(self):
+        """저장된 창 위치와 크기를 복원합니다."""
+        try:
+            # 저장된 geometry가 있으면 복원
+            geometry = self._settings.value("window_geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
+                logger.debug("저장된 창 geometry 복원 완료")
+                return
+
+            # geometry가 없으면 position만 복원
+            position = self._settings.value("window_position")
+            if position:
+                self.move(position)
+                logger.debug(f"저장된 창 위치 복원: {position}")
+        except Exception as e:
+            logger.error(f"창 위치 복원 실패: {e}", exc_info=True)
+
+    def moveEvent(self, event):
+        """창 이동 이벤트 - 마그넷 스냅 기능 구현"""
+        super().moveEvent(event)
+
+        # 마그넷 스냅 활성화 (화면 가장자리에 자동 정렬)
+        try:
+            # 현재 창 위치와 크기
+            window_rect = self.frameGeometry()
+            window_pos = window_rect.topLeft()
+
+            # 현재 창이 있는 스크린 찾기
+            screen = QApplication.screenAt(window_pos)
+            if not screen:
+                screen = QApplication.primaryScreen()
+
+            if screen:
+                # 사용 가능한 화면 영역 (작업 표시줄 제외)
+                available_geometry = screen.availableGeometry()
+
+                # 마그넷 감도 (픽셀 단위)
+                snap_threshold = 15
+
+                new_x = window_pos.x()
+                new_y = window_pos.y()
+
+                # 왼쪽 가장자리 스냅
+                if abs(window_rect.left() - available_geometry.left()) < snap_threshold:
+                    new_x = available_geometry.left()
+
+                # 오른쪽 가장자리 스냅
+                if abs(window_rect.right() - available_geometry.right()) < snap_threshold:
+                    new_x = available_geometry.right() - window_rect.width()
+
+                # 위쪽 가장자리 스냅
+                if abs(window_rect.top() - available_geometry.top()) < snap_threshold:
+                    new_y = available_geometry.top()
+
+                # 아래쪽 가장자리 스냅 (덜 자주 사용되므로 선택적)
+                if abs(window_rect.bottom() - available_geometry.bottom()) < snap_threshold:
+                    new_y = available_geometry.bottom() - window_rect.height()
+
+                # 위치가 변경되었으면 이동
+                if new_x != window_pos.x() or new_y != window_pos.y():
+                    self.move(new_x, new_y)
+
+        except Exception as e:
+            logger.error(f"마그넷 스냅 처리 중 오류: {e}", exc_info=True)
+
     def closeEvent(self, event: QEvent):
         """창 닫기 이벤트를 처리합니다. 트레이 관리자가 있으면 트레이로 숨깁니다."""
+        # 창 위치 저장 (트레이로 숨기기 전에 저장)
+        self._save_window_geometry()
+
         if hasattr(self, 'tray_manager') and self.tray_manager:
             self.tray_manager.handle_window_close_event(event) # 트레이 관리자에게 이벤트 처리 위임
         else: # 트레이 관리자 없으면 기본 동작 (숨기기)
@@ -1226,6 +1312,9 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
+
+        # 0. 창 위치 저장 (앱 종료 시)
+        self._save_window_geometry()
 
         # 1. 활성화된 타이머들 중지
         if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
