@@ -559,6 +559,24 @@ def run_server_main():
             raise HTTPException(status_code=404, detail="활성 세션이 없습니다.")
         return session
 
+    @app.get("/sessions/process/{process_id}/last", response_model=schemas.ProcessSessionSchema)
+    def get_last_session(process_id: str, db: Session = Depends(get_db)):
+        """특정 프로세스의 가장 최근 완료된 세션 조회"""
+        session = crud.get_last_session(db=db, process_id=process_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="완료된 세션이 없습니다.")
+        return session
+
+    @app.patch("/sessions/{session_id}/stamina", response_model=schemas.ProcessSessionSchema)
+    def update_session_stamina(session_id: int, stamina_at_end: int, db: Session = Depends(get_db)):
+        """세션의 종료 스태미나 값을 업데이트"""
+        success = crud.update_session_stamina(db=db, session_id=session_id, stamina_at_end=stamina_at_end)
+        if not success:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+        # 업데이트된 세션 반환
+        session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+        return session
+
     @app.get("/sessions", response_model=List[schemas.ProcessSessionSchema])
     def get_all_sessions_list(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
         """모든 세션 조회"""

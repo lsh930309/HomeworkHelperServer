@@ -242,13 +242,17 @@ class ProcessSession:
                  process_name: str = "",
                  start_timestamp: float = 0.0,
                  end_timestamp: Optional[float] = None,
-                 session_duration: Optional[float] = None):
+                 session_duration: Optional[float] = None,
+                 user_preset_id: Optional[str] = None,
+                 stamina_at_end: Optional[int] = None):
         self.id = id
         self.process_id = process_id
         self.process_name = process_name
         self.start_timestamp = start_timestamp
         self.end_timestamp = end_timestamp
         self.session_duration = session_duration
+        self.user_preset_id = user_preset_id
+        self.stamina_at_end = stamina_at_end
 
     def __repr__(self):
         return (f"ProcessSession(id={self.id}, process_name='{self.process_name}', "
@@ -263,6 +267,8 @@ class ProcessSession:
             "start_timestamp": self.start_timestamp,
             "end_timestamp": self.end_timestamp,
             "session_duration": self.session_duration,
+            "user_preset_id": self.user_preset_id,
+            "stamina_at_end": self.stamina_at_end,
         }
 
     @classmethod
@@ -275,4 +281,6 @@ class ProcessSession:
             start_timestamp=data.get("start_timestamp", 0.0),
             end_timestamp=data.get("end_timestamp"),
             session_duration=data.get("session_duration"),
+            user_preset_id=data.get("user_preset_id"),
+            stamina_at_end=data.get("stamina_at_end"),
         )

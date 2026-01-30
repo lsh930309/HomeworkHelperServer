@@ -187,11 +187,27 @@ class ProcessMonitor:
         API에서 조회한 실제 스태미나와 로컬 예상값을 비교하여
         차이가 있을 경우 이전 세션의 종료 스태미나를 보정합니다.
         """
+        _debug_log(f"[보정 시작] '{process.name}' (process_id={process.id}) - game_id={process.hoyolab_game_id}")
+
+        # 먼저 직전 세션 정보 조회 (디버깅용)
+        last_session = self.data_manager.get_last_session(process.id)
+        _debug_log(f"[보정 직전세션] '{process.name}' - "
+                   f"last_session_id={last_session.id if last_session else None}, "
+                   f"db_stamina_at_end={last_session.stamina_at_end if last_session else None}, "
+                   f"process.stamina_current={process.stamina_current}, "
+                   f"process.stamina_updated_at={process.stamina_updated_at}")
+
         service = self._get_hoyolab_service()
         if not service:
+            _debug_log(f"[보정 실패] '{process.name}' - HoYoLab 서비스 로드 실패")
             return
 
-        if not service.is_available() or not service.is_configured():
+        if not service.is_available():
+            _debug_log(f"[보정 스킵] '{process.name}' - genshin.py 라이브러리 없음")
+            return
+
+        if not service.is_configured():
+            _debug_log(f"[보정 스킵] '{process.name}' - 인증 정보 없음")
             return
 
         try:
@@ -199,9 +215,11 @@ class ProcessMonitor:
             logger.info(f"[HoYoLab] '{process.name}' 스태미나 보정 체크 중...")
             stamina = service.get_stamina(process.hoyolab_game_id)
             if not stamina:
+                _debug_log(f"[보정 실패] '{process.name}' - API 스태미나 조회 결과 없음")
                 return
 
             actual_current = stamina.current
+            _debug_log(f"[보정 API] '{process.name}' - 현재 스태미나: {actual_current}/{stamina.max}")
 
             # 2. 이전 기록이 없으면 현재 값으로 초기화만 수행
             if process.stamina_current is None or process.stamina_updated_at is None:
@@ -210,6 +228,7 @@ class ProcessMonitor:
                 process.stamina_updated_at = time.time()
                 self.data_manager.update_process(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
+                _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
                 return
 
             # 3. 로컬 예상값 계산 (마지막 기록 + 시간 기반 회복량)
@@ -219,14 +238,21 @@ class ProcessMonitor:
             expected_recovery = int(elapsed_seconds / recovery_rate)
             expected_current = min(process.stamina_current + expected_recovery, stamina.max)
 
+            _debug_log(f"[보정 계산] '{process.name}' - 이전값={process.stamina_current}, "
+                       f"경과={elapsed_seconds:.0f}초, 회복량={expected_recovery}, 예상={expected_current}, 실제={actual_current}")
+
             # 4. 차이 계산 및 보정
             difference = actual_current - expected_current
+            _debug_log(f"[보정 차이] '{process.name}' - diff={difference} (임계값=1)")
 
             if abs(difference) > 1:  # 유의미한 차이가 있는 경우 (1 이하는 오차 범위)
                 # 이전 세션의 종료 스태미나 보정
                 # 차이가 음수면: 실제로 더 많이 소모했음 → 이전 종료값을 낮춰야 함
                 # 차이가 양수면: 예상보다 덜 소모했음 → 이전 종료값을 높여야 함
                 last_session = self.data_manager.get_last_session(process.id)
+                _debug_log(f"[보정 세션] '{process.name}' - last_session_id={last_session.id if last_session else None}, "
+                           f"stamina_at_end={last_session.stamina_at_end if last_session else None}")
+
                 if last_session and last_session.stamina_at_end is not None:
                     corrected_stamina = last_session.stamina_at_end + difference
                     corrected_stamina = max(0, min(corrected_stamina, stamina.max))
@@ -238,12 +264,20 @@ class ProcessMonitor:
                     logger.info(f"[HoYoLab] '{process.name}' 스태미나 보정: "
                           f"예상 {expected_current} → 실제 {actual_current} "
                           f"(이전 세션 종료값 {last_session.stamina_at_end} → {corrected_stamina})")
+                    _debug_log(f"[보정 완료] '{process.name}' - 세션 {last_session.id}: "
+                               f"{last_session.stamina_at_end} → {corrected_stamina}")
+                else:
+                    _debug_log(f"[보정 스킵] '{process.name}' - 이전 세션 없음 또는 stamina_at_end=None")
+            else:
+                _debug_log(f"[보정 불필요] '{process.name}' - 차이 임계값 이하 (|{difference}| <= 1)")
 
             # 5. 현재 스태미나 정보 업데이트
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
             process.stamina_updated_at = time.time()
             self.data_manager.update_process(process)
+            _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 
         except Exception as e:
             logger.error(f"[HoYoLab] '{process.name}' 스태미나 보정 실패: {e}")
+            _debug_log(f"[보정 예외] '{process.name}' - {type(e).__name__}: {e}")
