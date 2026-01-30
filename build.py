@@ -17,6 +17,7 @@ import zipfile
 import re
 from pathlib import Path
 from datetime import datetime
+from tqdm import tqdm
 
 # Windows에서만 작동하는 키보드 입력 라이브러리
 if sys.platform == 'win32':
@@ -207,32 +208,36 @@ def archive_old_files(new_version):
     # 현재 날짜 폴더 (yy-mm-dd)
     date_folder = datetime.now().strftime("%y-%m-%d")
 
-    archived_count = 0
-
-    # Installer와 Portable 파일 각각 처리
+    # 아카이빙할 파일 목록 수집
+    files_to_archive = []
     for file_path in RELEASE_DIR.glob("HomeworkHelper_v*"):
-        if file_path.is_file():
-            # 파일 타입 확인
-            if file_path.suffix == '.exe':
-                archive_subdir = ARCHIVES_DIR / "installer" / date_folder
-            elif file_path.suffix == '.zip':
-                archive_subdir = ARCHIVES_DIR / "portable" / date_folder
-            else:
-                continue
+        if file_path.is_file() and file_path.suffix in ['.exe', '.zip']:
+            files_to_archive.append(file_path)
 
-            # 아카이브 폴더 생성
-            archive_subdir.mkdir(parents=True, exist_ok=True)
-
-            # 파일 이동
-            dest = archive_subdir / file_path.name
-            shutil.move(str(file_path), str(dest))
-            print(f"[OK] 아카이빙: {file_path.name} → {archive_subdir.relative_to(RELEASE_DIR)}/")
-            archived_count += 1
-
-    if archived_count == 0:
+    if not files_to_archive:
         print("  (아카이빙할 파일 없음)")
-    else:
-        print(f"\n총 {archived_count}개 파일 아카이빙 완료")
+        return
+
+    # 진행률 표시하며 아카이빙
+    archived_count = 0
+    for file_path in tqdm(files_to_archive, desc="아카이빙", unit="파일"):
+        # 파일 타입 확인
+        if file_path.suffix == '.exe':
+            archive_subdir = ARCHIVES_DIR / "installer" / date_folder
+        elif file_path.suffix == '.zip':
+            archive_subdir = ARCHIVES_DIR / "portable" / date_folder
+        else:
+            continue
+
+        # 아카이브 폴더 생성
+        archive_subdir.mkdir(parents=True, exist_ok=True)
+
+        # 파일 이동
+        dest = archive_subdir / file_path.name
+        shutil.move(str(file_path), str(dest))
+        archived_count += 1
+
+    print(f"\n총 {archived_count}개 파일 아카이빙 완료")
 
 
 def clean_build_artifacts():
@@ -286,7 +291,29 @@ def build_with_pyinstaller():
     print(f"빌드 명령: {' '.join(cmd)}\n")
 
     try:
-        result = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+        # 진행률 바와 함께 실시간 출력
+        with tqdm(desc="PyInstaller 빌드", bar_format="{desc}: {elapsed}", leave=True) as pbar:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=PROJECT_ROOT,
+                bufsize=1
+            )
+
+            # 실시간 출력 읽기 (한 줄에서 계속 업데이트)
+            for line in iter(process.stdout.readline, ''):
+                if line.strip():
+                    # \r + \033[K로 줄 지우고 출력 (잔상 방지)
+                    print(f"\r\033[K  → {line.strip()}", end='', flush=True)
+
+            process.wait()
+
+            if process.returncode != 0:
+                print("\n")  # 줄바꿈
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+
         print("\n[OK] PyInstaller 빌드 성공!")
         return True
     except subprocess.CalledProcessError as e:
@@ -307,16 +334,23 @@ def create_zip_distribution(version_info):
     zip_path = RELEASE_DIR / zip_filename
 
     try:
+        # 전체 파일 목록 수집
+        print("파일 목록 수집 중...")
+        all_files = []
+        for root, dirs, files in os.walk(APP_FOLDER):
+            for file in files:
+                file_path = Path(root) / file
+                arcname = file_path.relative_to(DIST_DIR)
+                all_files.append((file_path, arcname))
+
+        # 진행률 표시하며 압축
+        print(f"총 {len(all_files)}개 파일 압축 중...")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(APP_FOLDER):
-                for file in files:
-                    file_path = Path(root) / file
-                    # ZIP 내 경로: homework_helper/...
-                    arcname = file_path.relative_to(DIST_DIR)
-                    zipf.write(file_path, arcname)
+            for file_path, arcname in tqdm(all_files, desc="압축 진행", unit="파일"):
+                zipf.write(file_path, arcname)
 
         size_mb = zip_path.stat().st_size / (1024 * 1024)
-        print(f"[OK] ZIP 생성 완료: {zip_filename}")
+        print(f"\n[OK] ZIP 생성 완료: {zip_filename}")
         print(f"  파일 크기: {size_mb:.2f} MB")
         print(f"  저장 위치: {zip_path}")
         return True
@@ -379,9 +413,29 @@ def create_installer(version_info):
     print(f"인스톨러 명령: {' '.join(cmd)}\n")
 
     try:
-        result = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT,
-                                 capture_output=True, text=True)
-        print(result.stdout)
+        # 진행률 바와 함께 실시간 출력
+        with tqdm(desc="인스톨러 생성", bar_format="{desc}: {elapsed}", leave=True) as pbar:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=PROJECT_ROOT,
+                bufsize=1
+            )
+
+            # 실시간 출력 읽기 (한 줄에서 계속 업데이트)
+            for line in iter(process.stdout.readline, ''):
+                if line.strip():
+                    # \r + \033[K로 줄 지우고 출력 (잔상 방지)
+                    print(f"\r\033[K  → {line.strip()}", end='', flush=True)
+
+            process.wait()
+
+            if process.returncode != 0:
+                print("\n")  # 줄바꿈
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+
         print("\n[OK] 인스톨러 생성 성공!")
 
         # 생성된 인스톨러 파일명 변경 (타임스탬프 추가)

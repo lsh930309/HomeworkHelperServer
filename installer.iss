@@ -2,7 +2,7 @@
 ; Inno Setup 6.x 이상 필요 (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "HomeworkHelper"
-#define MyAppVersion "1.1.3"
+#define MyAppVersion "1.1.4"
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
@@ -121,15 +121,16 @@ begin
   Result := IsProcessRunning('homework_helper.exe');
 end;
 
-// 이전 버전 확인 및 제거, 실행 중인 프로세스 종료
+// 설치 전 실행 중인 프로세스 종료
 function InitializeSetup(): Boolean;
-var
-  ResultCode: Integer;
-  UninstallString: String;
 begin
   Result := True;
 
-  // === 1. 실행 중인 HomeworkHelper 프로세스 종료 ===
+  // === 실행 중인 HomeworkHelper 프로세스 종료 ===
+  // 이전 버전을 삭제하지 않고, 실행 중인 프로세스만 종료합니다.
+  // Inno Setup은 동일한 AppId를 감지하면 자동으로 in-place 업그레이드를 수행하며,
+  // 이 방식을 사용하면 작업 표시줄에 고정된 아이콘이 유지됩니다.
+
   if IsAppRunning() then
   begin
     if MsgBox('HomeworkHelper가 현재 실행 중입니다.' + #13#10 + #13#10 +
@@ -139,10 +140,10 @@ begin
     begin
       // 프로세스 종료
       KillAllAppProcesses();
-      
+
       // 종료 확인을 위해 잠시 대기
       Sleep(1000);
-      
+
       // 아직도 실행 중인지 확인
       if IsAppRunning() then
       begin
@@ -163,18 +164,9 @@ begin
     end;
   end;
 
-  // === 2. 레지스트리에서 이전 버전 확인 및 업그레이드 ===
-  if RegQueryStringValue(HKEY_LOCAL_MACHINE,
-    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1',
-    'UninstallString', UninstallString) then
-  begin
-    // 이전 버전이 있으면 자동으로 업그레이드 (사일런트 제거 후 설치)
-    // 사용자에게 물어보지 않고 바로 업그레이드 진행 (더 매끄러운 UX)
-    Exec(RemoveQuotes(UninstallString), '/SILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    
-    // 제거 완료 대기
-    Sleep(500);
-  end;
+  // 참고: 이전 버전은 자동으로 삭제하지 않습니다.
+  // Inno Setup이 동일한 AppId를 감지하면 파일을 덮어쓰는 방식으로 자동 업그레이드됩니다.
+  // 이 방식은 작업 표시줄 고정 아이콘을 유지하는 가장 안정적인 방법입니다.
 end;
 
 // 설치 전 준비 단계에서 추가 확인 (PrepareToInstall)
