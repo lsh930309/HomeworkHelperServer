@@ -11,11 +11,9 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('font', 'font'),
-        ('img', 'img'),
+        ('assets', 'assets'),
         ('src', 'src'),
         ('tools', 'tools'),
-        ('schemas', 'schemas'),
     ],
     hiddenimports=[
         # FastAPI/Backend
@@ -67,7 +65,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['img/app_icon.ico'],
+    icon=['assets/icons/app/app_icon.ico'],
 )
 
 coll = COLLECT(

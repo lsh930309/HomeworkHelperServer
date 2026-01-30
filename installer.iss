@@ -2,7 +2,7 @@
 ; Inno Setup 6.x 이상 필요 (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "HomeworkHelper"
-#define MyAppVersion "1.1.4"
+#define MyAppVersion "1.1.5"
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 ; 출력 설정
 OutputDir=release
 OutputBaseFilename=HomeworkHelper_Setup_v{#MyAppVersion}
-SetupIconFile=img\app_icon.ico
+SetupIconFile=assets\icons\app\app_icon.ico
 
 ; 압축
 Compression=lzma2

@@ -34,23 +34,35 @@ class GamePresetManager:
     
     def _load_presets(self) -> None:
         """프리셋 로드 (Copy-On-Init 전략)
-        
+
         1. 사용자 프리셋 파일이 있으면 그것만 로드합니다.
         2. 없으면 시스템 프리셋을 로드하여 사용자 프리셋 파일로 복사(초기화)한 후 로드합니다.
+        3. 프리셋 스키마 버전 마이그레이션을 수행합니다.
         """
         # 사용자 설정 디렉토리 확인
         if not self.USER_CONFIG_DIR.exists():
             self.USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            
+
         # 사용자 프리셋 파일 존재 여부 확인
         if not self.USER_PRESET_FILE.exists():
             logger.info("사용자 프리셋 파일이 없음. 시스템 프리셋으로 초기화합니다.")
             self._initialize_user_presets_from_system()
-            
+
         # 사용자 프리셋 로드
         loaded_data = self._load_json_file(self.USER_PRESET_FILE)
         if loaded_data and "presets" in loaded_data:
-            self._presets = loaded_data["presets"]
+            # 마이그레이션 수행
+            version = loaded_data.get("version", 1)
+            if version < 2:
+                logger.info(f"프리셋 스키마 v{version} → v2 마이그레이션 시작")
+                migrated_presets = [self._migrate_preset_schema(p) for p in loaded_data["presets"]]
+                self._presets = migrated_presets
+                # 마이그레이션 결과를 파일에 저장
+                self._save_presets()
+                logger.info("프리셋 스키마 마이그레이션 완료")
+            else:
+                self._presets = loaded_data["presets"]
+
             logger.info(f"프리셋 {len(self._presets)}개 로드 완료 (사용자 설정)")
         else:
             logger.error("프리셋 로드 실패 또는 형식이 잘못됨")
@@ -150,20 +162,65 @@ class GamePresetManager:
             return self._save_presets()
         return False
     
+    def _migrate_preset_schema(self, preset: dict) -> dict:
+        """프리셋 스키마를 v2로 마이그레이션
+
+        Args:
+            preset: v1 프리셋 데이터
+
+        Returns:
+            v2 프리셋 데이터
+        """
+        migrated = preset.copy()
+
+        # stamina_icon → icon_path 변환
+        if "stamina_icon" in migrated:
+            old_icon = migrated.pop("stamina_icon")
+            if old_icon:
+                # 확장자 추출
+                _, ext = os.path.splitext(old_icon)
+                # {preset_id}_stamina.{ext} 형식으로 변환
+                migrated["icon_path"] = f"{migrated['id']}_stamina{ext}"
+                migrated["icon_type"] = "system"
+
+        # 누락된 필드 null로 채우기
+        default_fields = {
+            "icon_path": None,
+            "icon_type": None,
+            "hoyolab_game_id": None,
+            "server_reset_time": None,
+            "default_cycle_hours": None,
+            "stamina_name": None,
+            "stamina_max_default": None,
+            "stamina_recovery_minutes": None,
+            "launcher_patterns": None,
+            "preferred_launch_type": "shortcut",
+            "mandatory_times": []
+        }
+        for key, default_val in default_fields.items():
+            if key not in migrated:
+                migrated[key] = default_val
+
+        # hoyolab_game_id 설정 (호요버스 게임은 id와 동일)
+        if migrated.get("is_hoyoverse") and not migrated.get("hoyolab_game_id"):
+            migrated["hoyolab_game_id"] = migrated["id"]
+
+        return migrated
+
     def _save_presets(self) -> bool:
         """현재 프리셋 목록을 파일에 저장"""
         try:
             data = {
-                "version": 1,
+                "version": 2,
                 "presets": self._presets
             }
-            
+
             with open(self.USER_PRESET_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, ensure_ascii=False, indent=4, fp=f)
-            
+
             logger.info("프리셋 저장 완료")
             return True
-            
+
         except Exception as e:
             logger.error(f"프리셋 저장 실패: {e}")
             return False

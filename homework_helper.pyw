@@ -667,7 +667,7 @@ def start_main_application(instance_manager: SingleInstanceApplication):
         print(f"현재 실행 상태: {admin_status}")
 
     # --- 폰트 설정 ---
-    font_path_ttf = get_bundle_resource_path(r"font\NEXONLv1GothicOTFBold.otf")
+    font_path_ttf = get_bundle_resource_path(r"assets\fonts\NEXONLv1GothicOTFBold.otf")
     if os.path.exists(font_path_ttf):
         font_id = QFontDatabase.addApplicationFont(font_path_ttf)
         if font_id != -1:

@@ -9,8 +9,8 @@ def get_base_path() -> str:
     """PyInstaller 환경이면 실행 파일 위치, 아니면 프로젝트 루트 추정(이 파일의 상위 디렉토리)."""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
-    # 개발 환경: 현재 파일이 프로젝트 루트 하위라고 가정하고 한 단계만 올라감
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
+    # 개발 환경: 현재 파일(src/utils/common.py)에서 프로젝트 루트까지 두 단계 위로
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def resource_path(relative_path):
     """ 개발 환경 및 PyInstaller 환경 모두에서 리소스 파일의 절대 경로를 반환합니다. """

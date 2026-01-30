@@ -4,10 +4,11 @@ from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QWidget, QFormLayout, QLineEdit, QTextEdit, QPushButton, QCheckBox,
-    QMessageBox, QSplitter, QGroupBox, QSpinBox, QTimeEdit, QComboBox
+    QMessageBox, QSplitter, QGroupBox, QSpinBox, QTimeEdit, QComboBox,
+    QFileDialog
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtGui import QColor, QBrush, QPixmap
 
 from src.utils.game_preset_manager import GamePresetManager
 
@@ -15,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 class PresetEditorDialog(QDialog):
     """게임 프리셋 관리/편집 다이얼로그"""
-    
+
+    # 프리셋 변경 시그널 (저장/삭제 시 발생)
+    presets_changed = pyqtSignal()
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("게임 프리셋 관리")
@@ -78,7 +82,23 @@ class PresetEditorDialog(QDialog):
         self.exe_patterns_edit = QTextEdit()
         self.exe_patterns_edit.setPlaceholderText("실행 파일 이름 (줄바꿈으로 구분, 예: game.exe)")
         self.exe_patterns_edit.setMaximumHeight(100)
-        
+
+        # 스태미나/재화 아이콘
+        self.icon_preview_label = QLabel()
+        self.icon_preview_label.setFixedSize(48, 48)
+        self.icon_preview_label.setStyleSheet("border: 1px solid #ccc; background: white;")
+        self.icon_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.icon_path_edit = QLineEdit()
+        self.icon_path_edit.setReadOnly(True)
+        self.icon_path_edit.setPlaceholderText("아이콘 없음 (공란 표시)")
+
+        self.icon_browse_btn = QPushButton("찾아보기...")
+        self.icon_browse_btn.clicked.connect(self._on_browse_stamina_icon)
+
+        self.icon_clear_btn = QPushButton("제거")
+        self.icon_clear_btn.clicked.connect(self._on_clear_stamina_icon)
+
         self.reset_time_edit = QTimeEdit()
         self.reset_time_edit.setDisplayFormat("HH:mm")
         self.reset_time_edit.setSpecialValueText("설정 안 함") # 값이 없음을 표현하기 위해
@@ -110,6 +130,18 @@ class PresetEditorDialog(QDialog):
         self.form_layout.addRow("ID (고유 식별자):", self.id_edit)
         self.form_layout.addRow("표시 이름:", self.name_edit)
         self.form_layout.addRow("실행 파일 (EXE):", self.exe_patterns_edit)
+
+        # 스태미나/재화 아이콘 섹션
+        icon_label = QLabel("스태미나/재화 아이콘:")
+        icon_label.setToolTip("진행률 컬럼에 표시될 아이콘 (선택사항)")
+        self.form_layout.addRow(icon_label, self.icon_preview_label)
+
+        icon_file_layout = QHBoxLayout()
+        icon_file_layout.addWidget(self.icon_path_edit)
+        icon_file_layout.addWidget(self.icon_browse_btn)
+        icon_file_layout.addWidget(self.icon_clear_btn)
+        self.form_layout.addRow("", icon_file_layout)
+
         self.form_layout.addRow("서버 초기화 시각:", self.reset_time_edit)
         self.form_layout.addRow("기본 실행 주기 (시간):", self.cycle_hours_spin)
         self.form_layout.addRow("특정 접속 시각:", self.mandatory_times_edit)
@@ -239,9 +271,25 @@ class PresetEditorDialog(QDialog):
                 self.hoyolab_game_combo.setCurrentIndex(0)
         else:
             self.hoyolab_game_combo.setCurrentIndex(0)
-        
+
+        # 스태미나 아이콘 로드
+        icon_path = preset.get("icon_path")
+        icon_type = preset.get("icon_type")
+
+        if icon_path:
+            self.icon_path_edit.setText(icon_path)
+
+            # 미리보기 업데이트
+            from src.utils.icon_helper import resolve_preset_icon_path
+            full_path = resolve_preset_icon_path(icon_path, icon_type)
+            if full_path:
+                self._update_icon_preview(full_path)
+        else:
+            self.icon_path_edit.clear()
+            self.icon_preview_label.clear()
+
         # 모든 프리셋 편집 가능
-        self.id_edit.setEnabled(False) # ID는 여전히 키값이므로 수정 불가
+        self.id_edit.setEnabled(True) # ID 수정 가능 (Phase 6)
         self.name_edit.setEnabled(True)
         self.exe_patterns_edit.setEnabled(True)
         self.reset_time_edit.setEnabled(True)
@@ -289,31 +337,86 @@ class PresetEditorDialog(QDialog):
                 # 정규화 (09:00 -> 09:00)
                 mandatory_times.append(t)
         
-        # 데이터 구성
+        # 신규인지 수정인지 확인
+        existing_preset = self.manager.get_preset_by_id(preset_id)
+
+        # ID 변경 감지 (기존 프리셋 편집 중)
+        if existing_preset and existing_preset.get("id") != preset_id:
+            old_id = existing_preset["id"]
+            new_id = preset_id
+            old_icon_path = existing_preset.get("icon_path")
+            icon_type = existing_preset.get("icon_type")
+
+            # 사용자 커스텀 아이콘이 있으면 파일명 변경
+            if old_icon_path and icon_type == "user":
+                from src.utils.icon_helper import ensure_custom_icons_directory
+                import os
+
+                custom_dir = ensure_custom_icons_directory()
+                old_file = os.path.join(custom_dir, old_icon_path)
+
+                if os.path.exists(old_file):
+                    # 새 파일명 생성 (확장자 유지)
+                    _, ext = os.path.splitext(old_icon_path)
+                    new_icon_filename = f"{new_id}_stamina{ext}"
+                    new_file = os.path.join(custom_dir, new_icon_filename)
+
+                    # 파일 리네임
+                    os.rename(old_file, new_file)
+
+                    # icon_path_edit 업데이트
+                    self.icon_path_edit.setText(new_icon_filename)
+
+            # ID 변경 경고 메시지
+            reply = QMessageBox.warning(
+                self,
+                "ID 변경 경고",
+                f"프리셋 ID를 '{old_id}' → '{preset_id}'로 변경합니다.\n\n"
+                "⚠️ 이 프리셋을 사용하는 기존 프로세스에서 참조가 끊어질 수 있습니다.\n"
+                "관련 프로세스를 편집하여 프리셋을 다시 선택해주세요.\n\n"
+                "계속하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+        # icon_path는 파일명만 저장 (예: "honkai_starrail_stamina.png")
+        icon_filename = self.icon_path_edit.text().strip()
+
+        # 데이터 구성 (모든 필드 명시적 포함)
         new_data = {
+            # 기본 필드
             "id": preset_id,
             "display_name": display_name,
             "exe_patterns": exe_patterns,
             "is_hoyoverse": self.is_hoyoverse_check.isChecked(),
             "preferred_launch_type": self.launch_type_combo.currentData(),
-            "mandatory_times": mandatory_times
+            "mandatory_times": mandatory_times,
+
+            # 스태미나 아이콘
+            "icon_path": icon_filename if icon_filename else None,
+            "icon_type": "user" if icon_filename else None,
+
+            # 호요버스 관련 (is_hoyoverse = False여도 null로 명시)
+            "hoyolab_game_id": self.hoyolab_game_combo.currentData() if self.is_hoyoverse_check.isChecked() else None,
+            "server_reset_time": self.reset_time_edit.time().toString("HH:mm") if self.reset_time_edit.time() != self.reset_time_edit.minimumTime() else None,
+            "default_cycle_hours": self.cycle_hours_spin.value() if self.cycle_hours_spin.value() > 0 else None,
+            "stamina_name": None,
+            "stamina_max_default": None,
+            "stamina_recovery_minutes": None,
+            "launcher_patterns": None
         }
-        
-        # HoYoLab ID
-        if self.is_hoyoverse_check.isChecked():
-            hid = self.hoyolab_game_combo.currentData()
-            if hid:
-                new_data["hoyolab_game_id"] = hid
-        
-        # 시간/주기 (설정 안 함이 아니면 추가)
-        if self.reset_time_edit.time() != self.reset_time_edit.minimumTime():
-            new_data["server_reset_time"] = self.reset_time_edit.time().toString("HH:mm")
-            
-        if self.cycle_hours_spin.value() > 0:
-            new_data["default_cycle_hours"] = self.cycle_hours_spin.value()
-            
-        # 신규인지 수정인지 확인
-        existing_preset = self.manager.get_preset_by_id(preset_id)
+
+        # 기존 프리셋이 있으면 시스템 필드 보존
+        if existing_preset:
+            for key in ["stamina_name", "stamina_max_default", "stamina_recovery_minutes", "launcher_patterns"]:
+                if key in existing_preset:
+                    new_data[key] = existing_preset[key]
+
+            # 시스템 프리셋의 아이콘은 보존
+            if existing_preset.get("icon_type") == "system":
+                new_data["icon_path"] = existing_preset.get("icon_path")
+                new_data["icon_type"] = "system"
         
         success = False
         if existing_preset:
@@ -350,6 +453,9 @@ class PresetEditorDialog(QDialog):
                 if data.get("id") == preset_id:
                     self.preset_list_widget.setCurrentItem(item)
                     break
+
+            # 프리셋 변경 시그널 발생 (메인 윈도우 새로고침용)
+            self.presets_changed.emit()
         else:
             QMessageBox.critical(self, "실패", f"프리셋 {action}에 실패했습니다.")
 
@@ -374,5 +480,75 @@ class PresetEditorDialog(QDialog):
                 self.manager.reload()
                 self._load_presets()
                 self._start_add_new_mode()
+
+                # 프리셋 변경 시그널 발생 (메인 윈도우 새로고침용)
+                self.presets_changed.emit()
             else:
                 QMessageBox.critical(self, "삭제 실패", "프리셋 삭제 중 오류가 발생했습니다.")
+
+    def _on_browse_stamina_icon(self):
+        """스태미나 아이콘 파일 선택 다이얼로그"""
+        from src.utils.icon_helper import ensure_custom_icons_directory
+        import shutil
+        import os
+
+        # 프리셋 ID 확인
+        preset_id = self.id_edit.text().strip()
+        if not preset_id:
+            QMessageBox.warning(self, "입력 오류", "프리셋 ID를 먼저 입력해주세요.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "스태미나/재화 아이콘 선택", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.ico)"
+        )
+        if file_path:
+            # 파일 확장자 추출
+            _, ext = os.path.splitext(file_path)
+
+            # 통일된 파일명: {preset_id}_stamina{ext}
+            filename = f"{preset_id}_stamina{ext}"
+
+            # 커스텀 아이콘 디렉토리에 복사
+            custom_dir = ensure_custom_icons_directory()
+            dest_path = os.path.join(custom_dir, filename)
+
+            # 중복 파일명 처리
+            if os.path.exists(dest_path):
+                reply = QMessageBox.question(
+                    self, "파일 중복",
+                    f"'{filename}' 파일이 이미 존재합니다. 덮어쓰시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+
+            shutil.copy(file_path, dest_path)
+
+            # UI 업데이트 (파일명만 저장)
+            self.icon_path_edit.setText(filename)
+            self._update_icon_preview(dest_path)
+
+    def _on_clear_stamina_icon(self):
+        """스태미나 아이콘 제거"""
+        self.icon_path_edit.clear()
+        self.icon_preview_label.clear()
+
+    def _update_icon_preview(self, icon_path: str):
+        """아이콘 미리보기 업데이트"""
+        import os
+
+        if not icon_path or not os.path.exists(icon_path):
+            self.icon_preview_label.clear()
+            return
+
+        pixmap = QPixmap(icon_path)
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(
+                48, 48,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.icon_preview_label.setPixmap(scaled_pixmap)
+        else:
+            self.icon_preview_label.clear()

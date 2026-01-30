@@ -67,8 +67,9 @@ def delete_process(db: Session, process_id: str):
 def update_process(db: Session, process_id: str, process: schemas.ProcessCreateSchema):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        # None 값을 전달하면 기존 값이 덮어써지는 문제 방지: None은 제외
-        update_data = {k: v for k, v in process.dict(exclude_unset=True).items() if v is not None}
+        # None 값도 명시적으로 업데이트 (NULL로 설정 가능)
+        # exclude_unset=True로 실제로 전달된 필드만 업데이트
+        update_data = process.dict(exclude_unset=True)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()

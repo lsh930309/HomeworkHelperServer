@@ -1,21 +1,23 @@
 {
-    "version": 1,
+    "version": 2,
     "presets": [
         {
             "id": "honkai_starrail",
             "display_name": "붕괴: 스타레일",
             "exe_patterns": [
-                "StarRail.exe",
-                "starrail.exe",
-                "Star Rail.exe"
+                "StarRail.exe"
             ],
-            "stamina_name": "개척력",
-            "stamina_icon": "stamina_starrail.png",
-            "default_cycle_hours": 24,
             "is_hoyoverse": true,
-            "stamina_max_default": 240,
+            "preferred_launch_type": "launcher",
+            "mandatory_times": [],
+            "icon_path": "honkai_starrail_stamina.png",
+            "icon_type": "system",
+            "hoyolab_game_id": "honkai_starrail",
+            "server_reset_time": "05:00",
+            "default_cycle_hours": 24,
+            "stamina_name": "개척력",
+            "stamina_max_default": 300,
             "stamina_recovery_minutes": 6,
-            "server_reset_time": "04:00",
             "launcher_patterns": [
                 "launcher.exe",
                 "HYP.exe"
@@ -25,21 +27,80 @@
             "id": "zenless_zone_zero",
             "display_name": "젠레스 존 제로",
             "exe_patterns": [
-                "ZenlessZoneZero.exe",
-                "zenless.exe",
-                "ZZZ.exe"
+                "ZenlessZoneZero.exe"
             ],
-            "stamina_name": "배터리",
-            "stamina_icon": "stamina_zzz.png",
-            "default_cycle_hours": 24,
             "is_hoyoverse": true,
+            "preferred_launch_type": "launcher",
+            "mandatory_times": [],
+            "icon_path": "zenless_zone_zero_stamina.png",
+            "icon_type": "system",
+            "hoyolab_game_id": "zenless_zone_zero",
+            "server_reset_time": "05:00",
+            "default_cycle_hours": 24,
+            "stamina_name": "배터리",
             "stamina_max_default": 240,
             "stamina_recovery_minutes": 6,
-            "server_reset_time": "04:00",
             "launcher_patterns": [
                 "launcher.exe",
                 "HYP.exe"
             ]
+        },
+        {
+            "id": "nikke",
+            "display_name": "승리의 여신: 니케",
+            "exe_patterns": [
+                "nikke.exe"
+            ],
+            "preferred_launch_type": "shortcut",
+            "server_reset_time": "05:00",
+            "default_cycle_hours": 24,
+            "is_hoyoverse": false,
+            "mandatory_times": [],
+            "icon_path": null,
+            "icon_type": null,
+            "hoyolab_game_id": null,
+            "stamina_name": null,
+            "stamina_max_default": null,
+            "stamina_recovery_minutes": null,
+            "launcher_patterns": null
+        },
+        {
+            "id": "endfield",
+            "display_name": "명일방주: 엔드필드",
+            "exe_patterns": [
+                "Endfield.exe"
+            ],
+            "preferred_launch_type": "direct",
+            "server_reset_time": "05:00",
+            "default_cycle_hours": 24,
+            "is_hoyoverse": false,
+            "mandatory_times": [],
+            "icon_path": null,
+            "icon_type": null,
+            "hoyolab_game_id": null,
+            "stamina_name": null,
+            "stamina_max_default": null,
+            "stamina_recovery_minutes": null,
+            "launcher_patterns": null
+        },
+        {
+            "id": "wuwa",
+            "display_name": "명조: 워더링 웨이브",
+            "exe_patterns": [
+                "Client-Win64-Shipping.exe"
+            ],
+            "preferred_launch_type": "direct",
+            "server_reset_time": "05:00",
+            "default_cycle_hours": 24,
+            "is_hoyoverse": false,
+            "mandatory_times": [],
+            "icon_path": null,
+            "icon_type": null,
+            "hoyolab_game_id": null,
+            "stamina_name": null,
+            "stamina_max_default": null,
+            "stamina_recovery_minutes": null,
+            "launcher_patterns": null
         }
     ]
 }

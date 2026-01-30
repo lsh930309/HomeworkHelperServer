@@ -252,16 +252,28 @@ class ProcessDialog(QDialog):
         """프리셋 관리자 열기"""
         from src.gui.preset_editor_dialog import PresetEditorDialog
         dialog = PresetEditorDialog(self)
+
+        # 프리셋 변경 시 메인 윈도우 새로고침
+        def on_presets_changed():
+            # MainWindow 찾기 (ProcessDialog의 parent 체인을 따라 올라감)
+            main_window = self.parent()
+            while main_window and not hasattr(main_window, 'refresh_presets_and_ui'):
+                main_window = main_window.parent()
+
+            if main_window and hasattr(main_window, 'refresh_presets_and_ui'):
+                main_window.refresh_presets_and_ui()
+
+        dialog.presets_changed.connect(on_presets_changed)
         dialog.exec()
         self._refresh_preset_combo()
 
     def _on_save_as_preset_clicked(self):
         """현재 설정을 신규 프리셋으로 바로 저장 (간단한 입력 다이얼로그)"""
-        from PyQt6.QtWidgets import QInputDialog
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
         from src.utils.game_preset_manager import GamePresetManager
         import re
         import os
-        
+
         # 현재 입력값 수집
         name = self.name_edit.text().strip()
         exe_path = self.monitoring_path_edit.text().strip()
@@ -269,8 +281,43 @@ class ProcessDialog(QDialog):
         cycle_hours = self.user_cycle_hours_edit.text().strip()
         mandatory_times = self.mandatory_times_edit.text().strip()
         launch_type = self.launch_type_combo.currentData() if hasattr(self, 'launch_type_combo') else "shortcut"
-        
-        # 이름이 없으면 입력 요청
+
+        # 1. 프리셋 ID 입력 (신규)
+        manager = GamePresetManager()
+        preset_id = None
+        while True:
+            preset_id, ok = QInputDialog.getText(
+                self,
+                "프리셋 ID",
+                "프리셋 ID를 입력하세요 (영문 소문자, 숫자, 언더스코어만):",
+                QLineEdit.EchoMode.Normal
+            )
+            if not ok:
+                return
+
+            preset_id = preset_id.strip().lower()
+
+            # ID 유효성 검사
+            if not re.match(r'^[a-z0-9_]+$', preset_id):
+                QMessageBox.warning(
+                    self, "입력 오류",
+                    "ID는 영문 소문자, 숫자, 언더스코어만 사용할 수 있습니다."
+                )
+                continue
+
+            # 중복 ID 체크
+            if manager.get_preset_by_id(preset_id):
+                reply = QMessageBox.question(
+                    self, "ID 중복",
+                    f"'{preset_id}' ID가 이미 존재합니다. 덮어쓰시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    continue
+
+            break  # 유효한 ID 입력 완료
+
+        # 2. 프리셋 표시 이름 입력 (기존 로직)
         if not name:
             name, ok = QInputDialog.getText(
                 self, "프리셋 이름", "프리셋 표시 이름을 입력하세요:"
@@ -278,13 +325,12 @@ class ProcessDialog(QDialog):
             if not ok or not name.strip():
                 return
             name = name.strip()
-        
-        # 실행 파일 패턴 입력 (기본값: 모니터링 경로의 파일명)
+
+        # 3. 실행 파일 패턴 입력 (기본값: 모니터링 경로의 파일명)
         default_exe = os.path.basename(exe_path) if exe_path else ""
-        from PyQt6.QtWidgets import QLineEdit
         exe_pattern, ok = QInputDialog.getText(
-            self, 
-            "실행 파일 패턴", 
+            self,
+            "실행 파일 패턴",
             "프리셋을 인식할 실행 파일 이름을 입력하세요:\n(예: game.exe)",
             QLineEdit.EchoMode.Normal,
             default_exe
@@ -294,46 +340,52 @@ class ProcessDialog(QDialog):
             return
         exe_pattern = exe_pattern.strip()
         
-        # ID 생성 (이름에서 안전한 문자만 추출)
-        preset_id = re.sub(r'[^a-zA-Z0-9]', '_', name).lower().strip('_')
-        if not preset_id:
-            preset_id = f"preset_{id(self) % 10000}"
-        
-        # 프리셋 데이터 구성
+        # mandatory_times 파싱
+        mandatory_times_list = []
+        if mandatory_times:
+            mandatory_times_list = [t.strip() for t in mandatory_times.split(",") if t.strip()]
+
+        # cycle_hours 파싱
+        cycle_hours_int = None
+        if cycle_hours:
+            try:
+                cycle_hours_int = int(cycle_hours)
+            except ValueError:
+                pass
+
+        # 호요버스 설정
+        is_hoyoverse = hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked()
+        hoyolab_game_id = None
+        if is_hoyoverse and hasattr(self, 'hoyolab_game_combo'):
+            hoyolab_game_id = self.hoyolab_game_combo.currentData()
+
+        # 프리셋 데이터 구성 (모든 필드 명시적 포함)
         preset_data = {
+            # 기본 필드
             "id": preset_id,
             "display_name": name,
             "exe_patterns": [exe_pattern],
-            "preferred_launch_type": launch_type
+            "is_hoyoverse": is_hoyoverse,
+            "preferred_launch_type": launch_type,
+            "mandatory_times": mandatory_times_list,
+
+            # 아이콘 (사용자가 직접 설정할 수 없으므로 null)
+            "icon_path": None,
+            "icon_type": None,
+
+            # 호요버스/게임 설정
+            "hoyolab_game_id": hoyolab_game_id if is_hoyoverse else None,
+            "server_reset_time": reset_time if reset_time else None,
+            "default_cycle_hours": cycle_hours_int,
+            "stamina_name": None,
+            "stamina_max_default": None,
+            "stamina_recovery_minutes": None,
+            "launcher_patterns": None
         }
         
-        # 선택적 필드 추가
-        if reset_time:
-            preset_data["server_reset_time"] = reset_time
-        if cycle_hours:
-            try:
-                preset_data["default_cycle_hours"] = int(cycle_hours)
-            except ValueError:
-                pass
-        if mandatory_times:
-            # 쉼표로 분리하여 리스트로 변환
-            times_list = [t.strip() for t in mandatory_times.split(",") if t.strip()]
-            if times_list:
-                preset_data["mandatory_times"] = times_list
-        
-        # 호요버스 게임 설정
-        if hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked():
-            preset_data["is_hoyoverse"] = True
-            if hasattr(self, 'hoyolab_game_combo'):
-                hid = self.hoyolab_game_combo.currentData()
-                if hid:
-                    preset_data["hoyolab_game_id"] = hid
-        
-        # 프리셋 저장
+        # 4. 프리셋 저장
         try:
-            manager = GamePresetManager()
-            
-            # 중복 ID 확인
+            # 중복 ID는 이미 위에서 확인했으므로 바로 저장
             existing = manager.get_preset_by_id(preset_id)
             if existing:
                 reply = QMessageBox.question(
@@ -864,6 +916,10 @@ class ProcessDialog(QDialog):
         hoyolab_game_id = self.hoyolab_game_combo.currentData()
         # hoyolab_game_id가 None이면 스태미나 추적도 자동으로 비활성화
         stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked() and hoyolab_game_id is not None
+
+        # 스태미나 추적이 비활성화되면 hoyolab_game_id도 null로 설정
+        if not stamina_tracking_enabled:
+            hoyolab_game_id = None
 
         return {
             "name": name,

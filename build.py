@@ -298,6 +298,8 @@ def build_with_pyinstaller():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 cwd=PROJECT_ROOT,
                 bufsize=1
             )
@@ -420,6 +422,8 @@ def create_installer(version_info):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 cwd=PROJECT_ROOT,
                 bufsize=1
             )

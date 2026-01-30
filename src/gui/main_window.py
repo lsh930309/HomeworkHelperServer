@@ -38,6 +38,7 @@ from src.core.launcher import Launcher
 from src.core.notifier import Notifier
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
+from src.utils.game_preset_manager import GamePresetManager
 
 
 class IconDownloader(QThread):
@@ -111,9 +112,12 @@ class MainWindow(QMainWindow):
             self.system_notifier.main_window_activated_callback = self.gui_notification_handler.process_system_notification_activation
 
         self.scheduler = Scheduler(self.data_manager, self.system_notifier, self.process_monitor) # 스케줄러 객체 생성
-        
+
         # 스케줄러의 상태 변경 콜백 함수 설정
         self.scheduler.status_change_callback = self._refresh_status_columns_immediate
+
+        # 게임 프리셋 매니저 초기화
+        self.preset_manager = GamePresetManager()
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
@@ -674,7 +678,7 @@ class MainWindow(QMainWindow):
 
             # 마지막 플레이 컬럼도 업데이트 (진행률 표시)
             percentage, time_str = self._calculate_progress_percentage(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(percentage, time_str)
+            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
             self.process_table.setCellWidget(r, self.COL_LAST_PLAYED, progress_widget)
             has_changes = True
 
@@ -709,7 +713,7 @@ class MainWindow(QMainWindow):
 
             # 마지막 플레이 컬럼 (진행률 표시)
             percentage, time_str = self._calculate_progress_percentage(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(percentage, time_str)
+            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
             self.process_table.setCellWidget(r, self.COL_LAST_PLAYED, progress_widget)
 
             # 실행 버튼 컬럼
@@ -1097,6 +1101,14 @@ class MainWindow(QMainWindow):
     def _refresh_status_columns_immediate(self):
         """상태 컬럼을 즉시 새로고침합니다 (중요한 시각 변경 시 호출)."""
         self._refresh_status_columns()
+
+    def refresh_presets_and_ui(self):
+        """프리셋 매니저를 다시 로드하고 UI를 새로고침합니다 (프리셋 편집 후 호출)."""
+        # 프리셋 매니저 새로고침
+        self.preset_manager.reload()
+
+        # 프로세스 목록 새로고침 (아이콘 변경사항 반영)
+        self.populate_process_list()
 
     def _load_and_display_web_buttons(self):
         """저장된 웹 바로가기 정보를 불러와 동적 버튼으로 UI에 표시합니다."""
@@ -1569,7 +1581,7 @@ class MainWindow(QMainWindow):
             return 0.0, "계산 오류"
 
 
-    def _create_progress_bar_widget(self, percentage: float, time_str: str) -> QWidget:
+    def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
         """진행률을 표시하는 QProgressBar 위젯을 생성합니다."""
         if percentage == 0.0 and not time_str.startswith("STAMINA:"):
             # 기록이 없는 경우 - 동일한 레이아웃 구조 유지
@@ -1578,9 +1590,17 @@ class MainWindow(QMainWindow):
             layout.setContentsMargins(2, 0, 2, 0)
             layout.setSpacing(4)
 
-            # 빈 아이콘 공간 확보
+            # 프리셋 아이콘 표시
             icon_label = QLabel()
-            icon_label.setFixedSize(18, 18)
+            icon_path = self._get_stamina_icon_path(process)
+
+            if icon_path and os.path.exists(icon_path):
+                pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                icon_label.setPixmap(pixmap)
+                icon_label.setFixedSize(18, 18)
+            else:
+                # 아이콘이 없으면 공간 확보
+                icon_label.setFixedSize(18, 18)
             layout.addWidget(icon_label)
 
             # 텍스트 라벨
@@ -1606,7 +1626,7 @@ class MainWindow(QMainWindow):
 
                     # 아이콘 라벨
                     icon_label = QLabel()
-                    icon_path = self._get_stamina_icon_path(game_id)
+                    icon_path = self._get_stamina_icon_path(process)
 
                     if icon_path and os.path.exists(icon_path):
                         pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -1625,15 +1645,23 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"스태미나 위젯 생성 오류: {e}", exc_info=True)
 
-        # 일반 시간 기반 Progress Bar (호요버스 게임과 동일한 레이아웃 적용)
+        # 일반 시간 기반 Progress Bar (프리셋 아이콘 포함)
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(2, 0, 2, 0)
         layout.setSpacing(4)
 
-        # 빈 아이콘 공간 확보 (호요버스 게임과 동일한 크기)
+        # 프리셋 아이콘 표시
         icon_label = QLabel()
-        icon_label.setFixedSize(18, 18)
+        icon_path = self._get_stamina_icon_path(process)
+
+        if icon_path and os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            icon_label.setPixmap(pixmap)
+            icon_label.setFixedSize(18, 18)
+        else:
+            # 아이콘이 없으면 공간 확보
+            icon_label.setFixedSize(18, 18)
         layout.addWidget(icon_label)
 
         # Progress Bar
@@ -1642,17 +1670,25 @@ class MainWindow(QMainWindow):
 
         return container
     
-    def _get_stamina_icon_path(self, hoyolab_game_id: str) -> Optional[str]:
-        """게임 ID에 해당하는 스태미나 아이콘 경로 반환"""
-        icon_map = {
-            "honkai_starrail": "img/stamina_starrail.png",
-            "zenless_zone_zero": "img/stamina_zzz.png",
-        }
-        relative_path = icon_map.get(hoyolab_game_id)
-        if relative_path:
-            # 실행 파일 기준 경로로 변환
-            return get_bundle_resource_path(relative_path)
-        return None
+    def _get_stamina_icon_path(self, process) -> Optional[str]:
+        """프로세스에 해당하는 스태미나/재화 아이콘 경로 반환 (프리셋 기반)"""
+        from src.utils.icon_helper import resolve_preset_icon_path
+
+        if not process.user_preset_id:
+            return None
+
+        preset = self.preset_manager.get_preset_by_id(process.user_preset_id)
+        if not preset:
+            return None
+
+        icon_path = preset.get("icon_path")
+        icon_type = preset.get("icon_type")
+
+        # icon_path가 없으면 None 반환 (공란 표시)
+        if not icon_path:
+            return None
+
+        return resolve_preset_icon_path(icon_path, icon_type)
     
     def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
         """스타일이 적용된 QProgressBar 생성"""
