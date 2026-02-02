@@ -1835,7 +1835,21 @@ class MainWindow(QMainWindow):
                 # 값이 변경되었을 때만 업데이트 (최적화)
                 if old_value != new_value:
                     progress_bar.setValue(new_value)
-                    progress_bar.setFormat(f"{percentage:.1f}%")
+
+                    # 스태미나 형식인지 확인하여 적절한 format 적용
+                    if time_str.startswith("STAMINA:"):
+                        try:
+                            parts = time_str.split(":")
+                            if len(parts) >= 3:
+                                stamina_text = parts[2]  # "120/300" 추출
+                                progress_bar.setFormat(stamina_text)
+                            else:
+                                progress_bar.setFormat(f"{percentage:.1f}%")
+                        except Exception:
+                            progress_bar.setFormat(f"{percentage:.1f}%")
+                    else:
+                        progress_bar.setFormat(f"{percentage:.1f}%")
+
                     updated_count += 1
 
                     # 색상 구간 결정 (0-49: 초록, 50-79: 노랑, 80-99: 주황, 100+: 빨강)
