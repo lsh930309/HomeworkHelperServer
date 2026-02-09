@@ -449,7 +449,12 @@ class PresetEditorDialog(QDialog):
             if reply == QMessageBox.StandardButton.No:
                 return
             # 덮어쓰기 진행
-            success = self.manager.update_user_preset(preset_id, new_data)
+            if is_editing and preset_id != self._original_preset_id:
+                # 편집 중 ID를 기존 프리셋으로 변경: 원본 삭제 후 대상 덮어쓰기
+                self.manager.remove_user_preset(self._original_preset_id)
+                success = self.manager.update_user_preset(preset_id, new_data)
+            else:
+                success = self.manager.update_user_preset(preset_id, new_data)
             action = "덮어쓰기"
         elif is_editing:
             # 기존 프리셋 수정 (ID 변경 포함)
