@@ -70,6 +70,8 @@ def update_process(db: Session, process_id: str, process: schemas.ProcessCreateS
         # None 값도 명시적으로 업데이트 (NULL로 설정 가능)
         # exclude_unset=True로 실제로 전달된 필드만 업데이트
         update_data = process.dict(exclude_unset=True)
+        # PK 변조 방지: id 필드가 포함되어 있으면 제거
+        update_data.pop("id", None)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -101,6 +103,8 @@ def update_shortcut(db: Session, shortcut_id: str, shortcut: schemas.WebShortcut
     db_shortcut = get_shortcut_by_id(db, shortcut_id)
     if db_shortcut:
         update_data = shortcut.dict(exclude_unset=True)
+        # PK 변조 방지: id 필드가 포함되어 있으면 제거
+        update_data.pop("id", None)
         for key, value in update_data.items():
             setattr(db_shortcut, key, value)
         db.commit()

@@ -192,32 +192,30 @@ class BrowserCookieExtractor:
             os.close(temp_fd)
             shutil.copy2(cookie_db, temp_db_path)
             
-            conn = sqlite3.connect(temp_db_path)
-            cursor = conn.cursor()
-            
-            # Firefox 쿠키 테이블 구조: moz_cookies
-            cursor.execute("""
-                SELECT name, value
-                FROM moz_cookies
-                WHERE host LIKE ?
-            """, (f"%{self.HOYOLAB_DOMAIN}%",))
-            
-            cookies_found = {}
-            for name, value in cursor.fetchall():
-                target_key = None
-                for key, aliases in self.COOKIE_ALIASES.items():
-                    if name in aliases:
-                        target_key = key
-                        break
+            with sqlite3.connect(temp_db_path) as conn:
+                cursor = conn.cursor()
                 
-                if not target_key:
-                    continue
+                # Firefox 쿠키 테이블 구조: moz_cookies
+                cursor.execute("""
+                    SELECT name, value
+                    FROM moz_cookies
+                    WHERE host LIKE ?
+                """, (f"%{self.HOYOLAB_DOMAIN}%",))
                 
-                if value:
-                    cookies_found[target_key] = value
-                    logger.debug(f"Firefox 쿠키 발견: {name}")
-            
-            conn.close()
+                cookies_found = {}
+                for name, value in cursor.fetchall():
+                    target_key = None
+                    for key, aliases in self.COOKIE_ALIASES.items():
+                        if name in aliases:
+                            target_key = key
+                            break
+                    
+                    if not target_key:
+                        continue
+                    
+                    if value:
+                        cookies_found[target_key] = value
+                        logger.debug(f"Firefox 쿠키 발견: {name}")
             
             # 모든 필수 쿠키가 있는지 확인
             if all(key in cookies_found for key in self.REQUIRED_COOKIES):
@@ -361,40 +359,38 @@ class BrowserCookieExtractor:
             os.close(temp_fd)
             shutil.copy2(db_path, temp_db_path)
             
-            conn = sqlite3.connect(temp_db_path)
-            cursor = conn.cursor()
-            
-            # HoYoLab 도메인의 쿠키 조회
-            cursor.execute("""
-                SELECT name, encrypted_value, value
-                FROM cookies
-                WHERE host_key LIKE ?
-            """, (f"%{self.HOYOLAB_DOMAIN}%",))
-            
-            cookies_found = {}
-            for name, encrypted_value, plain_value in cursor.fetchall():
-                # 필요한 쿠키인지 확인
-                target_key = None
-                for key, aliases in self.COOKIE_ALIASES.items():
-                    if name in aliases:
-                        target_key = key
-                        break
+            with sqlite3.connect(temp_db_path) as conn:
+                cursor = conn.cursor()
                 
-                if not target_key:
-                    continue
+                # HoYoLab 도메인의 쿠키 조회
+                cursor.execute("""
+                    SELECT name, encrypted_value, value
+                    FROM cookies
+                    WHERE host_key LIKE ?
+                """, (f"%{self.HOYOLAB_DOMAIN}%",))
                 
-                # 값 복호화
-                value = None
-                if plain_value:
-                    value = plain_value
-                elif encrypted_value:
-                    value = self._decrypt_cookie_value(encrypted_value, encryption_key)
-                
-                if value:
-                    cookies_found[target_key] = value
-                    logger.debug(f"쿠키 발견: {name}")
-            
-            conn.close()
+                cookies_found = {}
+                for name, encrypted_value, plain_value in cursor.fetchall():
+                    # 필요한 쿠키인지 확인
+                    target_key = None
+                    for key, aliases in self.COOKIE_ALIASES.items():
+                        if name in aliases:
+                            target_key = key
+                            break
+                    
+                    if not target_key:
+                        continue
+                    
+                    # 값 복호화
+                    value = None
+                    if plain_value:
+                        value = plain_value
+                    elif encrypted_value:
+                        value = self._decrypt_cookie_value(encrypted_value, encryption_key)
+                    
+                    if value:
+                        cookies_found[target_key] = value
+                        logger.debug(f"쿠키 발견: {name}")
             
             # 모든 필수 쿠키가 있는지 확인
             if all(key in cookies_found for key in self.REQUIRED_COOKIES):

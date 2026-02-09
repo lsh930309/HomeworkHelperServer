@@ -27,6 +27,9 @@ class PresetEditorDialog(QDialog):
         
         self.manager = GamePresetManager()
         
+        # 현재 편집 중인 원본 프리셋 ID (rename 시 원본 추적용)
+        self._original_preset_id: Optional[str] = None
+        
         # UI 초기화
         self._init_ui()
         
@@ -116,6 +119,7 @@ class PresetEditorDialog(QDialog):
         self.launch_type_combo = QComboBox()
         self.launch_type_combo.addItem("기본 (바로가기 우선)", "shortcut")
         self.launch_type_combo.addItem("프로세스 직접 실행 우선", "direct")
+        self.launch_type_combo.addItem("런처 우선", "launcher")
         
         # 호요버스 관련
         self.is_hoyoverse_check = QCheckBox("호요버스 게임 (스태미나 추적 지원)")
@@ -193,6 +197,7 @@ class PresetEditorDialog(QDialog):
     def _start_add_new_mode(self):
         """신규 추가 모드로 전환"""
         self.preset_list_widget.clearSelection()
+        self._original_preset_id = None  # 신규 모드에서는 원본 ID 없음
         self.form_group.setTitle("새 프리셋 추가")
         self.id_edit.setEnabled(True)
         self.id_edit.clear()
@@ -212,12 +217,15 @@ class PresetEditorDialog(QDialog):
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
 
-    def _on_preset_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
+    def _on_preset_selected(self, current: QListWidgetItem, _previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
         if not current:
             return
             
         preset = current.data(Qt.ItemDataRole.UserRole)
+        
+        # 원본 프리셋 ID 저장 (rename 시 원본 추적용)
+        self._original_preset_id = preset.get("id")
         
         self.form_group.setTitle("프리셋 정보")
         
@@ -337,11 +345,12 @@ class PresetEditorDialog(QDialog):
                 # 정규화 (09:00 -> 09:00)
                 mandatory_times.append(t)
         
-        # 신규인지 수정인지 확인
-        existing_preset = self.manager.get_preset_by_id(preset_id)
+        # 신규인지 수정인지 확인 (원본 ID 기준)
+        is_editing = self._original_preset_id is not None
+        existing_preset = self.manager.get_preset_by_id(self._original_preset_id) if is_editing else None
 
-        # ID 변경 감지 (기존 프리셋 편집 중)
-        if existing_preset and existing_preset.get("id") != preset_id:
+        # ID 변경 감지 (기존 프리셋 편집 중이고 ID가 변경됨)
+        if existing_preset and self._original_preset_id != preset_id:
             old_id = existing_preset["id"]
             new_id = preset_id
             old_icon_path = existing_preset.get("icon_path")
