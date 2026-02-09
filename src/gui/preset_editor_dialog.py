@@ -347,14 +347,17 @@ class PresetEditorDialog(QDialog):
         
         # 신규인지 수정인지 확인 (원본 ID 기준)
         is_editing = self._original_preset_id is not None
-        existing_preset = self.manager.get_preset_by_id(self._original_preset_id) if is_editing else None
+        original_preset = self.manager.get_preset_by_id(self._original_preset_id) if is_editing else None
+        
+        # 입력한 ID로 기존 프리셋이 있는지 확인 (중복 ID 감지)
+        target_preset = self.manager.get_preset_by_id(preset_id)
 
         # ID 변경 감지 (기존 프리셋 편집 중이고 ID가 변경됨)
-        if existing_preset and self._original_preset_id != preset_id:
-            old_id = existing_preset["id"]
+        if original_preset and self._original_preset_id != preset_id:
+            old_id = original_preset["id"]
             new_id = preset_id
-            old_icon_path = existing_preset.get("icon_path")
-            icon_type = existing_preset.get("icon_type")
+            old_icon_path = original_preset.get("icon_path")
+            icon_type = original_preset.get("icon_type")
 
             # 사용자 커스텀 아이콘이 있으면 파일명 변경
             if old_icon_path and icon_type == "user":
@@ -416,7 +419,8 @@ class PresetEditorDialog(QDialog):
             "launcher_patterns": None
         }
 
-        # 기존 프리셋이 있으면 시스템 필드 보존
+        # 기존 프리셋이 있으면 시스템 필드 보존 (원본 프리셋 또는 덮어쓰기 대상)
+        existing_preset = original_preset or target_preset
         if existing_preset:
             for key in ["stamina_name", "stamina_max_default", "stamina_recovery_minutes", "launcher_patterns"]:
                 if key in existing_preset:
@@ -428,22 +432,30 @@ class PresetEditorDialog(QDialog):
                 new_data["icon_type"] = "system"
         
         success = False
-        if existing_preset:
-            # 수정 (기존 ID가 존재하면 업데이트)
-            # 단, 현재 선택된 아이템이 아닌 다른 아이템의 ID를 입력했을 경우 덮어쓰기 경고가 필요할 수 있음
-            # 하지만 ID 수정은 막혀있으므로, 현재 선택된 아이템의 업데이트이거나
-            # 신규 추가 모드에서 기존 ID를 입력한 경우임.
-            if self.id_edit.isEnabled(): # 신규 추가 모드였다면
-                 reply = QMessageBox.question(
-                    self, 
-                    "덮어쓰기 확인", 
-                    f"이미 존재하는 ID '{preset_id}' 입니다. 덮어쓰시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                 if reply == QMessageBox.StandardButton.No:
-                     return
-
+        
+        # 중복 ID 감지: 입력한 ID로 기존 프리셋이 있고, (신규 추가거나 OR ID가 변경됨)
+        if target_preset and (not is_editing or preset_id != self._original_preset_id):
+            # 덮어쓰기 확인 필요
+            reply = QMessageBox.question(
+                self, 
+                "덮어쓰기 확인", 
+                f"이미 존재하는 ID '{preset_id}' 입니다. 덮어쓰시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+            # 덮어쓰기 진행
             success = self.manager.update_user_preset(preset_id, new_data)
+            action = "덮어쓰기"
+        elif is_editing:
+            # 기존 프리셋 수정 (ID 변경 포함)
+            if self._original_preset_id != preset_id:
+                # ID가 변경된 경우: 기존 프리셋 삭제 후 새로 추가
+                self.manager.delete_user_preset(self._original_preset_id)
+                success = self.manager.add_user_preset(new_data)
+            else:
+                # ID 동일한 경우: 업데이트
+                success = self.manager.update_user_preset(preset_id, new_data)
             action = "수정"
         else:
             # 신규 추가
