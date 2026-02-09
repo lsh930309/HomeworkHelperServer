@@ -1,5 +1,5 @@
 # dashboard.py
-"""대시보드 API 및 HTML 렌더링 모듈 v3"""
+"""대시보드 API 및 HTML 렌더링 모듈 v4"""
 
 import datetime
 import json
@@ -14,7 +14,6 @@ from src.data import models
 
 router = APIRouter()
 
-# 설정 파일 경로
 SETTINGS_DIR = os.path.join(os.getenv('APPDATA', os.path.expanduser('~')), 'HomeworkHelper')
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, 'dashboard_settings.json')
 
@@ -23,12 +22,14 @@ DEFAULT_SETTINGS = {
     "toolbar": "top",
     "chartType": "bar",
     "stackMode": "stacked",
-    "calendarThreshold": 10
+    "period": "week",
+    "calendarThreshold": 10,
+    "showUnregistered": False,
+    "showChartIcons": True
 }
 
 
 def load_settings():
-    """AppData에서 설정 로드"""
     try:
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
@@ -39,14 +40,12 @@ def load_settings():
 
 
 def save_settings(settings: dict):
-    """AppData에 설정 저장"""
     os.makedirs(SETTINGS_DIR, exist_ok=True)
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
 def get_dashboard_html() -> str:
-    """대시보드 HTML 페이지를 반환합니다."""
     return '''<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -104,7 +103,6 @@ def get_dashboard_html() -> str:
             flex-direction: column;
         }
         
-        /* === Toolbar === */
         .toolbar {
             height: 52px;
             background: var(--bg-card);
@@ -118,7 +116,6 @@ def get_dashboard_html() -> str:
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
-        /* 플로팅 스타일 - 더 플로팅 느낌 */
         body[data-toolbar="floating-top"] .toolbar,
         body[data-toolbar="floating-bottom"] .toolbar {
             position: fixed;
@@ -137,13 +134,8 @@ def get_dashboard_html() -> str:
         body[data-toolbar="bottom"] { flex-direction: column-reverse; }
         body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px solid var(--border-color); }
         
-        .toolbar-brand {
-            font-weight: 700;
-            font-size: 1rem;
-            color: var(--accent);
-        }
+        .toolbar-brand { font-weight: 700; font-size: 1rem; color: var(--accent); }
         
-        /* === 탭 버튼 === */
         .toolbar-tabs {
             display: flex;
             gap: 4px;
@@ -198,7 +190,6 @@ def get_dashboard_html() -> str:
         
         .icon-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
         
-        /* === 메인 컨텐츠 === */
         .main-content {
             flex: 1;
             padding: 16px;
@@ -221,7 +212,6 @@ def get_dashboard_html() -> str:
             to { opacity: 1; transform: translateY(0); }
         }
         
-        /* === 카드 === */
         .card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -240,12 +230,7 @@ def get_dashboard_html() -> str:
         
         .card-title { font-size: 0.95rem; font-weight: 600; }
         
-        /* === 통계 그리드 === */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-        }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
         @media (max-width: 800px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
         
         .stat-card {
@@ -259,16 +244,9 @@ def get_dashboard_html() -> str:
         .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
         .stat-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
         
-        /* === 차트 === */
         .chart-container { position: relative; flex: 1; min-height: 220px; }
         
-        /* 게임 아이콘 범례 */
-        .chart-legend {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-bottom: 8px;
-        }
+        .chart-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
         
         .legend-item {
             display: flex;
@@ -292,7 +270,6 @@ def get_dashboard_html() -> str:
             font-size: 0.65rem;
         }
         
-        /* === 달력 === */
         .calendar-wrapper { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         
         .calendar-grid {
@@ -314,38 +291,39 @@ def get_dashboard_html() -> str:
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 3px 2px;
+            padding: 4px 2px;
             border-radius: 5px;
             background: var(--bg-secondary);
             font-size: 0.65rem;
             cursor: pointer;
             transition: all 0.2s;
-            min-height: 44px;
+            min-height: 60px;
         }
         
         .calendar-day:hover { border: 1px solid var(--accent); }
         .calendar-day.empty { background: transparent; pointer-events: none; }
-        .calendar-day .date { font-weight: 600; margin-bottom: 1px; font-size: 0.7rem; }
+        .calendar-day .date { font-weight: 600; margin-bottom: 2px; font-size: 0.7rem; }
         
         .calendar-day .icons {
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
             gap: 2px;
-            justify-content: center;
-            flex: 1;
-            align-items: flex-start;
+            width: 100%;
+            padding: 0 2px;
         }
         
         .calendar-day .icon {
-            width: 20px;
-            height: 20px;
-            border-radius: 4px;
+            width: 100%;
+            aspect-ratio: 1;
+            max-width: 18px;
+            border-radius: 3px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
             color: white;
+            margin: 0 auto;
         }
         
         .month-nav { display: flex; align-items: center; gap: 10px; }
@@ -361,7 +339,6 @@ def get_dashboard_html() -> str:
         .month-nav button:hover { background: var(--accent); color: white; }
         .month-title { font-size: 0.95rem; font-weight: 600; }
         
-        /* === 설정 모달 === */
         .modal-overlay {
             position: fixed;
             inset: 0;
@@ -382,9 +359,9 @@ def get_dashboard_html() -> str:
             border: 1px solid var(--border-color);
             border-radius: 16px;
             padding: 20px;
-            width: 360px;
+            width: 380px;
             max-width: 90%;
-            max-height: 80vh;
+            max-height: 85vh;
             overflow-y: auto;
             transform: scale(0.9);
             transition: transform 0.2s;
@@ -393,7 +370,7 @@ def get_dashboard_html() -> str:
         .modal-overlay.active .modal { transform: scale(1); }
         .modal-title { font-size: 1rem; font-weight: 600; margin-bottom: 14px; }
         
-        .setting-group { margin-bottom: 14px; }
+        .setting-group { margin-bottom: 12px; }
         .setting-label { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 5px; display: block; }
         .setting-options { display: flex; gap: 5px; flex-wrap: wrap; }
         
@@ -411,6 +388,42 @@ def get_dashboard_html() -> str:
         
         .setting-btn:hover { border-color: var(--accent); }
         .setting-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+        
+        .setting-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        
+        .toggle-switch {
+            width: 40px;
+            height: 22px;
+            background: var(--border-color);
+            border-radius: 11px;
+            position: relative;
+            transition: background 0.2s;
+        }
+        
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+        
+        .setting-toggle.active .toggle-switch {
+            background: var(--accent);
+        }
+        
+        .setting-toggle.active .toggle-switch::after {
+            transform: translateX(18px);
+        }
         
         .modal-close {
             margin-top: 14px;
@@ -541,9 +554,24 @@ def get_dashboard_html() -> str:
             </div>
             
             <div class="setting-group">
-                <label class="setting-label">달력 최소 플레이 시간 (분)</label>
+                <label class="setting-label">달력 최소 플레이 시간</label>
                 <div class="setting-options">
                     <input type="number" id="thresholdInput" value="10" min="0" style="width:60px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;">
+                    <span style="font-size:0.8rem;color:var(--text-secondary);">분</span>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <div class="setting-toggle" id="showUnregisteredToggle">
+                    <div class="toggle-switch"></div>
+                    <span style="font-size:0.8rem;">미등록 게임 포함</span>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <div class="setting-toggle" id="showChartIconsToggle">
+                    <div class="toggle-switch"></div>
+                    <span style="font-size:0.8rem;">차트에 아이콘 표시</span>
                 </div>
             </div>
             
@@ -559,7 +587,8 @@ def get_dashboard_html() -> str:
             gameNameMap: {},
             playtimeData: null,
             calendarData: null,
-            settings: null
+            settings: null,
+            iconImages: {}
         };
         
         const COLORS = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6'];
@@ -570,13 +599,96 @@ def get_dashboard_html() -> str:
             return COLORS[Math.abs(hash) % COLORS.length];
         }
         
+        // === 아이콘 이미지 프리로드 ===
+        function preloadIcon(name) {
+            if (state.iconImages[name]) return state.iconImages[name];
+            const color = getColorForName(name);
+            const initial = name.charAt(0).toUpperCase();
+            
+            // SVG를 Image로 변환
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                <rect width="24" height="24" rx="4" fill="${color}"/>
+                <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
+            </svg>`;
+            const img = new Image();
+            img.src = 'data:image/svg+xml;base64,' + btoa(svg);
+            state.iconImages[name] = img;
+            return img;
+        }
+        
+        // === 차트 아이콘 플러그인 ===
+        const chartIconPlugin = {
+            id: 'chartIcons',
+            afterDraw: (chart) => {
+                if (!state.settings?.showChartIcons) return;
+                
+                const ctx = chart.ctx;
+                const chartType = chart.config.type;
+                const stackMode = state.settings?.stackMode || 'stacked';
+                
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (meta.hidden) return;
+                    
+                    const img = preloadIcon(dataset.label);
+                    if (!img.complete) return;
+                    
+                    const iconSize = 18;
+                    
+                    if (chartType === 'bar') {
+                        // 막대 차트: 각 막대 꼭대기에 아이콘 (누적 모드에서는 마지막 데이터셋만)
+                        if (stackMode === 'stacked' && datasetIndex !== chart.data.datasets.length - 1) {
+                            // 누적 모드에서는 최상단 막대만 아이콘 표시
+                            return;
+                        }
+                        
+                        meta.data.forEach((bar, index) => {
+                            if (bar.y !== undefined && dataset.data[index] > 0) {
+                                const x = bar.x - iconSize / 2;
+                                const y = bar.y - iconSize - 4;
+                                ctx.drawImage(img, x, y, iconSize, iconSize);
+                            }
+                        });
+                    } else if (chartType === 'line') {
+                        // 선형 차트: 최댓값 포인트에 아이콘 (겹침 방지)
+                        const data = dataset.data;
+                        if (!data || data.length === 0) return;
+                        
+                        // 최댓값 인덱스 찾기
+                        let maxIdx = 0;
+                        let maxVal = data[0];
+                        for (let i = 1; i < data.length; i++) {
+                            if (data[i] > maxVal) {
+                                maxVal = data[i];
+                                maxIdx = i;
+                            }
+                        }
+                        
+                        if (maxVal > 0) {
+                            const point = meta.data[maxIdx];
+                            if (point) {
+                                // 겹침 방지: 약간의 오프셋 적용
+                                const offsetY = -iconSize - 6 - (datasetIndex % 2) * (iconSize + 4);
+                                const x = point.x - iconSize / 2;
+                                const y = point.y + offsetY;
+                                ctx.drawImage(img, x, y, iconSize, iconSize);
+                            }
+                        }
+                    }
+                });
+            }
+        };
+        
+        // 플러그인 등록
+        Chart.register(chartIconPlugin);
+        
         // === 설정 ===
         async function loadSettings() {
             try {
                 const res = await fetch('/api/dashboard/settings');
                 state.settings = await res.json();
             } catch {
-                state.settings = { theme: 'auto', toolbar: 'top', chartType: 'bar', stackMode: 'stacked', period: 'week', calendarThreshold: 10 };
+                state.settings = { ...DEFAULT_SETTINGS };
             }
             applySettings();
         }
@@ -595,20 +707,20 @@ def get_dashboard_html() -> str:
         function applySettings() {
             const s = state.settings;
             
-            // 테마
             if (s.theme === 'auto') document.documentElement.removeAttribute('data-theme');
             else document.documentElement.setAttribute('data-theme', s.theme);
             
-            // 툴바
             document.body.setAttribute('data-toolbar', s.toolbar);
             
-            // UI 업데이트
             document.querySelectorAll('#themeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.theme));
             document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.toolbar));
             document.querySelectorAll('#chartTypeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.chartType));
             document.querySelectorAll('#stackModeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.stackMode));
             document.querySelectorAll('#periodOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.period));
             document.getElementById('thresholdInput').value = s.calendarThreshold || 10;
+            
+            document.getElementById('showUnregisteredToggle').classList.toggle('active', s.showUnregistered);
+            document.getElementById('showChartIconsToggle').classList.toggle('active', s.showChartIcons !== false);
         }
         
         function updateTabIndicator() {
@@ -640,17 +752,21 @@ def get_dashboard_html() -> str:
         
         async function loadPlaytimeData() {
             const period = state.settings?.period || 'week';
-            const data = await fetchAPI(`/api/dashboard/playtime?period=${period}&merge_names=true`);
+            const showUnreg = state.settings?.showUnregistered ? 'true' : 'false';
+            const data = await fetchAPI(`/api/dashboard/playtime?period=${period}&merge_names=true&show_unregistered=${showUnreg}`);
             if (data) {
                 state.playtimeData = data;
-                updatePlaytimeChart(data);
+                // 아이콘 프리로드
+                Object.keys(data.games || {}).forEach(preloadIcon);
+                setTimeout(() => updatePlaytimeChart(data), 100);
                 updateStats(data);
             }
         }
         
         async function loadCalendarData() {
             const threshold = state.settings?.calendarThreshold || 10;
-            const data = await fetchAPI(`/api/dashboard/calendar?year=${state.currentYear}&month=${state.currentMonth}&threshold=${threshold}`);
+            const showUnreg = state.settings?.showUnregistered ? 'true' : 'false';
+            const data = await fetchAPI(`/api/dashboard/calendar?year=${state.currentYear}&month=${state.currentMonth}&threshold=${threshold}&show_unregistered=${showUnreg}`);
             if (data) {
                 state.calendarData = data;
                 renderCalendar(data, state.currentYear, state.currentMonth);
@@ -675,18 +791,16 @@ def get_dashboard_html() -> str:
             const chartType = state.settings?.chartType || 'bar';
             const stackMode = state.settings?.stackMode || 'stacked';
             
-            // 아이콘 범례 생성
             const legendEl = document.getElementById('chartLegend');
             legendEl.innerHTML = '';
             
             const datasets = [];
             const gameNames = Object.keys(data.games || {});
             
-            gameNames.forEach((name, idx) => {
+            gameNames.forEach((name) => {
                 const gdata = data.games[name];
                 const color = getColorForName(name);
                 
-                // 범례 아이템 추가
                 const item = document.createElement('div');
                 item.className = 'legend-item';
                 item.innerHTML = `<div class="legend-icon" style="background:${color}">${name.charAt(0).toUpperCase()}</div><span>${name}</span>`;
@@ -724,9 +838,7 @@ def get_dashboard_html() -> str:
                     plugins: {
                         legend: { display: false },
                         tooltip: {
-                            callbacks: {
-                                label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}시간`
-                            }
+                            callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}시간` }
                         }
                     },
                     scales: {
@@ -773,12 +885,14 @@ def get_dashboard_html() -> str:
                 
                 let iconsHtml = '';
                 if (dayData?.games) {
-                    const validGames = dayData.games.filter(g => state.gameNameMap[g.name.toLowerCase()]);
-                    iconsHtml = validGames.slice(0, 4).map(g => {
+                    const showUnreg = state.settings?.showUnregistered;
+                    const gamesFiltered = showUnreg ? dayData.games : dayData.games.filter(g => state.gameNameMap[g.name.toLowerCase()]);
+                    
+                    // 모든 아이콘 표시 (3열 그리드로 줄바꿈)
+                    iconsHtml = gamesFiltered.map(g => {
                         const color = getColorForName(g.name);
                         return `<div class="icon" title="${g.name}: ${Math.round(g.minutes)}분" style="background:${color}">${g.name.charAt(0).toUpperCase()}</div>`;
                     }).join('');
-                    if (validGames.length > 4) iconsHtml += `<div class="icon" style="background:var(--text-secondary)">+${validGames.length-4}</div>`;
                 }
                 
                 cell.innerHTML = `<span class="date">${day}</span><div class="icons">${iconsHtml}</div>`;
@@ -788,7 +902,6 @@ def get_dashboard_html() -> str:
         
         // === 이벤트 ===
         function initEvents() {
-            // 탭
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -800,7 +913,6 @@ def get_dashboard_html() -> str:
                 });
             });
             
-            // 월 이동
             document.getElementById('prevMonth').addEventListener('click', () => {
                 state.currentMonth--;
                 if (state.currentMonth < 0) { state.currentMonth = 11; state.currentYear--; }
@@ -812,12 +924,10 @@ def get_dashboard_html() -> str:
                 loadCalendarData();
             });
             
-            // 설정 모달
             document.getElementById('settingsBtn').addEventListener('click', () => document.getElementById('settingsModal').classList.add('active'));
             document.getElementById('closeSettings').addEventListener('click', () => document.getElementById('settingsModal').classList.remove('active'));
             document.getElementById('settingsModal').addEventListener('click', e => { if (e.target.id === 'settingsModal') e.target.classList.remove('active'); });
             
-            // 설정 옵션들
             const settingHandlers = [
                 { id: 'themeOptions', key: 'theme', reload: false },
                 { id: 'toolbarOptions', key: 'toolbar', reload: false },
@@ -843,8 +953,34 @@ def get_dashboard_html() -> str:
                 loadCalendarData();
             });
             
+            document.getElementById('showUnregisteredToggle').addEventListener('click', () => {
+                state.settings.showUnregistered = !state.settings.showUnregistered;
+                applySettings();
+                saveSettings();
+                loadPlaytimeData();
+                if (state.calendarData) loadCalendarData();
+            });
+            
+            document.getElementById('showChartIconsToggle').addEventListener('click', () => {
+                state.settings.showChartIcons = !state.settings.showChartIcons;
+                applySettings();
+                saveSettings();
+                if (state.playtimeData) updatePlaytimeChart(state.playtimeData);
+            });
+            
             window.addEventListener('resize', updateTabIndicator);
         }
+        
+        const DEFAULT_SETTINGS = {
+            theme: 'auto',
+            toolbar: 'top',
+            chartType: 'bar',
+            stackMode: 'stacked',
+            period: 'week',
+            calendarThreshold: 10,
+            showUnregistered: false,
+            showChartIcons: true
+        };
         
         async function init() {
             await loadSettings();
@@ -867,13 +1003,11 @@ async def get_dashboard():
 
 @router.get("/api/dashboard/settings")
 async def get_settings():
-    """대시보드 설정 조회"""
     return JSONResponse(load_settings())
 
 
 @router.post("/api/dashboard/settings")
 async def save_settings_api(settings: dict = Body(...)):
-    """대시보드 설정 저장"""
     current = load_settings()
     current.update(settings)
     save_settings(current)
@@ -884,9 +1018,9 @@ async def save_settings_api(settings: dict = Body(...)):
 async def get_playtime_stats(
     period: str = Query("week"),
     game_id: str = Query("all"),
-    merge_names: bool = Query(False, description="동일 이름 게임 병합")
+    merge_names: bool = Query(True),
+    show_unregistered: bool = Query(False)
 ):
-    """기간별 플레이 시간 통계 API (이름 기준 병합 지원)"""
     from src.data.database import SessionLocal
     db = SessionLocal()
     
@@ -915,10 +1049,18 @@ async def get_playtime_stats(
         query = query.group_by('play_date', models.ProcessSession.process_id)
         results = query.all()
         
-        # 이름 기준 병합
+        # 등록된 게임 목록 가져오기 (미등록 필터링용)
+        registered_names = set()
+        if not show_unregistered:
+            processes = db.query(models.Process).all()
+            registered_names = {p.name.lower() for p in processes}
+        
         games_data = {}
         for row in results:
-            # 이름 기준으로 그룹핑 (merge_names=True일 때)
+            # 미등록 게임 필터링
+            if not show_unregistered and row.process_name.lower() not in registered_names:
+                continue
+            
             key = row.process_name if merge_names else row.process_id
             
             if key not in games_data:
@@ -953,15 +1095,21 @@ async def get_playtime_stats(
 async def get_calendar_data(
     year: int = Query(...),
     month: int = Query(...),
-    threshold: int = Query(10)
+    threshold: int = Query(10),
+    show_unregistered: bool = Query(False)
 ):
-    """달력 데이터 API (이름 기준 병합)"""
     from src.data.database import SessionLocal
     db = SessionLocal()
     
     try:
         start_date = datetime.datetime(year, month + 1, 1)
         end_date = datetime.datetime(year + 1, 1, 1) if month == 11 else datetime.datetime(year, month + 2, 1)
+        
+        # 등록된 게임 목록
+        registered_names = set()
+        if not show_unregistered:
+            processes = db.query(models.Process).all()
+            registered_names = {p.name.lower() for p in processes}
         
         results = db.query(
             func.date(models.ProcessSession.start_timestamp, 'unixepoch', 'localtime').label('play_date'),
@@ -972,10 +1120,14 @@ async def get_calendar_data(
             models.ProcessSession.start_timestamp >= start_date.timestamp(),
             models.ProcessSession.start_timestamp < end_date.timestamp(),
             models.ProcessSession.session_duration.isnot(None)
-        ).group_by('play_date', models.ProcessSession.process_name).all()  # process_name으로 그룹핑
+        ).group_by('play_date', models.ProcessSession.process_name).all()
         
         days_data = {}
         for row in results:
+            # 미등록 게임 필터링
+            if not show_unregistered and row.process_name.lower() not in registered_names:
+                continue
+            
             total_min = (row.total_seconds or 0) / 60
             if total_min < threshold:
                 continue
