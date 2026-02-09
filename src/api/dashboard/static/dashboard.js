@@ -55,10 +55,16 @@ const Dashboard = {
 
     // === 아이콘 ===
     async preloadIcon(name, processId) {
-        const cacheKey = processId || name;
-        if (this.state.iconImages[cacheKey]) return this.state.iconImages[cacheKey];
+        // 캐시 키는 항상 name으로 통일 (chartIconPlugin에서 dataset.label로 찾음)
+        if (this.state.iconImages[name]) return this.state.iconImages[name];
 
         const img = new Image();
+
+        // 이미지 로드 완료 대기를 위한 Promise
+        const loadPromise = new Promise((resolve) => {
+            img.onload = () => resolve(img);
+            img.onerror = () => resolve(img);
+        });
 
         // 실제 아이콘 시도
         if (processId) {
@@ -67,8 +73,8 @@ const Dashboard = {
                 const res = await fetch(iconUrl, { method: 'HEAD' });
                 if (res.ok) {
                     img.src = iconUrl;
-                    this.state.iconImages[cacheKey] = img;
-                    return img;
+                    this.state.iconImages[name] = img;
+                    return loadPromise;
                 }
             } catch (e) { }
         }
@@ -81,9 +87,10 @@ const Dashboard = {
             <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
         </svg>`;
         img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-        this.state.iconImages[cacheKey] = img;
-        return img;
+        this.state.iconImages[name] = img;
+        return loadPromise;
     },
+
 
     // === 차트 아이콘 플러그인 ===
     chartIconPlugin: {
@@ -304,19 +311,22 @@ const Dashboard = {
         if (data) {
             this.state.playtimeData = data;
 
-            // 색상 할당 및 아이콘 프리로드
+            // 색상 할당 및 아이콘 프리로드 (완료 대기)
             const gameNames = Object.keys(data.games || {});
-            gameNames.forEach((name, idx) => {
+            const iconPromises = gameNames.map((name, idx) => {
                 this.getColorForGame(name, idx);
-                this.preloadIcon(name, data.games[name].process_id);
+                return this.preloadIcon(name, data.games[name].process_id);
             });
 
-            setTimeout(() => this.updatePlaytimeChart(data), 100);
+            // 모든 아이콘 로드 완료 후 차트 렌더링
+            await Promise.all(iconPromises);
+            this.updatePlaytimeChart(data);
             this.updateStats(data);
         }
 
         this.updatePeriodLabel();
     },
+
 
     async loadCalendarData() {
         const threshold = this.state.settings?.calendarThreshold || 10;
