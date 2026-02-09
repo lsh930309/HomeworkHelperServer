@@ -1,0 +1,429 @@
+/* dashboard.css - 대시보드 스타일시트 v5 */
+
+:root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-card: #ffffff;
+    --text-primary: #1a1a2e;
+    --text-secondary: #6c757d;
+    --border-color: #e9ecef;
+    --accent: #6366f1;
+    --accent-light: #818cf8;
+}
+
+[data-theme="dark"] {
+    --bg-primary: #0f0f23;
+    --bg-secondary: #1a1a2e;
+    --bg-card: #16213e;
+    --text-primary: #e9ecef;
+    --text-secondary: #adb5bd;
+    --border-color: #2d3748;
+    --accent: #818cf8;
+    --accent-light: #a5b4fc;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg-primary: #0f0f23;
+        --bg-secondary: #1a1a2e;
+        --bg-card: #16213e;
+        --text-primary: #e9ecef;
+        --text-secondary: #adb5bd;
+        --border-color: #2d3748;
+        --accent: #818cf8;
+        --accent-light: #a5b4fc;
+    }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+    font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
+}
+
+/* === Toolbar === */
+.toolbar {
+    height: 52px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    z-index: 100;
+    flex-shrink: 0;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body[data-toolbar="floating-top"] .toolbar,
+body[data-toolbar="floating-bottom"] .toolbar {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1);
+    backdrop-filter: blur(16px);
+    background: color-mix(in srgb, var(--bg-card) 85%, transparent);
+}
+
+body[data-toolbar="floating-top"] .toolbar { top: 20px; }
+body[data-toolbar="floating-bottom"] .toolbar { bottom: 20px; top: auto; }
+body[data-toolbar="floating-top"] .main-content { padding-top: 92px; }
+body[data-toolbar="floating-bottom"] .main-content { padding-bottom: 92px; }
+body[data-toolbar="bottom"] { flex-direction: column-reverse; }
+body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px solid var(--border-color); }
+
+.toolbar-brand { font-weight: 700; font-size: 1rem; color: var(--accent); }
+
+/* === 탭 및 기간 네비게이션 === */
+.toolbar-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-secondary);
+    padding: 4px;
+    border-radius: 12px;
+    position: relative;
+}
+
+.tab-indicator {
+    position: absolute;
+    height: calc(100% - 8px);
+    background: var(--accent);
+    border-radius: 8px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 0;
+}
+
+.tab-btn {
+    padding: 7px 18px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: color 0.2s;
+    position: relative;
+    z-index: 1;
+}
+
+.tab-btn.active { color: white; }
+.tab-btn:not(.active):hover { color: var(--text-primary); }
+
+/* 기간 네비게이션 */
+.period-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.period-nav button {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.period-nav button:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.period-nav .period-label { font-size: 0.85rem; font-weight: 500; min-width: 100px; text-align: center; }
+
+.toolbar-actions { display: flex; gap: 6px; align-items: center; }
+
+.icon-btn {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    transition: all 0.2s;
+}
+
+.icon-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+
+/* === 메인 컨텐츠 === */
+.main-content {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+}
+
+.tab-panel { display: none; flex: 1; min-height: 0; }
+.tab-panel.active {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* === 카드 === */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.card-title { font-size: 0.95rem; font-weight: 600; }
+
+/* === 통계 그리드 === */
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 800px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+
+.stat-label { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 2px; }
+.stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+.stat-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
+
+/* === 차트 === */
+.chart-container { position: relative; flex: 1; min-height: 220px; }
+
+.chart-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    font-size: 0.75rem;
+}
+
+.legend-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.legend-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.legend-icon .fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 600;
+    font-size: 0.65rem;
+}
+
+/* === 달력 === */
+.calendar-wrapper { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+    flex: 1;
+}
+
+.calendar-header {
+    text-align: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 3px 0;
+}
+
+.calendar-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 2px;
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    font-size: 0.65rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-height: 60px;
+}
+
+.calendar-day:hover { border: 1px solid var(--accent); }
+.calendar-day.empty { background: transparent; pointer-events: none; }
+.calendar-day .date { font-weight: 600; margin-bottom: 2px; font-size: 0.7rem; }
+
+.calendar-day .icons {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    width: 100%;
+    padding: 0 2px;
+}
+
+.calendar-day .icon {
+    width: 100%;
+    aspect-ratio: 1;
+    max-width: 18px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    font-weight: 600;
+    color: white;
+    margin: 0 auto;
+    overflow: hidden;
+}
+
+.calendar-day .icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.month-nav { display: flex; align-items: center; gap: 10px; }
+.month-nav button {
+    padding: 5px 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+.month-nav button:hover { background: var(--accent); color: white; }
+.month-title { font-size: 0.95rem; font-weight: 600; }
+
+/* === 설정 모달 === */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s;
+}
+
+.modal-overlay.active { opacity: 1; visibility: visible; }
+
+.modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 20px;
+    width: 380px;
+    max-width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    transform: scale(0.9);
+    transition: transform 0.2s;
+}
+
+.modal-overlay.active .modal { transform: scale(1); }
+.modal-title { font-size: 1rem; font-weight: 600; margin-bottom: 14px; }
+
+.setting-group { margin-bottom: 12px; }
+.setting-label { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 5px; display: block; }
+.setting-options { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.setting-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.setting-btn:hover { border-color: var(--accent); }
+.setting-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+.setting-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.toggle-switch {
+    width: 40px;
+    height: 22px;
+    background: var(--border-color);
+    border-radius: 11px;
+    position: relative;
+    transition: background 0.2s;
+}
+
+.toggle-switch::after {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.2s;
+}
+
+.setting-toggle.active .toggle-switch { background: var(--accent); }
+.setting-toggle.active .toggle-switch::after { transform: translateX(18px); }
+
+.modal-close {
+    margin-top: 14px;
+    width: 100%;
+    padding: 9px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+}

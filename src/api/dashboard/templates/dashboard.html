@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>숙제 관리자 - 대시보드</title>
+    
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='24' font-size='24'>📊</text></svg>">
+    <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+</head>
+<body data-toolbar="top">
+    <header class="toolbar">
+        <div class="toolbar-brand">📊 대시보드</div>
+        
+        <nav class="toolbar-tabs">
+            <div class="tab-indicator" id="tabIndicator"></div>
+            <button class="tab-btn active" data-tab="playtime">📈 플레이 시간</button>
+            <button class="tab-btn" data-tab="calendar">📅 달력</button>
+        </nav>
+        
+        <div class="period-nav">
+            <button id="prevPeriod">◀</button>
+            <span class="period-label" id="periodLabel">이번 주</span>
+            <button id="nextPeriod">▶</button>
+        </div>
+        
+        <div class="toolbar-actions">
+            <button class="icon-btn" id="settingsBtn" title="설정">⚙️</button>
+        </div>
+    </header>
+    
+    <main class="main-content">
+        <section id="playtime" class="tab-panel active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">오늘</div>
+                    <div class="stat-value" id="statToday">-<span class="stat-unit">분</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">이번 주</div>
+                    <div class="stat-value" id="statWeek">-<span class="stat-unit">시간</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">이번 달</div>
+                    <div class="stat-value" id="statMonth">-<span class="stat-unit">시간</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">등록 게임</div>
+                    <div class="stat-value" id="statGames">-<span class="stat-unit">개</span></div>
+                </div>
+            </div>
+            
+            <div class="card" style="flex:1; display:flex; flex-direction:column;">
+                <div class="card-header">
+                    <h2 class="card-title">기간별 플레이 시간</h2>
+                </div>
+                <div class="chart-legend" id="chartLegend"></div>
+                <div class="chart-container">
+                    <canvas id="playtimeChart"></canvas>
+                </div>
+            </div>
+        </section>
+        
+        <section id="calendar" class="tab-panel">
+            <div class="card calendar-wrapper">
+                <div class="card-header">
+                    <div class="month-nav">
+                        <button id="prevMonth">◀</button>
+                        <span class="month-title" id="monthTitle">2026년 2월</span>
+                        <button id="nextMonth">▶</button>
+                    </div>
+                </div>
+                <div class="calendar-grid" id="calendarGrid">
+                    <div class="calendar-header">일</div>
+                    <div class="calendar-header">월</div>
+                    <div class="calendar-header">화</div>
+                    <div class="calendar-header">수</div>
+                    <div class="calendar-header">목</div>
+                    <div class="calendar-header">금</div>
+                    <div class="calendar-header">토</div>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <h3 class="modal-title">⚙️ 설정</h3>
+            
+            <div class="setting-group">
+                <label class="setting-label">테마</label>
+                <div class="setting-options" id="themeOptions">
+                    <button class="setting-btn" data-value="auto">자동</button>
+                    <button class="setting-btn" data-value="light">라이트</button>
+                    <button class="setting-btn" data-value="dark">다크</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">툴바 위치</label>
+                <div class="setting-options" id="toolbarOptions">
+                    <button class="setting-btn" data-value="top">상단</button>
+                    <button class="setting-btn" data-value="bottom">하단</button>
+                    <button class="setting-btn" data-value="floating-top">플로팅↑</button>
+                    <button class="setting-btn" data-value="floating-bottom">플로팅↓</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">차트 유형</label>
+                <div class="setting-options" id="chartTypeOptions">
+                    <button class="setting-btn" data-value="bar">막대</button>
+                    <button class="setting-btn" data-value="line">선형</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">데이터 표시</label>
+                <div class="setting-options" id="stackModeOptions">
+                    <button class="setting-btn" data-value="stacked">누적</button>
+                    <button class="setting-btn" data-value="grouped">개별</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">기간</label>
+                <div class="setting-options" id="periodOptions">
+                    <button class="setting-btn" data-value="week">주간</button>
+                    <button class="setting-btn" data-value="month">월간</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">달력 최소 플레이 시간</label>
+                <div class="setting-options">
+                    <input type="number" id="thresholdInput" value="10" min="0" 
+                        style="width:60px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;">
+                    <span style="font-size:0.8rem;color:var(--text-secondary);">분</span>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <div class="setting-toggle" id="showUnregisteredToggle">
+                    <div class="toggle-switch"></div>
+                    <span style="font-size:0.8rem;">미등록 게임 포함</span>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <div class="setting-toggle" id="showChartIconsToggle">
+                    <div class="toggle-switch"></div>
+                    <span style="font-size:0.8rem;">차트에 아이콘 표시</span>
+                </div>
+            </div>
+            
+            <button class="modal-close" id="closeSettings">닫기</button>
+        </div>
+    </div>
+    
+    <script src="/static/dashboard/dashboard.js"></script>
+</body>
+</html>
