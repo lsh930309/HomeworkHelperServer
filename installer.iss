@@ -79,25 +79,11 @@ function IsProcessRunning(ProcessName: String): Boolean;
 var
   ResultCode: Integer;
 begin
-  // tasklist로 프로세스 확인 (ERRORLEVEL 0 = 프로세스 존재)
-  Result := Exec('tasklist', '/FI "IMAGENAME eq ' + ProcessName + '" /NH | find /I "' + ProcessName + '"', 
-                 '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
-  
-  // 위 방법이 동작하지 않을 경우를 대비한 대체 방식
-  // cmd /c 를 사용하여 파이프 명령 실행
+  // cmd /c를 사용하여 파이프 명령 실행
+  // tasklist | find로 프로세스 존재 여부 확인 (ERRORLEVEL 0 = 프로세스 존재)
   Exec('cmd.exe', '/c tasklist /FI "IMAGENAME eq ' + ProcessName + '" 2>NUL | find /I "' + ProcessName + '" >NUL',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := (ResultCode = 0);
-end;
-
-// 프로세스 종료 함수
-function KillProcess(ProcessName: String): Boolean;
-var
-  ResultCode: Integer;
-begin
-  // taskkill로 프로세스 종료 (/F = 강제, /IM = 이미지 이름)
-  Exec('taskkill', '/F /IM ' + ProcessName, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Result := (ResultCode = 0) or (ResultCode = 128); // 128 = 프로세스 없음
 end;
 
 // 모든 HomeworkHelper 관련 프로세스 종료

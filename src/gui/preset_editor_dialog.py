@@ -27,6 +27,9 @@ class PresetEditorDialog(QDialog):
         
         self.manager = GamePresetManager()
         
+        # 현재 편집 중인 원본 프리셋 ID (rename 시 원본 추적용)
+        self._original_preset_id: Optional[str] = None
+        
         # UI 초기화
         self._init_ui()
         
@@ -116,6 +119,7 @@ class PresetEditorDialog(QDialog):
         self.launch_type_combo = QComboBox()
         self.launch_type_combo.addItem("기본 (바로가기 우선)", "shortcut")
         self.launch_type_combo.addItem("프로세스 직접 실행 우선", "direct")
+        self.launch_type_combo.addItem("런처 우선", "launcher")
         
         # 호요버스 관련
         self.is_hoyoverse_check = QCheckBox("호요버스 게임 (스태미나 추적 지원)")
@@ -193,6 +197,7 @@ class PresetEditorDialog(QDialog):
     def _start_add_new_mode(self):
         """신규 추가 모드로 전환"""
         self.preset_list_widget.clearSelection()
+        self._original_preset_id = None  # 신규 모드에서는 원본 ID 없음
         self.form_group.setTitle("새 프리셋 추가")
         self.id_edit.setEnabled(True)
         self.id_edit.clear()
@@ -212,12 +217,15 @@ class PresetEditorDialog(QDialog):
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
 
-    def _on_preset_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
+    def _on_preset_selected(self, current: QListWidgetItem, _previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
         if not current:
             return
             
         preset = current.data(Qt.ItemDataRole.UserRole)
+        
+        # 원본 프리셋 ID 저장 (rename 시 원본 추적용)
+        self._original_preset_id = preset.get("id")
         
         self.form_group.setTitle("프리셋 정보")
         
@@ -327,27 +335,37 @@ class PresetEditorDialog(QDialog):
         mandatory_times = []
         if mandatory_times_str:
             parts = [p.strip() for p in mandatory_times_str.split(",")]
-            # 간단한 포맷 검증 (HH:MM)
+            # 포맷 검증 (HH:MM) + 범위 검증 (00:00 ~ 23:59)
             import re
-            time_pat = re.compile(r"^\d{1,2}:\d{2}$")
+            time_pat = re.compile(r"^(\d{1,2}):(\d{2})$")
             for t in parts:
-                if not time_pat.match(t):
+                m = time_pat.match(t)
+                if not m:
                     QMessageBox.warning(self, "입력 오류", f"시간 형식이 올바르지 않습니다: {t}\nHH:MM 형식으로 입력해주세요.")
                     return
-                # 정규화 (09:00 -> 09:00)
-                mandatory_times.append(t)
+                hour, minute = map(int, m.groups())
+                if hour > 23 or minute > 59:
+                    QMessageBox.warning(self, "입력 오류", f"시간 범위가 올바르지 않습니다: {t}\n00:00 ~ 23:59 범위로 입력해주세요.")
+                    return
+                # 정규화 (9:00 -> 09:00)
+                mandatory_times.append(f"{hour:02d}:{minute:02d}")
         
-        # 신규인지 수정인지 확인
-        existing_preset = self.manager.get_preset_by_id(preset_id)
+        # 신규인지 수정인지 확인 (원본 ID 기준)
+        is_editing = self._original_preset_id is not None
+        original_preset = self.manager.get_preset_by_id(self._original_preset_id) if is_editing else None
+        
+        # 입력한 ID로 기존 프리셋이 있는지 확인 (중복 ID 감지)
+        target_preset = self.manager.get_preset_by_id(preset_id)
 
-        # ID 변경 감지 (기존 프리셋 편집 중)
-        if existing_preset and existing_preset.get("id") != preset_id:
-            old_id = existing_preset["id"]
+        # ID 변경 감지 (기존 프리셋 편집 중이고 ID가 변경됨)
+        pending_icon_rename = None  # 저장 성공 후 실행할 아이콘 리네임 작업
+        if original_preset and self._original_preset_id != preset_id:
+            old_id = original_preset["id"]
             new_id = preset_id
-            old_icon_path = existing_preset.get("icon_path")
-            icon_type = existing_preset.get("icon_type")
+            old_icon_path = original_preset.get("icon_path")
+            icon_type = original_preset.get("icon_type")
 
-            # 사용자 커스텀 아이콘이 있으면 파일명 변경
+            # 사용자 커스텀 아이콘이 있으면 리네임 작업 예약 (저장 성공 후 실행)
             if old_icon_path and icon_type == "user":
                 from src.utils.icon_helper import ensure_custom_icons_directory
                 import os
@@ -360,12 +378,9 @@ class PresetEditorDialog(QDialog):
                     _, ext = os.path.splitext(old_icon_path)
                     new_icon_filename = f"{new_id}_stamina{ext}"
                     new_file = os.path.join(custom_dir, new_icon_filename)
-
-                    # 파일 리네임
-                    os.rename(old_file, new_file)
-
-                    # icon_path_edit 업데이트
-                    self.icon_path_edit.setText(new_icon_filename)
+                    
+                    # 저장 성공 후 실행할 리네임 작업 예약
+                    pending_icon_rename = (old_file, new_file, new_icon_filename)
 
             # ID 변경 경고 메시지
             reply = QMessageBox.warning(
@@ -381,7 +396,8 @@ class PresetEditorDialog(QDialog):
                 return
 
         # icon_path는 파일명만 저장 (예: "honkai_starrail_stamina.png")
-        icon_filename = self.icon_path_edit.text().strip()
+        # ID 변경으로 인한 새 아이콘 파일명이 있으면 사용
+        icon_filename = pending_icon_rename[2] if pending_icon_rename else self.icon_path_edit.text().strip()
 
         # 데이터 구성 (모든 필드 명시적 포함)
         new_data = {
@@ -407,7 +423,8 @@ class PresetEditorDialog(QDialog):
             "launcher_patterns": None
         }
 
-        # 기존 프리셋이 있으면 시스템 필드 보존
+        # 기존 프리셋이 있으면 시스템 필드 보존 (원본 프리셋 또는 덮어쓰기 대상)
+        existing_preset = original_preset or target_preset
         if existing_preset:
             for key in ["stamina_name", "stamina_max_default", "stamina_recovery_minutes", "launcher_patterns"]:
                 if key in existing_preset:
@@ -419,22 +436,35 @@ class PresetEditorDialog(QDialog):
                 new_data["icon_type"] = "system"
         
         success = False
-        if existing_preset:
-            # 수정 (기존 ID가 존재하면 업데이트)
-            # 단, 현재 선택된 아이템이 아닌 다른 아이템의 ID를 입력했을 경우 덮어쓰기 경고가 필요할 수 있음
-            # 하지만 ID 수정은 막혀있으므로, 현재 선택된 아이템의 업데이트이거나
-            # 신규 추가 모드에서 기존 ID를 입력한 경우임.
-            if self.id_edit.isEnabled(): # 신규 추가 모드였다면
-                 reply = QMessageBox.question(
-                    self, 
-                    "덮어쓰기 확인", 
-                    f"이미 존재하는 ID '{preset_id}' 입니다. 덮어쓰시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                 if reply == QMessageBox.StandardButton.No:
-                     return
-
-            success = self.manager.update_user_preset(preset_id, new_data)
+        
+        # 중복 ID 감지: 입력한 ID로 기존 프리셋이 있고, (신규 추가거나 OR ID가 변경됨)
+        if target_preset and (not is_editing or preset_id != self._original_preset_id):
+            # 덮어쓰기 확인 필요
+            reply = QMessageBox.question(
+                self, 
+                "덮어쓰기 확인", 
+                f"이미 존재하는 ID '{preset_id}' 입니다. 덮어쓰시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+            # 덮어쓰기 진행
+            if is_editing and preset_id != self._original_preset_id:
+                # 편집 중 ID를 기존 프리셋으로 변경: 원본 삭제 후 대상 덮어쓰기
+                self.manager.remove_user_preset(self._original_preset_id)
+                success = self.manager.update_user_preset(preset_id, new_data)
+            else:
+                success = self.manager.update_user_preset(preset_id, new_data)
+            action = "덮어쓰기"
+        elif is_editing:
+            # 기존 프리셋 수정 (ID 변경 포함)
+            if self._original_preset_id != preset_id:
+                # ID가 변경된 경우: 기존 프리셋 삭제 후 새로 추가
+                self.manager.remove_user_preset(self._original_preset_id)
+                success = self.manager.add_user_preset(new_data)
+            else:
+                # ID 동일한 경우: 업데이트
+                success = self.manager.update_user_preset(preset_id, new_data)
             action = "수정"
         else:
             # 신규 추가
@@ -442,6 +472,14 @@ class PresetEditorDialog(QDialog):
             action = "추가"
             
         if success:
+            # 저장 성공 후 아이콘 리네임 실행 (ID 변경 시)
+            if pending_icon_rename:
+                import os
+                old_file, new_file, new_icon_filename = pending_icon_rename
+                if os.path.exists(old_file):
+                    os.rename(old_file, new_file)
+                    self.icon_path_edit.setText(new_icon_filename)
+            
             QMessageBox.information(self, "성공", f"프리셋이 {action}되었습니다.")
             self.manager.reload()
             self._load_presets()

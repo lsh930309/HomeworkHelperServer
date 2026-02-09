@@ -460,7 +460,8 @@ def create_installer(version_info):
             print(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
             print(f"  저장 위치: {dest}")
         else:
-            print(f"[경고] 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}")
+            print(f"[오류] 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}")
+            return False
 
         return True
     except subprocess.CalledProcessError as e:

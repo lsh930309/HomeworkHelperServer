@@ -385,17 +385,9 @@ class ProcessDialog(QDialog):
         
         # 4. 프리셋 저장
         try:
-            # 중복 ID는 이미 위에서 확인했으므로 바로 저장
+            # 중복 ID는 이미 위에서 확인하여 덮어쓰기 동의를 받았으므로 바로 저장
             existing = manager.get_preset_by_id(preset_id)
             if existing:
-                reply = QMessageBox.question(
-                    self,
-                    "덮어쓰기 확인",
-                    f"ID '{preset_id}'인 프리셋이 이미 존재합니다.\n덮어쓰시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                if reply == QMessageBox.StandardButton.No:
-                    return
                 success = manager.update_user_preset(preset_id, preset_data)
             else:
                 success = manager.add_user_preset(preset_data)

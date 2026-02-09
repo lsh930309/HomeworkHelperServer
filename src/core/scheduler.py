@@ -351,7 +351,7 @@ class Scheduler:
                 logger.info(f"스태미나 알림: '{process.name}' - {stamina_name} {predicted}/{max_stamina}")
                 self.notifier.send_notification(
                     title=f"{process.name} - {stamina_name} 가득 참",
-                    message=f"'{process.name}'의 {stamina_name}이 곷 가득 찉니다! ({predicted}/{max_stamina}, {remaining}개 남음)",
+                    message=f"'{process.name}'의 {stamina_name}이 곧 가득 찹니다! ({predicted}/{max_stamina}, {remaining}개 남음)",
                     task_id_to_highlight=process.id,
                     button_text="실행",
                     button_action="run"

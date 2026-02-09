@@ -837,6 +837,21 @@ class MainWindow(QMainWindow):
         elif launch_type == 'shortcut':
             # 바로가기 선호: 실행 경로 사용, 없으면 모니터링 경로 사용
             launch_target = p_launch.launch_path or p_launch.monitoring_path
+        elif launch_type == 'launcher':
+            # 런처 우선: 프리셋에서 런처 패턴 확인 후 사용, 없으면 shortcut 방식으로 폴백
+            # 런처 경로를 찾기 위한 로직: 프리셋의 launcher_patterns 활용
+            launcher_path = None
+            if hasattr(p_launch, 'user_preset_id') and p_launch.user_preset_id:
+                preset = self.preset_manager.get_preset_by_id(p_launch.user_preset_id)
+                if preset and preset.get('launcher_patterns'):
+                    # 런처 패턴으로 경로 탐색 (간단히 실행 경로에서 런처 탐색)
+                    launch_dir = os.path.dirname(p_launch.launch_path or p_launch.monitoring_path or '')
+                    for pattern in preset['launcher_patterns']:
+                        potential_launcher = os.path.join(launch_dir, pattern)
+                        if os.path.exists(potential_launcher):
+                            launcher_path = potential_launcher
+                            break
+            launch_target = launcher_path or p_launch.launch_path or p_launch.monitoring_path
         else:
             # 레거시 'auto' 등: 실행 경로가 있으면 사용, 없으면 모니터링 경로
             launch_target = p_launch.launch_path or p_launch.monitoring_path
