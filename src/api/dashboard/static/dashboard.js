@@ -62,32 +62,40 @@ const Dashboard = {
 
         // 이미지 로드 완료 대기를 위한 Promise
         const loadPromise = new Promise((resolve) => {
-            img.onload = () => resolve(img);
-            img.onerror = () => resolve(img);
+            img.onload = () => {
+                this.state.iconImages[name] = img;
+                resolve(img);
+            };
+            img.onerror = () => {
+                // 실패 시 폴백 SVG
+                const color = this.state.gameColors[name] || this.COLORS[0];
+                const initial = name.charAt(0).toUpperCase();
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                    <rect width="24" height="24" rx="4" fill="${color}"/>
+                    <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
+                </svg>`;
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+                // 재귀 방지를 위해 바로 저장
+                this.state.iconImages[name] = img;
+                resolve(img);
+            };
         });
 
-        // 실제 아이콘 시도
+        // 실제 아이콘 먼저 시도
         if (processId) {
-            const iconUrl = `/api/dashboard/icons/${processId}`;
-            try {
-                const res = await fetch(iconUrl, { method: 'HEAD' });
-                if (res.ok) {
-                    img.src = iconUrl;
-                    this.state.iconImages[name] = img;
-                    return loadPromise;
-                }
-            } catch (e) { }
+            img.src = `/api/dashboard/icons/${processId}`;
+        } else {
+            // processId 없으면 바로 폴백
+            const color = this.state.gameColors[name] || this.COLORS[0];
+            const initial = name.charAt(0).toUpperCase();
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                <rect width="24" height="24" rx="4" fill="${color}"/>
+                <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
+            </svg>`;
+            img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            this.state.iconImages[name] = img;
         }
 
-        // 폴백 SVG
-        const color = this.state.gameColors[name] || this.COLORS[0];
-        const initial = name.charAt(0).toUpperCase();
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-            <rect width="24" height="24" rx="4" fill="${color}"/>
-            <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
-        </svg>`;
-        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-        this.state.iconImages[name] = img;
         return loadPromise;
     },
 
