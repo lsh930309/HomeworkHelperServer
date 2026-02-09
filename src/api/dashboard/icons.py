@@ -52,6 +52,17 @@ def get_cached_icon_path(process_id: str) -> Path:
     return Path(ICON_CACHE_DIR) / f"{process_id}.png"
 
 
+def resolve_shortcut(lnk_path: str) -> str | None:
+    """바로가기(.lnk) 파일에서 대상 경로 추출"""
+    try:
+        import win32com.client
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(lnk_path)
+        return shortcut.TargetPath
+    except Exception:
+        return None
+
+
 def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
     """
     실행 파일에서 아이콘 추출
@@ -60,12 +71,6 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
         캐시된 아이콘 파일 경로 또는 None
     """
     try:
-        import win32gui
-        import win32ui
-        import win32con
-        import win32api
-        from PIL import Image
-        
         ensure_cache_dir()
         cache_path = get_cached_icon_path(process_id)
         
@@ -73,12 +78,28 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
         if cache_path.exists():
             return str(cache_path)
         
+        # 바로가기 파일인 경우 대상 경로 추출
+        actual_path = exe_path
+        if exe_path.lower().endswith('.lnk'):
+            resolved = resolve_shortcut(exe_path)
+            if resolved and os.path.exists(resolved):
+                actual_path = resolved
+            else:
+                return None
+        
         # 실행 파일 존재 확인
-        if not os.path.exists(exe_path):
+        if not os.path.exists(actual_path):
             return None
         
+        # pywin32로 아이콘 추출
+        import win32gui
+        import win32ui
+        import win32con
+        import win32api
+        from PIL import Image
+        
         # 아이콘 추출
-        large_icons, small_icons = win32gui.ExtractIconEx(exe_path, 0)
+        large_icons, small_icons = win32gui.ExtractIconEx(actual_path, 0)
         
         if large_icons:
             hicon = large_icons[0]
@@ -116,12 +137,13 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
         
         return None
         
-    except ImportError:
-        # pywin32가 없는 경우
+    except ImportError as e:
+        print(f"아이콘 추출 모듈 없음: {e}")
         return None
     except Exception as e:
         print(f"아이콘 추출 실패 ({exe_path}): {e}")
         return None
+
 
 
 def generate_fallback_svg(name: str, color: str) -> str:
