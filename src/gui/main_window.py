@@ -842,12 +842,9 @@ class MainWindow(QMainWindow):
             # 런처 경로를 찾기 위한 로직: 프리셋의 launcher_patterns 활용
             launcher_path = None
             if hasattr(p_launch, 'user_preset_id') and p_launch.user_preset_id:
-                from src.data.preset_manager import GamePresetManager
-                preset_manager = GamePresetManager()
-                preset = preset_manager.get_preset_by_id(p_launch.user_preset_id)
+                preset = self.preset_manager.get_preset_by_id(p_launch.user_preset_id)
                 if preset and preset.get('launcher_patterns'):
                     # 런처 패턴으로 경로 탐색 (간단히 실행 경로에서 런처 탐색)
-                    import os
                     launch_dir = os.path.dirname(p_launch.launch_path or p_launch.monitoring_path or '')
                     for pattern in preset['launcher_patterns']:
                         potential_launcher = os.path.join(launch_dir, pattern)

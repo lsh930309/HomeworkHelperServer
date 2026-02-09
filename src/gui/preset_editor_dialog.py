@@ -455,7 +455,7 @@ class PresetEditorDialog(QDialog):
             # 기존 프리셋 수정 (ID 변경 포함)
             if self._original_preset_id != preset_id:
                 # ID가 변경된 경우: 기존 프리셋 삭제 후 새로 추가
-                self.manager.delete_user_preset(self._original_preset_id)
+                self.manager.remove_user_preset(self._original_preset_id)
                 success = self.manager.add_user_preset(new_data)
             else:
                 # ID 동일한 경우: 업데이트
