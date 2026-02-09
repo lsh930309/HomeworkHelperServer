@@ -1,16 +1,48 @@
 # dashboard.py
-"""대시보드 API 및 HTML 렌더링 모듈 v2"""
+"""대시보드 API 및 HTML 렌더링 모듈 v3"""
 
 import datetime
+import json
+import os
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Query, Body
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 
 from src.data import models
 
 router = APIRouter()
+
+# 설정 파일 경로
+SETTINGS_DIR = os.path.join(os.getenv('APPDATA', os.path.expanduser('~')), 'HomeworkHelper')
+SETTINGS_FILE = os.path.join(SETTINGS_DIR, 'dashboard_settings.json')
+
+DEFAULT_SETTINGS = {
+    "theme": "auto",
+    "toolbar": "top",
+    "chartType": "bar",
+    "stackMode": "stacked",
+    "calendarThreshold": 10
+}
+
+
+def load_settings():
+    """AppData에서 설정 로드"""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return {**DEFAULT_SETTINGS, **json.load(f)}
+    except:
+        pass
+    return DEFAULT_SETTINGS.copy()
+
+
+def save_settings(settings: dict):
+    """AppData에 설정 저장"""
+    os.makedirs(SETTINGS_DIR, exist_ok=True)
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
 def get_dashboard_html() -> str:
@@ -22,14 +54,10 @@ def get_dashboard_html() -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>숙제 관리자 - 대시보드</title>
     
-    <!-- Satoshi 폰트 -->
     <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
-    
-    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
     
     <style>
-        /* === 테마 변수 === */
         :root {
             --bg-primary: #ffffff;
             --bg-secondary: #f8f9fa;
@@ -39,9 +67,6 @@ def get_dashboard_html() -> str:
             --border-color: #e9ecef;
             --accent: #6366f1;
             --accent-light: #818cf8;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
         }
         
         [data-theme="dark"] {
@@ -69,61 +94,56 @@ def get_dashboard_html() -> str:
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        html, body {
-            height: 100%;
-            overflow: hidden;
-        }
+        html, body { height: 100%; overflow: hidden; }
         
         body {
-            font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             display: flex;
             flex-direction: column;
         }
         
-        /* === Toolbar 스타일 (위치 설정 가능) === */
+        /* === Toolbar === */
         .toolbar {
-            height: 56px;
+            height: 52px;
             background: var(--bg-card);
             border-bottom: 1px solid var(--border-color);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 20px;
+            padding: 0 16px;
             z-index: 100;
             flex-shrink: 0;
-            transition: all 0.3s ease;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
-        /* 플로팅 스타일 */
+        /* 플로팅 스타일 - 더 플로팅 느낌 */
         body[data-toolbar="floating-top"] .toolbar,
         body[data-toolbar="floating-bottom"] .toolbar {
             position: fixed;
-            left: 20px;
-            right: 20px;
-            border-radius: 16px;
+            left: 24px;
+            right: 24px;
+            border-radius: 20px;
             border: 1px solid var(--border-color);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1);
+            backdrop-filter: blur(16px);
+            background: color-mix(in srgb, var(--bg-card) 85%, transparent);
         }
-        body[data-toolbar="floating-top"] .toolbar { top: 16px; }
-        body[data-toolbar="floating-bottom"] .toolbar { bottom: 16px; top: auto; }
-        body[data-toolbar="floating-top"] .main-content { padding-top: 88px; }
-        body[data-toolbar="floating-bottom"] .main-content { padding-bottom: 88px; }
+        body[data-toolbar="floating-top"] .toolbar { top: 20px; }
+        body[data-toolbar="floating-bottom"] .toolbar { bottom: 20px; top: auto; }
+        body[data-toolbar="floating-top"] .main-content { padding-top: 92px; }
+        body[data-toolbar="floating-bottom"] .main-content { padding-bottom: 92px; }
         body[data-toolbar="bottom"] { flex-direction: column-reverse; }
         body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px solid var(--border-color); }
         
         .toolbar-brand {
             font-weight: 700;
-            font-size: 1.1rem;
+            font-size: 1rem;
             color: var(--accent);
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
         
-        /* === 탭 버튼 (슬라이딩 indicator) === */
+        /* === 탭 버튼 === */
         .toolbar-tabs {
             display: flex;
             gap: 4px;
@@ -143,12 +163,12 @@ def get_dashboard_html() -> str:
         }
         
         .tab-btn {
-            padding: 8px 20px;
+            padding: 7px 18px;
             border: none;
             background: transparent;
             color: var(--text-secondary);
             font-family: inherit;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 500;
             cursor: pointer;
             border-radius: 8px;
@@ -160,16 +180,11 @@ def get_dashboard_html() -> str:
         .tab-btn.active { color: white; }
         .tab-btn:not(.active):hover { color: var(--text-primary); }
         
-        /* === 설정 버튼 === */
-        .toolbar-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
+        .toolbar-actions { display: flex; gap: 6px; align-items: center; }
         
         .icon-btn {
-            width: 36px;
-            height: 36px;
+            width: 34px;
+            height: 34px;
             border: 1px solid var(--border-color);
             background: var(--bg-secondary);
             border-radius: 8px;
@@ -177,42 +192,32 @@ def get_dashboard_html() -> str:
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1rem;
             transition: all 0.2s;
         }
         
-        .icon-btn:hover {
-            background: var(--accent);
-            color: white;
-            border-color: var(--accent);
-        }
+        .icon-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
         
         /* === 메인 컨텐츠 === */
         .main-content {
             flex: 1;
-            padding: 20px;
+            padding: 16px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 12px;
             overflow: auto;
         }
         
-        /* === 탭 패널 === */
-        .tab-panel {
-            display: none;
-            flex: 1;
-            min-height: 0;
-        }
-        
+        .tab-panel { display: none; flex: 1; min-height: 0; }
         .tab-panel.active {
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 12px;
             animation: fadeIn 0.3s ease;
         }
         
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
+            from { opacity: 0; transform: translateY(6px); }
             to { opacity: 1; transform: translateY(0); }
         }
         
@@ -221,80 +226,74 @@ def get_dashboard_html() -> str:
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            padding: 16px;
+            padding: 14px;
         }
         
         .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 10px;
         }
         
-        .card-title { font-size: 1rem; font-weight: 600; }
+        .card-title { font-size: 0.95rem; font-weight: 600; }
         
-        /* === 필터 컨트롤 === */
-        .filter-controls {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .filter-select, .filter-input {
-            padding: 6px 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            font-family: inherit;
-            font-size: 0.8rem;
-        }
-        
-        .filter-input { width: 60px; }
-        
-        .filter-label {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-        }
-        
-        /* === 통계 카드 그리드 === */
+        /* === 통계 그리드 === */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
+            gap: 10px;
         }
-        
-        @media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
-        @media (max-width: 500px) { .stats-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 800px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
         
         .stat-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 10px;
-            padding: 12px 16px;
+            padding: 10px 14px;
         }
         
-        .stat-label { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 2px; }
-        .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
-        .stat-unit { font-size: 0.75rem; color: var(--text-secondary); font-weight: 400; }
+        .stat-label { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 2px; }
+        .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+        .stat-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
         
-        /* === 차트 컨테이너 === */
-        .chart-container {
-            position: relative;
-            flex: 1;
-            min-height: 250px;
+        /* === 차트 === */
+        .chart-container { position: relative; flex: 1; min-height: 220px; }
+        
+        /* 게임 아이콘 범례 */
+        .chart-legend {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            font-size: 0.75rem;
+        }
+        
+        .legend-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 0.65rem;
         }
         
         /* === 달력 === */
-        .calendar-wrapper {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
+        .calendar-wrapper { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         
         .calendar-grid {
             display: grid;
@@ -305,28 +304,28 @@ def get_dashboard_html() -> str:
         
         .calendar-header {
             text-align: center;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 600;
             color: var(--text-secondary);
-            padding: 4px 0;
+            padding: 3px 0;
         }
         
         .calendar-day {
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 4px 2px;
-            border-radius: 6px;
+            padding: 3px 2px;
+            border-radius: 5px;
             background: var(--bg-secondary);
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             cursor: pointer;
             transition: all 0.2s;
-            min-height: 50px;
+            min-height: 44px;
         }
         
         .calendar-day:hover { border: 1px solid var(--accent); }
         .calendar-day.empty { background: transparent; pointer-events: none; }
-        .calendar-day .date { font-weight: 600; margin-bottom: 2px; font-size: 0.75rem; }
+        .calendar-day .date { font-weight: 600; margin-bottom: 1px; font-size: 0.7rem; }
         
         .calendar-day .icons {
             display: flex;
@@ -338,39 +337,29 @@ def get_dashboard_html() -> str:
         }
         
         .calendar-day .icon {
-            width: 22px;
-            height: 22px;
+            width: 20px;
+            height: 20px;
             border-radius: 4px;
-            object-fit: cover;
-            background: var(--bg-card);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 600;
+            color: white;
         }
         
-        /* === 월 네비게이션 === */
-        .month-nav {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-        
+        .month-nav { display: flex; align-items: center; gap: 10px; }
         .month-nav button {
-            padding: 6px 12px;
+            padding: 5px 10px;
             border: 1px solid var(--border-color);
             background: var(--bg-secondary);
             color: var(--text-primary);
             border-radius: 6px;
             cursor: pointer;
-            font-family: inherit;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
         }
-        
-        .month-nav button:hover { background: var(--accent); color: white; border-color: var(--accent); }
-        .month-title { font-size: 1rem; font-weight: 600; }
+        .month-nav button:hover { background: var(--accent); color: white; }
+        .month-title { font-size: 0.95rem; font-weight: 600; }
         
         /* === 설정 모달 === */
         .modal-overlay {
@@ -392,43 +381,31 @@ def get_dashboard_html() -> str:
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 16px;
-            padding: 24px;
-            min-width: 320px;
+            padding: 20px;
+            width: 360px;
             max-width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
             transform: scale(0.9);
             transition: transform 0.2s;
         }
         
         .modal-overlay.active .modal { transform: scale(1); }
+        .modal-title { font-size: 1rem; font-weight: 600; margin-bottom: 14px; }
         
-        .modal-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 16px; }
-        
-        .setting-group {
-            margin-bottom: 16px;
-        }
-        
-        .setting-label {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-bottom: 6px;
-            display: block;
-        }
-        
-        .setting-options {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
+        .setting-group { margin-bottom: 14px; }
+        .setting-label { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 5px; display: block; }
+        .setting-options { display: flex; gap: 5px; flex-wrap: wrap; }
         
         .setting-btn {
-            padding: 8px 14px;
+            padding: 6px 12px;
             border: 1px solid var(--border-color);
             background: var(--bg-secondary);
             color: var(--text-primary);
-            border-radius: 8px;
+            border-radius: 6px;
             cursor: pointer;
             font-family: inherit;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             transition: all 0.2s;
         }
         
@@ -436,24 +413,20 @@ def get_dashboard_html() -> str:
         .setting-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
         
         .modal-close {
-            margin-top: 16px;
+            margin-top: 14px;
             width: 100%;
-            padding: 10px;
+            padding: 9px;
             border: none;
             background: var(--accent);
             color: white;
             border-radius: 8px;
             cursor: pointer;
-            font-family: inherit;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 500;
         }
-        
-        .modal-close:hover { background: var(--accent-light); }
     </style>
 </head>
 <body data-toolbar="top">
-    <!-- Toolbar -->
     <header class="toolbar">
         <div class="toolbar-brand">📊 대시보드</div>
         <nav class="toolbar-tabs">
@@ -466,9 +439,7 @@ def get_dashboard_html() -> str:
         </div>
     </header>
     
-    <!-- Main Content -->
     <main class="main-content">
-        <!-- 플레이 시간 탭 -->
         <section id="playtime" class="tab-panel active">
             <div class="stats-grid">
                 <div class="stat-card">
@@ -492,31 +463,14 @@ def get_dashboard_html() -> str:
             <div class="card" style="flex:1; display:flex; flex-direction:column;">
                 <div class="card-header">
                     <h2 class="card-title">기간별 플레이 시간</h2>
-                    <div class="filter-controls">
-                        <select class="filter-select" id="periodSelect">
-                            <option value="week">주간</option>
-                            <option value="month">월간</option>
-                        </select>
-                        <select class="filter-select" id="gameFilter">
-                            <option value="all">전체 게임</option>
-                        </select>
-                        <select class="filter-select" id="chartTypeSelect">
-                            <option value="bar">막대</option>
-                            <option value="line">선형</option>
-                        </select>
-                        <select class="filter-select" id="stackModeSelect">
-                            <option value="stacked">누적</option>
-                            <option value="grouped">개별</option>
-                        </select>
-                    </div>
                 </div>
+                <div class="chart-legend" id="chartLegend"></div>
                 <div class="chart-container">
                     <canvas id="playtimeChart"></canvas>
                 </div>
             </div>
         </section>
         
-        <!-- 달력 탭 -->
         <section id="calendar" class="tab-panel">
             <div class="card calendar-wrapper">
                 <div class="card-header">
@@ -524,11 +478,6 @@ def get_dashboard_html() -> str:
                         <button id="prevMonth">◀</button>
                         <span class="month-title" id="monthTitle">2026년 2월</span>
                         <button id="nextMonth">▶</button>
-                    </div>
-                    <div class="filter-controls">
-                        <span class="filter-label">최소</span>
-                        <input type="number" class="filter-input" id="thresholdInput" value="10" min="0">
-                        <span class="filter-label">분</span>
                     </div>
                 </div>
                 <div class="calendar-grid" id="calendarGrid">
@@ -544,7 +493,6 @@ def get_dashboard_html() -> str:
         </section>
     </main>
     
-    <!-- 설정 모달 -->
     <div class="modal-overlay" id="settingsModal">
         <div class="modal">
             <h3 class="modal-title">⚙️ 설정</h3>
@@ -552,7 +500,7 @@ def get_dashboard_html() -> str:
             <div class="setting-group">
                 <label class="setting-label">테마</label>
                 <div class="setting-options" id="themeOptions">
-                    <button class="setting-btn active" data-value="auto">자동</button>
+                    <button class="setting-btn" data-value="auto">자동</button>
                     <button class="setting-btn" data-value="light">라이트</button>
                     <button class="setting-btn" data-value="dark">다크</button>
                 </div>
@@ -561,10 +509,41 @@ def get_dashboard_html() -> str:
             <div class="setting-group">
                 <label class="setting-label">툴바 위치</label>
                 <div class="setting-options" id="toolbarOptions">
-                    <button class="setting-btn active" data-value="top">상단</button>
+                    <button class="setting-btn" data-value="top">상단</button>
                     <button class="setting-btn" data-value="bottom">하단</button>
-                    <button class="setting-btn" data-value="floating-top">플로팅(상단)</button>
-                    <button class="setting-btn" data-value="floating-bottom">플로팅(하단)</button>
+                    <button class="setting-btn" data-value="floating-top">플로팅↑</button>
+                    <button class="setting-btn" data-value="floating-bottom">플로팅↓</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">차트 유형</label>
+                <div class="setting-options" id="chartTypeOptions">
+                    <button class="setting-btn" data-value="bar">막대</button>
+                    <button class="setting-btn" data-value="line">선형</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">데이터 표시</label>
+                <div class="setting-options" id="stackModeOptions">
+                    <button class="setting-btn" data-value="stacked">누적</button>
+                    <button class="setting-btn" data-value="grouped">개별</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">기간</label>
+                <div class="setting-options" id="periodOptions">
+                    <button class="setting-btn" data-value="week">주간</button>
+                    <button class="setting-btn" data-value="month">월간</button>
+                </div>
+            </div>
+            
+            <div class="setting-group">
+                <label class="setting-label">달력 최소 플레이 시간 (분)</label>
+                <div class="setting-options">
+                    <input type="number" id="thresholdInput" value="10" min="0" style="width:60px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;">
                 </div>
             </div>
             
@@ -573,74 +552,95 @@ def get_dashboard_html() -> str:
     </div>
     
     <script>
-        // === 상태 ===
         const state = {
             currentMonth: new Date().getMonth(),
             currentYear: new Date().getFullYear(),
             games: [],
-            registeredGameNames: new Set(),
+            gameNameMap: {},
             playtimeData: null,
             calendarData: null,
-            settings: {
-                theme: localStorage.getItem('dashboard_theme') || 'auto',
-                toolbar: localStorage.getItem('dashboard_toolbar') || 'top',
-                chartType: localStorage.getItem('dashboard_chartType') || 'bar',
-                stackMode: localStorage.getItem('dashboard_stackMode') || 'stacked'
-            }
+            settings: null
         };
         
-        // === 테마 적용 ===
-        function applyTheme(theme) {
-            if (theme === 'auto') {
-                document.documentElement.removeAttribute('data-theme');
-            } else {
-                document.documentElement.setAttribute('data-theme', theme);
+        const COLORS = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6'];
+        
+        function getColorForName(name) {
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            return COLORS[Math.abs(hash) % COLORS.length];
+        }
+        
+        // === 설정 ===
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/dashboard/settings');
+                state.settings = await res.json();
+            } catch {
+                state.settings = { theme: 'auto', toolbar: 'top', chartType: 'bar', stackMode: 'stacked', period: 'week', calendarThreshold: 10 };
             }
-            localStorage.setItem('dashboard_theme', theme);
-            state.settings.theme = theme;
-            if (state.playtimeData) updatePlaytimeChart(state.playtimeData);
+            applySettings();
         }
         
-        function applyToolbar(position) {
-            document.body.setAttribute('data-toolbar', position);
-            localStorage.setItem('dashboard_toolbar', position);
-            state.settings.toolbar = position;
+        async function saveSettings() {
+            try {
+                await fetch('/api/dashboard/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(state.settings)
+                });
+            } catch (e) { console.error('설정 저장 실패:', e); }
+            localStorage.setItem('dashboard_settings', JSON.stringify(state.settings));
         }
         
-        // === 탭 indicator 업데이트 ===
+        function applySettings() {
+            const s = state.settings;
+            
+            // 테마
+            if (s.theme === 'auto') document.documentElement.removeAttribute('data-theme');
+            else document.documentElement.setAttribute('data-theme', s.theme);
+            
+            // 툴바
+            document.body.setAttribute('data-toolbar', s.toolbar);
+            
+            // UI 업데이트
+            document.querySelectorAll('#themeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.theme));
+            document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.toolbar));
+            document.querySelectorAll('#chartTypeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.chartType));
+            document.querySelectorAll('#stackModeOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.stackMode));
+            document.querySelectorAll('#periodOptions .setting-btn').forEach(b => b.classList.toggle('active', b.dataset.value === s.period));
+            document.getElementById('thresholdInput').value = s.calendarThreshold || 10;
+        }
+        
         function updateTabIndicator() {
-            const activeTab = document.querySelector('.tab-btn.active');
-            const indicator = document.getElementById('tabIndicator');
-            if (activeTab && indicator) {
-                indicator.style.width = activeTab.offsetWidth + 'px';
-                indicator.style.left = activeTab.offsetLeft + 'px';
+            const tab = document.querySelector('.tab-btn.active');
+            const ind = document.getElementById('tabIndicator');
+            if (tab && ind) {
+                ind.style.width = tab.offsetWidth + 'px';
+                ind.style.left = tab.offsetLeft + 'px';
             }
         }
         
         // === API ===
-        async function fetchAPI(endpoint) {
+        async function fetchAPI(url) {
             try {
-                const res = await fetch(endpoint);
-                if (!res.ok) throw new Error('API 오류');
-                return await res.json();
-            } catch (e) {
-                console.error('API 실패:', e);
-                return null;
-            }
+                const res = await fetch(url);
+                return res.ok ? await res.json() : null;
+            } catch { return null; }
         }
         
         async function loadGames() {
             const games = await fetchAPI('/processes');
             if (games) {
                 state.games = games;
-                state.registeredGameNames = new Set(games.map(g => g.name.toLowerCase()));
-                populateGameFilter();
+                state.gameNameMap = {};
+                games.forEach(g => { state.gameNameMap[g.name.toLowerCase()] = g; });
                 document.getElementById('statGames').innerHTML = `${games.length}<span class="stat-unit">개</span>`;
             }
         }
         
-        async function loadPlaytimeData(period = 'week', gameId = 'all') {
-            const data = await fetchAPI(`/api/dashboard/playtime?period=${period}&game_id=${gameId}`);
+        async function loadPlaytimeData() {
+            const period = state.settings?.period || 'week';
+            const data = await fetchAPI(`/api/dashboard/playtime?period=${period}&merge_names=true`);
             if (data) {
                 state.playtimeData = data;
                 updatePlaytimeChart(data);
@@ -648,34 +648,20 @@ def get_dashboard_html() -> str:
             }
         }
         
-        async function loadCalendarData(year, month, threshold = 10) {
-            const data = await fetchAPI(`/api/dashboard/calendar?year=${year}&month=${month}&threshold=${threshold}`);
+        async function loadCalendarData() {
+            const threshold = state.settings?.calendarThreshold || 10;
+            const data = await fetchAPI(`/api/dashboard/calendar?year=${state.currentYear}&month=${state.currentMonth}&threshold=${threshold}`);
             if (data) {
                 state.calendarData = data;
-                renderCalendar(data, year, month);
+                renderCalendar(data, state.currentYear, state.currentMonth);
             }
-        }
-        
-        // === UI ===
-        function populateGameFilter() {
-            const select = document.getElementById('gameFilter');
-            select.innerHTML = '<option value="all">전체 게임</option>';
-            state.games.forEach(g => {
-                const opt = document.createElement('option');
-                opt.value = g.id;
-                opt.textContent = g.name;
-                select.appendChild(opt);
-            });
         }
         
         function updateStats(data) {
             if (data.stats) {
-                const today = Math.round(data.stats.today_minutes || 0);
-                const week = (data.stats.week_minutes || 0) / 60;
-                const month = (data.stats.month_minutes || 0) / 60;
-                document.getElementById('statToday').innerHTML = `${today}<span class="stat-unit">분</span>`;
-                document.getElementById('statWeek').innerHTML = `${week.toFixed(1)}<span class="stat-unit">시간</span>`;
-                document.getElementById('statMonth').innerHTML = `${month.toFixed(1)}<span class="stat-unit">시간</span>`;
+                document.getElementById('statToday').innerHTML = `${Math.round(data.stats.today_minutes || 0)}<span class="stat-unit">분</span>`;
+                document.getElementById('statWeek').innerHTML = `${((data.stats.week_minutes || 0) / 60).toFixed(1)}<span class="stat-unit">시간</span>`;
+                document.getElementById('statMonth').innerHTML = `${((data.stats.month_minutes || 0) / 60).toFixed(1)}<span class="stat-unit">시간</span>`;
             }
         }
         
@@ -686,36 +672,46 @@ def get_dashboard_html() -> str:
             const ctx = document.getElementById('playtimeChart').getContext('2d');
             if (playtimeChart) playtimeChart.destroy();
             
-            const chartType = document.getElementById('chartTypeSelect').value;
-            const stackMode = document.getElementById('stackModeSelect').value;
-            const period = document.getElementById('periodSelect').value;
+            const chartType = state.settings?.chartType || 'bar';
+            const stackMode = state.settings?.stackMode || 'stacked';
             
-            const colors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6'];
+            // 아이콘 범례 생성
+            const legendEl = document.getElementById('chartLegend');
+            legendEl.innerHTML = '';
+            
             const datasets = [];
-            let colorIdx = 0;
+            const gameNames = Object.keys(data.games || {});
             
-            for (const [gid, gdata] of Object.entries(data.games || {})) {
-                const color = colors[colorIdx++ % colors.length];
+            gameNames.forEach((name, idx) => {
+                const gdata = data.games[name];
+                const color = getColorForName(name);
+                
+                // 범례 아이템 추가
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                item.innerHTML = `<div class="legend-icon" style="background:${color}">${name.charAt(0).toUpperCase()}</div><span>${name}</span>`;
+                legendEl.appendChild(item);
+                
                 datasets.push({
-                    label: gdata.name,
+                    label: name,
                     data: gdata.minutes.map(m => m / 60),
-                    backgroundColor: chartType === 'bar' ? color + '99' : color + '33',
+                    backgroundColor: chartType === 'bar' ? color + 'cc' : color + '33',
                     borderColor: color,
                     borderWidth: 2,
                     fill: chartType === 'line' && stackMode === 'stacked',
                     tension: 0.4,
-                    pointRadius: chartType === 'line' ? 3 : 0
+                    pointRadius: chartType === 'line' ? 4 : 0,
+                    pointBackgroundColor: color
                 });
-            }
+            });
             
-            const isDark = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim() === '#0f0f23';
+            const isDark = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').includes('0f0f23');
             const gridColor = isDark ? '#2d3748' : '#e9ecef';
             const textColor = isDark ? '#adb5bd' : '#6c757d';
             
-            // 날짜 레이블 포맷 (월간: M-D, 주간: M-D)
             const labels = data.dates.map(d => {
-                const parts = d.split('-');
-                return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
+                const p = d.split('-');
+                return `${parseInt(p[1])}/${parseInt(p[2])}`;
             });
             
             playtimeChart = new Chart(ctx, {
@@ -726,8 +722,12 @@ def get_dashboard_html() -> str:
                     maintainAspectRatio: false,
                     interaction: { intersect: false, mode: 'index' },
                     plugins: {
-                        legend: { position: 'top', labels: { color: textColor, boxWidth: 12, padding: 8 } },
-                        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}시간` } }
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}시간`
+                            }
+                        }
                     },
                     scales: {
                         x: {
@@ -751,21 +751,19 @@ def get_dashboard_html() -> str:
             document.getElementById('monthTitle').textContent = `${year}년 ${month + 1}월`;
             
             const grid = document.getElementById('calendarGrid');
-            const headers = grid.querySelectorAll('.calendar-header');
+            const headers = [...grid.querySelectorAll('.calendar-header')];
             grid.innerHTML = '';
             headers.forEach(h => grid.appendChild(h));
             
             const firstDay = new Date(year, month, 1).getDay();
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             
-            // 빈 셀
             for (let i = 0; i < firstDay; i++) {
-                const empty = document.createElement('div');
-                empty.className = 'calendar-day empty';
-                grid.appendChild(empty);
+                const e = document.createElement('div');
+                e.className = 'calendar-day empty';
+                grid.appendChild(e);
             }
             
-            // 날짜 셀
             for (let day = 1; day <= daysInMonth; day++) {
                 const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
                 const dayData = data.days?.[dateStr];
@@ -775,23 +773,12 @@ def get_dashboard_html() -> str:
                 
                 let iconsHtml = '';
                 if (dayData?.games) {
-                    // 등록된 게임만 표시 (이름 매칭)
-                    const validGames = dayData.games.filter(g => {
-                        // ID로 등록된 게임 찾기 또는 이름 매칭
-                        const registered = state.games.find(rg => rg.id === g.id);
-                        if (registered) return true;
-                        // 이름 매칭 (대소문자 무시)
-                        return state.registeredGameNames.has(g.name.toLowerCase());
-                    });
-                    
+                    const validGames = dayData.games.filter(g => state.gameNameMap[g.name.toLowerCase()]);
                     iconsHtml = validGames.slice(0, 4).map(g => {
-                        const initial = g.name.charAt(0).toUpperCase();
-                        return `<div class="icon" title="${g.name}: ${Math.round(g.minutes)}분" style="background:${getColorForName(g.name)};color:white;">${initial}</div>`;
+                        const color = getColorForName(g.name);
+                        return `<div class="icon" title="${g.name}: ${Math.round(g.minutes)}분" style="background:${color}">${g.name.charAt(0).toUpperCase()}</div>`;
                     }).join('');
-                    
-                    if (validGames.length > 4) {
-                        iconsHtml += `<div class="icon" style="background:var(--text-secondary);color:white;">+${validGames.length-4}</div>`;
-                    }
+                    if (validGames.length > 4) iconsHtml += `<div class="icon" style="background:var(--text-secondary)">+${validGames.length-4}</div>`;
                 }
                 
                 cell.innerHTML = `<span class="date">${day}</span><div class="icons">${iconsHtml}</div>`;
@@ -799,16 +786,9 @@ def get_dashboard_html() -> str:
             }
         }
         
-        function getColorForName(name) {
-            const colors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'];
-            let hash = 0;
-            for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-            return colors[Math.abs(hash) % colors.length];
-        }
-        
         // === 이벤트 ===
         function initEvents() {
-            // 탭 전환
+            // 탭
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -816,18 +796,7 @@ def get_dashboard_html() -> str:
                     btn.classList.add('active');
                     document.getElementById(btn.dataset.tab).classList.add('active');
                     updateTabIndicator();
-                    if (btn.dataset.tab === 'calendar' && !state.calendarData) {
-                        loadCalendarData(state.currentYear, state.currentMonth);
-                    }
-                });
-            });
-            
-            // 차트 필터
-            ['periodSelect','gameFilter','chartTypeSelect','stackModeSelect'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => {
-                    const period = document.getElementById('periodSelect').value;
-                    const gameId = document.getElementById('gameFilter').value;
-                    loadPlaytimeData(period, gameId);
+                    if (btn.dataset.tab === 'calendar') loadCalendarData();
                 });
             });
             
@@ -835,67 +804,53 @@ def get_dashboard_html() -> str:
             document.getElementById('prevMonth').addEventListener('click', () => {
                 state.currentMonth--;
                 if (state.currentMonth < 0) { state.currentMonth = 11; state.currentYear--; }
-                loadCalendarData(state.currentYear, state.currentMonth, document.getElementById('thresholdInput').value);
+                loadCalendarData();
             });
             document.getElementById('nextMonth').addEventListener('click', () => {
                 state.currentMonth++;
                 if (state.currentMonth > 11) { state.currentMonth = 0; state.currentYear++; }
-                loadCalendarData(state.currentYear, state.currentMonth, document.getElementById('thresholdInput').value);
-            });
-            document.getElementById('thresholdInput').addEventListener('change', e => {
-                loadCalendarData(state.currentYear, state.currentMonth, e.target.value);
+                loadCalendarData();
             });
             
             // 설정 모달
-            document.getElementById('settingsBtn').addEventListener('click', () => {
-                document.getElementById('settingsModal').classList.add('active');
-            });
-            document.getElementById('closeSettings').addEventListener('click', () => {
-                document.getElementById('settingsModal').classList.remove('active');
-            });
-            document.getElementById('settingsModal').addEventListener('click', e => {
-                if (e.target.id === 'settingsModal') e.target.classList.remove('active');
-            });
+            document.getElementById('settingsBtn').addEventListener('click', () => document.getElementById('settingsModal').classList.add('active'));
+            document.getElementById('closeSettings').addEventListener('click', () => document.getElementById('settingsModal').classList.remove('active'));
+            document.getElementById('settingsModal').addEventListener('click', e => { if (e.target.id === 'settingsModal') e.target.classList.remove('active'); });
             
-            // 테마 옵션
-            document.querySelectorAll('#themeOptions .setting-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('#themeOptions .setting-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    applyTheme(btn.dataset.value);
+            // 설정 옵션들
+            const settingHandlers = [
+                { id: 'themeOptions', key: 'theme', reload: false },
+                { id: 'toolbarOptions', key: 'toolbar', reload: false },
+                { id: 'chartTypeOptions', key: 'chartType', reload: true },
+                { id: 'stackModeOptions', key: 'stackMode', reload: true },
+                { id: 'periodOptions', key: 'period', reload: true }
+            ];
+            
+            settingHandlers.forEach(({ id, key, reload }) => {
+                document.querySelectorAll(`#${id} .setting-btn`).forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        state.settings[key] = btn.dataset.value;
+                        applySettings();
+                        saveSettings();
+                        if (reload) loadPlaytimeData();
+                    });
                 });
             });
             
-            // 툴바 옵션
-            document.querySelectorAll('#toolbarOptions .setting-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    applyToolbar(btn.dataset.value);
-                });
+            document.getElementById('thresholdInput').addEventListener('change', e => {
+                state.settings.calendarThreshold = parseInt(e.target.value) || 10;
+                saveSettings();
+                loadCalendarData();
             });
             
-            // 창 리사이즈 시 indicator 업데이트
             window.addEventListener('resize', updateTabIndicator);
         }
         
-        // === 초기화 ===
         async function init() {
-            // 저장된 설정 적용
-            applyTheme(state.settings.theme);
-            applyToolbar(state.settings.toolbar);
-            document.getElementById('chartTypeSelect').value = state.settings.chartType;
-            document.getElementById('stackModeSelect').value = state.settings.stackMode;
-            
-            // 설정 UI 활성화
-            document.querySelector(`#themeOptions [data-value="${state.settings.theme}"]`)?.classList.add('active');
-            document.querySelector(`#toolbarOptions [data-value="${state.settings.toolbar}"]`)?.classList.add('active');
-            
+            await loadSettings();
             initEvents();
             await loadGames();
             await loadPlaytimeData();
-            
-            // 탭 indicator 초기화
             requestAnimationFrame(updateTabIndicator);
         }
         
@@ -907,17 +862,31 @@ def get_dashboard_html() -> str:
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def get_dashboard():
-    """대시보드 HTML 페이지 반환"""
     return get_dashboard_html()
+
+
+@router.get("/api/dashboard/settings")
+async def get_settings():
+    """대시보드 설정 조회"""
+    return JSONResponse(load_settings())
+
+
+@router.post("/api/dashboard/settings")
+async def save_settings_api(settings: dict = Body(...)):
+    """대시보드 설정 저장"""
+    current = load_settings()
+    current.update(settings)
+    save_settings(current)
+    return {"status": "ok"}
 
 
 @router.get("/api/dashboard/playtime")
 async def get_playtime_stats(
-    period: str = Query("week", description="기간: week, month"),
-    game_id: str = Query("all", description="게임 ID 또는 'all'"),
-    db: Session = Depends(lambda: None)
+    period: str = Query("week"),
+    game_id: str = Query("all"),
+    merge_names: bool = Query(False, description="동일 이름 게임 병합")
 ):
-    """기간별 플레이 시간 통계 API"""
+    """기간별 플레이 시간 통계 API (이름 기준 병합 지원)"""
     from src.data.database import SessionLocal
     db = SessionLocal()
     
@@ -946,14 +915,18 @@ async def get_playtime_stats(
         query = query.group_by('play_date', models.ProcessSession.process_id)
         results = query.all()
         
+        # 이름 기준 병합
         games_data = {}
         for row in results:
-            gid = row.process_id
-            if gid not in games_data:
-                games_data[gid] = {"name": row.process_name, "minutes": [0] * days}
+            # 이름 기준으로 그룹핑 (merge_names=True일 때)
+            key = row.process_name if merge_names else row.process_id
+            
+            if key not in games_data:
+                games_data[key] = {"name": row.process_name, "minutes": [0] * days}
+            
             if row.play_date in dates:
                 idx = dates.index(row.play_date)
-                games_data[gid]["minutes"][idx] = (row.total_seconds or 0) / 60
+                games_data[key]["minutes"][idx] += (row.total_seconds or 0) / 60
         
         today_str = now.strftime("%Y-%m-%d")
         week_start = (now - datetime.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0)
@@ -978,12 +951,11 @@ async def get_playtime_stats(
 
 @router.get("/api/dashboard/calendar")
 async def get_calendar_data(
-    year: int = Query(..., description="년도"),
-    month: int = Query(..., description="월 (0-11)"),
-    threshold: int = Query(10, description="최소 플레이 시간 (분)"),
-    db: Session = Depends(lambda: None)
+    year: int = Query(...),
+    month: int = Query(...),
+    threshold: int = Query(10)
 ):
-    """달력 데이터 API"""
+    """달력 데이터 API (이름 기준 병합)"""
     from src.data.database import SessionLocal
     db = SessionLocal()
     
@@ -991,20 +963,16 @@ async def get_calendar_data(
         start_date = datetime.datetime(year, month + 1, 1)
         end_date = datetime.datetime(year + 1, 1, 1) if month == 11 else datetime.datetime(year, month + 2, 1)
         
-        start_ts = start_date.timestamp()
-        end_ts = end_date.timestamp()
-        threshold_seconds = threshold * 60
-        
         results = db.query(
             func.date(models.ProcessSession.start_timestamp, 'unixepoch', 'localtime').label('play_date'),
             models.ProcessSession.process_id,
             models.ProcessSession.process_name,
             func.sum(models.ProcessSession.session_duration).label('total_seconds')
         ).filter(
-            models.ProcessSession.start_timestamp >= start_ts,
-            models.ProcessSession.start_timestamp < end_ts,
+            models.ProcessSession.start_timestamp >= start_date.timestamp(),
+            models.ProcessSession.start_timestamp < end_date.timestamp(),
             models.ProcessSession.session_duration.isnot(None)
-        ).group_by('play_date', models.ProcessSession.process_id).all()
+        ).group_by('play_date', models.ProcessSession.process_name).all()  # process_name으로 그룹핑
         
         days_data = {}
         for row in results:
@@ -1026,7 +994,6 @@ async def get_calendar_data(
 
 @router.get("/api/dashboard/icons/{process_id}")
 async def get_game_icon(process_id: str):
-    """게임 아이콘 이미지 반환"""
     from fastapi.responses import Response
     from src.data.database import SessionLocal
     
@@ -1036,7 +1003,6 @@ async def get_game_icon(process_id: str):
         name = process.name if process else "?"
         initial = name[0].upper() if name else "?"
         
-        # 색상 해시
         colors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899']
         h = sum(ord(c) for c in name)
         color = colors[h % len(colors)]
