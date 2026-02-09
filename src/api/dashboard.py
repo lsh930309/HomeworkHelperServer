@@ -605,16 +605,18 @@ def get_dashboard_html() -> str:
             const color = getColorForName(name);
             const initial = name.charAt(0).toUpperCase();
             
-            // SVG를 Image로 변환
+            // SVG를 Image로 변환 (한글 지원)
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
                 <rect width="24" height="24" rx="4" fill="${color}"/>
                 <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
             </svg>`;
             const img = new Image();
-            img.src = 'data:image/svg+xml;base64,' + btoa(svg);
+            // encodeURIComponent로 한글 지원
+            img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
             state.iconImages[name] = img;
             return img;
         }
+
         
         // === 차트 아이콘 플러그인 ===
         const chartIconPlugin = {
