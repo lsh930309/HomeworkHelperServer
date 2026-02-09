@@ -582,6 +582,10 @@ def run_server_main():
         """모든 세션 조회"""
         return crud.get_all_sessions(db=db, skip=skip, limit=limit)
 
+    # === 대시보드 라우터 등록 ===
+    from src.api.dashboard import router as dashboard_router
+    app.include_router(dashboard_router)
+    logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
 
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
