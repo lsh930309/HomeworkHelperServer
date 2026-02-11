@@ -1,27 +1,34 @@
-// dashboard.js - 대시보드 JavaScript v5
+// dashboard.js - 대시보드 JavaScript v6
 
 const Dashboard = {
     // === 상태 ===
     state: {
-        currentMonth: new Date().getMonth(),
-        currentYear: new Date().getFullYear(),
-        currentPeriodOffset: 0,  // 주간/월간 오프셋
+        currentPeriodOffset: 0,
         games: [],
         gameNameMap: {},
         gameColors: {},
         playtimeData: null,
-        calendarData: null,
         settings: null,
         iconImages: {},
-        iconCache: {}
+        iconCache: {},
+        dataCache: {},       // { offset: data }
+        isNavigating: false
     },
 
-    // 확장된 색상 팔레트 (15색, 구분 용이)
-    COLORS: [
-        '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6',
-        '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#14b8a6',
-        '#a855f7', '#3b82f6', '#eab308', '#64748b', '#0ea5e9'
-    ],
+    chartInstances: {},  // { canvasId: Chart instance }
+
+    // HSL 기반 동적 색상 생성 (Hue 균등분할, S=80%, L=55%)
+    generateColors(count) {
+        if (count <= 0) return [];
+        const S = 80;
+        const L = 55;
+        const colors = [];
+        for (let i = 0; i < count; i++) {
+            const H = Math.round((360 / count) * i);
+            colors.push(`hsl(${H}, ${S}%, ${L}%)`);
+        }
+        return colors;
+    },
 
     DEFAULT_SETTINGS: {
         theme: 'auto',
@@ -29,68 +36,65 @@ const Dashboard = {
         chartType: 'bar',
         stackMode: 'stacked',
         period: 'week',
-        calendarThreshold: 10,
         showUnregistered: false,
         showChartIcons: true,
         chartIconSize: 64,
-        barIconSizeMode: 'auto',  // 'auto' | 'fixed'
-        barIconMargin: 1.5        // percentage margin
+        barIconSizeMode: 'auto',
+        barIconMargin: 1.5
     },
-
-    playtimeChart: null,
 
     // === 초기화 ===
     async init() {
         await this.loadSettings();
         this.initEvents();
         await this.loadGames();
-        await this.loadPlaytimeData();
+        await this.loadAllPeriodData();
         requestAnimationFrame(() => this.updateTabIndicator());
     },
 
     // === 색상 ===
-    getColorForGame(name, index) {
-        if (this.state.gameColors[name]) return this.state.gameColors[name];
-        const color = this.COLORS[index % this.COLORS.length];
-        this.state.gameColors[name] = color;
-        return color;
+    assignColorsForGames(gameNames) {
+        const sorted = [...gameNames].sort();
+        const colors = this.generateColors(sorted.length);
+        this.state.gameColors = {};
+        sorted.forEach((name, idx) => {
+            this.state.gameColors[name] = colors[idx];
+        });
+    },
+
+    getColorForGame(name) {
+        return this.state.gameColors[name] || 'hsl(0, 80%, 55%)';
     },
 
     // === 아이콘 ===
     async preloadIcon(name, processId, targetSize = null) {
-        // 캐시 키는 항상 name으로 통일 (chartIconPlugin에서 dataset.label로 찾음)
         if (this.state.iconImages[name]) return this.state.iconImages[name];
 
         const img = new Image();
 
-        // 이미지 로드 완료 대기를 위한 Promise
         const loadPromise = new Promise((resolve) => {
             img.onload = () => {
                 this.state.iconImages[name] = img;
                 resolve(img);
             };
             img.onerror = () => {
-                // 실패 시 폴백 SVG
-                const color = this.state.gameColors[name] || this.COLORS[0];
+                const color = this.state.gameColors[name] || 'hsl(0, 80%, 55%)';
                 const initial = name.charAt(0).toUpperCase();
                 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
                     <rect width="24" height="24" rx="4" fill="${color}"/>
                     <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-family="Arial" font-weight="bold">${initial}</text>
                 </svg>`;
                 img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-                // 재귀 방지를 위해 바로 저장
                 this.state.iconImages[name] = img;
                 resolve(img);
             };
         });
 
-        // 실제 아이콘 먼저 시도
         if (processId) {
             const iconSize = targetSize || this.state.settings?.chartIconSize || 64;
             img.src = `/api/dashboard/icons/${processId}?size=${iconSize}`;
         } else {
-            // processId 없으면 바로 폴백
-            const color = this.state.gameColors[name] || this.COLORS[0];
+            const color = this.state.gameColors[name] || 'hsl(0, 80%, 55%)';
             const initial = name.charAt(0).toUpperCase();
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
                 <rect width="24" height="24" rx="4" fill="${color}"/>
@@ -103,7 +107,6 @@ const Dashboard = {
         return loadPromise;
     },
 
-
     // === 차트 아이콘 플러그인 ===
     chartIconPlugin: {
         id: 'chartIcons',
@@ -115,10 +118,8 @@ const Dashboard = {
             const chartType = chart.config.type;
             const datasets = chart.data.datasets;
 
-            // 막대 그래프에서는 아이콘 표시 안 함 (범례에만 표시)
             if (chartType === 'bar') return;
 
-            // 아이콘 위치 계산 (겹침 방지)
             const iconPositions = [];
 
             datasets.forEach((dataset, datasetIndex) => {
@@ -132,7 +133,6 @@ const Dashboard = {
                 const data = dataset.data;
 
                 if (chartType === 'line') {
-                    // 선형: 최적 위치 계산
                     const bestIdx = self.findBestIconPosition(data, datasetIndex, datasets, iconPositions, chart);
                     if (bestIdx >= 0 && data[bestIdx] > 0) {
                         const point = meta.data[bestIdx];
@@ -140,6 +140,23 @@ const Dashboard = {
                             const x = point.x - iconSize / 2;
                             const y = point.y - iconSize - 6;
                             iconPositions.push({ x: point.x, y: point.y, idx: bestIdx });
+
+                            const borderWidth = 2;
+                            const borderRadius = 4;
+                            ctx.save();
+                            ctx.strokeStyle = dataset.borderColor;
+                            ctx.lineWidth = borderWidth;
+                            ctx.beginPath();
+                            ctx.roundRect(
+                                x - borderWidth / 2,
+                                y - borderWidth / 2,
+                                iconSize + borderWidth,
+                                iconSize + borderWidth,
+                                borderRadius
+                            );
+                            ctx.stroke();
+                            ctx.restore();
+
                             ctx.drawImage(img, x, y, iconSize, iconSize);
                         }
                     }
@@ -148,18 +165,14 @@ const Dashboard = {
         }
     },
 
-    // 선형 그래프 최적 아이콘 위치 계산
     findBestIconPosition(data, datasetIndex, allDatasets, existingPositions, chart) {
         if (!data || data.length === 0) return -1;
 
-        // 설정
-        const MIN_X_DISTANCE = 40;  // 픽셀 단위 최소 거리
-        const EDGE_BUFFER = 1;      // 첫/마지막 인덱스 피하기
+        const MIN_X_DISTANCE = 40;
+        const EDGE_BUFFER = 1;
 
-        // 1단계: 각 위치의 시각적 분리도 점수 계산
         const separationScores = data.map((value, i) => {
             if (value <= 0) return -Infinity;
-
             let minGap = Infinity;
             allDatasets.forEach((ds, idx) => {
                 if (idx !== datasetIndex && ds.data[i] !== undefined) {
@@ -169,44 +182,33 @@ const Dashboard = {
             return minGap;
         });
 
-        // 2단계: 메타데이터로 좌표 접근
         const meta = chart.getDatasetMeta(datasetIndex);
-
-        // 3단계: 제약조건을 만족하는 최적 위치 찾기
         let bestIdx = -1;
         let bestScore = -Infinity;
 
         for (let i = EDGE_BUFFER; i < data.length - EDGE_BUFFER; i++) {
             if (data[i] <= 0) continue;
-
             const point = meta.data[i];
             if (!point) continue;
 
-            // 하드 제약: x축 겹침 확인
             const hasOverlap = existingPositions.some(pos =>
                 Math.abs(pos.x - point.x) < MIN_X_DISTANCE
             );
             if (hasOverlap) continue;
 
-            // 점수: 시각적 분리 우선
             let score = 0;
-            score += separationScores[i] * 100;  // 시각적 분리 (최우선)
-            score += data[i] * 10;                // 값 크기
-
-            // 중앙 위치 선호
+            score += separationScores[i] * 100;
+            score += data[i] * 10;
             const centerDist = Math.abs(i - data.length / 2);
             score += (data.length - centerDist) * 5;
 
-            // 기존 아이콘과의 간격
             let minDist = Infinity;
             existingPositions.forEach(pos => {
                 if (pos.idx !== undefined) {
                     minDist = Math.min(minDist, Math.abs(pos.idx - i));
                 }
             });
-            if (minDist !== Infinity) {
-                score += minDist * 3;
-            }
+            if (minDist !== Infinity) score += minDist * 3;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -266,13 +268,9 @@ const Dashboard = {
             b.classList.toggle('active', b.dataset.value === (s.barIconSizeMode || 'auto'));
         });
 
-        const thresholdInput = document.getElementById('thresholdInput');
-        if (thresholdInput) thresholdInput.value = s.calendarThreshold || 10;
-
         document.getElementById('showUnregisteredToggle')?.classList.toggle('active', s.showUnregistered);
         document.getElementById('showChartIconsToggle')?.classList.toggle('active', s.showChartIcons !== false);
 
-        // 아이콘 크기 설정
         const iconSize = s.chartIconSize || 64;
         const isCustomSize = ![32, 64, 96, 128].includes(iconSize);
 
@@ -317,7 +315,6 @@ const Dashboard = {
             weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (offset * 7));
             const weekEnd = new Date(weekStart);
             weekEnd.setDate(weekEnd.getDate() + 6);
-
             const formatDate = d => `${d.getMonth() + 1}/${d.getDate()}`;
             label.textContent = `${formatDate(weekStart)} ~ ${formatDate(weekEnd)}`;
         } else {
@@ -339,9 +336,8 @@ const Dashboard = {
         if (games) {
             this.state.games = games;
             this.state.gameNameMap = {};
-            games.forEach((g, idx) => {
+            games.forEach(g => {
                 this.state.gameNameMap[g.name.toLowerCase()] = g;
-                this.getColorForGame(g.name, idx);
             });
             const statGamesEl = document.getElementById('statGames');
             statGamesEl.textContent = games.length.toString();
@@ -352,52 +348,64 @@ const Dashboard = {
         }
     },
 
-    async loadPlaytimeData() {
-        const period = this.state.settings?.period || 'week';
+    // === 데이터 로딩 (3기간 동시) ===
+    async loadAllPeriodData() {
         const offset = this.state.currentPeriodOffset;
+        const period = this.state.settings?.period || 'week';
         const showUnreg = this.state.settings?.showUnregistered ? 'true' : 'false';
 
-        const data = await this.fetchAPI(
-            `/api/dashboard/playtime?period=${period}&offset=${offset}&merge_names=true&show_unregistered=${showUnreg}`
-        );
+        // 현재 및 인접 기간 데이터 가져오기 (캐시된 것은 건너뜀)
+        const offsets = [offset - 1, offset, offset + 1];
+        await Promise.all(offsets.map(async (o) => {
+            if (this.state.dataCache[o] !== undefined) return;
+            const data = await this.fetchAPI(
+                `/api/dashboard/playtime?period=${period}&offset=${o}&merge_names=true&show_unregistered=${showUnreg}`
+            );
+            this.state.dataCache[o] = data || { games: {}, dates: [], stats: {} };
+        }));
 
-        if (data) {
-            this.state.playtimeData = data;
+        // 표시 중인 3기간의 모든 게임 이름 수집 → 전역 색상 할당
+        const visibleGameNames = new Set();
+        this.state.games.forEach(g => visibleGameNames.add(g.name));
+        offsets.forEach(o => {
+            const data = this.state.dataCache[o];
+            if (data?.games) Object.keys(data.games).forEach(n => visibleGameNames.add(n));
+        });
+        this.assignColorsForGames([...visibleGameNames]);
 
-            // 색상 할당 및 아이콘 프리로드 (완료 대기)
-            const gameNames = Object.keys(data.games || {});
-            const targetSize = this.state.settings?.chartIconSize || 64;
-            const iconPromises = gameNames.map((name, idx) => {
-                this.getColorForGame(name, idx);
-                return this.preloadIcon(name, data.games[name].process_id, targetSize);
-            });
+        // 3기간 아이콘 프리로드
+        const targetSize = this.state.settings?.chartIconSize || 64;
+        const iconPromises = [];
+        offsets.forEach(o => {
+            const data = this.state.dataCache[o];
+            if (data?.games) {
+                Object.keys(data.games).forEach(name => {
+                    if (!this.state.iconImages[name]) {
+                        iconPromises.push(this.preloadIcon(name, data.games[name].process_id, targetSize));
+                    }
+                });
+            }
+        });
+        await Promise.all(iconPromises);
 
-            // 모든 아이콘 로드 완료 후 차트 렌더링
-            await Promise.all(iconPromises);
-            this.updatePlaytimeChart(data);
-            this.updateStats(data);
-        }
+        // 현재 데이터 설정
+        this.state.playtimeData = this.state.dataCache[offset];
 
+        // 3개 차트 모두 렌더링
+        this.renderAllCharts();
+        this.updateStats(this.state.dataCache[offset]);
         this.updatePeriodLabel();
-    },
 
-
-    async loadCalendarData() {
-        const threshold = this.state.settings?.calendarThreshold || 10;
-        const showUnreg = this.state.settings?.showUnregistered ? 'true' : 'false';
-
-        const data = await this.fetchAPI(
-            `/api/dashboard/calendar?year=${this.state.currentYear}&month=${this.state.currentMonth}&threshold=${threshold}&show_unregistered=${showUnreg}`
-        );
-
-        if (data) {
-            this.state.calendarData = data;
-            this.renderCalendar(data, this.state.currentYear, this.state.currentMonth);
-        }
+        // 오래된 캐시 정리
+        Object.keys(this.state.dataCache).forEach(key => {
+            if (Math.abs(parseInt(key) - offset) > 3) {
+                delete this.state.dataCache[key];
+            }
+        });
     },
 
     updateStats(data) {
-        if (data.stats) {
+        if (data?.stats) {
             const statTodayEl = document.getElementById('statToday');
             statTodayEl.textContent = Math.round(data.stats.today_minutes || 0).toString();
             const todayUnit = document.createElement('span');
@@ -421,92 +429,72 @@ const Dashboard = {
         }
     },
 
-    // === 차트 ===
-    updatePlaytimeChart(data) {
-        const ctx = document.getElementById('playtimeChart').getContext('2d');
-        if (this.playtimeChart) this.playtimeChart.destroy();
+    // === 차트 렌더링 ===
+    renderChartOnCanvas(canvasId, data) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        if (this.chartInstances[canvasId]) {
+            this.chartInstances[canvasId].destroy();
+            this.chartInstances[canvasId] = null;
+        }
 
         const chartType = this.state.settings?.chartType || 'bar';
         const stackMode = this.state.settings?.stackMode || 'stacked';
 
-        const legendEl = document.getElementById('chartLegend');
-        legendEl.innerHTML = '';
-
         const datasets = [];
-        const gameNames = Object.keys(data.games || {});
+        const gameNames = Object.keys(data?.games || {});
 
         gameNames.forEach((name, idx) => {
             const gdata = data.games[name];
-            const color = this.getColorForGame(name, idx);
+            const color = this.getColorForGame(name);
 
-            // 범례 아이템 (아이콘 포함)
-            const item = document.createElement('div');
-            item.className = 'legend-item';
+            const bgOpacity = chartType === 'bar' ? 0.8 : (stackMode === 'stacked' ? 0.5 : 0.2);
+            const bg = color.replace('hsl(', 'hsla(').replace(')', `, ${bgOpacity})`);
 
-            const iconContainer = document.createElement('div');
-            iconContainer.className = 'legend-icon';
-            iconContainer.style.background = color;
-
-            const iconImg = this.state.iconImages[name];
-            if (iconImg && iconImg.complete) {
-                // 아이콘 이미지가 로드된 경우
-                const img = document.createElement('img');
-                img.src = iconImg.src;
-                img.alt = name;
-                img.style.width = '100%';
-                img.style.height = '100%';
-                img.style.objectFit = 'cover';
-                img.style.borderRadius = '4px';
-                iconContainer.appendChild(img);
-            } else {
-                // 폴백: 색상 + 이니셜
-                const fallback = document.createElement('span');
-                fallback.className = 'fallback';
-                fallback.textContent = name.charAt(0).toUpperCase();
-                iconContainer.appendChild(fallback);
+            // 누적 모드: 레이어드 fill (무지개떡 방식)
+            let fillMode = false;
+            if (chartType === 'line' && stackMode === 'stacked') {
+                fillMode = idx === 0 ? 'origin' : '-1';
             }
-
-            const nameSpan = document.createElement('span');
-            nameSpan.textContent = name;
-
-            item.appendChild(iconContainer);
-            item.appendChild(nameSpan);
-            legendEl.appendChild(item);
 
             datasets.push({
                 label: name,
                 data: gdata.minutes.map(m => m / 60),
-                backgroundColor: chartType === 'bar' ? color + 'cc' : color + '33',
+                backgroundColor: bg,
                 borderColor: color,
                 borderWidth: 2,
-                fill: chartType === 'line' && stackMode === 'stacked',
+                fill: fillMode,
                 tension: 0.4,
                 pointRadius: chartType === 'line' ? 4 : 0,
                 pointBackgroundColor: color
             });
         });
 
-        const isDark = getComputedStyle(document.documentElement)
-            .getPropertyValue('--bg-primary').includes('0f0f23');
-        const gridColor = isDark ? '#2d3748' : '#e9ecef';
+        const theme = document.documentElement.getAttribute('data-theme');
+        const isDark = theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const gridColor = isDark ? '#333333' : '#e9ecef';
         const textColor = isDark ? '#adb5bd' : '#6c757d';
 
-        const labels = data.dates.map(d => {
+        const labels = (data?.dates || []).map(d => {
             const p = d.split('-');
             return `${parseInt(p[1])}/${parseInt(p[2])}`;
         });
 
-        this.playtimeChart = new Chart(ctx, {
+        this.chartInstances[canvasId] = new Chart(ctx, {
             type: chartType,
             data: { labels, datasets },
             plugins: [this.chartIconPlugin],
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: false,
                 interaction: { intersect: false, mode: 'index' },
                 plugins: {
                     legend: { display: false },
                     tooltip: {
+                        enabled: canvasId === 'playtimeChart',
                         callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}시간` }
                     }
                 },
@@ -527,107 +515,157 @@ const Dashboard = {
         });
     },
 
-    // === 달력 ===
-    renderCalendar(data, year, month) {
-        document.getElementById('monthTitle').textContent = `${year}년 ${month + 1}월`;
+    updateLegend(data) {
+        const legendEl = document.getElementById('chartLegend');
+        if (!legendEl) return;
+        legendEl.innerHTML = '';
 
-        const grid = document.getElementById('calendarGrid');
-        const headers = [...grid.querySelectorAll('.calendar-header')];
-        grid.innerHTML = '';
-        headers.forEach(h => {
-            grid.appendChild(h);
-        });
+        const gameNames = Object.keys(data?.games || {});
+        gameNames.forEach(name => {
+            const color = this.getColorForGame(name);
 
-        const firstDay = new Date(year, month, 1).getDay();
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const item = document.createElement('div');
+            item.className = 'legend-item';
 
-        for (let i = 0; i < firstDay; i++) {
-            const e = document.createElement('div');
-            e.className = 'calendar-day empty';
-            grid.appendChild(e);
-        }
+            const colorDot = document.createElement('div');
+            colorDot.className = 'legend-color';
+            colorDot.style.background = color;
 
-        for (let day = 1; day <= daysInMonth; day++) {
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const dayData = data.days?.[dateStr];
+            const iconContainer = document.createElement('div');
+            iconContainer.className = 'legend-icon';
 
-            const cell = document.createElement('div');
-            cell.className = 'calendar-day';
-
-            const dateSpan = document.createElement('span');
-            dateSpan.className = 'date';
-            dateSpan.textContent = day;
-            cell.appendChild(dateSpan);
-
-            const iconsDiv = document.createElement('div');
-            iconsDiv.className = 'icons';
-
-            if (dayData?.games) {
-                const showUnreg = this.state.settings?.showUnregistered;
-                const gamesFiltered = showUnreg ? dayData.games :
-                    dayData.games.filter(g => this.state.gameNameMap[g.name.toLowerCase()]);
-
-                gamesFiltered.slice(0, 9).forEach(g => {
-                    const gameInfo = this.state.gameNameMap[g.name.toLowerCase()];
-                    const processId = gameInfo?.id || g.id;
-
-                    const img = document.createElement('img');
-                    img.className = 'icon';
-                    img.src = `/api/dashboard/icons/${processId}?size=64`;
-                    img.alt = g.name;
-                    img.title = `${g.name}: ${Math.round(g.minutes)}분`;
-                    img.loading = 'lazy';
-                    img.onerror = function() { this.style.display = 'none'; };
-
-                    iconsDiv.appendChild(img);
-                });
+            const iconImg = this.state.iconImages[name];
+            if (iconImg && iconImg.complete) {
+                const img = document.createElement('img');
+                img.src = iconImg.src;
+                img.alt = name;
+                iconContainer.appendChild(img);
+            } else {
+                iconContainer.style.background = color;
+                const fallback = document.createElement('span');
+                fallback.className = 'fallback';
+                fallback.textContent = name.charAt(0).toUpperCase();
+                iconContainer.appendChild(fallback);
             }
 
-            cell.appendChild(iconsDiv);
-            grid.appendChild(cell);
-        }
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = name;
 
-        // 아이콘 크기 자동 조정 (렌더링 완료 후)
-        requestAnimationFrame(() => this.adjustCalendarIconSizes());
+            item.appendChild(colorDot);
+            item.appendChild(iconContainer);
+            item.appendChild(nameSpan);
+            legendEl.appendChild(item);
+        });
     },
 
-    adjustCalendarIconSizes() {
-        const cells = document.querySelectorAll('.calendar-day:not(.empty)');
-        if (cells.length === 0) return;
+    renderAllCharts() {
+        const offset = this.state.currentPeriodOffset;
+        this.renderChartOnCanvas('prevChart', this.state.dataCache[offset - 1]);
+        this.renderChartOnCanvas('playtimeChart', this.state.dataCache[offset]);
+        this.renderChartOnCanvas('nextChart', this.state.dataCache[offset + 1]);
+        this.updateLegend(this.state.dataCache[offset]);
+    },
 
-        // 첫 번째 셀의 실제 크기 측정
-        const sampleCell = cells[0];
-        const cellWidth = sampleCell.offsetWidth;
-        const cellHeight = sampleCell.offsetHeight;
+    // === 스와이프 네비게이션 (3패널 슬라이더) ===
+    initSwipeNavigation() {
+        const chartCard = document.querySelector('#playtime .card');
+        const slider = document.getElementById('chartSlider');
+        if (!chartCard || !slider) return;
 
-        // 날짜 텍스트 높이 측정
-        const dateEl = sampleCell.querySelector('.date');
-        const dateHeight = dateEl ? dateEl.offsetHeight : 14;
+        let startX = 0;
+        let currentDragX = 0;
+        let isDragging = false;
+        let isSwipe = false;
+        const THRESHOLD = 80;
+        const DEAD_ZONE = 8;
 
-        // 아이콘 영역 가용 크기 계산
-        const GRID_COLS = 3;
-        const GAP = 1;
-        const PADDING_H = 4;  // 좌우 패딩
-        const PADDING_V = 8;  // 상하 패딩
-        const DATE_MARGIN = 2;  // 날짜와 아이콘 사이 여백
+        chartCard.style.touchAction = 'pan-y';
+        chartCard.style.userSelect = 'none';
 
-        // 가용 너비/높이
-        const availableWidth = cellWidth - (PADDING_H * 2);
-        const availableHeight = cellHeight - dateHeight - DATE_MARGIN - (PADDING_V * 2);
-
-        // 아이콘 크기 계산 (3x3 그리드 기준)
-        const iconWidthByWidth = Math.floor((availableWidth - (GRID_COLS - 1) * GAP) / GRID_COLS);
-        const iconHeightByHeight = Math.floor((availableHeight - (GRID_COLS - 1) * GAP) / GRID_COLS);
-
-        // 작은 값 선택 (정사각형 유지) + 최대/최소 제한
-        let iconSize = Math.min(iconWidthByWidth, iconHeightByHeight);
-        iconSize = Math.max(12, Math.min(24, iconSize));  // 12px ~ 24px 범위
-
-        // 모든 아이콘에 크기 적용
-        document.querySelectorAll('.calendar-day .icon').forEach(icon => {
-            icon.style.width = `${iconSize}px`;
-            icon.style.height = `${iconSize}px`;
+        chartCard.addEventListener('pointerdown', (e) => {
+            if (this.state.isNavigating) return;
+            if (e.target.closest('.chart-legend') || e.target.closest('.card-header')) return;
+            isDragging = true;
+            isSwipe = false;
+            startX = e.clientX;
+            currentDragX = 0;
+            chartCard.setPointerCapture(e.pointerId);
+            slider.classList.remove('animating');
         });
+
+        chartCard.addEventListener('pointermove', (e) => {
+            if (!isDragging) return;
+            currentDragX = e.clientX - startX;
+
+            if (!isSwipe && Math.abs(currentDragX) < DEAD_ZONE) return;
+            isSwipe = true;
+
+            // 경계 체크: 이전/다음 데이터 존재 여부
+            const offset = this.state.currentPeriodOffset;
+            const prevData = this.state.dataCache[offset - 1];
+            const nextData = this.state.dataCache[offset + 1];
+            const canGoPrev = prevData && Object.keys(prevData.games || {}).length > 0;
+            const canGoNext = nextData && Object.keys(nextData.games || {}).length > 0;
+
+            let adjustedDrag = currentDragX;
+            if ((currentDragX > 0 && !canGoPrev) || (currentDragX < 0 && !canGoNext)) {
+                adjustedDrag = currentDragX * 0.15;  // 고무줄 효과
+            }
+
+            const containerWidth = chartCard.querySelector('.chart-container').offsetWidth;
+            const dragPercent = (adjustedDrag / containerWidth) * 33.333;
+            slider.style.transform = `translateX(${-33.333 + dragPercent}%)`;
+        });
+
+        const endDrag = () => {
+            if (!isDragging) return;
+            isDragging = false;
+
+            if (!isSwipe) return;
+
+            slider.classList.add('animating');
+
+            const offset = this.state.currentPeriodOffset;
+            const prevData = this.state.dataCache[offset - 1];
+            const nextData = this.state.dataCache[offset + 1];
+            const canGoPrev = prevData && Object.keys(prevData.games || {}).length > 0;
+            const canGoNext = nextData && Object.keys(nextData.games || {}).length > 0;
+
+            if (currentDragX > THRESHOLD && canGoPrev) {
+                // 이전으로: 슬라이더를 오른쪽으로 완전히 이동
+                slider.style.transform = 'translateX(0%)';
+                slider.addEventListener('transitionend', () => {
+                    this.navigatePeriod(-1);
+                }, { once: true });
+            } else if (currentDragX < -THRESHOLD && canGoNext) {
+                // 다음으로: 슬라이더를 왼쪽으로 완전히 이동
+                slider.style.transform = 'translateX(-66.666%)';
+                slider.addEventListener('transitionend', () => {
+                    this.navigatePeriod(1);
+                }, { once: true });
+            } else {
+                // 원위치 스냅백
+                slider.style.transform = 'translateX(-33.333%)';
+            }
+
+            currentDragX = 0;
+        };
+
+        chartCard.addEventListener('pointerup', endDrag);
+        chartCard.addEventListener('pointercancel', endDrag);
+    },
+
+    async navigatePeriod(direction) {
+        this.state.isNavigating = true;
+        this.state.currentPeriodOffset += direction;
+
+        // 슬라이더 즉시 중앙으로 리셋 (애니메이션 없이)
+        const slider = document.getElementById('chartSlider');
+        slider.classList.remove('animating');
+        slider.style.transform = 'translateX(-33.333%)';
+
+        await this.loadAllPeriodData();
+        this.state.isNavigating = false;
     },
 
     // === 이벤트 ===
@@ -644,41 +682,11 @@ const Dashboard = {
                 btn.classList.add('active');
                 document.getElementById(btn.dataset.tab).classList.add('active');
                 this.updateTabIndicator();
-                if (btn.dataset.tab === 'calendar') {
-                    this.loadCalendarData();
-                    // 탭 전환 시 아이콘 크기 조정
-                    requestAnimationFrame(() => this.adjustCalendarIconSizes());
-                }
             });
         });
 
-        // 기간 네비게이션
-        document.getElementById('prevPeriod')?.addEventListener('click', () => {
-            this.state.currentPeriodOffset--;
-            this.loadPlaytimeData();
-        });
-        document.getElementById('nextPeriod')?.addEventListener('click', () => {
-            this.state.currentPeriodOffset++;
-            this.loadPlaytimeData();
-        });
-
-        // 월 네비게이션
-        document.getElementById('prevMonth')?.addEventListener('click', () => {
-            this.state.currentMonth--;
-            if (this.state.currentMonth < 0) {
-                this.state.currentMonth = 11;
-                this.state.currentYear--;
-            }
-            this.loadCalendarData();
-        });
-        document.getElementById('nextMonth')?.addEventListener('click', () => {
-            this.state.currentMonth++;
-            if (this.state.currentMonth > 11) {
-                this.state.currentMonth = 0;
-                this.state.currentYear++;
-            }
-            this.loadCalendarData();
-        });
+        // 스와이프 네비게이션
+        this.initSwipeNavigation();
 
         // 설정 모달
         document.getElementById('settingsBtn')?.addEventListener('click', () =>
@@ -691,61 +699,60 @@ const Dashboard = {
 
         // 설정 옵션들
         const settingHandlers = [
-            { id: 'themeOptions', key: 'theme', reload: false },
-            { id: 'toolbarOptions', key: 'toolbar', reload: false },
-            { id: 'chartTypeOptions', key: 'chartType', reload: true },
-            { id: 'stackModeOptions', key: 'stackMode', reload: true },
-            { id: 'periodOptions', key: 'period', reload: true, resetOffset: true }
+            { id: 'themeOptions', key: 'theme', action: 'none' },
+            { id: 'toolbarOptions', key: 'toolbar', action: 'none' },
+            { id: 'chartTypeOptions', key: 'chartType', action: 'rerender' },
+            { id: 'stackModeOptions', key: 'stackMode', action: 'rerender' },
+            { id: 'periodOptions', key: 'period', action: 'reload', resetOffset: true }
         ];
 
-        settingHandlers.forEach(({ id, key, reload, resetOffset }) => {
+        settingHandlers.forEach(({ id, key, action, resetOffset }) => {
             document.querySelectorAll(`#${id} .setting-btn`).forEach(btn => {
                 btn.addEventListener('click', () => {
                     this.state.settings[key] = btn.dataset.value;
                     if (resetOffset) this.state.currentPeriodOffset = 0;
                     this.applySettings();
                     this.saveSettings();
-                    if (reload) this.loadPlaytimeData();
+                    if (action === 'reload') {
+                        this.state.dataCache = {};
+                        this.loadAllPeriodData();
+                    } else if (action === 'rerender') {
+                        this.renderAllCharts();
+                    }
                 });
             });
-        });
-
-        document.getElementById('thresholdInput')?.addEventListener('change', e => {
-            this.state.settings.calendarThreshold = parseInt(e.target.value) || 10;
-            this.saveSettings();
-            this.loadCalendarData();
         });
 
         document.getElementById('showUnregisteredToggle')?.addEventListener('click', () => {
             this.state.settings.showUnregistered = !this.state.settings.showUnregistered;
             this.applySettings();
             this.saveSettings();
-            this.loadPlaytimeData();
-            if (this.state.calendarData) this.loadCalendarData();
+            this.state.dataCache = {};
+            this.loadAllPeriodData();
         });
 
         document.getElementById('showChartIconsToggle')?.addEventListener('click', () => {
             this.state.settings.showChartIcons = !this.state.settings.showChartIcons;
             this.applySettings();
             this.saveSettings();
-            if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+            this.renderAllCharts();
         });
 
         // 아이콘 크기 설정
         document.querySelectorAll('#iconSizeOptions .setting-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 if (btn.dataset.value === 'custom') {
-                    // 사용자 지정 모드 활성화
                     const customInput = document.getElementById('customIconSizeInput');
                     const customValue = parseInt(customInput?.value || '64');
                     this.state.settings.chartIconSize = Math.max(1, Math.min(256, customValue));
                 } else {
-                    // 프리셋 크기 선택
                     this.state.settings.chartIconSize = parseInt(btn.dataset.value);
                 }
                 this.applySettings();
                 this.saveSettings();
-                if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+                this.state.iconImages = {};
+                this.state.dataCache = {};
+                this.loadAllPeriodData();
             });
         });
 
@@ -755,7 +762,9 @@ const Dashboard = {
             e.target.value = clamped;
             this.state.settings.chartIconSize = clamped;
             this.saveSettings();
-            if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+            this.state.iconImages = {};
+            this.state.dataCache = {};
+            this.loadAllPeriodData();
         });
 
         // 막대 차트 아이콘 크기 모드 설정
@@ -764,16 +773,12 @@ const Dashboard = {
                 this.state.settings.barIconSizeMode = btn.dataset.value;
                 this.applySettings();
                 this.saveSettings();
-                if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+                this.renderAllCharts();
             });
         });
 
         window.addEventListener('resize', () => {
             this.updateTabIndicator();
-            // 달력이 활성화되어 있으면 아이콘 크기 재조정
-            if (document.getElementById('calendar').classList.contains('active')) {
-                this.adjustCalendarIconSizes();
-            }
         });
     }
 };

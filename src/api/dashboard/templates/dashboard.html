@@ -17,13 +17,10 @@
         <nav class="toolbar-tabs">
             <div class="tab-indicator" id="tabIndicator"></div>
             <button class="tab-btn active" data-tab="playtime">📈 플레이 시간</button>
-            <button class="tab-btn" data-tab="calendar">📅 달력</button>
         </nav>
         
         <div class="period-nav">
-            <button id="prevPeriod">◀</button>
             <span class="period-label" id="periodLabel">이번 주</span>
-            <button id="nextPeriod">▶</button>
         </div>
         
         <div class="toolbar-actions">
@@ -58,31 +55,15 @@
                 </div>
                 <div class="chart-legend" id="chartLegend"></div>
                 <div class="chart-container">
-                    <canvas id="playtimeChart"></canvas>
+                    <div class="chart-slider" id="chartSlider">
+                        <div class="chart-panel"><canvas id="prevChart"></canvas></div>
+                        <div class="chart-panel"><canvas id="playtimeChart"></canvas></div>
+                        <div class="chart-panel"><canvas id="nextChart"></canvas></div>
+                    </div>
                 </div>
             </div>
         </section>
         
-        <section id="calendar" class="tab-panel">
-            <div class="card calendar-wrapper">
-                <div class="card-header">
-                    <div class="month-nav">
-                        <button id="prevMonth">◀</button>
-                        <span class="month-title" id="monthTitle">2026년 2월</span>
-                        <button id="nextMonth">▶</button>
-                    </div>
-                </div>
-                <div class="calendar-grid" id="calendarGrid">
-                    <div class="calendar-header">일</div>
-                    <div class="calendar-header">월</div>
-                    <div class="calendar-header">화</div>
-                    <div class="calendar-header">수</div>
-                    <div class="calendar-header">목</div>
-                    <div class="calendar-header">금</div>
-                    <div class="calendar-header">토</div>
-                </div>
-            </div>
-        </section>
     </main>
     
     <div class="modal-overlay" id="settingsModal">
@@ -132,14 +113,6 @@
                 </div>
             </div>
             
-            <div class="setting-group">
-                <label class="setting-label">달력 최소 플레이 시간</label>
-                <div class="setting-options">
-                    <input type="number" id="thresholdInput" value="10" min="0" 
-                        style="width:60px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;">
-                    <span style="font-size:0.8rem;color:var(--text-secondary);">분</span>
-                </div>
-            </div>
             
             <div class="setting-group">
                 <div class="setting-toggle" id="showUnregisteredToggle">
