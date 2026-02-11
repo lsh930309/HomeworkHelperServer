@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-PyInstaller 자동 빌드 스크립트 (onedir + Inno Setup)
-- .spec 파일 기반 빌드 (onedir 모드)
-- ZIP 배포 파일 자동 생성
-- Inno Setup 인스톨러 자동 생성
-- 자동 버전 관리 및 이전 버전 아카이빙
-- release 폴더에 최종 배포 파일 출력
+PyInstaller 자동 빌드 스크립트 (GUI 버전)
+- tkinter GUI로 버전 선택 및 빌드 진행 표시
+- 시스템 다크/라이트 모드 자동 감지
+- 기존 build.py의 모든 기능 유지
 """
 
 import os
@@ -15,16 +13,13 @@ import shutil
 import subprocess
 import zipfile
 import re
+import threading
+import queue
 from pathlib import Path
 from datetime import datetime
-from tqdm import tqdm
-
-# Windows에서만 작동하는 키보드 입력 라이브러리
-if sys.platform == 'win32':
-    import msvcrt
-else:
-    print("[오류] 이 스크립트는 Windows에서만 실행할 수 있습니다.")
-    sys.exit(1)
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+from tkinter import font as tkfont
 
 # ==================== 설정 ====================
 PROJECT_ROOT = Path(__file__).parent
@@ -32,28 +27,81 @@ RELEASE_DIR = PROJECT_ROOT / "release"
 ARCHIVES_DIR = RELEASE_DIR / "archives"
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
-# INSTALLER_OUTPUT_DIR 제거: installer.iss에서 자동 생성
 
-# 빌드 대상
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
-APP_FOLDER = DIST_DIR / APP_NAME  # onedir 결과물 폴더
+APP_FOLDER = DIST_DIR / APP_NAME
 
-# Inno Setup 경로 (일반적인 설치 경로)
 INNO_SETUP_PATH = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
 INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
 
-# 버전 패턴: HomeworkHelper_vA.B.C.yymmddhhmmss_*.{exe,zip}
 VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)\.(\d{12})')
 
+# 폰트 경로
+FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NEXONLv1GothicOTFBold.otf"
 # ================================================
 
 
-def print_section(title):
-    """섹션 제목 출력"""
-    print("\n" + "=" * 70)
-    print(f"  {title}")
-    print("=" * 70)
+def load_custom_font():
+    """커스텀 폰트 로딩"""
+    if FONT_PATH.exists():
+        try:
+            # Windows에서 폰트 등록
+            import ctypes
+            ctypes.windll.gdi32.AddFontResourceW(str(FONT_PATH))
+            return "NEXON Lv1 Gothic OTF Bold"
+        except:
+            pass
+    return "맑은 고딕"  # 폴백 폰트
+
+
+def is_dark_mode():
+    """Windows 다크 모드 감지"""
+    try:
+        import winreg
+        registry = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+        key = winreg.OpenKey(
+            registry,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return value == 0  # 0 = 다크 모드, 1 = 라이트 모드
+    except:
+        return False  # 기본값: 라이트 모드
+
+
+class ThemeColors:
+    """테마 색상 정의"""
+    def __init__(self, dark_mode=False):
+        if dark_mode:
+            self.bg = '#1e1e1e'
+            self.fg = '#ffffff'
+            self.input_bg = '#2d2d2d'
+            self.input_fg = '#ffffff'
+            self.button_bg = '#0e639c'
+            self.button_fg = '#ffffff'
+            self.log_bg = '#1e1e1e'
+            self.log_fg = '#cccccc'
+            self.highlight_bg = '#094771'
+            self.border = '#3e3e3e'
+            self.success = '#4ec9b0'
+            self.error = '#f48771'
+            self.warning = '#ce9178'
+        else:
+            self.bg = '#f0f0f0'
+            self.fg = '#000000'
+            self.input_bg = '#ffffff'
+            self.input_fg = '#000000'
+            self.button_bg = '#0078d4'
+            self.button_fg = '#ffffff'
+            self.log_bg = '#ffffff'
+            self.log_fg = '#000000'
+            self.highlight_bg = '#cce8ff'
+            self.border = '#d0d0d0'
+            self.success = '#107c10'
+            self.error = '#d13438'
+            self.warning = '#ff8c00'
 
 
 def get_latest_version():
@@ -62,18 +110,13 @@ def get_latest_version():
         return None
 
     latest_version = None
-    latest_timestamp = None
-
-    # release 폴더의 모든 exe, zip 파일 검사
     for file_path in RELEASE_DIR.glob("HomeworkHelper_v*"):
         match = VERSION_PATTERN.search(file_path.name)
         if match:
             major, minor, patch, timestamp = match.groups()
             version_tuple = (int(major), int(minor), int(patch), timestamp)
-
             if latest_version is None or version_tuple > latest_version:
                 latest_version = version_tuple
-                latest_timestamp = timestamp
 
     if latest_version:
         major, minor, patch, timestamp = latest_version
@@ -84,144 +127,385 @@ def get_latest_version():
             'timestamp': timestamp,
             'string': f"v{major}.{minor}.{patch}.{timestamp}"
         }
-
     return None
 
 
-def interactive_version_input(latest_version):
-    """대화형 버전 입력 UI"""
-    print_section("버전 설정")
+class VersionSelectorGUI:
+    """버전 선택 GUI"""
 
-    # 기본값 설정
-    if latest_version:
-        current = [latest_version['major'], latest_version['minor'], latest_version['patch']]
-        print(f"최신 버전: {latest_version['string']}")
-        print(f"현재 기본값: v{current[0]}.{current[1]}.{current[2]}.yymmddhhmmss")
-    else:
-        current = [1, 0, 0]
-        print("첫 번째 빌드입니다.")
-        print(f"기본값: v{current[0]}.{current[1]}.{current[2]}.yymmddhhmmss")
+    def __init__(self, latest_version, theme, font_family="맑은 고딕"):
+        self.latest_version = latest_version
+        self.theme = theme
+        self.font_family = font_family
+        self.result = None
 
-    print("\n조작 방법:")
-    print("  좌/우 방향키: 자릿수 이동 (A ← → B ← → C)")
-    print("  상/하 방향키: 숫자 증가/감소")
-    print("  Enter: 확정")
-    print("  ESC: 취소")
+        if latest_version:
+            self.current = [latest_version['major'], latest_version['minor'], latest_version['patch']]
+            self.original = self.current.copy()
+        else:
+            self.current = [1, 0, 0]
+            self.original = self.current.copy()
 
-    position = 0  # 0=major, 1=minor, 2=patch
-    original = current.copy()
+        self.position = 0  # 0=major, 1=minor, 2=patch
 
-    def print_version():
-        """현재 버전 상태 출력"""
-        parts = []
-        for i, num in enumerate(current):
-            if i == position:
-                parts.append(f"[{num}]")  # 현재 선택된 자리
-            else:
-                parts.append(str(num))
-        print(f"\r버전 선택: v{'.'.join(parts)}               ", end='', flush=True)
+        # 창 생성
+        self.root = tk.Tk()
+        self.root.title("HomeworkHelper - 버전 선택")
+        self.root.geometry("450x320")
+        self.root.resizable(False, False)
+        self.root.configure(bg=theme.bg)
 
-    print()
-    print_version()
+        # 항상 최상위
+        self.root.attributes('-topmost', True)
 
-    while True:
-        if msvcrt.kbhit():
-            key = msvcrt.getch()
+        self._create_widgets()
+        self._bind_events()
 
-            # ESC
-            if key == b'\x1b':
-                print("\n\n[취소] 빌드를 중단합니다.")
-                return None
+    def _create_widgets(self):
+        """위젯 생성"""
+        # 제목
+        title = tk.Label(
+            self.root,
+            text="버전 선택",
+            font=(self.font_family, 16),
+            bg=self.theme.bg,
+            fg=self.theme.fg
+        )
+        title.pack(pady=15)
 
-            # Enter
-            elif key == b'\r':
-                # 버전 검증: 원본보다 작으면 안 됨
-                new_tuple = tuple(current)
-                old_tuple = tuple(original)
+        # 최신 버전 표시
+        if self.latest_version:
+            info = tk.Label(
+                self.root,
+                text=f"최신 버전: {self.latest_version['string']}",
+                font=(self.font_family, 9),
+                bg=self.theme.bg,
+                fg=self.theme.fg
+            )
+            info.pack(pady=5)
 
-                if new_tuple < old_tuple:
-                    print("\n\n[오류] 이전 버전보다 낮은 버전은 설정할 수 없습니다.")
-                    print(f"  이전: v{original[0]}.{original[1]}.{original[2]}")
-                    print(f"  입력: v{current[0]}.{current[1]}.{current[2]}")
-                    print("\n다시 입력해주세요.")
-                    print_version()
-                    continue
+        # 버전 표시 프레임
+        version_frame = tk.Frame(self.root, bg=self.theme.bg)
+        version_frame.pack(pady=25)
 
-                timestamp = datetime.now().strftime("%y%m%d%H%M%S")
-                version_string = f"v{current[0]}.{current[1]}.{current[2]}.{timestamp}"
-                print(f"\n\n선택된 버전: {version_string}")
-                return {
-                    'major': current[0],
-                    'minor': current[1],
-                    'patch': current[2],
-                    'timestamp': timestamp,
-                    'string': version_string
-                }
+        # 버전 라벨들
+        self.labels = []
+        for i in range(3):
+            label = tk.Label(
+                version_frame,
+                text=str(self.current[i]),
+                font=(self.font_family, 32),
+                width=3,
+                bg=self.theme.highlight_bg if i == 0 else self.theme.input_bg,
+                fg=self.theme.fg,
+                relief=tk.FLAT,  # 플랫 디자인
+                borderwidth=1
+            )
+            label.pack(side=tk.LEFT, padx=5)
+            self.labels.append(label)
 
-            # 방향키
-            elif key == b'\xe0':  # 확장 키 (방향키)
-                arrow = msvcrt.getch()
+            if i < 2:
+                dot = tk.Label(
+                    version_frame,
+                    text=".",
+                    font=(self.font_family, 32),
+                    bg=self.theme.bg,
+                    fg=self.theme.fg
+                )
+                dot.pack(side=tk.LEFT)
 
-                # 좌
-                if arrow == b'K':
-                    position = max(0, position - 1)
+        # 조작 안내
+        help_frame = tk.Frame(self.root, bg=self.theme.bg)
+        help_frame.pack(pady=20)
 
-                # 우
-                elif arrow == b'M':
-                    position = min(2, position + 1)
+        help_items = [
+            ("← →", "자릿수 이동"),
+            ("↑ ↓", "숫자 증감"),
+            ("Enter", "확정"),
+            ("ESC", "취소")
+        ]
 
-                # 상 (증가)
-                elif arrow == b'H':
-                    # 앞자리가 증가하면 뒷자리 0으로 초기화
-                    old_value = current[position]
-                    current[position] += 1
+        for i, (key, desc) in enumerate(help_items):
+            row = i // 2
+            col = i % 2
 
-                    if current[position] > old_value:
-                        # major가 증가하면 minor, patch를 0으로
-                        if position == 0:
-                            current[1] = 0
-                            current[2] = 0
-                        # minor가 증가하면 patch를 0으로
-                        elif position == 1:
-                            current[2] = 0
+            key_label = tk.Label(
+                help_frame,
+                text=key,
+                font=(self.font_family, 9),
+                bg=self.theme.input_bg,
+                fg=self.theme.fg,
+                relief=tk.FLAT,  # 플랫 디자인
+                borderwidth=1,
+                padx=8,
+                pady=2
+            )
+            key_label.grid(row=row, column=col*2, padx=5, pady=3, sticky='e')
 
-                # 하 (감소, 원본보다 작아질 수 없음)
-                elif arrow == b'P':
-                    new_value = [current[0], current[1], current[2]]
-                    new_value[position] = max(0, current[position] - 1)
+            desc_label = tk.Label(
+                help_frame,
+                text=desc,
+                font=(self.font_family, 9),
+                bg=self.theme.bg,
+                fg=self.theme.fg
+            )
+            desc_label.grid(row=row, column=col*2+1, padx=5, pady=3, sticky='w')
 
-                    # 감소 후 버전이 원본보다 작아지는지 확인
-                    if tuple(new_value) >= tuple(original):
-                        current[position] = new_value[position]
+    def _update_display(self):
+        """버전 표시 업데이트"""
+        for i, label in enumerate(self.labels):
+            is_selected = (i == self.position)
+            label.config(
+                text=str(self.current[i]),
+                bg=self.theme.highlight_bg if is_selected else self.theme.input_bg
+            )
 
-                print_version()
+    def _bind_events(self):
+        """키보드 이벤트 바인딩"""
+        self.root.bind('<Left>', self._on_left)
+        self.root.bind('<Right>', self._on_right)
+        self.root.bind('<Up>', self._on_up)
+        self.root.bind('<Down>', self._on_down)
+        self.root.bind('<Return>', self._on_enter)
+        self.root.bind('<Escape>', self._on_escape)
+
+    def _on_left(self, event):
+        self.position = max(0, self.position - 1)
+        self._update_display()
+
+    def _on_right(self, event):
+        self.position = min(2, self.position + 1)
+        self._update_display()
+
+    def _on_up(self, event):
+        old_value = self.current[self.position]
+        self.current[self.position] += 1
+
+        # major 증가 시 minor, patch 초기화
+        if self.position == 0 and self.current[0] > old_value:
+            self.current[1] = 0
+            self.current[2] = 0
+        # minor 증가 시 patch 초기화
+        elif self.position == 1 and self.current[1] > old_value:
+            self.current[2] = 0
+
+        self._update_display()
+
+    def _on_down(self, event):
+        new_value = self.current.copy()
+        new_value[self.position] = max(0, self.current[self.position] - 1)
+
+        # 감소 후 버전이 원본보다 작아지는지 확인
+        if tuple(new_value) >= tuple(self.original):
+            self.current[self.position] = new_value[self.position]
+            self._update_display()
+
+    def _on_enter(self, event):
+        # 버전 검증
+        if tuple(self.current) < tuple(self.original):
+            # 오류 메시지 표시
+            error_label = tk.Label(
+                self.root,
+                text="⚠ 이전 버전보다 낮은 버전은 설정할 수 없습니다",
+                font=(self.font_family, 9),
+                bg=self.theme.bg,
+                fg=self.theme.error
+            )
+            error_label.pack(pady=5)
+            self.root.after(2000, error_label.destroy)
+            return
+
+        timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+        self.result = {
+            'major': self.current[0],
+            'minor': self.current[1],
+            'patch': self.current[2],
+            'timestamp': timestamp,
+            'string': f"v{self.current[0]}.{self.current[1]}.{self.current[2]}.{timestamp}"
+        }
+        self.root.destroy()
+
+    def _on_escape(self, event):
+        self.root.destroy()
+
+    def show(self):
+        """창 표시 및 결과 반환"""
+        self.root.focus_force()
+        self.root.mainloop()
+        return self.result
 
 
-def archive_old_files(new_version):
+class BuildProgressGUI:
+    """빌드 진행 상황 GUI"""
+
+    def __init__(self, version_info, theme, font_family="맑은 고딕"):
+        self.version_info = version_info
+        self.theme = theme
+        self.font_family = font_family
+
+        # 창 생성 (작고 깔끔하게)
+        self.root = tk.Tk()
+        self.root.title(f"HomeworkHelper 빌드")
+        self.root.geometry("500x210")  # 세로 높이 증가 (180 → 210)
+        self.root.resizable(False, False)
+        self.root.configure(bg=theme.bg)
+
+        # 항상 최상위
+        self.root.attributes('-topmost', True)
+
+        # 애니메이션 상태
+        self.status_base = ""
+        self.animation_dots = 1
+        self.is_animating = True
+
+        self._create_widgets()
+        self._start_animation()
+
+    def _create_widgets(self):
+        """위젯 생성"""
+        # 메인 프레임
+        main_frame = tk.Frame(self.root, bg=self.theme.bg)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
+
+        # 제목
+        title = tk.Label(
+            main_frame,
+            text="HomeworkHelper 빌드",
+            font=(self.font_family, 16),
+            bg=self.theme.bg,
+            fg=self.theme.fg
+        )
+        title.pack(pady=(0, 5))
+
+        # 버전 정보
+        version_label = tk.Label(
+            main_frame,
+            text=f"버전: {self.version_info['string']}",
+            font=(self.font_family, 10),
+            bg=self.theme.bg,
+            fg=self.theme.fg
+        )
+        version_label.pack(pady=(0, 15))
+
+        # 진행 상태
+        self.status_label = tk.Label(
+            main_frame,
+            text="준비 중...",
+            font=(self.font_family, 11),
+            bg=self.theme.bg,
+            fg=self.theme.fg
+        )
+        self.status_label.pack(pady=(0, 10))
+
+        # 프로그레스 바 (Windows 스타일 녹색, 플랫)
+        style = ttk.Style()
+        style.theme_use('clam')  # 플랫한 스타일
+        style.configure(
+            "Green.Horizontal.TProgressbar",
+            troughcolor=self.theme.input_bg,
+            bordercolor=self.theme.border,
+            background='#06b025',  # Windows 녹색
+            lightcolor='#06b025',
+            darkcolor='#06b025',
+            thickness=24
+        )
+
+        self.progress = ttk.Progressbar(
+            main_frame,
+            mode='determinate',
+            maximum=100,
+            style="Green.Horizontal.TProgressbar"
+        )
+        self.progress.pack(fill=tk.X, pady=(0, 10))
+        self.progress['value'] = 0
+
+        # 진행률 퍼센트 표시
+        self.percent_label = tk.Label(
+            main_frame,
+            text="0%",
+            font=(self.font_family, 12),
+            bg=self.theme.bg,
+            fg=self.theme.fg
+        )
+        self.percent_label.pack()
+
+    def _start_animation(self):
+        """상태 메시지 점 애니메이션 시작"""
+        def update_animation():
+            if self.is_animating and self.status_base.endswith(" 중"):
+                dots = "." * self.animation_dots
+                self.status_label.config(text=f"{self.status_base}{dots}")
+                self.animation_dots = (self.animation_dots % 3) + 1
+            self.root.after(500, update_animation)  # 0.5초마다 업데이트
+
+        self.root.after(500, update_animation)
+
+    def log(self, message, tag='', update_last_line=False):
+        """로그 메시지 (더미 - 로그 박스 제거됨)"""
+        pass  # 로그 출력 안함
+
+    def log_section(self, title):
+        """섹션 제목 로그 (더미)"""
+        pass  # 로그 출력 안함
+
+    def set_status(self, status):
+        """상태 메시지 업데이트"""
+        # 끝의 점들을 제거하여 기본 메시지 저장
+        self.status_base = status.rstrip('.')
+
+        # "~~~ 중..." 형태면 애니메이션 활성화
+        if self.status_base.endswith(" 중"):
+            self.is_animating = True
+            self.animation_dots = 1  # 리셋
+        else:
+            # 완료 메시지 등은 애니메이션 비활성화
+            self.is_animating = False
+            self.status_label.config(text=status)
+
+    def set_progress(self, value):
+        """프로그레스 바 값 설정 (0~100)"""
+        self.progress['value'] = value
+        self.percent_label.config(text=f"{int(value)}%")
+        self.root.update_idletasks()
+
+    def show_complete(self, success=True, auto_close_delay=3000):
+        """완료 표시 및 자동 종료"""
+        self.set_progress(100)
+        if success:
+            self.set_status("✓ 빌드 완료! (잠시 후 자동 종료...)")
+            # 자동 종료
+            if auto_close_delay > 0:
+                self.root.after(auto_close_delay, self.root.destroy)
+        else:
+            self.set_status("✗ 빌드 실패")
+            # 실패 시 수동 종료
+
+
+# ==================== 빌드 함수들 ====================
+
+def archive_old_files(gui, new_version):
     """이전 버전 파일들을 archives 폴더로 이동"""
-    print_section("이전 버전 파일 아카이빙")
+    gui.log_section("이전 버전 파일 아카이빙")
+    gui.set_status("이전 버전 파일 아카이빙 중...")
+    gui.set_progress(5)
 
     if not RELEASE_DIR.exists():
-        print("  (이전 버전 파일 없음)")
+        gui.log("  (이전 버전 파일 없음)")
         return
 
-    # 현재 날짜 폴더 (yy-mm-dd)
     date_folder = datetime.now().strftime("%y-%m-%d")
-
-    # 아카이빙할 파일 목록 수집
     files_to_archive = []
+
     for file_path in RELEASE_DIR.glob("HomeworkHelper_v*"):
         if file_path.is_file() and file_path.suffix in ['.exe', '.zip']:
             files_to_archive.append(file_path)
 
     if not files_to_archive:
-        print("  (아카이빙할 파일 없음)")
+        gui.log("  (아카이빙할 파일 없음)")
         return
 
-    # 진행률 표시하며 아카이빙
     archived_count = 0
-    for file_path in tqdm(files_to_archive, desc="아카이빙", unit="파일"):
-        # 파일 타입 확인
+    for file_path in files_to_archive:
         if file_path.suffix == '.exe':
             archive_subdir = ARCHIVES_DIR / "installer" / date_folder
         elif file_path.suffix == '.zip':
@@ -229,115 +513,137 @@ def archive_old_files(new_version):
         else:
             continue
 
-        # 아카이브 폴더 생성
         archive_subdir.mkdir(parents=True, exist_ok=True)
-
-        # 파일 이동
         dest = archive_subdir / file_path.name
         shutil.move(str(file_path), str(dest))
         archived_count += 1
+        gui.log(f"  ✓ {file_path.name} → archives/{file_path.suffix[1:]}/{date_folder}/")
 
-    print(f"\n총 {archived_count}개 파일 아카이빙 완료")
+    gui.log(f"\n총 {archived_count}개 파일 아카이빙 완료", 'success')
+    gui.set_progress(10)
 
 
-def clean_build_artifacts():
+def clean_build_artifacts(gui):
     """빌드 산출물 폴더 삭제"""
-    print_section("이전 빌드 산출물 정리")
+    gui.log_section("이전 빌드 산출물 정리")
+    gui.set_status("이전 빌드 산출물 정리 중...")
+    gui.set_progress(15)
 
     for folder in [BUILD_DIR, DIST_DIR]:
         if folder.exists():
             try:
                 shutil.rmtree(folder)
-                print(f"[OK] 삭제: {folder.name}/")
+                gui.log(f"  ✓ 삭제: {folder.name}/", 'success')
             except Exception as e:
-                print(f"[경고] 삭제 실패 ({folder.name}): {e}")
+                gui.log(f"  ⚠ 삭제 실패 ({folder.name}): {e}", 'warning')
         else:
-            print(f"  (없음: {folder.name}/)")
+            gui.log(f"  (없음: {folder.name}/)")
 
-    # installer_output은 Inno Setup이 자동 생성하므로 미리 만들 필요 없음
-    # 하지만 이전 빌드의 잔여 파일은 정리
-    # installer_output_dir = PROJECT_ROOT / "installer_output"
-    # if installer_output_dir.exists():
-    #     try:
-    #         shutil.rmtree(installer_output_dir)
-    #         print(f"[OK] 삭제: installer_output/")
-    #     except Exception as e:
-    #         print(f"[경고] 삭제 실패 (installer_output): {e}")
+    gui.set_progress(20)
 
 
-def ensure_release_dir():
-    """release 폴더 생성 (없으면)"""
+def ensure_release_dir(gui):
+    """release 폴더 생성"""
     if not RELEASE_DIR.exists():
         RELEASE_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"[OK] release 폴더 생성")
+        gui.log("  ✓ release 폴더 생성", 'success')
     return RELEASE_DIR
 
 
-def build_with_pyinstaller():
-    """PyInstaller로 .spec 파일 기반 빌드"""
-    print_section("PyInstaller 빌드 시작 (onedir 모드)")
+def build_with_pyinstaller(gui):
+    """PyInstaller로 빌드"""
+    gui.log_section("PyInstaller 빌드 시작 (onedir 모드)")
+    gui.set_status("PyInstaller 빌드 중...")
+    gui.set_progress(25)
 
     if not SPEC_FILE.exists():
-        print(f"[오류] .spec 파일 없음: {SPEC_FILE}")
+        gui.log(f"✗ .spec 파일 없음: {SPEC_FILE}", 'error')
         return False
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
         str(SPEC_FILE),
-        "--noconfirm",  # 기존 빌드 덮어쓰기 확인 생략
-        "--clean",      # 이전 빌드 캐시 정리
+        "--noconfirm",
+        "--clean",
     ]
 
-    print(f"빌드 명령: {' '.join(cmd)}\n")
+    gui.log(f"빌드 명령: {' '.join(cmd)}\n")
 
     try:
-        # 진행률 바와 함께 실시간 출력
-        with tqdm(desc="PyInstaller 빌드", bar_format="{desc}: {elapsed}", leave=True) as pbar:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                cwd=PROJECT_ROOT,
-                bufsize=1
-            )
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            cwd=PROJECT_ROOT,
+            bufsize=1
+        )
 
-            # 실시간 출력 읽기 (한 줄에서 계속 업데이트)
-            for line in iter(process.stdout.readline, ''):
-                if line.strip():
-                    # \r + \033[K로 줄 지우고 출력 (잔상 방지)
-                    print(f"\r\033[K  → {line.strip()}", end='', flush=True)
+        line_count = 0
+        last_was_progress = False
 
-            process.wait()
+        # 진행률 패턴 (같은 줄 업데이트 대상)
+        progress_patterns = [
+            'building',
+            'copying',
+            'compressing',
+            'EXE',
+            'Appending',
+            'Processing',
+        ]
 
-            if process.returncode != 0:
-                print("\n")  # 줄바꿈
-                raise subprocess.CalledProcessError(process.returncode, cmd)
+        for line in iter(process.stdout.readline, ''):
+            if line.strip():
+                cleaned_line = line.replace('\r', '').strip()
 
-        print("\n[OK] PyInstaller 빌드 성공!")
+                # 진행률 메시지인지 판단
+                is_progress = any(pattern in cleaned_line for pattern in progress_patterns)
+
+                if is_progress and last_was_progress and line_count > 0:
+                    # 이전 줄도 진행률이었다면 덮어쓰기
+                    gui.log(f"  → {cleaned_line}", update_last_line=True)
+                else:
+                    # 새 줄로 추가
+                    gui.log(f"  → {cleaned_line}")
+
+                last_was_progress = is_progress
+                line_count += 1
+
+                # 진행률 업데이트 (25% ~ 60%)
+                progress = min(60, 25 + (line_count * 0.3))
+                gui.set_progress(progress)
+
+        process.wait()
+
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+
+        gui.log("\n✓ PyInstaller 빌드 성공!", 'success')
+        gui.set_progress(60)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"\n[오류] 빌드 실패: {e}")
+        gui.log(f"\n✗ 빌드 실패: {e}", 'error')
         return False
 
 
-def create_zip_distribution(version_info):
-    """onedir 결과물을 ZIP으로 압축하여 release 폴더에 저장"""
-    print_section("ZIP 배포 파일 생성")
+def create_zip_distribution(gui, version_info):
+    """ZIP 배포 파일 생성"""
+    gui.log_section("ZIP 배포 파일 생성")
+    gui.set_status("ZIP 파일 생성 중...")
+    gui.set_progress(65)
 
     if not APP_FOLDER.exists():
-        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
+        gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
-    ensure_release_dir()
+    ensure_release_dir(gui)
     zip_filename = f"HomeworkHelper_{version_info['string']}_Portable.zip"
     zip_path = RELEASE_DIR / zip_filename
 
     try:
-        # 전체 파일 목록 수집
-        print("파일 목록 수집 중...")
+        gui.log("파일 목록 수집 중...")
         all_files = []
         for root, dirs, files in os.walk(APP_FOLDER):
             for file in files:
@@ -345,19 +651,26 @@ def create_zip_distribution(version_info):
                 arcname = file_path.relative_to(DIST_DIR)
                 all_files.append((file_path, arcname))
 
-        # 진행률 표시하며 압축
-        print(f"총 {len(all_files)}개 파일 압축 중...")
+        gui.log(f"총 {len(all_files)}개 파일 압축 중...")
+
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path, arcname in tqdm(all_files, desc="압축 진행", unit="파일"):
+            for i, (file_path, arcname) in enumerate(all_files):
                 zipf.write(file_path, arcname)
 
+                # 진행률 업데이트 (65% ~ 75%)
+                if i % 10 == 0:
+                    progress = 65 + (i / len(all_files) * 10)
+                    gui.set_progress(progress)
+                    gui.log(f"  압축 중: {i}/{len(all_files)} 파일...", update_last_line=(i > 0))
+
         size_mb = zip_path.stat().st_size / (1024 * 1024)
-        print(f"\n[OK] ZIP 생성 완료: {zip_filename}")
-        print(f"  파일 크기: {size_mb:.2f} MB")
-        print(f"  저장 위치: {zip_path}")
+        gui.log(f"\n✓ ZIP 생성 완료: {zip_filename}", 'success')
+        gui.log(f"  파일 크기: {size_mb:.2f} MB")
+        gui.log(f"  저장 위치: {zip_path}")
+        gui.set_progress(75)
         return True
     except Exception as e:
-        print(f"[오류] ZIP 생성 실패: {e}")
+        gui.log(f"✗ ZIP 생성 실패: {e}", 'error')
         return False
 
 
@@ -370,7 +683,6 @@ def update_installer_script_version(version_info):
         with open(INSTALLER_SCRIPT, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # #define MyAppVersion "x.x.x" 패턴 찾아서 업데이트
         version_string = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
         content = re.sub(
             r'(#define MyAppVersion\s+")[^"]+(")',
@@ -383,186 +695,240 @@ def update_installer_script_version(version_info):
 
         return True
     except Exception as e:
-        print(f"[경고] installer.iss 버전 업데이트 실패: {e}")
         return False
 
 
-def create_installer(version_info):
+def create_installer(gui, version_info):
     """Inno Setup으로 인스톨러 생성"""
-    print_section("Inno Setup 인스톨러 생성")
+    gui.log_section("Inno Setup 인스톨러 생성")
+    gui.set_status("인스톨러 생성 중...")
+    gui.set_progress(80)
 
-    # Inno Setup 설치 확인
     if not INNO_SETUP_PATH.exists():
-        print(f"[건너뛰기] Inno Setup이 설치되어 있지 않습니다.")
-        print(f"  예상 경로: {INNO_SETUP_PATH}")
-        print(f"  다운로드: https://jrsoftware.org/isinfo.php")
+        gui.log(f"⚠ Inno Setup이 설치되어 있지 않습니다", 'warning')
+        gui.log(f"  예상 경로: {INNO_SETUP_PATH}")
+        gui.log(f"  다운로드: https://jrsoftware.org/isinfo.php")
+        gui.set_progress(95)  # 건너뛰기
         return False
 
-    # .iss 스크립트 확인
     if not INSTALLER_SCRIPT.exists():
-        print(f"[오류] 인스톨러 스크립트 없음: {INSTALLER_SCRIPT}")
+        gui.log(f"✗ 인스톨러 스크립트 없음: {INSTALLER_SCRIPT}", 'error')
         return False
 
-    # 앱 폴더 확인
     if not APP_FOLDER.exists():
-        print(f"[오류] 배포 폴더 없음: {APP_FOLDER}")
+        gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
-    # installer.iss 버전 정보 업데이트
     update_installer_script_version(version_info)
 
     cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
-    print(f"인스톨러 명령: {' '.join(cmd)}\n")
+    gui.log(f"인스톨러 명령: {' '.join(cmd)}\n")
 
     try:
-        # 진행률 바와 함께 실시간 출력
-        with tqdm(desc="인스톨러 생성", bar_format="{desc}: {elapsed}", leave=True) as pbar:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                cwd=PROJECT_ROOT,
-                bufsize=1
-            )
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            cwd=PROJECT_ROOT,
+            bufsize=1
+        )
 
-            # 실시간 출력 읽기 (한 줄에서 계속 업데이트)
-            for line in iter(process.stdout.readline, ''):
-                if line.strip():
-                    # \r + \033[K로 줄 지우고 출력 (잔상 방지)
-                    print(f"\r\033[K  → {line.strip()}", end='', flush=True)
+        line_count = 0
+        last_was_progress = False
 
-            process.wait()
+        # Inno Setup 진행률 패턴
+        progress_patterns = [
+            'Compiling',
+            'Preprocessing',
+            'Compressing',
+            'Creating',
+            '%',  # 퍼센트 포함
+        ]
 
-            if process.returncode != 0:
-                print("\n")  # 줄바꿈
-                raise subprocess.CalledProcessError(process.returncode, cmd)
+        for line in iter(process.stdout.readline, ''):
+            if line.strip():
+                cleaned_line = line.replace('\r', '').strip()
 
-        print("\n[OK] 인스톨러 생성 성공!")
+                # 진행률 메시지인지 판단
+                is_progress = any(pattern in cleaned_line for pattern in progress_patterns)
 
-        # 생성된 인스톨러 파일명 변경 (타임스탬프 추가)
-        # installer.iss의 OutputBaseFilename=HomeworkHelper_Setup_vX.Y.Z
+                if is_progress and last_was_progress and line_count > 0:
+                    # 이전 줄도 진행률이었다면 덮어쓰기
+                    gui.log(f"  → {cleaned_line}", update_last_line=True)
+                else:
+                    # 새 줄로 추가
+                    gui.log(f"  → {cleaned_line}")
+
+                last_was_progress = is_progress
+                line_count += 1
+
+                # 진행률 업데이트 (80% ~ 95%)
+                progress = min(95, 80 + (line_count * 0.3))
+                gui.set_progress(progress)
+
+        process.wait()
+
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+
+        gui.log("\n✓ 인스톨러 생성 성공!", 'success')
+
+        # 파일명 변경
         base_version = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
         expected_filename = f"HomeworkHelper_Setup_v{base_version}.exe"
         generated_file = RELEASE_DIR / expected_filename
-        
+
         if generated_file.exists():
-            # 새 파일명: HomeworkHelper_vX.Y.Z.timestamp_Setup.exe
             new_name = f"HomeworkHelper_{version_info['string']}_Setup.exe"
             dest = RELEASE_DIR / new_name
-
-            # 이름 변경
             shutil.move(str(generated_file), str(dest))
-            
+
             size_mb = dest.stat().st_size / (1024 * 1024)
-            print(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
-            print(f"  저장 위치: {dest}")
+            gui.log(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
+            gui.log(f"  저장 위치: {dest}")
         else:
-            print(f"[오류] 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}")
+            gui.log(f"✗ 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}", 'error')
             return False
 
+        gui.set_progress(95)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"\n[오류] 인스톨러 생성 실패: {e}")
-        if e.stderr:
-            print(f"오류 메시지:\n{e.stderr}")
+        gui.log(f"\n✗ 인스톨러 생성 실패: {e}", 'error')
         return False
 
 
-def print_summary(version_info):
+def print_summary(gui, version_info):
     """빌드 결과 요약"""
-    print_section("빌드 완료 - 결과 요약")
+    gui.log_section("빌드 완료 - 결과 요약")
+    gui.set_progress(98)
 
-    print(f"\n빌드 버전: {version_info['string']}")
-    print("\n배포 파일 목록 (release 폴더):")
-    print("-" * 70)
+    gui.log(f"\n빌드 버전: {version_info['string']}")
+    gui.log("\n배포 파일 목록 (release 폴더):")
+    gui.log("-" * 70)
 
     if not RELEASE_DIR.exists():
-        print("  (release 폴더 없음)")
+        gui.log("  (release 폴더 없음)")
         return
 
     has_files = False
 
-    # 1. 인스톨러
+    # 인스톨러
     for setup_file in RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"):
         size_mb = setup_file.stat().st_size / (1024 * 1024)
-        print(f"  [인스톨러] {setup_file.name} ({size_mb:.2f} MB)")
+        gui.log(f"  [인스톨러] {setup_file.name} ({size_mb:.2f} MB)", 'success')
         has_files = True
 
-    # 2. ZIP
+    # ZIP
     for zip_file in RELEASE_DIR.glob(f"*{version_info['string']}*Portable*.zip"):
         size_mb = zip_file.stat().st_size / (1024 * 1024)
-        print(f"  [Portable] {zip_file.name} ({size_mb:.2f} MB)")
+        gui.log(f"  [Portable] {zip_file.name} ({size_mb:.2f} MB)", 'success')
         has_files = True
 
     if not has_files:
-        print("  (파일 없음)")
+        gui.log("  (파일 없음)")
 
-    print("-" * 70)
-    print(f"\n배포 경로: {RELEASE_DIR.absolute()}")
-    print("\n사용 방법:")
-    print("  1. 설치 프로그램: *Setup*.exe 실행")
-    print("  2. Portable 버전: *.zip 압축 해제 후 실행")
+    gui.log("-" * 70)
+    gui.log(f"\n배포 경로: {RELEASE_DIR.absolute()}")
+    gui.log("\n사용 방법:")
+    gui.log("  1. 설치 프로그램: *Setup*.exe 실행")
+    gui.log("  2. Portable 버전: *.zip 압축 해제 후 실행")
+
+
+def run_build_process(gui, version_info):
+    """빌드 프로세스 실행 (별도 스레드)"""
+    def build():
+        try:
+            # 1. 아카이빙
+            archive_old_files(gui, version_info)
+
+            # 2. 정리
+            clean_build_artifacts(gui)
+
+            # 3. PyInstaller 빌드
+            if not build_with_pyinstaller(gui):
+                gui.show_complete(False, auto_close_delay=0)  # 실패 시 자동 종료 안함
+                return
+
+            # 4. ZIP 생성
+            success_count = 0
+            if create_zip_distribution(gui, version_info):
+                success_count += 1
+
+            # 5. 인스톨러 생성
+            if create_installer(gui, version_info):
+                success_count += 1
+
+            # 6. 결과 요약
+            print_summary(gui, version_info)
+
+            if success_count == 0:
+                gui.log("\n⚠ 배포 파일이 생성되지 않았습니다.", 'warning')
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            # 7. release 폴더 열기
+            folder_opened = False
+            try:
+                subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
+                gui.log(f"\n✓ release 폴더를 열었습니다", 'success')
+                folder_opened = True
+            except Exception as e:
+                gui.log(f"\n⚠ release 폴더 열기 실패: {e}", 'warning')
+
+            # 8. 완료 (폴더 열기 성공 시만 자동 종료)
+            if folder_opened:
+                gui.show_complete(True, auto_close_delay=3000)  # 3초 후 자동 종료
+            else:
+                gui.show_complete(True, auto_close_delay=0)  # 수동 종료
+
+        except Exception as e:
+            gui.log(f"\n✗ 예상치 못한 오류: {e}", 'error')
+            import traceback
+            gui.log(traceback.format_exc(), 'error')
+            gui.show_complete(False, auto_close_delay=0)
+
+    # 빌드 스레드 시작
+    build_thread = threading.Thread(target=build, daemon=True)
+    build_thread.start()
 
 
 def main():
     """메인 함수"""
-    print_section("HomeworkHelper 빌드 스크립트 (onedir + Installer)")
-    print(f"프로젝트 경로: {PROJECT_ROOT}")
-    print(f"빌드 모드: onedir (폴더 배포)")
+    # 커스텀 폰트 로딩
+    font_family = load_custom_font()
 
-    # 0. .spec 파일 존재 확인
+    # 다크 모드 감지
+    dark_mode = is_dark_mode()
+    theme = ThemeColors(dark_mode)
+
+    # .spec 파일 존재 확인
     if not SPEC_FILE.exists():
-        print(f"\n[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
+        print(f"[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
         return 1
 
     # 1. 최신 버전 확인
     latest_version = get_latest_version()
 
-    # 2. 대화형 버전 입력
-    version_info = interactive_version_input(latest_version)
+    # 2. 버전 선택 GUI
+    version_selector = VersionSelectorGUI(latest_version, theme, font_family)
+    version_info = version_selector.show()
+
     if version_info is None:
+        print("[취소] 빌드를 중단합니다.")
         return 1
 
-    # 3. 이전 파일 아카이빙
-    archive_old_files(version_info)
+    # 3. 빌드 진행 GUI
+    build_gui = BuildProgressGUI(version_info, theme, font_family)
 
-    # 4. 이전 빌드 산출물 정리
-    clean_build_artifacts()
+    # 4. 빌드 프로세스 시작
+    run_build_process(build_gui, version_info)
 
-    # 5. PyInstaller 빌드 (onedir 모드)
-    if not build_with_pyinstaller():
-        print("\n[실패] 빌드 과정에서 오류가 발생했습니다.")
-        return 1
+    # GUI 실행
+    build_gui.root.mainloop()
 
-    # 6. 배포 파일 생성
-    success_count = 0
-
-    # 6-1. ZIP 생성
-    if create_zip_distribution(version_info):
-        success_count += 1
-
-    # 6-2. 인스톨러 생성 (Inno Setup 있는 경우)
-    if create_installer(version_info):
-        success_count += 1
-
-    # 7. 결과 요약
-    print_summary(version_info)
-
-    if success_count == 0:
-        print("\n[경고] 배포 파일이 생성되지 않았습니다.")
-        return 1
-
-    # 8. release 폴더를 Windows Explorer로 열기
-    try:
-        subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
-        print(f"[OK] release 폴더를 열었습니다: {RELEASE_DIR.absolute()}")
-    except Exception as e:
-        print(f"[경고] release 폴더 열기 실패: {e}")
-
-    print("\n" + "=" * 70 + "\n")
     return 0
 
 
@@ -570,7 +936,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("\n\n[중단] 사용자에 의해 중단됨")
+        print("\n[중단] 사용자에 의해 중단됨")
         sys.exit(1)
     except Exception as e:
         print(f"\n[오류] 예상치 못한 오류: {e}")
