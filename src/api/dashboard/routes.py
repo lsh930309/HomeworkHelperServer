@@ -22,7 +22,7 @@ TEMPLATE_DIR = BASE_DIR / "templates"
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def get_dashboard():
+def get_dashboard():
     """대시보드 HTML 페이지"""
     template_path = TEMPLATE_DIR / "dashboard.html"
     with open(template_path, 'r', encoding='utf-8') as f:
@@ -30,13 +30,13 @@ async def get_dashboard():
 
 
 @router.get("/api/dashboard/settings")
-async def get_settings():
+def get_settings():
     """대시보드 설정 조회"""
     return JSONResponse(load_settings())
 
 
 @router.post("/api/dashboard/settings")
-async def update_settings(settings: dict = Body(...)):
+def update_settings(settings: dict = Body(...)):
     """대시보드 설정 저장"""
     current = load_settings()
     current.update(settings)
@@ -45,7 +45,7 @@ async def update_settings(settings: dict = Body(...)):
 
 
 @router.get("/api/dashboard/playtime")
-async def get_playtime_stats(
+def get_playtime_stats(
     period: str = Query("week"),
     offset: int = Query(0, description="기간 오프셋 (-1: 이전, 1: 다음)"),
     game_id: str = Query("all"),
@@ -59,10 +59,18 @@ async def get_playtime_stats(
     try:
         now = datetime.datetime.now()
         days = 7 if period == "week" else 30
-        
+
         # 오프셋 적용
         if period == "week":
-            start_date = now - datetime.timedelta(days=days + (-offset * 7))
+            # 이번 주 일요일 자정 계산
+            # weekday(): 월=0, 화=1, ..., 일=6
+            days_since_sunday = (now.weekday() + 1) % 7  # 일요일=0, 월요일=1, ..., 토요일=6
+            current_week_sunday = (now - datetime.timedelta(days=days_since_sunday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+
+            # 오프셋 적용 (주 단위)
+            start_date = current_week_sunday - datetime.timedelta(weeks=-offset)
         else:
             # 월간: 해당 월의 1일부터
             target_month = now.month + offset
@@ -80,7 +88,7 @@ async def get_playtime_stats(
             else:
                 end_date = datetime.datetime(target_year, target_month + 1, 1)
             days = (end_date - start_date).days
-        
+
         start_timestamp = start_date.timestamp()
         dates = [(start_date + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
         
@@ -129,8 +137,12 @@ async def get_playtime_stats(
         
         # 통계 계산
         today_str = now.strftime("%Y-%m-%d")
-        week_start = (now - datetime.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0)
+        # 이번 주 일요일 자정 (위와 동일한 로직)
+        days_since_sunday = (now.weekday() + 1) % 7
+        week_start = (now - datetime.timedelta(days=days_since_sunday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
         today_minutes = week_minutes = month_minutes = 0
         for i, ds in enumerate(dates):
@@ -157,7 +169,7 @@ async def get_playtime_stats(
 
 
 @router.get("/api/dashboard/calendar")
-async def get_calendar_data(
+def get_calendar_data(
     year: int = Query(...),
     month: int = Query(...),
     threshold: int = Query(10),
@@ -212,7 +224,7 @@ async def get_calendar_data(
 
 
 @router.get("/api/dashboard/icons/{process_id}")
-async def get_game_icon(
+def get_game_icon(
     process_id: str,
     size: int = Query(default=64, ge=1, le=256, description="Icon size in pixels")
 ):

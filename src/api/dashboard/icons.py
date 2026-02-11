@@ -257,40 +257,88 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
         if large_icons:
             hicon = large_icons[0]
 
-            # 원본 크기로 추출 (32x32)
-            icon_size = 32
-            hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-            hbmp = win32ui.CreateBitmap()
-            hbmp.CreateCompatibleBitmap(hdc, icon_size, icon_size)
+            # GDI 리소스 초기화
+            screen_dc_handle = None
+            hdc = None
+            hdc_mem = None
+            hbmp = None
+            old_bitmap = None
 
-            hdc_mem = hdc.CreateCompatibleDC()
-            hdc_mem.SelectObject(hbmp)
-            hdc_mem.FillSolidRect((0, 0, icon_size, icon_size), win32api.RGB(0, 0, 0))
+            try:
+                # 원본 크기로 추출 (32x32)
+                icon_size = 32
 
-            win32gui.DrawIconEx(hdc_mem.GetHandleOutput(), 0, 0, hicon, icon_size, icon_size, 0, None, win32con.DI_NORMAL)
+                # Screen DC 가져오기
+                screen_dc_handle = win32gui.GetDC(0)
+                hdc = win32ui.CreateDCFromHandle(screen_dc_handle)
 
-            # 비트맵 정보 추출
-            bmpinfo = hbmp.GetInfo()
-            bmpstr = hbmp.GetBitmapBits(True)
+                # Bitmap 생성
+                hbmp = win32ui.CreateBitmap()
+                hbmp.CreateCompatibleBitmap(hdc, icon_size, icon_size)
 
-            # PIL Image로 변환
-            img = Image.frombuffer(
-                'RGBA',
-                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-                bmpstr, 'raw', 'BGRA', 0, 1
-            )
+                # Memory DC 생성 및 bitmap 선택
+                hdc_mem = hdc.CreateCompatibleDC()
+                old_bitmap = hdc_mem.SelectObject(hbmp)
+                hdc_mem.FillSolidRect((0, 0, icon_size, icon_size), win32api.RGB(0, 0, 0))
 
-            # PNG로 저장
-            img.save(str(cache_path), 'PNG')
+                # 아이콘 그리기
+                win32gui.DrawIconEx(hdc_mem.GetHandleOutput(), 0, 0, hicon, icon_size, icon_size, 0, None, win32con.DI_NORMAL)
 
-            # 정리
-            for icon in large_icons + small_icons:
-                win32gui.DestroyIcon(icon)
+                # 비트맵 정보 추출
+                bmpinfo = hbmp.GetInfo()
+                bmpstr = hbmp.GetBitmapBits(True)
 
-            # 다양한 크기 변형 생성
-            generate_icon_variants(str(cache_path), process_id)
+                # PIL Image로 변환
+                img = Image.frombuffer(
+                    'RGBA',
+                    (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                    bmpstr, 'raw', 'BGRA', 0, 1
+                )
 
-            return str(cache_path)
+                # PNG로 저장
+                img.save(str(cache_path), 'PNG')
+
+                # 다양한 크기 변형 생성
+                generate_icon_variants(str(cache_path), process_id)
+
+                return str(cache_path)
+
+            finally:
+                # GDI 리소스 정리 (역순으로)
+                # 1. 원래 bitmap 복원
+                if old_bitmap and hdc_mem:
+                    try:
+                        hdc_mem.SelectObject(old_bitmap)
+                    except Exception:
+                        pass
+
+                # 2. Bitmap 삭제
+                if hbmp:
+                    try:
+                        hbmp.DeleteObject()
+                    except Exception:
+                        pass
+
+                # 3. Memory DC 삭제
+                if hdc_mem:
+                    try:
+                        hdc_mem.DeleteDC()
+                    except Exception:
+                        pass
+
+                # 4. Screen DC 해제
+                if screen_dc_handle:
+                    try:
+                        win32gui.ReleaseDC(0, screen_dc_handle)
+                    except Exception:
+                        pass
+
+                # 5. 아이콘 정리
+                for icon in large_icons + small_icons:
+                    try:
+                        win32gui.DestroyIcon(icon)
+                    except Exception:
+                        pass
 
         return None
 

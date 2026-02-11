@@ -50,8 +50,8 @@ def load_custom_font():
             import ctypes
             ctypes.windll.gdi32.AddFontResourceW(str(FONT_PATH))
             return "NEXON Lv1 Gothic OTF Bold"
-        except:
-            pass
+        except (OSError, ImportError, AttributeError) as e:
+            print(f"[경고] 커스텀 폰트 로딩 실패: {e}")
     return "맑은 고딕"  # 폴백 폰트
 
 
@@ -67,7 +67,8 @@ def is_dark_mode():
         value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         winreg.CloseKey(key)
         return value == 0  # 0 = 다크 모드, 1 = 라이트 모드
-    except:
+    except (FileNotFoundError, OSError, PermissionError) as e:
+        print(f"[경고] 다크 모드 감지 실패: {e}")
         return False  # 기본값: 라이트 모드
 
 
@@ -345,7 +346,7 @@ class BuildProgressGUI:
 
         # 창 생성 (작고 깔끔하게)
         self.root = tk.Tk()
-        self.root.title(f"HomeworkHelper 빌드")
+        self.root.title("HomeworkHelper 빌드")
         self.root.geometry("500x210")  # 세로 높이 증가 (180 → 210)
         self.root.resizable(False, False)
         self.root.configure(bg=theme.bg)
@@ -440,6 +441,18 @@ class BuildProgressGUI:
 
         self.root.after(500, update_animation)
 
+    def _is_main_thread(self):
+        """현재 스레드가 메인 스레드인지 확인"""
+        import threading
+        return threading.current_thread() == threading.main_thread()
+
+    def _safe_call(self, func):
+        """스레드-안전 GUI 호출"""
+        if self._is_main_thread():
+            func()
+        else:
+            self.root.after(0, func)
+
     def log(self, message, tag='', update_last_line=False):
         """로그 메시지 (더미 - 로그 박스 제거됨)"""
         pass  # 로그 출력 안함
@@ -449,41 +462,56 @@ class BuildProgressGUI:
         pass  # 로그 출력 안함
 
     def set_status(self, status):
-        """상태 메시지 업데이트"""
-        # 끝의 점들을 제거하여 기본 메시지 저장
-        self.status_base = status.rstrip('.')
+        """상태 메시지 업데이트 (스레드-안전)"""
+        def _update():
+            # 끝의 점들을 제거하여 기본 메시지 저장
+            self.status_base = status.rstrip('.')
 
-        # "~~~ 중..." 형태면 애니메이션 활성화
-        if self.status_base.endswith(" 중"):
-            self.is_animating = True
-            self.animation_dots = 1  # 리셋
-        else:
-            # 완료 메시지 등은 애니메이션 비활성화
-            self.is_animating = False
-            self.status_label.config(text=status)
+            # "~~~ 중..." 형태면 애니메이션 활성화
+            if self.status_base.endswith(" 중"):
+                self.is_animating = True
+                self.animation_dots = 1  # 리셋
+            else:
+                # 완료 메시지 등은 애니메이션 비활성화
+                self.is_animating = False
+                self.status_label.config(text=status)
+
+        self._safe_call(_update)
 
     def set_progress(self, value):
-        """프로그레스 바 값 설정 (0~100)"""
-        self.progress['value'] = value
-        self.percent_label.config(text=f"{int(value)}%")
-        self.root.update_idletasks()
+        """프로그레스 바 값 설정 (0~100, 스레드-안전)"""
+        def _update():
+            self.progress['value'] = value
+            self.percent_label.config(text=f"{int(value)}%")
+            self.root.update_idletasks()
+
+        self._safe_call(_update)
 
     def show_complete(self, success=True, auto_close_delay=3000):
-        """완료 표시 및 자동 종료"""
-        self.set_progress(100)
-        if success:
-            self.set_status("✓ 빌드 완료! (잠시 후 자동 종료...)")
-            # 자동 종료
-            if auto_close_delay > 0:
-                self.root.after(auto_close_delay, self.root.destroy)
-        else:
-            self.set_status("✗ 빌드 실패")
-            # 실패 시 수동 종료
+        """완료 표시 및 자동 종료 (스레드-안전)"""
+        def _complete():
+            self.progress['value'] = 100
+            self.percent_label.config(text="100%")
+            self.root.update_idletasks()
+
+            if success:
+                self.status_base = "✓ 빌드 완료! (잠시 후 자동 종료...)"
+                self.is_animating = False
+                self.status_label.config(text=self.status_base)
+                # 자동 종료
+                if auto_close_delay > 0:
+                    self.root.after(auto_close_delay, self.root.destroy)
+            else:
+                self.status_base = "✗ 빌드 실패"
+                self.is_animating = False
+                self.status_label.config(text=self.status_base)
+
+        self._safe_call(_complete)
 
 
 # ==================== 빌드 함수들 ====================
 
-def archive_old_files(gui, new_version):
+def archive_old_files(gui, _new_version):
     """이전 버전 파일들을 archives 폴더로 이동"""
     gui.log_section("이전 버전 파일 아카이빙")
     gui.set_status("이전 버전 파일 아카이빙 중...")
@@ -705,9 +733,9 @@ def create_installer(gui, version_info):
     gui.set_progress(80)
 
     if not INNO_SETUP_PATH.exists():
-        gui.log(f"⚠ Inno Setup이 설치되어 있지 않습니다", 'warning')
+        gui.log("⚠ Inno Setup이 설치되어 있지 않습니다", 'warning')
         gui.log(f"  예상 경로: {INNO_SETUP_PATH}")
-        gui.log(f"  다운로드: https://jrsoftware.org/isinfo.php")
+        gui.log("  다운로드: https://jrsoftware.org/isinfo.php")
         gui.set_progress(95)  # 건너뛰기
         return False
 
@@ -873,7 +901,7 @@ def run_build_process(gui, version_info):
             folder_opened = False
             try:
                 subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
-                gui.log(f"\n✓ release 폴더를 열었습니다", 'success')
+                gui.log("\n✓ release 폴더를 열었습니다", 'success')
                 folder_opened = True
             except Exception as e:
                 gui.log(f"\n⚠ release 폴더 열기 실패: {e}", 'warning')

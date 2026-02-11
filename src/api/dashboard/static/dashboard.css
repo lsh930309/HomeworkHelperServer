@@ -35,8 +35,16 @@
     }
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; overflow: hidden; }
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
 
 body {
     font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -67,7 +75,7 @@ body[data-toolbar="floating-bottom"] .toolbar {
     right: 24px;
     border-radius: 20px;
     border: 1px solid var(--border-color);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1);
+    box-shadow: 0 8px 32px rgb(0 0 0 / 15%), 0 2px 8px rgb(0 0 0 / 10%);
     backdrop-filter: blur(16px);
     background: color-mix(in srgb, var(--bg-card) 85%, transparent);
 }

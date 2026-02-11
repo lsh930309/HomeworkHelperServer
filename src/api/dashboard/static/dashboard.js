@@ -247,18 +247,24 @@ const Dashboard = {
 
         document.body.setAttribute('data-toolbar', s.toolbar);
 
-        document.querySelectorAll('#themeOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === s.theme));
-        document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === s.toolbar));
-        document.querySelectorAll('#chartTypeOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === s.chartType));
-        document.querySelectorAll('#stackModeOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === s.stackMode));
-        document.querySelectorAll('#periodOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === s.period));
-        document.querySelectorAll('#barIconSizeOptions .setting-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === (s.barIconSizeMode || 'auto')));
+        document.querySelectorAll('#themeOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === s.theme);
+        });
+        document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === s.toolbar);
+        });
+        document.querySelectorAll('#chartTypeOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === s.chartType);
+        });
+        document.querySelectorAll('#stackModeOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === s.stackMode);
+        });
+        document.querySelectorAll('#periodOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === s.period);
+        });
+        document.querySelectorAll('#barIconSizeOptions .setting-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.value === (s.barIconSizeMode || 'auto'));
+        });
 
         const thresholdInput = document.getElementById('thresholdInput');
         if (thresholdInput) thresholdInput.value = s.calendarThreshold || 10;
@@ -419,19 +425,34 @@ const Dashboard = {
             const item = document.createElement('div');
             item.className = 'legend-item';
 
+            const iconContainer = document.createElement('div');
+            iconContainer.className = 'legend-icon';
+            iconContainer.style.background = color;
+
             const iconImg = this.state.iconImages[name];
-            let iconHtml = '';
             if (iconImg && iconImg.complete) {
                 // 아이콘 이미지가 로드된 경우
-                iconHtml = `<img src="${iconImg.src}" alt="${name}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">`;
+                const img = document.createElement('img');
+                img.src = iconImg.src;
+                img.alt = name;
+                img.style.width = '100%';
+                img.style.height = '100%';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '4px';
+                iconContainer.appendChild(img);
             } else {
                 // 폴백: 색상 + 이니셜
-                iconHtml = `<span class="fallback">${name.charAt(0).toUpperCase()}</span>`;
+                const fallback = document.createElement('span');
+                fallback.className = 'fallback';
+                fallback.textContent = name.charAt(0).toUpperCase();
+                iconContainer.appendChild(fallback);
             }
 
-            item.innerHTML = `<div class="legend-icon" style="background:${color}">
-                ${iconHtml}
-            </div><span>${name}</span>`;
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = name;
+
+            item.appendChild(iconContainer);
+            item.appendChild(nameSpan);
             legendEl.appendChild(item);
 
             datasets.push({
@@ -513,26 +534,36 @@ const Dashboard = {
             const cell = document.createElement('div');
             cell.className = 'calendar-day';
 
-            let iconsHtml = '';
+            const dateSpan = document.createElement('span');
+            dateSpan.className = 'date';
+            dateSpan.textContent = day;
+            cell.appendChild(dateSpan);
+
+            const iconsDiv = document.createElement('div');
+            iconsDiv.className = 'icons';
+
             if (dayData?.games) {
                 const showUnreg = this.state.settings?.showUnregistered;
                 const gamesFiltered = showUnreg ? dayData.games :
                     dayData.games.filter(g => this.state.gameNameMap[g.name.toLowerCase()]);
 
-                iconsHtml = gamesFiltered.slice(0, 9).map(g => {
+                gamesFiltered.slice(0, 9).forEach(g => {
                     const gameInfo = this.state.gameNameMap[g.name.toLowerCase()];
                     const processId = gameInfo?.id || g.id;
-                    return `<img
-                        class="icon"
-                        src="/api/dashboard/icons/${processId}?size=64"
-                        alt="${g.name}"
-                        title="${g.name}: ${Math.round(g.minutes)}분"
-                        onerror="this.style.display='none'"
-                        loading="lazy">`;
-                }).join('');
+
+                    const img = document.createElement('img');
+                    img.className = 'icon';
+                    img.src = `/api/dashboard/icons/${processId}?size=64`;
+                    img.alt = g.name;
+                    img.title = `${g.name}: ${Math.round(g.minutes)}분`;
+                    img.loading = 'lazy';
+                    img.onerror = function() { this.style.display = 'none'; };
+
+                    iconsDiv.appendChild(img);
+                });
             }
 
-            cell.innerHTML = `<span class="date">${day}</span><div class="icons">${iconsHtml}</div>`;
+            cell.appendChild(iconsDiv);
             grid.appendChild(cell);
         }
 
