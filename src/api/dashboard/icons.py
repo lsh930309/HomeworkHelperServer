@@ -31,6 +31,9 @@ GAME_COLORS = [
     '#0ea5e9',  # 스카이
 ]
 
+# 아이콘 프리셋 크기
+ICON_SIZES = [16, 24, 32, 48, 64, 96, 128, 256]
+
 
 def get_color_for_game(name: str, index: int = None) -> str:
     """게임 이름 기반 고유 색상 반환 (인덱스 우선)"""
@@ -47,11 +50,83 @@ def ensure_cache_dir():
     os.makedirs(ICON_CACHE_DIR, exist_ok=True)
 
 
-def get_cached_icon_path(process_id: str) -> Path:
+def get_cached_icon_path(process_id: str, size: int = None) -> Path:
     """캐시된 아이콘 경로 반환 (버전 포함)"""
     # 아이콘 추출 방식 변경 시 버전 업데이트하여 캐시 무효화
-    version = "v4_native"
-    return Path(ICON_CACHE_DIR) / f"{process_id}_{version}.png"
+    version = "v5_multires"
+
+    if size is None:
+        return Path(ICON_CACHE_DIR) / f"{process_id}_{version}_original.png"
+    else:
+        return Path(ICON_CACHE_DIR) / f"{process_id}_{version}_{size}px.png"
+
+
+def resize_icon_high_quality(image, target_size: int):
+    """Resize icon using Lanczos resampling for best quality"""
+    if image.size[0] == target_size and image.size[1] == target_size:
+        return image
+
+    from PIL import Image
+    return image.resize(
+        (target_size, target_size),
+        Image.Resampling.LANCZOS
+    )
+
+
+def generate_icon_variants(source_path: str, process_id: str) -> dict[int, str]:
+    """Generate multiple size variants from source icon"""
+    try:
+        from PIL import Image
+
+        original = Image.open(source_path)
+        original.load()
+
+        if original.mode != 'RGBA':
+            original = original.convert('RGBA')
+
+        variants = {}
+
+        for size in ICON_SIZES:
+            cache_path = get_cached_icon_path(process_id, size)
+
+            if cache_path.exists():
+                variants[size] = str(cache_path)
+                continue
+
+            resized = resize_icon_high_quality(original, size)
+            resized.save(str(cache_path), 'PNG', optimize=True)
+            variants[size] = str(cache_path)
+
+        return variants
+
+    except Exception as e:
+        print(f"Failed to generate icon variants: {e}")
+        return {}
+
+
+def get_icon_for_size(process_id: str, requested_size: int) -> Path | None:
+    """Get best icon variant for requested size"""
+    requested_size = max(1, min(256, requested_size))
+
+    # Find smallest preset >= requested size
+    best_size = None
+    for size in ICON_SIZES:
+        if size >= requested_size:
+            best_size = size
+            break
+
+    if best_size is None:
+        # Larger than all presets, use original
+        cache_path = get_cached_icon_path(process_id)
+        return cache_path if cache_path.exists() else None
+
+    cache_path = get_cached_icon_path(process_id, best_size)
+    if cache_path.exists():
+        return cache_path
+
+    # Fallback to original
+    original_path = get_cached_icon_path(process_id)
+    return original_path if original_path.exists() else None
 
 
 def resolve_shortcut(lnk_path: str) -> str | None:
@@ -162,6 +237,9 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
                         except Exception:
                             pass  # 삭제 실패는 무시 (임시 파일이므로)
 
+                        # 다양한 크기 변형 생성
+                        generate_icon_variants(str(cache_path), process_id)
+
                         return str(cache_path)
             finally:
                 win32api.FreeLibrary(h)
@@ -208,6 +286,9 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
             # 정리
             for icon in large_icons + small_icons:
                 win32gui.DestroyIcon(icon)
+
+            # 다양한 크기 변형 생성
+            generate_icon_variants(str(cache_path), process_id)
 
             return str(cache_path)
 

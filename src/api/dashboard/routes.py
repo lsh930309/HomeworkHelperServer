@@ -11,7 +11,7 @@ from sqlalchemy import func
 
 from src.data import models
 from .settings import load_settings, save_settings, DEFAULT_SETTINGS
-from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_cached_icon_path
+from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_cached_icon_path, get_icon_for_size
 
 router = APIRouter()
 
@@ -212,11 +212,14 @@ async def get_calendar_data(
 
 
 @router.get("/api/dashboard/icons/{process_id}")
-async def get_game_icon(process_id: str):
-    """게임 아이콘 API - 실제 exe에서 추출 시도"""
+async def get_game_icon(
+    process_id: str,
+    size: int = Query(default=64, ge=1, le=256, description="Icon size in pixels")
+):
+    """게임 아이콘 API - 동적 크기 지원"""
     from src.data.database import SessionLocal
     db = SessionLocal()
-    
+
     try:
         process = db.query(models.Process).filter(models.Process.id == process_id).first()
         if not process:
@@ -224,22 +227,23 @@ async def get_game_icon(process_id: str):
                 content=generate_fallback_svg("?", "#6366f1"),
                 media_type="image/svg+xml"
             )
-        
+
         name = process.name
         # monitoring_path 우선, launch_path 폴백
         exe_path = process.monitoring_path or process.launch_path
-        
-        # 캐시된 아이콘 확인
-        cache_path = get_cached_icon_path(process_id)
-        if cache_path.exists():
-            return FileResponse(str(cache_path), media_type="image/png")
-        
+
+        # 요청된 크기에 맞는 캐시된 아이콘 확인
+        icon_path = get_icon_for_size(process_id, size)
+        if icon_path:
+            return FileResponse(str(icon_path), media_type="image/png")
+
         # exe에서 아이콘 추출 시도
         if exe_path and os.path.exists(exe_path):
-            icon_path = extract_icon_from_exe(exe_path, process_id)
+            extract_icon_from_exe(exe_path, process_id)
+            icon_path = get_icon_for_size(process_id, size)
             if icon_path:
-                return FileResponse(icon_path, media_type="image/png")
-        
+                return FileResponse(str(icon_path), media_type="image/png")
+
         # 폴백 SVG
         color = get_color_for_game(name)
         return Response(

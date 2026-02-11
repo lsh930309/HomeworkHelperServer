@@ -32,7 +32,9 @@ const Dashboard = {
         calendarThreshold: 10,
         showUnregistered: false,
         showChartIcons: true,
-        chartIconSize: 64
+        chartIconSize: 64,
+        barIconSizeMode: 'auto',  // 'auto' | 'fixed'
+        barIconMargin: 1.5        // percentage margin
     },
 
     playtimeChart: null,
@@ -55,7 +57,7 @@ const Dashboard = {
     },
 
     // === 아이콘 ===
-    async preloadIcon(name, processId) {
+    async preloadIcon(name, processId, targetSize = null) {
         // 캐시 키는 항상 name으로 통일 (chartIconPlugin에서 dataset.label로 찾음)
         if (this.state.iconImages[name]) return this.state.iconImages[name];
 
@@ -84,7 +86,8 @@ const Dashboard = {
 
         // 실제 아이콘 먼저 시도
         if (processId) {
-            img.src = `/api/dashboard/icons/${processId}`;
+            const iconSize = targetSize || this.state.settings?.chartIconSize || 64;
+            img.src = `/api/dashboard/icons/${processId}?size=${iconSize}`;
         } else {
             // processId 없으면 바로 폴백
             const color = this.state.gameColors[name] || this.COLORS[0];
@@ -110,8 +113,10 @@ const Dashboard = {
 
             const ctx = chart.ctx;
             const chartType = chart.config.type;
-            const stackMode = self.state.settings?.stackMode || 'stacked';
             const datasets = chart.data.datasets;
+
+            // 막대 그래프에서는 아이콘 표시 안 함 (범례에만 표시)
+            if (chartType === 'bar') return;
 
             // 아이콘 위치 계산 (겹침 방지)
             const iconPositions = [];
@@ -126,27 +131,9 @@ const Dashboard = {
                 const iconSize = self.state.settings?.chartIconSize || 64;
                 const data = dataset.data;
 
-                if (chartType === 'bar' && stackMode !== 'stacked') {
-                    // 개별 모드: 각 막대 위에 아이콘
-                    meta.data.forEach((bar, index) => {
-                        if (data[index] > 0) {
-                            const x = bar.x - iconSize / 2;
-                            const y = bar.y - iconSize - 4;
-                            ctx.drawImage(img, x, y, iconSize, iconSize);
-                        }
-                    });
-                } else if (chartType === 'bar' && stackMode === 'stacked') {
-                    // 누적 모드: 최상단에만
-                    if (datasetIndex === datasets.length - 1) {
-                        meta.data.forEach((bar, index) => {
-                            const x = bar.x - iconSize / 2;
-                            const y = bar.y - iconSize - 4;
-                            ctx.drawImage(img, x, y, iconSize, iconSize);
-                        });
-                    }
-                } else if (chartType === 'line') {
+                if (chartType === 'line') {
                     // 선형: 최적 위치 계산
-                    const bestIdx = self.findBestIconPosition(data, datasetIndex, datasets, iconPositions);
+                    const bestIdx = self.findBestIconPosition(data, datasetIndex, datasets, iconPositions, chart);
                     if (bestIdx >= 0 && data[bestIdx] > 0) {
                         const point = meta.data[bestIdx];
                         if (point) {
@@ -162,42 +149,63 @@ const Dashboard = {
     },
 
     // 선형 그래프 최적 아이콘 위치 계산
-    findBestIconPosition(data, datasetIndex, allDatasets, existingPositions) {
+    findBestIconPosition(data, datasetIndex, allDatasets, existingPositions, chart) {
         if (!data || data.length === 0) return -1;
 
-        let bestIdx = 0;
-        let bestScore = -Infinity;
+        // 설정
+        const MIN_X_DISTANCE = 40;  // 픽셀 단위 최소 거리
+        const EDGE_BUFFER = 1;      // 첫/마지막 인덱스 피하기
 
-        for (let i = 0; i < data.length; i++) {
-            if (data[i] <= 0) continue;
+        // 1단계: 각 위치의 시각적 분리도 점수 계산
+        const separationScores = data.map((value, i) => {
+            if (value <= 0) return -Infinity;
 
-            let score = 0;
-
-            // 1. 값이 클수록 좋음
-            score += data[i] * 10;
-
-            // 2. 다른 데이터셋과의 차이가 클수록 좋음
-            let maxDiff = 0;
+            let minGap = Infinity;
             allDatasets.forEach((ds, idx) => {
-                if (idx !== datasetIndex && ds.data[i]) {
-                    maxDiff = Math.max(maxDiff, Math.abs(data[i] - ds.data[i]));
+                if (idx !== datasetIndex && ds.data[i] !== undefined) {
+                    minGap = Math.min(minGap, Math.abs(value - ds.data[i]));
                 }
             });
-            score += maxDiff * 5;
+            return minGap;
+        });
 
-            // 3. 기존 아이콘 위치와 멀수록 좋음
+        // 2단계: 메타데이터로 좌표 접근
+        const meta = chart.getDatasetMeta(datasetIndex);
+
+        // 3단계: 제약조건을 만족하는 최적 위치 찾기
+        let bestIdx = -1;
+        let bestScore = -Infinity;
+
+        for (let i = EDGE_BUFFER; i < data.length - EDGE_BUFFER; i++) {
+            if (data[i] <= 0) continue;
+
+            const point = meta.data[i];
+            if (!point) continue;
+
+            // 하드 제약: x축 겹침 확인
+            const hasOverlap = existingPositions.some(pos =>
+                Math.abs(pos.x - point.x) < MIN_X_DISTANCE
+            );
+            if (hasOverlap) continue;
+
+            // 점수: 시각적 분리 우선
+            let score = 0;
+            score += separationScores[i] * 100;  // 시각적 분리 (최우선)
+            score += data[i] * 10;                // 값 크기
+
+            // 중앙 위치 선호
+            const centerDist = Math.abs(i - data.length / 2);
+            score += (data.length - centerDist) * 5;
+
+            // 기존 아이콘과의 간격
             let minDist = Infinity;
             existingPositions.forEach(pos => {
-                const dist = Math.abs(pos.idx - i);
-                minDist = Math.min(minDist, dist);
+                if (pos.idx !== undefined) {
+                    minDist = Math.min(minDist, Math.abs(pos.idx - i));
+                }
             });
             if (minDist !== Infinity) {
                 score += minDist * 3;
-            }
-
-            // 4. 차트의 좌/우 끝부분은 피하기 (큰 페널티)
-            if (i === 0 || i === data.length - 1) {
-                score -= 1000;
             }
 
             if (score > bestScore) {
@@ -249,6 +257,8 @@ const Dashboard = {
             b.classList.toggle('active', b.dataset.value === s.stackMode));
         document.querySelectorAll('#periodOptions .setting-btn').forEach(b =>
             b.classList.toggle('active', b.dataset.value === s.period));
+        document.querySelectorAll('#barIconSizeOptions .setting-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.value === (s.barIconSizeMode || 'auto')));
 
         const thresholdInput = document.getElementById('thresholdInput');
         if (thresholdInput) thresholdInput.value = s.calendarThreshold || 10;
@@ -346,9 +356,10 @@ const Dashboard = {
 
             // 색상 할당 및 아이콘 프리로드 (완료 대기)
             const gameNames = Object.keys(data.games || {});
+            const targetSize = this.state.settings?.chartIconSize || 64;
             const iconPromises = gameNames.map((name, idx) => {
                 this.getColorForGame(name, idx);
-                return this.preloadIcon(name, data.games[name].process_id);
+                return this.preloadIcon(name, data.games[name].process_id, targetSize);
             });
 
             // 모든 아이콘 로드 완료 후 차트 렌더링
@@ -404,11 +415,22 @@ const Dashboard = {
             const gdata = data.games[name];
             const color = this.getColorForGame(name, idx);
 
-            // 범례 아이템
+            // 범례 아이템 (아이콘 포함)
             const item = document.createElement('div');
             item.className = 'legend-item';
+
+            const iconImg = this.state.iconImages[name];
+            let iconHtml = '';
+            if (iconImg && iconImg.complete) {
+                // 아이콘 이미지가 로드된 경우
+                iconHtml = `<img src="${iconImg.src}" alt="${name}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">`;
+            } else {
+                // 폴백: 색상 + 이니셜
+                iconHtml = `<span class="fallback">${name.charAt(0).toUpperCase()}</span>`;
+            }
+
             item.innerHTML = `<div class="legend-icon" style="background:${color}">
-                <span class="fallback">${name.charAt(0).toUpperCase()}</span>
+                ${iconHtml}
             </div><span>${name}</span>`;
             legendEl.appendChild(item);
 
@@ -497,15 +519,64 @@ const Dashboard = {
                 const gamesFiltered = showUnreg ? dayData.games :
                     dayData.games.filter(g => this.state.gameNameMap[g.name.toLowerCase()]);
 
-                iconsHtml = gamesFiltered.map(g => {
-                    const color = this.state.gameColors[g.name] || this.COLORS[0];
-                    return `<div class="icon" title="${g.name}: ${Math.round(g.minutes)}분" style="background:${color}">${g.name.charAt(0).toUpperCase()}</div>`;
+                iconsHtml = gamesFiltered.slice(0, 9).map(g => {
+                    const gameInfo = this.state.gameNameMap[g.name.toLowerCase()];
+                    const processId = gameInfo?.id || g.id;
+                    return `<img
+                        class="icon"
+                        src="/api/dashboard/icons/${processId}?size=64"
+                        alt="${g.name}"
+                        title="${g.name}: ${Math.round(g.minutes)}분"
+                        onerror="this.style.display='none'"
+                        loading="lazy">`;
                 }).join('');
             }
 
             cell.innerHTML = `<span class="date">${day}</span><div class="icons">${iconsHtml}</div>`;
             grid.appendChild(cell);
         }
+
+        // 아이콘 크기 자동 조정 (렌더링 완료 후)
+        requestAnimationFrame(() => this.adjustCalendarIconSizes());
+    },
+
+    adjustCalendarIconSizes() {
+        const cells = document.querySelectorAll('.calendar-day:not(.empty)');
+        if (cells.length === 0) return;
+
+        // 첫 번째 셀의 실제 크기 측정
+        const sampleCell = cells[0];
+        const cellWidth = sampleCell.offsetWidth;
+        const cellHeight = sampleCell.offsetHeight;
+
+        // 날짜 텍스트 높이 측정
+        const dateEl = sampleCell.querySelector('.date');
+        const dateHeight = dateEl ? dateEl.offsetHeight : 14;
+
+        // 아이콘 영역 가용 크기 계산
+        const GRID_COLS = 3;
+        const GAP = 1;
+        const PADDING_H = 4;  // 좌우 패딩
+        const PADDING_V = 8;  // 상하 패딩
+        const DATE_MARGIN = 2;  // 날짜와 아이콘 사이 여백
+
+        // 가용 너비/높이
+        const availableWidth = cellWidth - (PADDING_H * 2);
+        const availableHeight = cellHeight - dateHeight - DATE_MARGIN - (PADDING_V * 2);
+
+        // 아이콘 크기 계산 (3x3 그리드 기준)
+        const iconWidthByWidth = Math.floor((availableWidth - (GRID_COLS - 1) * GAP) / GRID_COLS);
+        const iconHeightByHeight = Math.floor((availableHeight - (GRID_COLS - 1) * GAP) / GRID_COLS);
+
+        // 작은 값 선택 (정사각형 유지) + 최대/최소 제한
+        let iconSize = Math.min(iconWidthByWidth, iconHeightByHeight);
+        iconSize = Math.max(12, Math.min(24, iconSize));  // 12px ~ 24px 범위
+
+        // 모든 아이콘에 크기 적용
+        document.querySelectorAll('.calendar-day .icon').forEach(icon => {
+            icon.style.width = `${iconSize}px`;
+            icon.style.height = `${iconSize}px`;
+        });
     },
 
     // === 이벤트 ===
@@ -518,7 +589,11 @@ const Dashboard = {
                 btn.classList.add('active');
                 document.getElementById(btn.dataset.tab).classList.add('active');
                 this.updateTabIndicator();
-                if (btn.dataset.tab === 'calendar') this.loadCalendarData();
+                if (btn.dataset.tab === 'calendar') {
+                    this.loadCalendarData();
+                    // 탭 전환 시 아이콘 크기 조정
+                    requestAnimationFrame(() => this.adjustCalendarIconSizes());
+                }
             });
         });
 
@@ -628,7 +703,23 @@ const Dashboard = {
             if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
         });
 
-        window.addEventListener('resize', () => this.updateTabIndicator());
+        // 막대 차트 아이콘 크기 모드 설정
+        document.querySelectorAll('#barIconSizeOptions .setting-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.state.settings.barIconSizeMode = btn.dataset.value;
+                this.applySettings();
+                this.saveSettings();
+                if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+            });
+        });
+
+        window.addEventListener('resize', () => {
+            this.updateTabIndicator();
+            // 달력이 활성화되어 있으면 아이콘 크기 재조정
+            if (document.getElementById('calendar').classList.contains('active')) {
+                this.adjustCalendarIconSizes();
+            }
+        });
     }
 };
 
