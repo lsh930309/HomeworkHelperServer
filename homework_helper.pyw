@@ -582,6 +582,20 @@ def run_server_main():
         """모든 세션 조회"""
         return crud.get_all_sessions(db=db, skip=skip, limit=limit)
 
+    # === 대시보드 라우터 및 정적 파일 등록 ===
+    from fastapi.staticfiles import StaticFiles
+    from pathlib import Path
+    from src.api.dashboard import router as dashboard_router
+    
+    # 정적 파일 서빙 (CSS, JS)
+    dashboard_static_dir = Path(__file__).parent / "src" / "api" / "dashboard" / "static"
+    if dashboard_static_dir.exists():
+        app.mount("/static/dashboard", StaticFiles(directory=str(dashboard_static_dir)), name="dashboard_static")
+        logger.info(f"정적 파일 서빙 등록: {dashboard_static_dir}")
+    
+    app.include_router(dashboard_router)
+    logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
+
 
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.

@@ -171,6 +171,14 @@ class MainWindow(QMainWindow):
         self.add_web_shortcut_button.clicked.connect(self._open_add_web_shortcut_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_web_shortcut_button) # 상단 버튼 영역에 웹 바로가기 추가 버튼 추가
 
+        # 대시보드 버튼 추가
+        self.dashboard_button = QPushButton()
+        self.dashboard_button.setToolTip("통계 대시보드 열기")
+        self.dashboard_button.setText("📊")  # 차트 이모지
+        self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
+        self.dashboard_button.clicked.connect(lambda: self.open_webpage("http://127.0.0.1:8000/dashboard"))
+        self.top_button_area_layout.addWidget(self.dashboard_button)
+
         # GitHub 바로가기 버튼 추가
         self.github_button = QPushButton()
         self.github_button.setToolTip("GitHub 저장소 방문")
