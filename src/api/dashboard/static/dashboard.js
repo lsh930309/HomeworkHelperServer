@@ -343,8 +343,12 @@ const Dashboard = {
                 this.state.gameNameMap[g.name.toLowerCase()] = g;
                 this.getColorForGame(g.name, idx);
             });
-            document.getElementById('statGames').innerHTML =
-                `${games.length}<span class="stat-unit">개</span>`;
+            const statGamesEl = document.getElementById('statGames');
+            statGamesEl.textContent = games.length.toString();
+            const unitSpan = document.createElement('span');
+            unitSpan.className = 'stat-unit';
+            unitSpan.textContent = '개';
+            statGamesEl.appendChild(unitSpan);
         }
     },
 
@@ -394,12 +398,26 @@ const Dashboard = {
 
     updateStats(data) {
         if (data.stats) {
-            document.getElementById('statToday').innerHTML =
-                `${Math.round(data.stats.today_minutes || 0)}<span class="stat-unit">분</span>`;
-            document.getElementById('statWeek').innerHTML =
-                `${((data.stats.week_minutes || 0) / 60).toFixed(1)}<span class="stat-unit">시간</span>`;
-            document.getElementById('statMonth').innerHTML =
-                `${((data.stats.month_minutes || 0) / 60).toFixed(1)}<span class="stat-unit">시간</span>`;
+            const statTodayEl = document.getElementById('statToday');
+            statTodayEl.textContent = Math.round(data.stats.today_minutes || 0).toString();
+            const todayUnit = document.createElement('span');
+            todayUnit.className = 'stat-unit';
+            todayUnit.textContent = '분';
+            statTodayEl.appendChild(todayUnit);
+
+            const statWeekEl = document.getElementById('statWeek');
+            statWeekEl.textContent = ((data.stats.week_minutes || 0) / 60).toFixed(1);
+            const weekUnit = document.createElement('span');
+            weekUnit.className = 'stat-unit';
+            weekUnit.textContent = '시간';
+            statWeekEl.appendChild(weekUnit);
+
+            const statMonthEl = document.getElementById('statMonth');
+            statMonthEl.textContent = ((data.stats.month_minutes || 0) / 60).toFixed(1);
+            const monthUnit = document.createElement('span');
+            monthUnit.className = 'stat-unit';
+            monthUnit.textContent = '시간';
+            statMonthEl.appendChild(monthUnit);
         }
     },
 
@@ -516,7 +534,9 @@ const Dashboard = {
         const grid = document.getElementById('calendarGrid');
         const headers = [...grid.querySelectorAll('.calendar-header')];
         grid.innerHTML = '';
-        headers.forEach(h => grid.appendChild(h));
+        headers.forEach(h => {
+            grid.appendChild(h);
+        });
 
         const firstDay = new Date(year, month, 1).getDay();
         const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -615,8 +635,12 @@ const Dashboard = {
         // 탭 전환
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(b => {
+                    b.classList.remove('active');
+                });
+                document.querySelectorAll('.tab-panel').forEach(p => {
+                    p.classList.remove('active');
+                });
                 btn.classList.add('active');
                 document.getElementById(btn.dataset.tab).classList.add('active');
                 this.updateTabIndicator();

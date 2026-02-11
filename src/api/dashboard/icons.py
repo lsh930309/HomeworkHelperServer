@@ -78,26 +78,26 @@ def generate_icon_variants(source_path: str, process_id: str) -> dict[int, str]:
     try:
         from PIL import Image
 
-        original = Image.open(source_path)
-        original.load()
+        with Image.open(source_path) as original:
+            original.load()
 
-        if original.mode != 'RGBA':
-            original = original.convert('RGBA')
+            if original.mode != 'RGBA':
+                original = original.convert('RGBA')
 
-        variants = {}
+            variants = {}
 
-        for size in ICON_SIZES:
-            cache_path = get_cached_icon_path(process_id, size)
+            for size in ICON_SIZES:
+                cache_path = get_cached_icon_path(process_id, size)
 
-            if cache_path.exists():
+                if cache_path.exists():
+                    variants[size] = str(cache_path)
+                    continue
+
+                resized = resize_icon_high_quality(original, size)
+                resized.save(str(cache_path), 'PNG', optimize=True)
                 variants[size] = str(cache_path)
-                continue
 
-            resized = resize_icon_high_quality(original, size)
-            resized.save(str(cache_path), 'PNG', optimize=True)
-            variants[size] = str(cache_path)
-
-        return variants
+            return variants
 
     except Exception as e:
         print(f"Failed to generate icon variants: {e}")
@@ -226,10 +226,9 @@ def extract_icon_from_exe(exe_path: str, process_id: str) -> str | None:
                             tmp_path = tmp.name
 
                         # PIL로 열어서 PNG로 저장
-                        img = Image.open(tmp_path)
-                        img.load()  # 이미지 데이터를 메모리에 로드
-                        img.save(str(cache_path), 'PNG')
-                        img.close()  # 파일 핸들 닫기
+                        with Image.open(tmp_path) as img:
+                            img.load()  # 이미지 데이터를 메모리에 로드
+                            img.save(str(cache_path), 'PNG')
 
                         # 임시 파일 삭제
                         try:

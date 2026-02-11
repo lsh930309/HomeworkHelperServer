@@ -135,24 +135,31 @@ def get_playtime_stats(
                 idx = dates.index(row.play_date)
                 games_data[key]["minutes"][idx] += (row.total_seconds or 0) / 60
         
-        # 통계 계산
+        # 통계 계산: 선택된 기간의 데이터를 기준으로 계산
         today_str = now.strftime("%Y-%m-%d")
-        # 이번 주 일요일 자정 (위와 동일한 로직)
+
+        # 현재 주/월의 시작점 (오프셋 무관, 실제 현재 날짜 기준)
         days_since_sunday = (now.weekday() + 1) % 7
-        week_start = (now - datetime.timedelta(days=days_since_sunday)).replace(
+        current_week_start = (now - datetime.timedelta(days=days_since_sunday)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
         today_minutes = week_minutes = month_minutes = 0
         for i, ds in enumerate(dates):
             dt = datetime.datetime.strptime(ds, "%Y-%m-%d")
             day_total = sum(g["minutes"][i] for g in games_data.values())
-            if ds == today_str: 
+
+            # 오늘 날짜와 일치하는 경우
+            if ds == today_str:
                 today_minutes = day_total
-            if dt >= week_start: 
+
+            # 현재 주에 속하는 경우 (오프셋과 무관하게 실제 현재 주)
+            if dt >= current_week_start and dt < current_week_start + datetime.timedelta(days=7):
                 week_minutes += day_total
-            if dt >= month_start: 
+
+            # 현재 월에 속하는 경우 (오프셋과 무관하게 실제 현재 월)
+            if dt.year == now.year and dt.month == now.month:
                 month_minutes += day_total
         
         return {
@@ -171,7 +178,7 @@ def get_playtime_stats(
 @router.get("/api/dashboard/calendar")
 def get_calendar_data(
     year: int = Query(...),
-    month: int = Query(...),
+    month: int = Query(..., ge=0, le=11, description="Month index (0-11)"),
     threshold: int = Query(10),
     show_unregistered: bool = Query(False)
 ):
