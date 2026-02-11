@@ -226,8 +226,8 @@ async def get_game_icon(process_id: str):
             )
         
         name = process.name
-        # launch_path 또는 monitoring_path 사용
-        exe_path = process.launch_path or process.monitoring_path
+        # monitoring_path 우선, launch_path 폴백
+        exe_path = process.monitoring_path or process.launch_path
         
         # 캐시된 아이콘 확인
         cache_path = get_cached_icon_path(process_id)

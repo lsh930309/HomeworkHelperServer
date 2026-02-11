@@ -154,7 +154,24 @@
                     <span style="font-size:0.8rem;">차트에 아이콘 표시</span>
                 </div>
             </div>
-            
+
+            <div class="setting-group">
+                <label class="setting-label">차트 아이콘 크기</label>
+                <div class="setting-options" id="iconSizeOptions">
+                    <button class="setting-btn" data-value="32">32</button>
+                    <button class="setting-btn" data-value="64">64</button>
+                    <button class="setting-btn" data-value="96">96</button>
+                    <button class="setting-btn" data-value="128">128</button>
+                    <button class="setting-btn" data-value="custom">사용자 지정</button>
+                </div>
+                <div style="margin-top:8px;display:none;" id="customIconSizeWrapper">
+                    <input type="number" id="customIconSizeInput" value="64" min="1" max="256"
+                        style="width:80px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.8rem;"
+                        placeholder="1-256">
+                    <span style="font-size:0.8rem;color:var(--text-secondary);margin-left:6px;">px (1-256)</span>
+                </div>
+            </div>
+
             <button class="modal-close" id="closeSettings">닫기</button>
         </div>
     </div>

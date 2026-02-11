@@ -31,7 +31,8 @@ const Dashboard = {
         period: 'week',
         calendarThreshold: 10,
         showUnregistered: false,
-        showChartIcons: true
+        showChartIcons: true,
+        chartIconSize: 64
     },
 
     playtimeChart: null,
@@ -122,7 +123,7 @@ const Dashboard = {
                 const img = self.state.iconImages[dataset.label];
                 if (!img || !img.complete) return;
 
-                const iconSize = 18;
+                const iconSize = self.state.settings?.chartIconSize || 64;
                 const data = dataset.data;
 
                 if (chartType === 'bar' && stackMode !== 'stacked') {
@@ -194,6 +195,11 @@ const Dashboard = {
                 score += minDist * 3;
             }
 
+            // 4. 차트의 좌/우 끝부분은 피하기 (큰 페널티)
+            if (i === 0 || i === data.length - 1) {
+                score -= 1000;
+            }
+
             if (score > bestScore) {
                 bestScore = score;
                 bestIdx = i;
@@ -249,6 +255,25 @@ const Dashboard = {
 
         document.getElementById('showUnregisteredToggle')?.classList.toggle('active', s.showUnregistered);
         document.getElementById('showChartIconsToggle')?.classList.toggle('active', s.showChartIcons !== false);
+
+        // 아이콘 크기 설정
+        const iconSize = s.chartIconSize || 64;
+        const isCustomSize = ![32, 64, 96, 128].includes(iconSize);
+
+        document.querySelectorAll('#iconSizeOptions .setting-btn').forEach(b => {
+            if (b.dataset.value === 'custom') {
+                b.classList.toggle('active', isCustomSize);
+            } else {
+                b.classList.toggle('active', b.dataset.value === String(iconSize));
+            }
+        });
+
+        const customWrapper = document.getElementById('customIconSizeWrapper');
+        const customInput = document.getElementById('customIconSizeInput');
+        if (customWrapper && customInput) {
+            customWrapper.style.display = isCustomSize ? 'block' : 'none';
+            customInput.value = iconSize;
+        }
 
         this.updatePeriodLabel();
     },
@@ -572,6 +597,33 @@ const Dashboard = {
         document.getElementById('showChartIconsToggle')?.addEventListener('click', () => {
             this.state.settings.showChartIcons = !this.state.settings.showChartIcons;
             this.applySettings();
+            this.saveSettings();
+            if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+        });
+
+        // 아이콘 크기 설정
+        document.querySelectorAll('#iconSizeOptions .setting-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (btn.dataset.value === 'custom') {
+                    // 사용자 지정 모드 활성화
+                    const customInput = document.getElementById('customIconSizeInput');
+                    const customValue = parseInt(customInput?.value || '64');
+                    this.state.settings.chartIconSize = Math.max(1, Math.min(256, customValue));
+                } else {
+                    // 프리셋 크기 선택
+                    this.state.settings.chartIconSize = parseInt(btn.dataset.value);
+                }
+                this.applySettings();
+                this.saveSettings();
+                if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
+            });
+        });
+
+        document.getElementById('customIconSizeInput')?.addEventListener('change', e => {
+            const value = parseInt(e.target.value) || 64;
+            const clamped = Math.max(1, Math.min(256, value));
+            e.target.value = clamped;
+            this.state.settings.chartIconSize = clamped;
             this.saveSettings();
             if (this.state.playtimeData) this.updatePlaytimeChart(this.state.playtimeData);
         });
