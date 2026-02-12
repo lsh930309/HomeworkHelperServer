@@ -14,7 +14,8 @@ const Dashboard = {
         dataCache: {},       // { offset: data }
         isNavigating: false,
         selectedGames: new Set(),  // 선택된 게임들
-        globalMaxY: 0  // 전체 기간의 Y축 최댓값
+        globalMaxY: 0,  // 전체 기간의 Y축 최댓값
+        chartIconPositions: {}  // { canvasId: [{x, y, width, height}] }
     },
 
     chartInstances: {},  // { canvasId: Chart instance }
@@ -155,34 +156,48 @@ const Dashboard = {
             const stackMode = self.state.settings?.stackMode || 'stacked';
             const datasets = chart.data.datasets;
             const iconSize = self.state.settings?.chartIconSize || 64;
+            const showIcons = self.state.settings?.showChartIcons;
+
+            // 테마 감지
+            const theme = document.documentElement.getAttribute('data-theme');
+            const isDark = theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+            // 차트 영역 범위
+            const chartArea = chart.chartArea;
+            const topBoundary = chartArea.top;
 
             ctx.save();
             ctx.font = 'bold 11px Satoshi, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
 
+            // 텍스트 높이 측정
+            const textHeight = 14;  // 대략적인 텍스트 높이
+
             if (stackMode === 'stacked') {
                 // 누적 모드: 총합 최댓값 1개
-                let maxSum = 0;
+                let maxSum = -Infinity;
                 let maxIndex = -1;
 
                 const dataLength = datasets[0]?.data?.length || 0;
                 for (let i = 0; i < dataLength; i++) {
                     let sum = 0;
+                    let hasData = false;
                     datasets.forEach(dataset => {
                         const meta = chart.getDatasetMeta(datasets.indexOf(dataset));
-                        if (!meta.hidden && dataset.data[i] !== undefined) {
+                        if (!meta.hidden && dataset.data[i] !== undefined && dataset.data[i] !== null) {
                             sum += dataset.data[i];
+                            hasData = true;
                         }
                     });
 
-                    if (sum > maxSum) {
+                    if (hasData && sum > maxSum) {
                         maxSum = sum;
                         maxIndex = i;
                     }
                 }
 
-                if (maxIndex >= 0 && maxSum > 0) {
+                if (maxIndex >= 0 && maxSum > -Infinity && maxSum > 0) {
                     // 스택의 최상단 데이터셋 찾기
                     let topDatasetIndex = -1;
                     for (let di = datasets.length - 1; di >= 0; di--) {
@@ -198,14 +213,24 @@ const Dashboard = {
                         const point = meta.data[maxIndex];
                         if (point) {
                             const text = `${maxSum.toFixed(1)}시간`;
-                            ctx.fillStyle = '#000000';
-                            ctx.strokeStyle = '#ffffff';
-                            ctx.lineWidth = 3;
+                            // 누적 모드: 테마별 색상
+                            ctx.fillStyle = isDark ? '#ffffff' : '#000000';
 
-                            // 아이콘 회피: 위쪽 여유 공간 확보
-                            const yOffset = self.state.settings?.showChartIcons ? iconSize + 16 : 8;
-                            ctx.strokeText(text, point.x, point.y - yOffset);
-                            ctx.fillText(text, point.x, point.y - yOffset);
+                            // Y 위치 계산 (아이콘과 차트 범위 고려)
+                            let yPos = point.y - 8;  // 기본 위치
+
+                            if (showIcons) {
+                                // 아이콘이 있을 수 있으므로 아이콘 위로 배치
+                                yPos = point.y - iconSize - 16;
+                            }
+
+                            // 차트 범위를 벗어나는지 확인
+                            if (yPos - textHeight < topBoundary) {
+                                // 범위를 벗어나면 포인트 아래에 배치
+                                yPos = point.y + textHeight + 8;
+                            }
+
+                            ctx.fillText(text, point.x, yPos);
                         }
                     }
                 }
@@ -215,28 +240,38 @@ const Dashboard = {
                     const meta = chart.getDatasetMeta(datasetIndex);
                     if (meta.hidden) return;
 
-                    let maxValue = 0;
+                    let maxValue = -Infinity;
                     let maxIndex = -1;
 
                     dataset.data.forEach((value, i) => {
-                        if (value > maxValue) {
+                        if (value !== undefined && value !== null && value > maxValue) {
                             maxValue = value;
                             maxIndex = i;
                         }
                     });
 
-                    if (maxIndex >= 0 && maxValue > 0) {
+                    if (maxIndex >= 0 && maxValue > -Infinity && maxValue > 0) {
                         const point = meta.data[maxIndex];
                         if (point) {
                             const text = `${maxValue.toFixed(1)}시간`;
+                            // 개별 모드: 차트 색상 사용
                             ctx.fillStyle = dataset.borderColor;
-                            ctx.strokeStyle = '#ffffff';
-                            ctx.lineWidth = 3;
 
-                            // 아이콘 회피: 위쪽 여유 공간 확보
-                            const yOffset = self.state.settings?.showChartIcons ? iconSize + 16 : 8;
-                            ctx.strokeText(text, point.x, point.y - yOffset);
-                            ctx.fillText(text, point.x, point.y - yOffset);
+                            // Y 위치 계산 (아이콘과 차트 범위 고려)
+                            let yPos = point.y - 8;  // 기본 위치
+
+                            if (showIcons) {
+                                // 아이콘이 있을 수 있으므로 아이콘 위로 배치
+                                yPos = point.y - iconSize - 16;
+                            }
+
+                            // 차트 범위를 벗어나는지 확인
+                            if (yPos - textHeight < topBoundary) {
+                                // 범위를 벗어나면 포인트 아래에 배치
+                                yPos = point.y + textHeight + 8;
+                            }
+
+                            ctx.fillText(text, point.x, yPos);
                         }
                     }
                 });
@@ -698,14 +733,19 @@ const Dashboard = {
 
             datasets.push({
                 label: name,
-                data: gdata.minutes.map(m => m / 60),
+                data: gdata.minutes.map(m => {
+                    // null/undefined는 null로 (차트에 표시 안 함), 0은 0으로 표시
+                    if (m === null || m === undefined) return null;
+                    return m / 60;
+                }),
                 backgroundColor: bg,
                 borderColor: color,
                 borderWidth: 2,
                 fill: fillMode,
                 tension: 0.4,
                 pointRadius: chartType === 'line' ? 4 : 0,
-                pointBackgroundColor: color
+                pointBackgroundColor: color,
+                spanGaps: false  // 데이터 없는 구간은 선을 끊음
             });
         });
 
