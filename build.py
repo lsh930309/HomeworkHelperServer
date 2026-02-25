@@ -37,6 +37,10 @@ INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
 
 VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)\.(\d{12})')
 
+# 코드 서명
+CERT_DIR = PROJECT_ROOT / "certs"
+CERT_FILE = CERT_DIR / "HomeworkHelper.pfx"
+
 # 폰트 경로
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NEXONLv1GothicOTFBold.otf"
 # ================================================
@@ -656,6 +660,129 @@ def build_with_pyinstaller(gui):
         return False
 
 
+def find_signtool():
+    """Windows SDK에서 signtool.exe 경로를 자동 탐색"""
+    # 일반적인 Windows SDK 경로들
+    sdk_roots = [
+        Path(r"C:\Program Files (x86)\Windows Kits\10\bin"),
+        Path(r"C:\Program Files\Windows Kits\10\bin"),
+    ]
+
+    for sdk_root in sdk_roots:
+        if not sdk_root.exists():
+            continue
+        # 가장 최신 SDK 버전 폴더 사용
+        version_dirs = sorted(sdk_root.glob("10.*"), reverse=True)
+        for version_dir in version_dirs:
+            signtool = version_dir / "x64" / "signtool.exe"
+            if signtool.exists():
+                return signtool
+
+    # PATH에서 찾기
+    signtool_in_path = shutil.which("signtool")
+    if signtool_in_path:
+        return Path(signtool_in_path)
+
+    return None
+
+
+def sign_file(gui, file_path, signtool_path, cert_path, cert_password):
+    """개별 파일에 코드 서명 적용"""
+    file_path = Path(file_path)
+    if not file_path.exists():
+        gui.log(f"  ⚠ 파일 없음: {file_path.name}", 'warning')
+        return False
+
+    cmd = [
+        str(signtool_path), "sign",
+        "/f", str(cert_path),
+        "/p", cert_password,
+        "/fd", "SHA256",
+        "/td", "SHA256",
+        "/tr", "http://timestamp.digicert.com",
+        "/d", "HomeworkHelper",
+        str(file_path)
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=60
+        )
+        if result.returncode == 0:
+            gui.log(f"  ✓ 서명 완료: {file_path.name}", 'success')
+            return True
+        else:
+            gui.log(f"  ✗ 서명 실패: {file_path.name}", 'error')
+            gui.log(f"    {result.stderr.strip()}")
+            return False
+    except subprocess.TimeoutExpired:
+        gui.log(f"  ✗ 서명 타임아웃: {file_path.name}", 'error')
+        return False
+    except Exception as e:
+        gui.log(f"  ✗ 서명 오류: {e}", 'error')
+        return False
+
+
+def sign_build_artifacts(gui, version_info, target_files=None):
+    """빌드 산출물에 코드 서명 적용
+
+    Args:
+        target_files: 서명할 파일 경로 리스트. None이면 dist 내 메인 exe를 서명.
+    Returns:
+        bool: 서명 성공 여부 (signtool/인증서 미발견 시에도 True 반환)
+    """
+    gui.log_section("코드 서명")
+    gui.set_status("코드 서명 중...")
+
+    # signtool 탐색
+    signtool_path = find_signtool()
+    if not signtool_path:
+        gui.log("  ⚠ signtool.exe를 찾을 수 없습니다", 'warning')
+        gui.log("    Windows SDK를 설치하면 코드 서명이 가능합니다")
+        gui.log("    https://developer.microsoft.com/windows/downloads/windows-sdk/")
+        return True  # 서명 없이 계속 진행
+
+    gui.log(f"  signtool: {signtool_path}")
+
+    # 인증서 확인
+    if not CERT_FILE.exists():
+        gui.log(f"  ⚠ 인증서 파일 없음: {CERT_FILE}", 'warning')
+        gui.log("    certs/create_cert.ps1을 실행하여 인증서를 생성하세요")
+        return True  # 서명 없이 계속 진행
+
+    # 비밀번호 파일 확인 또는 환경 변수에서 읽기
+    cert_password = os.environ.get("HH_CERT_PASSWORD", "")
+    if not cert_password:
+        # 비밀번호 파일에서 읽기 시도
+        pw_file = CERT_DIR / ".password"
+        if pw_file.exists():
+            cert_password = pw_file.read_text(encoding='utf-8').strip()
+        else:
+            gui.log("  ⚠ 인증서 비밀번호를 찾을 수 없습니다", 'warning')
+            gui.log("    환경 변수 HH_CERT_PASSWORD를 설정하거나")
+            gui.log(f"    {pw_file} 파일에 비밀번호를 저장하세요")
+            return True  # 서명 없이 계속 진행
+
+    # 서명 대상 파일 결정
+    if target_files is None:
+        main_exe = APP_FOLDER / "homework_helper.exe"
+        target_files = [main_exe]
+
+    # 서명 수행
+    signed_count = 0
+    for file_path in target_files:
+        if sign_file(gui, file_path, signtool_path, CERT_FILE, cert_password):
+            signed_count += 1
+
+    gui.log(f"\n  서명 결과: {signed_count}/{len(target_files)} 파일 서명 완료")
+    return signed_count > 0
+
+
 def create_zip_distribution(gui, version_info):
     """ZIP 배포 파일 생성"""
     gui.log_section("ZIP 배포 파일 생성")
@@ -877,19 +1004,30 @@ def run_build_process(gui, version_info):
 
             # 3. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
-                gui.show_complete(False, auto_close_delay=0)  # 실패 시 자동 종료 안함
+                gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 4. ZIP 생성
+            # 4. 메인 exe 코드 서명
+            gui.set_progress(62)
+            sign_build_artifacts(gui, version_info)
+
+
+            # 5. ZIP 생성
             success_count = 0
             if create_zip_distribution(gui, version_info):
                 success_count += 1
 
-            # 5. 인스톨러 생성
+            # 6. 인스톨러 생성
             if create_installer(gui, version_info):
                 success_count += 1
 
-            # 6. 결과 요약
+                # 7. 인스톨러 exe 코드 서명
+                setup_files = list(RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"))
+                if setup_files:
+                    gui.set_progress(96)
+                    sign_build_artifacts(gui, version_info, target_files=setup_files)
+
+            # 8. 결과 요약
             print_summary(gui, version_info)
 
             if success_count == 0:
@@ -914,7 +1052,6 @@ def run_build_process(gui, version_info):
 
         except Exception as e:
             gui.log(f"\n✗ 예상치 못한 오류: {e}", 'error')
-            import traceback
             gui.log(traceback.format_exc(), 'error')
             gui.show_complete(False, auto_close_delay=0)
 

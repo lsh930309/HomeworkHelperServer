@@ -13,7 +13,6 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('src', 'src'),
-        ('tools', 'tools'),
     ],
     hiddenimports=[
         # FastAPI/Backend
