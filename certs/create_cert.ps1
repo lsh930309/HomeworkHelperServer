@@ -5,7 +5,8 @@
 param(
     [string]$CertName = "HomeworkHelper Code Signing",
     [string]$Publisher = "CN=lsh930309",
-    [int]$ValidYears = 5
+    [int]$ValidYears = 5,
+    [switch]$TrustRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,10 +35,10 @@ $password = Read-Host "비밀번호 입력" -AsSecureString
 $confirmPassword = Read-Host "비밀번호 확인" -AsSecureString
 
 # 비밀번호 일치 확인
-$pw1 = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password))
-$pw2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmPassword))
+$bstr1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
+$pw1 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr1)
+$bstr2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmPassword)
+$pw2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr2)
 
 if ($pw1 -ne $pw2) {
     Write-Host "[오류] 비밀번호가 일치하지 않습니다." -ForegroundColor Red
@@ -45,7 +46,9 @@ if ($pw1 -ne $pw2) {
 }
 
 # 메모리에서 평문 비밀번호 제거
-Remove-Variable pw1, pw2
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr1)
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr2)
+Remove-Variable pw1, pw2, bstr1, bstr2
 
 # 인증서 생성
 Write-Host ""
@@ -74,19 +77,23 @@ Export-PfxCertificate `
 
 Write-Host "  저장 위치: $PfxPath"
 
-# 신뢰할 수 있는 루트 인증 기관에 등록 (선택)
+# 신뢰할 수 있는 루트 인증 기관에 등록 (선택: -TrustRoot 스위치 필요)
 Write-Host ""
-Write-Host "[4/4] 로컬 신뢰 저장소에 등록 중..." -ForegroundColor Green
-try {
-    $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
-        "Root", "CurrentUser")
-    $rootStore.Open("ReadWrite")
-    $rootStore.Add($cert)
-    $rootStore.Close()
-    Write-Host "  신뢰할 수 있는 루트 인증 기관에 등록 완료" -ForegroundColor Green
-} catch {
-    Write-Host "  [경고] 루트 저장소 등록 실패: $_" -ForegroundColor Yellow
-    Write-Host "  (서명은 가능하지만, Windows가 인증서를 신뢰하지 않을 수 있습니다)"
+if ($TrustRoot) {
+    Write-Host "[4/4] 로컬 신뢰 저장소에 등록 중..." -ForegroundColor Green
+    try {
+        $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+            "Root", "CurrentUser")
+        $rootStore.Open("ReadWrite")
+        $rootStore.Add($cert)
+        $rootStore.Close()
+        Write-Host "  신뢰할 수 있는 루트 인증 기관에 등록 완료" -ForegroundColor Green
+    } catch {
+        Write-Host "  [경고] 루트 저장소 등록 실패: $_" -ForegroundColor Yellow
+        Write-Host "  (서명은 가능하지만, Windows가 인증서를 신뢰하지 않을 수 있습니다)"
+    }
+} else {
+    Write-Host "[4/4] 루트 저장소 등록 건너뜀 (-TrustRoot 스위치로 활성화 가능)" -ForegroundColor Yellow
 }
 
 Write-Host ""

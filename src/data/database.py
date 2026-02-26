@@ -170,6 +170,7 @@ def backup_database(max_backups: int = 3) -> bool:
     os.makedirs(backup_dir, exist_ok=True)
 
     try:
+        import contextlib
         # 롤링: backup.N 삭제 → backup.(N-1)→N 순으로 밀기
         for i in range(max_backups, 0, -1):
             current = os.path.join(backup_dir, f"app_data.backup.{i}.db")
@@ -181,19 +182,19 @@ def backup_database(max_backups: int = 3) -> bool:
                 if os.path.exists(current):
                     os.rename(current, next_slot)
 
-        # 현재 DB → backup.1.db (SQLite Online Backup API)
+        # 현재 DB → backup.1.db (SQLite Online Backup API, 원자적 교체)
         backup_path = os.path.join(backup_dir, "app_data.backup.1.db")
-        src_conn = _sqlite3.connect(db_path)
-        dst_conn = _sqlite3.connect(backup_path)
-        src_conn.backup(dst_conn)
-        dst_conn.close()
-        src_conn.close()
-
-        print(f"[Backup] DB 백업 완료: {backup_path}")
-        return True
+        temp_path = backup_path + ".tmp"
+        with contextlib.closing(_sqlite3.connect(db_path)) as src_conn:
+            with contextlib.closing(_sqlite3.connect(temp_path)) as dst_conn:
+                src_conn.backup(dst_conn)
+        os.replace(temp_path, backup_path)
     except Exception as e:
         print(f"[Backup] DB 백업 실패 (무시됨): {e}")
         return False
+    else:
+        print(f"[Backup] DB 백업 완료: {backup_path}")
+        return True
 
 
 # 6. 안전한 데이터베이스 종료 함수 (선택사항 - 추가 안전장치)

@@ -90,7 +90,7 @@ begin
   // PowerShell 스크립트를 임시 파일로 작성 후 실행
   // (경로에 공백이 있어도 안전하게 처리)
   Script :=
-    '$exe = "' + AppExe + '"' + #13#10 +
+    '$exe = ''' + AppExe + '''' + #13#10 +
     '$action  = New-ScheduledTaskAction -Execute $exe' + #13#10 +
     '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries' + #13#10 +
     '$user = $env:USERNAME' + #13#10 +
@@ -115,13 +115,16 @@ end;
 
 procedure DeleteScheduledTasks();
 var
-  ResultCode: Integer;
+  RC1, RC2: Integer;
 begin
   Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Admin" /f',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    '', SW_HIDE, ewWaitUntilTerminated, RC1);
   Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Normal" /f',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('예약 작업 삭제 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)');
+    '', SW_HIDE, ewWaitUntilTerminated, RC2);
+  if (RC1 = 0) and (RC2 = 0) then
+    Log('예약 작업 삭제 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
+  else
+    Log('예약 작업 삭제 일부 실패. RC1=' + IntToStr(RC1) + ', RC2=' + IntToStr(RC2));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

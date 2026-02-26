@@ -36,7 +36,8 @@ const Dashboard = {
 
     // 날짜의 요일 확인 (0: 일요일, 6: 토요일)
     getDayOfWeek(dateStr) {
-        const date = new Date(dateStr);
+        const [year, month, day] = dateStr.split('-');
+        const date = new Date(Number(year), Number(month) - 1, Number(day));
         return date.getDay();
     },
 
@@ -236,9 +237,9 @@ const Dashboard = {
                 }
             } else {
                 // 개별 모드: 각 게임별 최댓값 1개씩
-                datasets.forEach((dataset, datasetIndex) => {
+                for (const [datasetIndex, dataset] of datasets.entries()) {
                     const meta = chart.getDatasetMeta(datasetIndex);
-                    if (meta.hidden) return;
+                    if (meta.hidden) continue;
 
                     let maxValue = -Infinity;
                     let maxIndex = -1;
@@ -274,7 +275,7 @@ const Dashboard = {
                             ctx.fillText(text, point.x, yPos);
                         }
                     }
-                });
+                }
             }
 
             ctx.restore();
@@ -296,12 +297,12 @@ const Dashboard = {
 
             const iconPositions = [];
 
-            datasets.forEach((dataset, datasetIndex) => {
+            for (const [datasetIndex, dataset] of datasets.entries()) {
                 const meta = chart.getDatasetMeta(datasetIndex);
-                if (meta.hidden) return;
+                if (meta.hidden) continue;
 
                 const img = self.state.iconImages[dataset.label];
-                if (!img || !img.complete) return;
+                if (!img || !img.complete) continue;
 
                 const iconSize = self.state.settings?.chartIconSize || 64;
                 const data = dataset.data;
@@ -335,7 +336,7 @@ const Dashboard = {
                         }
                     }
                 }
-            });
+            }
         }
     },
 
@@ -579,9 +580,9 @@ const Dashboard = {
         // selectedGames가 비어있으면 모든 게임을 포함
         const useAllGames = this.state.selectedGames.size === 0;
 
-        offsets.forEach(o => {
+        for (const o of offsets) {
             const data = this.state.dataCache[o];
-            if (!data?.games || !data?.dates) return;
+            if (!data?.games || !data?.dates) continue;
 
             const dateCount = data.dates.length;
             for (let i = 0; i < dateCount; i++) {
@@ -604,9 +605,9 @@ const Dashboard = {
                     });
                 }
             }
-        });
+        }
 
-        this.state.globalMaxY = Math.ceil(maxY * 1.1);  // 10% 여유 공간
+        this.state.globalMaxY = maxY <= 0 ? 10 : Math.ceil(maxY * 1.1);  // 10% 여유 공간
     },
 
     // === 데이터 로딩 (3기간 동시) ===
@@ -815,7 +816,7 @@ const Dashboard = {
                     padding: {
                         left: 0,
                         right: 0,
-                        top: this.state.settings?.showChartIcons ? 80 : 20,
+                        top: this.state.settings?.showChartIcons ? (this.state.settings.chartIconSize || 64) + 20 : 20,
                         bottom: isMainChart ? 0 : 0
                     }
                 }

@@ -63,7 +63,7 @@ def _run_as_admin_shellexecute():
         else:
             script = sys.argv[0]
 
-        params = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in sys.argv[1:])
+        params = subprocess.list2cmdline(sys.argv[1:])
 
         ret = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", script, params if params else None, None, 1
@@ -118,9 +118,9 @@ def _restart_as_normal_subprocess():
     """
     try:
         if getattr(sys, 'frozen', False):
-            args = [sys.executable] + sys.argv[1:]
+            args = [sys.executable, *sys.argv[1:]]
         else:
-            args = [sys.executable, sys.argv[0]] + sys.argv[1:]
+            args = [sys.executable, sys.argv[0], *sys.argv[1:]]
 
         subprocess.Popen(
             args,
@@ -160,13 +160,12 @@ def check_admin_requirement():
         if os.path.exists(db_path):
             # SQLite 데이터베이스에서 직접 설정 읽기
             import sqlite3
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # global_settings 테이블에서 run_as_admin 값 가져오기 (id=1인 행)
-            cursor.execute("SELECT run_as_admin FROM global_settings WHERE id = 1")
-            result = cursor.fetchone()
-            conn.close()
+                # global_settings 테이블에서 run_as_admin 값 가져오기 (id=1인 행)
+                cursor.execute("SELECT run_as_admin FROM global_settings WHERE id = 1")
+                result = cursor.fetchone()
 
             if result:
                 run_as_admin_setting = bool(result[0])

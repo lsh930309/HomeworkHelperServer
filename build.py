@@ -728,7 +728,7 @@ def sign_file(gui, file_path, signtool_path, cert_path, cert_password):
         return False
 
 
-def sign_build_artifacts(gui, version_info, target_files=None):
+def sign_build_artifacts(gui, _version_info, target_files=None):
     """빌드 산출물에 코드 서명 적용
 
     Args:
@@ -780,7 +780,7 @@ def sign_build_artifacts(gui, version_info, target_files=None):
             signed_count += 1
 
     gui.log(f"\n  서명 결과: {signed_count}/{len(target_files)} 파일 서명 완료")
-    return signed_count > 0
+    return signed_count == len(target_files)
 
 
 def create_zip_distribution(gui, version_info):
