@@ -18,8 +18,8 @@
     --text-primary: #e9ecef;
     --text-secondary: #adb5bd;
     --border-color: #333;
-    --accent: #adb5bd;
-    --accent-light: #ced4da;
+    --accent: #5a6268;
+    --accent-light: #6c757d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -30,8 +30,8 @@
         --text-primary: #e9ecef;
         --text-secondary: #adb5bd;
         --border-color: #333;
-        --accent: #adb5bd;
-        --accent-light: #ced4da;
+        --accent: #5a6268;
+        --accent-light: #6c757d;
     }
 }
 

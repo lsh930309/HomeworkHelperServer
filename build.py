@@ -1009,7 +1009,10 @@ def run_build_process(gui, version_info):
 
             # 4. 메인 exe 코드 서명
             gui.set_progress(62)
-            sign_build_artifacts(gui, version_info)
+            if not sign_build_artifacts(gui, version_info):
+                gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
+                gui.show_complete(False, auto_close_delay=0)
+                return
 
 
             # 5. ZIP 생성

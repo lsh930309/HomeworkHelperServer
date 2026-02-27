@@ -88,3 +88,4 @@ certs/.password
 # 프로젝트 공통 설정은 Git에 포함 (.claude/settings.json)
 # 개인별 로컬 설정만 제외 (.claude/settings.local.json)
 .claude/
+.omc/

@@ -628,10 +628,16 @@ const Dashboard = {
 
         // 표시 중인 3기간의 모든 게임 이름 수집 → 전역 색상 할당
         const visibleGameNames = new Set();
-        this.state.games.forEach(g => visibleGameNames.add(g.name));
+        this.state.games.forEach(g => {
+            visibleGameNames.add(g.name);
+        });
         offsets.forEach(o => {
             const data = this.state.dataCache[o];
-            if (data?.games) Object.keys(data.games).forEach(n => visibleGameNames.add(n));
+            if (data?.games) {
+                Object.keys(data.games).forEach(n => {
+                    visibleGameNames.add(n);
+                });
+            }
         });
         this.assignColorsForGames([...visibleGameNames]);
 
@@ -833,7 +839,9 @@ const Dashboard = {
 
         // 초기 선택 상태 설정 (모든 게임 선택)
         if (this.state.selectedGames.size === 0) {
-            gameNames.forEach(name => this.state.selectedGames.add(name));
+            gameNames.forEach(name => {
+                this.state.selectedGames.add(name);
+            });
         }
 
         gameNames.forEach(name => {
@@ -1073,7 +1081,7 @@ const Dashboard = {
             { id: 'toolbarOptions', key: 'toolbar', action: 'none' }
         ];
 
-        settingHandlers.forEach(({ id, key, action }) => {
+        settingHandlers.forEach(({ id, key }) => {
             document.querySelectorAll(`#${id} .setting-btn`).forEach(btn => {
                 btn.addEventListener('click', () => {
                     this.state.settings[key] = btn.dataset.value;

@@ -35,20 +35,26 @@ $password = Read-Host "비밀번호 입력" -AsSecureString
 $confirmPassword = Read-Host "비밀번호 확인" -AsSecureString
 
 # 비밀번호 일치 확인
-$bstr1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
-$pw1 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr1)
-$bstr2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmPassword)
-$pw2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr2)
+$bstr1 = [IntPtr]::Zero
+$bstr2 = [IntPtr]::Zero
+$passwordMatch = $false
+try {
+    $bstr1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
+    $bstr2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirmPassword)
+    $pw1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr1)
+    $pw2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr2)
 
-if ($pw1 -ne $pw2) {
-    Write-Host "[오류] 비밀번호가 일치하지 않습니다." -ForegroundColor Red
-    exit 1
+    if ($pw1 -ne $pw2) {
+        Write-Host "[오류] 비밀번호가 일치하지 않습니다." -ForegroundColor Red
+    } else {
+        $passwordMatch = $true
+    }
+} finally {
+    if ($bstr1 -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr1) }
+    if ($bstr2 -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr2) }
+    Remove-Variable pw1, pw2, bstr1, bstr2 -ErrorAction SilentlyContinue
 }
-
-# 메모리에서 평문 비밀번호 제거
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr1)
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr2)
-Remove-Variable pw1, pw2, bstr1, bstr2
+if (-not $passwordMatch) { exit 1 }
 
 # 인증서 생성
 Write-Host ""

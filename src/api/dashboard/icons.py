@@ -12,37 +12,24 @@ ICON_CACHE_DIR = os.path.join(
     'icon_cache'
 )
 
-# 기본 색상 팔레트 (HSL 기반으로 더 구분 가능하게)
-GAME_COLORS = [
-    '#6366f1',  # 인디고
-    '#22c55e',  # 그린
-    '#f59e0b',  # 앰버
-    '#ef4444',  # 레드
-    '#8b5cf6',  # 바이올렛
-    '#ec4899',  # 핑크
-    '#06b6d4',  # 시안
-    '#84cc16',  # 라임
-    '#f97316',  # 오렌지
-    '#14b8a6',  # 틸
-    '#a855f7',  # 퍼플
-    '#3b82f6',  # 블루
-    '#eab308',  # 옐로우
-    '#64748b',  # 슬레이트
-    '#0ea5e9',  # 스카이
-]
+def generate_game_color(index: int, total: int) -> str:
+    """HSL 기반 동적 색상 생성 (Hue 균등분할, S=80%, L=55%)"""
+    if total <= 0:
+        total = 1
+    h = round((360 / total) * index)
+    return f"hsl({h}, 80%, 55%)"
 
 # 아이콘 프리셋 크기
 ICON_SIZES = [16, 24, 32, 48, 64, 96, 128, 256]
 
 
-def get_color_for_game(name: str, index: int = None) -> str:
-    """게임 이름 기반 고유 색상 반환 (인덱스 우선)"""
+def get_color_for_game(name: str, index: int = 0, total: int = 10) -> str:
+    """HSL 기반 게임 색상 반환"""
     if index is not None:
-        return GAME_COLORS[index % len(GAME_COLORS)]
-    
-    # 이름 해시 기반 색상 선택
+        return generate_game_color(index, total)
+    # 이름 해시 기반 폴백
     hash_val = int(hashlib.md5(name.encode()).hexdigest()[:8], 16)
-    return GAME_COLORS[hash_val % len(GAME_COLORS)]
+    return generate_game_color(hash_val % total, total)
 
 
 def ensure_cache_dir():

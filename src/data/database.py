@@ -185,10 +185,16 @@ def backup_database(max_backups: int = 3) -> bool:
         # 현재 DB → backup.1.db (SQLite Online Backup API, 원자적 교체)
         backup_path = os.path.join(backup_dir, "app_data.backup.1.db")
         temp_path = backup_path + ".tmp"
-        with contextlib.closing(_sqlite3.connect(db_path)) as src_conn:
-            with contextlib.closing(_sqlite3.connect(temp_path)) as dst_conn:
-                src_conn.backup(dst_conn)
-        os.replace(temp_path, backup_path)
+        replaced = False
+        try:
+            with contextlib.closing(_sqlite3.connect(db_path)) as src_conn:
+                with contextlib.closing(_sqlite3.connect(temp_path)) as dst_conn:
+                    src_conn.backup(dst_conn)
+            os.replace(temp_path, backup_path)
+            replaced = True
+        finally:
+            if not replaced and os.path.exists(temp_path):
+                os.remove(temp_path)
     except Exception as e:
         print(f"[Backup] DB 백업 실패 (무시됨): {e}")
         return False

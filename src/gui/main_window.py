@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
@@ -214,15 +214,18 @@ class MainWindow(QMainWindow):
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
         self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
-        
+
         # 테이블 크기 정책 설정 - 스크롤바 없이 내용에 맞게 조절
         self.process_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.process_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
-        # 테이블 행 높이 설정 (기본값 유지)
+
+        # 테이블 행 높이 및 아이콘 크기 설정
         vh = self.process_table.verticalHeader()
         if vh:
             vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
+
+        # 고화질 아이콘 표시를 위한 아이콘 크기 설정 (24x24px 논리 크기, 고DPI에서 자동 확대)
+        self.process_table.setIconSize(QSize(24, 24))
         
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
 
