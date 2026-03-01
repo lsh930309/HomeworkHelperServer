@@ -83,20 +83,29 @@ Export-PfxCertificate `
 
 Write-Host "  저장 위치: $PfxPath"
 
+# Thumbprint 파일 저장 (build.py에서 참조)
+$ThumbprintFile = Join-Path $CertsDir ".thumbprint"
+$cert.Thumbprint | Out-File -FilePath $ThumbprintFile -Encoding ascii -NoNewline
+Write-Host "  썸프린트 저장: $ThumbprintFile"
+
 # 신뢰할 수 있는 루트 인증 기관에 등록 (선택: -TrustRoot 스위치 필요)
 Write-Host ""
 if ($TrustRoot) {
     Write-Host "[4/4] 로컬 신뢰 저장소에 등록 중..." -ForegroundColor Green
+    $rootStore = $null
     try {
-        $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
-            "Root", "CurrentUser")
+        $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
         $rootStore.Open("ReadWrite")
         $rootStore.Add($cert)
-        $rootStore.Close()
         Write-Host "  신뢰할 수 있는 루트 인증 기관에 등록 완료" -ForegroundColor Green
     } catch {
         Write-Host "  [경고] 루트 저장소 등록 실패: $_" -ForegroundColor Yellow
         Write-Host "  (서명은 가능하지만, Windows가 인증서를 신뢰하지 않을 수 있습니다)"
+    } finally {
+        if ($rootStore) {
+            $rootStore.Close()
+            $rootStore.Dispose()
+        }
     }
 } else {
     Write-Host "[4/4] 루트 저장소 등록 건너뜀 (-TrustRoot 스위치로 활성화 가능)" -ForegroundColor Yellow
@@ -108,7 +117,7 @@ Write-Host "  인증서 생성 완료!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "다음 단계:" -ForegroundColor Cyan
-Write-Host "  1. build.py 실행 시 자동으로 서명됩니다."
-Write-Host "  2. PFX 비밀번호를 안전하게 보관하세요."
-Write-Host "  3. 이 PFX 파일을 Git에 커밋하지 마세요!"
+Write-Host "  1. build.py 실행 시 자동으로 서명됩니다 (Windows 인증서 저장소 기반)."
+Write-Host "  2. PFX 비밀번호와 .thumbprint 파일을 안전하게 보관하세요."
+Write-Host "  3. PFX 파일과 .thumbprint 파일을 Git에 커밋하지 마세요!"
 Write-Host ""

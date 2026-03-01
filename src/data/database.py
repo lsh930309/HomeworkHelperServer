@@ -162,6 +162,10 @@ def backup_database(max_backups: int = 3) -> bool:
     """
     import sqlite3 as _sqlite3
 
+    if max_backups < 1:
+        print(f"[Backup] max_backups 값이 유효하지 않습니다: {max_backups}")
+        return False
+
     if not os.path.exists(db_path):
         print("[Backup] DB 파일이 없어 백업을 건너뜁니다. (최초 실행)")
         return False
