@@ -1185,8 +1185,9 @@ const Dashboard = {
 
                 this.state.settings.stackMode = newStack;
                 this.saveSettings();
-                this.state.dataCache = {};
-                this.loadAllPeriodData();
+                const offset = this.state.currentPeriodOffset;
+                this.calculateGlobalMaxY([offset - 1, offset, offset + 1]);
+                this.renderAllCharts(false);
             });
         });
 
