@@ -161,13 +161,6 @@ class MainWindow(QMainWindow):
         self.add_game_button.clicked.connect(self.open_add_process_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_game_button) # 레이아웃에 버튼 추가
 
-        # 볼륨 패널 토글 버튼
-        self.volume_toggle_btn = QPushButton("🔇 볼륨")
-        self.volume_toggle_btn.setCheckable(True)
-        self.volume_toggle_btn.setToolTip("게임별 볼륨 조절 패널 열기/닫기")
-        self.volume_toggle_btn.clicked.connect(self._toggle_volume_panel)
-        self.top_button_area_layout.addWidget(self.volume_toggle_btn)
-
         self.top_button_area_layout.addStretch(1) # 버튼들 사이의 공간 확장
 
         self.dynamic_web_buttons_layout = QHBoxLayout() # 동적 웹 버튼들을 위한 수평 레이아웃
@@ -451,7 +444,7 @@ class MainWindow(QMainWindow):
             h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_VOLUME, QHeaderView.ResizeMode.Fixed) # 볼륨 컬럼: 고정 폭
-            h.resizeSection(self.COL_VOLUME, 160)  # 볼륨 컬럼 폭 160px
+            h.resizeSection(self.COL_VOLUME, 120)  # 볼륨 컬럼 폭 120px
 
     def _create_menu_bar(self):
         mb = self.menuBar()
@@ -475,9 +468,15 @@ class MainWindow(QMainWindow):
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
+        self.volume_toggle_action = QAction("🔇 볼륨 패널 표시", self)
+        self.volume_toggle_action.setCheckable(True)
+        self.volume_toggle_action.setToolTip("게임별 볼륨 조절 패널 열기/닫기")
+        self.volume_toggle_action.triggered.connect(self._toggle_volume_panel)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
+            sm.addSeparator()
+            sm.addAction(self.volume_toggle_action)  # 볼륨 패널 토글 액션
 
         # 도구 메뉴
         tm = mb.addMenu("도구(&T)")
@@ -1445,7 +1444,7 @@ class MainWindow(QMainWindow):
                         web_button_count += 1
         
         # 볼륨 패널 너비 추가
-        volume_extra = 160 if getattr(self, '_volume_panel_visible', False) else 0
+        volume_extra = 120 if getattr(self, '_volume_panel_visible', False) else 0
 
         # 창 너비 결정 (고정 너비 + 웹 버튼 + 볼륨 패널)
         if web_button_count > 0:
@@ -1585,8 +1584,27 @@ class MainWindow(QMainWindow):
     def _toggle_volume_panel(self):
         """볼륨 컬럼 표시/숨김 토글 및 창 너비 자동 조절."""
         self._volume_panel_visible = not self._volume_panel_visible
+
+        # 창 너비를 먼저 확정한 뒤 컬럼 숨기기/표시 (순서 중요)
+        # setColumnHidden이 먼저 호출되면 Qt가 즉시 Stretch 재계산을 수행하여
+        # 창 크기 변경 전에 NAME 컬럼 폭이 오계산됨
+        volume_extra = 120 if self._volume_panel_visible else 0
+        web_button_count = 0
+        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
+            for i in range(self.dynamic_web_buttons_layout.count()):
+                item = self.dynamic_web_buttons_layout.itemAt(i)
+                if item and item.widget() and item.widget().isVisible():
+                    web_button_count += 1
+        target_width = (400 if web_button_count > 0 else 470) + volume_extra
+        self.setFixedWidth(target_width)
+
+        # 창 너비 확정 후 컬럼 표시/숨김
         self.process_table.setColumnHidden(self.COL_VOLUME, not self._volume_panel_visible)
-        self.volume_toggle_btn.setText("🔊 볼륨" if self._volume_panel_visible else "🔇 볼륨")
+
+        if hasattr(self, 'volume_toggle_action'):
+            label = "🔊 볼륨 패널 숨기기" if self._volume_panel_visible else "🔇 볼륨 패널 표시"
+            self.volume_toggle_action.setText(label)
+            self.volume_toggle_action.setChecked(self._volume_panel_visible)
         self._adjust_window_size_to_content()
 
     def _create_volume_control_widget(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
