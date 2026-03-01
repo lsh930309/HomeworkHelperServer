@@ -40,6 +40,7 @@ VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)\.(\d{12})')
 # 코드 서명
 CERT_DIR = PROJECT_ROOT / "certs"
 CERT_FILE = CERT_DIR / "HomeworkHelper.pfx"
+CERT_THUMBPRINT_FILE = CERT_DIR / ".thumbprint"
 
 # 폰트 경로
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NEXONLv1GothicOTFBold.otf"
@@ -686,8 +687,8 @@ def find_signtool():
     return None
 
 
-def sign_file(gui, file_path, signtool_path, cert_path, cert_password):
-    """개별 파일에 코드 서명 적용"""
+def sign_file(gui, file_path, signtool_path, cert_thumbprint):
+    """개별 파일에 코드 서명 적용 (Windows 인증서 저장소 기반)"""
     file_path = Path(file_path)
     if not file_path.exists():
         gui.log(f"  ⚠ 파일 없음: {file_path.name}", 'warning')
@@ -695,8 +696,8 @@ def sign_file(gui, file_path, signtool_path, cert_path, cert_password):
 
     cmd = [
         str(signtool_path), "sign",
-        "/f", str(cert_path),
-        "/p", cert_password,
+        "/s", "My",
+        "/sha1", cert_thumbprint,
         "/fd", "SHA256",
         "/td", "SHA256",
         "/tr", "http://timestamp.digicert.com",
@@ -749,23 +750,15 @@ def sign_build_artifacts(gui, _version_info, target_files=None):
 
     gui.log(f"  signtool: {signtool_path}")
 
-    # 인증서 확인
-    if not CERT_FILE.exists():
-        gui.log(f"  ⚠ 인증서 파일 없음: {CERT_FILE}", 'warning')
-        gui.log("    certs/create_cert.ps1을 실행하여 인증서를 생성하세요")
-        return True  # 서명 없이 계속 진행
-
-    # 비밀번호 파일 확인 또는 환경 변수에서 읽기
-    cert_password = os.environ.get("HH_CERT_PASSWORD", "")
-    if not cert_password:
-        # 비밀번호 파일에서 읽기 시도
-        pw_file = CERT_DIR / ".password"
-        if pw_file.exists():
-            cert_password = pw_file.read_text(encoding='utf-8').strip()
+    # 인증서 썸프린트 확인 (환경 변수 또는 파일)
+    cert_thumbprint = os.environ.get("HH_CERT_THUMBPRINT", "")
+    if not cert_thumbprint:
+        if CERT_THUMBPRINT_FILE.exists():
+            cert_thumbprint = CERT_THUMBPRINT_FILE.read_text(encoding='utf-8').strip()
         else:
-            gui.log("  ⚠ 인증서 비밀번호를 찾을 수 없습니다", 'warning')
-            gui.log("    환경 변수 HH_CERT_PASSWORD를 설정하거나")
-            gui.log(f"    {pw_file} 파일에 비밀번호를 저장하세요")
+            gui.log("  ⚠ 인증서 썸프린트를 찾을 수 없습니다", 'warning')
+            gui.log("    환경 변수 HH_CERT_THUMBPRINT를 설정하거나")
+            gui.log(f"    certs/create_cert.ps1을 실행하여 {CERT_THUMBPRINT_FILE.name} 파일을 생성하세요")
             return True  # 서명 없이 계속 진행
 
     # 서명 대상 파일 결정
@@ -776,7 +769,7 @@ def sign_build_artifacts(gui, _version_info, target_files=None):
     # 서명 수행
     signed_count = 0
     for file_path in target_files:
-        if sign_file(gui, file_path, signtool_path, CERT_FILE, cert_password):
+        if sign_file(gui, file_path, signtool_path, cert_thumbprint):
             signed_count += 1
 
     gui.log(f"\n  서명 결과: {signed_count}/{len(target_files)} 파일 서명 완료")
@@ -1028,7 +1021,10 @@ def run_build_process(gui, version_info):
                 setup_files = list(RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"))
                 if setup_files:
                     gui.set_progress(96)
-                    sign_build_artifacts(gui, version_info, target_files=setup_files)
+                    if not sign_build_artifacts(gui, version_info, target_files=setup_files):
+                        gui.log("\n✗ 인스톨러 코드 서명 실패로 빌드를 중단합니다.", 'error')
+                        gui.show_complete(False, auto_close_delay=0)
+                        return
 
             # 8. 결과 요약
             print_summary(gui, version_info)

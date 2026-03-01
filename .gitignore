@@ -81,6 +81,7 @@ android/.cxx/
 certs/*.pfx
 certs/*.cer
 certs/.password
+certs/.thumbprint
 
 # ===========================
 # Claude Code

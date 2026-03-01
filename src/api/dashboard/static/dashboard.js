@@ -14,6 +14,7 @@ const Dashboard = {
         dataCache: {},       // { offset: data }
         isNavigating: false,
         selectedGames: new Set(),  // 선택된 게임들
+        selectedGamesInitialized: false,  // 최초 1회 전체 선택 여부
         globalMaxY: 0,  // 전체 기간의 Y축 최댓값
         chartIconPositions: {}  // { canvasId: [{x, y, width, height}] }
     },
@@ -837,11 +838,12 @@ const Dashboard = {
 
         const gameNames = Object.keys(data?.games || {}).sort();
 
-        // 초기 선택 상태 설정 (모든 게임 선택)
-        if (this.state.selectedGames.size === 0) {
+        // 최초 1회만 전체 선택 초기화
+        if (!this.state.selectedGamesInitialized) {
             gameNames.forEach(name => {
                 this.state.selectedGames.add(name);
             });
+            this.state.selectedGamesInitialized = true;
         }
 
         gameNames.forEach(name => {
@@ -856,6 +858,12 @@ const Dashboard = {
             checkbox.className = 'legend-checkbox';
             checkbox.checked = isSelected;
 
+            const refreshBySelection = () => {
+                const offset = this.state.currentPeriodOffset;
+                this.calculateGlobalMaxY([offset - 1, offset, offset + 1]);
+                this.renderAllCharts(false);
+            };
+
             const toggleSelection = () => {
                 if (checkbox.checked) {
                     checkbox.checked = false;
@@ -864,8 +872,7 @@ const Dashboard = {
                     checkbox.checked = true;
                     this.state.selectedGames.add(name);
                 }
-                this.state.dataCache = {};
-                this.loadAllPeriodData();
+                refreshBySelection();
             };
 
             checkbox.addEventListener('change', (e) => {
@@ -875,8 +882,7 @@ const Dashboard = {
                 } else {
                     this.state.selectedGames.delete(name);
                 }
-                this.state.dataCache = {};
-                this.loadAllPeriodData();
+                refreshBySelection();
             });
 
             // 항목 전체 클릭 시 토글
