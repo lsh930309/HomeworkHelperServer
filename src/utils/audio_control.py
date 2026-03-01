@@ -15,7 +15,7 @@ def get_app_volume(pid: int) -> Optional[float]:
             if session.Process and session.Process.pid == pid:
                 volume = session._ctl.QueryInterface(ISimpleAudioVolume)
                 return volume.GetMasterVolume()
-    except Exception as e:
+    except (OSError, AttributeError) as e:
         logger.debug(f"get_app_volume PID={pid}: {e}")
     return None
 
@@ -31,7 +31,7 @@ def set_app_volume(pid: int, level: float) -> bool:
                 volume = session._ctl.QueryInterface(ISimpleAudioVolume)
                 volume.SetMasterVolume(level, None)
                 return True
-    except Exception as e:
+    except (OSError, AttributeError) as e:
         logger.debug(f"set_app_volume PID={pid} level={level}: {e}")
     return False
 
@@ -45,7 +45,7 @@ def is_muted(pid: int) -> Optional[bool]:
             if session.Process and session.Process.pid == pid:
                 volume = session._ctl.QueryInterface(ISimpleAudioVolume)
                 return bool(volume.GetMute())
-    except Exception as e:
+    except (OSError, AttributeError) as e:
         logger.debug(f"is_muted PID={pid}: {e}")
     return None
 
@@ -60,6 +60,6 @@ def set_mute(pid: int, mute: bool) -> bool:
                 volume = session._ctl.QueryInterface(ISimpleAudioVolume)
                 volume.SetMute(mute, None)
                 return True
-    except Exception as e:
+    except (OSError, AttributeError) as e:
         logger.debug(f"set_mute PID={pid} mute={mute}: {e}")
     return False

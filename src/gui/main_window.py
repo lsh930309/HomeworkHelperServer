@@ -711,6 +711,10 @@ class MainWindow(QMainWindow):
             self.process_table.setCellWidget(r, self.COL_LAST_PLAYED, progress_widget)
             has_changes = True
 
+            # 새로 실행된 프로세스에 기본 볼륨 자동 적용
+            pid = self._get_active_pid(p.id)
+            self._sync_default_volume_state(p, pid)
+
         # 실제 변경사항이 있을 때만 상태바 메시지 표시
         if has_changes:
             status_bar = self.statusBar()
@@ -776,20 +780,9 @@ class MainWindow(QMainWindow):
             elif st_str == PROC_STATE_COMPLETED: st_item.setBackground(self.COLOR_COMPLETED) # 완료: 초록색 배경
             else: st_item.setBackground(df_bg) # 그 외: 기본 배경색
 
-            # 볼륨 컬럼: PID 조회 및 자동 적용
-            pid = None
-            pm_entry = self.process_monitor.active_monitored_processes.get(p.id)
-            if pm_entry:
-                pid = pm_entry.get('pid')
-
-            # 게임이 새로 실행된 경우 기본 볼륨 자동 적용
-            if pid and getattr(p, 'default_volume', None) is not None and p.id not in self._volume_applied_process_ids:
-                audio_control.set_app_volume(pid, p.default_volume / 100.0)
-                self._volume_applied_process_ids.add(p.id)
-            elif not pid and p.id in self._volume_applied_process_ids:
-                # 게임 종료 시 추적 해제 (다음 실행 시 다시 적용)
-                self._volume_applied_process_ids.discard(p.id)
-
+            # 볼륨 컬럼: PID 조회 → 기본 볼륨 동기화 → 위젯 생성
+            pid = self._get_active_pid(p.id)
+            self._sync_default_volume_state(p, pid)
             vol_widget = self._create_volume_control_widget(p, pid)
             self.process_table.setCellWidget(r, self.COL_VOLUME, vol_widget)
 
@@ -840,7 +833,8 @@ class MainWindow(QMainWindow):
                                        hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID
                                        stamina_current=getattr(p_edit, 'stamina_current', None),  # 기존 스태미나 정보 유지
                                        stamina_max=getattr(p_edit, 'stamina_max', None),
-                                       stamina_updated_at=getattr(p_edit, 'stamina_updated_at', None))
+                                       stamina_updated_at=getattr(p_edit, 'stamina_updated_at', None),
+                                       default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
                     self.populate_process_list() # 전체 테이블 새로고침 (프로세스 정보 변경)
@@ -1628,7 +1622,7 @@ class MainWindow(QMainWindow):
 
         slider.setValue(initial_volume)
 
-        def on_mute_toggled(checked, p=process, pid_ref=pid, btn=mute_btn):
+        def on_mute_toggled(checked, pid_ref=pid, btn=mute_btn):
             btn.setText("🔇" if checked else "🔊")
             if pid_ref:
                 audio_control.set_mute(pid_ref, checked)
@@ -1651,22 +1645,39 @@ class MainWindow(QMainWindow):
 
     def _schedule_volume_save(self, process: ManagedProcess):
         """볼륨 변경 후 500ms 디바운스로 DB 저장 예약."""
-        if process.id in self._volume_save_timers:
-            self._volume_save_timers[process.id].stop()
-
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(lambda p=process: self._save_volume_to_db(p))
-        timer.start(500)
-        self._volume_save_timers[process.id] = timer
+        existing = self._volume_save_timers.get(process.id)
+        if existing is not None:
+            existing.stop()
+            existing.start(500)
+        else:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda p=process: self._save_volume_to_db(p))
+            timer.start(500)
+            self._volume_save_timers[process.id] = timer
 
     def _save_volume_to_db(self, process: ManagedProcess):
         """프로세스의 볼륨 설정을 DB에 저장."""
         try:
             self.data_manager.update_process(process)
             logger.debug(f"볼륨 저장: {process.name} = {process.default_volume}")
-        except Exception as e:
-            logger.error(f"볼륨 저장 실패: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"볼륨 저장 실패: {e}")
+
+    def _get_active_pid(self, process_id: str) -> Optional[int]:
+        """process_id에 대해 현재 활성 PID를 반환합니다. 실행 중이 아니면 None."""
+        pm_entry = self.process_monitor.active_monitored_processes.get(process_id)
+        if pm_entry:
+            return pm_entry.get('pid')
+        return None
+
+    def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
+        """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
+        if pid and getattr(process, 'default_volume', None) is not None and process.id not in self._volume_applied_process_ids:
+            audio_control.set_app_volume(pid, process.default_volume / 100.0)
+            self._volume_applied_process_ids.add(process.id)
+        elif not pid and process.id in self._volume_applied_process_ids:
+            self._volume_applied_process_ids.discard(process.id)
 
     # ─────────────────────────────
 
