@@ -40,6 +40,7 @@ from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMP
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
+from src.gui.volume_panel import VolumePopoverPanel
 
 
 class IconDownloader(QThread):
@@ -87,8 +88,7 @@ class MainWindow(QMainWindow):
     COL_LAST_PLAYED = 2
     COL_LAUNCH_BTN = 3
     COL_STATUS = 4
-    COL_VOLUME = 5
-    TOTAL_COLUMNS = 6 # 전체 컬럼 개수
+    TOTAL_COLUMNS = 5 # 전체 컬럼 개수
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -142,9 +142,8 @@ class MainWindow(QMainWindow):
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
 
         # 볼륨 패널 상태
-        self._volume_panel_visible = False  # 볼륨 컬럼 초기 숨김
         self._volume_applied_process_ids: set = set()  # 볼륨 자동 적용 완료된 process_id 집합
-        self._volume_save_timers: dict = {}  # 볼륨 디바운스 타이머
+        self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(self.data_manager)
 
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
@@ -216,9 +215,8 @@ class MainWindow(QMainWindow):
         # 프로세스 테이블 설정
         self.process_table = QTableWidget() # 테이블 위젯 생성
         self.process_table.setColumnCount(self.TOTAL_COLUMNS) # 컬럼 개수 설정
-        self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태", "볼륨"]) # 헤더 라벨 설정
+        self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태"]) # 헤더 라벨 설정
         self._configure_table_header() # 테이블 헤더 상세 설정
-        self.process_table.setColumnHidden(self.COL_VOLUME, True)  # 볼륨 컬럼 초기 숨김
         self.process_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers) # 편집 불가 설정
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
@@ -443,8 +441,6 @@ class MainWindow(QMainWindow):
             h.resizeSection(self.COL_LAST_PLAYED, 120)  # 진행률 컬럼 폭 120px로 고정
             h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
             h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_VOLUME, QHeaderView.ResizeMode.Fixed) # 볼륨 컬럼: 고정 폭
-            h.resizeSection(self.COL_VOLUME, 120)  # 볼륨 컬럼 폭 120px
 
     def _create_menu_bar(self):
         mb = self.menuBar()
@@ -468,15 +464,18 @@ class MainWindow(QMainWindow):
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
-        self.volume_toggle_action = QAction("🔇 볼륨 패널 표시", self)
-        self.volume_toggle_action.setCheckable(True)
-        self.volume_toggle_action.setToolTip("게임별 볼륨 조절 패널 열기/닫기")
-        self.volume_toggle_action.triggered.connect(self._toggle_volume_panel)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
-            sm.addSeparator()
-            sm.addAction(self.volume_toggle_action)  # 볼륨 패널 토글 액션
+
+        # 메뉴바 오른쪽 끝에 볼륨 토글 버튼 배치
+        from PyQt6.QtWidgets import QToolButton
+        self._volume_btn = QToolButton()
+        self._volume_btn.setText("🔇")
+        self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
+        self._volume_btn.setCheckable(True)
+        self._volume_btn.clicked.connect(self._toggle_volume_panel)
+        mb.setCornerWidget(self._volume_btn, Qt.Corner.TopRightCorner)
 
         # 도구 메뉴
         tm = mb.addMenu("도구(&T)")
@@ -779,11 +778,8 @@ class MainWindow(QMainWindow):
             elif st_str == PROC_STATE_COMPLETED: st_item.setBackground(self.COLOR_COMPLETED) # 완료: 초록색 배경
             else: st_item.setBackground(df_bg) # 그 외: 기본 배경색
 
-            # 볼륨 컬럼: PID 조회 → 기본 볼륨 동기화 → 위젯 생성
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
-            vol_widget = self._create_volume_control_widget(p, pid)
-            self.process_table.setCellWidget(r, self.COL_VOLUME, vol_widget)
 
         self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
         self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
@@ -1443,14 +1439,11 @@ class MainWindow(QMainWindow):
                     if widget and widget.isVisible():
                         web_button_count += 1
         
-        # 볼륨 패널 너비 추가
-        volume_extra = 120 if getattr(self, '_volume_panel_visible', False) else 0
-
-        # 창 너비 결정 (고정 너비 + 웹 버튼 + 볼륨 패널)
+        # 창 너비 결정 (고정 너비 + 웹 버튼)
         if web_button_count > 0:
-            target_width = 400 + volume_extra
+            target_width = 400
         else:
-            target_width = 470 + volume_extra
+            target_width = 470
 
         # 너비 제약 업데이트 (setFixedWidth 으로 min/max 동시 설정)
         self.setFixedWidth(target_width)
@@ -1582,105 +1575,21 @@ class MainWindow(QMainWindow):
     # ───────── 볼륨 패널 ─────────
 
     def _toggle_volume_panel(self):
-        """볼륨 컬럼 표시/숨김 토글 및 창 너비 자동 조절."""
-        self._volume_panel_visible = not self._volume_panel_visible
-
-        # 창 너비를 먼저 확정한 뒤 컬럼 숨기기/표시 (순서 중요)
-        # setColumnHidden이 먼저 호출되면 Qt가 즉시 Stretch 재계산을 수행하여
-        # 창 크기 변경 전에 NAME 컬럼 폭이 오계산됨
-        volume_extra = 120 if self._volume_panel_visible else 0
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget() and item.widget().isVisible():
-                    web_button_count += 1
-        target_width = (400 if web_button_count > 0 else 470) + volume_extra
-        self.setFixedWidth(target_width)
-
-        # 창 너비 확정 후 컬럼 표시/숨김
-        self.process_table.setColumnHidden(self.COL_VOLUME, not self._volume_panel_visible)
-
-        if hasattr(self, 'volume_toggle_action'):
-            label = "🔊 볼륨 패널 숨기기" if self._volume_panel_visible else "🔇 볼륨 패널 표시"
-            self.volume_toggle_action.setText(label)
-            self.volume_toggle_action.setChecked(self._volume_panel_visible)
-        self._adjust_window_size_to_content()
-
-    def _create_volume_control_widget(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
-        """볼륨 슬라이더 + 음소거 버튼으로 구성된 셀 위젯 반환."""
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(3)
-
-        # 음소거 토글 버튼
-        mute_btn = QPushButton("🔊")
-        mute_btn.setFixedSize(28, 28)
-        mute_btn.setCheckable(True)
-
-        # 볼륨 슬라이더
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, 100)
-
-        # 초기값: default_volume → 없으면 100
-        initial_volume = getattr(process, 'default_volume', None)
-        if initial_volume is None:
-            initial_volume = 100
-
-        # 실행 중인 경우 실제 시스템 볼륨으로 초기화
-        if pid:
-            actual_volume = audio_control.get_app_volume(pid)
-            if actual_volume is not None:
-                initial_volume = int(actual_volume * 100)
-            muted = audio_control.is_muted(pid)
-            if muted:
-                mute_btn.setChecked(True)
-                mute_btn.setText("🔇")
-
-        slider.setValue(initial_volume)
-
-        def on_mute_toggled(checked, pid_ref=pid, btn=mute_btn):
-            btn.setText("🔇" if checked else "🔊")
-            if pid_ref:
-                audio_control.set_mute(pid_ref, checked)
-
-        mute_btn.toggled.connect(on_mute_toggled)
-        slider.valueChanged.connect(
-            lambda v, p=process, pid_ref=pid: self._on_volume_changed(v, p, pid_ref)
-        )
-
-        layout.addWidget(mute_btn)
-        layout.addWidget(slider)
-        return container
-
-    def _on_volume_changed(self, value: int, process: ManagedProcess, pid: Optional[int]):
-        """슬라이더 값 변경 시 실시간 볼륨 적용 및 DB 저장 예약."""
-        if pid:
-            audio_control.set_app_volume(pid, value / 100.0)
-        process.default_volume = value
-        self._schedule_volume_save(process)
-
-    def _schedule_volume_save(self, process: ManagedProcess):
-        """볼륨 변경 후 500ms 디바운스로 DB 저장 예약."""
-        existing = self._volume_save_timers.get(process.id)
-        if existing is not None:
-            existing.stop()
-            existing.start(500)
+        """볼륨 팝오버 패널을 토글합니다."""
+        if self._volume_panel.isVisible():
+            self._volume_panel.hide()
+            self._volume_btn.setChecked(False)
+            self._volume_btn.setText("🔇")
         else:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(lambda p=process: self._save_volume_to_db(p))
-            timer.start(500)
-            self._volume_save_timers[process.id] = timer
-
-    def _save_volume_to_db(self, process: ManagedProcess):
-        """프로세스의 볼륨 설정을 DB에 저장."""
-        try:
-            self.data_manager.update_process(process)
-            logger.debug(f"볼륨 저장: {process.name} = {process.default_volume}")
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"볼륨 저장 실패: {e}")
+            running = [
+                (p, self._get_active_pid(p.id))
+                for p in self.data_manager.managed_processes
+                if self._get_active_pid(p.id) is not None
+            ]
+            self._volume_panel.refresh(running)
+            self._volume_panel.show_below(self._volume_btn)
+            self._volume_btn.setChecked(True)
+            self._volume_btn.setText("🔊")
 
     def _get_active_pid(self, process_id: str) -> Optional[int]:
         """process_id에 대해 현재 활성 PID를 반환합니다. 실행 중이 아니면 None."""
