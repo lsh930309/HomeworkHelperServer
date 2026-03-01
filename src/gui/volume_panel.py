@@ -4,15 +4,65 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QSlider, QFrame, QSizePolicy,
+    QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
+
+# 무채색 모노톤 슬라이더 스타일
+_SLIDER_STYLE = """
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #aaaaaa;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: #606060;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #505050;
+    border: 1px solid #404040;
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    margin: -5px 0;
+}
+QSlider::handle:horizontal:hover {
+    background: #404040;
+}
+"""
+
+# 음소거 버튼 스타일 (배경 제거, 무채색 테두리)
+_MUTE_BTN_STYLE = """
+QPushButton {
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(button);
+    font-size: 11px;
+}
+QPushButton:checked {
+    background: palette(mid);
+    color: palette(text);
+}
+QPushButton:hover {
+    background: palette(midlight);
+}
+"""
+
+
+def _system_icon(pixmap_enum) -> QIcon:
+    """Qt 표준 아이콘을 반환합니다. 없으면 null 아이콘."""
+    style = QApplication.style()
+    if style:
+        icon = style.standardIcon(pixmap_enum)
+        return icon
+    return QIcon()
 
 
 class VolumePopoverPanel(QWidget):
@@ -21,18 +71,27 @@ class VolumePopoverPanel(QWidget):
     def __init__(self, data_manager, parent=None):
         """팝오버 패널을 초기화합니다."""
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setAutoFillBackground(True)
+        # 일반 창 느낌의 외곽선 + 모서리 처리
+        self.setStyleSheet("""
+            VolumePopoverPanel {
+                border: 1px solid palette(mid);
+                border-radius: 6px;
+                background-color: palette(window);
+            }
+        """)
         self._data_manager = data_manager
         self._volume_save_timers: dict = {}
         self._setup_ui()
 
     def _setup_ui(self):
         """기본 UI 레이아웃을 구성합니다."""
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(320)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
 
-        header = QLabel("🔊 볼륨 조절")
+        header = QLabel("볼륨 조절")
         header.setStyleSheet("font-weight: bold;")
         outer.addWidget(header)
 
@@ -69,7 +128,7 @@ class VolumePopoverPanel(QWidget):
         self.adjustSize()
 
     def _make_row(self, process: ManagedProcess, pid: int) -> QWidget:
-        """프로세스 한 행(아이콘 / 음소거 버튼 / 슬라이더)을 생성합니다."""
+        """프로세스 한 행(아이콘 / 음소거 버튼 / 슬라이더 / 값 레이블)을 생성합니다."""
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -89,41 +148,82 @@ class VolumePopoverPanel(QWidget):
         name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(name_label)
 
-        # 음소거 버튼
-        mute_btn = QPushButton("🔊")
+        # 음소거 버튼: Qt 표준 아이콘 사용 (무채색 시스템 아이콘)
+        mute_btn = QPushButton()
         mute_btn.setFixedSize(28, 28)
         mute_btn.setCheckable(True)
+        mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
-        # 볼륨 슬라이더
+        from PyQt6.QtWidgets import QStyle
+        icon_on = _system_icon(QStyle.StandardPixmap.SP_MediaVolume)
+        icon_off = _system_icon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
+        if not icon_on.isNull():
+            mute_btn.setIcon(icon_on)
+            mute_btn._icon_on = icon_on
+            mute_btn._icon_off = icon_off if not icon_off.isNull() else icon_on
+        else:
+            mute_btn.setText("▶")
+            mute_btn._icon_on = None
+
+        # 볼륨 슬라이더: 5 단위 스냅, 무채색
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
+        slider.setSingleStep(5)
+        slider.setPageStep(5)
         slider.setFixedWidth(110)
+        slider.setStyleSheet(_SLIDER_STYLE)
 
-        # 초기 볼륨: 실제 시스템 볼륨 → 저장값 → 100 순으로 fallback
+        # 값 레이블 (드래그 중 실시간 표시)
+        vol_label = QLabel()
+        vol_label.setFixedWidth(28)
+        vol_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        # 초기 볼륨 결정: 실제 시스템 볼륨 → 저장값 → 100
         initial_volume = getattr(process, 'default_volume', None)
         if initial_volume is None:
             initial_volume = 100
         actual = audio_control.get_app_volume(pid)
         if actual is not None:
-            initial_volume = int(actual * 100)
-        if audio_control.is_muted(pid):
+            initial_volume = round(int(actual * 100) / 5) * 5
+        initial_volume = max(0, min(100, initial_volume))
+
+        is_muted = audio_control.is_muted(pid)
+        if is_muted:
             mute_btn.setChecked(True)
-            mute_btn.setText("🔇")
+            if mute_btn._icon_on:
+                mute_btn.setIcon(mute_btn._icon_off)
+            else:
+                mute_btn.setText("✕")
+
         slider.setValue(initial_volume)
+        vol_label.setText(str(initial_volume))
 
         def on_mute_toggled(checked, pid_ref=pid, btn=mute_btn):
             """음소거 버튼 토글 시 시스템 음소거 상태를 변경합니다."""
-            btn.setText("🔇" if checked else "🔊")
+            if btn._icon_on:
+                btn.setIcon(btn._icon_off if checked else btn._icon_on)
+            else:
+                btn.setText("✕" if checked else "▶")
             if pid_ref:
                 audio_control.set_mute(pid_ref, checked)
 
+        def on_value_changed(v, p=process, pid_ref=pid, lbl=vol_label, s=slider):
+            """슬라이더 값을 5 단위로 스냅하고 레이블 및 볼륨을 갱신합니다."""
+            snapped = round(v / 5) * 5
+            snapped = max(0, min(100, snapped))
+            if snapped != v:
+                s.blockSignals(True)
+                s.setValue(snapped)
+                s.blockSignals(False)
+            lbl.setText(str(snapped))
+            self._on_volume_changed(snapped, p, pid_ref)
+
         mute_btn.toggled.connect(on_mute_toggled)
-        slider.valueChanged.connect(
-            lambda v, p=process, pid_ref=pid: self._on_volume_changed(v, p, pid_ref)
-        )
+        slider.valueChanged.connect(on_value_changed)
 
         layout.addWidget(mute_btn)
         layout.addWidget(slider)
+        layout.addWidget(vol_label)
         return row
 
     def _on_volume_changed(self, value: int, process: ManagedProcess, pid: Optional[int]):

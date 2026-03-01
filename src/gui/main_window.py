@@ -468,13 +468,24 @@ class MainWindow(QMainWindow):
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
 
-        # 메뉴바 오른쪽 끝에 볼륨 토글 버튼 배치
+        # 메뉴바 오른쪽 끝에 볼륨 토글 버튼 배치 (배경 없는 심플 아이콘 버튼)
         from PyQt6.QtWidgets import QToolButton
         self._volume_btn = QToolButton()
-        self._volume_btn.setText("🔇")
+        self._volume_btn.setText("🔊")
         self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
         self._volume_btn.setCheckable(True)
         self._volume_btn.clicked.connect(self._toggle_volume_panel)
+        # 배경·테두리 제거, 우측 마진 추가
+        self._volume_btn.setStyleSheet("""
+            QToolButton {
+                border: none;
+                background: transparent;
+                padding: 2px 8px 2px 2px;
+            }
+            QToolButton:hover { background: transparent; }
+            QToolButton:checked { background: transparent; }
+            QToolButton:pressed { background: transparent; }
+        """)
         mb.setCornerWidget(self._volume_btn, Qt.Corner.TopRightCorner)
 
         # 도구 메뉴
@@ -1579,7 +1590,7 @@ class MainWindow(QMainWindow):
         if self._volume_panel.isVisible():
             self._volume_panel.hide()
             self._volume_btn.setChecked(False)
-            self._volume_btn.setText("🔇")
+            self._volume_btn.setText("🔊")
         else:
             running = [
                 (p, self._get_active_pid(p.id))
@@ -1589,7 +1600,7 @@ class MainWindow(QMainWindow):
             self._volume_panel.refresh(running)
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
-            self._volume_btn.setText("🔊")
+            # self._volume_btn.setText("🔇")
 
     def _get_active_pid(self, process_id: str) -> Optional[int]:
         """process_id에 대해 현재 활성 PID를 반환합니다. 실행 중이 아니면 None."""
