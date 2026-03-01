@@ -25,7 +25,9 @@ class ManagedProcess:
                  hoyolab_game_id: Optional[str] = None,  # 추적할 호요버스 게임 ID
                  stamina_current: Optional[int] = None,
                  stamina_max: Optional[int] = None,
-                 stamina_updated_at: Optional[float] = None):
+                 stamina_updated_at: Optional[float] = None,
+                 # 앱 볼륨 제어
+                 default_volume: Optional[int] = None):
 
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
@@ -52,6 +54,9 @@ class ManagedProcess:
         self.stamina_current = stamina_current
         self.stamina_max = stamina_max
         self.stamina_updated_at = stamina_updated_at
+
+        # 앱 볼륨 제어
+        self.default_volume = default_volume
 
     def __repr__(self):
         return f"<ManagedProcess(id='{self.id}', name='{self.name}', preset='{self.user_preset_id}')>"
@@ -83,6 +88,9 @@ class ManagedProcess:
             data['stamina_max'] = None
         if 'stamina_updated_at' not in data:
             data['stamina_updated_at'] = None
+        # 볼륨 필드 하위 호환성
+        if 'default_volume' not in data:
+            data['default_volume'] = None
         return cls(**data)
     
     def is_hoyoverse_game(self) -> bool:

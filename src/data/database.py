@@ -94,6 +94,8 @@ def auto_migrate_database():
         # ProcessSession 테이블 - 사용자 프리셋 ID 및 스태미나 정보
         ("process_sessions", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         ("process_sessions", "stamina_at_end", "INTEGER", None),
+        # Process 테이블 - 앱 볼륨 제어
+        ("managed_processes", "default_volume", "INTEGER", None),
     ]
     
     try:

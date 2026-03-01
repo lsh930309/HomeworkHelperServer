@@ -20,6 +20,8 @@ class ProcessSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 앱 볼륨 제어
+    default_volume: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -43,6 +45,8 @@ class ProcessCreateSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 앱 볼륨 제어
+    default_volume: Optional[int] = None
 
 class WebShortcutBase(BaseModel):
     name: str = ""

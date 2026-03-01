@@ -33,6 +33,9 @@ class Process(Base):
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
+    # 앱 볼륨 제어
+    default_volume = Column(Integer, nullable=True)  # 0~100, None이면 미설정
+
 
 class WebShortcut(Base):
     __tablename__ = "web_shortcuts"
