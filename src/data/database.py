@@ -151,7 +151,63 @@ def auto_migrate_database():
         print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")
 
 
-# 5. 안전한 데이터베이스 종료 함수 (선택사항 - 추가 안전장치)
+# 5. DB 롤링 백업 함수
+def backup_database(max_backups: int = 3) -> bool:
+    """앱 시작 시 이전 세션의 DB를 롤링 백업합니다.
+
+    SQLite Online Backup API를 사용하므로 DB가 열려 있어도 안전하게 백업됩니다.
+
+    백업 위치: %APPDATA%/HomeworkHelper/backups/
+    파일명: app_data.backup.1.db (최신) ~ app_data.backup.{max_backups}.db (가장 오래된)
+    """
+    import sqlite3 as _sqlite3
+
+    if max_backups < 1:
+        print(f"[Backup] max_backups 값이 유효하지 않습니다: {max_backups}")
+        return False
+
+    if not os.path.exists(db_path):
+        print("[Backup] DB 파일이 없어 백업을 건너뜁니다. (최초 실행)")
+        return False
+
+    backup_dir = os.path.join(base_dir, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    try:
+        import contextlib
+        # 롤링: backup.N 삭제 → backup.(N-1)→N 순으로 밀기
+        for i in range(max_backups, 0, -1):
+            current = os.path.join(backup_dir, f"app_data.backup.{i}.db")
+            if i == max_backups:
+                if os.path.exists(current):
+                    os.remove(current)
+            else:
+                next_slot = os.path.join(backup_dir, f"app_data.backup.{i + 1}.db")
+                if os.path.exists(current):
+                    os.rename(current, next_slot)
+
+        # 현재 DB → backup.1.db (SQLite Online Backup API, 원자적 교체)
+        backup_path = os.path.join(backup_dir, "app_data.backup.1.db")
+        temp_path = backup_path + ".tmp"
+        replaced = False
+        try:
+            with contextlib.closing(_sqlite3.connect(db_path)) as src_conn:
+                with contextlib.closing(_sqlite3.connect(temp_path)) as dst_conn:
+                    src_conn.backup(dst_conn)
+            os.replace(temp_path, backup_path)
+            replaced = True
+        finally:
+            if not replaced and os.path.exists(temp_path):
+                os.remove(temp_path)
+    except Exception as e:
+        print(f"[Backup] DB 백업 실패 (무시됨): {e}")
+        return False
+    else:
+        print(f"[Backup] DB 백업 완료: {backup_path}")
+        return True
+
+
+# 6. 안전한 데이터베이스 종료 함수 (선택사항 - 추가 안전장치)
 def safe_shutdown_database():
     """
     데이터베이스를 안전하게 종료합니다.

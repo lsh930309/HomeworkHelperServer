@@ -53,13 +53,28 @@
                 <div class="card-header">
                     <h2 class="card-title">기간별 플레이 시간</h2>
                 </div>
-                <div class="chart-legend" id="chartLegend"></div>
-                <div class="chart-container">
-                    <div class="chart-slider" id="chartSlider">
-                        <div class="chart-panel"><canvas id="prevChart"></canvas></div>
-                        <div class="chart-panel"><canvas id="playtimeChart"></canvas></div>
-                        <div class="chart-panel"><canvas id="nextChart"></canvas></div>
+                <div class="chart-controls">
+                    <div class="chart-legend" id="chartLegend"></div>
+                    <div class="chart-stack-toggle">
+                        <div class="toggle-indicator" id="stackToggleIndicator"></div>
+                        <button class="stack-toggle-btn active" data-stack="stacked">누적</button>
+                        <button class="stack-toggle-btn" data-stack="grouped">개별</button>
                     </div>
+                </div>
+                <div class="chart-wrapper">
+                    <div class="chart-y-axis" id="chartYAxis"></div>
+                    <div class="chart-container">
+                        <div class="chart-slider" id="chartSlider">
+                            <div class="chart-panel"><canvas id="prevChart"></canvas></div>
+                            <div class="chart-panel"><canvas id="playtimeChart"></canvas></div>
+                            <div class="chart-panel"><canvas id="nextChart"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="chart-period-toggle">
+                    <div class="toggle-indicator" id="periodToggleIndicator"></div>
+                    <button class="period-toggle-btn active" data-period="week">주간</button>
+                    <button class="period-toggle-btn" data-period="month">월간</button>
                 </div>
             </div>
         </section>
@@ -88,31 +103,6 @@
                     <button class="setting-btn" data-value="floating-bottom">플로팅↓</button>
                 </div>
             </div>
-            
-            <div class="setting-group">
-                <label class="setting-label">차트 유형</label>
-                <div class="setting-options" id="chartTypeOptions">
-                    <button class="setting-btn" data-value="bar">막대</button>
-                    <button class="setting-btn" data-value="line">선형</button>
-                </div>
-            </div>
-            
-            <div class="setting-group">
-                <label class="setting-label">데이터 표시</label>
-                <div class="setting-options" id="stackModeOptions">
-                    <button class="setting-btn" data-value="stacked">누적</button>
-                    <button class="setting-btn" data-value="grouped">개별</button>
-                </div>
-            </div>
-            
-            <div class="setting-group">
-                <label class="setting-label">기간</label>
-                <div class="setting-options" id="periodOptions">
-                    <button class="setting-btn" data-value="week">주간</button>
-                    <button class="setting-btn" data-value="month">월간</button>
-                </div>
-            </div>
-            
             
             <div class="setting-group">
                 <div class="setting-toggle" id="showUnregisteredToggle">

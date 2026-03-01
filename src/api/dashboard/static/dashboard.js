@@ -12,10 +12,49 @@ const Dashboard = {
         iconImages: {},
         iconCache: {},
         dataCache: {},       // { offset: data }
-        isNavigating: false
+        isNavigating: false,
+        selectedGames: new Set(),  // 선택된 게임들
+        selectedGamesInitialized: false,  // 최초 1회 전체 선택 여부
+        globalMaxY: 0,  // 전체 기간의 Y축 최댓값
+        chartIconPositions: {}  // { canvasId: [{x, y, width, height}] }
     },
 
     chartInstances: {},  // { canvasId: Chart instance }
+
+    // === 한국 공휴일 데이터 (2025-2027) ===
+    koreanHolidays: {
+        '2025': ['01-01', '01-28', '01-29', '01-30', '03-01', '03-03', '05-05', '05-06', '06-06', '08-15', '09-06', '09-07', '09-08', '10-03', '10-09', '12-25'],
+        '2026': ['01-01', '02-16', '02-17', '02-18', '03-01', '05-05', '05-24', '06-06', '08-15', '09-26', '09-27', '09-28', '10-03', '10-05', '12-25'],
+        '2027': ['01-01', '02-06', '02-07', '02-08', '03-01', '05-05', '05-13', '06-06', '08-15', '09-15', '09-16', '09-17', '10-03', '10-04', '12-25']
+    },
+
+    // 날짜가 공휴일인지 확인
+    isHoliday(dateStr) {
+        const [year, month, day] = dateStr.split('-');
+        const mmdd = `${month}-${day}`;
+        return this.koreanHolidays[year]?.includes(mmdd) || false;
+    },
+
+    // 날짜의 요일 확인 (0: 일요일, 6: 토요일)
+    getDayOfWeek(dateStr) {
+        const [year, month, day] = dateStr.split('-');
+        const date = new Date(Number(year), Number(month) - 1, Number(day));
+        return date.getDay();
+    },
+
+    // 날짜 레이블 색상 결정
+    getDateLabelColor(dateStr, isDark) {
+        const dayOfWeek = this.getDayOfWeek(dateStr);
+        const isHoliday = this.isHoliday(dateStr);
+
+        if (dayOfWeek === 0 || isHoliday) {
+            return '#dc3545';  // 일요일 또는 공휴일: 빨간색
+        } else if (dayOfWeek === 6) {
+            return '#0d6efd';  // 토요일: 파란색
+        } else {
+            return isDark ? '#adb5bd' : '#6c757d';  // 평일: 기본 색상
+        }
+    },
 
     // HSL 기반 동적 색상 생성 (Hue 균등분할, S=80%, L=55%)
     generateColors(count) {
@@ -49,7 +88,10 @@ const Dashboard = {
         this.initEvents();
         await this.loadGames();
         await this.loadAllPeriodData();
-        requestAnimationFrame(() => this.updateTabIndicator());
+        requestAnimationFrame(() => {
+            this.updateTabIndicator();
+            this.updateToggleIndicators();
+        });
     },
 
     // === 색상 ===
@@ -107,6 +149,140 @@ const Dashboard = {
         return loadPromise;
     },
 
+    // === 차트 최댓값 텍스트 플러그인 ===
+    maxValuePlugin: {
+        id: 'maxValueLabels',
+        afterDatasetsDraw: (chart) => {
+            const self = Dashboard;
+            const ctx = chart.ctx;
+            const stackMode = self.state.settings?.stackMode || 'stacked';
+            const datasets = chart.data.datasets;
+            const iconSize = self.state.settings?.chartIconSize || 64;
+            const showIcons = self.state.settings?.showChartIcons;
+
+            // 테마 감지
+            const theme = document.documentElement.getAttribute('data-theme');
+            const isDark = theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+            // 차트 영역 범위
+            const chartArea = chart.chartArea;
+            const topBoundary = chartArea.top;
+
+            ctx.save();
+            ctx.font = 'bold 11px Satoshi, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+
+            // 텍스트 높이 측정
+            const textHeight = 14;  // 대략적인 텍스트 높이
+
+            if (stackMode === 'stacked') {
+                // 누적 모드: 총합 최댓값 1개
+                let maxSum = -Infinity;
+                let maxIndex = -1;
+
+                const dataLength = datasets[0]?.data?.length || 0;
+                for (let i = 0; i < dataLength; i++) {
+                    let sum = 0;
+                    let hasData = false;
+                    datasets.forEach(dataset => {
+                        const meta = chart.getDatasetMeta(datasets.indexOf(dataset));
+                        if (!meta.hidden && dataset.data[i] !== undefined && dataset.data[i] !== null) {
+                            sum += dataset.data[i];
+                            hasData = true;
+                        }
+                    });
+
+                    if (hasData && sum > maxSum) {
+                        maxSum = sum;
+                        maxIndex = i;
+                    }
+                }
+
+                if (maxIndex >= 0 && maxSum > -Infinity && maxSum > 0) {
+                    // 스택의 최상단 데이터셋 찾기
+                    let topDatasetIndex = -1;
+                    for (let di = datasets.length - 1; di >= 0; di--) {
+                        const meta = chart.getDatasetMeta(di);
+                        if (!meta.hidden && datasets[di].data[maxIndex] > 0) {
+                            topDatasetIndex = di;
+                            break;
+                        }
+                    }
+
+                    if (topDatasetIndex >= 0) {
+                        const meta = chart.getDatasetMeta(topDatasetIndex);
+                        const point = meta.data[maxIndex];
+                        if (point) {
+                            const text = `${maxSum.toFixed(1)}시간`;
+                            // 누적 모드: 테마별 색상
+                            ctx.fillStyle = isDark ? '#ffffff' : '#000000';
+
+                            // Y 위치 계산 (아이콘과 차트 범위 고려)
+                            let yPos = point.y - 8;  // 기본 위치
+
+                            if (showIcons) {
+                                // 아이콘이 있을 수 있으므로 아이콘 위로 배치
+                                yPos = point.y - iconSize - 16;
+                            }
+
+                            // 차트 범위를 벗어나는지 확인
+                            if (yPos - textHeight < topBoundary) {
+                                // 범위를 벗어나면 포인트 아래에 배치
+                                yPos = point.y + textHeight + 8;
+                            }
+
+                            ctx.fillText(text, point.x, yPos);
+                        }
+                    }
+                }
+            } else {
+                // 개별 모드: 각 게임별 최댓값 1개씩
+                for (const [datasetIndex, dataset] of datasets.entries()) {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (meta.hidden) continue;
+
+                    let maxValue = -Infinity;
+                    let maxIndex = -1;
+
+                    dataset.data.forEach((value, i) => {
+                        if (value !== undefined && value !== null && value > maxValue) {
+                            maxValue = value;
+                            maxIndex = i;
+                        }
+                    });
+
+                    if (maxIndex >= 0 && maxValue > -Infinity && maxValue > 0) {
+                        const point = meta.data[maxIndex];
+                        if (point) {
+                            const text = `${maxValue.toFixed(1)}시간`;
+                            // 개별 모드: 차트 색상 사용
+                            ctx.fillStyle = dataset.borderColor;
+
+                            // Y 위치 계산 (아이콘과 차트 범위 고려)
+                            let yPos = point.y - 8;  // 기본 위치
+
+                            if (showIcons) {
+                                // 아이콘이 있을 수 있으므로 아이콘 위로 배치
+                                yPos = point.y - iconSize - 16;
+                            }
+
+                            // 차트 범위를 벗어나는지 확인
+                            if (yPos - textHeight < topBoundary) {
+                                // 범위를 벗어나면 포인트 아래에 배치
+                                yPos = point.y + textHeight + 8;
+                            }
+
+                            ctx.fillText(text, point.x, yPos);
+                        }
+                    }
+                }
+            }
+
+            ctx.restore();
+        }
+    },
+
     // === 차트 아이콘 플러그인 ===
     chartIconPlugin: {
         id: 'chartIcons',
@@ -122,12 +298,12 @@ const Dashboard = {
 
             const iconPositions = [];
 
-            datasets.forEach((dataset, datasetIndex) => {
+            for (const [datasetIndex, dataset] of datasets.entries()) {
                 const meta = chart.getDatasetMeta(datasetIndex);
-                if (meta.hidden) return;
+                if (meta.hidden) continue;
 
                 const img = self.state.iconImages[dataset.label];
-                if (!img || !img.complete) return;
+                if (!img || !img.complete) continue;
 
                 const iconSize = self.state.settings?.chartIconSize || 64;
                 const data = dataset.data;
@@ -161,7 +337,7 @@ const Dashboard = {
                         }
                     }
                 }
-            });
+            }
         }
     },
 
@@ -169,6 +345,7 @@ const Dashboard = {
         if (!data || data.length === 0) return -1;
 
         const MIN_X_DISTANCE = 40;
+        const MIN_Y_DISTANCE = (this.state.settings?.chartIconSize || 64) + 20;  // 아이콘 크기 + 여유 공간
         const EDGE_BUFFER = 1;
 
         const separationScores = data.map((value, i) => {
@@ -191,10 +368,26 @@ const Dashboard = {
             const point = meta.data[i];
             if (!point) continue;
 
-            const hasOverlap = existingPositions.some(pos =>
-                Math.abs(pos.x - point.x) < MIN_X_DISTANCE
-            );
-            if (hasOverlap) continue;
+            // X좌표 겹침 체크 (Y좌표 차이가 충분하면 허용)
+            let xOverlapPenalty = 0;
+            let hasBlockingOverlap = false;
+
+            existingPositions.forEach(pos => {
+                const xDist = Math.abs(pos.x - point.x);
+                const yDist = Math.abs(pos.y - point.y);
+
+                if (xDist < MIN_X_DISTANCE) {
+                    if (yDist < MIN_Y_DISTANCE) {
+                        // Y좌표도 가까우면 완전 차단
+                        hasBlockingOverlap = true;
+                    } else {
+                        // Y좌표가 멀면 페널티만 부여
+                        xOverlapPenalty += 50 * (1 - xDist / MIN_X_DISTANCE);
+                    }
+                }
+            });
+
+            if (hasBlockingOverlap) continue;
 
             let score = 0;
             score += separationScores[i] * 100;
@@ -202,13 +395,27 @@ const Dashboard = {
             const centerDist = Math.abs(i - data.length / 2);
             score += (data.length - centerDist) * 5;
 
-            let minDist = Infinity;
+            // X좌표 거리 보너스
+            let minXDist = Infinity;
+            existingPositions.forEach(pos => {
+                const xDist = Math.abs(pos.x - point.x);
+                minXDist = Math.min(minXDist, xDist);
+            });
+            if (minXDist !== Infinity) {
+                score += Math.min(minXDist, 100) * 2;  // X좌표 겹침 최소화 보너스
+            }
+
+            // 인덱스 거리 보너스
+            let minIdxDist = Infinity;
             existingPositions.forEach(pos => {
                 if (pos.idx !== undefined) {
-                    minDist = Math.min(minDist, Math.abs(pos.idx - i));
+                    minIdxDist = Math.min(minIdxDist, Math.abs(pos.idx - i));
                 }
             });
-            if (minDist !== Infinity) score += minDist * 3;
+            if (minIdxDist !== Infinity) score += minIdxDist * 3;
+
+            // X좌표 겹침 페널티 적용
+            score -= xOverlapPenalty;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -255,21 +462,20 @@ const Dashboard = {
         document.querySelectorAll('#toolbarOptions .setting-btn').forEach(b => {
             b.classList.toggle('active', b.dataset.value === s.toolbar);
         });
-        document.querySelectorAll('#chartTypeOptions .setting-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.value === s.chartType);
-        });
-        document.querySelectorAll('#stackModeOptions .setting-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.value === s.stackMode);
-        });
-        document.querySelectorAll('#periodOptions .setting-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.value === s.period);
-        });
         document.querySelectorAll('#barIconSizeOptions .setting-btn').forEach(b => {
             b.classList.toggle('active', b.dataset.value === (s.barIconSizeMode || 'auto'));
         });
 
         document.getElementById('showUnregisteredToggle')?.classList.toggle('active', s.showUnregistered);
         document.getElementById('showChartIconsToggle')?.classList.toggle('active', s.showChartIcons !== false);
+
+        document.querySelectorAll('.period-toggle-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.period === s.period);
+        });
+
+        document.querySelectorAll('.stack-toggle-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.stack === s.stackMode);
+        });
 
         const iconSize = s.chartIconSize || 64;
         const isCustomSize = ![32, 64, 96, 128].includes(iconSize);
@@ -290,6 +496,7 @@ const Dashboard = {
         }
 
         this.updatePeriodLabel();
+        requestAnimationFrame(() => this.updateToggleIndicators());
     },
 
     updateTabIndicator() {
@@ -298,6 +505,24 @@ const Dashboard = {
         if (tab && ind) {
             ind.style.width = tab.offsetWidth + 'px';
             ind.style.left = tab.offsetLeft + 'px';
+        }
+    },
+
+    updateToggleIndicators() {
+        // 주간/월간 토글 인디케이터
+        const periodBtn = document.querySelector('.period-toggle-btn.active');
+        const periodInd = document.getElementById('periodToggleIndicator');
+        if (periodBtn && periodInd) {
+            periodInd.style.width = periodBtn.offsetWidth + 'px';
+            periodInd.style.left = periodBtn.offsetLeft + 'px';
+        }
+
+        // 누적/개별 토글 인디케이터
+        const stackBtn = document.querySelector('.stack-toggle-btn.active');
+        const stackInd = document.getElementById('stackToggleIndicator');
+        if (stackBtn && stackInd) {
+            stackInd.style.width = stackBtn.offsetWidth + 'px';
+            stackInd.style.left = stackBtn.offsetLeft + 'px';
         }
     },
 
@@ -348,6 +573,44 @@ const Dashboard = {
         }
     },
 
+    // === 전체 기간 Y축 최댓값 계산 ===
+    calculateGlobalMaxY(offsets) {
+        const stackMode = this.state.settings?.stackMode || 'stacked';
+        let maxY = 0;
+
+        // selectedGames가 비어있으면 모든 게임을 포함
+        const useAllGames = this.state.selectedGames.size === 0;
+
+        for (const o of offsets) {
+            const data = this.state.dataCache[o];
+            if (!data?.games || !data?.dates) continue;
+
+            const dateCount = data.dates.length;
+            for (let i = 0; i < dateCount; i++) {
+                if (stackMode === 'stacked') {
+                    // 누적 모드: 각 날짜별 모든 게임의 합계
+                    let sum = 0;
+                    Object.keys(data.games).forEach(name => {
+                        if (useAllGames || this.state.selectedGames.has(name)) {
+                            sum += (data.games[name].minutes[i] || 0) / 60;
+                        }
+                    });
+                    maxY = Math.max(maxY, sum);
+                } else {
+                    // 개별 모드: 각 게임별 최댓값
+                    Object.keys(data.games).forEach(name => {
+                        if (useAllGames || this.state.selectedGames.has(name)) {
+                            const value = (data.games[name].minutes[i] || 0) / 60;
+                            maxY = Math.max(maxY, value);
+                        }
+                    });
+                }
+            }
+        }
+
+        this.state.globalMaxY = maxY <= 0 ? 10 : Math.ceil(maxY * 1.1);  // 10% 여유 공간
+    },
+
     // === 데이터 로딩 (3기간 동시) ===
     async loadAllPeriodData() {
         const offset = this.state.currentPeriodOffset;
@@ -366,10 +629,16 @@ const Dashboard = {
 
         // 표시 중인 3기간의 모든 게임 이름 수집 → 전역 색상 할당
         const visibleGameNames = new Set();
-        this.state.games.forEach(g => visibleGameNames.add(g.name));
+        this.state.games.forEach(g => {
+            visibleGameNames.add(g.name);
+        });
         offsets.forEach(o => {
             const data = this.state.dataCache[o];
-            if (data?.games) Object.keys(data.games).forEach(n => visibleGameNames.add(n));
+            if (data?.games) {
+                Object.keys(data.games).forEach(n => {
+                    visibleGameNames.add(n);
+                });
+            }
         });
         this.assignColorsForGames([...visibleGameNames]);
 
@@ -391,8 +660,11 @@ const Dashboard = {
         // 현재 데이터 설정
         this.state.playtimeData = this.state.dataCache[offset];
 
-        // 3개 차트 모두 렌더링
-        this.renderAllCharts();
+        // 전체 기간의 Y축 최댓값 계산
+        this.calculateGlobalMaxY(offsets);
+
+        // 3개 차트 모두 렌더링 (네비게이션 중이면 애니메이션 비활성화)
+        this.renderAllCharts(!this.state.isNavigating);
         this.updateStats(this.state.dataCache[offset]);
         this.updatePeriodLabel();
 
@@ -430,10 +702,13 @@ const Dashboard = {
     },
 
     // === 차트 렌더링 ===
-    renderChartOnCanvas(canvasId, data) {
+    renderChartOnCanvas(canvasId, data, animate = true) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
+
+        // 중앙 차트만 X축 레이블 표시
+        const isMainChart = canvasId === 'playtimeChart';
 
         if (this.chartInstances[canvasId]) {
             this.chartInstances[canvasId].destroy();
@@ -444,9 +719,14 @@ const Dashboard = {
         const stackMode = this.state.settings?.stackMode || 'stacked';
 
         const datasets = [];
-        const gameNames = Object.keys(data?.games || {});
+        const gameNames = Object.keys(data?.games || {}).sort();
 
-        gameNames.forEach((name, idx) => {
+        // 선택된 게임만 필터링 (비어있으면 모든 게임)
+        const selectedGameNames = this.state.selectedGames.size === 0
+            ? gameNames
+            : gameNames.filter(name => this.state.selectedGames.has(name));
+
+        selectedGameNames.forEach((name, idx) => {
             const gdata = data.games[name];
             const color = this.getColorForGame(name);
 
@@ -461,14 +741,19 @@ const Dashboard = {
 
             datasets.push({
                 label: name,
-                data: gdata.minutes.map(m => m / 60),
+                data: gdata.minutes.map(m => {
+                    // null/undefined는 null로 (차트에 표시 안 함), 0은 0으로 표시
+                    if (m === null || m === undefined) return null;
+                    return m / 60;
+                }),
                 backgroundColor: bg,
                 borderColor: color,
                 borderWidth: 2,
                 fill: fillMode,
                 tension: 0.4,
                 pointRadius: chartType === 'line' ? 4 : 0,
-                pointBackgroundColor: color
+                pointBackgroundColor: color,
+                spanGaps: false  // 데이터 없는 구간은 선을 끊음
             });
         });
 
@@ -477,7 +762,8 @@ const Dashboard = {
         const gridColor = isDark ? '#333333' : '#e9ecef';
         const textColor = isDark ? '#adb5bd' : '#6c757d';
 
-        const labels = (data?.dates || []).map(d => {
+        const dates = data?.dates || [];
+        const labels = dates.map(d => {
             const p = d.split('-');
             return `${parseInt(p[1])}/${parseInt(p[2])}`;
         });
@@ -485,11 +771,14 @@ const Dashboard = {
         this.chartInstances[canvasId] = new Chart(ctx, {
             type: chartType,
             data: { labels, datasets },
-            plugins: [this.chartIconPlugin],
+            plugins: [this.maxValuePlugin, this.chartIconPlugin],
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false,
+                animation: animate ? {
+                    duration: 400,
+                    easing: 'easeInOutQuart'
+                } : false,
                 interaction: { intersect: false, mode: 'index' },
                 plugins: {
                     legend: { display: false },
@@ -501,14 +790,41 @@ const Dashboard = {
                 scales: {
                     x: {
                         stacked: stackMode === 'stacked',
-                        grid: { color: gridColor },
-                        ticks: { color: textColor, font: { size: 10 } }
+                        grid: {
+                            color: gridColor,
+                            drawBorder: false
+                        },
+                        ticks: {
+                            display: isMainChart,
+                            color: (context) => {
+                                const index = context.index;
+                                if (index >= 0 && index < dates.length) {
+                                    return this.getDateLabelColor(dates[index], isDark);
+                                }
+                                return textColor;
+                            },
+                            font: { size: 10 }
+                        }
                     },
                     y: {
                         stacked: stackMode === 'stacked',
                         beginAtZero: true,
-                        grid: { color: gridColor },
-                        ticks: { color: textColor, callback: v => v + 'h' }
+                        max: this.state.globalMaxY > 0 ? this.state.globalMaxY : undefined,
+                        grid: {
+                            color: gridColor,
+                            drawBorder: false
+                        },
+                        ticks: {
+                            display: false  // Y축 레이블 숨김
+                        }
+                    }
+                },
+                layout: {
+                    padding: {
+                        left: 0,
+                        right: 0,
+                        top: this.state.settings?.showChartIcons ? (this.state.settings.chartIconSize || 64) + 20 : 20,
+                        bottom: isMainChart ? 0 : 0
                     }
                 }
             }
@@ -520,12 +836,61 @@ const Dashboard = {
         if (!legendEl) return;
         legendEl.innerHTML = '';
 
-        const gameNames = Object.keys(data?.games || {});
+        const gameNames = Object.keys(data?.games || {}).sort();
+
+        // 최초 1회만 전체 선택 초기화
+        if (!this.state.selectedGamesInitialized) {
+            gameNames.forEach(name => {
+                this.state.selectedGames.add(name);
+            });
+            this.state.selectedGamesInitialized = true;
+        }
+
         gameNames.forEach(name => {
             const color = this.getColorForGame(name);
+            const isSelected = this.state.selectedGames.has(name);
 
             const item = document.createElement('div');
             item.className = 'legend-item';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'legend-checkbox';
+            checkbox.checked = isSelected;
+
+            const refreshBySelection = () => {
+                const offset = this.state.currentPeriodOffset;
+                this.calculateGlobalMaxY([offset - 1, offset, offset + 1]);
+                this.renderAllCharts(false);
+            };
+
+            const toggleSelection = () => {
+                if (checkbox.checked) {
+                    checkbox.checked = false;
+                    this.state.selectedGames.delete(name);
+                } else {
+                    checkbox.checked = true;
+                    this.state.selectedGames.add(name);
+                }
+                refreshBySelection();
+            };
+
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                if (checkbox.checked) {
+                    this.state.selectedGames.add(name);
+                } else {
+                    this.state.selectedGames.delete(name);
+                }
+                refreshBySelection();
+            });
+
+            // 항목 전체 클릭 시 토글
+            item.addEventListener('click', (e) => {
+                if (e.target !== checkbox) {
+                    toggleSelection();
+                }
+            });
 
             const colorDot = document.createElement('div');
             colorDot.className = 'legend-color';
@@ -551,6 +916,7 @@ const Dashboard = {
             const nameSpan = document.createElement('span');
             nameSpan.textContent = name;
 
+            item.appendChild(checkbox);
             item.appendChild(colorDot);
             item.appendChild(iconContainer);
             item.appendChild(nameSpan);
@@ -558,12 +924,30 @@ const Dashboard = {
         });
     },
 
-    renderAllCharts() {
+    updateYAxis() {
+        const yAxisEl = document.getElementById('chartYAxis');
+        if (!yAxisEl) return;
+
+        yAxisEl.innerHTML = '';
+        const maxY = this.state.globalMaxY || 10;
+        const steps = 5;
+
+        for (let i = steps; i >= 0; i--) {
+            const value = (maxY / steps * i).toFixed(0);
+            const label = document.createElement('div');
+            label.textContent = `${value}h`;
+            label.style.lineHeight = '1';
+            yAxisEl.appendChild(label);
+        }
+    },
+
+    renderAllCharts(animate = true) {
         const offset = this.state.currentPeriodOffset;
-        this.renderChartOnCanvas('prevChart', this.state.dataCache[offset - 1]);
-        this.renderChartOnCanvas('playtimeChart', this.state.dataCache[offset]);
-        this.renderChartOnCanvas('nextChart', this.state.dataCache[offset + 1]);
+        this.renderChartOnCanvas('prevChart', this.state.dataCache[offset - 1], animate);
+        this.renderChartOnCanvas('playtimeChart', this.state.dataCache[offset], animate);
+        this.renderChartOnCanvas('nextChart', this.state.dataCache[offset + 1], animate);
         this.updateLegend(this.state.dataCache[offset]);
+        this.updateYAxis();
     },
 
     // === 스와이프 네비게이션 (3패널 슬라이더) ===
@@ -584,7 +968,7 @@ const Dashboard = {
 
         chartCard.addEventListener('pointerdown', (e) => {
             if (this.state.isNavigating) return;
-            if (e.target.closest('.chart-legend') || e.target.closest('.card-header')) return;
+            if (e.target.closest('.chart-controls') || e.target.closest('.card-header') || e.target.closest('.chart-period-toggle')) return;
             isDragging = true;
             isSwipe = false;
             startX = e.clientX;
@@ -700,25 +1084,15 @@ const Dashboard = {
         // 설정 옵션들
         const settingHandlers = [
             { id: 'themeOptions', key: 'theme', action: 'none' },
-            { id: 'toolbarOptions', key: 'toolbar', action: 'none' },
-            { id: 'chartTypeOptions', key: 'chartType', action: 'rerender' },
-            { id: 'stackModeOptions', key: 'stackMode', action: 'rerender' },
-            { id: 'periodOptions', key: 'period', action: 'reload', resetOffset: true }
+            { id: 'toolbarOptions', key: 'toolbar', action: 'none' }
         ];
 
-        settingHandlers.forEach(({ id, key, action, resetOffset }) => {
+        settingHandlers.forEach(({ id, key }) => {
             document.querySelectorAll(`#${id} .setting-btn`).forEach(btn => {
                 btn.addEventListener('click', () => {
                     this.state.settings[key] = btn.dataset.value;
-                    if (resetOffset) this.state.currentPeriodOffset = 0;
                     this.applySettings();
                     this.saveSettings();
-                    if (action === 'reload') {
-                        this.state.dataCache = {};
-                        this.loadAllPeriodData();
-                    } else if (action === 'rerender') {
-                        this.renderAllCharts();
-                    }
                 });
             });
         });
@@ -777,12 +1151,54 @@ const Dashboard = {
             });
         });
 
+        // 차트 기간 토글
+        document.querySelectorAll('.period-toggle-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const newPeriod = btn.dataset.period;
+                if (this.state.settings.period === newPeriod) return;
+
+                document.querySelectorAll('.period-toggle-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.period === newPeriod);
+                });
+
+                this.updateToggleIndicators();
+
+                this.state.settings.period = newPeriod;
+                this.state.currentPeriodOffset = 0;
+                this.saveSettings();
+                this.state.dataCache = {};
+                this.loadAllPeriodData();
+            });
+        });
+
+        // 차트 누적/개별 토글
+        document.querySelectorAll('.stack-toggle-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const newStack = btn.dataset.stack;
+                if (this.state.settings.stackMode === newStack) return;
+
+                document.querySelectorAll('.stack-toggle-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.stack === newStack);
+                });
+
+                this.updateToggleIndicators();
+
+                this.state.settings.stackMode = newStack;
+                this.saveSettings();
+                const offset = this.state.currentPeriodOffset;
+                this.calculateGlobalMaxY([offset - 1, offset, offset + 1]);
+                this.renderAllCharts(false);
+            });
+        });
+
         window.addEventListener('resize', () => {
             this.updateTabIndicator();
+            this.updateToggleIndicators();
         });
     }
 };
 
 // 플러그인 등록 및 초기화
+Chart.register(Dashboard.maxValuePlugin);
 Chart.register(Dashboard.chartIconPlugin);
 Dashboard.init();

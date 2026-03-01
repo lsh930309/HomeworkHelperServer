@@ -76,8 +76,17 @@ android/.cxx/
 *.temp
 
 # ===========================
+# 코드 서명 인증서
+# ===========================
+certs/*.pfx
+certs/*.cer
+certs/.password
+certs/.thumbprint
+
+# ===========================
 # Claude Code
 # ===========================
 # 프로젝트 공통 설정은 Git에 포함 (.claude/settings.json)
 # 개인별 로컬 설정만 제외 (.claude/settings.local.json)
 .claude/
+.omc/

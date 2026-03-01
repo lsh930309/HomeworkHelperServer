@@ -3,7 +3,12 @@
 
 import sys
 import os
+import subprocess
 import ctypes
+
+# 설치 시 등록되는 예약 작업 이름 (installer.iss와 반드시 일치해야 함)
+_ADMIN_TASK_NAME = "HomeworkHelper_Admin"
+_NORMAL_TASK_NAME = "HomeworkHelper_Normal"
 
 
 def is_admin():
@@ -18,62 +23,113 @@ def is_admin():
 
 
 def run_as_admin():
-    """현재 스크립트를 관리자 권한으로 재시작합니다."""
+    """관리자 권한으로 재시작합니다.
+
+    설치 시 등록된 예약 작업(HomeworkHelper_Admin)을 통해 UAC 프롬프트 없이
+    관리자 권한으로 재시작합니다.
+    예약 작업이 없는 경우(개발 환경 등) ShellExecuteW 방식으로 fallback합니다.
+    """
     if not os.name == 'nt':
         return False
 
     try:
-        if getattr(sys, 'frozen', False):
-            # PyInstaller로 패키징된 경우
-            script = sys.executable
-        else:
-            # 일반 파이썬 스크립트인 경우
-            script = sys.argv[0]
-
-        # 명령줄 인수를 문자열로 결합 (sys.argv[1:]부터 전달)
-        params = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in sys.argv[1:])
-
-        # ShellExecuteW를 사용하여 관리자 권한으로 재시작
-        shell32 = ctypes.windll.shell32
-        ret = shell32.ShellExecuteW(None, "runas", script, params if params else None, None, 1)
-
-        if ret > 32:
-            print("관리자 권한으로 재시작을 요청했습니다.")
+        result = subprocess.run(
+            ['schtasks', '/run', '/tn', _ADMIN_TASK_NAME],
+            capture_output=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            print(f"예약 작업 '{_ADMIN_TASK_NAME}'을 통해 관리자 권한으로 재시작 요청됨.")
             return True
         else:
-            print(f"관리자 권한으로 재시작 요청 실패. 오류 코드: {ret}")
+            stderr = result.stderr.decode('utf-8', errors='replace').strip()
+            print(f"예약 작업 실행 실패 (code={result.returncode}): {stderr}")
+            print("ShellExecuteW fallback으로 전환합니다...")
+            return _run_as_admin_shellexecute()
+    except Exception as e:
+        print(f"예약 작업 실행 오류: {e}, ShellExecuteW fallback으로 전환합니다...")
+        return _run_as_admin_shellexecute()
+
+
+def _run_as_admin_shellexecute():
+    """예약 작업이 없을 때 ShellExecuteW('runas') 방식으로 fallback합니다.
+
+    개발 환경 또는 인스톨러 없이 실행할 때 사용됩니다.
+    이 경우 UAC 프롬프트가 표시됩니다.
+    """
+    try:
+        if getattr(sys, 'frozen', False):
+            script = sys.executable
+        else:
+            script = sys.argv[0]
+
+        params = subprocess.list2cmdline(sys.argv[1:])
+
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", script, params if params else None, None, 1
+        )
+        if ret > 32:
+            print("ShellExecuteW fallback: 관리자 권한 재시작 요청됨.")
+            return True
+        else:
+            print(f"ShellExecuteW fallback 실패. 오류 코드: {ret}")
             return False
     except Exception as e:
-        print(f"관리자 권한으로 재시작 중 오류 발생: {e}")
+        print(f"ShellExecuteW fallback 오류: {e}")
         return False
 
 
 def restart_as_normal():
-    """현재 스크립트를 일반 권한으로 재시작합니다 (관리자→일반 전환용)."""
+    """일반 권한으로 재시작합니다 (관리자 → 일반 전환용).
+
+    설치 시 등록된 예약 작업(HomeworkHelper_Normal)을 통해 재시작합니다.
+    Task Scheduler는 작업 소유자의 기본(비상승) 토큰으로 프로세스를 시작하므로
+    관리자 → 일반 권한 전환이 정확하게 이루어집니다.
+    예약 작업이 없는 경우 subprocess 방식으로 fallback합니다.
+    """
     if not os.name == 'nt':
         return False
 
     try:
-        import subprocess
-        
-        if getattr(sys, 'frozen', False):
-            # PyInstaller로 패키징된 경우
-            script = sys.executable
-            args = [script] + sys.argv[1:]
+        result = subprocess.run(
+            ['schtasks', '/run', '/tn', _NORMAL_TASK_NAME],
+            capture_output=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            print(f"예약 작업 '{_NORMAL_TASK_NAME}'을 통해 일반 권한으로 재시작 요청됨.")
+            return True
         else:
-            # 일반 파이썬 스크립트인 경우
-            script = sys.executable
-            args = [script, sys.argv[0]] + sys.argv[1:]
+            stderr = result.stderr.decode('utf-8', errors='replace').strip()
+            print(f"예약 작업 실행 실패 (code={result.returncode}): {stderr}")
+            print("subprocess fallback으로 전환합니다...")
+            return _restart_as_normal_subprocess()
+    except Exception as e:
+        print(f"예약 작업 실행 오류: {e}, subprocess fallback으로 전환합니다...")
+        return _restart_as_normal_subprocess()
 
-        # 새 프로세스를 일반 권한으로 시작 (현재 프로세스와 분리)
+
+def _restart_as_normal_subprocess():
+    """예약 작업이 없을 때 subprocess 방식으로 fallback합니다.
+
+    개발 환경 또는 인스톨러 없이 실행할 때 사용됩니다.
+    주의: 이 방식은 부모 프로세스의 토큰을 상속하므로
+    관리자 권한으로 실행 중일 경우 자식 프로세스도 관리자 권한을 가질 수 있습니다.
+    """
+    try:
+        if getattr(sys, 'frozen', False):
+            args = [sys.executable, *sys.argv[1:]]
+        else:
+            args = [sys.executable, sys.argv[0], *sys.argv[1:]]
+
         subprocess.Popen(
             args,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         )
-        print("일반 권한으로 재시작을 요청했습니다.")
+        print("subprocess fallback: 일반 권한 재시작 요청됨.")
         return True
     except Exception as e:
-        print(f"일반 권한으로 재시작 중 오류 발생: {e}")
+        print(f"subprocess fallback 오류: {e}")
         return False
 
 
@@ -104,13 +160,12 @@ def check_admin_requirement():
         if os.path.exists(db_path):
             # SQLite 데이터베이스에서 직접 설정 읽기
             import sqlite3
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # global_settings 테이블에서 run_as_admin 값 가져오기 (id=1인 행)
-            cursor.execute("SELECT run_as_admin FROM global_settings WHERE id = 1")
-            result = cursor.fetchone()
-            conn.close()
+                # global_settings 테이블에서 run_as_admin 값 가져오기 (id=1인 행)
+                cursor.execute("SELECT run_as_admin FROM global_settings WHERE id = 1")
+                result = cursor.fetchone()
 
             if result:
                 run_as_admin_setting = bool(result[0])

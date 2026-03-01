@@ -74,6 +74,72 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; 필요 시 사용자에게 안내 메시지만 표시
 
 [Code]
+// ============================================================
+// 예약 작업 등록/해제 (관리자 권한 재시작 기능용)
+// admin.py의 _ADMIN_TASK_NAME, _NORMAL_TASK_NAME과 반드시 일치해야 함
+// ============================================================
+
+procedure RegisterScheduledTasks();
+var
+  AppExe, ScriptPath, Script: String;
+  ResultCode: Integer;
+begin
+  AppExe := ExpandConstant('{app}\homework_helper.exe');
+  ScriptPath := ExpandConstant('{tmp}\hh_register_tasks.ps1');
+
+  // PowerShell 스크립트를 임시 파일로 작성 후 실행
+  // (경로에 공백이 있어도 안전하게 처리)
+  Script :=
+    '$exe = ''' + AppExe + '''' + #13#10 +
+    '$action  = New-ScheduledTaskAction -Execute $exe' + #13#10 +
+    '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries' + #13#10 +
+    '$user = $env:USERNAME' + #13#10 +
+    '# 관리자 권한 작업 (UAC 없이 highest privilege로 실행)' + #13#10 +
+    '$pa = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest' + #13#10 +
+    'Register-ScheduledTask -TaskName "HomeworkHelper_Admin" -Action $action -Principal $pa -Settings $settings -Force | Out-Null' + #13#10 +
+    '# 일반 권한 작업 (관리자 → 일반 전환용, 표준 토큰으로 실행)' + #13#10 +
+    '$pn = New-ScheduledTaskPrincipal -UserId $user -RunLevel Limited' + #13#10 +
+    'Register-ScheduledTask -TaskName "HomeworkHelper_Normal" -Action $action -Principal $pn -Settings $settings -Force | Out-Null';
+
+  SaveStringToFile(ScriptPath, Script, False);
+
+  Exec('powershell.exe',
+    '-NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if ResultCode = 0 then
+    Log('예약 작업 등록 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
+  else
+    Log('예약 작업 등록 실패. ResultCode=' + IntToStr(ResultCode));
+end;
+
+procedure DeleteScheduledTasks();
+var
+  RC1, RC2: Integer;
+begin
+  Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Admin" /f',
+    '', SW_HIDE, ewWaitUntilTerminated, RC1);
+  Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Normal" /f',
+    '', SW_HIDE, ewWaitUntilTerminated, RC2);
+  if (RC1 = 0) and (RC2 = 0) then
+    Log('예약 작업 삭제 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
+  else
+    Log('예약 작업 삭제 일부 실패. RC1=' + IntToStr(RC1) + ', RC2=' + IntToStr(RC2));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RegisterScheduledTasks();
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    DeleteScheduledTasks();
+end;
+
+// ============================================================
 // 실행 중인 프로세스 확인 함수
 function IsProcessRunning(ProcessName: String): Boolean;
 var

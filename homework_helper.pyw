@@ -167,7 +167,7 @@ def is_server_running() -> bool:
         import win32api
         import winerror
 
-        mutex_name = "Global\\HomeworkHelperDBServerMutex"
+        mutex_name = "Local\\HomeworkHelperDBServerMutex"
 
         # 뮤텍스 열기 시도 (이미 존재하면 서버 실행 중)
         try:
@@ -311,7 +311,7 @@ def run_server_main():
         try:
             import win32event
             import win32api
-            mutex_name = "Global\\HomeworkHelperDBServerMutex"
+            mutex_name = "Local\\HomeworkHelperDBServerMutex"
             server_mutex = win32event.CreateMutex(None, False, mutex_name)
             if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
                 logger.error("서버가 이미 실행 중입니다! 중복 실행 불가.")
@@ -334,7 +334,10 @@ def run_server_main():
     from fastapi import FastAPI, Depends, HTTPException
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas
-    from src.data.database import SessionLocal, engine, auto_migrate_database
+    from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
+
+    # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
+    backup_database()
 
     # 자동 마이그레이션 실행 (새 컬럼 추가)
     auto_migrate_database()
@@ -427,24 +430,6 @@ def run_server_main():
         signal.signal(signal.SIGTERM, shutdown_handler)
         signal.signal(signal.SIGBREAK, shutdown_handler)
         logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
-
-        # SetConsoleCtrlHandler로 시스템 종료 이벤트 처리
-        try:
-            import win32api
-            def console_ctrl_handler(ctrl_type):
-                """Windows 콘솔 제어 이벤트 처리"""
-                if ctrl_type in (win32api.CTRL_C_EVENT, win32api.CTRL_BREAK_EVENT,
-                                win32api.CTRL_CLOSE_EVENT, win32api.CTRL_LOGOFF_EVENT,
-                                win32api.CTRL_SHUTDOWN_EVENT):
-                    logger.info(f"Windows 시스템 종료 이벤트 감지 (Type: {ctrl_type})")
-                    shutdown_handler(ctrl_type, None)
-                    return True
-                return False
-
-            win32api.SetConsoleCtrlHandler(console_ctrl_handler, True)
-            logger.info("Windows 시스템 종료 이벤트 핸들러 등록 완료")
-        except ImportError:
-            logger.warning("pywin32 없음: 시스템 종료 이벤트 처리 불가 (signal만 사용)")
 
     app = FastAPI()
 

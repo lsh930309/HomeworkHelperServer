@@ -17,9 +17,9 @@
     --bg-card: #1a1a1a;
     --text-primary: #e9ecef;
     --text-secondary: #adb5bd;
-    --border-color: #333333;
-    --accent: #adb5bd;
-    --accent-light: #ced4da;
+    --border-color: #333;
+    --accent: #5a6268;
+    --accent-light: #6c757d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,9 +29,9 @@
         --bg-card: #1a1a1a;
         --text-primary: #e9ecef;
         --text-secondary: #adb5bd;
-        --border-color: #333333;
-        --accent: #adb5bd;
-        --accent-light: #ced4da;
+        --border-color: #333;
+        --accent: #5a6268;
+        --accent-light: #6c757d;
     }
 }
 
@@ -211,7 +211,84 @@ body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px soli
 .stat-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
 
 /* === 차트 === */
-.chart-container { position: relative; flex: 1; min-height: 220px; overflow: hidden; }
+.chart-wrapper {
+    display: flex;
+    flex: 1;
+    min-height: 220px;
+    position: relative;
+}
+
+.chart-y-axis {
+    width: 40px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10px 0;
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-align: right;
+    padding-right: 8px;
+    position: relative;
+    z-index: 1;
+}
+
+.chart-container {
+    position: relative;
+    flex: 1;
+    min-height: 220px;
+    overflow: hidden;
+}
+
+.chart-period-toggle {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin-top: 8px;
+    padding: 4px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    width: fit-content;
+    margin-left: auto;
+    margin-right: auto;
+    position: relative;
+}
+
+.chart-period-toggle .toggle-indicator,
+.chart-stack-toggle .toggle-indicator {
+    position: absolute;
+    height: calc(100% - 8px);
+    background: var(--accent);
+    border-radius: 6px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 0;
+}
+
+.period-toggle-btn,
+.stack-toggle-btn {
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: color 0.2s;
+    position: relative;
+    z-index: 1;
+}
+
+.period-toggle-btn:hover,
+.stack-toggle-btn:hover {
+    color: var(--text-primary);
+}
+
+.period-toggle-btn.active,
+.stack-toggle-btn.active {
+    color: white;
+}
 
 .chart-slider {
     display: flex;
@@ -230,7 +307,34 @@ body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px soli
     position: relative;
 }
 
-.chart-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-panel canvas {
+    display: block;
+}
+
+.chart-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.chart-legend {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.chart-stack-toggle {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-secondary);
+    padding: 4px;
+    border-radius: 8px;
+    position: relative;
+}
 
 .legend-item {
     display: flex;
@@ -240,6 +344,15 @@ body[data-toolbar="bottom"] .toolbar { border-bottom: none; border-top: 1px soli
     background: var(--bg-secondary);
     border-radius: 6px;
     font-size: 0.75rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.legend-checkbox {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: var(--accent);
 }
 
 .legend-color {
