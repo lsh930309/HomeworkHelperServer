@@ -140,12 +140,16 @@ class MainWindow(QMainWindow):
         self._create_menu_bar() # 메뉴 바 생성
         # 저장된 테마 적용
         self._apply_theme(getattr(self.data_manager.global_settings, 'theme', 'system'))
+        # 항상 위 설정 초기 적용 (앱 재시작 후에도 유지)
+        self._load_always_on_top_setting()
 
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
 
         # 볼륨 패널 상태
         self._volume_applied_process_ids: set = set()  # 볼륨 자동 적용 완료된 process_id 집합
-        self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(self.data_manager)
+        self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(
+            self.data_manager, on_hide=self._on_volume_panel_hidden
+        )
 
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
@@ -1680,6 +1684,11 @@ class MainWindow(QMainWindow):
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
             # self._volume_btn.setText("🔇")
+
+    def _on_volume_panel_hidden(self):
+        """볼륨 패널이 숨겨질 때 (외부 클릭 포함) 토글 버튼 상태를 초기화합니다."""
+        self._volume_btn.setChecked(False)
+        self._volume_btn.setText("🔊")
 
     def _get_active_pid(self, process_id: str) -> Optional[int]:
         """process_id에 대해 현재 활성 PID를 반환합니다. 실행 중이 아니면 None."""

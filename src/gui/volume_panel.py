@@ -86,9 +86,10 @@ def _system_icon(pixmap_enum) -> QIcon:
 class VolumePopoverPanel(QWidget):
     """실행 중인 게임의 볼륨을 조절하는 팝오버 패널."""
 
-    def __init__(self, data_manager, parent=None):
+    def __init__(self, data_manager, parent=None, on_hide=None):
         """팝오버 패널을 초기화합니다."""
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self._on_hide_callback = on_hide
         self.setAutoFillBackground(True)
         # 외곽선 강화 + 모서리 처리
         self.setStyleSheet("""
@@ -280,6 +281,12 @@ class VolumePopoverPanel(QWidget):
     def _save_volume_to_db(self, process: ManagedProcess):
         """프로세스의 볼륨 설정을 워커 스레드에서 DB에 저장."""
         self._save_pool.start(_VolumeSaveRunnable(self._data_manager, process))
+
+    def hideEvent(self, event):
+        """패널이 숨겨질 때 (외부 클릭 포함) 콜백을 호출합니다."""
+        super().hideEvent(event)
+        if self._on_hide_callback is not None:
+            self._on_hide_callback()
 
     def show_below(self, anchor: QWidget):
         """anchor 위젯의 바로 아래 오른쪽 정렬로 팝오버를 표시합니다."""

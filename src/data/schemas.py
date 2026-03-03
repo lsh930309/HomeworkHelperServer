@@ -80,6 +80,9 @@ class GlobalSettingsSchema(BaseModel):
     # 스태미나 알림 설정
     stamina_notify_enabled: bool = True
     stamina_notify_threshold: int = 20
+    # 테마 / 게임 모드
+    theme: str = "system"
+    hide_on_game: bool = True
 
 
 class ProcessSessionCreate(BaseModel):

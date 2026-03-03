@@ -97,6 +97,9 @@ def auto_migrate_database():
         ("process_sessions", "stamina_at_end", "INTEGER", None),
         # Process 테이블 - 앱 볼륨 제어
         ("managed_processes", "default_volume", "INTEGER", None),
+        # GlobalSettings 테이블 - 테마 / 게임 모드
+        ("global_settings", "theme", "TEXT", "'system'"),
+        ("global_settings", "hide_on_game", "INTEGER", "1"),
     ]
     
     try:

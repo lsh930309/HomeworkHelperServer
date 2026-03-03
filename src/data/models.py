@@ -70,6 +70,9 @@ class GlobalSettings(Base):
     # 스태미나 알림 설정 (호요버스 게임)
     stamina_notify_enabled = Column(Boolean, default=True)
     stamina_notify_threshold = Column(Integer, default=20)  # 최대 - N 이상일 때 알림
+    # 테마 / 게임 모드
+    theme = Column(String, default="system")  # "system" | "light" | "dark"
+    hide_on_game = Column(Boolean, default=True)
 
 
 class ProcessSession(Base):
