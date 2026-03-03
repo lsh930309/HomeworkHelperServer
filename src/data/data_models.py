@@ -144,7 +144,11 @@ class GlobalSettings:
                  notify_on_daily_reset: bool = True,
                  # 스태미나 알림 설정 (호요버스 게임)
                  stamina_notify_enabled: bool = True,
-                 stamina_notify_threshold: int = 20):  # 최대 - N 이상일 때 알림
+                 stamina_notify_threshold: int = 20,  # 최대 - N 이상일 때 알림
+                 # 테마 설정
+                 theme: str = "system",  # "system" | "light" | "dark"
+                 # 게임 실행 시 창 숨기기
+                 hide_on_game: bool = True):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -163,6 +167,9 @@ class GlobalSettings:
         # 스태미나 알림 설정
         self.stamina_notify_enabled = stamina_notify_enabled
         self.stamina_notify_threshold = stamina_notify_threshold
+        # 테마 / 게임 모드
+        self.theme = theme
+        self.hide_on_game = hide_on_game
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -201,6 +208,11 @@ class GlobalSettings:
             data['stamina_notify_enabled'] = True
         if 'stamina_notify_threshold' not in data:
             data['stamina_notify_threshold'] = 20
+        # 테마 / 게임 모드 하위 호환성
+        if 'theme' not in data:
+            data['theme'] = 'system'
+        if 'hide_on_game' not in data:
+            data['hide_on_game'] = True
         return cls(**data)
     
 class WebShortcut:

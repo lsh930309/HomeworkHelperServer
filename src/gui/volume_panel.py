@@ -5,36 +5,38 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QColor
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
 
-# 무채색 모노톤 슬라이더 스타일
+# 슬라이더 스타일 (palette 기반으로 테마 자동 대응)
 _SLIDER_STYLE = """
 QSlider::groove:horizontal {
-    height: 4px;
-    background: #aaaaaa;
+    height: 5px;
+    background: palette(midlight);
     border-radius: 2px;
 }
 QSlider::sub-page:horizontal {
-    background: #606060;
+    background: palette(highlight);
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
-    background: #505050;
-    border: 1px solid #404040;
+    background: palette(light);
+    border: 2px solid palette(highlight);
     width: 14px;
     height: 14px;
     border-radius: 7px;
     margin: -5px 0;
 }
 QSlider::handle:horizontal:hover {
-    background: #404040;
+    background: palette(highlight);
+    border-color: palette(highlight);
 }
 """
 
@@ -72,14 +74,20 @@ class VolumePopoverPanel(QWidget):
         """팝오버 패널을 초기화합니다."""
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAutoFillBackground(True)
-        # 일반 창 느낌의 외곽선 + 모서리 처리
+        # 외곽선 강화 + 모서리 처리
         self.setStyleSheet("""
             VolumePopoverPanel {
-                border: 1px solid palette(mid);
-                border-radius: 6px;
+                border: 2px solid palette(shadow);
+                border-radius: 8px;
                 background-color: palette(window);
             }
         """)
+        # 드롭 섀도우로 메인 GUI와 시각적 분리
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(16)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        self.setGraphicsEffect(shadow)
         self._data_manager = data_manager
         self._volume_save_timers: dict = {}
         self._setup_ui()
@@ -236,23 +244,27 @@ class VolumePopoverPanel(QWidget):
     def _schedule_volume_save(self, process: ManagedProcess):
         """볼륨 변경 후 500ms 디바운스로 DB 저장 예약."""
         existing = self._volume_save_timers.get(process.id)
-        if existing is not None:
-            existing.stop()
-            existing.start(500)
+        if existing is None:
+            existing = QTimer(self)
+            existing.setSingleShot(True)
+            self._volume_save_timers[process.id] = existing
         else:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(lambda p=process: self._save_volume_to_db(p))
-            timer.start(500)
-            self._volume_save_timers[process.id] = timer
+            existing.stop()
+            try:
+                existing.timeout.disconnect()
+            except TypeError:
+                pass
+
+        existing.timeout.connect(lambda p=process: self._save_volume_to_db(p))
+        existing.start(500)
 
     def _save_volume_to_db(self, process: ManagedProcess):
         """프로세스의 볼륨 설정을 DB에 저장."""
         try:
             self._data_manager.update_process(process)
             logger.debug("볼륨 저장: %s = %s", process.name, process.default_volume)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("볼륨 저장 실패: %s", e)
+        except Exception:  # noqa: BLE001
+            logger.exception("볼륨 저장 실패")
 
     def show_below(self, anchor: QWidget):
         """anchor 위젯의 바로 아래 오른쪽 정렬로 팝오버를 표시합니다."""

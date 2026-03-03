@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
-    QLabel, QProgressBar, QSlider
+    QLabel, QProgressBar, QSlider, QToolButton,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
@@ -138,6 +138,8 @@ class MainWindow(QMainWindow):
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
         self._create_menu_bar() # 메뉴 바 생성
+        # 저장된 테마 적용
+        self._apply_theme(getattr(self.data_manager.global_settings, 'theme', 'system'))
 
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
 
@@ -468,25 +470,45 @@ class MainWindow(QMainWindow):
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
 
-        # 메뉴바 오른쪽 끝에 볼륨 토글 버튼 배치 (배경 없는 심플 아이콘 버튼)
-        from PyQt6.QtWidgets import QToolButton
+        # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
         self._volume_btn.setText("🔊")
         self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
         self._volume_btn.setCheckable(True)
         self._volume_btn.clicked.connect(self._toggle_volume_panel)
-        # 배경·테두리 제거, 우측 마진 추가
         self._volume_btn.setStyleSheet("""
             QToolButton {
-                border: none;
+                border: 1px solid transparent;
+                border-radius: 4px;
                 background: transparent;
-                padding: 2px 8px 2px 2px;
+                padding: 2px 6px;
             }
-            QToolButton:hover { background: transparent; }
-            QToolButton:checked { background: transparent; }
-            QToolButton:pressed { background: transparent; }
+            QToolButton:hover {
+                background: palette(midlight);
+                border-color: palette(mid);
+            }
+            QToolButton:checked {
+                background: palette(highlight);
+                color: palette(highlighted-text);
+                border-color: palette(highlight);
+            }
+            QToolButton:pressed {
+                background: palette(dark);
+            }
         """)
-        mb.setCornerWidget(self._volume_btn, Qt.Corner.TopRightCorner)
+
+        self._always_on_top_cb = QCheckBox("항상 위")
+        self._always_on_top_cb.setToolTip("창을 항상 위에 표시")
+        self._always_on_top_cb.setChecked(self.data_manager.global_settings.always_on_top)
+        self._always_on_top_cb.toggled.connect(self._on_always_on_top_toggled)
+
+        corner_container = QWidget()
+        corner_layout = QHBoxLayout(corner_container)
+        corner_layout.setContentsMargins(0, 0, 4, 0)
+        corner_layout.setSpacing(6)
+        corner_layout.addWidget(self._always_on_top_cb)
+        corner_layout.addWidget(self._volume_btn)
+        mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
 
         # 도구 메뉴
         tm = mb.addMenu("도구(&T)")
@@ -502,6 +524,56 @@ class MainWindow(QMainWindow):
             self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         else:
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
+        # 메뉴바 체크박스 상태 동기화 (시그널 루프 방지)
+        if hasattr(self, '_always_on_top_cb'):
+            self._always_on_top_cb.blockSignals(True)
+            self._always_on_top_cb.setChecked(always_on_top)
+            self._always_on_top_cb.blockSignals(False)
+
+    def _on_always_on_top_toggled(self, checked: bool):
+        """메뉴바 [항상 위] 체크박스 토글 시 즉시 적용 및 설정 저장."""
+        gs = self.data_manager.global_settings
+        gs.always_on_top = checked
+        self.data_manager.save_global_settings(gs)
+        self._load_always_on_top_setting()
+        self.show()
+
+    def _apply_theme(self, theme: str = "system"):
+        """테마를 적용합니다. theme: 'system' | 'light' | 'dark'"""
+        app = QApplication.instance()
+        if app is None:
+            return
+        if theme == "dark":
+            app.setStyle("Fusion")
+            palette = QPalette()
+            dark_base = QColor(42, 42, 42)
+            dark_window = QColor(53, 53, 53)
+            dark_text = QColor(220, 220, 220)
+            highlight = QColor(42, 130, 218)
+            palette.setColor(QPalette.ColorRole.Window, dark_window)
+            palette.setColor(QPalette.ColorRole.WindowText, dark_text)
+            palette.setColor(QPalette.ColorRole.Base, dark_base)
+            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(66, 66, 66))
+            palette.setColor(QPalette.ColorRole.ToolTipBase, dark_base)
+            palette.setColor(QPalette.ColorRole.ToolTipText, dark_text)
+            palette.setColor(QPalette.ColorRole.Text, dark_text)
+            palette.setColor(QPalette.ColorRole.Button, dark_window)
+            palette.setColor(QPalette.ColorRole.ButtonText, dark_text)
+            palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
+            palette.setColor(QPalette.ColorRole.Link, highlight)
+            palette.setColor(QPalette.ColorRole.Highlight, highlight)
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+            palette.setColor(QPalette.ColorRole.Mid, QColor(80, 80, 80))
+            palette.setColor(QPalette.ColorRole.Shadow, QColor(20, 20, 20))
+            palette.setColor(QPalette.ColorRole.Light, QColor(90, 90, 90))
+            palette.setColor(QPalette.ColorRole.Midlight, QColor(65, 65, 65))
+            app.setPalette(palette)
+        elif theme == "light":
+            app.setStyle("Fusion")
+            app.setPalette(app.style().standardPalette())
+        else:  # system
+            app.setStyle("")
+            app.setPalette(QPalette())
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
@@ -576,6 +648,8 @@ class MainWindow(QMainWindow):
 
             # '항상 위' 설정이 변경되었을 수 있으므로 즉시 적용
             self._load_always_on_top_setting()
+            # 테마 설정 즉시 적용
+            self._apply_theme(getattr(upd_gs, 'theme', 'system'))
             self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
 
             status_bar = self.statusBar()
@@ -627,6 +701,9 @@ class MainWindow(QMainWindow):
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
+        # 게임 감지 시 창 숨기기 기능이 비활성화된 경우 게임 모드 플래그만 갱신
+        hide_enabled = getattr(self.data_manager.global_settings, 'hide_on_game', True)
+
         # 현재 모니터링 중인 프로세스 중 '실행중' 상태인 것이 있는지 확인
         any_game_running = False
         for p in self.data_manager.managed_processes:
@@ -637,17 +714,19 @@ class MainWindow(QMainWindow):
         if any_game_running and not self._is_game_mode_active:
             # 게임이 실행되었고, 아직 게임 모드가 활성화되지 않았다면
             self._is_game_mode_active = True
-            self.tray_manager.handle_minimize_event() # 창을 트레이로 숨김
-            status_bar = self.statusBar()
-            if status_bar:
-                status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
+            if hide_enabled:
+                self.tray_manager.handle_minimize_event() # 창을 트레이로 숨김
+                status_bar = self.statusBar()
+                if status_bar:
+                    status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
-            self.activate_and_show() # 창을 다시 표시
-            status_bar = self.statusBar()
-            if status_bar:
-                status_bar.showMessage("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
+            if hide_enabled:
+                self.activate_and_show() # 창을 다시 표시
+                status_bar = self.statusBar()
+                if status_bar:
+                    status_bar.showMessage("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
 
     def run_scheduler_check(self):
         """스케줄러 검사를 실행하고 상태 변경이 있을 때만 테이블을 업데이트합니다."""
@@ -1500,7 +1579,7 @@ class MainWindow(QMainWindow):
         if web_button_count > 0:
             target_width = 400  # 웹 버튼이 있을 때의 고정 너비
         else:
-            target_width = 300  # 웹 버튼이 없을 때의 고정 너비 (최초 창 너비)
+            target_width = 470  # 웹 버튼이 없을 때의 고정 너비
         
         # 현재 너비가 목표 너비와 다르면 조절
         current_width = self.width()
@@ -1612,8 +1691,8 @@ class MainWindow(QMainWindow):
     def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
         if pid and getattr(process, 'default_volume', None) is not None and process.id not in self._volume_applied_process_ids:
-            audio_control.set_app_volume(pid, process.default_volume / 100.0)
-            self._volume_applied_process_ids.add(process.id)
+            if audio_control.set_app_volume(pid, process.default_volume / 100.0):
+                self._volume_applied_process_ids.add(process.id)
         elif not pid and process.id in self._volume_applied_process_ids:
             self._volume_applied_process_ids.discard(process.id)
 
