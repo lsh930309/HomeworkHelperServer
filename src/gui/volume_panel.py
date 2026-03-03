@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
     QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
 from PyQt6.QtGui import QIcon, QColor
 
 from src.data.data_models import ManagedProcess
@@ -56,6 +56,22 @@ QPushButton:hover {
     background: palette(midlight);
 }
 """
+
+
+class _VolumeSaveRunnable(QRunnable):
+    """볼륨 DB 저장을 워커 스레드에서 실행하는 Runnable."""
+
+    def __init__(self, data_manager, process: ManagedProcess):
+        super().__init__()
+        self._data_manager = data_manager
+        self._process = process
+
+    def run(self):
+        try:
+            self._data_manager.update_process(self._process)
+            logger.debug("볼륨 저장: %s = %s", self._process.name, self._process.default_volume)
+        except Exception:  # noqa: BLE001
+            logger.exception("볼륨 저장 실패")
 
 
 def _system_icon(pixmap_enum) -> QIcon:
@@ -259,12 +275,8 @@ class VolumePopoverPanel(QWidget):
         existing.start(500)
 
     def _save_volume_to_db(self, process: ManagedProcess):
-        """프로세스의 볼륨 설정을 DB에 저장."""
-        try:
-            self._data_manager.update_process(process)
-            logger.debug("볼륨 저장: %s = %s", process.name, process.default_volume)
-        except Exception:  # noqa: BLE001
-            logger.exception("볼륨 저장 실패")
+        """프로세스의 볼륨 설정을 워커 스레드에서 DB에 저장."""
+        QThreadPool.globalInstance().start(_VolumeSaveRunnable(self._data_manager, process))
 
     def show_below(self, anchor: QWidget):
         """anchor 위젯의 바로 아래 오른쪽 정렬로 팝오버를 표시합니다."""
