@@ -138,6 +138,9 @@ class MainWindow(QMainWindow):
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
         self._create_menu_bar() # 메뉴 바 생성
+        # 테마 복원 시 사용할 원본 스타일명 저장 (setStyle("") 은 복원 보장 불가)
+        _app = QApplication.instance()
+        self._original_style_name = _app.style().objectName() if _app else ""
         # 저장된 테마 적용
         self._apply_theme(getattr(self.data_manager.global_settings, 'theme', 'system'))
         # 항상 위 설정 초기 적용 (앱 재시작 후에도 유지)
@@ -598,7 +601,7 @@ class MainWindow(QMainWindow):
             palette.setColor(QPalette.ColorRole.Midlight, QColor(227, 227, 227))
             app.setPalette(palette)
         else:  # system
-            app.setStyle("")
+            app.setStyle(self._original_style_name or "")
             app.setPalette(QPalette())
         # 스타일 변경 후 폰트 복원
         app.setFont(saved_font)
@@ -1707,7 +1710,6 @@ class MainWindow(QMainWindow):
             self._volume_panel.refresh(running)
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
-            # self._volume_btn.setText("🔇")
 
     def _on_volume_panel_hidden(self):
         """볼륨 패널이 숨겨질 때 (외부 클릭 포함) 토글 버튼 상태를 초기화합니다."""
