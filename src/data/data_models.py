@@ -25,8 +25,10 @@ class ManagedProcess:
                  hoyolab_game_id: Optional[str] = None,  # 추적할 호요버스 게임 ID
                  stamina_current: Optional[int] = None,
                  stamina_max: Optional[int] = None,
-                 stamina_updated_at: Optional[float] = None):
-
+                 stamina_updated_at: Optional[float] = None,
+                 # 앱 볼륨 제어
+                 default_volume: Optional[int] = None):
+        """관리 대상 프로세스 인스턴스를 초기화합니다."""
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
         self.monitoring_path = monitoring_path
@@ -53,7 +55,11 @@ class ManagedProcess:
         self.stamina_max = stamina_max
         self.stamina_updated_at = stamina_updated_at
 
+        # 앱 볼륨 제어
+        self.default_volume = default_volume
+
     def __repr__(self):
+        """ManagedProcess 객체의 문자열 표현을 반환합니다."""
         return f"<ManagedProcess(id='{self.id}', name='{self.name}', preset='{self.user_preset_id}')>"
 
     def to_dict(self) -> Dict:
@@ -83,6 +89,9 @@ class ManagedProcess:
             data['stamina_max'] = None
         if 'stamina_updated_at' not in data:
             data['stamina_updated_at'] = None
+        # 볼륨 필드 하위 호환성
+        if 'default_volume' not in data:
+            data['default_volume'] = None
         return cls(**data)
     
     def is_hoyoverse_game(self) -> bool:
@@ -135,8 +144,12 @@ class GlobalSettings:
                  notify_on_daily_reset: bool = True,
                  # 스태미나 알림 설정 (호요버스 게임)
                  stamina_notify_enabled: bool = True,
-                 stamina_notify_threshold: int = 20):  # 최대 - N 이상일 때 알림
-        
+                 stamina_notify_threshold: int = 20,  # 최대 - N 이상일 때 알림
+                 # 테마 설정
+                 theme: str = "system",  # "system" | "light" | "dark"
+                 # 게임 실행 시 창 숨기기
+                 hide_on_game: bool = True):
+        """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
         self.sleep_correction_advance_notify_hours = sleep_correction_advance_notify_hours
@@ -154,12 +167,17 @@ class GlobalSettings:
         # 스태미나 알림 설정
         self.stamina_notify_enabled = stamina_notify_enabled
         self.stamina_notify_threshold = stamina_notify_threshold
+        # 테마 / 게임 모드
+        self.theme = theme
+        self.hide_on_game = hide_on_game
 
     def to_dict(self) -> Dict:
+        """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
         return self.__dict__.copy()
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'GlobalSettings':
+        """딕셔너리에서 객체를 생성합니다 (이전 버전 호환성 처리 포함)."""
         # 이전 버전과의 호환성을 위해 run_on_startup이 없을 경우 기본값 False 사용
         if 'run_on_startup' not in data:
             data['run_on_startup'] = False
@@ -190,6 +208,11 @@ class GlobalSettings:
             data['stamina_notify_enabled'] = True
         if 'stamina_notify_threshold' not in data:
             data['stamina_notify_threshold'] = 20
+        # 테마 / 게임 모드 하위 호환성
+        if 'theme' not in data:
+            data['theme'] = 'system'
+        if 'hide_on_game' not in data:
+            data['hide_on_game'] = True
         return cls(**data)
     
 class WebShortcut:
@@ -199,8 +222,9 @@ class WebShortcut:
                  name: str = "",
                  url: str = "",
                  refresh_time_str: Optional[str] = None, # HH:MM 형식, 예: "10:00"
-                 last_reset_timestamp: Optional[float] = None 
+                 last_reset_timestamp: Optional[float] = None
                 ):
+        """웹 바로가기 인스턴스를 초기화합니다."""
         self.id = id if id else str(uuid.uuid4())
         self.name = name
         self.url = url
@@ -208,6 +232,7 @@ class WebShortcut:
         self.last_reset_timestamp = last_reset_timestamp
 
     def __repr__(self):
+        """WebShortcut 객체의 문자열 표현을 반환합니다."""
         return (f"WebShortcut(id='{self.id}', name='{self.name}', url='{self.url}', "
                 f"refresh_time_str='{self.refresh_time_str}', last_reset_timestamp={self.last_reset_timestamp})")
 
@@ -245,6 +270,7 @@ class ProcessSession:
                  session_duration: Optional[float] = None,
                  user_preset_id: Optional[str] = None,
                  stamina_at_end: Optional[int] = None):
+        """프로세스 세션 인스턴스를 초기화합니다."""
         self.id = id
         self.process_id = process_id
         self.process_name = process_name
@@ -255,6 +281,7 @@ class ProcessSession:
         self.stamina_at_end = stamina_at_end
 
     def __repr__(self):
+        """ProcessSession 객체의 문자열 표현을 반환합니다."""
         return (f"ProcessSession(id={self.id}, process_name='{self.process_name}', "
                 f"start={self.start_timestamp}, end={self.end_timestamp}, duration={self.session_duration})")
 

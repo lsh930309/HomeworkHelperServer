@@ -33,6 +33,9 @@ class Process(Base):
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
+    # 앱 볼륨 제어
+    default_volume = Column(Integer, nullable=True)  # 0~100, None이면 미설정
+
 
 class WebShortcut(Base):
     __tablename__ = "web_shortcuts"
@@ -67,6 +70,9 @@ class GlobalSettings(Base):
     # 스태미나 알림 설정 (호요버스 게임)
     stamina_notify_enabled = Column(Boolean, default=True)
     stamina_notify_threshold = Column(Integer, default=20)  # 최대 - N 이상일 때 알림
+    # 테마 / 게임 모드
+    theme = Column(String, default="system")  # "system" | "light" | "dark"
+    hide_on_game = Column(Boolean, default=True)
 
 
 class ProcessSession(Base):
