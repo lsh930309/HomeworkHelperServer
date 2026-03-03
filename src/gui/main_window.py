@@ -547,6 +547,8 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
+        # setStyle() 호출 시 앱 폰트가 스타일 기본값으로 초기화되는 문제 방지
+        saved_font = app.font()
         if theme == "dark":
             app.setStyle("Fusion")
             palette = QPalette()
@@ -574,10 +576,32 @@ class MainWindow(QMainWindow):
             app.setPalette(palette)
         elif theme == "light":
             app.setStyle("Fusion")
-            app.setPalette(app.style().standardPalette())
+            # standardPalette() 대신 모든 색상 명시적 정의:
+            # 시스템 다크 모드가 활성화된 환경에서도 라이트 팔레트 강제 적용
+            palette = QPalette()
+            palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+            palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 231, 227))
+            palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+            palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+            palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+            palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+            palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+            palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+            palette.setColor(QPalette.ColorRole.Link, QColor(0, 0, 255))
+            palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+            palette.setColor(QPalette.ColorRole.Mid, QColor(160, 160, 160))
+            palette.setColor(QPalette.ColorRole.Shadow, QColor(105, 105, 105))
+            palette.setColor(QPalette.ColorRole.Light, QColor(255, 255, 255))
+            palette.setColor(QPalette.ColorRole.Midlight, QColor(227, 227, 227))
+            app.setPalette(palette)
         else:  # system
             app.setStyle("")
             app.setPalette(QPalette())
+        # 스타일 변경 후 폰트 복원
+        app.setFont(saved_font)
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
