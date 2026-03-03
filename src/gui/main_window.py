@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         self._is_game_mode_active = False # 게임 모드 활성화 여부 추적
 
         # 볼륨 패널 상태
-        self._volume_applied_process_ids: set = set()  # 볼륨 자동 적용 완료된 process_id 집합
+        self._volume_applied_pids: dict[str, int] = {}  # process_id -> 적용 완료 PID (PID 변경 재실행 감지)
         self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(
             self.data_manager, on_hide=self._on_volume_panel_hidden
         )
@@ -1702,11 +1702,11 @@ class MainWindow(QMainWindow):
             self._volume_btn.setChecked(False)
             self._volume_btn.setText("🔊")
         else:
-            running = [
-                (p, self._get_active_pid(p.id))
-                for p in self.data_manager.managed_processes
-                if self._get_active_pid(p.id) is not None
-            ]
+            running = []
+            for p in self.data_manager.managed_processes:
+                pid = self._get_active_pid(p.id)
+                if pid is not None:
+                    running.append((p, pid))
             self._volume_panel.refresh(running)
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
@@ -1725,11 +1725,19 @@ class MainWindow(QMainWindow):
 
     def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
-        if pid and getattr(process, 'default_volume', None) is not None and process.id not in self._volume_applied_process_ids:
-            if audio_control.set_app_volume(pid, process.default_volume / 100.0):
-                self._volume_applied_process_ids.add(process.id)
-        elif not pid and process.id in self._volume_applied_process_ids:
-            self._volume_applied_process_ids.discard(process.id)
+        if not pid:
+            self._volume_applied_pids.pop(process.id, None)
+            return
+
+        default_volume = getattr(process, "default_volume", None)
+        if default_volume is None:
+            return
+
+        if self._volume_applied_pids.get(process.id) == pid:
+            return
+
+        if audio_control.set_app_volume(pid, default_volume / 100.0):
+            self._volume_applied_pids[process.id] = pid
 
     # ─────────────────────────────
 
