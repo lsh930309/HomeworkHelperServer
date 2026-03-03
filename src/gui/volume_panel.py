@@ -211,7 +211,7 @@ class VolumePopoverPanel(QWidget):
             initial_volume = 100
         actual = audio_control.get_app_volume(pid)
         if actual is not None:
-            initial_volume = round(int(actual * 100) / 5) * 5
+            initial_volume = round((actual * 100) / 5) * 5
         initial_volume = max(0, min(100, initial_volume))
 
         is_muted = audio_control.is_muted(pid)
@@ -231,7 +231,7 @@ class VolumePopoverPanel(QWidget):
                 btn.setIcon(btn._icon_off if checked else btn._icon_on)
             else:
                 btn.setText("✕" if checked else "▶")
-            if pid_ref:
+            if pid_ref is not None:
                 audio_control.set_mute(pid_ref, checked)
 
         def on_value_changed(v, p=process, pid_ref=pid, lbl=vol_label, s=slider):
@@ -255,7 +255,7 @@ class VolumePopoverPanel(QWidget):
 
     def _on_volume_changed(self, value: int, process: ManagedProcess, pid: Optional[int]):
         """슬라이더 값 변경 시 실시간 볼륨 적용 및 DB 저장 예약."""
-        if pid:
+        if pid is not None:
             audio_control.set_app_volume(pid, value / 100.0)
         process.default_volume = value
         self._schedule_volume_save(process)
