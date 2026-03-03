@@ -106,6 +106,9 @@ class VolumePopoverPanel(QWidget):
         self.setGraphicsEffect(shadow)
         self._data_manager = data_manager
         self._volume_save_timers: dict = {}
+        # 볼륨 저장 전용 직렬 스레드풀 (순서 보장, 동시 접근 방지)
+        self._save_pool = QThreadPool(self)
+        self._save_pool.setMaxThreadCount(1)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -276,7 +279,7 @@ class VolumePopoverPanel(QWidget):
 
     def _save_volume_to_db(self, process: ManagedProcess):
         """프로세스의 볼륨 설정을 워커 스레드에서 DB에 저장."""
-        QThreadPool.globalInstance().start(_VolumeSaveRunnable(self._data_manager, process))
+        self._save_pool.start(_VolumeSaveRunnable(self._data_manager, process))
 
     def show_below(self, anchor: QWidget):
         """anchor 위젯의 바로 아래 오른쪽 정렬로 팝오버를 표시합니다."""
@@ -291,5 +294,9 @@ class VolumePopoverPanel(QWidget):
                 x = geo.left()
             if y + self.height() > geo.bottom():
                 y = global_pos.y() - anchor.height() - self.height()
+            if y < geo.top():
+                y = geo.top()
+            if x + self.width() > geo.right():
+                x = geo.right() - self.width()
         self.move(x, y)
         self.show()
