@@ -290,13 +290,13 @@ class VolumePopoverPanel(QWidget):
         screen = anchor.screen()
         if screen:
             geo = screen.availableGeometry()
-            if x < geo.left():
-                x = geo.left()
-            if y + self.height() > geo.bottom():
+            # 하단 벗어날 경우 anchor 위쪽으로 재배치 (inclusive 경계)
+            if y + self.height() > geo.bottom() + 1:
                 y = global_pos.y() - anchor.height() - self.height()
-            if y < geo.top():
-                y = geo.top()
-            if x + self.width() > geo.right():
-                x = geo.right() - self.width()
+            # 상하좌우 최종 clamp (QRect inclusive 경계 적용)
+            max_x = max(geo.left(), geo.right() - self.width() + 1)
+            max_y = max(geo.top(), geo.bottom() - self.height() + 1)
+            x = max(geo.left(), min(x, max_x))
+            y = max(geo.top(), min(y, max_y))
         self.move(x, y)
         self.show()
