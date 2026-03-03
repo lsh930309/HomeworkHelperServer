@@ -30,6 +30,10 @@ a = Analysis(
         
         # Data
         'pydantic', 'jsonschema',
+
+        # Audio (pycaw - Windows WASAPI)
+        'pycaw', 'pycaw.pycaw',
+        'comtypes', 'comtypes.client',
     ],
     hookspath=[],
     hooksconfig={},

@@ -20,6 +20,8 @@ class ProcessSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 앱 볼륨 제어
+    default_volume: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -43,6 +45,8 @@ class ProcessCreateSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 앱 볼륨 제어
+    default_volume: Optional[int] = None
 
 class WebShortcutBase(BaseModel):
     name: str = ""
@@ -76,6 +80,9 @@ class GlobalSettingsSchema(BaseModel):
     # 스태미나 알림 설정
     stamina_notify_enabled: bool = True
     stamina_notify_threshold: int = 20
+    # 테마 / 게임 모드
+    theme: str = "system"
+    hide_on_game: bool = True
 
 
 class ProcessSessionCreate(BaseModel):

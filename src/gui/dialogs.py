@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
-    QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication
+    QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
+    QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -967,8 +968,25 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setSingleStep(0.25)
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
         self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
-        self.always_on_top_checkbox = QCheckBox("창을 항상 위에 표시") # <<< 항상 위 체크박스 추가
         self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
+
+        # 테마 선택 (라디오 버튼)
+        self.theme_system_rb = QRadioButton("시스템")
+        self.theme_light_rb = QRadioButton("라이트")
+        self.theme_dark_rb = QRadioButton("다크")
+        self._theme_btn_group = QButtonGroup(self)
+        self._theme_btn_group.addButton(self.theme_system_rb, 0)
+        self._theme_btn_group.addButton(self.theme_light_rb, 1)
+        self._theme_btn_group.addButton(self.theme_dark_rb, 2)
+        self.theme_system_rb.setChecked(True)
+        theme_rb_layout = QHBoxLayout()
+        theme_rb_layout.addWidget(self.theme_system_rb)
+        theme_rb_layout.addWidget(self.theme_light_rb)
+        theme_rb_layout.addWidget(self.theme_dark_rb)
+        theme_rb_layout.addStretch()
+
+        # 게임 실행 시 창 숨기기
+        self.hide_on_game_checkbox = QCheckBox("게임 실행 감지 시 창을 트레이로 자동 숨기기")
         # --- 알림 설정 체크박스들 ---
         self.notify_on_launch_success_checkbox = QCheckBox("프로세스 실행 성공 시 알림")
         self.notify_on_launch_failure_checkbox = QCheckBox("프로세스 실행 실패 시 알림")
@@ -987,13 +1005,15 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow("화면 배율:", scale_layout)
         self.form_layout.addRow(QLabel(""))  # 구분선
 
+        self.form_layout.addRow("테마:", theme_rb_layout)
+        self.form_layout.addRow(QLabel(""))  # 구분선
         self.form_layout.addRow("수면 시작 시각:", self.sleep_start_edit)
         self.form_layout.addRow("수면 종료 시각:", self.sleep_end_edit)
         self.form_layout.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
         self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
         self.form_layout.addRow(self.run_on_startup_checkbox)
-        self.form_layout.addRow(self.always_on_top_checkbox) # <<< 레이아웃에 추가
         self.form_layout.addRow(self.run_as_admin_checkbox)
+        self.form_layout.addRow(self.hide_on_game_checkbox)
         # 알림 설정 섹션
         self.form_layout.addRow(QLabel("알림 설정:"))
         self.form_layout.addRow(self.notify_on_launch_success_checkbox)
@@ -1109,8 +1129,17 @@ class GlobalSettingsDialog(QDialog):
         self.sleep_correction_hours_spinbox.setValue(self.current_settings.sleep_correction_advance_notify_hours)
         self.cycle_advance_hours_spinbox.setValue(self.current_settings.cycle_deadline_advance_notify_hours)
         self.run_on_startup_checkbox.setChecked(self.current_settings.run_on_startup)
-        self.always_on_top_checkbox.setChecked(self.current_settings.always_on_top) # <<< 값 로드
         self.run_as_admin_checkbox.setChecked(self.current_settings.run_as_admin)
+        # 테마
+        theme = getattr(self.current_settings, 'theme', 'system')
+        if theme == 'light':
+            self.theme_light_rb.setChecked(True)
+        elif theme == 'dark':
+            self.theme_dark_rb.setChecked(True)
+        else:
+            self.theme_system_rb.setChecked(True)
+        # 게임 실행 시 창 숨기기
+        self.hide_on_game_checkbox.setChecked(getattr(self.current_settings, 'hide_on_game', True))
         # 알림 설정
         self.notify_on_launch_success_checkbox.setChecked(self.current_settings.notify_on_launch_success)
         self.notify_on_launch_failure_checkbox.setChecked(self.current_settings.notify_on_launch_failure)
@@ -1129,7 +1158,7 @@ class GlobalSettingsDialog(QDialog):
             sleep_correction_advance_notify_hours=self.sleep_correction_hours_spinbox.value(),
             cycle_deadline_advance_notify_hours=self.cycle_advance_hours_spinbox.value(),
             run_on_startup=self.run_on_startup_checkbox.isChecked(),
-            always_on_top=self.always_on_top_checkbox.isChecked(), # <<< 값 반환
+            always_on_top=self.current_settings.always_on_top,  # 메뉴바 체크박스로 관리
             run_as_admin=self.run_as_admin_checkbox.isChecked(),
             notify_on_launch_success=self.notify_on_launch_success_checkbox.isChecked(),
             notify_on_launch_failure=self.notify_on_launch_failure_checkbox.isChecked(),
@@ -1138,7 +1167,9 @@ class GlobalSettingsDialog(QDialog):
             notify_on_sleep_correction=self.notify_on_sleep_correction_checkbox.isChecked(),
             notify_on_daily_reset=self.notify_on_daily_reset_checkbox.isChecked(),
             stamina_notify_enabled=self.stamina_notify_checkbox.isChecked(),
-            stamina_notify_threshold=self.stamina_threshold_spinbox.value()
+            stamina_notify_threshold=self.stamina_threshold_spinbox.value(),
+            theme='light' if self.theme_light_rb.isChecked() else 'dark' if self.theme_dark_rb.isChecked() else 'system',
+            hide_on_game=self.hide_on_game_checkbox.isChecked(),
         )
         
 class WebShortcutDialog(QDialog):

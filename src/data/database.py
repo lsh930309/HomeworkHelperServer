@@ -51,6 +51,7 @@ from sqlalchemy import event
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_conn, connection_record):
+    """SQLite 연결 시 WAL 모드 및 성능/안정성 PRAGMA를 설정합니다."""
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=FULL")  # PC 강제 종료 시 데이터 손실 방지
@@ -94,6 +95,11 @@ def auto_migrate_database():
         # ProcessSession 테이블 - 사용자 프리셋 ID 및 스태미나 정보
         ("process_sessions", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         ("process_sessions", "stamina_at_end", "INTEGER", None),
+        # Process 테이블 - 앱 볼륨 제어
+        ("managed_processes", "default_volume", "INTEGER", None),
+        # GlobalSettings 테이블 - 테마 / 게임 모드
+        ("global_settings", "theme", "TEXT", "'system'"),
+        ("global_settings", "hide_on_game", "INTEGER", "1"),
     ]
     
     try:
