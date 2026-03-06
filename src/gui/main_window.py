@@ -1445,6 +1445,11 @@ class MainWindow(QMainWindow):
             if not screen:
                 return
             avail = screen.availableGeometry()
+            # 창 크기가 가용 영역을 초과하면 먼저 크기를 줄임 (위치 계산 전)
+            if self.height() > avail.height():
+                self.resize(self.width(), avail.height())
+            if self.width() > avail.width():
+                self.resize(avail.width(), self.height())
             pos = self.pos()
             size = self.size()
             new_x = max(avail.left(), min(pos.x(), avail.right() - size.width() + 1))
