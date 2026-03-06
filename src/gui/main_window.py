@@ -1424,6 +1424,7 @@ class MainWindow(QMainWindow):
             if geometry:
                 self.restoreGeometry(geometry)
                 logger.debug("저장된 창 geometry 복원 완료")
+                self._clamp_window_to_available_screen()
                 return
 
             # geometry가 없으면 position만 복원
@@ -1431,8 +1432,33 @@ class MainWindow(QMainWindow):
             if position:
                 self.move(position)
                 logger.debug(f"저장된 창 위치 복원: {position}")
+                self._clamp_window_to_available_screen()
         except Exception as e:
             logger.error(f"창 위치 복원 실패: {e}", exc_info=True)
+
+    def _clamp_window_to_available_screen(self):
+        """창이 상태 표시줄/Dock 등을 제외한 화면 유효 영역 안에 위치하도록 보정합니다."""
+        try:
+            screen = QApplication.screenAt(self.pos())
+            if not screen:
+                screen = QApplication.primaryScreen()
+            if not screen:
+                return
+            avail = screen.availableGeometry()
+            # 창 크기가 가용 영역을 초과하면 먼저 크기를 줄임 (위치 계산 전)
+            if self.height() > avail.height():
+                self.resize(self.width(), avail.height())
+            if self.width() > avail.width():
+                self.resize(avail.width(), self.height())
+            pos = self.pos()
+            size = self.size()
+            new_x = max(avail.left(), min(pos.x(), avail.right() - size.width() + 1))
+            new_y = max(avail.top(), min(pos.y(), avail.bottom() - size.height() + 1))
+            if new_x != pos.x() or new_y != pos.y():
+                self.move(new_x, new_y)
+                logger.debug(f"창 위치 화면 영역으로 보정: ({new_x}, {new_y})")
+        except Exception as e:
+            logger.error(f"창 위치 보정 실패: {e}", exc_info=True)
 
     def moveEvent(self, event):
         """창 이동 이벤트 - 마그넷 스냅 기능 구현"""

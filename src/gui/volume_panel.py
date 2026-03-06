@@ -142,7 +142,9 @@ class VolumePopoverPanel(QWidget):
         while self._list_layout.count() > 0:
             item = self._list_layout.takeAt(0)
             if item and item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                w.hide()
+                w.deleteLater()
 
         if not running_entries:
             empty = QLabel("실행 중인 게임이 없습니다.")
