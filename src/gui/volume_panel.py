@@ -5,10 +5,9 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
-    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
-from PyQt6.QtGui import QIcon, QColor
+from PyQt6.QtGui import QIcon
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
@@ -99,12 +98,6 @@ class VolumePopoverPanel(QWidget):
                 background-color: palette(window);
             }
         """)
-        # 드롭 섀도우로 메인 GUI와 시각적 분리
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(16)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 100))
-        self.setGraphicsEffect(shadow)
         self._data_manager = data_manager
         self._volume_save_timers: dict = {}
         # 볼륨 저장 전용 직렬 스레드풀 (순서 보장, 동시 접근 방지)
