@@ -29,6 +29,24 @@ _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함
 _DEFAULT_AUTO_HIDE_MS = 3000
 
+def _tint_icon_white(icon) -> "QIcon":
+    """아이콘 픽셀을 흰색으로 틴팅합니다 (다크 배경 전용)."""
+    from PyQt6.QtGui import QPainter, QColor, QPixmap
+    from PyQt6.QtCore import Qt
+    pixmap = icon.pixmap(16, 16)
+    if pixmap.isNull():
+        return icon
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(result.rect(), QColor("white"))
+    painter.end()
+    from PyQt6.QtGui import QIcon
+    return QIcon(result)
+
+
 # 슬라이더 스타일 (volume_panel.py 와 동일 스타일)
 _SLIDER_STYLE = """
 QSlider::groove:horizontal {
@@ -162,9 +180,6 @@ class SidebarWidget(QWidget):
         header_row.addWidget(self._game_name_label, 1)
         layout.addLayout(header_row)
 
-        # 구분선
-        layout.addWidget(self._make_separator())
-
         # --- 볼륨 섹션 (모든 등록 게임) ---
         vol_title = QLabel("볼륨")
         vol_title.setStyleSheet("color: rgba(255,255,255,160); font-size: 11px;")
@@ -172,12 +187,11 @@ class SidebarWidget(QWidget):
 
         self._vol_scroll = QScrollArea()
         self._vol_scroll.setWidgetResizable(True)
-        self._vol_scroll.setMaximumHeight(130)
+        self._vol_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._vol_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._vol_scroll.setStyleSheet(
             "QScrollArea { border: none; background: transparent; }"
             "QWidget#vol_container { background: transparent; }"
-            "QScrollBar:vertical { width: 4px; background: transparent; border-radius: 2px; }"
-            "QScrollBar::handle:vertical { background: rgba(255,255,255,60); border-radius: 2px; }"
         )
         self._vol_list_container = QWidget()
         self._vol_list_container.setObjectName("vol_container")
@@ -192,8 +206,6 @@ class SidebarWidget(QWidget):
         stamina_layout = QVBoxLayout(self._stamina_section)
         stamina_layout.setContentsMargins(0, 0, 0, 0)
         stamina_layout.setSpacing(4)
-
-        layout.addWidget(self._make_separator())
 
         stamina_title = QLabel("스태미나")
         stamina_title.setStyleSheet("color: rgba(255,255,255,160); font-size: 11px;")
@@ -227,8 +239,6 @@ class SidebarWidget(QWidget):
         self._stamina_section.setVisible(False)
 
         # --- 플레이 시간 섹션 ---
-        layout.addWidget(self._make_separator())
-
         playtime_title = QLabel("오늘 플레이")
         playtime_title.setStyleSheet("color: rgba(255,255,255,160); font-size: 11px;")
         layout.addWidget(playtime_title)
@@ -556,6 +566,7 @@ class SidebarWidget(QWidget):
             QPushButton:checked {
                 background: rgba(100,149,237,180);
                 border-color: rgba(100,149,237,255);
+                color: white;
             }
             QPushButton:hover:!checked {
                 background: rgba(255,255,255,40);
@@ -568,9 +579,11 @@ class SidebarWidget(QWidget):
             icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
             icon_off = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
             if not icon_on.isNull():
-                mute_btn.setIcon(icon_on)
-                mute_btn._icon_on = icon_on
-                mute_btn._icon_off = icon_off if not icon_off.isNull() else icon_on
+                icon_on_w = _tint_icon_white(icon_on)
+                icon_off_w = _tint_icon_white(icon_off) if not icon_off.isNull() else icon_on_w
+                mute_btn.setIcon(icon_on_w)
+                mute_btn._icon_on = icon_on_w
+                mute_btn._icon_off = icon_off_w
             else:
                 mute_btn.setText("🔊")
                 mute_btn._icon_on = None
