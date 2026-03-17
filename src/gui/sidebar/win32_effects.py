@@ -157,12 +157,15 @@ def remove_blur_effect(hwnd: int) -> bool:
         if _WINDOWS_BUILD >= _WIN11_BUILD:
             dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
             value = ctypes.c_int(_DWMSBT_NONE)
-            dwmapi.DwmSetWindowAttribute(
+            hr = dwmapi.DwmSetWindowAttribute(
                 ctypes.wintypes.HWND(hwnd),
                 ctypes.c_uint(_DWMWA_SYSTEMBACKDROP_TYPE),
                 ctypes.byref(value),
                 ctypes.sizeof(value),
             )
+            if hr != 0:
+                logger.debug("블러 효과 제거 실패(Win11), HRESULT=0x%08x", hr & 0xFFFFFFFF)
+                return False
         elif _WINDOWS_BUILD >= _WIN10_1809:
             user32 = ctypes.WinDLL("user32", use_last_error=True)
             accent = _ACCENT_POLICY()
@@ -171,10 +174,13 @@ def remove_blur_effect(hwnd: int) -> bool:
             data.Attribute = _WCA_ACCENT_POLICY
             data.pData = ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p)
             data.cbData = ctypes.sizeof(accent)
-            user32.SetWindowCompositionAttribute(
+            ok = user32.SetWindowCompositionAttribute(
                 ctypes.wintypes.HWND(hwnd),
                 ctypes.pointer(data),
             )
+            if not ok:
+                logger.debug("블러 효과 제거 실패(Win10), last_error=%s", ctypes.get_last_error())
+                return False
         return True
     except Exception as e:
         logger.debug("블러 효과 제거 예외: %s", e)

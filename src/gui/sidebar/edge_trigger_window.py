@@ -52,8 +52,9 @@ class EdgeTriggerWindow(QWidget):
             | Qt.WindowType.WindowTransparentForInput,
         )
         self._trigger_callback = trigger_callback
-        self._trigger_y_start = max(0.0, min(1.0, trigger_y_start))
-        self._trigger_y_end = max(0.0, min(1.0, trigger_y_end))
+        _s = max(0.0, min(1.0, trigger_y_start))
+        _e = max(0.0, min(1.0, trigger_y_end))
+        self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
         self._in_cooldown = False
         self._cursor_was_in_zone = False
@@ -96,8 +97,9 @@ class EdgeTriggerWindow(QWidget):
         cooldown_sec: float,
     ) -> None:
         """트리거 설정을 런타임에 갱신합니다."""
-        self._trigger_y_start = max(0.0, min(1.0, trigger_y_start))
-        self._trigger_y_end = max(0.0, min(1.0, trigger_y_end))
+        _s = max(0.0, min(1.0, trigger_y_start))
+        _e = max(0.0, min(1.0, trigger_y_end))
+        self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
 
     # ------------------------------------------------------------------
@@ -119,22 +121,18 @@ class EdgeTriggerWindow(QWidget):
 
         cursor_pos = QCursor.pos()
 
-        # 활성 화면의 geometry 기준으로 Y 비율 계산
-        screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
-        if screen is None:
-            return
-        geo: QRect = screen.geometry()
+        # 트리거 창 자체의 geometry 기준으로 판정 (멀티모니터 오탐 방지)
+        my_geo: QRect = self.geometry()
 
         # 우측 가장자리 X 범위 내에 있는지 확인
-        right_edge_x = geo.right()
-        if cursor_pos.x() < right_edge_x - _TRIGGER_WIDTH_PX:
+        if cursor_pos.x() < my_geo.left():
             self._cursor_was_in_zone = False
             return
 
-        # Y 비율 계산
-        if geo.height() == 0:
+        # Y 비율 계산 (트리거 창은 화면 전체 높이와 동일)
+        if my_geo.height() == 0:
             return
-        y_ratio = (cursor_pos.y() - geo.top()) / geo.height()
+        y_ratio = (cursor_pos.y() - my_geo.top()) / my_geo.height()
         in_zone = self._trigger_y_start <= y_ratio <= self._trigger_y_end
 
         if in_zone and not self._cursor_was_in_zone:

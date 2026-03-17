@@ -772,7 +772,7 @@ class MainWindow(QMainWindow):
                     running_process = proc
                     running_pid = entry.get('pid')
                     break
-            if hasattr(self, '_sidebar_controller'):
+            if hasattr(self, '_sidebar_controller') and running_process is not None:
                 self._sidebar_controller.activate_for_game(
                     running_process,
                     pid=running_pid,
@@ -1789,16 +1789,12 @@ class MainWindow(QMainWindow):
             return
 
         default_volume = getattr(process, "default_volume", None)
-        if default_volume is None:
-            return
+        already_applied = self._volume_applied_pids.get(process.id) == pid
+        if not already_applied and default_volume is not None:
+            if audio_control.set_app_volume(pid, default_volume / 100.0):
+                self._volume_applied_pids[process.id] = pid
 
-        if self._volume_applied_pids.get(process.id) == pid:
-            return
-
-        if audio_control.set_app_volume(pid, default_volume / 100.0):
-            self._volume_applied_pids[process.id] = pid
-
-        # default_muted 적용 (이미 적용된 PID는 건너뜀 — 위 set_app_volume 와 동일 조건)
+        # default_muted 적용 (default_volume 미설정이어도 항상 적용)
         default_muted = getattr(process, "default_muted", False)
         audio_control.set_mute(pid, default_muted)
 

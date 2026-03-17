@@ -737,7 +737,7 @@ class SidebarWidget(QWidget):
                     try:
                         self._dm.update_process(self._proc)
                     except Exception:
-                        pass
+                        logger.exception("볼륨 저장 실패: %s", self._proc.name)
 
             self._save_pool.start(_SaveRunnable(self._data_manager, p))
 

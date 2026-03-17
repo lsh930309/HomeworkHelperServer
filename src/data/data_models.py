@@ -229,17 +229,17 @@ class GlobalSettings:
             data['theme'] = 'system'
         if 'hide_on_game' not in data:
             data['hide_on_game'] = True
-        # 사이드바 설정 하위 호환성
-        if 'sidebar_enabled' not in data:
-            data['sidebar_enabled'] = True
-        if 'sidebar_trigger_y_start' not in data:
-            data['sidebar_trigger_y_start'] = 0.1
-        if 'sidebar_trigger_y_end' not in data:
-            data['sidebar_trigger_y_end'] = 0.9
-        if 'sidebar_auto_hide_sec' not in data:
-            data['sidebar_auto_hide_sec'] = 3
-        if 'sidebar_effect' not in data:
-            data['sidebar_effect'] = 'acrylic'
+        # 사이드바 설정 하위 호환성 + 타입/범위 정규화
+        data['sidebar_enabled'] = bool(data.get('sidebar_enabled', True))
+        _y_start = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_start', 0.1))))
+        _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
+        data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
+        data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
+        data['sidebar_auto_hide_sec'] = max(0, int(data.get('sidebar_auto_hide_sec', 3)))
+        _effect = data.get('sidebar_effect', 'acrylic')
+        if _effect not in ('mica', 'acrylic', 'none'):
+            _effect = 'acrylic'
+        data['sidebar_effect'] = _effect
         return cls(**data)
     
 class WebShortcut:
