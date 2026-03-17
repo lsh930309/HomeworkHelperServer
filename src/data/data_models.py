@@ -148,7 +148,13 @@ class GlobalSettings:
                  # 테마 설정
                  theme: str = "system",  # "system" | "light" | "dark"
                  # 게임 실행 시 창 숨기기
-                 hide_on_game: bool = True):
+                 hide_on_game: bool = True,
+                 # 사이드바 설정
+                 sidebar_enabled: bool = True,
+                 sidebar_trigger_y_start: float = 0.1,
+                 sidebar_trigger_y_end: float = 0.9,
+                 sidebar_auto_hide_sec: int = 3,
+                 sidebar_effect: str = "acrylic"):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -170,6 +176,12 @@ class GlobalSettings:
         # 테마 / 게임 모드
         self.theme = theme
         self.hide_on_game = hide_on_game
+        # 사이드바
+        self.sidebar_enabled = sidebar_enabled
+        self.sidebar_trigger_y_start = sidebar_trigger_y_start
+        self.sidebar_trigger_y_end = sidebar_trigger_y_end
+        self.sidebar_auto_hide_sec = sidebar_auto_hide_sec
+        self.sidebar_effect = sidebar_effect
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -213,6 +225,17 @@ class GlobalSettings:
             data['theme'] = 'system'
         if 'hide_on_game' not in data:
             data['hide_on_game'] = True
+        # 사이드바 설정 하위 호환성
+        if 'sidebar_enabled' not in data:
+            data['sidebar_enabled'] = True
+        if 'sidebar_trigger_y_start' not in data:
+            data['sidebar_trigger_y_start'] = 0.1
+        if 'sidebar_trigger_y_end' not in data:
+            data['sidebar_trigger_y_end'] = 0.9
+        if 'sidebar_auto_hide_sec' not in data:
+            data['sidebar_auto_hide_sec'] = 3
+        if 'sidebar_effect' not in data:
+            data['sidebar_effect'] = 'acrylic'
         return cls(**data)
     
 class WebShortcut:

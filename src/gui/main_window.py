@@ -41,6 +41,7 @@ from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
+from src.gui.sidebar.sidebar_controller import SidebarController
 
 
 class IconDownloader(QThread):
@@ -154,6 +155,9 @@ class MainWindow(QMainWindow):
             self.data_manager, on_hide=self._on_volume_panel_hidden
         )
 
+        # 사이드바 컨트롤러 초기화
+        self._sidebar_controller = SidebarController(self.data_manager, self)
+
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
         self._saved_size = None
@@ -194,6 +198,14 @@ class MainWindow(QMainWindow):
         self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
         self.dashboard_button.clicked.connect(lambda: self.open_webpage("http://127.0.0.1:8000/dashboard"))
         self.top_button_area_layout.addWidget(self.dashboard_button)
+
+        # 사이드바 디버그 토글 버튼
+        self._sidebar_debug_btn = QPushButton()
+        self._sidebar_debug_btn.setToolTip("[디버깅] 사이드바 위젯 토글\n(게임 실행 없이 사이드바를 열거나 닫습니다)")
+        self._sidebar_debug_btn.setText("◀▶")
+        self._sidebar_debug_btn.setFixedSize(icon_button_size, icon_button_size)
+        self._sidebar_debug_btn.clicked.connect(lambda: self._sidebar_controller.toggle_debug_sidebar())
+        self.top_button_area_layout.addWidget(self._sidebar_debug_btn)
 
         # GitHub 바로가기 버튼 추가
         self.github_button = QPushButton()
@@ -750,9 +762,26 @@ class MainWindow(QMainWindow):
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
+            # 사이드바 활성화: 실행 중인 프로세스 탐색
+            running_process = None
+            running_pid = None
+            for proc in self.data_manager.managed_processes:
+                entry = self.process_monitor.active_monitored_processes.get(proc.id)
+                if entry is not None:
+                    running_process = proc
+                    running_pid = entry.get('pid')
+                    break
+            if hasattr(self, '_sidebar_controller'):
+                self._sidebar_controller.activate_for_game(
+                    running_process,
+                    pid=running_pid,
+                    game_start_timestamp=None,
+                )
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
+            if hasattr(self, '_sidebar_controller'):
+                self._sidebar_controller.deactivate()
             if hide_enabled:
                 self.activate_and_show() # 창을 다시 표시
                 status_bar = self.statusBar()
@@ -1542,6 +1571,10 @@ class MainWindow(QMainWindow):
         # 3. 인스턴스 매니저 리소스 정리 (단일 인스턴스 실행 관련)
         if self._instance_manager and hasattr(self._instance_manager, 'cleanup'):
             self._instance_manager.cleanup()
+
+        # 3-1. 사이드바 컨트롤러 정리
+        if hasattr(self, '_sidebar_controller'):
+            self._sidebar_controller.cleanup()
 
         # 4. QApplication 종료
         app_instance = QApplication.instance()
