@@ -145,6 +145,12 @@ class SidebarWidget(QWidget):
         self._playtime_timer.setInterval(1000)
         self._playtime_timer.timeout.connect(self._refresh_playtime)
 
+        # 커서 위치 폴링 타이머 (200ms) — leaveEvent 오탐 방지
+        # 스크롤 영역 자식 위젯 상호작용 시 leaveEvent 가 오발하는 문제를 우회합니다.
+        self._cursor_poll_timer = QTimer(self)
+        self._cursor_poll_timer.setInterval(200)
+        self._cursor_poll_timer.timeout.connect(self._poll_cursor)
+
         # 볼륨 저장 전용 직렬 스레드풀 (VolumePopoverPanel 와 동일 패턴)
         self._volume_save_timers: dict = {}
         self._save_pool = QThreadPool(self)
@@ -342,6 +348,7 @@ class SidebarWidget(QWidget):
 
         self._is_shown = True
         self._playtime_timer.start()
+        self._cursor_poll_timer.start()
         self._refresh_volumes_list()  # 슬라이드인 시 PID 새로 조회
         self._reset_auto_hide()
         logger.debug("SidebarWidget 슬라이드인")
@@ -353,6 +360,7 @@ class SidebarWidget(QWidget):
 
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
+        self._cursor_poll_timer.stop()
 
         geo = self.geometry()
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
@@ -369,6 +377,7 @@ class SidebarWidget(QWidget):
         """타이머와 애니메이션을 정리합니다."""
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
+        self._cursor_poll_timer.stop()
         self._anim.stop()
         self.hide()
 
@@ -380,22 +389,6 @@ class SidebarWidget(QWidget):
         """위젯 크기 변경 시 내부 프레임을 동기화합니다."""
         super().resizeEvent(event)
         self._frame.setGeometry(0, 0, self.width(), self.height())
-
-    def enterEvent(self, event) -> None:
-        """마우스가 사이드바에 진입하면 자동 숨김 타이머를 취소합니다."""
-        super().enterEvent(event)
-        self._auto_hide_timer.stop()
-
-    def leaveEvent(self, event) -> None:
-        """마우스가 사이드바에서 벗어나면 자동 숨김 타이머를 시작합니다.
-
-        자식 위젯으로 이동할 때도 부모의 leaveEvent가 발생하므로,
-        커서가 실제로 위젯 영역 밖인지 확인한 후 타이머를 시작합니다.
-        """
-        super().leaveEvent(event)
-        from PyQt6.QtGui import QCursor
-        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
-            self._reset_auto_hide()
 
     # ------------------------------------------------------------------
     # 내부 메서드
@@ -416,6 +409,21 @@ class SidebarWidget(QWidget):
         """자동 숨김 타이머를 초기화합니다."""
         if self._auto_hide_ms > 0:
             self._auto_hide_timer.start(self._auto_hide_ms)
+
+    def _poll_cursor(self) -> None:
+        """200ms마다 커서 위치를 확인해 자동 숨김 타이머를 제어합니다.
+
+        leaveEvent/enterEvent 는 QScrollArea 내부 위젯과의 상호작용 시
+        오발(false trigger)하는 경우가 있어, 폴링 방식으로 대체합니다.
+        """
+        from PyQt6.QtGui import QCursor
+        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        if inside:
+            if self._auto_hide_timer.isActive():
+                self._auto_hide_timer.stop()
+        else:
+            if not self._auto_hide_timer.isActive():
+                self._reset_auto_hide()
 
     def _on_slide_out_finished(self) -> None:
         """슬라이드아웃 완료 후 창을 숨깁니다."""
@@ -555,6 +563,8 @@ class SidebarWidget(QWidget):
         mute_btn = QPushButton()
         mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
+        from PyQt6.QtCore import QSize
+        mute_btn.setIconSize(QSize(14, 14))
         mute_btn.setStyleSheet("""
             QPushButton {
                 border: 1px solid rgba(255,255,255,60);
@@ -562,6 +572,7 @@ class SidebarWidget(QWidget):
                 background: rgba(255,255,255,20);
                 color: white;
                 font-size: 10px;
+                padding: 0px;
             }
             QPushButton:checked {
                 background: rgba(100,149,237,180);

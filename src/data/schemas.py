@@ -22,6 +22,7 @@ class ProcessSchema(BaseModel):
     stamina_updated_at: Optional[float] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
+    default_muted: bool = False
 
     class Config:
         from_attributes = True
@@ -47,6 +48,7 @@ class ProcessCreateSchema(BaseModel):
     stamina_updated_at: Optional[float] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
+    default_muted: bool = False
 
 class WebShortcutBase(BaseModel):
     name: str = ""
