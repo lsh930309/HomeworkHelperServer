@@ -331,6 +331,11 @@ class SidebarWidget(QWidget):
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
         self._anim.setStartValue(geo)
         self._anim.setEndValue(end)
+        # 중복 연결 방지
+        try:
+            self._anim.finished.disconnect(self._on_slide_out_finished)
+        except (RuntimeError, TypeError):
+            pass
         self._anim.finished.connect(self._on_slide_out_finished)
         self._anim.start()
 
@@ -385,7 +390,8 @@ class SidebarWidget(QWidget):
         from src.gui.main_window import MainWindow
         if not MainWindow.INSTANCE:
             return []
-        active = MainWindow.INSTANCE.process_monitor.active_monitored_processes
+        # dict 복사 - process_monitor 스레드가 동시에 수정할 수 있음
+        active = dict(MainWindow.INSTANCE.process_monitor.active_monitored_processes)
         managed = getattr(self._data_manager, 'managed_processes', [])
         managed_map = {p.id: p for p in managed}
 
@@ -539,8 +545,11 @@ class SidebarWidget(QWidget):
         loader = _IconLoader(process.monitoring_path, self)
 
         def _on_icon(pixmap, lbl=icon_label):
-            if not pixmap.isNull():
-                lbl.setPixmap(pixmap)
+            try:
+                if not pixmap.isNull():
+                    lbl.setPixmap(pixmap)
+            except RuntimeError:
+                pass  # icon_label 이 이미 삭제된 경우 무시
             loader.deleteLater()
 
         loader.icon_loaded.connect(_on_icon)
@@ -567,10 +576,11 @@ class SidebarWidget(QWidget):
         from src.gui.main_window import MainWindow
         active_pids: dict = {}
         if MainWindow.INSTANCE:
+            # dict 복사 - process_monitor 스레드가 동시에 수정할 수 있음
+            active_snapshot = dict(MainWindow.INSTANCE.process_monitor.active_monitored_processes)
             active_pids = {
                 proc_id: entry.get('pid')
-                for proc_id, entry in
-                MainWindow.INSTANCE.process_monitor.active_monitored_processes.items()
+                for proc_id, entry in active_snapshot.items()
             }
 
         for proc in processes:
@@ -625,7 +635,10 @@ class SidebarWidget(QWidget):
             mute_btn._icon_on = None
 
         if is_running:
-            initial_muted = audio_control.is_muted(pid) or False
+            try:
+                initial_muted = audio_control.is_muted(pid) or False
+            except Exception:
+                initial_muted = getattr(process, 'default_muted', False)
         else:
             initial_muted = getattr(process, 'default_muted', False)
         if initial_muted:
@@ -652,9 +665,12 @@ class SidebarWidget(QWidget):
 
         vol = getattr(process, 'default_volume', None) or 100
         if is_running:
-            actual = audio_control.get_app_volume(pid)
-            if actual is not None:
-                vol = round((actual * 100) / 5) * 5
+            try:
+                actual = audio_control.get_app_volume(pid)
+                if actual is not None:
+                    vol = round((actual * 100) / 5) * 5
+            except Exception:
+                pass
         vol = max(0, min(100, vol))
         slider.blockSignals(True)
         slider.setValue(vol)
