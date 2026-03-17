@@ -9,11 +9,12 @@ from typing import Optional
 
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QRect, QTimer, QPoint,
+    QRunnable, QThreadPool, QObject, pyqtSignal,
 )
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
@@ -126,6 +127,11 @@ class SidebarWidget(QWidget):
         self._playtime_timer.setInterval(1000)
         self._playtime_timer.timeout.connect(self._refresh_playtime)
 
+        # 볼륨 저장 전용 직렬 스레드풀 (VolumePopoverPanel 와 동일 패턴)
+        self._volume_save_timers: dict = {}
+        self._save_pool = QThreadPool(self)
+        self._save_pool.setMaxThreadCount(1)
+
         # Win32 블러 효과 적용 (창이 표시된 뒤 winId 획득 후 적용)
         self._blur_applied = False
 
@@ -159,30 +165,27 @@ class SidebarWidget(QWidget):
         # 구분선
         layout.addWidget(self._make_separator())
 
-        # --- 볼륨 섹션 ---
+        # --- 볼륨 섹션 (모든 등록 게임) ---
         vol_title = QLabel("볼륨")
         vol_title.setStyleSheet("color: rgba(255,255,255,160); font-size: 11px;")
         layout.addWidget(vol_title)
 
-        vol_row = QHBoxLayout()
-        vol_row.setSpacing(6)
-
-        self._vol_slider = QSlider(Qt.Orientation.Horizontal)
-        self._vol_slider.setRange(0, 100)
-        self._vol_slider.setSingleStep(5)
-        self._vol_slider.setPageStep(5)
-        self._vol_slider.setStyleSheet(_SLIDER_STYLE)
-        self._vol_slider.valueChanged.connect(self._on_volume_slider_changed)
-        self._vol_slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
-
-        self._vol_label = QLabel("100")
-        self._vol_label.setFixedWidth(28)
-        self._vol_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._vol_label.setStyleSheet("color: white; font-size: 11px;")
-
-        vol_row.addWidget(self._vol_slider)
-        vol_row.addWidget(self._vol_label)
-        layout.addLayout(vol_row)
+        self._vol_scroll = QScrollArea()
+        self._vol_scroll.setWidgetResizable(True)
+        self._vol_scroll.setMaximumHeight(130)
+        self._vol_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QWidget#vol_container { background: transparent; }"
+            "QScrollBar:vertical { width: 4px; background: transparent; border-radius: 2px; }"
+            "QScrollBar::handle:vertical { background: rgba(255,255,255,60); border-radius: 2px; }"
+        )
+        self._vol_list_container = QWidget()
+        self._vol_list_container.setObjectName("vol_container")
+        self._vol_list_layout = QVBoxLayout(self._vol_list_container)
+        self._vol_list_layout.setContentsMargins(0, 0, 4, 0)
+        self._vol_list_layout.setSpacing(4)
+        self._vol_scroll.setWidget(self._vol_list_container)
+        layout.addWidget(self._vol_scroll)
 
         # --- 스태미나 섹션 ---
         self._stamina_section = QWidget()
@@ -283,7 +286,7 @@ class SidebarWidget(QWidget):
         if process is None:
             self._game_name_label.setText("게임")
             self._game_icon_label.clear()
-            self._vol_slider.setValue(100)
+            self._refresh_volumes_list()
             self._stamina_section.setVisible(False)
             self._playtime_label.setText("0분")
             return
@@ -293,19 +296,8 @@ class SidebarWidget(QWidget):
         # 고해상도 아이콘 로드 (백그라운드 스레드로 캐시 추출 후 UI 갱신)
         self._load_icon_async(process)
 
-        # 볼륨 초기값
-        vol = 100
-        if pid is not None:
-            actual = audio_control.get_app_volume(pid)
-            if actual is not None:
-                vol = round((actual * 100) / 5) * 5
-        elif process.default_volume is not None:
-            vol = process.default_volume
-        vol = max(0, min(100, vol))
-        self._vol_slider.blockSignals(True)
-        self._vol_slider.setValue(vol)
-        self._vol_slider.blockSignals(False)
-        self._vol_label.setText(str(vol))
+        # 모든 게임 볼륨 목록 갱신
+        self._refresh_volumes_list()
 
         # 스태미나
         self._refresh_stamina(process)
@@ -340,6 +332,7 @@ class SidebarWidget(QWidget):
 
         self._is_shown = True
         self._playtime_timer.start()
+        self._refresh_volumes_list()  # 슬라이드인 시 PID 새로 조회
         self._reset_auto_hide()
         logger.debug("SidebarWidget 슬라이드인")
 
@@ -496,19 +489,121 @@ class SidebarWidget(QWidget):
         if self._current_process is not None:
             self._refresh_stamina(self._current_process)
 
-    def _on_volume_slider_changed(self, value: int) -> None:
-        """볼륨 슬라이더 값 변경 시 5 단위 스냅 및 실시간 적용."""
-        snapped = round(value / 5) * 5
-        snapped = max(0, min(100, snapped))
-        if snapped != value:
-            self._vol_slider.blockSignals(True)
-            self._vol_slider.setValue(snapped)
-            self._vol_slider.blockSignals(False)
-        self._vol_label.setText(str(snapped))
+    def _refresh_volumes_list(self) -> None:
+        """모든 등록 게임에 대한 볼륨 행을 재구성합니다."""
+        # 기존 행 제거
+        while self._vol_list_layout.count() > 0:
+            item = self._vol_list_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
 
-        if self._current_pid is not None:
-            audio_control.set_app_volume(self._current_pid, snapped / 100.0)
-        if self._current_process is not None:
-            self._current_process.default_volume = snapped
+        processes = getattr(self._data_manager, 'managed_processes', [])
+        if not processes:
+            empty = QLabel("등록된 게임 없음")
+            empty.setStyleSheet("color: rgba(255,255,255,100); font-size: 11px;")
+            self._vol_list_layout.addWidget(empty)
+            return
 
+        # 현재 실행 중인 PID 맵
+        from src.gui.main_window import MainWindow
+        active_pids: dict = {}
+        if MainWindow.INSTANCE:
+            active_pids = {
+                proc_id: entry.get('pid')
+                for proc_id, entry in MainWindow.INSTANCE.process_monitor.active_monitored_processes.items()
+            }
+
+        for proc in processes:
+            self._vol_list_layout.addWidget(self._make_vol_row(proc, active_pids.get(proc.id)))
+
+    def _make_vol_row(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
+        """다크 테마 볼륨 행 (이름 + 슬라이더 + 값 레이블)."""
+        is_running = pid is not None
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        hl = QHBoxLayout(row)
+        hl.setContentsMargins(0, 1, 0, 1)
+        hl.setSpacing(4)
+
+        name_color = "rgba(255,255,255,220)" if is_running else "rgba(255,255,255,110)"
+        name_lbl = QLabel(process.name)
+        name_lbl.setStyleSheet(f"color: {name_color}; font-size: 11px;")
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        hl.addWidget(name_lbl, 1)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 100)
+        slider.setSingleStep(5)
+        slider.setPageStep(5)
+        slider.setFixedWidth(80)
+        slider.setStyleSheet(_SLIDER_STYLE)
+        slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
+
+        val_lbl = QLabel()
+        val_lbl.setFixedWidth(26)
+        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        val_lbl.setStyleSheet("color: rgba(255,255,255,180); font-size: 11px;")
+
+        vol = getattr(process, 'default_volume', None) or 100
+        if is_running:
+            actual = audio_control.get_app_volume(pid)
+            if actual is not None:
+                vol = round((actual * 100) / 5) * 5
+        vol = max(0, min(100, vol))
+        slider.blockSignals(True)
+        slider.setValue(vol)
+        slider.blockSignals(False)
+        val_lbl.setText(str(vol))
+
+        def on_changed(v, p=process, pid_ref=pid, lbl=val_lbl, s=slider):
+            snapped = round(v / 5) * 5
+            snapped = max(0, min(100, snapped))
+            if snapped != v:
+                s.blockSignals(True)
+                s.setValue(snapped)
+                s.blockSignals(False)
+            lbl.setText(str(snapped))
+            self._on_vol_list_changed(snapped, p, pid_ref)
+
+        slider.valueChanged.connect(on_changed)
+        hl.addWidget(slider)
+        hl.addWidget(val_lbl)
+        return row
+
+    def _on_vol_list_changed(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
+        """볼륨 리스트 슬라이더 변경 시 실시간 적용 및 DB 저장 예약."""
+        if pid is not None:
+            audio_control.set_app_volume(pid, value / 100.0)
+        process.default_volume = value
+        self._schedule_volume_save(process)
         self._reset_auto_hide()
+
+    def _schedule_volume_save(self, process: ManagedProcess) -> None:
+        """500ms 디바운스로 볼륨 DB 저장 예약."""
+        existing = self._volume_save_timers.get(process.id)
+        if existing is None:
+            existing = QTimer(self)
+            existing.setSingleShot(True)
+            self._volume_save_timers[process.id] = existing
+        else:
+            existing.stop()
+            try:
+                existing.timeout.disconnect()
+            except TypeError:
+                pass
+
+        def _save(p=process):
+            class _SaveRunnable(QRunnable):
+                def __init__(self, dm, proc):
+                    super().__init__()
+                    self._dm = dm
+                    self._proc = proc
+                def run(self):
+                    try:
+                        self._dm.update_process(self._proc)
+                    except Exception:
+                        pass
+            self._save_pool.start(_SaveRunnable(self._data_manager, p))
+
+        existing.timeout.connect(_save)
+        existing.start(500)

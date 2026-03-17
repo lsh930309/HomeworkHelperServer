@@ -39,20 +39,27 @@ QSlider::handle:horizontal:hover {
 }
 """
 
-# 음소거 버튼 스타일 (배경 제거, 무채색 테두리)
+# 음소거 버튼 스타일 (라이트/다크 모드 모두 시인성 확보)
 _MUTE_BTN_STYLE = """
 QPushButton {
-    border: 1px solid palette(mid);
+    border: 1px solid palette(midlight);
     border-radius: 4px;
     background: palette(button);
+    color: palette(buttonText);
     font-size: 11px;
 }
 QPushButton:checked {
-    background: palette(mid);
-    color: palette(text);
+    background: palette(highlight);
+    color: palette(highlightedText);
+    border-color: palette(highlight);
 }
-QPushButton:hover {
+QPushButton:hover:!checked {
     background: palette(midlight);
+    color: palette(buttonText);
+}
+QPushButton:disabled {
+    color: palette(placeholderText);
+    border-color: palette(mid);
 }
 """
 
@@ -173,7 +180,7 @@ class VolumePopoverPanel(QWidget):
         name_label = QLabel(process.name)
         name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         if not is_running:
-            name_label.setStyleSheet("color: gray;")
+            name_label.setStyleSheet("color: palette(placeholderText);")
         layout.addWidget(name_label)
 
         # 음소거 버튼: 실행 중인 경우만 활성화
