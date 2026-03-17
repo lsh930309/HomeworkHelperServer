@@ -576,7 +576,7 @@ class SidebarWidget(QWidget):
                     if icon and not icon.isNull():
                         self.icon_loaded.emit(icon.pixmap(40, 40))
                 except Exception:
-                    pass
+                    logger.debug("아이콘 로드 실패: %s", self._path, exc_info=True)
 
         loader = _IconLoader(process.monitoring_path, self)
 

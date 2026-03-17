@@ -245,14 +245,20 @@ class VolumePopoverPanel(QWidget):
         if initial_volume is None:
             initial_volume = 100
         if is_running:
-            actual = audio_control.get_app_volume(pid)
-            if actual is not None:
-                initial_volume = round((actual * 100) / 5) * 5
+            try:
+                actual = audio_control.get_app_volume(pid)
+                if actual is not None:
+                    initial_volume = round((actual * 100) / 5) * 5
+            except Exception:
+                pass  # 저장된 기본값 사용
         initial_volume = max(0, min(100, initial_volume))
 
         # 초기 음소거 상태: 실행 중이면 시스템 상태, 대기 중이면 저장된 기본값
         if is_running:
-            initial_muted = audio_control.is_muted(pid) or False
+            try:
+                initial_muted = audio_control.is_muted(pid) or False
+            except Exception:
+                initial_muted = getattr(process, 'default_muted', False)
         else:
             initial_muted = getattr(process, 'default_muted', False)
         if initial_muted:
@@ -275,7 +281,10 @@ class VolumePopoverPanel(QWidget):
             p.default_muted = checked
             self._schedule_volume_save(p)
             if pid_ref is not None:
-                audio_control.set_mute(pid_ref, checked)
+                try:
+                    audio_control.set_mute(pid_ref, checked)
+                except Exception:
+                    logger.debug("음소거 설정 실패: pid=%s", pid_ref, exc_info=True)
 
         def on_value_changed(v, p=process, pid_ref=pid, lbl=vol_label, s=slider):
             snapped = round(v / 5) * 5
