@@ -647,6 +647,35 @@ def ensure_process_table_schema():
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN stamina_notify_threshold INTEGER DEFAULT 20"))
                     print("[Migration] global_settings.stamina_notify_threshold 컬럼 추가됨")
 
+                # 사이드바 설정 컬럼 추가
+                if 'sidebar_enabled' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_enabled INTEGER DEFAULT 1"))
+                    print("[Migration] global_settings.sidebar_enabled 컬럼 추가됨")
+                if 'sidebar_auto_hide_sec' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_sec INTEGER DEFAULT 3"))
+                    print("[Migration] global_settings.sidebar_auto_hide_sec 컬럼 추가됨")
+                if 'sidebar_height_ratio' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_height_ratio REAL DEFAULT 1.0"))
+                    print("[Migration] global_settings.sidebar_height_ratio 컬럼 추가됨")
+                if 'sidebar_opacity' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_opacity REAL DEFAULT 0.85"))
+                    print("[Migration] global_settings.sidebar_opacity 컬럼 추가됨")
+                if 'sidebar_clock_enabled' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_clock_enabled INTEGER DEFAULT 1"))
+                    print("[Migration] global_settings.sidebar_clock_enabled 컬럼 추가됨")
+                if 'sidebar_clock_format' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_clock_format TEXT DEFAULT '%H:%M:%S'"))
+                    print("[Migration] global_settings.sidebar_clock_format 컬럼 추가됨")
+                if 'sidebar_playtime_enabled' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_playtime_enabled INTEGER DEFAULT 1"))
+                    print("[Migration] global_settings.sidebar_playtime_enabled 컬럼 추가됨")
+                if 'sidebar_playtime_prefix' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_playtime_prefix TEXT DEFAULT '오늘 플레이 시간'"))
+                    print("[Migration] global_settings.sidebar_playtime_prefix 컬럼 추가됨")
+                if 'sidebar_volume_section_enabled' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_volume_section_enabled INTEGER DEFAULT 1"))
+                    print("[Migration] global_settings.sidebar_volume_section_enabled 컬럼 추가됨")
+
             conn.commit()
     except Exception as e:
         print(f"테이블 스키마 확인/수정 중 오류: {e}")

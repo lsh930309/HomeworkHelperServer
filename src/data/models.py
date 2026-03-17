@@ -75,6 +75,17 @@ class GlobalSettings(Base):
     theme = Column(String, default="system")  # "system" | "light" | "dark"
     hide_on_game = Column(Boolean, default=True)
 
+    # 사이드바
+    sidebar_enabled = Column(Boolean, default=True)
+    sidebar_auto_hide_sec = Column(Integer, default=3)
+    sidebar_height_ratio = Column(Float, default=1.0)
+    sidebar_opacity = Column(Float, default=0.85)
+    sidebar_clock_enabled = Column(Boolean, default=True)
+    sidebar_clock_format = Column(String, default="%H:%M:%S")
+    sidebar_playtime_enabled = Column(Boolean, default=True)
+    sidebar_playtime_prefix = Column(String, default="오늘 플레이 시간")
+    sidebar_volume_section_enabled = Column(Boolean, default=True)
+
 
 class ProcessSession(Base):
     """게임/프로세스 실행 세션 타임스탬프 기록"""

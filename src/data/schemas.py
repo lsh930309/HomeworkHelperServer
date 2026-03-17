@@ -85,6 +85,16 @@ class GlobalSettingsSchema(BaseModel):
     # 테마 / 게임 모드
     theme: str = "system"
     hide_on_game: bool = True
+    # 사이드바
+    sidebar_enabled: bool = True
+    sidebar_auto_hide_sec: int = 3
+    sidebar_height_ratio: float = 1.0
+    sidebar_opacity: float = 0.85
+    sidebar_clock_enabled: bool = True
+    sidebar_clock_format: str = "%H:%M:%S"
+    sidebar_playtime_enabled: bool = True
+    sidebar_playtime_prefix: str = "오늘 플레이 시간"
+    sidebar_volume_section_enabled: bool = True
 
 
 class ProcessSessionCreate(BaseModel):
