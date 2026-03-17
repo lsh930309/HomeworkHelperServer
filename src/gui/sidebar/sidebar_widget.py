@@ -318,6 +318,7 @@ class SidebarWidget(QWidget):
         geo = self._compute_geometry()
         start = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
         self.setGeometry(start)
+        self.apply_visual_settings()
         self.show()
 
         if not self._blur_applied:
@@ -792,8 +793,21 @@ class SidebarWidget(QWidget):
         if screen is None:
             return QRect(0, 0, _SIDEBAR_WIDTH, 600)
         geo = screen.availableGeometry()
+        gs = getattr(self._data_manager, 'global_settings', None)
+        height_ratio = max(0.3, min(1.0, getattr(gs, 'sidebar_height_ratio', 1.0) if gs else 1.0))
+        sidebar_height = int(geo.height() * height_ratio)
+        y_offset = (geo.height() - sidebar_height) // 2
         x = geo.right() - _SIDEBAR_WIDTH + 1
-        return QRect(x, geo.top(), _SIDEBAR_WIDTH, geo.height())
+        return QRect(x, geo.top() + y_offset, _SIDEBAR_WIDTH, sidebar_height)
+
+    def apply_visual_settings(self) -> None:
+        """투명도·geometry 설정을 즉시 반영합니다."""
+        gs = getattr(self._data_manager, 'global_settings', None)
+        opacity = max(0.1, min(1.0, getattr(gs, 'sidebar_opacity', 0.85) if gs else 0.85))
+        self.setWindowOpacity(opacity)
+        if self._is_shown:
+            geo = self._compute_geometry()
+            self.setGeometry(geo)
 
     def _reset_auto_hide(self) -> None:
         if self._auto_hide_ms > 0:

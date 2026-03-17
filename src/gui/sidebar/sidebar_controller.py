@@ -140,7 +140,11 @@ class SidebarController:
         if self._sidebar is not None:
             auto_hide_ms = settings.sidebar_auto_hide_sec * 1000
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
+            self._sidebar.apply_visual_settings()
             self._sidebar.refresh_content()
+            # sidebar_enabled=False 로 변경 시 즉시 숨김
+            if not getattr(settings, 'sidebar_enabled', True) and self._sidebar._is_shown:
+                self._sidebar.slide_out()
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""
