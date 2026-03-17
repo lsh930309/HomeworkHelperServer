@@ -14,7 +14,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
@@ -560,13 +560,17 @@ class SidebarWidget(QWidget):
         hl.addWidget(name_lbl, 1)
 
         # 음소거 버튼 (실행 중/대기 중 모두 활성화)
-        mute_btn = QPushButton()
+        # QToolButton: 아이콘 전용 버튼에서 자동 중앙 정렬을 보장
+        mute_btn = QToolButton()
         mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
         from PyQt6.QtCore import QSize
+        from PyQt6.QtCore import Qt as _Qt
         mute_btn.setIconSize(QSize(14, 14))
+        mute_btn.setToolButtonStyle(_Qt.ToolButtonStyle.ToolButtonIconOnly)
+        mute_btn.setAutoRaise(True)
         mute_btn.setStyleSheet("""
-            QPushButton {
+            QToolButton {
                 border: 1px solid rgba(255,255,255,60);
                 border-radius: 3px;
                 background: rgba(255,255,255,20);
@@ -574,12 +578,12 @@ class SidebarWidget(QWidget):
                 font-size: 10px;
                 padding: 0px;
             }
-            QPushButton:checked {
+            QToolButton:checked {
                 background: rgba(100,149,237,180);
                 border-color: rgba(100,149,237,255);
                 color: white;
             }
-            QPushButton:hover:!checked {
+            QToolButton:hover:!checked {
                 background: rgba(255,255,255,40);
             }
         """)
