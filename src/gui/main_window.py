@@ -1798,6 +1798,10 @@ class MainWindow(QMainWindow):
         if audio_control.set_app_volume(pid, default_volume / 100.0):
             self._volume_applied_pids[process.id] = pid
 
+        # default_muted 적용 (이미 적용된 PID는 건너뜀 — 위 set_app_volume 와 동일 조건)
+        default_muted = getattr(process, "default_muted", False)
+        audio_control.set_mute(pid, default_muted)
+
     # ─────────────────────────────
 
     def _calculate_progress_percentage(self, process: ManagedProcess, current_dt: datetime.datetime) -> tuple[float, str]:

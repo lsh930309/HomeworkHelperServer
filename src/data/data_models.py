@@ -27,7 +27,8 @@ class ManagedProcess:
                  stamina_max: Optional[int] = None,
                  stamina_updated_at: Optional[float] = None,
                  # 앱 볼륨 제어
-                 default_volume: Optional[int] = None):
+                 default_volume: Optional[int] = None,
+                 default_muted: bool = False):
         """관리 대상 프로세스 인스턴스를 초기화합니다."""
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
@@ -57,6 +58,7 @@ class ManagedProcess:
 
         # 앱 볼륨 제어
         self.default_volume = default_volume
+        self.default_muted = default_muted
 
     def __repr__(self):
         """ManagedProcess 객체의 문자열 표현을 반환합니다."""
@@ -92,6 +94,8 @@ class ManagedProcess:
         # 볼륨 필드 하위 호환성
         if 'default_volume' not in data:
             data['default_volume'] = None
+        if 'default_muted' not in data:
+            data['default_muted'] = False
         return cls(**data)
     
     def is_hoyoverse_game(self) -> bool:

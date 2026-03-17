@@ -517,25 +517,86 @@ class SidebarWidget(QWidget):
             self._vol_list_layout.addWidget(self._make_vol_row(proc, active_pids.get(proc.id)))
 
     def _make_vol_row(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
-        """다크 테마 볼륨 행 (이름 + 슬라이더 + 값 레이블)."""
+        """다크 테마 볼륨 행 (이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet("background: transparent;")
+        # 실행 중인 게임은 행 배경을 살짝 밝힘
+        row_bg = "rgba(255,255,255,12)" if is_running else "transparent"
+        row.setStyleSheet(f"background: {row_bg}; border-radius: 3px;")
         hl = QHBoxLayout(row)
-        hl.setContentsMargins(0, 1, 0, 1)
+        hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)
 
-        name_color = "rgba(255,255,255,220)" if is_running else "rgba(255,255,255,110)"
+        # 실행 중 인디케이터: 녹색 점
+        dot_lbl = QLabel("●")
+        dot_lbl.setFixedWidth(10)
+        dot_lbl.setStyleSheet(
+            "color: #4caf50; font-size: 8px;" if is_running
+            else "color: transparent; font-size: 8px;"
+        )
+        hl.addWidget(dot_lbl)
+
         name_lbl = QLabel(process.name)
-        name_lbl.setStyleSheet(f"color: {name_color}; font-size: 11px;")
+        name_lbl.setStyleSheet("color: rgba(255,255,255,220); font-size: 11px;")
         name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hl.addWidget(name_lbl, 1)
+
+        # 음소거 버튼 (실행 중/대기 중 모두 활성화)
+        mute_btn = QPushButton()
+        mute_btn.setFixedSize(22, 22)
+        mute_btn.setCheckable(True)
+        mute_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid rgba(255,255,255,60);
+                border-radius: 3px;
+                background: rgba(255,255,255,20);
+                color: white;
+                font-size: 10px;
+            }
+            QPushButton:checked {
+                background: rgba(100,149,237,180);
+                border-color: rgba(100,149,237,255);
+            }
+            QPushButton:hover:!checked {
+                background: rgba(255,255,255,40);
+            }
+        """)
+
+        from PyQt6.QtWidgets import QApplication, QStyle
+        style = QApplication.style()
+        if style:
+            icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
+            icon_off = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
+            if not icon_on.isNull():
+                mute_btn.setIcon(icon_on)
+                mute_btn._icon_on = icon_on
+                mute_btn._icon_off = icon_off if not icon_off.isNull() else icon_on
+            else:
+                mute_btn.setText("🔊")
+                mute_btn._icon_on = None
+        else:
+            mute_btn.setText("🔊")
+            mute_btn._icon_on = None
+
+        # 초기 음소거 상태
+        if is_running:
+            initial_muted = audio_control.is_muted(pid) or False
+        else:
+            initial_muted = getattr(process, 'default_muted', False)
+        if initial_muted:
+            mute_btn.blockSignals(True)
+            mute_btn.setChecked(True)
+            mute_btn.blockSignals(False)
+            if getattr(mute_btn, '_icon_on', None):
+                mute_btn.setIcon(mute_btn._icon_off)
+            else:
+                mute_btn.setText("🔇")
 
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
         slider.setSingleStep(5)
         slider.setPageStep(5)
-        slider.setFixedWidth(80)
+        slider.setFixedWidth(70)
         slider.setStyleSheet(_SLIDER_STYLE)
         slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
 
@@ -555,6 +616,17 @@ class SidebarWidget(QWidget):
         slider.blockSignals(False)
         val_lbl.setText(str(vol))
 
+        def on_mute_toggled(checked, p=process, pid_ref=pid, btn=mute_btn):
+            if getattr(btn, '_icon_on', None):
+                btn.setIcon(btn._icon_off if checked else btn._icon_on)
+            else:
+                btn.setText("🔇" if checked else "🔊")
+            p.default_muted = checked
+            self._schedule_volume_save(p)
+            if pid_ref is not None:
+                audio_control.set_mute(pid_ref, checked)
+            self._reset_auto_hide()
+
         def on_changed(v, p=process, pid_ref=pid, lbl=val_lbl, s=slider):
             snapped = round(v / 5) * 5
             snapped = max(0, min(100, snapped))
@@ -565,7 +637,9 @@ class SidebarWidget(QWidget):
             lbl.setText(str(snapped))
             self._on_vol_list_changed(snapped, p, pid_ref)
 
+        mute_btn.toggled.connect(on_mute_toggled)
         slider.valueChanged.connect(on_changed)
+        hl.addWidget(mute_btn)
         hl.addWidget(slider)
         hl.addWidget(val_lbl)
         return row

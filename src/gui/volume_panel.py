@@ -176,19 +176,25 @@ class VolumePopoverPanel(QWidget):
             icon_label.setPixmap(qi.pixmap(20, 20))
         layout.addWidget(icon_label)
 
-        # 게임 이름 (실행 중이 아니면 흐리게 표시)
+        # 실행 중 인디케이터: 녹색 점 (대기 중이면 투명)
+        dot_label = QLabel("●")
+        dot_label.setFixedWidth(12)
+        dot_label.setStyleSheet(
+            "color: #4caf50; font-size: 8px;" if is_running
+            else "color: transparent; font-size: 8px;"
+        )
+        layout.addWidget(dot_label)
+
+        # 게임 이름 (실행 여부와 무관하게 동일한 색상)
         name_label = QLabel(process.name)
         name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        if not is_running:
-            name_label.setStyleSheet("color: palette(placeholderText);")
         layout.addWidget(name_label)
 
-        # 음소거 버튼: 실행 중인 경우만 활성화
+        # 음소거 버튼: 실행 중/대기 중 모두 활성화 (대기 중은 default_muted 저장)
         mute_btn = QPushButton()
         mute_btn.setFixedSize(28, 28)
         mute_btn.setCheckable(True)
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
-        mute_btn.setEnabled(is_running)
 
         from PyQt6.QtWidgets import QStyle
         icon_on = _system_icon(QStyle.StandardPixmap.SP_MediaVolume)
@@ -226,23 +232,30 @@ class VolumePopoverPanel(QWidget):
                 initial_volume = round((actual * 100) / 5) * 5
         initial_volume = max(0, min(100, initial_volume))
 
+        # 초기 음소거 상태: 실행 중이면 시스템 상태, 대기 중이면 저장된 기본값
         if is_running:
-            is_muted = audio_control.is_muted(pid)
-            if is_muted:
-                mute_btn.setChecked(True)
-                if mute_btn._icon_on:
-                    mute_btn.setIcon(mute_btn._icon_off)
-                else:
-                    mute_btn.setText("✕")
+            initial_muted = audio_control.is_muted(pid) or False
+        else:
+            initial_muted = getattr(process, 'default_muted', False)
+        if initial_muted:
+            mute_btn.blockSignals(True)
+            mute_btn.setChecked(True)
+            mute_btn.blockSignals(False)
+            if mute_btn._icon_on:
+                mute_btn.setIcon(mute_btn._icon_off)
+            else:
+                mute_btn.setText("✕")
 
         slider.setValue(initial_volume)
         vol_label.setText(str(initial_volume))
 
-        def on_mute_toggled(checked, pid_ref=pid, btn=mute_btn):
+        def on_mute_toggled(checked, p=process, pid_ref=pid, btn=mute_btn):
             if btn._icon_on:
                 btn.setIcon(btn._icon_off if checked else btn._icon_on)
             else:
                 btn.setText("✕" if checked else "▶")
+            p.default_muted = checked
+            self._schedule_volume_save(p)
             if pid_ref is not None:
                 audio_control.set_mute(pid_ref, checked)
 
