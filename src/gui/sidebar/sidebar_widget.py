@@ -135,13 +135,26 @@ class SidebarWidget(QWidget):
 
     def _build_ui(self, layout: QVBoxLayout) -> None:
         """사이드바 내부 위젯을 구성합니다."""
-        # --- 게임 이름 ---
+        # --- 게임 아이콘 + 이름 헤더 ---
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+
+        self._game_icon_label = QLabel()
+        self._game_icon_label.setFixedSize(40, 40)
+        self._game_icon_label.setStyleSheet(
+            "background: rgba(255,255,255,15); border-radius: 8px;"
+        )
+        self._game_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._game_icon_label.setScaledContents(True)
+        header_row.addWidget(self._game_icon_label)
+
         self._game_name_label = QLabel("게임")
         self._game_name_label.setStyleSheet(
             "color: white; font-weight: bold; font-size: 13px;"
         )
         self._game_name_label.setWordWrap(True)
-        layout.addWidget(self._game_name_label)
+        header_row.addWidget(self._game_name_label, 1)
+        layout.addLayout(header_row)
 
         # 구분선
         layout.addWidget(self._make_separator())
@@ -269,12 +282,16 @@ class SidebarWidget(QWidget):
 
         if process is None:
             self._game_name_label.setText("게임")
+            self._game_icon_label.clear()
             self._vol_slider.setValue(100)
             self._stamina_section.setVisible(False)
-            self._playtime_label.setText("00:00:00")
+            self._playtime_label.setText("0분")
             return
 
         self._game_name_label.setText(process.name)
+
+        # 고해상도 아이콘 로드 (백그라운드 스레드로 캐시 추출 후 UI 갱신)
+        self._load_icon_async(process)
 
         # 볼륨 초기값
         vol = 100
@@ -435,13 +452,45 @@ class SidebarWidget(QWidget):
     def _refresh_playtime(self) -> None:
         """플레이 시간 레이블을 갱신합니다."""
         if self._game_start_timestamp is None:
-            self._playtime_label.setText("00:00:00")
+            self._playtime_label.setText("0분")
             return
         elapsed = int(time.time() - self._game_start_timestamp)
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
-        s = elapsed % 60
-        self._playtime_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        if h > 0:
+            self._playtime_label.setText(f"{h}시간 {m:02d}분")
+        else:
+            self._playtime_label.setText(f"{m}분")
+
+    def _load_icon_async(self, process: ManagedProcess) -> None:
+        """게임 아이콘을 백그라운드 스레드에서 추출한 뒤 UI에 반영합니다."""
+        from PyQt6.QtCore import QThread, pyqtSignal as Signal
+
+        class _IconLoader(QThread):
+            icon_loaded = Signal(object)  # QPixmap
+
+            def __init__(self, path: str, parent=None):
+                super().__init__(parent)
+                self._path = path
+
+            def run(self):
+                try:
+                    from src.utils.process import get_qicon_for_file
+                    icon = get_qicon_for_file(self._path, icon_size=48)
+                    if icon and not icon.isNull():
+                        self.icon_loaded.emit(icon.pixmap(40, 40))
+                except Exception:
+                    pass
+
+        loader = _IconLoader(process.monitoring_path, self)
+
+        def _on_icon(pixmap):
+            if not pixmap.isNull():
+                self._game_icon_label.setPixmap(pixmap)
+            loader.deleteLater()
+
+        loader.icon_loaded.connect(_on_icon)
+        loader.start()
 
         # 스태미나도 주기적으로 갱신
         if self._current_process is not None:

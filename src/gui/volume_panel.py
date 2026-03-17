@@ -125,13 +125,14 @@ class VolumePopoverPanel(QWidget):
         self._list_layout.setSpacing(6)
         outer.addLayout(self._list_layout)
 
-        self._empty_label = QLabel("실행 중인 게임이 없습니다.")
+        self._empty_label = QLabel("등록된 게임이 없습니다.")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet("color: gray; padding: 8px;")
         self._list_layout.addWidget(self._empty_label)
 
-    def refresh(self, running_entries: list):
-        """실행 중인 (process, pid) 쌍 목록으로 패널을 갱신합니다."""
+    def refresh(self, all_entries: list):
+        """(process, pid_or_None) 쌍 목록으로 패널을 갱신합니다.
+        pid가 None이면 게임이 실행 중이 아닌 것으로, 기본 볼륨만 조정 가능합니다."""
         while self._list_layout.count() > 0:
             item = self._list_layout.takeAt(0)
             if item and item.widget():
@@ -139,19 +140,21 @@ class VolumePopoverPanel(QWidget):
                 w.hide()
                 w.deleteLater()
 
-        if not running_entries:
-            empty = QLabel("실행 중인 게임이 없습니다.")
+        if not all_entries:
+            empty = QLabel("등록된 게임이 없습니다.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet("color: gray; padding: 8px;")
             self._list_layout.addWidget(empty)
         else:
-            for process, pid in running_entries:
+            for process, pid in all_entries:
                 self._list_layout.addWidget(self._make_row(process, pid))
 
         self.adjustSize()
 
-    def _make_row(self, process: ManagedProcess, pid: int) -> QWidget:
-        """프로세스 한 행(아이콘 / 음소거 버튼 / 슬라이더 / 값 레이블)을 생성합니다."""
+    def _make_row(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
+        """프로세스 한 행(아이콘 / 이름 / 음소거 버튼 / 슬라이더 / 값 레이블)을 생성합니다.
+        pid가 None이면 게임이 실행 중이 아님을 의미하며, 기본 볼륨 설정만 가능합니다."""
+        is_running = pid is not None
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -166,16 +169,19 @@ class VolumePopoverPanel(QWidget):
             icon_label.setPixmap(qi.pixmap(20, 20))
         layout.addWidget(icon_label)
 
-        # 게임 이름
+        # 게임 이름 (실행 중이 아니면 흐리게 표시)
         name_label = QLabel(process.name)
         name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        if not is_running:
+            name_label.setStyleSheet("color: gray;")
         layout.addWidget(name_label)
 
-        # 음소거 버튼: Qt 표준 아이콘 사용 (무채색 시스템 아이콘)
+        # 음소거 버튼: 실행 중인 경우만 활성화
         mute_btn = QPushButton()
         mute_btn.setFixedSize(28, 28)
         mute_btn.setCheckable(True)
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
+        mute_btn.setEnabled(is_running)
 
         from PyQt6.QtWidgets import QStyle
         icon_on = _system_icon(QStyle.StandardPixmap.SP_MediaVolume)
@@ -188,7 +194,7 @@ class VolumePopoverPanel(QWidget):
             mute_btn.setText("▶")
             mute_btn._icon_on = None
 
-        # 볼륨 슬라이더: 5 단위 스냅, 무채색
+        # 볼륨 슬라이더: 5 단위 스냅
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
         slider.setSingleStep(5)
@@ -196,33 +202,36 @@ class VolumePopoverPanel(QWidget):
         slider.setFixedWidth(110)
         slider.setStyleSheet(_SLIDER_STYLE)
 
-        # 값 레이블 (드래그 중 실시간 표시)
+        # 값 레이블
         vol_label = QLabel()
         vol_label.setFixedWidth(28)
         vol_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        # 초기 볼륨 결정: 실제 시스템 볼륨 → 저장값 → 100
+        # 초기 볼륨 결정
+        # 실행 중: 실제 시스템 볼륨 → 저장값 → 100
+        # 대기 중: 저장값 → 100
         initial_volume = getattr(process, 'default_volume', None)
         if initial_volume is None:
             initial_volume = 100
-        actual = audio_control.get_app_volume(pid)
-        if actual is not None:
-            initial_volume = round((actual * 100) / 5) * 5
+        if is_running:
+            actual = audio_control.get_app_volume(pid)
+            if actual is not None:
+                initial_volume = round((actual * 100) / 5) * 5
         initial_volume = max(0, min(100, initial_volume))
 
-        is_muted = audio_control.is_muted(pid)
-        if is_muted:
-            mute_btn.setChecked(True)
-            if mute_btn._icon_on:
-                mute_btn.setIcon(mute_btn._icon_off)
-            else:
-                mute_btn.setText("✕")
+        if is_running:
+            is_muted = audio_control.is_muted(pid)
+            if is_muted:
+                mute_btn.setChecked(True)
+                if mute_btn._icon_on:
+                    mute_btn.setIcon(mute_btn._icon_off)
+                else:
+                    mute_btn.setText("✕")
 
         slider.setValue(initial_volume)
         vol_label.setText(str(initial_volume))
 
         def on_mute_toggled(checked, pid_ref=pid, btn=mute_btn):
-            """음소거 버튼 토글 시 시스템 음소거 상태를 변경합니다."""
             if btn._icon_on:
                 btn.setIcon(btn._icon_off if checked else btn._icon_on)
             else:
@@ -231,7 +240,6 @@ class VolumePopoverPanel(QWidget):
                 audio_control.set_mute(pid_ref, checked)
 
         def on_value_changed(v, p=process, pid_ref=pid, lbl=vol_label, s=slider):
-            """슬라이더 값을 5 단위로 스냅하고 레이블 및 볼륨을 갱신합니다."""
             snapped = round(v / 5) * 5
             snapped = max(0, min(100, snapped))
             if snapped != v:

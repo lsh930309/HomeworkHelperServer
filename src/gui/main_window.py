@@ -252,8 +252,9 @@ class MainWindow(QMainWindow):
         if vh:
             vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
 
-        # 고화질 아이콘 표시를 위한 아이콘 크기 설정 (24x24px 논리 크기, 고DPI에서 자동 확대)
-        self.process_table.setIconSize(QSize(24, 24))
+        # 아이콘 크기: 행 높이(36px)에서 여백을 뺀 28px로 설정 (DPI 배율은 get_qicon_for_file 내부에서 적용)
+        self._table_icon_logical_size = 28
+        self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
         
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
 
@@ -883,7 +884,7 @@ class MainWindow(QMainWindow):
         for r, p in enumerate(processes): # 각 프로세스에 대해 반복
             # 아이콘 컬럼
             icon_item = QTableWidgetItem()
-            qi = get_qicon_for_file(p.monitoring_path) # 파일 경로로부터 아이콘 가져오기
+            qi = get_qicon_for_file(p.monitoring_path, icon_size=getattr(self, '_table_icon_logical_size', 28))
             if qi and not qi.isNull(): icon_item.setIcon(qi)
             self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
 
@@ -1761,12 +1762,11 @@ class MainWindow(QMainWindow):
             self._volume_btn.setChecked(False)
             self._volume_btn.setText("🔊")
         else:
-            running = []
+            all_entries = []
             for p in self.data_manager.managed_processes:
-                pid = self._get_active_pid(p.id)
-                if pid is not None:
-                    running.append((p, pid))
-            self._volume_panel.refresh(running)
+                pid = self._get_active_pid(p.id)  # 실행 중이 아니면 None
+                all_entries.append((p, pid))
+            self._volume_panel.refresh(all_entries)
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
 
