@@ -14,7 +14,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
@@ -30,13 +30,19 @@ _ANIM_DURATION_MS = 220
 _DEFAULT_AUTO_HIDE_MS = 3000
 
 def _tint_icon_white(icon) -> "QIcon":
-    """아이콘 픽셀을 흰색으로 틴팅합니다 (다크 배경 전용)."""
+    """아이콘 픽셀을 흰색으로 틴팅합니다 (다크 배경 전용).
+
+    devicePixelRatio 를 원본에서 그대로 복사해야 HiDPI 환경에서
+    논리 픽셀 크기가 보존됩니다. 보존하지 않으면 아이콘이 버튼보다
+    커져서 (0,0) 위치로 클리핑되는 현상이 발생합니다.
+    """
     from PyQt6.QtGui import QPainter, QColor, QPixmap
     from PyQt6.QtCore import Qt
     pixmap = icon.pixmap(16, 16)
     if pixmap.isNull():
         return icon
     result = QPixmap(pixmap.size())
+    result.setDevicePixelRatio(pixmap.devicePixelRatio())  # HiDPI 대응
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.drawPixmap(0, 0, pixmap)
@@ -560,29 +566,23 @@ class SidebarWidget(QWidget):
         hl.addWidget(name_lbl, 1)
 
         # 음소거 버튼 (실행 중/대기 중 모두 활성화)
-        # QToolButton: 아이콘 전용 버튼에서 자동 중앙 정렬을 보장
-        mute_btn = QToolButton()
+        mute_btn = QPushButton()
         mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
-        from PyQt6.QtCore import QSize
-        from PyQt6.QtCore import Qt as _Qt
-        mute_btn.setIconSize(QSize(14, 14))
-        mute_btn.setToolButtonStyle(_Qt.ToolButtonStyle.ToolButtonIconOnly)
-        mute_btn.setAutoRaise(True)
         mute_btn.setStyleSheet("""
-            QToolButton {
+            QPushButton {
                 border: 1px solid rgba(255,255,255,60);
                 border-radius: 3px;
                 background: rgba(255,255,255,20);
                 color: white;
                 font-size: 10px;
             }
-            QToolButton:checked {
+            QPushButton:checked {
                 background: rgba(100,149,237,180);
                 border-color: rgba(100,149,237,255);
                 color: white;
             }
-            QToolButton:hover:!checked {
+            QPushButton:hover:!checked {
                 background: rgba(255,255,255,40);
             }
         """)
