@@ -576,7 +576,6 @@ class SidebarWidget(QWidget):
                 background: rgba(255,255,255,20);
                 color: white;
                 font-size: 10px;
-                padding: 0px;
             }
             QToolButton:checked {
                 background: rgba(100,149,237,180);
