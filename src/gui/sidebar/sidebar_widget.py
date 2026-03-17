@@ -23,7 +23,7 @@ from src.utils import audio_control
 logger = logging.getLogger(__name__)
 
 # 사이드바 고정 너비 (px)
-_SIDEBAR_WIDTH = 240
+_SIDEBAR_WIDTH = 260
 # 슬라이드 애니메이션 시간 (ms)
 _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함

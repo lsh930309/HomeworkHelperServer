@@ -14,6 +14,24 @@ from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
 
+
+def _tint_icon_white(icon) -> QIcon:
+    """아이콘 픽셀을 흰색으로 틴팅합니다. DPR 보존으로 HiDPI 대응."""
+    from PyQt6.QtGui import QPainter, QColor, QPixmap
+    from PyQt6.QtCore import Qt as _Qt
+    pixmap = icon.pixmap(16, 16)
+    if pixmap.isNull():
+        return icon
+    result = QPixmap(pixmap.size())
+    result.setDevicePixelRatio(pixmap.devicePixelRatio())
+    result.fill(_Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(result.rect(), QColor("white"))
+    painter.end()
+    return QIcon(result)
+
 # 슬라이더 스타일 (palette 기반으로 테마 자동 대응)
 _SLIDER_STYLE = """
 QSlider::groove:horizontal {
@@ -197,8 +215,8 @@ class VolumePopoverPanel(QWidget):
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
         from PyQt6.QtWidgets import QStyle
-        icon_on = _system_icon(QStyle.StandardPixmap.SP_MediaVolume)
-        icon_off = _system_icon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
+        icon_on = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolume))
+        icon_off = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolumeMuted))
         if not icon_on.isNull():
             mute_btn.setIcon(icon_on)
             mute_btn._icon_on = icon_on
