@@ -180,6 +180,11 @@ class SidebarWidget(QWidget):
         self._playtime_timer.setInterval(1000)
         self._playtime_timer.timeout.connect(self._refresh_playtime)
 
+        # 현재 시간 갱신 타이머 (1초)
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(1000)
+        self._clock_timer.timeout.connect(self._update_clock)
+
         # 커서 위치 폴링 타이머 (200ms) — leaveEvent 오탐 방지
         self._cursor_poll_timer = QTimer(self)
         self._cursor_poll_timer.setInterval(200)
@@ -223,6 +228,18 @@ class SidebarWidget(QWidget):
         self._scroll_layout = QVBoxLayout(self._scroll_content)
         self._scroll_layout.setContentsMargins(0, 0, 0, 0)
         self._scroll_layout.setSpacing(0)
+
+        # 현재 시간 섹션 (최상단)
+        self._clock_widget = QWidget()
+        self._clock_widget.setStyleSheet("background: transparent;")
+        clock_layout = QVBoxLayout(self._clock_widget)
+        clock_layout.setContentsMargins(0, 0, 0, 8)
+        clock_layout.setSpacing(2)
+        self._clock_label = QLabel()
+        self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_label.setStyleSheet("color: white; font-size: 28px; font-weight: bold; background: transparent;")
+        clock_layout.addWidget(self._clock_label)
+        self._scroll_layout.insertWidget(0, self._clock_widget)
 
         # 실행 중 게임 클러스터 영역 (동적으로 채워짐)
         self._active_clusters_layout = QVBoxLayout()
@@ -288,6 +305,7 @@ class SidebarWidget(QWidget):
 
     def refresh_content(self) -> None:
         """게임 클러스터와 볼륨 목록을 모두 갱신합니다."""
+        self._update_clock()
         self._refresh_active_sections()
         self._refresh_volumes_list()
 
@@ -312,6 +330,7 @@ class SidebarWidget(QWidget):
         self._is_shown = True
         self.refresh_content()
         self._playtime_timer.start()
+        self._clock_timer.start()
         self._cursor_poll_timer.start()
         QApplication.instance().installEventFilter(self._click_filter)
         self._reset_auto_hide()
@@ -324,6 +343,7 @@ class SidebarWidget(QWidget):
 
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
+        self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         QApplication.instance().removeEventFilter(self._click_filter)
 
@@ -346,6 +366,7 @@ class SidebarWidget(QWidget):
         """타이머와 애니메이션을 정리합니다."""
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
+        self._clock_timer.stop()
         self._cursor_poll_timer.stop()
         try:
             QApplication.instance().removeEventFilter(self._click_filter)
@@ -448,13 +469,17 @@ class SidebarWidget(QWidget):
         self._load_icon_async(process, icon_label)
 
         # ── 플레이타임 ──
+        gs = getattr(self._data_manager, 'global_settings', None)
+        playtime_enabled = getattr(gs, 'sidebar_playtime_enabled', True) if gs else True
+        playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
         playtime_label = QLabel("0분")
         playtime_label.setStyleSheet(
             "color: rgba(255,255,255,200); font-size: 12px; background: transparent;"
         )
+        playtime_label.setVisible(playtime_enabled)
         layout.addWidget(playtime_label)
-        self._playtime_labels[process.id] = (playtime_label, start_ts)
-        self._update_playtime_label(playtime_label, start_ts)
+        self._playtime_labels[process.id] = (playtime_label, start_ts, playtime_prefix)
+        self._update_playtime_label(playtime_label, start_ts, playtime_prefix)
 
         # ── 게임 종료 버튼 ──
         kill_btn = QPushButton("게임 종료")
@@ -499,24 +524,34 @@ class SidebarWidget(QWidget):
     # 내부 메서드 — 플레이타임
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _update_playtime_label(label: QLabel, start_ts: float) -> None:
+    def _update_playtime_label(self, label: QLabel, start_ts: float, prefix: str = "오늘 플레이 시간") -> None:
         """경과 시간을 계산해 레이블 텍스트를 갱신합니다."""
         if not start_ts:
-            label.setText("0분")
+            label.setText(f"{prefix}: 0분")
             return
         elapsed = int(time.time() - start_ts)
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
         if h > 0:
-            label.setText(f"{h}시간 {m:02d}분")
+            elapsed_text = f"{h}시간 {m:02d}분"
         else:
-            label.setText(f"{m}분")
+            elapsed_text = f"{m}분"
+        label.setText(f"{prefix}: {elapsed_text}")
 
     def _refresh_playtime(self) -> None:
         """1초 타이머마다 모든 실행 중 게임의 플레이타임 레이블을 갱신합니다."""
-        for label, start_ts in self._playtime_labels.values():
-            self._update_playtime_label(label, start_ts)
+        for entry in self._playtime_labels.values():
+            label, start_ts, prefix = entry
+            self._update_playtime_label(label, start_ts, prefix)
+
+    def _update_clock(self) -> None:
+        """현재 시간 레이블을 갱신합니다."""
+        import datetime
+        gs = getattr(self._data_manager, 'global_settings', None)
+        fmt = getattr(gs, 'sidebar_clock_format', '%H:%M:%S') if gs else '%H:%M:%S'
+        self._clock_label.setText(datetime.datetime.now().strftime(fmt))
+        enabled = getattr(gs, 'sidebar_clock_enabled', True) if gs else True
+        self._clock_widget.setVisible(enabled)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 아이콘 비동기 로드
@@ -561,6 +596,10 @@ class SidebarWidget(QWidget):
 
     def _refresh_volumes_list(self) -> None:
         """모든 등록 게임에 대한 볼륨 행을 재구성합니다."""
+        gs = getattr(self._data_manager, 'global_settings', None)
+        vol_enabled = getattr(gs, 'sidebar_volume_section_enabled', True) if gs else True
+        self._vol_section.setVisible(vol_enabled)
+
         while self._vol_list_layout.count() > 0:
             item = self._vol_list_layout.takeAt(0)
             if item and item.widget():

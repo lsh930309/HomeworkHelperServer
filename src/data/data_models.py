@@ -158,7 +158,14 @@ class GlobalSettings:
                  sidebar_trigger_y_start: float = 0.1,
                  sidebar_trigger_y_end: float = 0.9,
                  sidebar_auto_hide_sec: int = 3,
-                 sidebar_effect: str = "acrylic"):
+                 sidebar_effect: str = "acrylic",
+                 sidebar_height_ratio: float = 1.0,
+                 sidebar_opacity: float = 0.85,
+                 sidebar_clock_enabled: bool = True,
+                 sidebar_clock_format: str = "%H:%M:%S",
+                 sidebar_playtime_enabled: bool = True,
+                 sidebar_playtime_prefix: str = "오늘 플레이 시간",
+                 sidebar_volume_section_enabled: bool = True):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -186,6 +193,13 @@ class GlobalSettings:
         self.sidebar_trigger_y_end = sidebar_trigger_y_end
         self.sidebar_auto_hide_sec = sidebar_auto_hide_sec
         self.sidebar_effect = sidebar_effect
+        self.sidebar_height_ratio = sidebar_height_ratio
+        self.sidebar_opacity = sidebar_opacity
+        self.sidebar_clock_enabled = sidebar_clock_enabled
+        self.sidebar_clock_format = sidebar_clock_format
+        self.sidebar_playtime_enabled = sidebar_playtime_enabled
+        self.sidebar_playtime_prefix = sidebar_playtime_prefix
+        self.sidebar_volume_section_enabled = sidebar_volume_section_enabled
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -240,6 +254,13 @@ class GlobalSettings:
         if _effect not in ('mica', 'acrylic', 'none'):
             _effect = 'acrylic'
         data['sidebar_effect'] = _effect
+        data['sidebar_height_ratio'] = max(0.3, min(1.0, float(data.get('sidebar_height_ratio', 1.0))))
+        data['sidebar_opacity'] = max(0.1, min(1.0, float(data.get('sidebar_opacity', 0.85))))
+        data['sidebar_clock_enabled'] = bool(data.get('sidebar_clock_enabled', True))
+        data['sidebar_clock_format'] = str(data.get('sidebar_clock_format', '%H:%M:%S'))
+        data['sidebar_playtime_enabled'] = bool(data.get('sidebar_playtime_enabled', True))
+        data['sidebar_playtime_prefix'] = str(data.get('sidebar_playtime_prefix', '오늘 플레이 시간'))
+        data['sidebar_volume_section_enabled'] = bool(data.get('sidebar_volume_section_enabled', True))
         return cls(**data)
     
 class WebShortcut:

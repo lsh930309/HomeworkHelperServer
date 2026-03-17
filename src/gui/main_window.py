@@ -199,14 +199,6 @@ class MainWindow(QMainWindow):
         self.dashboard_button.clicked.connect(lambda: self.open_webpage("http://127.0.0.1:8000/dashboard"))
         self.top_button_area_layout.addWidget(self.dashboard_button)
 
-        # 사이드바 디버그 토글 버튼
-        self._sidebar_debug_btn = QPushButton()
-        self._sidebar_debug_btn.setToolTip("[디버깅] 사이드바 위젯 토글\n(게임 실행 없이 사이드바를 열거나 닫습니다)")
-        self._sidebar_debug_btn.setText("◀▶")
-        self._sidebar_debug_btn.setFixedSize(icon_button_size, icon_button_size)
-        self._sidebar_debug_btn.clicked.connect(lambda: self._sidebar_controller.toggle_debug_sidebar())
-        self.top_button_area_layout.addWidget(self._sidebar_debug_btn)
-
         # GitHub 바로가기 버튼 추가
         self.github_button = QPushButton()
         self.github_button.setToolTip("GitHub 저장소 방문")
@@ -480,15 +472,24 @@ class MainWindow(QMainWindow):
         except AttributeError: # 예외 발생 시 빈 아이콘 사용 (안전 장치)
             ei = QIcon()
         ea = QAction(ei, "종료(&X)", self); ea.setShortcut("Ctrl+Q"); ea.triggered.connect(self.initiate_quit_sequence)
+        restart_action = QAction("재시작(&R)", self)
+        restart_action.setShortcut("Ctrl+R")
+        restart_action.triggered.connect(self._restart_app)
         if fm:
+            fm.addAction(restart_action)
+            fm.addSeparator()
             fm.addAction(ea) # 종료 액션
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
+        sidebar_settings_action = QAction("사이드바 설정...", self)
+        sidebar_settings_action.triggered.connect(self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
+            sm.addSeparator()
+            sm.addAction(sidebar_settings_action)
 
         # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
@@ -530,12 +531,21 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self._volume_btn)
         mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
 
-        # 도구 메뉴
-        tm = mb.addMenu("도구(&T)")
-        lsm_action = QAction("🎬 Label Studio Helper", self)
-        lsm_action.triggered.connect(self.open_label_studio_manager)
-        if tm:
-            tm.addAction(lsm_action)
+    def _restart_app(self) -> None:
+        """앱을 재시작합니다."""
+        import sys, os
+        QApplication.quit()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def open_sidebar_settings_dialog(self) -> None:
+        from src.gui.sidebar_settings_dialog import SidebarSettingsDialog
+        gs = self.data_manager.global_settings
+        dlg = SidebarSettingsDialog(gs, self)
+        if dlg.exec():
+            updated = dlg.get_updated_settings()
+            self.data_manager.save_global_settings(updated)
+            if hasattr(self, '_sidebar_controller'):
+                self._sidebar_controller.apply_settings(updated)
 
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""

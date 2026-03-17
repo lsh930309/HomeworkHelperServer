@@ -36,8 +36,6 @@ class SidebarController:
         # 앱 종료 시
         self._sidebar_controller.cleanup()
 
-        # 디버그 토글 버튼
-        self._sidebar_controller.toggle_debug_sidebar()
     """
 
     def __init__(self, data_manager, main_window: Optional[QWidget] = None):
@@ -56,7 +54,6 @@ class SidebarController:
         # 지연 생성 (화면 정보가 필요하므로 QApplication 초기화 이후)
         self._trigger: Optional[EdgeTriggerWindow] = None
         self._sidebar: Optional[SidebarWidget] = None
-        self._debug_mode = False  # 디버그 강제 표시 여부
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -105,7 +102,6 @@ class SidebarController:
         self._active_process = None
         self._active_pid = None
         self._game_start_timestamp = None
-        self._debug_mode = False
 
         if self._trigger is not None:
             self._trigger.stop()
@@ -114,22 +110,6 @@ class SidebarController:
             self._sidebar.slide_out()
 
         logger.debug("SidebarController 비활성화")
-
-    def toggle_debug_sidebar(self) -> None:
-        """디버그용 사이드바 토글 (게임 실행 없이 사이드바를 열거나 닫습니다)."""
-        self._ensure_widgets_created()
-
-        if self._sidebar is None:
-            return
-
-        if self._sidebar._is_shown:
-            self._sidebar.slide_out()
-            self._debug_mode = False
-        else:
-            # 더미 프로세스 없이 빈 상태로 표시
-            self._sidebar.update_process(self._active_process, self._active_pid, self._game_start_timestamp)
-            self._sidebar.slide_in()
-            self._debug_mode = True
 
     def cleanup(self) -> None:
         """앱 종료 시 모든 리소스를 정리합니다."""
@@ -154,6 +134,13 @@ class SidebarController:
     # ------------------------------------------------------------------
     # 내부 메서드
     # ------------------------------------------------------------------
+
+    def apply_settings(self, settings) -> None:
+        """사이드바 설정을 런타임에 반영합니다."""
+        if self._sidebar is not None:
+            auto_hide_ms = settings.sidebar_auto_hide_sec * 1000
+            self._sidebar.update_auto_hide_ms(auto_hide_ms)
+            self._sidebar.refresh_content()
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""
