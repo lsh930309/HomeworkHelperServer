@@ -362,14 +362,20 @@ class SidebarWidget(QWidget):
         self._frame.setGeometry(0, 0, self.width(), self.height())
 
     def enterEvent(self, event) -> None:
-        """마우스가 사이드바에 진입하면 자동 숨김 타이머를 리셋합니다."""
+        """마우스가 사이드바에 진입하면 자동 숨김 타이머를 취소합니다."""
         super().enterEvent(event)
-        self._reset_auto_hide()
+        self._auto_hide_timer.stop()
 
     def leaveEvent(self, event) -> None:
-        """마우스가 사이드바에서 벗어나면 자동 숨김 타이머를 재시작합니다."""
+        """마우스가 사이드바에서 벗어나면 자동 숨김 타이머를 시작합니다.
+
+        자식 위젯으로 이동할 때도 부모의 leaveEvent가 발생하므로,
+        커서가 실제로 위젯 영역 밖인지 확인한 후 타이머를 시작합니다.
+        """
         super().leaveEvent(event)
-        self._reset_auto_hide()
+        from PyQt6.QtGui import QCursor
+        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+            self._reset_auto_hide()
 
     # ------------------------------------------------------------------
     # 내부 메서드
