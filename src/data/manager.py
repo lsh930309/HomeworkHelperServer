@@ -47,8 +47,15 @@ class DataManager:
                     print(f"Error loading global settings from {path}: {e}.")
         return GlobalSettings()
 
-    def save_global_settings(self):
-        """파일에 현재 전역 설정을 저장합니다."""
+    def save_global_settings(self, settings=None):
+        """전역 설정을 파일에 저장합니다.
+
+        Args:
+            settings: 저장할 GlobalSettings 객체. None이면 현재 self.global_settings를 저장합니다.
+                      값을 넘기면 self.global_settings도 교체됩니다.
+        """
+        if settings is not None:
+            self.global_settings = settings
         try:
             with open(self.settings_file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.global_settings.to_dict(), f, ensure_ascii=False, indent=4)

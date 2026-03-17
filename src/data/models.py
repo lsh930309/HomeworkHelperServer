@@ -34,7 +34,8 @@ class Process(Base):
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
     # 앱 볼륨 제어
-    default_volume = Column(Integer, nullable=True)  # 0~100, None이면 미설정
+    default_volume = Column(Integer, nullable=True)   # 0~100, None이면 미설정
+    default_muted = Column(Boolean, nullable=False, default=False)
 
 
 class WebShortcut(Base):

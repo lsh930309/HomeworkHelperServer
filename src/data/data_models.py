@@ -27,7 +27,8 @@ class ManagedProcess:
                  stamina_max: Optional[int] = None,
                  stamina_updated_at: Optional[float] = None,
                  # 앱 볼륨 제어
-                 default_volume: Optional[int] = None):
+                 default_volume: Optional[int] = None,
+                 default_muted: bool = False):
         """관리 대상 프로세스 인스턴스를 초기화합니다."""
         self.id = id if id else str(uuid.uuid4()) # ID가 없으면 새로 생성
         self.name = name
@@ -57,6 +58,7 @@ class ManagedProcess:
 
         # 앱 볼륨 제어
         self.default_volume = default_volume
+        self.default_muted = default_muted
 
     def __repr__(self):
         """ManagedProcess 객체의 문자열 표현을 반환합니다."""
@@ -92,6 +94,8 @@ class ManagedProcess:
         # 볼륨 필드 하위 호환성
         if 'default_volume' not in data:
             data['default_volume'] = None
+        if 'default_muted' not in data:
+            data['default_muted'] = False
         return cls(**data)
     
     def is_hoyoverse_game(self) -> bool:
@@ -148,7 +152,20 @@ class GlobalSettings:
                  # 테마 설정
                  theme: str = "system",  # "system" | "light" | "dark"
                  # 게임 실행 시 창 숨기기
-                 hide_on_game: bool = True):
+                 hide_on_game: bool = True,
+                 # 사이드바 설정
+                 sidebar_enabled: bool = True,
+                 sidebar_trigger_y_start: float = 0.1,
+                 sidebar_trigger_y_end: float = 0.9,
+                 sidebar_auto_hide_sec: int = 3,
+                 sidebar_effect: str = "acrylic",
+                 sidebar_height_ratio: float = 1.0,
+                 sidebar_opacity: float = 0.85,
+                 sidebar_clock_enabled: bool = True,
+                 sidebar_clock_format: str = "%H:%M:%S",
+                 sidebar_playtime_enabled: bool = True,
+                 sidebar_playtime_prefix: str = "오늘 플레이 시간",
+                 sidebar_volume_section_enabled: bool = True):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -170,6 +187,19 @@ class GlobalSettings:
         # 테마 / 게임 모드
         self.theme = theme
         self.hide_on_game = hide_on_game
+        # 사이드바
+        self.sidebar_enabled = sidebar_enabled
+        self.sidebar_trigger_y_start = sidebar_trigger_y_start
+        self.sidebar_trigger_y_end = sidebar_trigger_y_end
+        self.sidebar_auto_hide_sec = sidebar_auto_hide_sec
+        self.sidebar_effect = sidebar_effect
+        self.sidebar_height_ratio = sidebar_height_ratio
+        self.sidebar_opacity = sidebar_opacity
+        self.sidebar_clock_enabled = sidebar_clock_enabled
+        self.sidebar_clock_format = sidebar_clock_format
+        self.sidebar_playtime_enabled = sidebar_playtime_enabled
+        self.sidebar_playtime_prefix = sidebar_playtime_prefix
+        self.sidebar_volume_section_enabled = sidebar_volume_section_enabled
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -213,6 +243,24 @@ class GlobalSettings:
             data['theme'] = 'system'
         if 'hide_on_game' not in data:
             data['hide_on_game'] = True
+        # 사이드바 설정 하위 호환성 + 타입/범위 정규화
+        data['sidebar_enabled'] = bool(data.get('sidebar_enabled', True))
+        _y_start = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_start', 0.1))))
+        _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
+        data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
+        data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
+        data['sidebar_auto_hide_sec'] = max(0, int(data.get('sidebar_auto_hide_sec', 3)))
+        _effect = data.get('sidebar_effect', 'acrylic')
+        if _effect not in ('mica', 'acrylic', 'none'):
+            _effect = 'acrylic'
+        data['sidebar_effect'] = _effect
+        data['sidebar_height_ratio'] = max(0.3, min(1.0, float(data.get('sidebar_height_ratio', 1.0))))
+        data['sidebar_opacity'] = max(0.1, min(1.0, float(data.get('sidebar_opacity', 0.85))))
+        data['sidebar_clock_enabled'] = bool(data.get('sidebar_clock_enabled', True))
+        data['sidebar_clock_format'] = str(data.get('sidebar_clock_format', '%H:%M:%S'))
+        data['sidebar_playtime_enabled'] = bool(data.get('sidebar_playtime_enabled', True))
+        data['sidebar_playtime_prefix'] = str(data.get('sidebar_playtime_prefix', '오늘 플레이 시간'))
+        data['sidebar_volume_section_enabled'] = bool(data.get('sidebar_volume_section_enabled', True))
         return cls(**data)
     
 class WebShortcut:

@@ -41,6 +41,7 @@ from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
+from src.gui.sidebar.sidebar_controller import SidebarController
 
 
 class IconDownloader(QThread):
@@ -154,6 +155,9 @@ class MainWindow(QMainWindow):
             self.data_manager, on_hide=self._on_volume_panel_hidden
         )
 
+        # 사이드바 컨트롤러 초기화
+        self._sidebar_controller = SidebarController(self.data_manager, self)
+
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
         self._saved_size = None
@@ -240,8 +244,9 @@ class MainWindow(QMainWindow):
         if vh:
             vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
 
-        # 고화질 아이콘 표시를 위한 아이콘 크기 설정 (24x24px 논리 크기, 고DPI에서 자동 확대)
-        self.process_table.setIconSize(QSize(24, 24))
+        # 아이콘 크기: 행 높이(36px)에서 여백을 뺀 28px로 설정 (DPI 배율은 get_qicon_for_file 내부에서 적용)
+        self._table_icon_logical_size = 28
+        self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
         
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
 
@@ -467,15 +472,24 @@ class MainWindow(QMainWindow):
         except AttributeError: # 예외 발생 시 빈 아이콘 사용 (안전 장치)
             ei = QIcon()
         ea = QAction(ei, "종료(&X)", self); ea.setShortcut("Ctrl+Q"); ea.triggered.connect(self.initiate_quit_sequence)
+        restart_action = QAction("재시작(&R)", self)
+        restart_action.setShortcut("Ctrl+R")
+        restart_action.triggered.connect(self._restart_app)
         if fm:
+            fm.addAction(restart_action)
+            fm.addSeparator()
             fm.addAction(ea) # 종료 액션
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
+        sidebar_settings_action = QAction("사이드바 설정...", self)
+        sidebar_settings_action.triggered.connect(self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
+            sm.addSeparator()
+            sm.addAction(sidebar_settings_action)
 
         # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
@@ -517,12 +531,21 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self._volume_btn)
         mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
 
-        # 도구 메뉴
-        tm = mb.addMenu("도구(&T)")
-        lsm_action = QAction("🎬 Label Studio Helper", self)
-        lsm_action.triggered.connect(self.open_label_studio_manager)
-        if tm:
-            tm.addAction(lsm_action)
+    def _restart_app(self) -> None:
+        """앱을 재시작합니다."""
+        import sys, os
+        QApplication.quit()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def open_sidebar_settings_dialog(self) -> None:
+        from src.gui.sidebar_settings_dialog import SidebarSettingsDialog
+        gs = self.data_manager.global_settings
+        dlg = SidebarSettingsDialog(gs, self)
+        if dlg.exec():
+            updated = dlg.get_updated_settings()
+            self.data_manager.save_global_settings(updated)
+            if hasattr(self, '_sidebar_controller'):
+                self._sidebar_controller.apply_settings(updated)
 
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
@@ -750,9 +773,26 @@ class MainWindow(QMainWindow):
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
+            # 사이드바 활성화: 실행 중인 프로세스 탐색
+            running_process = None
+            running_pid = None
+            for proc in self.data_manager.managed_processes:
+                entry = self.process_monitor.active_monitored_processes.get(proc.id)
+                if entry is not None:
+                    running_process = proc
+                    running_pid = entry.get('pid')
+                    break
+            if hasattr(self, '_sidebar_controller') and running_process is not None:
+                self._sidebar_controller.activate_for_game(
+                    running_process,
+                    pid=running_pid,
+                    game_start_timestamp=None,
+                )
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
+            if hasattr(self, '_sidebar_controller'):
+                self._sidebar_controller.deactivate()
             if hide_enabled:
                 self.activate_and_show() # 창을 다시 표시
                 status_bar = self.statusBar()
@@ -854,7 +894,7 @@ class MainWindow(QMainWindow):
         for r, p in enumerate(processes): # 각 프로세스에 대해 반복
             # 아이콘 컬럼
             icon_item = QTableWidgetItem()
-            qi = get_qicon_for_file(p.monitoring_path) # 파일 경로로부터 아이콘 가져오기
+            qi = get_qicon_for_file(p.monitoring_path, icon_size=getattr(self, '_table_icon_logical_size', 28))
             if qi and not qi.isNull(): icon_item.setIcon(qi)
             self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
 
@@ -1543,6 +1583,10 @@ class MainWindow(QMainWindow):
         if self._instance_manager and hasattr(self._instance_manager, 'cleanup'):
             self._instance_manager.cleanup()
 
+        # 3-1. 사이드바 컨트롤러 정리
+        if hasattr(self, '_sidebar_controller'):
+            self._sidebar_controller.cleanup()
+
         # 4. QApplication 종료
         app_instance = QApplication.instance()
         if app_instance:
@@ -1728,12 +1772,11 @@ class MainWindow(QMainWindow):
             self._volume_btn.setChecked(False)
             self._volume_btn.setText("🔊")
         else:
-            running = []
+            all_entries = []
             for p in self.data_manager.managed_processes:
-                pid = self._get_active_pid(p.id)
-                if pid is not None:
-                    running.append((p, pid))
-            self._volume_panel.refresh(running)
+                pid = self._get_active_pid(p.id)  # 실행 중이 아니면 None
+                all_entries.append((p, pid))
+            self._volume_panel.refresh(all_entries)
             self._volume_panel.show_below(self._volume_btn)
             self._volume_btn.setChecked(True)
 
@@ -1756,14 +1799,14 @@ class MainWindow(QMainWindow):
             return
 
         default_volume = getattr(process, "default_volume", None)
-        if default_volume is None:
-            return
+        already_applied = self._volume_applied_pids.get(process.id) == pid
+        if not already_applied and default_volume is not None:
+            if audio_control.set_app_volume(pid, default_volume / 100.0):
+                self._volume_applied_pids[process.id] = pid
 
-        if self._volume_applied_pids.get(process.id) == pid:
-            return
-
-        if audio_control.set_app_volume(pid, default_volume / 100.0):
-            self._volume_applied_pids[process.id] = pid
+        # default_muted 적용 (default_volume 미설정이어도 항상 적용)
+        default_muted = getattr(process, "default_muted", False)
+        audio_control.set_mute(pid, default_muted)
 
     # ─────────────────────────────
 
