@@ -55,6 +55,13 @@ class SidebarController:
         self._trigger: Optional[EdgeTriggerWindow] = None
         self._sidebar: Optional[SidebarWidget] = None
 
+        # 디스플레이 변경 감지 (가상 디스플레이 전환 등)
+        app = QApplication.instance()
+        if app is not None:
+            app.primaryScreenChanged.connect(self._on_primary_screen_changed)
+            app.screenAdded.connect(self._on_screen_config_changed)
+            app.screenRemoved.connect(self._on_screen_config_changed)
+
     # ------------------------------------------------------------------
     # 공개 API
     # ------------------------------------------------------------------
@@ -206,3 +213,21 @@ class SidebarController:
             return
         self._sidebar.slide_in()
         logger.debug("엣지 트리거 → 사이드바 슬라이드인")
+
+    def _on_primary_screen_changed(self, screen: "QScreen") -> None:
+        """주 화면이 변경되었을 때 위젯을 재배치합니다."""
+        logger.debug("주 화면 변경 감지 → 사이드바 위젯 재배치: %s", screen.name() if screen else "None")
+        new_screen = screen or QApplication.primaryScreen()
+        if self._trigger is not None:
+            self._trigger.reposition(new_screen)
+        if self._sidebar is not None:
+            self._sidebar.update_screen(new_screen)
+
+    def _on_screen_config_changed(self, screen: "QScreen") -> None:
+        """화면이 추가/제거되었을 때 위젯을 재배치합니다."""
+        logger.debug("화면 구성 변경 감지 → 사이드바 위젯 재배치")
+        new_screen = self._get_screen()
+        if self._trigger is not None:
+            self._trigger.reposition(new_screen)
+        if self._sidebar is not None:
+            self._sidebar.update_screen(new_screen)

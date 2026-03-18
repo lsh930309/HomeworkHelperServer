@@ -102,6 +102,11 @@ class EdgeTriggerWindow(QWidget):
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
 
+    def reposition(self, screen: Optional[QScreen]) -> None:
+        """화면 변경 시 트리거 창을 새 화면의 우측 끝으로 재배치합니다."""
+        self._reposition(screen)
+        logger.debug("EdgeTriggerWindow 재배치: %s", screen.name() if screen else "None")
+
     # ------------------------------------------------------------------
     # 내부 메서드
     # ------------------------------------------------------------------

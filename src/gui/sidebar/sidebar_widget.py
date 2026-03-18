@@ -800,6 +800,14 @@ class SidebarWidget(QWidget):
         x = geo.right() - _SIDEBAR_WIDTH + 1
         return QRect(x, geo.top() + y_offset, _SIDEBAR_WIDTH, sidebar_height)
 
+    def update_screen(self, screen: Optional[QScreen]) -> None:
+        """화면 변경 시 스크린 참조를 갱신하고 geometry를 재계산합니다."""
+        self._screen = screen
+        if self._is_shown:
+            geo = self._compute_geometry()
+            self.setGeometry(geo)
+        logger.debug("SidebarWidget 스크린 갱신: %s", screen.name() if screen else "None")
+
     def apply_visual_settings(self) -> None:
         """투명도·geometry 설정을 즉시 반영합니다."""
         gs = getattr(self._data_manager, 'global_settings', None)
