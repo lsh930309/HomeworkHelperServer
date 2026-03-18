@@ -32,52 +32,50 @@ def _tint_icon_white(icon) -> QIcon:
     painter.end()
     return QIcon(result)
 
-# 슬라이더 스타일 (palette 기반으로 테마 자동 대응)
 _SLIDER_STYLE = """
 QSlider::groove:horizontal {
-    height: 5px;
-    background: palette(midlight);
+    height: 4px;
+    background: rgba(255,255,255,28);
     border-radius: 2px;
 }
 QSlider::sub-page:horizontal {
-    background: palette(highlight);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(100,160,255,200), stop:1 rgba(140,190,255,220));
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
-    background: palette(light);
-    border: 2px solid palette(highlight);
-    width: 14px;
-    height: 14px;
-    border-radius: 7px;
-    margin: -5px 0;
+    background: rgba(220,230,255,240);
+    border: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin: -4px 0;
 }
 QSlider::handle:horizontal:hover {
-    background: palette(highlight);
-    border-color: palette(highlight);
+    background: white;
 }
 """
 
-# 음소거 버튼 스타일 (라이트/다크 모드 모두 시인성 확보)
 _MUTE_BTN_STYLE = """
 QPushButton {
-    border: 1px solid palette(midlight);
+    border: 1px solid rgba(255,255,255,22);
     border-radius: 4px;
-    background: palette(button);
-    color: palette(buttonText);
+    background: rgba(255,255,255,10);
+    color: white;
     font-size: 11px;
 }
 QPushButton:checked {
-    background: palette(highlight);
-    color: palette(highlightedText);
-    border-color: palette(highlight);
+    background: rgba(80,130,220,160);
+    border-color: rgba(100,160,255,180);
+    color: white;
 }
 QPushButton:hover:!checked {
-    background: palette(midlight);
-    color: palette(buttonText);
+    background: rgba(255,255,255,22);
+    color: white;
 }
 QPushButton:disabled {
-    color: palette(placeholderText);
-    border-color: palette(mid);
+    color: rgba(255,255,255,60);
+    border-color: rgba(255,255,255,15);
 }
 """
 
@@ -115,12 +113,11 @@ class VolumePopoverPanel(QWidget):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self._on_hide_callback = on_hide
         self.setAutoFillBackground(True)
-        # 외곽선 강화 + 모서리 처리
         self.setStyleSheet("""
             VolumePopoverPanel {
-                border: 2px solid palette(shadow);
+                border: 1px solid rgba(180,200,255,22);
                 border-radius: 8px;
-                background-color: palette(window);
+                background-color: #0c0c10;
             }
         """)
         self._data_manager = data_manager
@@ -138,12 +135,12 @@ class VolumePopoverPanel(QWidget):
         outer.setSpacing(6)
 
         header = QLabel("볼륨 조절")
-        header.setStyleSheet("font-weight: bold;")
+        header.setStyleSheet("color: rgba(150,170,210,200); font-size: 10px; font-weight: 500; letter-spacing: 1px;")
         outer.addWidget(header)
 
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: rgba(255,255,255,12); border: none; max-height: 1px;")
         outer.addWidget(line)
 
         self._list_layout = QVBoxLayout()
@@ -152,7 +149,7 @@ class VolumePopoverPanel(QWidget):
 
         self._empty_label = QLabel("등록된 게임이 없습니다.")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet("color: gray; padding: 8px;")
+        self._empty_label.setStyleSheet("color: rgba(255,255,255,80); padding: 8px; font-size: 11px;")
         self._list_layout.addWidget(self._empty_label)
 
     def refresh(self, all_entries: list):
@@ -168,7 +165,7 @@ class VolumePopoverPanel(QWidget):
         if not all_entries:
             empty = QLabel("등록된 게임이 없습니다.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setStyleSheet("color: gray; padding: 8px;")
+            empty.setStyleSheet("color: rgba(255,255,255,80); padding: 8px; font-size: 11px;")
             self._list_layout.addWidget(empty)
         else:
             for process, pid in all_entries:
@@ -198,13 +195,14 @@ class VolumePopoverPanel(QWidget):
         dot_label = QLabel("●")
         dot_label.setFixedWidth(12)
         dot_label.setStyleSheet(
-            "color: #4caf50; font-size: 8px;" if is_running
-            else "color: transparent; font-size: 8px;"
+            "color: rgba(80,200,120,220); font-size: 7px;" if is_running
+            else "color: transparent; font-size: 7px;"
         )
         layout.addWidget(dot_label)
 
         # 게임 이름 (실행 여부와 무관하게 동일한 색상)
         name_label = QLabel(process.name)
+        name_label.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
         name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(name_label)
 
@@ -237,6 +235,7 @@ class VolumePopoverPanel(QWidget):
         vol_label = QLabel()
         vol_label.setFixedWidth(28)
         vol_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        vol_label.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
 
         # 초기 볼륨 결정
         # 실행 중: 실제 시스템 볼륨 → 저장값 → 100
