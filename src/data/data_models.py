@@ -140,8 +140,6 @@ class GlobalSettings:
                  run_on_startup: bool = False,
                  always_on_top: bool = False,
                  run_as_admin: bool = False,
-                 notify_on_launch_success: bool = True,
-                 notify_on_launch_failure: bool = True,
                  notify_on_mandatory_time: bool = True,
                  notify_on_cycle_deadline: bool = True,
                  notify_on_sleep_correction: bool = True,
@@ -175,8 +173,6 @@ class GlobalSettings:
         self.always_on_top = always_on_top
         self.run_as_admin = run_as_admin # <<< 새 속성 초기화
         # 알림 옵션
-        self.notify_on_launch_success = notify_on_launch_success
-        self.notify_on_launch_failure = notify_on_launch_failure
         self.notify_on_mandatory_time = notify_on_mandatory_time
         self.notify_on_cycle_deadline = notify_on_cycle_deadline
         self.notify_on_sleep_correction = notify_on_sleep_correction
@@ -221,10 +217,9 @@ class GlobalSettings:
         if 'run_as_admin' not in data:
             data['run_as_admin'] = False
         # 알림 옵션들 역호환 기본값 추가
-        if 'notify_on_launch_success' not in data:
-            data['notify_on_launch_success'] = True
-        if 'notify_on_launch_failure' not in data:
-            data['notify_on_launch_failure'] = True
+        # notify_on_launch_success / notify_on_launch_failure 는 제거됨 — 구버전 DB 값은 무시
+        data.pop('notify_on_launch_success', None)
+        data.pop('notify_on_launch_failure', None)
         if 'notify_on_mandatory_time' not in data:
             data['notify_on_mandatory_time'] = True
         if 'notify_on_cycle_deadline' not in data:

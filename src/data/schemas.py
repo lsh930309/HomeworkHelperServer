@@ -73,8 +73,6 @@ class GlobalSettingsSchema(BaseModel):
     run_on_startup: bool = False
     always_on_top: bool = False
     run_as_admin: bool = False
-    notify_on_launch_success: bool = True
-    notify_on_launch_failure: bool = True
     notify_on_mandatory_time: bool = True
     notify_on_cycle_deadline: bool = True
     notify_on_sleep_correction: bool = True

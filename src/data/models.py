@@ -61,8 +61,6 @@ class GlobalSettings(Base):
     run_on_startup = Column(Boolean, default=False)
     always_on_top = Column(Boolean, default=False)
     run_as_admin = Column(Boolean, default=False)
-    notify_on_launch_success = Column(Boolean, default=True)
-    notify_on_launch_failure = Column(Boolean, default=True)
     notify_on_mandatory_time = Column(Boolean, default=True)
     notify_on_cycle_deadline = Column(Boolean, default=True)
     notify_on_sleep_correction = Column(Boolean, default=True)

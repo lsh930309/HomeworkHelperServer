@@ -108,11 +108,11 @@ class MainWindow(QMainWindow):
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
 
-        self.system_notifier = Notifier(QApplication.applicationName()) # 시스템 알림 객체 생성
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
-        # 시스템 알림 콜백을 GUI 알림 처리기에 연결
-        if hasattr(self.system_notifier, 'main_window_activated_callback'):
-            self.system_notifier.main_window_activated_callback = self.gui_notification_handler.process_system_notification_activation
+        self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
+            QApplication.applicationName(),
+            main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
+        )
 
         self.scheduler = Scheduler(self.data_manager, self.system_notifier, self.process_monitor) # 스케줄러 객체 생성
 
@@ -1055,17 +1055,12 @@ class MainWindow(QMainWindow):
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
         if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
-            # 설정에 따라 실행 성공 알림 전송
-            if self.data_manager.global_settings.notify_on_launch_success:
-                self.system_notifier.send_notification(title="프로세스 실행", message=f"'{p_launch.name}' 실행함.", task_id_to_highlight=None)
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 시도.", 3000)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
-            if self.data_manager.global_settings.notify_on_launch_failure:
-                self.system_notifier.send_notification(title="실행 실패", message=f"'{p_launch.name}' 실행 실패. 로그 확인.", task_id_to_highlight=None)
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)

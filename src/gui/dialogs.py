@@ -988,8 +988,6 @@ class GlobalSettingsDialog(QDialog):
         # 게임 실행 시 창 숨기기
         self.hide_on_game_checkbox = QCheckBox("게임 실행 감지 시 창을 트레이로 자동 숨기기")
         # --- 알림 설정 체크박스들 ---
-        self.notify_on_launch_success_checkbox = QCheckBox("프로세스 실행 성공 시 알림")
-        self.notify_on_launch_failure_checkbox = QCheckBox("프로세스 실행 실패 시 알림")
         self.notify_on_mandatory_time_checkbox = QCheckBox("고정 접속 시간 알림")
         self.notify_on_cycle_deadline_checkbox = QCheckBox("사용자 주기 만료 임박 알림")
         self.notify_on_sleep_correction_checkbox = QCheckBox("수면 보정(잠들기 전 미리) 알림")
@@ -1016,8 +1014,6 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow(self.hide_on_game_checkbox)
         # 알림 설정 섹션
         self.form_layout.addRow(QLabel("알림 설정:"))
-        self.form_layout.addRow(self.notify_on_launch_success_checkbox)
-        self.form_layout.addRow(self.notify_on_launch_failure_checkbox)
         self.form_layout.addRow(self.notify_on_mandatory_time_checkbox)
         self.form_layout.addRow(self.notify_on_cycle_deadline_checkbox)
         self.form_layout.addRow(self.notify_on_sleep_correction_checkbox)
@@ -1141,8 +1137,6 @@ class GlobalSettingsDialog(QDialog):
         # 게임 실행 시 창 숨기기
         self.hide_on_game_checkbox.setChecked(getattr(self.current_settings, 'hide_on_game', True))
         # 알림 설정
-        self.notify_on_launch_success_checkbox.setChecked(self.current_settings.notify_on_launch_success)
-        self.notify_on_launch_failure_checkbox.setChecked(self.current_settings.notify_on_launch_failure)
         self.notify_on_mandatory_time_checkbox.setChecked(self.current_settings.notify_on_mandatory_time)
         self.notify_on_cycle_deadline_checkbox.setChecked(self.current_settings.notify_on_cycle_deadline)
         self.notify_on_sleep_correction_checkbox.setChecked(self.current_settings.notify_on_sleep_correction)
@@ -1160,8 +1154,6 @@ class GlobalSettingsDialog(QDialog):
             run_on_startup=self.run_on_startup_checkbox.isChecked(),
             always_on_top=self.current_settings.always_on_top,  # 메뉴바 체크박스로 관리
             run_as_admin=self.run_as_admin_checkbox.isChecked(),
-            notify_on_launch_success=self.notify_on_launch_success_checkbox.isChecked(),
-            notify_on_launch_failure=self.notify_on_launch_failure_checkbox.isChecked(),
             notify_on_mandatory_time=self.notify_on_mandatory_time_checkbox.isChecked(),
             notify_on_cycle_deadline=self.notify_on_cycle_deadline_checkbox.isChecked(),
             notify_on_sleep_correction=self.notify_on_sleep_correction_checkbox.isChecked(),
