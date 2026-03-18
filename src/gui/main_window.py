@@ -2264,36 +2264,4 @@ class MainWindow(QMainWindow):
         result = msg_box.exec()
         return result == QMessageBox.StandardButton.Yes
 
-    def open_label_studio_manager(self):
-        """Label Studio Helper 설치/관리 다이얼로그 표시"""
-        try:
-            from src.utils.lsh_installer import LabelStudioHelperDialog
-            
-            if LabelStudioHelperDialog is None:
-                QMessageBox.warning(
-                    self,
-                    "기능 없음",
-                    "Label Studio Helper 설치 도우미를 사용할 수 없습니다."
-                )
-                return
-            
-            dialog = LabelStudioHelperDialog(self)
-            dialog.exec()
-
-            status_bar = self.statusBar()
-            if status_bar:
-                status_bar.showMessage("Label Studio Helper 다이얼로그 닫힘", 2000)
-
-        except ImportError as e:
-            QMessageBox.critical(
-                self,
-                "모듈 로드 오류",
-                f"Label Studio Helper 설치 도우미를 로드할 수 없습니다:\n{str(e)}"
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "오류",
-                f"Label Studio Helper 다이얼로그 실행 실패:\n{e}"
-            )
 
