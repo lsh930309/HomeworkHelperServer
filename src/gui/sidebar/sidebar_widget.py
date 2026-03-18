@@ -57,42 +57,43 @@ def _tint_icon_white(icon) -> "QIcon":
 # 슬라이더 스타일
 _SLIDER_STYLE = """
 QSlider::groove:horizontal {
-    height: 5px;
-    background: rgba(255,255,255,60);
+    height: 4px;
+    background: rgba(255,255,255,28);
     border-radius: 2px;
 }
 QSlider::sub-page:horizontal {
-    background: rgba(100,149,237,200);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(100,160,255,200), stop:1 rgba(140,190,255,220));
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
-    background: white;
-    border: 2px solid rgba(100,149,237,200);
-    width: 14px;
-    height: 14px;
-    border-radius: 7px;
-    margin: -5px 0;
+    background: rgba(220,230,255,240);
+    border: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin: -4px 0;
 }
 QSlider::handle:horizontal:hover {
-    background: rgba(100,149,237,255);
+    background: white;
 }
 """
 
 _MUTE_BTN_STYLE = """
 QPushButton {
-    border: 1px solid rgba(255,255,255,60);
+    border: 1px solid rgba(255,255,255,22);
     border-radius: 3px;
-    background: rgba(255,255,255,20);
+    background: rgba(255,255,255,10);
     color: white;
     font-size: 10px;
 }
 QPushButton:checked {
-    background: rgba(100,149,237,180);
-    border-color: rgba(100,149,237,255);
+    background: rgba(80,130,220,160);
+    border-color: rgba(100,160,255,180);
     color: white;
 }
 QPushButton:hover:!checked {
-    background: rgba(255,255,255,40);
+    background: rgba(255,255,255,22);
 }
 """
 
@@ -154,8 +155,8 @@ class SidebarWidget(QWidget):
         self._frame.setObjectName("SidebarFrame")
         self._frame.setStyleSheet("""
             QFrame#SidebarFrame {
-                background-color: rgba(30, 30, 30, 210);
-                border-left: 1px solid rgba(255, 255, 255, 40);
+                background-color: rgba(12, 12, 16, 240);
+                border-left: 1px solid rgba(180, 200, 255, 18);
                 border-radius: 0px;
             }
         """)
@@ -237,7 +238,7 @@ class SidebarWidget(QWidget):
         clock_layout.setSpacing(2)
         self._clock_label = QLabel()
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clock_label.setStyleSheet("color: white; font-size: 28px; font-weight: bold; background: transparent;")
+        self._clock_label.setStyleSheet("color: rgba(220,230,255,240); font-size: 28px; font-weight: 300; letter-spacing: 2px; background: transparent;")
         clock_layout.addWidget(self._clock_label)
         self._scroll_layout.insertWidget(0, self._clock_widget)
 
@@ -254,7 +255,7 @@ class SidebarWidget(QWidget):
         vol_section_layout.setSpacing(4)
 
         vol_title = QLabel("볼륨")
-        vol_title.setStyleSheet("color: rgba(255,255,255,160); font-size: 11px;")
+        vol_title.setStyleSheet("color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;")
         vol_section_layout.addWidget(vol_title)
 
         self._vol_list_container = QWidget()
@@ -275,13 +276,16 @@ class SidebarWidget(QWidget):
         close_btn.setFixedHeight(28)
         close_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(255,255,255,30);
-                color: white;
-                border: 1px solid rgba(255,255,255,60);
+                background: rgba(255,255,255,10);
+                color: rgba(255,255,255,160);
+                border: 1px solid rgba(255,255,255,18);
                 border-radius: 4px;
                 font-size: 11px;
             }
-            QPushButton:hover { background: rgba(255,255,255,60); }
+            QPushButton:hover {
+                background: rgba(255,255,255,22);
+                color: white;
+            }
         """)
         close_btn.clicked.connect(self.slide_out)
         layout.addWidget(close_btn)
@@ -439,7 +443,7 @@ class SidebarWidget(QWidget):
         """
         cluster = QWidget()
         cluster.setStyleSheet(
-            "QWidget { background: rgba(255,255,255,8); border-radius: 6px; }"
+            "QWidget { background: rgba(255,255,255,5); border: 1px solid rgba(255,255,255,10); border-radius: 8px; }"
         )
         layout = QVBoxLayout(cluster)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -452,7 +456,7 @@ class SidebarWidget(QWidget):
         icon_label = QLabel()
         icon_label.setFixedSize(40, 40)
         icon_label.setStyleSheet(
-            "background: rgba(255,255,255,15); border-radius: 8px;"
+            "background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 10px;"
         )
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setScaledContents(True)
@@ -460,7 +464,7 @@ class SidebarWidget(QWidget):
 
         name_label = QLabel(process.name)
         name_label.setStyleSheet(
-            "color: white; font-weight: bold; font-size: 13px; background: transparent;"
+            "color: rgba(235,240,255,240); font-weight: 600; font-size: 13px; background: transparent;"
         )
         name_label.setWordWrap(True)
         header.addWidget(name_label, 1)
@@ -475,7 +479,7 @@ class SidebarWidget(QWidget):
         playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
         playtime_label = QLabel("0분")
         playtime_label.setStyleSheet(
-            "color: rgba(255,255,255,200); font-size: 12px; background: transparent;"
+            "color: rgba(160,180,220,200); font-size: 11px; background: transparent;"
         )
         playtime_label.setVisible(playtime_enabled)
         layout.addWidget(playtime_label)
@@ -487,14 +491,14 @@ class SidebarWidget(QWidget):
         kill_btn.setFixedHeight(28)
         kill_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(200, 40, 40, 180);
-                color: white;
-                border: 1px solid rgba(255, 80, 80, 180);
-                border-radius: 4px;
+                background: rgba(160, 30, 30, 160);
+                color: rgba(255,200,200,220);
+                border: 1px solid rgba(200, 60, 60, 120);
+                border-radius: 5px;
                 font-size: 11px;
             }
-            QPushButton:hover  { background: rgba(220, 50, 50, 230); }
-            QPushButton:pressed { background: rgba(160, 20, 20, 230); }
+            QPushButton:hover  { background: rgba(200, 40, 40, 200); color: white; }
+            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
         """)
         kill_btn.clicked.connect(lambda _=False, p=pid: self._kill_process(p))
         layout.addWidget(kill_btn)
@@ -632,8 +636,7 @@ class SidebarWidget(QWidget):
         """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row_bg = "rgba(255,255,255,12)" if is_running else "transparent"
-        row.setStyleSheet(f"background: {row_bg}; border-radius: 3px;")
+        row.setStyleSheet("background: transparent; border-radius: 4px;")
         hl = QHBoxLayout(row)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)
@@ -641,13 +644,13 @@ class SidebarWidget(QWidget):
         dot_lbl = QLabel("●")
         dot_lbl.setFixedWidth(10)
         dot_lbl.setStyleSheet(
-            "color: #4caf50; font-size: 8px;" if is_running
-            else "color: transparent; font-size: 8px;"
+            "color: rgba(80,200,120,220); font-size: 7px;" if is_running
+            else "color: transparent; font-size: 7px;"
         )
         hl.addWidget(dot_lbl)
 
         name_lbl = QLabel(process.name)
-        name_lbl.setStyleSheet("color: rgba(255,255,255,220); font-size: 11px;")
+        name_lbl.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
         name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hl.addWidget(name_lbl, 1)
 
@@ -701,7 +704,7 @@ class SidebarWidget(QWidget):
         val_lbl = QLabel()
         val_lbl.setFixedWidth(28)
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        val_lbl.setStyleSheet("color: rgba(255,255,255,180); font-size: 11px;")
+        val_lbl.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
 
         vol = getattr(process, 'default_volume', None) or 100
         if is_running:
@@ -792,7 +795,7 @@ class SidebarWidget(QWidget):
         screen = self._screen or QApplication.primaryScreen()
         if screen is None:
             return QRect(0, 0, _SIDEBAR_WIDTH, 600)
-        geo = screen.availableGeometry()
+        geo = screen.geometry()
         gs = getattr(self._data_manager, 'global_settings', None)
         height_ratio = max(0.3, min(1.0, getattr(gs, 'sidebar_height_ratio', 1.0) if gs else 1.0))
         sidebar_height = int(geo.height() * height_ratio)
