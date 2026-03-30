@@ -1,227 +1,165 @@
-# 스크린샷 기능 구현 계획
+# screenshot feature — implementation state
 
-> 작성일: 2026-03-19
-> 상태: 사전 조사 완료, 구현 보류 (메커니즘 확인 필요)
-
----
-
-## 배경
-
-사이드바에 여분 공간이 생겨 새로운 기능 섹션 추가를 검토 중.
-게임 스크린샷 기능을 사이드바에 통합하되, **게임패드 버튼으로 트리거**하는 방식을 목표로 함.
+> last_updated: 2026-03-30
+> branch: dev-20260318 (commit bef5a15)
 
 ---
 
-## 사용 환경
+## STATUS
 
-- 게임패드: Gamesir (Xbox 라이센스 취득 제품)
-- PC 인식: Xbox 360 컨트롤러로 인식
-- 현재 동작: 패드의 **[공유] 버튼** → Game Bar 스크린샷 촬영
-- 문제점:
-  - Xbox 라이센스 제품이라 제조사 제공 버튼 리매핑 기능 없음
-  - Game Bar 방식 사용 시, 게임패드→키보드/마우스 UI 전환이 발생해 **마우스 커서가 화면에 나타남**
-
----
-
-## 목표
-
-1. [공유] 버튼 입력을 가로채어 Game Bar 대신 **앱 자체 스크린샷** 기능 실행
-2. 이 과정에서 키보드/마우스 입력이 발생하지 않도록 하여 **마우스 커서 비표시 유지**
-3. 스크린샷 결과를 사이드바에서 확인/관리할 수 있도록 통합
-
----
-
-## 메커니즘 분석
-
-### [공유] 버튼의 동작 원리 추정
-
-Xbox 360 컨트롤러 프로토콜에는 "공유" 버튼이 원래 없음.
-따라서 Gamesir 펌웨어/드라이버가 둘 중 하나의 방식으로 동작하는 것으로 추정:
-
-| 방식 | 가능성 | 설명 |
+| phase | scope | status |
 |---|---|---|
-| **가상 HID 키보드로 `Win+Alt+PrtScn` 주입** | **높음** | 컨트롤러 드라이버가 가상 키보드 장치를 생성하고 해당 키 조합 전송 |
-| **XInput Guide 버튼 → Game Bar가 해석** | 낮음 | XInput의 Guide 버튼(0x0400)을 Game Bar가 감지해 처리 |
-
-### 메커니즘 확인 방법 (추후 수행)
-
-장치관리자(`devmgmt.msc`) → 휴먼 인터페이스 장치:
-
-- **패드 연결 시 "HID 키보드 장치"가 새로 생김** → 가상 키보드 방식 → **구현 방법 A**
-- **새로 생기지 않음** → XInput Guide 버튼 방식 → **구현 방법 B**
+| Phase 1 | 게임패드 트리거 + 캡처 + 사이드바 UI + 설정 | COMPLETE (committed) |
+| Phase 1.5 | 진단 도구 실행 → _method.txt 갱신 | PENDING (user action needed) |
+| Phase 2 | 녹화 (DXGI+WASAPI+ffmpeg or OBS WebSocket) | DEFERRED |
 
 ---
 
-## 구현 방법 A: WH_KEYBOARD_LL 훅 (가상 키보드 방식)
-
-### 원리
-
-`WH_KEYBOARD_LL`은 `Win+Alt+PrtScn`이 Game Bar 서비스에 도달하기 **전에** 가로챌 수 있음.
-훅 콜백에서 `1` 반환 시 해당 키 이벤트가 OS에서 완전히 삭제됨.
+## ARCHITECTURE
 
 ```
-[공유 버튼 누름]
-    ↓
-[가상 HID 키보드 → Win+Alt+PrtScn 전송]
-    ↓
-[WH_KEYBOARD_LL 훅 → 이벤트 삭제 + 앱 자체 캡처 실행]
-    ↓
-[Game Bar: 이벤트 미수신]
-[게임: 키보드 입력 없음 → UI 모드 전환 없음 → 커서 비표시 유지]
+tools/diagnose_gamepad_screenshot.py   ← 1회성 진단, _method.txt 기록
+src/screenshot/
+  __init__.py         ← exports ScreenshotManager only
+  manager.py          ← 중앙 컨트롤러: _method.txt 읽어 impl 선택
+  method_a.py         ← WH_KEYBOARD_LL hook (Win+Alt+PrtScn 가로채기)
+  method_c.py         ← WinRT RawGameController polling (Xbox 라이센스 패드)
+  capture.py          ← 실제 캡처 로직 (mss → GDI BitBlt fallback)
+  _method.txt         ← "A" or "C:<button_index>" (gitignore됨, 진단 후 생성)
+src/gui/
+  main_window.py      ← ScreenshotManager 수명주기, Game Bar 레지스트리 제어
+  sidebar/sidebar_widget.py  ← 사이드바 스크린샷 섹션 + 썸네일 그리드
+  sidebar_settings_dialog.py ← 저장경로/트리거/GameBar/캡처모드 설정 UI
+src/data/
+  schemas.py          ← GlobalSettings에 screenshot_* 6개 필드
+  models.py / database.py / data_models.py  ← DB 컬럼 + 마이그레이션 완료
 ```
 
-### 샘플 코드 (Python / ctypes)
+---
 
+## IMPLEMENTED DETAILS
+
+### GlobalSettings fields (schemas.py)
 ```python
-import ctypes
-import ctypes.wintypes as wintypes
-
-WH_KEYBOARD_LL = 13
-WM_KEYDOWN     = 0x0100
-VK_SNAPSHOT    = 0x2C   # PrtScn
-VK_LWIN        = 0x5B
-VK_MENU        = 0x12   # Alt
-
-class KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("vkCode",      wintypes.DWORD),
-        ("scanCode",    wintypes.DWORD),
-        ("flags",       wintypes.DWORD),
-        ("time",        wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-    ]
-
-def install_screenshot_hook(screenshot_callback):
-    HOOKPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
-    )
-
-    def handler(nCode, wParam, lParam):
-        if nCode >= 0 and wParam == WM_KEYDOWN:
-            kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-            win_down = ctypes.windll.user32.GetAsyncKeyState(VK_LWIN) & 0x8000
-            alt_down = ctypes.windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000
-            if kb.vkCode == VK_SNAPSHOT and win_down and alt_down:
-                screenshot_callback()  # 앱 자체 캡처 실행
-                return 1               # 이벤트 완전 삭제
-        return ctypes.windll.user32.CallNextHookEx(None, nCode, wParam, lParam)
-
-    proc = HOOKPROC(handler)
-    hook = ctypes.windll.user32.SetWindowsHookExW(
-        WH_KEYBOARD_LL, proc, None, 0
-    )
-    return hook, proc  # proc은 GC 방지를 위해 반드시 보관
+screenshot_enabled: bool = True
+screenshot_save_dir: str = ""              # 비어있으면 ~/Pictures/GameCaptures
+screenshot_gamepad_trigger: bool = True
+screenshot_disable_gamebar: bool = False
+screenshot_capture_mode: str = "fullscreen"   # or "game_window"
+screenshot_gamepad_button_index: int = -1     # Method C용, 진단 후 설정
 ```
 
-### 주의사항
+### _method.txt format
+- `"A"` → method_a.py (WH_KEYBOARD_LL hook)
+- `"C:3"` → method_c.py with button_index=3 (숫자는 진단 결과에 따라 다름)
+- 파일 없음 → manager.py가 "A"로 fallback
 
-- `Win+L` (화면 잠금) 등 일부 시스템 단축키는 LL 훅으로도 차단 불가
-- `Win+Alt+PrtScn`은 보호 목록에 없으므로 차단 가능
-- `proc` 참조를 유지하지 않으면 GC가 수거하여 크래시 발생 → 멤버 변수로 보관 필수
-- 훅은 메시지 루프가 있는 스레드에서 실행해야 함 (PyQt6 메인 스레드 OK)
-
----
-
-## 구현 방법 B: XInput Guide 버튼 방식
-
-### 원리
-
-Game Bar를 캡처 단축키 한정으로 비활성화 후, XInput 폴링으로 Guide 버튼 감지.
-
-```
-레지스트리 설정:
-HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR
-  AppCaptureEnabled = 0   (Game Bar 스크린샷 캡처 비활성화)
-```
-
+### ScreenshotManager public API (manager.py)
 ```python
-import ctypes
-
-XINPUT_GAMEPAD_GUIDE = 0x0400  # 비공개 확장 (XInputGetStateEx 필요)
-
-class XINPUT_GAMEPAD(ctypes.Structure):
-    _fields_ = [
-        ("wButtons",      ctypes.c_ushort),
-        ("bLeftTrigger",  ctypes.c_ubyte),
-        ("bRightTrigger", ctypes.c_ubyte),
-        ("sThumbLX",      ctypes.c_short),
-        ("sThumbLY",      ctypes.c_short),
-        ("sThumbRX",      ctypes.c_short),
-        ("sThumbRY",      ctypes.c_short),
-    ]
-
-class XINPUT_STATE(ctypes.Structure):
-    _fields_ = [
-        ("dwPacketNumber", ctypes.c_ulong),
-        ("Gamepad",        XINPUT_GAMEPAD),
-    ]
-
-# XInputGetStateEx (비공개 ordinal 100) - Guide 버튼 읽기 가능
-xinput = ctypes.windll.xinput1_4
-XInputGetStateEx = xinput[100]
-
-def poll_guide_button(controller_index=0):
-    state = XINPUT_STATE()
-    if XInputGetStateEx(controller_index, ctypes.byref(state)) == 0:
-        return bool(state.Gamepad.wButtons & XINPUT_GAMEPAD_GUIDE)
-    return False
+ScreenshotManager(get_target_hwnd: Callable[[], Optional[int]])
+.start() / .stop()
+.capture_now()
+.set_save_dir(path: str)
+.set_capture_mode(mode: str)  # "fullscreen" or "game_window"
+.set_on_captured(callback: Callable[[str], None])
 ```
 
-### 주의사항
-
-- `XInputGetStateEx`는 비공개 API (ordinal 100) — 안정성 낮음
-- Game Bar를 완전히 끄지 않고 캡처 기능만 비활성화할 수 있는지 추가 검증 필요
-- Xbox 360 스타일 컨트롤러에서 Guide 버튼이 실제로 공유 버튼과 매핑되는지 확인 필요
-
----
-
-## 스크린샷 캡처 구현 선택지
-
-| 방법 | 장점 | 단점 | 권장 상황 |
-|---|---|---|---|
-| `mss` 라이브러리 | pip install, 간단 | 일부 DX 게임 검은 화면 | 프로토타입 |
-| DXGI Duplication (`ctypes`) | GPU 렌더링까지 캡처 | 구현 복잡 | 프로덕션 |
-| `Windows.Graphics.Capture` (WinRT) | HDR, DirectX 완벽 지원 | `winrt` 패키지 필요 | 최고 품질 |
-| Game Bar 폴더 감시 | 구현 0줄 | 제어권 없음 | 최후 수단 |
-
-**권장**: 1단계 `mss`로 기본 동작 확인 → 2단계 DXGI Duplication으로 교체
-
-### 커서 제거 보조 코드 (방법 A 사용 시에도 혹시 모를 경우 대비)
-
+### capture.py key functions
 ```python
-def capture_without_cursor():
-    ctypes.windll.user32.ShowCursor(False)
-    try:
-        import mss
-        with mss.mss() as sct:
-            return sct.grab(sct.monitors[0])  # 전체 화면
-    finally:
-        ctypes.windll.user32.ShowCursor(True)
+take_screenshot(save_dir: str) -> Optional[str]
+take_screenshot_window(hwnd: int, save_dir: str) -> Optional[str]
+# window 캡처: GetClientRect + ClientToScreen → mss region or GDI BitBlt
+# filename: capture_YYYYMMDD_HHMMSS_mmm.png
 ```
+
+### method_a.py
+- SetWindowsHookExW(WH_KEYBOARD_LL) on daemon thread with message loop
+- Win+Alt+PrtScn 감지 → return 1 (이벤트 삭제) → callback 호출
+- stop(): PostThreadMessage(WM_QUIT)
+
+### method_c.py
+- winrt.windows.gaming.input.RawGameController 50ms 폴링
+- edge detection: curr[idx] and not prev[idx]
+- discover_button_index(timeout_sec=10.0) → 진단 도구에서 사용
+
+### main_window.py integration
+- _start_screenshot_manager(): app 시작 시 enabled 확인 후 start()
+- _get_screenshot_target_hwnd(): 마지막 포커스된 등록 게임 창 HWND 반환
+- _on_screenshot_captured(path): sidebar_widget.on_screenshot_captured() 호출
+- _set_gamebar_capture(enabled): HKCU\...\GameDVR\AppCaptureEnabled 레지스트리 제어
+- _restore_gamebar_setting(): closeEvent 시 원복
+- _gamebar_original_value: Optional[int] (최초 비활성화 시점에 원본값 저장)
+
+### sidebar screenshot section (sidebar_widget.py)
+- _build_screenshot_section(): "스크린샷" 그룹박스, "지금 촬영" 버튼
+- _refresh_screenshot_thumbnails(): screenshot_save_dir에서 PNG/BMP 최대 8개 로드
+- 썸네일 그리드: 3열 × 최대 3행 = 9셀, 마지막 셀 = "+NNN" 폴더 단축 버튼
+- 각 썸네일 클릭 → QDesktopServices.openUrl(파일경로)
+- on_screenshot_captured(path): 새 캡처 후 썸네일 갱신 슬롯
 
 ---
 
-## 사이드바 통합 UI 구조 (안)
+## PENDING: Phase 1.5 — 진단 실행
 
+### 목적
+Gamesir G7 Pro 공유 버튼이 Method A(WH_KEYBOARD_LL)로 잡히는지, Method C(WinRT)가 필요한지 확인.
+3가지 진단 단계 모두 이전 세션에서 실패했음 → WinRT Method C 추가 후 재진단 필요.
+
+### 실행 방법
+```bash
+python tools/diagnose_gamepad_screenshot.py
 ```
-사이드바 스크린샷 섹션
-├── 버튼: "지금 촬영"         ← 마우스로 직접 트리거
-├── 최근 스크린샷 썸네일 목록  ← 클릭 시 파일 탐색기로 열기
-└── 설정 (사이드바 설정 다이얼로그에 추가)
-    ├── 저장 경로
-    ├── 파일명 형식 (날짜/게임명 포함 옵션)
-    ├── 게임패드 트리거 ON/OFF
-    └── (방법 B의 경우) 버튼 조합 선택
-```
+게임패드 연결 상태에서 실행. 각 단계마다 프롬프트에 따라 공유 버튼을 누름.
+
+### 예상 결과
+| 시나리오 | _method.txt 내용 | 비고 |
+|---|---|---|
+| Method A 성공 | `A` | WH_KEYBOARD_LL이 Win+Alt+PrtScn을 잡음 |
+| Method C 성공 | `C:<idx>` | WinRT가 버튼 인식, manager 자동 선택 |
+| 둘 다 실패 | `A` (fallback) | 추가 조사 필요 |
+
+### 진단 후 후속 작업
+1. `_method.txt` 내용 확인
+2. Method C 결과인 경우: 설정 다이얼로그에서 "감지된 버튼 인덱스" 읽기 전용 필드에 표시됨
+3. 앱 실행 후 실제 게임에서 공유 버튼 눌러 캡처 동작 확인
+4. mss 블랙스크린 여부 확인 (DX11/12 게임에서)
 
 ---
 
-## 다음 단계 체크리스트
+## KNOWN ISSUES / RISKS
 
-- [ ] 장치관리자에서 패드 연결 시 "HID 키보드 장치" 추가 여부 확인
-  - 추가됨 → **방법 A** 진행
-  - 추가 안 됨 → XInput Guide 버튼 여부 테스트 후 **방법 B** 진행
-- [ ] `mss` 라이브러리로 기본 스크린샷 캡처 동작 확인 (DX 게임에서 검은 화면 여부)
-- [ ] 방법 A 선택 시: WH_KEYBOARD_LL 훅 단독 테스트 스크립트 작성
-- [ ] 사이드바 스크린샷 섹션 UI 구현
-- [ ] 저장 경로 / 파일명 형식 설정 항목 추가
+| 항목 | 내용 | 조치 |
+|---|---|---|
+| mss 블랙스크린 | DX11/DX12 일부 게임에서 검은 화면 가능 | 발생 시 DXGI Desktop Duplication으로 교체 (Phase 2) |
+| winrt 미설치 | Method C 시도 시 ImportError | requirements.txt 추가됨, .venv 설치 필요 |
+| Game Bar 복원 실패 | 강제종료 시 _gamebar_original_value 소실 | 레지스트리 별도 백업 키 저장 미구현 |
+| 다중 게임 실행 | _get_screenshot_target_hwnd()가 마지막 포커스 창 반환 | 동작 확인 필요 |
+
+---
+
+## DEFERRED: Phase 2
+
+### 녹화 기능
+- 방법 후보: DXGI+WASAPI+ffmpeg pipe (self-hosted), OBS WebSocket 연동
+- 미결 사항: 인코더 선택, 세그먼트 저장 방식, 진행 표시 UI
+
+### OBS WebSocket 연동
+- OBS → 앱: 녹화/스크린샷 이벤트 수신 → 사이드바 갱신
+- 앱 → OBS: 게임패드 트리거로 OBS 제어
+- 미결 사항: OBS 선택적 설치, 포트/비밀번호 설정 UI
+
+---
+
+## FILE INDEX
+
+```
+src/screenshot/manager.py
+src/screenshot/method_a.py
+src/screenshot/method_c.py
+src/screenshot/capture.py
+src/gui/main_window.py              ← _start_screenshot_manager, _on_screenshot_captured
+src/gui/sidebar/sidebar_widget.py   ← on_screenshot_captured, _build_screenshot_section
+src/gui/sidebar_settings_dialog.py  ← screenshot settings group
+src/data/schemas.py                 ← screenshot_* fields
+tools/diagnose_gamepad_screenshot.py
+```
