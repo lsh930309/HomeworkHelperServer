@@ -47,11 +47,19 @@ class SidebarSettingsDialog(QDialog):
         basic_form.addRow("투명도 (0.10~1.00)", self._opacity_spin)
 
         self._auto_hide_spin = QSpinBox()
-        self._auto_hide_spin.setRange(0, 60)
-        self._auto_hide_spin.setSuffix(" 초")
-        self._auto_hide_spin.setValue(self._settings.sidebar_auto_hide_sec)
-        self._auto_hide_spin.setToolTip("0 = 자동 숨김 없음")
+        self._auto_hide_spin.setRange(0, 60000)
+        self._auto_hide_spin.setSingleStep(100)
+        self._auto_hide_spin.setSuffix(" ms")
+        self._auto_hide_spin.setValue(self._settings.sidebar_auto_hide_ms)
+        self._auto_hide_spin.setToolTip("0 = 커서가 벗어나는 즉시 숨김\n100ms 단위 조절, 직접 입력 시 1ms 단위")
         basic_form.addRow("자동 숨김 대기", self._auto_hide_spin)
+
+        self._edge_width_spin = QSpinBox()
+        self._edge_width_spin.setRange(1, 50)
+        self._edge_width_spin.setSuffix(" px")
+        self._edge_width_spin.setValue(self._settings.sidebar_edge_width_px)
+        self._edge_width_spin.setToolTip("화면 우측 가장자리에서 사이드바를 트리거하는 감지 영역 너비\n값이 클수록 커서를 가장자리에 덜 정확히 위치시켜도 트리거됨")
+        basic_form.addRow("엣지 감지 너비", self._edge_width_spin)
 
         layout.addWidget(basic_group)
 
@@ -109,7 +117,8 @@ class SidebarSettingsDialog(QDialog):
         gs.sidebar_enabled = self._enabled_cb.isChecked()
         gs.sidebar_height_ratio = self._height_spin.value()
         gs.sidebar_opacity = self._opacity_spin.value()
-        gs.sidebar_auto_hide_sec = self._auto_hide_spin.value()
+        gs.sidebar_auto_hide_ms = self._auto_hide_spin.value()
+        gs.sidebar_edge_width_px = self._edge_width_spin.value()
         gs.sidebar_clock_enabled = self._clock_enabled_cb.isChecked()
         gs.sidebar_clock_format = self._clock_format_edit.text().strip() or "%H:%M:%S"
         gs.sidebar_playtime_enabled = self._playtime_enabled_cb.isChecked()

@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QRect, QTimer,
-    QRunnable, QThreadPool, QObject, QEvent,
+    QRunnable, QThreadPool,
 )
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
@@ -98,24 +98,6 @@ QPushButton:hover:!checked {
 """
 
 
-class _ClickOutsideFilter(QObject):
-    """사이드바 영역 외부 마우스 클릭 시 즉시 숨깁니다."""
-
-    def __init__(self, sidebar: "SidebarWidget", parent=None):
-        super().__init__(parent)
-        self._sidebar = sidebar
-
-    def eventFilter(self, obj, event) -> bool:
-        if event.type() == QEvent.Type.MouseButtonPress and self._sidebar._is_shown:
-            try:
-                pos = event.globalPosition().toPoint()
-            except AttributeError:
-                pos = event.globalPos()
-            if not self._sidebar.geometry().contains(pos):
-                self._sidebar.slide_out()
-        return False
-
-
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
@@ -196,8 +178,8 @@ class SidebarWidget(QWidget):
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
 
-        # 외부 클릭 감지 필터
-        self._click_filter = _ClickOutsideFilter(self)
+        # Win32 외부 클릭 감지 상태
+        self._lbutton_was_down: bool = False
 
         # Win32 블러 효과 (최초 show 후 적용)
         self._blur_applied = False
@@ -337,7 +319,7 @@ class SidebarWidget(QWidget):
         self._playtime_timer.start()
         self._clock_timer.start()
         self._cursor_poll_timer.start()
-        QApplication.instance().installEventFilter(self._click_filter)
+        self._lbutton_was_down = False
         self._reset_auto_hide()
         logger.debug("SidebarWidget 슬라이드인")
 
@@ -350,7 +332,6 @@ class SidebarWidget(QWidget):
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
-        QApplication.instance().removeEventFilter(self._click_filter)
 
         geo = self.geometry()
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
@@ -373,10 +354,6 @@ class SidebarWidget(QWidget):
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
-        try:
-            QApplication.instance().removeEventFilter(self._click_filter)
-        except Exception:
-            pass
         self._anim.stop()
         self.hide()
 
@@ -826,13 +803,35 @@ class SidebarWidget(QWidget):
 
     def _poll_cursor(self) -> None:
         from PyQt6.QtGui import QCursor
-        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        cursor_pos = QCursor.pos()
+        inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
+
+        # 자동 숨김 타이머 관리
         if inside:
             if self._auto_hide_timer.isActive():
                 self._auto_hide_timer.stop()
         else:
-            if not self._auto_hide_timer.isActive():
+            if self._auto_hide_ms == 0:
+                self.slide_out()
+                return
+            elif not self._auto_hide_timer.isActive():
                 self._reset_auto_hide()
+
+        # Win32 좌클릭 감지 (전체화면 게임 포함)
+        try:
+            import ctypes
+            state = ctypes.windll.user32.GetAsyncKeyState(0x01)
+            lbutton_down = bool(state & 0x8000)
+        except Exception:
+            lbutton_down = False
+
+        if lbutton_down and not self._lbutton_was_down:
+            # 새 클릭 감지 — 사이드바 영역 밖이면 숨김
+            if not inside:
+                self._lbutton_was_down = True
+                self.slide_out()
+                return
+        self._lbutton_was_down = lbutton_down
 
     def _on_slide_out_finished(self) -> None:
         try:

@@ -85,7 +85,8 @@ class GlobalSettingsSchema(BaseModel):
     hide_on_game: bool = True
     # 사이드바
     sidebar_enabled: bool = True
-    sidebar_auto_hide_sec: int = 3
+    sidebar_auto_hide_ms: int = 3000
+    sidebar_edge_width_px: int = 2
     sidebar_height_ratio: float = 1.0
     sidebar_opacity: float = 0.85
     sidebar_clock_enabled: bool = True

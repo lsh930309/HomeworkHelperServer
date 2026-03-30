@@ -75,7 +75,8 @@ class GlobalSettings(Base):
 
     # 사이드바
     sidebar_enabled = Column(Boolean, default=True)
-    sidebar_auto_hide_sec = Column(Integer, default=3)
+    sidebar_auto_hide_ms = Column(Integer, default=3000)
+    sidebar_edge_width_px = Column(Integer, default=2)
     sidebar_height_ratio = Column(Float, default=1.0)
     sidebar_opacity = Column(Float, default=0.85)
     sidebar_clock_enabled = Column(Boolean, default=True)

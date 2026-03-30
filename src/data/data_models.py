@@ -155,7 +155,8 @@ class GlobalSettings:
                  sidebar_enabled: bool = True,
                  sidebar_trigger_y_start: float = 0.1,
                  sidebar_trigger_y_end: float = 0.9,
-                 sidebar_auto_hide_sec: int = 3,
+                 sidebar_auto_hide_ms: int = 3000,
+                 sidebar_edge_width_px: int = 2,
                  sidebar_effect: str = "acrylic",
                  sidebar_height_ratio: float = 1.0,
                  sidebar_opacity: float = 0.85,
@@ -187,7 +188,8 @@ class GlobalSettings:
         self.sidebar_enabled = sidebar_enabled
         self.sidebar_trigger_y_start = sidebar_trigger_y_start
         self.sidebar_trigger_y_end = sidebar_trigger_y_end
-        self.sidebar_auto_hide_sec = sidebar_auto_hide_sec
+        self.sidebar_auto_hide_ms = sidebar_auto_hide_ms
+        self.sidebar_edge_width_px = sidebar_edge_width_px
         self.sidebar_effect = sidebar_effect
         self.sidebar_height_ratio = sidebar_height_ratio
         self.sidebar_opacity = sidebar_opacity
@@ -244,7 +246,13 @@ class GlobalSettings:
         _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
         data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
         data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
-        data['sidebar_auto_hide_sec'] = max(0, int(data.get('sidebar_auto_hide_sec', 3)))
+        # sidebar_auto_hide_ms 하위 호환성 (구버전: sidebar_auto_hide_sec)
+        if 'sidebar_auto_hide_ms' not in data and 'sidebar_auto_hide_sec' in data:
+            data['sidebar_auto_hide_ms'] = max(0, int(data['sidebar_auto_hide_sec'])) * 1000
+        else:
+            data['sidebar_auto_hide_ms'] = max(0, int(data.get('sidebar_auto_hide_ms', 3000)))
+        data.pop('sidebar_auto_hide_sec', None)
+        data['sidebar_edge_width_px'] = max(1, min(50, int(data.get('sidebar_edge_width_px', 2))))
         _effect = data.get('sidebar_effect', 'acrylic')
         if _effect not in ('mica', 'acrylic', 'none'):
             _effect = 'acrylic'

@@ -145,13 +145,18 @@ class SidebarController:
     def apply_settings(self, settings) -> None:
         """사이드바 설정을 런타임에 반영합니다."""
         if self._sidebar is not None:
-            auto_hide_ms = settings.sidebar_auto_hide_sec * 1000
+            auto_hide_ms = getattr(settings, 'sidebar_auto_hide_ms', 3000)
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
             self._sidebar.apply_visual_settings()
             self._sidebar.refresh_content()
             # sidebar_enabled=False 로 변경 시 즉시 숨김
             if not getattr(settings, 'sidebar_enabled', True) and self._sidebar._is_shown:
                 self._sidebar.slide_out()
+        if self._trigger is not None:
+            trigger_y_start = getattr(settings, 'sidebar_trigger_y_start', 0.1)
+            trigger_y_end = getattr(settings, 'sidebar_trigger_y_end', 0.9)
+            edge_width_px = getattr(settings, 'sidebar_edge_width_px', 2)
+            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""
@@ -183,8 +188,8 @@ class SidebarController:
 
         trigger_y_start = getattr(gs, 'sidebar_trigger_y_start', 0.1) if gs else 0.1
         trigger_y_end = getattr(gs, 'sidebar_trigger_y_end', 0.9) if gs else 0.9
-        auto_hide_sec = getattr(gs, 'sidebar_auto_hide_sec', 3) if gs else 3
-        auto_hide_ms = int(auto_hide_sec * 1000)
+        auto_hide_ms = int(getattr(gs, 'sidebar_auto_hide_ms', 3000) if gs else 3000)
+        edge_width_px = int(getattr(gs, 'sidebar_edge_width_px', 2) if gs else 2)
 
         if self._sidebar is None:
             self._sidebar = SidebarWidget(
@@ -202,10 +207,11 @@ class SidebarController:
                 trigger_y_start=trigger_y_start,
                 trigger_y_end=trigger_y_end,
                 cooldown_sec=1.0,
+                trigger_width_px=edge_width_px,
                 screen=screen,
             )
         else:
-            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0)
+            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
 
     def _on_edge_triggered(self) -> None:
         """EdgeTriggerWindow 가 커서 진입을 감지했을 때 호출됩니다."""

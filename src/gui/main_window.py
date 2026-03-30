@@ -1800,8 +1800,12 @@ class MainWindow(QMainWindow):
                 self._volume_applied_pids[process.id] = pid
 
         # default_muted 적용 (default_volume 미설정이어도 항상 적용)
+        # 게임 시작 직후 오디오 세션이 없을 수 있으므로 실패 시 재시도
         default_muted = getattr(process, "default_muted", False)
-        audio_control.set_mute(pid, default_muted)
+        if not audio_control.set_mute(pid, default_muted):
+            from PyQt6.QtCore import QTimer
+            for delay_ms in (1000, 3000, 5000):
+                QTimer.singleShot(delay_ms, lambda p=pid, m=default_muted: audio_control.set_mute(p, m))
 
     # ─────────────────────────────
 

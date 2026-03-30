@@ -101,6 +101,8 @@ def auto_migrate_database():
         # GlobalSettings 테이블 - 테마 / 게임 모드
         ("global_settings", "theme", "TEXT", "'system'"),
         ("global_settings", "hide_on_game", "INTEGER", "1"),
+        ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
+        ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
     ]
     
     try:
@@ -152,6 +154,15 @@ def auto_migrate_database():
                 conn.commit()
                 if result.rowcount > 0:
                     print(f"[Migration] process_sessions: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+
+        # sidebar_auto_hide_sec → sidebar_auto_hide_ms 데이터 마이그레이션
+        existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
+        if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
+            conn.execute(text(
+                "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
+                "WHERE sidebar_auto_hide_ms = 3000"
+            ))
+            conn.commit()
 
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:

@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import QApplication, QWidget
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 100   # 커서 감지 폴링 간격 (ms)
-_TRIGGER_WIDTH_PX = 2     # 트리거 창 너비 (px) — 1px은 가끔 클리핑되므로 2px 사용
 
 
 class EdgeTriggerWindow(QWidget):
@@ -31,6 +30,7 @@ class EdgeTriggerWindow(QWidget):
         trigger_y_start: float = 0.1,
         trigger_y_end: float = 0.9,
         cooldown_sec: float = 1.0,
+        trigger_width_px: int = 2,
         screen: Optional[QScreen] = None,
         parent: Optional[QWidget] = None,
     ):
@@ -41,6 +41,7 @@ class EdgeTriggerWindow(QWidget):
             trigger_y_start: 트리거 영역 시작 Y 비율 (0.0 ~ 1.0).
             trigger_y_end: 트리거 영역 종료 Y 비율 (0.0 ~ 1.0).
             cooldown_sec: 트리거 후 재발동 방지 시간 (초).
+            trigger_width_px: 트리거 영역 너비 (px). 클수록 민감도 높음.
             screen: 배치할 화면. None이면 주 화면을 사용합니다.
             parent: 부모 위젯.
         """
@@ -56,6 +57,7 @@ class EdgeTriggerWindow(QWidget):
         _e = max(0.0, min(1.0, trigger_y_end))
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
+        self._trigger_width_px = max(1, trigger_width_px)
         self._in_cooldown = False
         self._cursor_was_in_zone = False
 
@@ -64,8 +66,8 @@ class EdgeTriggerWindow(QWidget):
         self.setWindowOpacity(0.0)  # 완전 투명
 
         # 배치할 화면 결정
-        target_screen = screen or QApplication.primaryScreen()
-        self._reposition(target_screen)
+        self._screen = screen or QApplication.primaryScreen()
+        self._reposition(self._screen)
 
         # 폴링 타이머
         self._poll_timer = QTimer(self)
@@ -95,15 +97,19 @@ class EdgeTriggerWindow(QWidget):
         trigger_y_start: float,
         trigger_y_end: float,
         cooldown_sec: float,
+        trigger_width_px: int = 2,
     ) -> None:
         """트리거 설정을 런타임에 갱신합니다."""
         _s = max(0.0, min(1.0, trigger_y_start))
         _e = max(0.0, min(1.0, trigger_y_end))
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
+        self._trigger_width_px = max(1, trigger_width_px)
+        self._reposition(self._screen if hasattr(self, '_screen') else None)
 
     def reposition(self, screen: Optional[QScreen]) -> None:
         """화면 변경 시 트리거 창을 새 화면의 우측 끝으로 재배치합니다."""
+        self._screen = screen
         self._reposition(screen)
         logger.debug("EdgeTriggerWindow 재배치: %s", screen.name() if screen else "None")
 
@@ -116,8 +122,8 @@ class EdgeTriggerWindow(QWidget):
         if screen is None:
             return
         geo: QRect = screen.geometry()
-        trigger_x = geo.right() - _TRIGGER_WIDTH_PX + 1
-        self.setGeometry(trigger_x, geo.top(), _TRIGGER_WIDTH_PX, geo.height())
+        trigger_x = geo.right() - self._trigger_width_px + 1
+        self.setGeometry(trigger_x, geo.top(), self._trigger_width_px, geo.height())
 
     def _poll_cursor(self) -> None:
         """현재 커서 위치를 확인하고 트리거 영역 진입 여부를 판단합니다."""
