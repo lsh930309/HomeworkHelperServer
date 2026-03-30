@@ -1,7 +1,7 @@
 # screenshot feature — implementation state
 
 > last_updated: 2026-03-30
-> branch: dev-20260318 (commit bef5a15)
+> branch: dev-20260318 (commit 2bcffb7)
 
 ---
 
@@ -9,9 +9,10 @@
 
 | phase | scope | status |
 |---|---|---|
-| Phase 1 | 게임패드 트리거 + 캡처 + 사이드바 UI + 설정 | COMPLETE (committed) |
+| Phase 1 | 게임패드 트리거 + 캡처 + 사이드바 UI + 설정 | COMPLETE |
 | Phase 1.5 | 진단 도구 실행 → _method.txt 갱신 | PENDING (user action needed) |
-| Phase 2 | 녹화 (DXGI+WASAPI+ffmpeg or OBS WebSocket) | DEFERRED |
+| Phase 2 | OBS WebSocket 녹화 기능 | COMPLETE |
+| Phase 2.5 | UI/UX 개선 (파일명/썸네일/버튼/순서) | COMPLETE |
 
 ---
 
@@ -20,26 +21,34 @@
 ```
 tools/diagnose_gamepad_screenshot.py   ← 1회성 진단, _method.txt 기록
 src/screenshot/
-  __init__.py         ← exports ScreenshotManager only
-  manager.py          ← 중앙 컨트롤러: _method.txt 읽어 impl 선택
-  method_a.py         ← WH_KEYBOARD_LL hook (Win+Alt+PrtScn 가로채기)
-  method_c.py         ← WinRT RawGameController polling (Xbox 라이센스 패드)
-  capture.py          ← 실제 캡처 로직 (mss → GDI BitBlt fallback)
-  _method.txt         ← "A" or "C:<button_index>" (gitignore됨, 진단 후 생성)
+  __init__.py              ← exports ScreenshotManager only
+  manager.py               ← 중앙 컨트롤러: _method.txt 읽어 impl 선택, game_name_provider
+  trigger_dispatcher.py    ← 홀드 시간 기반 분기 (짧게=스크린샷, 길게=녹화토글)
+  method_a.py              ← WH_KEYBOARD_LL hook (Win+Alt+PrtScn 가로채기)
+  method_c.py              ← WinRT RawGameController polling (Xbox 라이센스 패드)
+  capture.py               ← 캡처 로직 (mss → GDI BitBlt fallback), 파일명 생성
+  _method.txt              ← "A" or "C:<button_index>" (gitignore됨, 진단 후 생성)
+src/recording/
+  __init__.py              ← exports RecordingManager only
+  manager.py               ← 상태 머신 (idle/recording/connecting/obs_offline), OBS 제어
+  obs_client.py            ← obs-websocket 5.x 최소 클라이언트 (websocket-client)
+  obs_config_reader.py     ← %APPDATA%\obs-studio 설정 자동 읽기
 src/gui/
-  main_window.py      ← ScreenshotManager 수명주기, Game Bar 레지스트리 제어
-  sidebar/sidebar_widget.py  ← 사이드바 스크린샷 섹션 + 썸네일 그리드
-  sidebar_settings_dialog.py ← 저장경로/트리거/GameBar/캡처모드 설정 UI
+  main_window.py           ← ScreenshotManager + RecordingManager 수명주기
+  sidebar/sidebar_widget.py  ← 스크린샷 섹션 + 녹화 섹션 (볼륨 → 스크린샷 → 녹화 순)
+  sidebar_settings_dialog.py ← 스크린샷 + 녹화 설정 UI, [OBS에서 불러오기] 버튼
 src/data/
-  schemas.py          ← GlobalSettings에 screenshot_* 6개 필드
-  models.py / database.py / data_models.py  ← DB 컬럼 + 마이그레이션 완료
+  schemas.py / models.py / database.py / data_models.py
+    ← screenshot_* 6개 + recording_*/obs_* 9개 필드, 마이그레이션 완료
 ```
 
 ---
 
 ## IMPLEMENTED DETAILS
 
-### GlobalSettings fields (schemas.py)
+### GlobalSettings fields
+
+**스크린샷 (schemas.py)**
 ```python
 screenshot_enabled: bool = True
 screenshot_save_dir: str = ""              # 비어있으면 ~/Pictures/GameCaptures
@@ -49,53 +58,101 @@ screenshot_capture_mode: str = "fullscreen"   # or "game_window"
 screenshot_gamepad_button_index: int = -1     # Method C용, 진단 후 설정
 ```
 
+**녹화/OBS (schemas.py)**
+```python
+recording_enabled: bool = False
+obs_host: str = "localhost"
+obs_port: int = 4455
+obs_password: str = ""
+obs_exe_path: str = ""
+obs_auto_launch: bool = False
+obs_launch_hidden: bool = True
+obs_watch_output_dir: bool = True
+recording_hold_threshold_ms: int = 800
+```
+
+### 파일명 형식 (capture.py)
+```
+{game_name}_{yyyy-mm-dd} {오전|오후} {H}_{MM}_{SS}.png
+예) Minecraft_2026-03-30 오후 2_34_56.png
+```
+- game_name: 포커스된 등록 게임 프로세스명 (main_window._get_screenshot_game_name())
+- 등록 게임 미확인 시 "capture" 폴백
+- Windows 금지 문자 자동 제거 (_sanitize_filename), 최대 60자
+
+### 버튼 입력 분기 (trigger_dispatcher.py)
+```
+짧게 누름 (< 500ms, release 시):  스크린샷 촬영
+홀드 800ms+:                      녹화 토글 즉시 발화
+500ms ~ 800ms:                    무시 (오동작 방지)
+```
+
 ### _method.txt format
 - `"A"` → method_a.py (WH_KEYBOARD_LL hook)
-- `"C:3"` → method_c.py with button_index=3 (숫자는 진단 결과에 따라 다름)
-- 파일 없음 → manager.py가 "A"로 fallback
+- `"C:3"` → method_c.py with button_index=3
+- 파일 없음 → "A" fallback
 
 ### ScreenshotManager public API (manager.py)
 ```python
 ScreenshotManager(get_target_hwnd: Callable[[], Optional[int]])
 .start() / .stop()
-.capture_now()
+.capture_now() -> Optional[str]
 .set_save_dir(path: str)
-.set_capture_mode(mode: str)  # "fullscreen" or "game_window"
-.set_on_captured(callback: Callable[[str], None])
+.set_capture_mode(mode: str)          # "fullscreen" or "game_window"
+.set_on_captured(fn: Callable[[str], None])
+.set_on_long_press(fn: Callable[[], None])   # 녹화 토글 콜백
+.set_game_name_provider(fn: Callable[[], str])  # 파일명용 게임명 조회
 ```
 
-### capture.py key functions
+### RecordingManager public API (recording/manager.py)
 ```python
-take_screenshot(save_dir: str) -> Optional[str]
-take_screenshot_window(hwnd: int, save_dir: str) -> Optional[str]
-# window 캡처: GetClientRect + ClientToScreen → mss region or GDI BitBlt
-# filename: capture_YYYYMMDD_HHMMSS_mmm.png
+RecordingManager()
+.apply_settings(settings: GlobalSettings)
+.on_recording_toggle()         # TriggerDispatcher long_press에 연결
+.start_recording() / .stop_recording()
+.get_state() -> "idle"|"recording"|"connecting"|"obs_offline"
+.get_elapsed_sec() -> int
+.set_on_state_changed(fn)
+.shutdown()
 ```
 
-### method_a.py
-- SetWindowsHookExW(WH_KEYBOARD_LL) on daemon thread with message loop
-- Win+Alt+PrtScn 감지 → return 1 (이벤트 삭제) → callback 호출
-- stop(): PostThreadMessage(WM_QUIT)
+### OBSClient (recording/obs_client.py)
+- obs-websocket 5.x 프로토콜, websocket-client 패키지 사용
+- 인증: SHA256(password+salt)→base64→SHA256(+challenge)→base64
+- 요청: StartRecord, StopRecord, GetRecordStatus
+- 이벤트: RecordStateChanged
+- reconnect: 연결 끊길 경우 재시도 루프
 
-### method_c.py
-- winrt.windows.gaming.input.RawGameController 50ms 폴링
-- edge detection: curr[idx] and not prev[idx]
-- discover_button_index(timeout_sec=10.0) → 진단 도구에서 사용
+### obs_config_reader (recording/obs_config_reader.py)
+```python
+read_obs_config() -> {port, password, output_dir, exe_path}
+# 소스: %APPDATA%\obs-studio\plugin_config\obs-websocket\config.json
+#       %APPDATA%\obs-studio\global.ini → CurrentProfile
+#       %APPDATA%\obs-studio\basic\profiles\<profile>\basic.ini
+#       HKLM\SOFTWARE\OBS Studio (레지스트리)
+```
 
 ### main_window.py integration
-- _start_screenshot_manager(): app 시작 시 enabled 확인 후 start()
-- _get_screenshot_target_hwnd(): 마지막 포커스된 등록 게임 창 HWND 반환
-- _on_screenshot_captured(path): sidebar_widget.on_screenshot_captured() 호출
-- _set_gamebar_capture(enabled): HKCU\...\GameDVR\AppCaptureEnabled 레지스트리 제어
-- _restore_gamebar_setting(): closeEvent 시 원복
-- _gamebar_original_value: Optional[int] (최초 비활성화 시점에 원본값 저장)
+- `_get_screenshot_target_hwnd()`: 포커스된 등록 게임 창 HWND 반환
+- `_get_screenshot_game_name()`: 포커스된 등록 게임 프로세스명 반환
+- `_on_screenshot_captured(path)`: sidebar.on_screenshot_captured() 호출 (_is_shown 가드 없음)
+- `_set_gamebar_capture(enabled)`: HKCU\...\GameDVR\AppCaptureEnabled 레지스트리 제어
+- `_restore_gamebar_setting()`: closeEvent 시 원복
+- `_on_recording_state_changed(state)`: sidebar.on_recording_state_changed() 호출
+- RecordingManager.shutdown(): closeEvent 시 호출
 
-### sidebar screenshot section (sidebar_widget.py)
-- _build_screenshot_section(): "스크린샷" 그룹박스, "지금 촬영" 버튼
-- _refresh_screenshot_thumbnails(): screenshot_save_dir에서 PNG/BMP 최대 8개 로드
-- 썸네일 그리드: 3열 × 최대 3행 = 9셀, 마지막 셀 = "+NNN" 폴더 단축 버튼
-- 각 썸네일 클릭 → QDesktopServices.openUrl(파일경로)
-- on_screenshot_captured(path): 새 캡처 후 썸네일 갱신 슬롯
+### sidebar layout (sidebar_widget.py)
+섹션 순서: 클럭 → 실행중 게임 클러스터 → **볼륨** → **스크린샷** → **녹화**
+
+**스크린샷 섹션**
+- "지금 촬영" 버튼: 닫기 버튼 스타일 (28px, rgba(255,255,255,10) 배경)
+- 썸네일 그리드: 3열 × 최대 3행, 마지막 셀 = "+NNN" 폴더 단축
+- on_screenshot_captured(): QMetaObject.invokeMethod(QueuedConnection)으로 스레드 안전 갱신
+
+**녹화 섹션**
+- 상태 레이블: OBS 오프라인 / 연결 중 / OBS 대기 중 / ● REC HH:MM:SS
+- "■ 녹화 종료" 버튼: 게임 종료 버튼 스타일 (28px, 빨간 계열), 녹화 중일 때만 표시
+- 1초 타이머로 경과 시간 갱신
 
 ---
 
@@ -103,7 +160,7 @@ take_screenshot_window(hwnd: int, save_dir: str) -> Optional[str]
 
 ### 목적
 Gamesir G7 Pro 공유 버튼이 Method A(WH_KEYBOARD_LL)로 잡히는지, Method C(WinRT)가 필요한지 확인.
-3가지 진단 단계 모두 이전 세션에서 실패했음 → WinRT Method C 추가 후 재진단 필요.
+이전 세션에서 3가지 진단 단계 모두 실패 → WinRT Method C 추가 후 재진단 필요.
 
 ### 실행 방법
 ```bash
@@ -120,9 +177,9 @@ python tools/diagnose_gamepad_screenshot.py
 
 ### 진단 후 후속 작업
 1. `_method.txt` 내용 확인
-2. Method C 결과인 경우: 설정 다이얼로그에서 "감지된 버튼 인덱스" 읽기 전용 필드에 표시됨
-3. 앱 실행 후 실제 게임에서 공유 버튼 눌러 캡처 동작 확인
-4. mss 블랙스크린 여부 확인 (DX11/12 게임에서)
+2. 앱 실행 후 실제 게임에서 공유 버튼 짧게 눌러 캡처 동작 확인
+3. mss 블랙스크린 여부 확인 (DX11/12 게임에서)
+4. OBS 연동: 설정 다이얼로그 [OBS에서 불러오기] → 연결 확인 → 버튼 길게 눌러 녹화 시작/종료 확인
 
 ---
 
@@ -130,36 +187,53 @@ python tools/diagnose_gamepad_screenshot.py
 
 | 항목 | 내용 | 조치 |
 |---|---|---|
-| mss 블랙스크린 | DX11/DX12 일부 게임에서 검은 화면 가능 | 발생 시 DXGI Desktop Duplication으로 교체 (Phase 2) |
-| winrt 미설치 | Method C 시도 시 ImportError | requirements.txt 추가됨, .venv 설치 필요 |
+| mss 블랙스크린 | DX11/DX12 일부 게임에서 검은 화면 가능 | DXGI Desktop Duplication으로 교체 고려 |
+| winrt 미설치 | Method C 시도 시 ImportError | requirements.txt 추가됨, pip install 필요 |
+| websocket-client 미설치 | OBS 연동 시 ImportError | requirements.txt 추가됨, pip install 필요 |
 | Game Bar 복원 실패 | 강제종료 시 _gamebar_original_value 소실 | 레지스트리 별도 백업 키 저장 미구현 |
-| 다중 게임 실행 | _get_screenshot_target_hwnd()가 마지막 포커스 창 반환 | 동작 확인 필요 |
+| 게임명 미확인 | 게임 미실행/포커스 없으면 파일명이 "capture_..." | 현재 동작 의도적 폴백 |
 
 ---
 
-## DEFERRED: Phase 2
+## DEFERRED
 
-### 녹화 기능
-- 방법 후보: DXGI+WASAPI+ffmpeg pipe (self-hosted), OBS WebSocket 연동
-- 미결 사항: 인코더 선택, 세그먼트 저장 방식, 진행 표시 UI
+### 녹화 일시정지
+- 홀드 3단계(짧게/중간/길게) 또는 별도 버튼 할당 방식 미결
+- 현재: start/stop only
 
-### OBS WebSocket 연동
-- OBS → 앱: 녹화/스크린샷 이벤트 수신 → 사이드바 갱신
-- 앱 → OBS: 게임패드 트리거로 OBS 제어
-- 미결 사항: OBS 선택적 설치, 포트/비밀번호 설정 UI
+### 녹화 파일 사이드바 표시
+- obs_watch_output_dir 필드 준비됨, 파일 감시 로직 미구현
+- OBS 출력 폴더 감시 → 완료 파일 썸네일 표시
+
+### mss → DXGI 교체
+- mss 블랙스크린 발생 시 DXGI Desktop Duplication API로 교체
 
 ---
 
 ## FILE INDEX
 
 ```
-src/screenshot/manager.py
-src/screenshot/method_a.py
-src/screenshot/method_c.py
-src/screenshot/capture.py
-src/gui/main_window.py              ← _start_screenshot_manager, _on_screenshot_captured
-src/gui/sidebar/sidebar_widget.py   ← on_screenshot_captured, _build_screenshot_section
-src/gui/sidebar_settings_dialog.py  ← screenshot settings group
-src/data/schemas.py                 ← screenshot_* fields
+[스크린샷 코어]
+src/screenshot/manager.py              ← ScreenshotManager, set_game_name_provider
+src/screenshot/trigger_dispatcher.py   ← 홀드 시간 분기 로직
+src/screenshot/method_a.py             ← WH_KEYBOARD_LL
+src/screenshot/method_c.py             ← WinRT RawGameController
+src/screenshot/capture.py              ← 캡처 + 파일명 생성 (_build_save_path)
+
+[녹화 코어]
+src/recording/manager.py
+src/recording/obs_client.py
+src/recording/obs_config_reader.py
+
+[GUI]
+src/gui/main_window.py                 ← _get_screenshot_game_name, 양쪽 manager 수명주기
+src/gui/sidebar/sidebar_widget.py      ← 섹션 순서, 버튼 스타일, QueuedConnection 갱신
+src/gui/sidebar_settings_dialog.py     ← 스크린샷+녹화 설정, [OBS에서 불러오기]
+
+[데이터]
+src/data/schemas.py                    ← screenshot_* + recording_*/obs_* 필드
+src/data/models.py / database.py / data_models.py
+
+[진단]
 tools/diagnose_gamepad_screenshot.py
 ```
