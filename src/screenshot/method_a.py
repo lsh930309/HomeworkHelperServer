@@ -35,7 +35,7 @@ VK_RWIN        = 0x5C
 VK_MENU        = 0x12     # Alt
 PM_REMOVE      = 0x0001
 
-HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):

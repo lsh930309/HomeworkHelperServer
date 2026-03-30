@@ -45,7 +45,7 @@ RIDI_DEVICENAME     = 0x20000007
 XINPUT_GAMEPAD_GUIDE        = 0x0400
 ERROR_DEVICE_NOT_CONNECTED  = 1167
 
-HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 
 # ──────────────────────────────────────────────────────────────
