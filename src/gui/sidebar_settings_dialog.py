@@ -16,13 +16,24 @@ class SidebarSettingsDialog(QDialog):
     def __init__(self, settings: GlobalSettings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("사이드바 설정")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(860)
         self._settings = settings
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(12)
+
+        # ── 2컬럼 레이아웃 ──
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+
+        # ════════════════ 왼쪽 컬럼 ════════════════
 
         # ── 기본 설정 ──
         basic_group = QGroupBox("기본 설정")
@@ -62,7 +73,7 @@ class SidebarSettingsDialog(QDialog):
         self._edge_width_spin.setToolTip("화면 우측 가장자리 트리거 감지 영역 너비\n값이 클수록 덜 정밀하게 위치시켜도 트리거됨")
         basic_form.addRow("엣지 감지 너비", self._edge_width_spin)
 
-        layout.addWidget(basic_group)
+        left_col.addWidget(basic_group)
 
         # ── 섹션 표시 ──
         section_group = QGroupBox("섹션 표시")
@@ -80,7 +91,7 @@ class SidebarSettingsDialog(QDialog):
         self._vol_enabled_cb.setChecked(self._settings.sidebar_volume_section_enabled)
         section_form.addRow("볼륨 섹션 표시", self._vol_enabled_cb)
 
-        layout.addWidget(section_group)
+        left_col.addWidget(section_group)
 
         # ── 현재 시간 설정 ──
         clock_group = QGroupBox("현재 시간 섹션")
@@ -92,7 +103,7 @@ class SidebarSettingsDialog(QDialog):
         )
         clock_form.addRow("시간 포맷", self._clock_format_edit)
 
-        layout.addWidget(clock_group)
+        left_col.addWidget(clock_group)
 
         # ── 플레이타임 설정 ──
         pt_group = QGroupBox("플레이타임 섹션")
@@ -101,7 +112,10 @@ class SidebarSettingsDialog(QDialog):
         self._playtime_prefix_edit = QLineEdit(self._settings.sidebar_playtime_prefix)
         pt_form.addRow("접두어 텍스트", self._playtime_prefix_edit)
 
-        layout.addWidget(pt_group)
+        left_col.addWidget(pt_group)
+        left_col.addStretch()
+
+        # ════════════════ 오른쪽 컬럼 ════════════════
 
         # ── 스크린샷 설정 ──
         ss_group = QGroupBox("스크린샷")
@@ -158,7 +172,7 @@ class SidebarSettingsDialog(QDialog):
             self._ss_capture_mode_combo.setCurrentIndex(idx)
         ss_form.addRow("캡처 대상", self._ss_capture_mode_combo)
 
-        layout.addWidget(ss_group)
+        right_col.addWidget(ss_group)
 
         # ── 녹화 (OBS) 설정 ──
         rec_group = QGroupBox("녹화 (OBS)")
@@ -225,7 +239,13 @@ class SidebarSettingsDialog(QDialog):
         obs_import_btn.clicked.connect(self._import_obs_config)
         rec_form.addRow(obs_import_btn)
 
-        layout.addWidget(rec_group)
+        right_col.addWidget(rec_group)
+        right_col.addStretch()
+
+        # ── 컬럼 조합 ──
+        columns.addLayout(left_col)
+        columns.addLayout(right_col)
+        main_layout.addLayout(columns)
 
         # ── 버튼 ──
         buttons = QDialogButtonBox(
@@ -233,7 +253,7 @@ class SidebarSettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        main_layout.addWidget(buttons)
 
     def _browse_screenshot_dir(self) -> None:
         current = self._ss_save_dir_edit.text().strip()
