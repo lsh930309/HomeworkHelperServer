@@ -171,6 +171,10 @@ def test_keyboard_hook(timeout_sec: int = 12) -> bool:
                         return 1  # 이벤트 삭제 (Game Bar에 전달 안 됨)
             return ctypes.windll.user32.CallNextHookEx(None, nCode, wParam, lParam)
 
+        ctypes.windll.user32.CallNextHookEx.restype = ctypes.c_longlong
+        ctypes.windll.user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM,
+        ]
         proc = HOOKPROC(_handler)
         hook = ctypes.windll.user32.SetWindowsHookExW(WH_KEYBOARD_LL, proc, None, 0)
         if not hook:

@@ -129,6 +129,10 @@ class MethodA:
                             return 1
             return ctypes.windll.user32.CallNextHookEx(None, nCode, wParam, lParam)
 
+        ctypes.windll.user32.CallNextHookEx.restype = ctypes.c_longlong
+        ctypes.windll.user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM,
+        ]
         proc = HOOKPROC(_handler)
         hook = ctypes.windll.user32.SetWindowsHookExW(WH_KEYBOARD_LL, proc, None, 0)
 
