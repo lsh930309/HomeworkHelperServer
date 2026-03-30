@@ -140,18 +140,10 @@ class SidebarSettingsDialog(QDialog):
         self._ss_gamepad_cb = QCheckBox()
         self._ss_gamepad_cb.setChecked(self._settings.screenshot_gamepad_trigger)
         self._ss_gamepad_cb.setToolTip(
-            "게임패드 버튼으로 스크린샷 트리거 활성화\n"
-            "버튼 인덱스는 tools/diagnose_gamepad_screenshot.py 로 탐색"
+            "게임패드 공유 버튼(Win+Alt+PrtScn)으로 스크린샷 트리거 활성화\n"
+            "짧게 누름: 스크린샷 / 길게 누름(800ms+): 녹화 토글"
         )
         ss_form.addRow("게임패드 트리거", self._ss_gamepad_cb)
-
-        # 감지된 버튼 인덱스 표시 (읽기 전용)
-        btn_idx = self._settings.screenshot_gamepad_button_index
-        btn_idx_label = QLabel(
-            str(btn_idx) if btn_idx >= 0 else "미설정 (진단 도구 실행 필요)"
-        )
-        btn_idx_label.setStyleSheet("color: gray; font-size: 11px;")
-        ss_form.addRow("감지된 버튼 인덱스", btn_idx_label)
 
         # Game Bar 캡처 비활성화
         self._ss_disable_gamebar_cb = QCheckBox()

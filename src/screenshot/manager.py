@@ -1,37 +1,15 @@
-"""스크린샷 기능 통합 매니저.
+"""스크린샷 기능 통합 매니저 (Method A 고정).
 
-_method.txt 형식:
-  "A"       — Method A (WH_KEYBOARD_LL, Win+Alt+PrtScn 가로채기)
-  "C:<idx>" — Method C (WinRT RawGameController, 버튼 인덱스 idx)
+Gamesir G7 Pro 등 HID 가상 키보드 드라이버 기반 게임패드는
+공유 버튼 입력을 Win+Alt+PrtScn 키 이벤트로 주입합니다.
+WH_KEYBOARD_LL 훅(Method A)이 이를 Game Bar보다 먼저 가로채 처리합니다.
 """
 import logging
-from pathlib import Path
 from typing import Callable, Optional
 
 from src.screenshot.trigger_dispatcher import TriggerDispatcher
 
 logger = logging.getLogger(__name__)
-
-_ACTIVE_METHOD = "A"
-_METHOD_FILE = Path(__file__).parent / "_method.txt"
-
-
-def _resolve_method() -> tuple:
-    """(method_id: str, button_index: int) 반환."""
-    if _METHOD_FILE.exists():
-        val = _METHOD_FILE.read_text(encoding="utf-8").strip().upper()
-        if ":" in val:
-            parts = val.split(":", 1)
-            method = parts[0].strip()
-            try:
-                idx = int(parts[1].strip())
-            except ValueError:
-                idx = -1
-            if method in ("A", "C"):
-                return method, idx
-        elif val in ("A", "C"):
-            return val, -1
-    return _ACTIVE_METHOD, -1
 
 
 class ScreenshotManager:
@@ -58,7 +36,6 @@ class ScreenshotManager:
         self._save_dir = save_dir
         self._get_target_hwnd = get_target_hwnd
         self._get_game_name: Optional[Callable[[], str]] = None
-        self._method_id, self._button_index = _resolve_method()
         self._impl = None
         self._on_captured: Optional[Callable[[str], None]] = None
         self._capture_mode: str = "fullscreen"  # "fullscreen" | "game_window"
@@ -96,16 +73,9 @@ class ScreenshotManager:
         self._impl = self._create_impl()
         if self._impl is None:
             return
-        # dispatcher가 있으면 callback은 dispatcher 경유로 호출됨
-        # legacy fallback용으로도 callback 설정 유지
         self._impl.set_callback(self._on_trigger)
         self._impl.start()
-        logger.info(
-            "ScreenshotManager 시작 (Method %s, button=%s, save_dir=%s)",
-            self._method_id,
-            self._button_index if self._method_id == "C" else "n/a",
-            self._save_dir,
-        )
+        logger.info("ScreenshotManager 시작 (save_dir=%s)", self._save_dir)
 
     def stop(self) -> None:
         """트리거 감지를 정지합니다."""
@@ -125,14 +95,6 @@ class ScreenshotManager:
                 if result:
                     return result
         return take_screenshot(save_dir=self._save_dir, game_name=game_name)
-
-    @property
-    def method_id(self) -> str:
-        return self._method_id
-
-    @property
-    def button_index(self) -> int:
-        return self._button_index
 
     # ── 내부 구현 ────────────────────────────────────────────────
 
@@ -157,14 +119,6 @@ class ScreenshotManager:
             self._long_press_callback()
 
     def _create_impl(self):
-        if self._method_id == "C":
-            try:
-                from src.screenshot.method_c import MethodC
-                return MethodC(button_index=self._button_index, dispatcher=self._dispatcher)
-            except Exception as exc:
-                logger.error("MethodC 초기화 실패: %s", exc)
-                return None
-        # Default: Method A
         try:
             from src.screenshot.method_a import MethodA
             return MethodA(dispatcher=self._dispatcher)

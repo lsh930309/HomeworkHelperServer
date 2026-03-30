@@ -20,7 +20,7 @@ class TriggerDispatcher:
         self._recording_fired: bool = False
         self._lock = threading.Lock()
 
-    # --- public interface (called from MethodA / MethodC) ---
+    # --- public interface (called from MethodA) ---
 
     def on_press(self) -> None:
         with self._lock:

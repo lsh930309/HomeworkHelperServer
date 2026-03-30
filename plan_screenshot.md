@@ -10,7 +10,7 @@
 | phase | scope | status |
 |---|---|---|
 | Phase 1 | 게임패드 트리거 + 캡처 + 사이드바 UI + 설정 | COMPLETE |
-| Phase 1.5 | 진단 도구 실행 → _method.txt 갱신 | PENDING (user action needed) |
+| Phase 1.5 | 진단 도구 실행 → Method A 확인 | COMPLETE |
 | Phase 2 | OBS WebSocket 녹화 기능 | COMPLETE |
 | Phase 2.5 | UI/UX 개선 (파일명/썸네일/버튼/순서) | COMPLETE |
 
@@ -19,15 +19,12 @@
 ## ARCHITECTURE
 
 ```
-tools/diagnose_gamepad_screenshot.py   ← 1회성 진단, _method.txt 기록
 src/screenshot/
   __init__.py              ← exports ScreenshotManager only
-  manager.py               ← 중앙 컨트롤러: _method.txt 읽어 impl 선택, game_name_provider
+  manager.py               ← 중앙 컨트롤러: Method A 고정, game_name_provider
   trigger_dispatcher.py    ← 홀드 시간 기반 분기 (짧게=스크린샷, 길게=녹화토글)
   method_a.py              ← WH_KEYBOARD_LL hook (Win+Alt+PrtScn 가로채기)
-  method_c.py              ← WinRT RawGameController polling (Xbox 라이센스 패드)
   capture.py               ← 캡처 로직 (mss → GDI BitBlt fallback), 파일명 생성
-  _method.txt              ← "A" or "C:<button_index>" (gitignore됨, 진단 후 생성)
 src/recording/
   __init__.py              ← exports RecordingManager only
   manager.py               ← 상태 머신 (idle/recording/connecting/obs_offline), OBS 제어
@@ -87,11 +84,6 @@ recording_hold_threshold_ms: int = 800
 500ms ~ 800ms:                    무시 (오동작 방지)
 ```
 
-### _method.txt format
-- `"A"` → method_a.py (WH_KEYBOARD_LL hook)
-- `"C:3"` → method_c.py with button_index=3
-- 파일 없음 → "A" fallback
-
 ### ScreenshotManager public API (manager.py)
 ```python
 ScreenshotManager(get_target_hwnd: Callable[[], Optional[int]])
@@ -103,6 +95,9 @@ ScreenshotManager(get_target_hwnd: Callable[[], Optional[int]])
 .set_on_long_press(fn: Callable[[], None])   # 녹화 토글 콜백
 .set_game_name_provider(fn: Callable[[], str])  # 파일명용 게임명 조회
 ```
+
+> **Method A 고정**: Gamesir G7 Pro는 `ROOT#FEIZHI_VIRTUAL_KEYBOARD` 가상 HID 키보드 드라이버를
+> 통해 Win+Alt+PrtScn 이벤트를 주입함이 진단으로 확인됨. Method B/C/진단 도구 제거.
 
 ### RecordingManager public API (recording/manager.py)
 ```python
@@ -156,31 +151,6 @@ read_obs_config() -> {port, password, output_dir, exe_path}
 
 ---
 
-## PENDING: Phase 1.5 — 진단 실행
-
-### 목적
-Gamesir G7 Pro 공유 버튼이 Method A(WH_KEYBOARD_LL)로 잡히는지, Method C(WinRT)가 필요한지 확인.
-이전 세션에서 3가지 진단 단계 모두 실패 → WinRT Method C 추가 후 재진단 필요.
-
-### 실행 방법
-```bash
-python tools/diagnose_gamepad_screenshot.py
-```
-게임패드 연결 상태에서 실행. 각 단계마다 프롬프트에 따라 공유 버튼을 누름.
-
-### 예상 결과
-| 시나리오 | _method.txt 내용 | 비고 |
-|---|---|---|
-| Method A 성공 | `A` | WH_KEYBOARD_LL이 Win+Alt+PrtScn을 잡음 |
-| Method C 성공 | `C:<idx>` | WinRT가 버튼 인식, manager 자동 선택 |
-| 둘 다 실패 | `A` (fallback) | 추가 조사 필요 |
-
-### 진단 후 후속 작업
-1. `_method.txt` 내용 확인
-2. 앱 실행 후 실제 게임에서 공유 버튼 짧게 눌러 캡처 동작 확인
-3. mss 블랙스크린 여부 확인 (DX11/12 게임에서)
-4. OBS 연동: 설정 다이얼로그 [OBS에서 불러오기] → 연결 확인 → 버튼 길게 눌러 녹화 시작/종료 확인
-
 ---
 
 ## KNOWN ISSUES / RISKS
@@ -214,10 +184,9 @@ python tools/diagnose_gamepad_screenshot.py
 
 ```
 [스크린샷 코어]
-src/screenshot/manager.py              ← ScreenshotManager, set_game_name_provider
+src/screenshot/manager.py              ← ScreenshotManager, set_game_name_provider (Method A 고정)
 src/screenshot/trigger_dispatcher.py   ← 홀드 시간 분기 로직
-src/screenshot/method_a.py             ← WH_KEYBOARD_LL
-src/screenshot/method_c.py             ← WinRT RawGameController
+src/screenshot/method_a.py             ← WH_KEYBOARD_LL (Win+Alt+PrtScn 가로채기)
 src/screenshot/capture.py              ← 캡처 + 파일명 생성 (_build_save_path)
 
 [녹화 코어]
