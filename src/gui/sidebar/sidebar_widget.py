@@ -253,6 +253,8 @@ class SidebarWidget(QWidget):
         self._vol_list_layout.setSpacing(4)
         vol_section_layout.addWidget(self._vol_list_container)
 
+        self._scroll_layout.addWidget(self._vol_section)
+
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
         self._scroll_layout.addWidget(self._screenshot_section)
@@ -260,8 +262,6 @@ class SidebarWidget(QWidget):
         # 녹화 섹션
         self._recording_section = self._build_recording_section()
         self._scroll_layout.addWidget(self._recording_section)
-
-        self._scroll_layout.addWidget(self._vol_section)
         self._scroll_layout.addStretch(1)
 
         self._main_scroll.setWidget(self._scroll_content)
@@ -869,18 +869,16 @@ class SidebarWidget(QWidget):
             "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
         )
         self._capture_now_btn = QPushButton("지금 촬영")
-        self._capture_now_btn.setFixedHeight(22)
+        self._capture_now_btn.setFixedHeight(28)
         self._capture_now_btn.setStyleSheet("""
             QPushButton {
                 background: rgba(255,255,255,10);
                 color: rgba(255,255,255,160);
                 border: 1px solid rgba(255,255,255,18);
-                border-radius: 3px;
-                font-size: 10px;
-                padding: 0 6px;
+                border-radius: 4px;
+                font-size: 11px;
             }
             QPushButton:hover { background: rgba(255,255,255,22); color: white; }
-            QPushButton:pressed { background: rgba(100,160,255,120); }
         """)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
         header.addWidget(title)
@@ -917,17 +915,17 @@ class SidebarWidget(QWidget):
         layout.addWidget(self._rec_status_label)
 
         self._rec_stop_btn = QPushButton("■ 녹화 종료")
-        self._rec_stop_btn.setFixedHeight(24)
+        self._rec_stop_btn.setFixedHeight(28)
         self._rec_stop_btn.setStyleSheet("""
             QPushButton {
-                background: rgba(224,85,85,160);
-                color: white;
-                border: 1px solid rgba(224,85,85,200);
-                border-radius: 3px;
-                font-size: 10px;
-                padding: 0 8px;
+                background: rgba(160, 30, 30, 160);
+                color: rgba(255,200,200,220);
+                border: 1px solid rgba(200, 60, 60, 120);
+                border-radius: 5px;
+                font-size: 11px;
             }
-            QPushButton:hover { background: rgba(224,85,85,220); }
+            QPushButton:hover { background: rgba(200, 40, 40, 200); color: white; }
+            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
         """)
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
@@ -1123,9 +1121,12 @@ class SidebarWidget(QWidget):
                     self._reset_auto_hide()
 
     def on_screenshot_captured(self, path: str) -> None:
-        """외부(MainWindow)에서 캡처 완료 시 호출됩니다."""
-        if self._is_shown:
-            self._refresh_screenshot_thumbnails()
+        """외부(MainWindow)에서 캡처 완료 시 호출됩니다. 워커 스레드에서 호출 가능."""
+        from PyQt6.QtCore import QMetaObject, Qt
+        QMetaObject.invokeMethod(
+            self, "_refresh_screenshot_thumbnails",
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def _on_slide_out_finished(self) -> None:
         try:

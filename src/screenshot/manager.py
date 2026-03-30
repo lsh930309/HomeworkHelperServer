@@ -57,6 +57,7 @@ class ScreenshotManager:
         """
         self._save_dir = save_dir
         self._get_target_hwnd = get_target_hwnd
+        self._get_game_name: Optional[Callable[[], str]] = None
         self._method_id, self._button_index = _resolve_method()
         self._impl = None
         self._on_captured: Optional[Callable[[str], None]] = None
@@ -76,6 +77,10 @@ class ScreenshotManager:
     def set_on_long_press(self, fn: Callable[[], None]) -> None:
         """롱프레스(녹화 토글) 시 호출될 콜백을 등록합니다."""
         self._long_press_callback = fn
+
+    def set_game_name_provider(self, fn: Callable[[], str]) -> None:
+        """현재 활성 게임 이름을 반환하는 콜백을 등록합니다 (파일명 생성에 사용)."""
+        self._get_game_name = fn
 
     def set_save_dir(self, save_dir: Optional[str]) -> None:
         self._save_dir = save_dir
@@ -110,13 +115,14 @@ class ScreenshotManager:
     def capture_now(self) -> Optional[str]:
         """즉시 스크린샷을 촬영합니다. 저장 경로를 반환하며 실패 시 None."""
         from src.screenshot.capture import take_screenshot, take_screenshot_window
+        game_name = self._get_game_name() if self._get_game_name else ""
         if self._capture_mode == "game_window" and self._get_target_hwnd:
             hwnd = self._get_target_hwnd()
             if hwnd:
-                result = take_screenshot_window(hwnd, save_dir=self._save_dir)
+                result = take_screenshot_window(hwnd, save_dir=self._save_dir, game_name=game_name)
                 if result:
                     return result
-        return take_screenshot(save_dir=self._save_dir)
+        return take_screenshot(save_dir=self._save_dir, game_name=game_name)
 
     @property
     def method_id(self) -> str:

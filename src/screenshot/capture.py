@@ -20,9 +20,9 @@ _DEFAULT_SAVE_DIR = Path.home() / "Pictures" / "GameCaptures"
 # 공개 API
 # ──────────────────────────────────────────────────────────────
 
-def take_screenshot(save_dir: Optional[str] = None) -> Optional[str]:
+def take_screenshot(save_dir: Optional[str] = None, game_name: str = "") -> Optional[str]:
     """현재 전체 화면을 캡처해 파일로 저장합니다."""
-    save_path = _build_save_path(save_dir)
+    save_path = _build_save_path(save_dir, game_name)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     ctypes.windll.user32.ShowCursor(False)
@@ -38,7 +38,7 @@ def take_screenshot(save_dir: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def take_screenshot_window(hwnd: int, save_dir: Optional[str] = None) -> Optional[str]:
+def take_screenshot_window(hwnd: int, save_dir: Optional[str] = None, game_name: str = "") -> Optional[str]:
     """지정 창의 클라이언트 영역(렌더링 영역)만 캡처합니다.
 
     창이 최소화되어 있거나 클라이언트 크기가 0이면 전체 화면 폴백을 사용합니다.
@@ -46,13 +46,13 @@ def take_screenshot_window(hwnd: int, save_dir: Optional[str] = None) -> Optiona
     region = _get_client_region(hwnd)
     if region is None:
         logger.debug("take_screenshot_window: 클라이언트 영역 획득 실패 → 전체 화면 폴백")
-        return take_screenshot(save_dir=save_dir)
+        return take_screenshot(save_dir=save_dir, game_name=game_name)
 
     x, y, w, h = region
     if w <= 0 or h <= 0:
-        return take_screenshot(save_dir=save_dir)
+        return take_screenshot(save_dir=save_dir, game_name=game_name)
 
-    save_path = _build_save_path(save_dir)
+    save_path = _build_save_path(save_dir, game_name)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     ctypes.windll.user32.ShowCursor(False)
@@ -72,10 +72,22 @@ def take_screenshot_window(hwnd: int, save_dir: Optional[str] = None) -> Optiona
 # 내부 헬퍼 — 경로/영역
 # ──────────────────────────────────────────────────────────────
 
-def _build_save_path(save_dir: Optional[str]) -> Path:
+def _sanitize_filename(name: str) -> str:
+    """Windows 파일명 금지 문자(\\/:*?"<>|)를 제거합니다."""
+    import re
+    sanitized = re.sub(r'[\\/:*?"<>|]', '_', name).strip()
+    return sanitized[:60] if sanitized else "capture"
+
+
+def _build_save_path(save_dir: Optional[str], game_name: str = "") -> Path:
     base = Path(save_dir) if save_dir else _DEFAULT_SAVE_DIR
-    ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    return base / f"capture_{ts}.png"
+    now = datetime.datetime.now()
+    hour_12 = now.hour % 12 or 12
+    ampm = "오전" if now.hour < 12 else "오후"
+    time_str = f"{hour_12}_{now.minute:02d}_{now.second:02d}"
+    date_str = now.strftime("%Y-%m-%d")
+    safe_name = _sanitize_filename(game_name) if game_name.strip() else "capture"
+    return base / f"{safe_name}_{date_str} {ampm} {time_str}.png"
 
 
 def _get_client_region(hwnd: int) -> Optional[tuple]:

@@ -164,6 +164,7 @@ class MainWindow(QMainWindow):
             get_target_hwnd=self._get_screenshot_target_hwnd,
         )
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
+        self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)
         self._apply_screenshot_settings()
 
         # 녹화 매니저
@@ -1854,6 +1855,25 @@ class MainWindow(QMainWindow):
             }
         return hwnd if pid in active_pids else None
 
+    def _get_screenshot_game_name(self) -> str:
+        """포커스된 등록 게임의 이름 반환. 없으면 빈 문자열."""
+        import ctypes
+        import ctypes.wintypes as wt
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd or not self.process_monitor:
+            return ""
+        pid_c = wt.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_c))
+        pid = pid_c.value
+        active = self.process_monitor.active_monitored_processes
+        managed_map = {p.id: p for p in getattr(self.data_manager, 'managed_processes', [])}
+        for proc_id, entry in active.items():
+            if entry.get('pid') == pid:
+                proc = managed_map.get(proc_id)
+                if proc:
+                    return proc.name
+        return ""
+
     def _apply_screenshot_settings(self) -> None:
         """GlobalSettings의 스크린샷 설정을 ScreenshotManager에 반영합니다."""
         gs = getattr(self.data_manager, 'global_settings', None)
@@ -1902,9 +1922,7 @@ class MainWindow(QMainWindow):
         logger.info("스크린샷 저장됨: %s", path)
         if (self._sidebar_controller is not None
                 and self._sidebar_controller._sidebar is not None):
-            sidebar = self._sidebar_controller._sidebar
-            if sidebar._is_shown:
-                sidebar.on_screenshot_captured(path)
+            self._sidebar_controller._sidebar.on_screenshot_captured(path)
 
     _gamebar_original_value: Optional[int] = None
 
