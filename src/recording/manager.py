@@ -135,6 +135,11 @@ class RecordingManager:
     def _launch_obs(exe_path: str, hidden: bool) -> None:
         try:
             import os
+            import psutil
+            exe_name = os.path.basename(exe_path).lower()
+            if any(p.name().lower() == exe_name for p in psutil.process_iter(["name"])):
+                logger.debug("OBS already running, skipping launch")
+                return
             args = [exe_path]
             if hidden:
                 args.append("--startminimized")
