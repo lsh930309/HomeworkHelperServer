@@ -166,6 +166,13 @@ class MainWindow(QMainWindow):
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
         self._apply_screenshot_settings()
 
+        # 녹화 매니저
+        from src.recording import RecordingManager
+        self._recording_manager = RecordingManager()
+        self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
+        self._screenshot_manager.set_on_long_press(self._recording_manager.on_recording_toggle)
+        self._apply_recording_settings()
+
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
         self._saved_size = None
@@ -554,6 +561,7 @@ class MainWindow(QMainWindow):
             self.data_manager.save_global_settings(updated)
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
+            self._apply_recording_settings()
 
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
@@ -1593,7 +1601,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_sidebar_controller'):
             self._sidebar_controller.cleanup()
 
-        # 3-2. Game Bar 설정 복원
+        # 3-2. 녹화 매니저 종료
+        if hasattr(self, '_recording_manager'):
+            self._recording_manager.shutdown()
+
+        # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
 
         # 4. QApplication 종료
@@ -1856,6 +1868,22 @@ class MainWindow(QMainWindow):
             self._set_gamebar_capture(False)
         else:
             self._restore_gamebar_setting()
+
+    def _apply_recording_settings(self) -> None:
+        """GlobalSettings의 녹화 설정을 RecordingManager에 반영합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None or not hasattr(self, '_recording_manager'):
+            return
+        self._recording_manager.apply_settings(gs)
+
+    def _on_recording_state_changed(self, state: str) -> None:
+        """RecordingManager 상태 변경 콜백."""
+        if hasattr(self, '_sidebar_controller') and self._sidebar_controller._sidebar is not None:
+            sidebar = self._sidebar_controller._sidebar
+            # 콜백이 아직 연결되지 않았으면 연결
+            if not getattr(sidebar, '_stop_recording_callback', None) and hasattr(self, '_recording_manager'):
+                sidebar.set_on_stop_recording(self._recording_manager.stop_recording)
+            sidebar.on_recording_state_changed(state)
 
     def _start_screenshot_manager(self) -> None:
         """게임 실행 시 스크린샷 매니저를 시작합니다."""

@@ -171,7 +171,17 @@ class GlobalSettings:
                  screenshot_gamepad_trigger: bool = True,
                  screenshot_disable_gamebar: bool = False,
                  screenshot_capture_mode: str = "fullscreen",
-                 screenshot_gamepad_button_index: int = -1):
+                 screenshot_gamepad_button_index: int = -1,
+                 # Recording (OBS)
+                 recording_enabled: bool = False,
+                 obs_host: str = "localhost",
+                 obs_port: int = 4455,
+                 obs_password: str = "",
+                 obs_exe_path: str = "",
+                 obs_auto_launch: bool = False,
+                 obs_launch_hidden: bool = True,
+                 obs_watch_output_dir: bool = True,
+                 recording_hold_threshold_ms: int = 800):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -212,6 +222,16 @@ class GlobalSettings:
         self.screenshot_disable_gamebar = screenshot_disable_gamebar
         self.screenshot_capture_mode = screenshot_capture_mode
         self.screenshot_gamepad_button_index = screenshot_gamepad_button_index
+        # Recording (OBS)
+        self.recording_enabled = recording_enabled
+        self.obs_host = obs_host
+        self.obs_port = obs_port
+        self.obs_password = obs_password
+        self.obs_exe_path = obs_exe_path
+        self.obs_auto_launch = obs_auto_launch
+        self.obs_launch_hidden = obs_launch_hidden
+        self.obs_watch_output_dir = obs_watch_output_dir
+        self.recording_hold_threshold_ms = recording_hold_threshold_ms
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -288,6 +308,16 @@ class GlobalSettings:
             _cap_mode = 'fullscreen'
         data['screenshot_capture_mode'] = _cap_mode
         data['screenshot_gamepad_button_index'] = int(data.get('screenshot_gamepad_button_index', -1))
+        # Recording (OBS) 하위 호환성
+        data['recording_enabled'] = bool(data.get('recording_enabled', False))
+        data['obs_host'] = str(data.get('obs_host', 'localhost'))
+        data['obs_port'] = int(data.get('obs_port', 4455))
+        data['obs_password'] = str(data.get('obs_password', ''))
+        data['obs_exe_path'] = str(data.get('obs_exe_path', ''))
+        data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
+        data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
+        data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
+        data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
         return cls(**data)
     
 class WebShortcut:

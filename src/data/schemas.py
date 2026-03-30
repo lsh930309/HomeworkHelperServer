@@ -101,6 +101,16 @@ class GlobalSettingsSchema(BaseModel):
     screenshot_disable_gamebar: bool = False
     screenshot_capture_mode: str = "fullscreen"
     screenshot_gamepad_button_index: int = -1
+    # Recording (OBS)
+    recording_enabled: bool = False
+    obs_host: str = "localhost"
+    obs_port: int = 4455
+    obs_password: str = ""
+    obs_exe_path: str = ""
+    obs_auto_launch: bool = False
+    obs_launch_hidden: bool = True
+    obs_watch_output_dir: bool = True
+    recording_hold_threshold_ms: int = 800
 
 
 class ProcessSessionCreate(BaseModel):

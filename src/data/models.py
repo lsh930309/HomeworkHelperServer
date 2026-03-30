@@ -91,6 +91,16 @@ class GlobalSettings(Base):
     screenshot_disable_gamebar = Column(Boolean, default=False)
     screenshot_capture_mode = Column(String, default="fullscreen")
     screenshot_gamepad_button_index = Column(Integer, default=-1)
+    # Recording (OBS)
+    recording_enabled = Column(Boolean, default=False)
+    obs_host = Column(String, default="localhost")
+    obs_port = Column(Integer, default=4455)
+    obs_password = Column(String, default="")
+    obs_exe_path = Column(String, default="")
+    obs_auto_launch = Column(Boolean, default=False)
+    obs_launch_hidden = Column(Boolean, default=True)
+    obs_watch_output_dir = Column(Boolean, default=True)
+    recording_hold_threshold_ms = Column(Integer, default=800)
 
 
 class ProcessSession(Base):

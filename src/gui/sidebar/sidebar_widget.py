@@ -257,6 +257,10 @@ class SidebarWidget(QWidget):
         self._screenshot_section = self._build_screenshot_section()
         self._scroll_layout.addWidget(self._screenshot_section)
 
+        # 녹화 섹션
+        self._recording_section = self._build_recording_section()
+        self._scroll_layout.addWidget(self._recording_section)
+
         self._scroll_layout.addWidget(self._vol_section)
         self._scroll_layout.addStretch(1)
 
@@ -306,6 +310,7 @@ class SidebarWidget(QWidget):
         self._refresh_volumes_list()
         self._refresh_screenshot_section()
         self._refresh_screenshot_thumbnails()
+        self._refresh_recording_section()
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -892,6 +897,103 @@ class SidebarWidget(QWidget):
         layout.addWidget(self._thumb_grid_container)
 
         return section
+
+    def _build_recording_section(self) -> QWidget:
+        """녹화 상태 섹션 위젯을 구성합니다."""
+        section = QWidget()
+        section.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(4)
+
+        title = QLabel("녹화")
+        title.setStyleSheet(
+            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
+        )
+        layout.addWidget(title)
+
+        self._rec_status_label = QLabel("○ OBS 오프라인")
+        self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+        layout.addWidget(self._rec_status_label)
+
+        self._rec_stop_btn = QPushButton("■ 녹화 종료")
+        self._rec_stop_btn.setFixedHeight(24)
+        self._rec_stop_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(224,85,85,160);
+                color: white;
+                border: 1px solid rgba(224,85,85,200);
+                border-radius: 3px;
+                font-size: 10px;
+                padding: 0 8px;
+            }
+            QPushButton:hover { background: rgba(224,85,85,220); }
+        """)
+        self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
+        self._rec_stop_btn.hide()
+        layout.addWidget(self._rec_stop_btn)
+
+        # 녹화 상태
+        self._rec_state = "obs_offline"
+        self._rec_elapsed_sec = 0
+        self._stop_recording_callback = None
+
+        # 녹화 타이머 (1초)
+        self._rec_timer = QTimer(self)
+        self._rec_timer.setInterval(1000)
+        self._rec_timer.timeout.connect(self._update_rec_timer)
+        self._rec_timer.start()
+
+        return section
+
+    def set_on_stop_recording(self, fn) -> None:
+        """녹화 종료 버튼 클릭 시 호출될 콜백을 등록합니다."""
+        self._stop_recording_callback = fn
+
+    def on_recording_state_changed(self, state: str) -> None:
+        """MainWindow에서 호출하는 슬롯. state: 'idle'|'recording'|'connecting'|'obs_offline'"""
+        self._rec_state = state
+        if state == "recording":
+            self._rec_elapsed_sec = 0
+        self._update_rec_ui()
+
+    def _update_rec_ui(self) -> None:
+        state = getattr(self, '_rec_state', 'obs_offline')
+        elapsed = getattr(self, '_rec_elapsed_sec', 0)
+        if state == "recording":
+            mins, secs = divmod(elapsed, 60)
+            hrs, mins = divmod(mins, 60)
+            self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
+            self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
+            self._rec_stop_btn.show()
+        elif state == "idle":
+            self._rec_status_label.setText("● OBS 대기 중")
+            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_stop_btn.hide()
+        elif state == "connecting":
+            self._rec_status_label.setText("○ OBS 연결 중...")
+            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_stop_btn.hide()
+        else:  # obs_offline
+            self._rec_status_label.setText("○ OBS 오프라인")
+            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_stop_btn.hide()
+
+    def _update_rec_timer(self) -> None:
+        """1초 tick. recording 상태일 때만 elapsed 증가."""
+        if getattr(self, '_rec_state', '') == "recording":
+            self._rec_elapsed_sec = getattr(self, '_rec_elapsed_sec', 0) + 1
+            self._update_rec_ui()
+
+    def _on_rec_stop_clicked(self) -> None:
+        if self._stop_recording_callback:
+            self._stop_recording_callback()
+
+    def _refresh_recording_section(self) -> None:
+        """recording_enabled 설정에 따라 섹션 show/hide."""
+        gs = getattr(self._data_manager, 'global_settings', None)
+        enabled = getattr(gs, 'recording_enabled', False) if gs else False
+        self._recording_section.setVisible(enabled)
 
     def _refresh_screenshot_section(self) -> None:
         """스크린샷 섹션 표시 여부를 설정에 따라 갱신합니다."""

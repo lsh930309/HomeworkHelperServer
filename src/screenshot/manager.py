@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
+from src.screenshot.trigger_dispatcher import TriggerDispatcher
+
 logger = logging.getLogger(__name__)
 
 _ACTIVE_METHOD = "A"
@@ -59,12 +61,21 @@ class ScreenshotManager:
         self._impl = None
         self._on_captured: Optional[Callable[[str], None]] = None
         self._capture_mode: str = "fullscreen"  # "fullscreen" | "game_window"
+        self._long_press_callback: Optional[Callable[[], None]] = None
+        self._dispatcher = TriggerDispatcher(
+            on_screenshot=self._on_trigger,
+            on_long_press=self._on_long_press_trigger,
+        )
 
     # ── 공개 API ────────────────────────────────────────────────
 
     def set_on_captured(self, fn: Callable[[str], None]) -> None:
         """캡처 완료 시 호출될 콜백. 인자로 저장 파일 경로(str)를 전달합니다."""
         self._on_captured = fn
+
+    def set_on_long_press(self, fn: Callable[[], None]) -> None:
+        """롱프레스(녹화 토글) 시 호출될 콜백을 등록합니다."""
+        self._long_press_callback = fn
 
     def set_save_dir(self, save_dir: Optional[str]) -> None:
         self._save_dir = save_dir
@@ -78,6 +89,8 @@ class ScreenshotManager:
         self._impl = self._create_impl()
         if self._impl is None:
             return
+        # dispatcher가 있으면 callback은 dispatcher 경유로 호출됨
+        # legacy fallback용으로도 callback 설정 유지
         self._impl.set_callback(self._on_trigger)
         self._impl.start()
         logger.info(
@@ -120,18 +133,22 @@ class ScreenshotManager:
         if path and self._on_captured:
             self._on_captured(path)
 
+    def _on_long_press_trigger(self) -> None:
+        if self._long_press_callback:
+            self._long_press_callback()
+
     def _create_impl(self):
         if self._method_id == "C":
             try:
                 from src.screenshot.method_c import MethodC
-                return MethodC(button_index=self._button_index)
+                return MethodC(button_index=self._button_index, dispatcher=self._dispatcher)
             except Exception as exc:
                 logger.error("MethodC 초기화 실패: %s", exc)
                 return None
         # Default: Method A
         try:
             from src.screenshot.method_a import MethodA
-            return MethodA()
+            return MethodA(dispatcher=self._dispatcher)
         except Exception as exc:
             logger.error("MethodA 초기화 실패: %s", exc)
             return None

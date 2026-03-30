@@ -31,14 +31,16 @@ def _get_controllers():
 class MethodC:
     """WinRT RawGameController 폴링 기반 스크린샷 트리거."""
 
-    def __init__(self, button_index: int = -1):
+    def __init__(self, button_index: int = -1, dispatcher=None):
         """
         Args:
             button_index: 감지할 버튼 인덱스 (0-based).
                           -1 이면 임의 버튼 첫 프레스를 트리거로 사용합니다.
+            dispatcher: TriggerDispatcher 인스턴스 (있으면 홀드 분기 사용).
         """
         self._button_index = button_index
         self._callback: Optional[Callable] = None
+        self._dispatcher = dispatcher
         self._thread: Optional[threading.Thread] = None
         self._running: bool = False
         self._prev_states: dict = {}   # {controller_id: [bool, ...]}
@@ -108,27 +110,55 @@ class MethodC:
                     if len(prev) != len(curr):
                         prev = [False] * len(curr)
 
-                    triggered = False
-                    if self._button_index >= 0:
-                        # 지정 버튼 엣지 감지
+                    if self._dispatcher:
+                        # dispatcher 모드: rising/falling edge + hold tick
                         idx = self._button_index
-                        if idx < len(curr) and curr[idx] and not prev[idx]:
-                            triggered = True
-                            logger.debug("MethodC: 버튼[%d] 프레스 감지", idx)
+                        if idx >= 0 and idx < len(curr):
+                            # rising edge (버튼 눌림)
+                            if curr[idx] and not prev[idx]:
+                                logger.debug("MethodC: 버튼[%d] 프레스 감지", idx)
+                                self._dispatcher.on_press()
+                            # hold tick (버튼 홀드 중)
+                            elif curr[idx] and prev[idx]:
+                                self._dispatcher.on_hold_tick()
+                            # falling edge (버튼 뗌)
+                            elif not curr[idx] and prev[idx]:
+                                logger.debug("MethodC: 버튼[%d] 릴리즈 감지", idx)
+                                self._dispatcher.on_release()
+                        elif idx < 0:
+                            # auto 모드: 첫 번째 변화 버튼 사용
+                            for i, (c, p) in enumerate(zip(curr, prev)):
+                                if c and not p:
+                                    logger.debug("MethodC: 버튼[%d] 프레스 (auto 모드)", i)
+                                    self._dispatcher.on_press()
+                                    break
+                                elif not c and p:
+                                    self._dispatcher.on_release()
+                                    break
+                            # hold tick: 임의 버튼이 눌려있으면
+                            if any(c and p for c, p in zip(curr, prev)):
+                                self._dispatcher.on_hold_tick()
                     else:
-                        # 임의 버튼 엣지 감지 (진단/auto 모드)
-                        for i, (c, p) in enumerate(zip(curr, prev)):
-                            if c and not p:
+                        # legacy 모드: 직접 callback 호출
+                        triggered = False
+                        if self._button_index >= 0:
+                            idx = self._button_index
+                            if idx < len(curr) and curr[idx] and not prev[idx]:
                                 triggered = True
-                                logger.debug("MethodC: 버튼[%d] 프레스 (auto 모드)", i)
-                                break
+                                logger.debug("MethodC: 버튼[%d] 프레스 감지", idx)
+                        else:
+                            for i, (c, p) in enumerate(zip(curr, prev)):
+                                if c and not p:
+                                    triggered = True
+                                    logger.debug("MethodC: 버튼[%d] 프레스 (auto 모드)", i)
+                                    break
 
-                    if triggered and self._callback:
-                        threading.Thread(
-                            target=self._callback,
-                            daemon=True,
-                            name="screenshot-capture",
-                        ).start()
+                        if triggered and self._callback:
+                            threading.Thread(
+                                target=self._callback,
+                                daemon=True,
+                                name="screenshot-capture",
+                            ).start()
 
                     self._prev_states[cid] = curr
             except Exception as exc:
