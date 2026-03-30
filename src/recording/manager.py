@@ -134,9 +134,12 @@ class RecordingManager:
     @staticmethod
     def _launch_obs(exe_path: str, hidden: bool) -> None:
         try:
+            import os
             args = [exe_path]
             if hidden:
                 args.append("--startminimized")
-            subprocess.Popen(args)
+            # OBS는 자신의 설치 디렉토리를 cwd로 실행해야 locale 파일을 찾을 수 있음
+            obs_dir = os.path.dirname(exe_path)
+            subprocess.Popen(args, cwd=obs_dir)
         except Exception as e:
             logger.warning("Failed to launch OBS: %s", e)
