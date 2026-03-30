@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -269,7 +270,7 @@ def test_xinput_guide(timeout_sec: int = 8) -> bool:
 # ──────────────────────────────────────────────────────────────
 
 def run_diagnosis() -> str:
-    """진단을 실행하고 채택된 방법 'A' 또는 'B'를 반환합니다."""
+    """진단을 실행하고 채택된 방법 'A' 또는 'C'를 반환합니다."""
     print()
     print("=" * 62)
     print("  게임패드 스크린샷 메커니즘 진단 도구")
@@ -308,6 +309,15 @@ def run_diagnosis() -> str:
     xinput_ok = test_xinput_guide(timeout_sec=8)
     print(f"  결과: {'감지됨 ✓' if xinput_ok else '감지 안 됨'}")
 
+    # ── 테스트 3: WinRT RawGameController ───────────────────────
+    print()
+    print("[테스트 3] WinRT RawGameController — Share 버튼 인덱스 탐색")
+    winrt_button_index = test_winrt_raw(timeout_sec=10)
+    if winrt_button_index is not None:
+        print(f"  결과: 버튼 인덱스 {winrt_button_index} 감지됨 ✓")
+    else:
+        print("  결과: 감지 안 됨")
+
     # ── 판정 ────────────────────────────────────────────────────
     print()
     print("=" * 62)
@@ -316,28 +326,114 @@ def run_diagnosis() -> str:
 
     if hook_ok:
         method = "A"
+        method_txt = "A"
         reason = "WH_KEYBOARD_LL 훅에서 Win+Alt+PrtScn 감지됨 → 가상 키보드 주입 방식"
+    elif winrt_button_index is not None:
+        method = "C"
+        method_txt = f"C:{winrt_button_index}"
+        reason = (
+            f"WinRT RawGameController 버튼[{winrt_button_index}] 감지됨 "
+            f"→ Xbox 라이센스 패드 방식"
+        )
     elif xinput_ok:
-        method = "B"
-        reason = "XInput Guide 버튼 감지됨 → XInput 폴링 방식"
+        method = "A"
+        method_txt = "A"
+        reason = (
+            "XInput Guide 버튼 감지됨 (참고용). "
+            "Method A를 기본 설정합니다."
+        )
     else:
         method = "A"
+        method_txt = "A"
         reason = (
             "자동 판정 불가 (Share 버튼 입력이 감지되지 않음)\n"
-            "  기본값 Method A로 설정합니다. 동작하지 않으면 B로 전환하세요."
+            "  기본값 Method A로 설정합니다."
         )
 
     print(f"\n  채택: Method {method}")
+    print(f"  저장값: {method_txt}")
     print(f"  이유: {reason}")
 
     out_path = ROOT / "src" / "screenshot" / "_method.txt"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(method, encoding="utf-8")
+    out_path.write_text(method_txt, encoding="utf-8")
     print(f"\n  결과 저장 → {out_path.relative_to(ROOT)}")
     print()
     print("  다음 단계: python tools/select_screenshot_method.py")
     print("=" * 62)
     return method
+
+
+
+# ──────────────────────────────────────────────────────────────
+# 테스트 3: WinRT RawGameController
+# ──────────────────────────────────────────────────────────────
+
+def test_winrt_raw(timeout_sec: int = 10) -> Optional[int]:
+    """WinRT RawGameController에서 새로 눌린 버튼 인덱스 반환. 실패 시 None."""
+    try:
+        from winrt.windows.gaming.input import RawGameController
+        controllers = list(RawGameController.raw_game_controllers)
+    except Exception as exc:
+        print(f"  [건너뜀] winrt-Windows.Gaming.Input 로드 실패: {exc}")
+        return None
+
+    if not controllers:
+        print("  [건너뜀] RawGameController 감지 없음")
+        return None
+
+    print(f"  RawGameController 감지: {len(controllers)}개")
+    for i, c in enumerate(controllers):
+        try:
+            print(f"    [{i}] 버튼={c.button_count} 축={c.axis_count} 스위치={c.switch_count}")
+        except Exception:
+            pass
+
+    print(f"  게임패드 [공유] 버튼을 눌러 주세요 ({timeout_sec}초 대기)...", flush=True)
+
+    # 초기 상태 스냅샷
+    prev_states: dict = {}
+    for ctrl in controllers:
+        cid = id(ctrl)
+        n = getattr(ctrl, 'button_count', 0)
+        if n == 0:
+            continue
+        buttons = [False] * n
+        axes    = [0.0]   * getattr(ctrl, 'axis_count', 0)
+        switches = [0]    * getattr(ctrl, 'switch_count', 0)
+        try:
+            _ts, buttons, _ax, _sw = ctrl.get_current_reading(buttons, axes, switches)
+            prev_states[cid] = list(buttons)
+        except Exception:
+            prev_states[cid] = [False] * n
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            for ctrl in list(RawGameController.raw_game_controllers):
+                cid = id(ctrl)
+                n = getattr(ctrl, 'button_count', 0)
+                if n == 0:
+                    continue
+                buttons = [False] * n
+                axes    = [0.0]   * getattr(ctrl, 'axis_count', 0)
+                switches = [0]    * getattr(ctrl, 'switch_count', 0)
+                try:
+                    _ts, buttons, _ax, _sw = ctrl.get_current_reading(buttons, axes, switches)
+                except Exception:
+                    continue
+                curr = list(buttons)
+                prev = prev_states.get(cid, [False] * len(curr))
+                if len(prev) != len(curr):
+                    prev = [False] * len(curr)
+                for i, (c, p) in enumerate(zip(curr, prev)):
+                    if c and not p:
+                        return i
+                prev_states[cid] = curr
+        except Exception:
+            pass
+        time.sleep(0.05)
+    return None
 
 
 if __name__ == "__main__":

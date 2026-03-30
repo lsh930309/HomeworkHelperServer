@@ -164,7 +164,14 @@ class GlobalSettings:
                  sidebar_clock_format: str = "%H:%M:%S",
                  sidebar_playtime_enabled: bool = True,
                  sidebar_playtime_prefix: str = "오늘 플레이 시간",
-                 sidebar_volume_section_enabled: bool = True):
+                 sidebar_volume_section_enabled: bool = True,
+                 # 스크린샷 설정
+                 screenshot_enabled: bool = True,
+                 screenshot_save_dir: str = "",
+                 screenshot_gamepad_trigger: bool = True,
+                 screenshot_disable_gamebar: bool = False,
+                 screenshot_capture_mode: str = "fullscreen",
+                 screenshot_gamepad_button_index: int = -1):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -198,6 +205,13 @@ class GlobalSettings:
         self.sidebar_playtime_enabled = sidebar_playtime_enabled
         self.sidebar_playtime_prefix = sidebar_playtime_prefix
         self.sidebar_volume_section_enabled = sidebar_volume_section_enabled
+        # 스크린샷
+        self.screenshot_enabled = screenshot_enabled
+        self.screenshot_save_dir = screenshot_save_dir
+        self.screenshot_gamepad_trigger = screenshot_gamepad_trigger
+        self.screenshot_disable_gamebar = screenshot_disable_gamebar
+        self.screenshot_capture_mode = screenshot_capture_mode
+        self.screenshot_gamepad_button_index = screenshot_gamepad_button_index
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -264,6 +278,16 @@ class GlobalSettings:
         data['sidebar_playtime_enabled'] = bool(data.get('sidebar_playtime_enabled', True))
         data['sidebar_playtime_prefix'] = str(data.get('sidebar_playtime_prefix', '오늘 플레이 시간'))
         data['sidebar_volume_section_enabled'] = bool(data.get('sidebar_volume_section_enabled', True))
+        # 스크린샷 설정 하위 호환성
+        data['screenshot_enabled'] = bool(data.get('screenshot_enabled', True))
+        data['screenshot_save_dir'] = str(data.get('screenshot_save_dir', ''))
+        data['screenshot_gamepad_trigger'] = bool(data.get('screenshot_gamepad_trigger', True))
+        data['screenshot_disable_gamebar'] = bool(data.get('screenshot_disable_gamebar', False))
+        _cap_mode = data.get('screenshot_capture_mode', 'fullscreen')
+        if _cap_mode not in ('fullscreen', 'game_window'):
+            _cap_mode = 'fullscreen'
+        data['screenshot_capture_mode'] = _cap_mode
+        data['screenshot_gamepad_button_index'] = int(data.get('screenshot_gamepad_button_index', -1))
         return cls(**data)
     
 class WebShortcut:

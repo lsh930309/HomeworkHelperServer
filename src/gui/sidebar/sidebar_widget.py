@@ -14,7 +14,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
@@ -29,6 +29,12 @@ _SIDEBAR_WIDTH = 280
 _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함
 _DEFAULT_AUTO_HIDE_MS = 3000
+
+# 스크린샷 썸네일 크기 (px)
+_THUMB_W = 76
+_THUMB_H = 57
+_THUMB_COLS = 3
+_THUMB_MAX_CELLS = _THUMB_COLS * 3  # 최대 9셀 (마지막 1셀은 폴더 버튼)
 
 
 def _tint_icon_white(icon) -> "QIcon":
@@ -247,6 +253,10 @@ class SidebarWidget(QWidget):
         self._vol_list_layout.setSpacing(4)
         vol_section_layout.addWidget(self._vol_list_container)
 
+        # 스크린샷 섹션
+        self._screenshot_section = self._build_screenshot_section()
+        self._scroll_layout.addWidget(self._screenshot_section)
+
         self._scroll_layout.addWidget(self._vol_section)
         self._scroll_layout.addStretch(1)
 
@@ -294,6 +304,8 @@ class SidebarWidget(QWidget):
         self._update_clock()
         self._refresh_active_sections()
         self._refresh_volumes_list()
+        self._refresh_screenshot_section()
+        self._refresh_screenshot_thumbnails()
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -832,6 +844,186 @@ class SidebarWidget(QWidget):
                 self.slide_out()
                 return
         self._lbutton_was_down = lbutton_down
+
+    # ------------------------------------------------------------------
+    # 내부 메서드 — 스크린샷 섹션
+    # ------------------------------------------------------------------
+
+    def _build_screenshot_section(self) -> QWidget:
+        """스크린샷 섹션 위젯을 구성합니다."""
+        section = QWidget()
+        section.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(4)
+
+        # 헤더 행
+        header = QHBoxLayout()
+        title = QLabel("스크린샷")
+        title.setStyleSheet(
+            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
+        )
+        self._capture_now_btn = QPushButton("지금 촬영")
+        self._capture_now_btn.setFixedHeight(22)
+        self._capture_now_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,10);
+                color: rgba(255,255,255,160);
+                border: 1px solid rgba(255,255,255,18);
+                border-radius: 3px;
+                font-size: 10px;
+                padding: 0 6px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
+            QPushButton:pressed { background: rgba(100,160,255,120); }
+        """)
+        self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self._capture_now_btn)
+        layout.addLayout(header)
+
+        # 썸네일 그리드
+        self._thumb_grid_container = QWidget()
+        self._thumb_grid_container.setStyleSheet("background: transparent;")
+        self._thumb_grid_layout = QGridLayout(self._thumb_grid_container)
+        self._thumb_grid_layout.setSpacing(3)
+        self._thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._thumb_grid_container)
+
+        return section
+
+    def _refresh_screenshot_section(self) -> None:
+        """스크린샷 섹션 표시 여부를 설정에 따라 갱신합니다."""
+        gs = getattr(self._data_manager, 'global_settings', None)
+        enabled = getattr(gs, 'screenshot_enabled', True) if gs else True
+        self._screenshot_section.setVisible(enabled)
+        # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
+        self._capture_now_btn.setEnabled(True)
+
+    def _refresh_screenshot_thumbnails(self) -> None:
+        """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
+        # 그리드 초기화
+        while self._thumb_grid_layout.count():
+            item = self._thumb_grid_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        gs = getattr(self._data_manager, 'global_settings', None)
+        enabled = getattr(gs, 'screenshot_enabled', True) if gs else True
+        if not enabled:
+            return
+
+        save_dir_str = getattr(gs, 'screenshot_save_dir', '') if gs else ''
+        if not save_dir_str:
+            from src.screenshot.capture import _DEFAULT_SAVE_DIR
+            save_dir_str = str(_DEFAULT_SAVE_DIR)
+
+        from pathlib import Path
+        save_path = Path(save_dir_str)
+        if not save_path.exists():
+            return
+
+        # 최신 파일 목록 (png + jpg)
+        files = sorted(
+            [f for f in save_path.iterdir()
+             if f.suffix.lower() in ('.png', '.jpg', '.jpeg') and f.is_file()],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+
+        max_shown = _THUMB_MAX_CELLS - 1  # 마지막 셀 = 폴더 버튼
+        shown = files[:max_shown]
+        remaining = max(0, len(files) - max_shown)
+
+        # 썸네일 셀 추가
+        for idx, fp in enumerate(shown):
+            row, col = divmod(idx, _THUMB_COLS)
+            cell = self._make_thumb_cell(fp)
+            self._thumb_grid_layout.addWidget(cell, row, col)
+
+        # 폴더 버튼 (마지막 셀)
+        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_btn = QPushButton(folder_label)
+        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
+        folder_btn.setToolTip("스크린샷 폴더 열기")
+        folder_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,8);
+                color: rgba(180,200,240,200);
+                border: 1px dashed rgba(255,255,255,25);
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
+        """)
+        _dir = save_dir_str
+        folder_btn.clicked.connect(
+            lambda _checked=False, d=_dir: __import__('os').startfile(d)
+            if __import__('pathlib').Path(d).exists()
+            else None
+        )
+        next_idx = len(shown)
+        row, col = divmod(next_idx, _THUMB_COLS)
+        self._thumb_grid_layout.addWidget(folder_btn, row, col)
+
+    def _make_thumb_cell(self, filepath) -> QPushButton:
+        """썸네일 셀 QPushButton을 반환합니다."""
+        from PyQt6.QtGui import QPixmap, QIcon
+        from PyQt6.QtCore import Qt as _Qt
+        btn = QPushButton()
+        btn.setFixedSize(_THUMB_W, _THUMB_H)
+        btn.setToolTip(str(filepath.name))
+        btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,6);
+                border: 1px solid rgba(255,255,255,15);
+                border-radius: 3px;
+                padding: 0;
+            }
+            QPushButton:hover { border-color: rgba(100,160,255,180); }
+        """)
+        # 썸네일 로드 (동기, 작은 파일이므로 허용)
+        try:
+            pixmap = QPixmap(str(filepath))
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    _THUMB_W, _THUMB_H,
+                    _Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    _Qt.TransformationMode.SmoothTransformation,
+                )
+                x_off = (scaled.width() - _THUMB_W) // 2
+                y_off = (scaled.height() - _THUMB_H) // 2
+                cropped = scaled.copy(x_off, y_off, _THUMB_W, _THUMB_H)
+                btn.setIcon(QIcon(cropped))
+                btn.setIconSize(cropped.size())
+        except Exception:
+            pass
+        _fp = filepath
+        btn.clicked.connect(
+            lambda _checked=False, p=_fp: __import__('os').startfile(str(p))
+        )
+        return btn
+
+    def _on_capture_now_clicked(self) -> None:
+        """'지금 촬영' 버튼 클릭 핸들러."""
+        from src.gui.main_window import MainWindow
+        if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_screenshot_manager'):
+            mgr = MainWindow.INSTANCE._screenshot_manager
+            if mgr:
+                self.hide()  # 사이드바 잠시 숨김
+                import time as _time
+                _time.sleep(0.1)  # 숨김 적용 대기
+                path = mgr.capture_now()
+                self.show()
+                if path:
+                    self._refresh_screenshot_thumbnails()
+                    self._reset_auto_hide()
+
+    def on_screenshot_captured(self, path: str) -> None:
+        """외부(MainWindow)에서 캡처 완료 시 호출됩니다."""
+        if self._is_shown:
+            self._refresh_screenshot_thumbnails()
 
     def _on_slide_out_finished(self) -> None:
         try:

@@ -1,7 +1,8 @@
 """스크린샷 기능 통합 매니저.
 
-_ACTIVE_METHOD 값은 tools/select_screenshot_method.py 가 자동으로 수정합니다.
-직접 변경하거나 _method.txt 를 통해 런타임에도 오버라이드할 수 있습니다.
+_method.txt 형식:
+  "A"       — Method A (WH_KEYBOARD_LL, Win+Alt+PrtScn 가로채기)
+  "C:<idx>" — Method C (WinRT RawGameController, 버튼 인덱스 idx)
 """
 import logging
 from pathlib import Path
@@ -9,19 +10,26 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# select_screenshot_method.py 가 이 줄을 수정합니다 — 직접 편집 가능
 _ACTIVE_METHOD = "A"
-
 _METHOD_FILE = Path(__file__).parent / "_method.txt"
 
 
-def _resolve_method() -> str:
-    """_method.txt 가 있으면 우선 적용, 없으면 _ACTIVE_METHOD 사용."""
+def _resolve_method() -> tuple:
+    """(method_id: str, button_index: int) 반환."""
     if _METHOD_FILE.exists():
         val = _METHOD_FILE.read_text(encoding="utf-8").strip().upper()
-        if val in ("A", "B"):
-            return val
-    return _ACTIVE_METHOD
+        if ":" in val:
+            parts = val.split(":", 1)
+            method = parts[0].strip()
+            try:
+                idx = int(parts[1].strip())
+            except ValueError:
+                idx = -1
+            if method in ("A", "C"):
+                return method, idx
+        elif val in ("A", "C"):
+            return val, -1
+    return _ACTIVE_METHOD, -1
 
 
 class ScreenshotManager:
@@ -35,11 +43,22 @@ class ScreenshotManager:
         mgr.stop()
     """
 
-    def __init__(self, save_dir: Optional[str] = None):
-        self._save_dir   = save_dir
-        self._method_id  = _resolve_method()
-        self._impl       = None
+    def __init__(
+        self,
+        save_dir: Optional[str] = None,
+        get_target_hwnd: Optional[Callable[[], Optional[int]]] = None,
+    ):
+        """
+        Args:
+            save_dir: 스크린샷 저장 디렉터리.
+            get_target_hwnd: 게임 창 모드 캡처 시 대상 HWND 반환 콜백.
+        """
+        self._save_dir = save_dir
+        self._get_target_hwnd = get_target_hwnd
+        self._method_id, self._button_index = _resolve_method()
+        self._impl = None
         self._on_captured: Optional[Callable[[str], None]] = None
+        self._capture_mode: str = "fullscreen"  # "fullscreen" | "game_window"
 
     # ── 공개 API ────────────────────────────────────────────────
 
@@ -47,13 +66,26 @@ class ScreenshotManager:
         """캡처 완료 시 호출될 콜백. 인자로 저장 파일 경로(str)를 전달합니다."""
         self._on_captured = fn
 
+    def set_save_dir(self, save_dir: Optional[str]) -> None:
+        self._save_dir = save_dir
+
+    def set_capture_mode(self, mode: str) -> None:
+        """캡처 모드 설정. 'fullscreen' | 'game_window'."""
+        self._capture_mode = mode
+
     def start(self) -> None:
         """트리거 감지를 시작합니다."""
         self._impl = self._create_impl()
+        if self._impl is None:
+            return
         self._impl.set_callback(self._on_trigger)
         self._impl.start()
-        logger.info("ScreenshotManager 시작 (Method %s, save_dir=%s)",
-                    self._method_id, self._save_dir)
+        logger.info(
+            "ScreenshotManager 시작 (Method %s, button=%s, save_dir=%s)",
+            self._method_id,
+            self._button_index if self._method_id == "C" else "n/a",
+            self._save_dir,
+        )
 
     def stop(self) -> None:
         """트리거 감지를 정지합니다."""
@@ -64,13 +96,22 @@ class ScreenshotManager:
 
     def capture_now(self) -> Optional[str]:
         """즉시 스크린샷을 촬영합니다. 저장 경로를 반환하며 실패 시 None."""
-        from src.screenshot.capture import take_screenshot
+        from src.screenshot.capture import take_screenshot, take_screenshot_window
+        if self._capture_mode == "game_window" and self._get_target_hwnd:
+            hwnd = self._get_target_hwnd()
+            if hwnd:
+                result = take_screenshot_window(hwnd, save_dir=self._save_dir)
+                if result:
+                    return result
         return take_screenshot(save_dir=self._save_dir)
 
     @property
     def method_id(self) -> str:
-        """현재 활성화된 방법 ID ('A' 또는 'B')."""
         return self._method_id
+
+    @property
+    def button_index(self) -> int:
+        return self._button_index
 
     # ── 내부 구현 ────────────────────────────────────────────────
 
@@ -80,8 +121,17 @@ class ScreenshotManager:
             self._on_captured(path)
 
     def _create_impl(self):
-        if self._method_id == "B":
-            from src.screenshot.method_b import MethodB
-            return MethodB()
-        from src.screenshot.method_a import MethodA
-        return MethodA()
+        if self._method_id == "C":
+            try:
+                from src.screenshot.method_c import MethodC
+                return MethodC(button_index=self._button_index)
+            except Exception as exc:
+                logger.error("MethodC 초기화 실패: %s", exc)
+                return None
+        # Default: Method A
+        try:
+            from src.screenshot.method_a import MethodA
+            return MethodA()
+        except Exception as exc:
+            logger.error("MethodA 초기화 실패: %s", exc)
+            return None

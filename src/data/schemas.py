@@ -94,6 +94,13 @@ class GlobalSettingsSchema(BaseModel):
     sidebar_playtime_enabled: bool = True
     sidebar_playtime_prefix: str = "오늘 플레이 시간"
     sidebar_volume_section_enabled: bool = True
+    # 스크린샷 설정
+    screenshot_enabled: bool = True
+    screenshot_save_dir: str = ""
+    screenshot_gamepad_trigger: bool = True
+    screenshot_disable_gamebar: bool = False
+    screenshot_capture_mode: str = "fullscreen"
+    screenshot_gamepad_button_index: int = -1
 
 
 class ProcessSessionCreate(BaseModel):

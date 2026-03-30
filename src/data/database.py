@@ -103,6 +103,13 @@ def auto_migrate_database():
         ("global_settings", "hide_on_game", "INTEGER", "1"),
         ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
         ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
+        # GlobalSettings 테이블 - 스크린샷 설정
+        ("global_settings", "screenshot_enabled", "INTEGER", "1"),
+        ("global_settings", "screenshot_save_dir", "TEXT", "''"),
+        ("global_settings", "screenshot_gamepad_trigger", "INTEGER", "1"),
+        ("global_settings", "screenshot_disable_gamebar", "INTEGER", "0"),
+        ("global_settings", "screenshot_capture_mode", "TEXT", "'fullscreen'"),
+        ("global_settings", "screenshot_gamepad_button_index", "INTEGER", "-1"),
     ]
     
     try:

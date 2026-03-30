@@ -84,6 +84,13 @@ class GlobalSettings(Base):
     sidebar_playtime_enabled = Column(Boolean, default=True)
     sidebar_playtime_prefix = Column(String, default="오늘 플레이 시간")
     sidebar_volume_section_enabled = Column(Boolean, default=True)
+    # 스크린샷 설정
+    screenshot_enabled = Column(Boolean, default=True)
+    screenshot_save_dir = Column(String, default="")
+    screenshot_gamepad_trigger = Column(Boolean, default=True)
+    screenshot_disable_gamebar = Column(Boolean, default=False)
+    screenshot_capture_mode = Column(String, default="fullscreen")
+    screenshot_gamepad_button_index = Column(Integer, default=-1)
 
 
 class ProcessSession(Base):

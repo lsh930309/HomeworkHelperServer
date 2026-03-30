@@ -158,6 +158,14 @@ class MainWindow(QMainWindow):
         # 사이드바 컨트롤러 초기화
         self._sidebar_controller = SidebarController(self.data_manager, self)
 
+        # 스크린샷 매니저
+        from src.screenshot import ScreenshotManager
+        self._screenshot_manager = ScreenshotManager(
+            get_target_hwnd=self._get_screenshot_target_hwnd,
+        )
+        self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
+        self._apply_screenshot_settings()
+
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
         self._saved_size = None
@@ -788,11 +796,14 @@ class MainWindow(QMainWindow):
                     pid=running_pid,
                     game_start_timestamp=None,
                 )
+                # 스크린샷 매니저 시작
+                self._start_screenshot_manager()
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.deactivate()
+            self._screenshot_manager.stop()
             if hide_enabled:
                 self.activate_and_show() # 창을 다시 표시
                 status_bar = self.statusBar()
@@ -1582,6 +1593,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_sidebar_controller'):
             self._sidebar_controller.cleanup()
 
+        # 3-2. Game Bar 설정 복원
+        self._restore_gamebar_setting()
+
         # 4. QApplication 종료
         app_instance = QApplication.instance()
         if app_instance:
@@ -1806,6 +1820,102 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QTimer
             for delay_ms in (1000, 3000, 5000):
                 QTimer.singleShot(delay_ms, lambda p=pid, m=default_muted: audio_control.set_mute(p, m))
+
+    # ── 스크린샷 ────────────────────────────────────────────────
+
+    def _get_screenshot_target_hwnd(self) -> Optional[int]:
+        """포커스된 등록 게임 창의 HWND 반환. 등록 게임이 아니면 None."""
+        import ctypes
+        import ctypes.wintypes as wt
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid_c = wt.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_c))
+        pid = pid_c.value
+        active_pids = set()
+        if self.process_monitor:
+            active_pids = {
+                entry.get('pid')
+                for entry in self.process_monitor.active_monitored_processes.values()
+                if entry.get('pid')
+            }
+        return hwnd if pid in active_pids else None
+
+    def _apply_screenshot_settings(self) -> None:
+        """GlobalSettings의 스크린샷 설정을 ScreenshotManager에 반영합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None or self._screenshot_manager is None:
+            return
+        save_dir = getattr(gs, 'screenshot_save_dir', '') or None
+        self._screenshot_manager.set_save_dir(save_dir)
+        self._screenshot_manager.set_capture_mode(
+            getattr(gs, 'screenshot_capture_mode', 'fullscreen')
+        )
+        if getattr(gs, 'screenshot_disable_gamebar', False):
+            self._set_gamebar_capture(False)
+        else:
+            self._restore_gamebar_setting()
+
+    def _start_screenshot_manager(self) -> None:
+        """게임 실행 시 스크린샷 매니저를 시작합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None:
+            return
+        if not getattr(gs, 'screenshot_enabled', True):
+            return
+        if not getattr(gs, 'screenshot_gamepad_trigger', True):
+            return
+        self._apply_screenshot_settings()
+        self._screenshot_manager.start()
+
+    def _on_screenshot_captured(self, path: str) -> None:
+        """캡처 완료 콜백 — 사이드바 썸네일 갱신."""
+        logger.info("스크린샷 저장됨: %s", path)
+        if (self._sidebar_controller is not None
+                and self._sidebar_controller._sidebar is not None):
+            sidebar = self._sidebar_controller._sidebar
+            if sidebar._is_shown:
+                sidebar.on_screenshot_captured(path)
+
+    _gamebar_original_value: Optional[int] = None
+
+    def _set_gamebar_capture(self, enabled: bool) -> None:
+        """Game Bar 스크린샷 캡처 활성화 여부를 레지스트리로 제어합니다."""
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE
+            ) as key:
+                if self._gamebar_original_value is None:
+                    try:
+                        val, _ = winreg.QueryValueEx(key, "AppCaptureEnabled")
+                        self._gamebar_original_value = int(val)
+                    except FileNotFoundError:
+                        self._gamebar_original_value = 1
+                winreg.SetValueEx(key, "AppCaptureEnabled", 0, winreg.REG_DWORD,
+                                  1 if enabled else 0)
+            logger.info("Game Bar AppCaptureEnabled → %d", 1 if enabled else 0)
+        except Exception as exc:
+            logger.warning("Game Bar 레지스트리 설정 실패: %s", exc)
+
+    def _restore_gamebar_setting(self) -> None:
+        """Game Bar 설정을 원래 값으로 복원합니다."""
+        if self._gamebar_original_value is None:
+            return
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE
+            ) as key:
+                winreg.SetValueEx(key, "AppCaptureEnabled", 0, winreg.REG_DWORD,
+                                  self._gamebar_original_value)
+            logger.info("Game Bar AppCaptureEnabled 복원 → %d", self._gamebar_original_value)
+            self._gamebar_original_value = None
+        except Exception as exc:
+            logger.warning("Game Bar 레지스트리 복원 실패: %s", exc)
 
     # ─────────────────────────────
 

@@ -23,6 +23,7 @@ jsonschema
 
 # === Windows Notifications ===
 Windows-Toasts
+winrt-Windows.Gaming.Input
 
 # === HoYoLab Integration ===
 genshin>=1.6.0
