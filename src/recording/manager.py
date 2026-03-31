@@ -76,6 +76,13 @@ class RecordingManager:
     def set_on_state_changed(self, fn: Callable[[RecordingState], None]) -> None:
         self._on_state_changed = fn
 
+    def reconnect(self) -> None:
+        """사이드바 재연결 버튼 전용 — 연결만 시도하고 녹화는 시작하지 않는다."""
+        self._try_connect_async(then_record=False)
+
+    def get_last_error(self) -> str:
+        return self._client.get_last_error()
+
     def shutdown(self) -> None:
         self._client.disconnect()
 
@@ -123,16 +130,20 @@ class RecordingManager:
         host = s.get("host", "localhost")
         port = s.get("port", 4455)
         password = s.get("password", "")
+        logger.info("OBS WebSocket 연결 시도: ws://%s:%s (password=%s)", host, port, "***" if password else "<empty>")
         ok = self._client.connect(host=host, port=port, password=password)
         if not ok:
+            logger.warning("OBS WebSocket 1차 연결 실패, 3초 후 재시도...")
             time.sleep(3)
             ok = self._client.connect(host=host, port=port, password=password)
 
         if ok:
+            logger.info("OBS WebSocket 연결 성공")
             self._set_state("idle")
             if then_record:
                 self.start_recording()
         else:
+            logger.warning("OBS WebSocket 연결 최종 실패 (host=%s, port=%s)", host, port)
             self._set_state("obs_offline")
 
     @staticmethod

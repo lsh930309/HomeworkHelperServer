@@ -997,6 +997,12 @@ class SidebarWidget(QWidget):
             self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
             self._rec_stop_btn.hide()
             self._rec_connect_btn.show()
+            # 마지막 연결 실패 이유를 툴팁으로 표시
+            from src.gui.main_window import MainWindow
+            if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_recording_manager'):
+                err = MainWindow.INSTANCE._recording_manager.get_last_error()
+                self._rec_status_label.setToolTip(err if err else "")
+                self._rec_connect_btn.setToolTip(err if err else "")
 
     def _update_rec_timer(self) -> None:
         """1초 tick. recording 상태일 때만 elapsed 증가."""
@@ -1009,10 +1015,10 @@ class SidebarWidget(QWidget):
             self._stop_recording_callback()
 
     def _on_rec_connect_clicked(self) -> None:
-        """OBS 재연결 버튼 클릭 — RecordingManager.on_recording_toggle() 호출."""
+        """OBS 재연결 버튼 클릭 — 연결만 시도하고 녹화는 시작하지 않는다."""
         from src.gui.main_window import MainWindow
         if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_recording_manager'):
-            MainWindow.INSTANCE._recording_manager.on_recording_toggle()
+            MainWindow.INSTANCE._recording_manager.reconnect()
 
     def _refresh_recording_section(self) -> None:
         """recording_enabled 설정에 따라 섹션 show/hide."""

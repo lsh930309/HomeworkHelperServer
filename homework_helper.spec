@@ -27,6 +27,7 @@ a = Analysis(
         
         # Network
         'requests',
+        'websocket', 'websocket._app', 'websocket._core', 'websocket._http',
         
         # Data
         'pydantic', 'jsonschema',

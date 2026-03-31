@@ -35,12 +35,14 @@ class OBSClient:
         self._pending_results: dict[str, dict] = {}
         self._on_record_state_changed: Optional[Callable[[bool], None]] = None
         self._stop_event = threading.Event()
+        self._last_error: str = ""
 
     # ---------- public API ----------
 
     def connect(self, host: str = "localhost", port: int = 4455, password: str = "") -> bool:
         """연결 시도. 최대 5초 대기. 성공 시 True."""
         if not _WS_AVAILABLE:
+            self._last_error = "websocket-client 라이브러리가 설치되지 않았습니다."
             logger.warning("websocket-client not installed")
             return False
         self._host = host
@@ -48,6 +50,7 @@ class OBSClient:
         self._password = password
         self._stop_event.clear()
         self._identified = False
+        self._last_error = ""
 
         ready = threading.Event()
         self._ready_event = ready
@@ -64,7 +67,21 @@ class OBSClient:
             target=self._ws.run_forever, daemon=True
         )
         self._ws_thread.start()
-        return ready.wait(timeout=5.0) and self._identified
+
+        completed = ready.wait(timeout=5.0)
+        if not completed:
+            # 5초 내에 _on_close/_on_message 응답 없음 → OBS가 TCP는 수락했으나 WebSocket 응답 없음
+            self._last_error = (
+                f"연결 시간 초과 (ws://{host}:{port}) — "
+                "OBS WebSocket 서버 포트/버전을 확인하세요."
+            )
+            logger.warning("OBS WebSocket 연결 시간 초과 (%s:%s)", host, port)
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            return False
+        return self._identified
 
     def disconnect(self) -> None:
         self._stop_event.set()
@@ -76,6 +93,9 @@ class OBSClient:
 
     def is_connected(self) -> bool:
         return self._identified
+
+    def get_last_error(self) -> str:
+        return self._last_error
 
     def start_record(self) -> bool:
         return self._request("StartRecord") is not None
@@ -169,10 +189,20 @@ class OBSClient:
                     self._on_record_state_changed(active)
 
     def _on_error(self, ws, error) -> None:
-        logger.debug("OBS WebSocket error: %s", error)
+        logger.warning("OBS WebSocket error: %s", error)
+        self._last_error = str(error)
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
         self._identified = False
         self._connected = False
+        if close_status_code:
+            if close_status_code == 4009:
+                self._last_error = f"인증 실패 (code {close_status_code}) — 사이드바 설정에서 OBS 비밀번호를 확인하세요."
+            else:
+                self._last_error = f"연결 종료 (code {close_status_code}): {close_msg or ''}"
+            logger.warning(
+                "OBS WebSocket closed — code: %s, reason: %s",
+                close_status_code, close_msg or "",
+            )
         if hasattr(self, "_ready_event") and not self._ready_event.is_set():
             self._ready_event.set()
