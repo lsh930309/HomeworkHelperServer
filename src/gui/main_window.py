@@ -812,6 +812,11 @@ class MainWindow(QMainWindow):
                 )
                 # 스크린샷 매니저 시작
                 self._start_screenshot_manager()
+                # 사이드바 생성 직후 RecordingManager의 현재 상태를 즉시 동기화
+                # (앱 시작 시 연결 시도가 사이드바 생성보다 먼저 완료되는 경우
+                #  상태 변경 신호가 버려지므로, 여기서 강제로 한 번 재전송)
+                if hasattr(self, '_recording_manager'):
+                    self._recording_state_sig.emit(self._recording_manager.get_state())
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
