@@ -206,7 +206,11 @@ def _save_as_png(bmp, width: int, height: int, save_path: Path) -> str:
         img = Image.frombuffer("RGB", (width, height), raw, "raw", "BGRX", 0, 1)
         img.save(str(save_path), "PNG")
     except ImportError:
-        _write_png_stdlib(width, height, bytes(raw), save_path)
+        try:
+            _write_png_stdlib(width, height, bytes(raw), save_path)
+        except Exception as exc:
+            logger.error("stdlib PNG 저장 실패: %s", exc)
+            raise
     return str(save_path)
 
 

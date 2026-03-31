@@ -44,7 +44,7 @@ a = Analysis(
         'torch', 'torchvision', 'torchaudio',
         
         # 영상/이미지 처리 (LSH로 이동)
-        'cv2', 'av', 'skimage', 'scipy', 'PIL', 'matplotlib',
+        'cv2', 'av', 'skimage', 'scipy', 'matplotlib',
         'numpy', 'imageio',
     ],
     noarchive=False,

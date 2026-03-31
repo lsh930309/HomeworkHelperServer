@@ -567,6 +567,7 @@ class MainWindow(QMainWindow):
             self.data_manager.save_global_settings(updated)
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
+            self._apply_screenshot_settings()
             self._apply_recording_settings()
 
     def _load_always_on_top_setting(self):
@@ -1857,9 +1858,10 @@ class MainWindow(QMainWindow):
         pid = pid_c.value
         active_pids = set()
         if self.process_monitor:
+            active_snapshot = dict(self.process_monitor.active_monitored_processes)
             active_pids = {
                 entry.get('pid')
-                for entry in self.process_monitor.active_monitored_processes.values()
+                for entry in active_snapshot.values()
                 if entry.get('pid')
             }
         return hwnd if pid in active_pids else None
@@ -1874,7 +1876,7 @@ class MainWindow(QMainWindow):
         pid_c = wt.DWORD()
         ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_c))
         pid = pid_c.value
-        active = self.process_monitor.active_monitored_processes
+        active = dict(self.process_monitor.active_monitored_processes)
         managed_map = {p.id: p for p in getattr(self.data_manager, 'managed_processes', [])}
         for proc_id, entry in active.items():
             if entry.get('pid') == pid:
@@ -1892,6 +1894,9 @@ class MainWindow(QMainWindow):
         self._screenshot_manager.set_save_dir(save_dir)
         self._screenshot_manager.set_capture_mode(
             getattr(gs, 'screenshot_capture_mode', 'fullscreen')
+        )
+        self._screenshot_manager.set_long_press_threshold(
+            getattr(gs, 'recording_hold_threshold_ms', 800)
         )
         if getattr(gs, 'screenshot_disable_gamebar', False):
             self._set_gamebar_capture(False)

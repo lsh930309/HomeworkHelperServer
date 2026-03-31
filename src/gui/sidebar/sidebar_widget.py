@@ -1144,14 +1144,16 @@ class SidebarWidget(QWidget):
         if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_screenshot_manager'):
             mgr = MainWindow.INSTANCE._screenshot_manager
             if mgr:
-                self.hide()  # 사이드바 잠시 숨김
-                import time as _time
-                _time.sleep(0.1)  # 숨김 적용 대기
-                path = mgr.capture_now()
-                self.show()
-                if path:
-                    self._refresh_screenshot_thumbnails()
+                self.hide()
+
+                def _capture() -> None:
+                    path = mgr.capture_now()
+                    self.show()
+                    if path:
+                        self._refresh_screenshot_thumbnails()
                     self._reset_auto_hide()
+
+                QTimer.singleShot(100, _capture)
 
     def on_screenshot_captured(self, path: str) -> None:
         """외부(MainWindow)에서 캡처 완료 시 호출됩니다. 워커 스레드에서 호출 가능."""

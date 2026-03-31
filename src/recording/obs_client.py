@@ -128,15 +128,19 @@ class OBSClient:
             },
         }
         ev = threading.Event()
-        self._pending[req_id] = ev
+        with self._lock:
+            self._pending[req_id] = ev
         try:
             self._ws.send(json.dumps(payload))
         except Exception:
-            self._pending.pop(req_id, None)
+            with self._lock:
+                self._pending.pop(req_id, None)
             return None
         if ev.wait(timeout=5.0):
-            return self._pending_results.pop(req_id, None)
-        self._pending.pop(req_id, None)
+            with self._lock:
+                return self._pending_results.pop(req_id, None)
+        with self._lock:
+            self._pending.pop(req_id, None)
         return None
 
     def _authenticate(self, challenge: str, salt: str) -> str:
@@ -149,10 +153,14 @@ class OBSClient:
         return auth
 
     def _on_open(self, ws) -> None:
+        if ws is not self._ws:
+            return
         with self._lock:
             self._connected = True
 
     def _on_message(self, ws, message: str) -> None:
+        if ws is not self._ws:
+            return
         try:
             msg = json.loads(message)
         except Exception:
@@ -176,10 +184,12 @@ class OBSClient:
 
         elif op == 7:  # RequestResponse
             req_id = d.get("requestId")
-            if req_id and req_id in self._pending:
-                self._pending_results[req_id] = d
-                self._pending[req_id].set()
-                self._pending.pop(req_id, None)
+            if req_id:
+                with self._lock:
+                    ev = self._pending.pop(req_id, None)
+                    if ev is not None:
+                        self._pending_results[req_id] = d
+                        ev.set()
 
         elif op == 5:  # Event
             event_type = d.get("eventType")
@@ -189,10 +199,14 @@ class OBSClient:
                     self._on_record_state_changed(active)
 
     def _on_error(self, ws, error) -> None:
+        if ws is not self._ws:
+            return
         logger.warning("OBS WebSocket error: %s", error)
         self._last_error = str(error)
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
+        if ws is not self._ws:
+            return
         self._identified = False
         self._connected = False
         if close_status_code:

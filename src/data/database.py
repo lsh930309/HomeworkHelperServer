@@ -173,13 +173,14 @@ def auto_migrate_database():
                     print(f"[Migration] process_sessions: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
 
         # sidebar_auto_hide_sec → sidebar_auto_hide_ms 데이터 마이그레이션
-        existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
-        if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
-            conn.execute(text(
-                "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
-                "WHERE sidebar_auto_hide_ms = 3000"
-            ))
-            conn.commit()
+        with engine.connect() as conn:
+            existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
+            if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
+                conn.execute(text(
+                    "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
+                    "WHERE sidebar_auto_hide_ms = 3000"
+                ))
+                conn.commit()
 
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:

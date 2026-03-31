@@ -18,7 +18,7 @@
 
 ## ARCHITECTURE
 
-```
+```text
 src/screenshot/
   __init__.py              ← exports ScreenshotManager only
   manager.py               ← 중앙 컨트롤러: Method A 고정, game_name_provider
@@ -69,7 +69,7 @@ recording_hold_threshold_ms: int = 800
 ```
 
 ### 파일명 형식 (capture.py)
-```
+```text
 {game_name}_{yyyy-mm-dd} {오전|오후} {H}_{MM}_{SS}.png
 예) Minecraft_2026-03-30 오후 2_34_56.png
 ```
@@ -78,7 +78,7 @@ recording_hold_threshold_ms: int = 800
 - Windows 금지 문자 자동 제거 (_sanitize_filename), 최대 60자
 
 ### 버튼 입력 분기 (trigger_dispatcher.py)
-```
+```text
 짧게 누름 (< 500ms, release 시):  스크린샷 촬영
 홀드 800ms+:                      녹화 토글 즉시 발화
 500ms ~ 800ms:                    무시 (오동작 방지)
@@ -182,7 +182,7 @@ read_obs_config() -> {port, password, output_dir, exe_path}
 
 ## FILE INDEX
 
-```
+```text
 [스크린샷 코어]
 src/screenshot/manager.py              ← ScreenshotManager, set_game_name_provider (Method A 고정)
 src/screenshot/trigger_dispatcher.py   ← 홀드 시간 분기 로직

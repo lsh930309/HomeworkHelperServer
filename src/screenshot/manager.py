@@ -66,6 +66,13 @@ class ScreenshotManager:
         """캡처 모드 설정. 'fullscreen' | 'game_window'."""
         self._capture_mode = mode
 
+    def set_long_press_threshold(self, threshold_ms: int) -> None:
+        """롱프레스(녹화 토글) 임계값을 밀리초 단위로 설정합니다."""
+        self._dispatcher.LONG_MIN_MS = max(
+            self._dispatcher.SHORT_MAX_MS,
+            int(threshold_ms),
+        )
+
     def start(self) -> None:
         """트리거 감지를 시작합니다."""
         if self._impl is not None:

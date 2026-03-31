@@ -1,7 +1,10 @@
+import logging
 import os
 import json
 import configparser
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def read_obs_config() -> dict:
@@ -22,8 +25,8 @@ def read_obs_config() -> dict:
                 ws_cfg = json.load(f)
             result["port"] = int(ws_cfg.get("server_port", 4455))
             result["password"] = str(ws_cfg.get("server_password", ""))
-        except Exception:
-            pass
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            logger.warning("OBS WebSocket 설정 읽기 실패: %s", e)
 
     # 2. 현재 프로필 → 출력 경로
     global_ini = os.path.join(obs_dir, "global.ini")
@@ -42,8 +45,8 @@ def read_obs_config() -> dict:
                         or pcfg.get("AdvOut", "RecFilePath", fallback="")
                     )
                     result["output_dir"] = path
-        except Exception:
-            pass
+        except (OSError, configparser.Error) as e:
+            logger.warning("OBS 프로필 설정 읽기 실패: %s", e)
 
     # 3. OBS 실행파일 경로 (레지스트리 → 일반 경로 fallback)
     try:
@@ -53,8 +56,8 @@ def read_obs_config() -> dict:
         candidate = os.path.join(install_dir, "bin", "64bit", "obs64.exe")
         if os.path.isfile(candidate):
             result["exe_path"] = candidate
-    except Exception:
-        pass
+    except (OSError, ImportError) as e:
+        logger.warning("OBS 레지스트리 경로 읽기 실패: %s", e)
 
     if not result["exe_path"]:
         for candidate in [
