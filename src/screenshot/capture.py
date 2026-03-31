@@ -144,10 +144,6 @@ def _try_gdi(save_path: Path) -> Optional[str]:
         mem_dc.BitBlt((0, 0), (w, h), mfc_dc, (x, y), win32con.SRCCOPY)
         try:
             result = _save_as_png(bmp, w, h, save_path)
-        except ImportError:
-            bmp_path = save_path.with_suffix(".bmp")
-            bmp.SaveBitmapFile(mem_dc, str(bmp_path))
-            result = str(bmp_path)
         finally:
             win32gui.DeleteObject(bmp.GetHandle())
             mem_dc.DeleteDC()
@@ -192,10 +188,6 @@ def _try_gdi_region(save_path: Path, x: int, y: int, w: int, h: int) -> Optional
         mem_dc.BitBlt((0, 0), (w, h), mfc_dc, (x, y), win32con.SRCCOPY)
         try:
             result = _save_as_png(bmp, w, h, save_path)
-        except ImportError:
-            bmp_path = save_path.with_suffix(".bmp")
-            bmp.SaveBitmapFile(mem_dc, str(bmp_path))
-            result = str(bmp_path)
         finally:
             win32gui.DeleteObject(bmp.GetHandle())
             mem_dc.DeleteDC()
@@ -208,8 +200,40 @@ def _try_gdi_region(save_path: Path, x: int, y: int, w: int, h: int) -> Optional
 
 
 def _save_as_png(bmp, width: int, height: int, save_path: Path) -> str:
-    from PIL import Image
     raw = bmp.GetBitmapBits(True)
-    img = Image.frombuffer("RGB", (width, height), raw, "raw", "BGRX", 0, 1)
-    img.save(str(save_path), "PNG")
+    try:
+        from PIL import Image
+        img = Image.frombuffer("RGB", (width, height), raw, "raw", "BGRX", 0, 1)
+        img.save(str(save_path), "PNG")
+    except ImportError:
+        _write_png_stdlib(width, height, bytes(raw), save_path)
     return str(save_path)
+
+
+def _write_png_stdlib(width: int, height: int, bgrx: bytes, save_path: Path) -> None:
+    """Pillow 없이 zlib+struct 만으로 24-bit RGB PNG를 저장합니다."""
+    import struct
+    import zlib
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    stride = width * 4  # BGRX
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # filter type = None
+        base = y * stride
+        for x in range(width):
+            p = base + x * 4
+            rows.append(bgrx[p + 2])  # R
+            rows.append(bgrx[p + 1])  # G
+            rows.append(bgrx[p + 0])  # B
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+        + _chunk(b"IEND", b"")
+    )
+    save_path.write_bytes(png)

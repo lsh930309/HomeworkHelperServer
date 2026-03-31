@@ -931,6 +931,23 @@ class SidebarWidget(QWidget):
         self._rec_stop_btn.hide()
         layout.addWidget(self._rec_stop_btn)
 
+        # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
+        self._rec_connect_btn = QPushButton("↺ OBS 재연결")
+        self._rec_connect_btn.setFixedHeight(26)
+        self._rec_connect_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,12);
+                color: rgba(180,200,240,200);
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
+            QPushButton:pressed { background: rgba(255,255,255,8); }
+        """)
+        self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
+        layout.addWidget(self._rec_connect_btn)
+
         # 녹화 상태
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
@@ -964,18 +981,22 @@ class SidebarWidget(QWidget):
             self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
             self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
             self._rec_stop_btn.show()
+            self._rec_connect_btn.hide()
         elif state == "idle":
             self._rec_status_label.setText("● OBS 대기 중")
-            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_status_label.setStyleSheet("color: #5aaa5a; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_connect_btn.hide()
         elif state == "connecting":
             self._rec_status_label.setText("○ OBS 연결 중...")
-            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_status_label.setStyleSheet("color: #aaa850; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_connect_btn.hide()
         else:  # obs_offline
             self._rec_status_label.setText("○ OBS 오프라인")
             self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_connect_btn.show()
 
     def _update_rec_timer(self) -> None:
         """1초 tick. recording 상태일 때만 elapsed 증가."""
@@ -986,6 +1007,12 @@ class SidebarWidget(QWidget):
     def _on_rec_stop_clicked(self) -> None:
         if self._stop_recording_callback:
             self._stop_recording_callback()
+
+    def _on_rec_connect_clicked(self) -> None:
+        """OBS 재연결 버튼 클릭 — RecordingManager.on_recording_toggle() 호출."""
+        from src.gui.main_window import MainWindow
+        if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_recording_manager'):
+            MainWindow.INSTANCE._recording_manager.on_recording_toggle()
 
     def _refresh_recording_section(self) -> None:
         """recording_enabled 설정에 따라 섹션 show/hide."""
@@ -1024,10 +1051,10 @@ class SidebarWidget(QWidget):
         if not save_path.exists():
             return
 
-        # 최신 파일 목록 (png + jpg)
+        # 최신 파일 목록 (png + jpg + bmp)
         files = sorted(
             [f for f in save_path.iterdir()
-             if f.suffix.lower() in ('.png', '.jpg', '.jpeg') and f.is_file()],
+             if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp') and f.is_file()],
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )

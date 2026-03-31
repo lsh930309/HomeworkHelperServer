@@ -75,6 +75,7 @@ class IconDownloader(QThread):
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
     request_table_refresh_signal = pyqtSignal() # 테이블 새로고침 요청 시그널
+    _recording_state_sig = pyqtSignal(str)       # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
 
     # UI 색상 정의
     COLOR_INCOMPLETE = QColor("red")      # 미완료 상태 색상
@@ -172,7 +173,11 @@ class MainWindow(QMainWindow):
         self._recording_manager = RecordingManager()
         self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
         self._screenshot_manager.set_on_long_press(self._recording_manager.on_recording_toggle)
+        self._recording_state_sig.connect(self._dispatch_recording_state_to_sidebar)
         self._apply_recording_settings()
+
+        # 앱 시작 즉시 게임패드 훅 활성화 (게임 실행 전에도 전역 동작)
+        self._start_screenshot_manager()
 
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
@@ -812,7 +817,6 @@ class MainWindow(QMainWindow):
             self._is_game_mode_active = False
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.deactivate()
-            self._screenshot_manager.stop()
             if hide_enabled:
                 self.activate_and_show() # 창을 다시 표시
                 status_bar = self.statusBar()
@@ -1897,10 +1901,14 @@ class MainWindow(QMainWindow):
         self._recording_manager.apply_settings(gs)
 
     def _on_recording_state_changed(self, state: str) -> None:
-        """RecordingManager 상태 변경 콜백."""
+        """RecordingManager 상태 변경 콜백 — 백그라운드 스레드에서 호출될 수 있음.
+        pyqtSignal을 통해 메인 스레드로 안전하게 릴레이."""
+        self._recording_state_sig.emit(state)
+
+    def _dispatch_recording_state_to_sidebar(self, state: str) -> None:
+        """메인 스레드에서 실행되는 실제 사이드바 업데이트."""
         if hasattr(self, '_sidebar_controller') and self._sidebar_controller._sidebar is not None:
             sidebar = self._sidebar_controller._sidebar
-            # 콜백이 아직 연결되지 않았으면 연결
             if not getattr(sidebar, '_stop_recording_callback', None) and hasattr(self, '_recording_manager'):
                 sidebar.set_on_stop_recording(self._recording_manager.stop_recording)
             sidebar.on_recording_state_changed(state)

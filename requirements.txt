@@ -26,6 +26,10 @@ Windows-Toasts
 winrt-Windows.Gaming.Input
 websocket-client
 
+# === Screenshot ===
+mss
+Pillow
+
 # === HoYoLab Integration ===
 genshin>=1.6.0
 pycryptodome>=3.20.0

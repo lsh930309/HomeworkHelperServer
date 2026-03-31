@@ -91,6 +91,8 @@ class ScreenshotManager:
 
     def start(self) -> None:
         """트리거 감지를 시작합니다."""
+        if self._impl is not None:
+            return  # 이미 실행 중
         self._impl = self._create_impl()
         if self._impl is None:
             return

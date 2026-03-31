@@ -117,13 +117,17 @@ class RecordingManager:
         # auto_launch: OBS 프로세스 실행
         if s.get("auto_launch") and s.get("exe_path"):
             self._launch_obs(s["exe_path"], s.get("launch_hidden", True))
-            time.sleep(3)  # OBS 기동 대기
+            time.sleep(5)  # OBS WebSocket 기동 대기 (3→5초)
 
-        ok = self._client.connect(
-            host=s.get("host", "localhost"),
-            port=s.get("port", 4455),
-            password=s.get("password", ""),
-        )
+        # 연결 시도 (최대 2회: 첫 시도 실패 시 3초 후 재시도)
+        host = s.get("host", "localhost")
+        port = s.get("port", 4455)
+        password = s.get("password", "")
+        ok = self._client.connect(host=host, port=port, password=password)
+        if not ok:
+            time.sleep(3)
+            ok = self._client.connect(host=host, port=port, password=password)
+
         if ok:
             self._set_state("idle")
             if then_record:
