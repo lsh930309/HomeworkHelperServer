@@ -137,6 +137,17 @@ class ScreenshotManager:
     # ── 내부 구현 ────────────────────────────────────────────────
 
     def _on_trigger(self) -> None:
+        # WH_KEYBOARD_LL hook callback 안에서 호출될 수 있으므로
+        # 블로킹 캡처는 반드시 별도 스레드에서 실행해야 함
+        # (hook callback 내 블로킹 시 Windows가 ~200ms timeout 후 훅 무력화)
+        import threading as _threading
+        _threading.Thread(
+            target=self._do_capture,
+            daemon=True,
+            name="screenshot-capture",
+        ).start()
+
+    def _do_capture(self) -> None:
         path = self.capture_now()
         if path and self._on_captured:
             self._on_captured(path)

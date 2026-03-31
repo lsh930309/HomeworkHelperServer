@@ -101,13 +101,14 @@ class MethodA:
             if nCode >= 0:
                 kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 if kb.vkCode == VK_SNAPSHOT:
-                    win_dn = bool(
-                        ctypes.windll.user32.GetAsyncKeyState(VK_LWIN) & 0x8000
-                        or ctypes.windll.user32.GetAsyncKeyState(VK_RWIN) & 0x8000
-                    )
-                    alt_dn = bool(ctypes.windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000)
-                    if win_dn and alt_dn:
-                        if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        # 키 다운 시점에만 Win+Alt 보조키 확인
+                        win_dn = bool(
+                            ctypes.windll.user32.GetAsyncKeyState(VK_LWIN) & 0x8000
+                            or ctypes.windll.user32.GetAsyncKeyState(VK_RWIN) & 0x8000
+                        )
+                        alt_dn = bool(ctypes.windll.user32.GetAsyncKeyState(VK_MENU) & 0x8000)
+                        if win_dn and alt_dn:
                             if not self._prtscn_held:
                                 self._prtscn_held = True
                                 logger.debug("MethodA: Win+Alt+PrtScn 키 다운 감지")
@@ -120,13 +121,15 @@ class MethodA:
                                         name="screenshot-capture",
                                     ).start()
                             return 1  # 이벤트 삭제 (Game Bar 미전달)
-                        elif wParam in (WM_KEYUP, WM_SYSKEYUP):
-                            if self._prtscn_held:
-                                self._prtscn_held = False
-                                logger.debug("MethodA: Win+Alt+PrtScn 키 업 감지")
-                                if self._dispatcher:
-                                    self._dispatcher.on_release()
-                            return 1
+                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                        # 키 업은 _prtscn_held 플래그만 확인 — UP 시점엔 Win/Alt가
+                        # 이미 해제돼 있어 GetAsyncKeyState 검사가 신뢰 불가
+                        if self._prtscn_held:
+                            self._prtscn_held = False
+                            logger.debug("MethodA: Win+Alt+PrtScn 키 업 감지")
+                            if self._dispatcher:
+                                self._dispatcher.on_release()
+                            return 1  # 이벤트 삭제
             return ctypes.windll.user32.CallNextHookEx(None, nCode, wParam, lParam)
 
         ctypes.windll.user32.CallNextHookEx.restype = ctypes.c_longlong
