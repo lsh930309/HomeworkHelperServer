@@ -174,6 +174,11 @@ class MainWindow(QMainWindow):
         self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
         self._screenshot_manager.set_on_long_press(self._recording_manager.on_recording_toggle)
         self._recording_state_sig.connect(self._dispatch_recording_state_to_sidebar)
+        self._sidebar_controller.set_recording_callbacks(
+            on_stop=self._recording_manager.stop_recording,
+            on_reconnect=self._recording_manager.reconnect,
+            get_last_error=self._recording_manager.get_last_error,
+        )
         self._apply_recording_settings()
 
         # 앱 시작 즉시 게임패드 훅 활성화 (게임 실행 전에도 전역 동작)
@@ -1917,11 +1922,8 @@ class MainWindow(QMainWindow):
 
     def _dispatch_recording_state_to_sidebar(self, state: str) -> None:
         """메인 스레드에서 실행되는 실제 사이드바 업데이트."""
-        if hasattr(self, '_sidebar_controller') and self._sidebar_controller._sidebar is not None:
-            sidebar = self._sidebar_controller._sidebar
-            if not getattr(sidebar, '_stop_recording_callback', None) and hasattr(self, '_recording_manager'):
-                sidebar.set_on_stop_recording(self._recording_manager.stop_recording)
-            sidebar.on_recording_state_changed(state)
+        if hasattr(self, '_sidebar_controller'):
+            self._sidebar_controller.dispatch_recording_state(state)
 
     def _start_screenshot_manager(self) -> None:
         """게임 실행 시 스크린샷 매니저를 시작합니다."""
@@ -1938,9 +1940,8 @@ class MainWindow(QMainWindow):
     def _on_screenshot_captured(self, path: str) -> None:
         """캡처 완료 콜백 — 사이드바 썸네일 갱신."""
         logger.info("스크린샷 저장됨: %s", path)
-        if (self._sidebar_controller is not None
-                and self._sidebar_controller._sidebar is not None):
-            self._sidebar_controller._sidebar.on_screenshot_captured(path)
+        if self._sidebar_controller is not None:
+            self._sidebar_controller.notify_screenshot_captured(path)
 
     _gamebar_original_value: Optional[int] = None
 

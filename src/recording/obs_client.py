@@ -79,7 +79,7 @@ class OBSClient:
             try:
                 self._ws.close()
             except Exception:
-                pass
+                logger.exception("타임아웃 후 WebSocket 정리 중 예외")
             return False
         return self._identified
 
@@ -89,7 +89,7 @@ class OBSClient:
             try:
                 self._ws.close()
             except Exception:
-                pass
+                logger.exception("OBS WebSocket 종료 중 예외")
 
     def is_connected(self) -> bool:
         return self._identified

@@ -80,7 +80,8 @@ class ScreenshotManager:
         self._impl = self._create_impl()
         if self._impl is None:
             return
-        self._impl.set_callback(self._on_trigger)
+        if getattr(self._impl, "_dispatcher", None) is None:
+            self._impl.set_callback(self._on_trigger)
         self._impl.start()
         logger.info("ScreenshotManager 시작 (save_dir=%s)", self._save_dir)
 

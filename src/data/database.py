@@ -101,8 +101,16 @@ def auto_migrate_database():
         # GlobalSettings 테이블 - 테마 / 게임 모드
         ("global_settings", "theme", "TEXT", "'system'"),
         ("global_settings", "hide_on_game", "INTEGER", "1"),
+        ("global_settings", "sidebar_enabled", "INTEGER", "1"),
         ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
         ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
+        ("global_settings", "sidebar_height_ratio", "REAL", "1.0"),
+        ("global_settings", "sidebar_opacity", "REAL", "0.85"),
+        ("global_settings", "sidebar_clock_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_clock_format", "TEXT", "'%H:%M:%S'"),
+        ("global_settings", "sidebar_playtime_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_playtime_prefix", "TEXT", "'오늘 플레이 시간'"),
+        ("global_settings", "sidebar_volume_section_enabled", "INTEGER", "1"),
         # GlobalSettings 테이블 - 스크린샷 설정
         ("global_settings", "screenshot_enabled", "INTEGER", "1"),
         ("global_settings", "screenshot_save_dir", "TEXT", "''"),

@@ -6,7 +6,7 @@ QPropertyAnimation 으로 부드러운 슬라이드 효과를 제공하며,
 """
 import logging
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QRect, QTimer,
@@ -117,6 +117,8 @@ class SidebarWidget(QWidget):
         data_manager,
         auto_hide_ms: int = _DEFAULT_AUTO_HIDE_MS,
         screen: Optional[QScreen] = None,
+        reconnect_recording: Optional[Callable[[], None]] = None,
+        get_recording_error: Optional[Callable[[], str]] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(
@@ -128,6 +130,8 @@ class SidebarWidget(QWidget):
         self._data_manager = data_manager
         self._auto_hide_ms = auto_hide_ms
         self._is_shown = False
+        self._reconnect_recording = reconnect_recording
+        self._get_recording_error = get_recording_error
 
         # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
         self._playtime_labels: dict = {}
@@ -965,6 +969,14 @@ class SidebarWidget(QWidget):
         """녹화 종료 버튼 클릭 시 호출될 콜백을 등록합니다."""
         self._stop_recording_callback = fn
 
+    def set_on_reconnect_recording(self, fn: Optional[Callable[[], None]]) -> None:
+        """녹화 재연결 버튼 클릭 시 호출될 콜백을 등록합니다."""
+        self._reconnect_recording = fn
+
+    def set_recording_error_provider(self, fn: Optional[Callable[[], str]]) -> None:
+        """최근 녹화 연결 오류 메시지를 제공하는 콜백을 등록합니다."""
+        self._get_recording_error = fn
+
     def on_recording_state_changed(self, state: str) -> None:
         """MainWindow에서 호출하는 슬롯. state: 'idle'|'recording'|'connecting'|'obs_offline'"""
         self._rec_state = state
@@ -998,11 +1010,9 @@ class SidebarWidget(QWidget):
             self._rec_stop_btn.hide()
             self._rec_connect_btn.show()
             # 마지막 연결 실패 이유를 툴팁으로 표시
-            from src.gui.main_window import MainWindow
-            if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_recording_manager'):
-                err = MainWindow.INSTANCE._recording_manager.get_last_error()
-                self._rec_status_label.setToolTip(err if err else "")
-                self._rec_connect_btn.setToolTip(err if err else "")
+            err = self._get_recording_error() if self._get_recording_error else ""
+            self._rec_status_label.setToolTip(err if err else "")
+            self._rec_connect_btn.setToolTip(err if err else "")
 
     def _update_rec_timer(self) -> None:
         """1초 tick. recording 상태일 때만 elapsed 증가."""
@@ -1016,9 +1026,8 @@ class SidebarWidget(QWidget):
 
     def _on_rec_connect_clicked(self) -> None:
         """OBS 재연결 버튼 클릭 — 연결만 시도하고 녹화는 시작하지 않는다."""
-        from src.gui.main_window import MainWindow
-        if MainWindow.INSTANCE and hasattr(MainWindow.INSTANCE, '_recording_manager'):
-            MainWindow.INSTANCE._recording_manager.reconnect()
+        if self._reconnect_recording:
+            self._reconnect_recording()
 
     def _refresh_recording_section(self) -> None:
         """recording_enabled 설정에 따라 섹션 show/hide."""
@@ -1131,7 +1140,7 @@ class SidebarWidget(QWidget):
                 btn.setIcon(QIcon(cropped))
                 btn.setIconSize(cropped.size())
         except Exception:
-            pass
+            logger.exception("썸네일 로드 실패: %s", filepath)
         _fp = filepath
         btn.clicked.connect(
             lambda _checked=False, p=_fp: __import__('os').startfile(str(p))

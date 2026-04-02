@@ -5,7 +5,7 @@ EdgeTriggerWindow 와 SidebarWidget 의 생명주기를 조율합니다.
 게임 종료 시 deactivate() 로 사이드바와 트리거를 비활성화합니다.
 """
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QScreen
@@ -50,6 +50,9 @@ class SidebarController:
         self._active_process: Optional[ManagedProcess] = None
         self._active_pid: Optional[int] = None
         self._game_start_timestamp: Optional[float] = None
+        self._on_stop_recording: Optional[Callable[[], None]] = None
+        self._on_reconnect_recording: Optional[Callable[[], None]] = None
+        self._get_recording_error: Optional[Callable[[], str]] = None
 
         # 지연 생성 (화면 정보가 필요하므로 QApplication 초기화 이후)
         self._trigger: Optional[EdgeTriggerWindow] = None
@@ -138,6 +141,35 @@ class SidebarController:
 
         logger.debug("SidebarController cleanup 완료")
 
+    def set_recording_callbacks(
+        self,
+        *,
+        on_stop: Optional[Callable[[], None]] = None,
+        on_reconnect: Optional[Callable[[], None]] = None,
+        get_last_error: Optional[Callable[[], str]] = None,
+    ) -> None:
+        """사이드바 녹화 제어 콜백을 주입합니다."""
+        if on_stop is not None:
+            self._on_stop_recording = on_stop
+        if on_reconnect is not None:
+            self._on_reconnect_recording = on_reconnect
+        if get_last_error is not None:
+            self._get_recording_error = get_last_error
+        if self._sidebar is not None:
+            self._sidebar.set_on_stop_recording(self._on_stop_recording)
+            self._sidebar.set_on_reconnect_recording(self._on_reconnect_recording)
+            self._sidebar.set_recording_error_provider(self._get_recording_error)
+
+    def dispatch_recording_state(self, state: str) -> None:
+        """사이드바에 녹화 상태를 전달합니다."""
+        if self._sidebar is not None:
+            self._sidebar.on_recording_state_changed(state)
+
+    def notify_screenshot_captured(self, path: str) -> None:
+        """사이드바에 새 스크린샷 캡처를 전달합니다."""
+        if self._sidebar is not None:
+            self._sidebar.on_screenshot_captured(path)
+
     # ------------------------------------------------------------------
     # 내부 메서드
     # ------------------------------------------------------------------
@@ -196,7 +228,10 @@ class SidebarController:
                 data_manager=self._data_manager,
                 auto_hide_ms=auto_hide_ms,
                 screen=screen,
+                reconnect_recording=self._on_reconnect_recording,
+                get_recording_error=self._get_recording_error,
             )
+            self.set_recording_callbacks()
         else:
             # 설정 갱신
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
