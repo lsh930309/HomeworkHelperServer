@@ -1846,8 +1846,18 @@ class MainWindow(QMainWindow):
         default_muted = getattr(process, "default_muted", False)
         if not audio_control.set_mute(pid, default_muted):
             from PyQt6.QtCore import QTimer
-            for delay_ms in (1000, 3000, 5000):
-                QTimer.singleShot(delay_ms, lambda p=pid, m=default_muted: audio_control.set_mute(p, m))
+            remaining_delays = [1000, 3000, 5000]
+
+            def try_set_mute(target_pid: int, muted: bool, delays: list[int]) -> None:
+                if audio_control.set_mute(target_pid, muted) or not delays:
+                    return
+                next_delay = delays[0]
+                QTimer.singleShot(
+                    next_delay,
+                    lambda p=target_pid, m=muted, d=delays[1:]: try_set_mute(p, m, d),
+                )
+
+            try_set_mute(pid, default_muted, remaining_delays)
 
     # ── 스크린샷 ────────────────────────────────────────────────
 

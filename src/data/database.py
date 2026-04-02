@@ -119,14 +119,14 @@ def auto_migrate_database():
         ("global_settings", "screenshot_capture_mode", "TEXT", "'fullscreen'"),
         ("global_settings", "screenshot_gamepad_button_index", "INTEGER", "-1"),
         # Recording (OBS)
-        ("global_settings", "recording_enabled", "BOOLEAN", "0"),
+        ("global_settings", "recording_enabled", "INTEGER", "0"),
         ("global_settings", "obs_host", "TEXT", "'localhost'"),
         ("global_settings", "obs_port", "INTEGER", "4455"),
         ("global_settings", "obs_password", "TEXT", "''"),
         ("global_settings", "obs_exe_path", "TEXT", "''"),
-        ("global_settings", "obs_auto_launch", "BOOLEAN", "0"),
-        ("global_settings", "obs_launch_hidden", "BOOLEAN", "1"),
-        ("global_settings", "obs_watch_output_dir", "BOOLEAN", "1"),
+        ("global_settings", "obs_auto_launch", "INTEGER", "0"),
+        ("global_settings", "obs_launch_hidden", "INTEGER", "1"),
+        ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
     ]
     

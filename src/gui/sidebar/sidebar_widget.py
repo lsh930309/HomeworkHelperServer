@@ -5,7 +5,9 @@ QPropertyAnimation 으로 부드러운 슬라이드 효과를 제공하며,
 전체 볼륨 조절 섹션을 포함합니다.
 """
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
@@ -1101,8 +1103,8 @@ class SidebarWidget(QWidget):
         """)
         _dir = save_dir_str
         folder_btn.clicked.connect(
-            lambda _checked=False, d=_dir: __import__('os').startfile(d)
-            if __import__('pathlib').Path(d).exists()
+            lambda _checked=False, d=_dir: os.startfile(d)
+            if Path(d).exists()
             else None
         )
         next_idx = len(shown)
