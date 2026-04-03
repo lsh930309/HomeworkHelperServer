@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QRect, QTimer,
-    QRunnable, QThreadPool,
+    QRunnable, QThreadPool, pyqtSlot,
 )
 from PyQt6.QtGui import QScreen, QColor
 from PyQt6.QtWidgets import (
@@ -342,6 +342,7 @@ class SidebarWidget(QWidget):
         self._playtime_timer.start()
         self._clock_timer.start()
         self._cursor_poll_timer.start()
+        self._rec_timer.start()
         self._lbutton_was_down = False
         self._reset_auto_hide()
         logger.debug("SidebarWidget 슬라이드인")
@@ -355,6 +356,7 @@ class SidebarWidget(QWidget):
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
+        self._rec_timer.stop()
 
         geo = self.geometry()
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
@@ -963,7 +965,6 @@ class SidebarWidget(QWidget):
         self._rec_timer = QTimer(self)
         self._rec_timer.setInterval(1000)
         self._rec_timer.timeout.connect(self._update_rec_timer)
-        self._rec_timer.start()
 
         return section
 
@@ -1045,6 +1046,7 @@ class SidebarWidget(QWidget):
         # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
         self._capture_now_btn.setEnabled(True)
 
+    @pyqtSlot()
     def _refresh_screenshot_thumbnails(self) -> None:
         """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
         # 그리드 초기화
@@ -1102,11 +1104,14 @@ class SidebarWidget(QWidget):
             QPushButton:hover { background: rgba(255,255,255,18); color: white; }
         """)
         _dir = save_dir_str
-        folder_btn.clicked.connect(
-            lambda _checked=False, d=_dir: os.startfile(d)
-            if Path(d).exists()
-            else None
-        )
+
+        def _open_folder(d: str = _dir) -> None:
+            if Path(d).exists():
+                os.startfile(d)
+                return
+            logger.warning("스크린샷 폴더가 존재하지 않습니다: %s", d)
+
+        folder_btn.clicked.connect(lambda _checked=False: _open_folder())
         next_idx = len(shown)
         row, col = divmod(next_idx, _THUMB_COLS)
         self._thumb_grid_layout.addWidget(folder_btn, row, col)

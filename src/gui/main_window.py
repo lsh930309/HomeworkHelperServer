@@ -1973,7 +1973,7 @@ class MainWindow(QMainWindow):
                                   1 if enabled else 0)
             logger.info("Game Bar AppCaptureEnabled → %d", 1 if enabled else 0)
         except Exception as exc:
-            logger.warning("Game Bar 레지스트리 설정 실패: %s", exc)
+            logger.warning("Game Bar 레지스트리 설정 실패: %s", exc, exc_info=True)
 
     def _restore_gamebar_setting(self) -> None:
         """Game Bar 설정을 원래 값으로 복원합니다."""
@@ -1990,7 +1990,7 @@ class MainWindow(QMainWindow):
             logger.info("Game Bar AppCaptureEnabled 복원 → %d", self._gamebar_original_value)
             self._gamebar_original_value = None
         except Exception as exc:
-            logger.warning("Game Bar 레지스트리 복원 실패: %s", exc)
+            logger.warning("Game Bar 레지스트리 복원 실패: %s", exc, exc_info=True)
 
     # ─────────────────────────────
 
