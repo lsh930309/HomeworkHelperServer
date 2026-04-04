@@ -101,6 +101,33 @@ def auto_migrate_database():
         # GlobalSettings 테이블 - 테마 / 게임 모드
         ("global_settings", "theme", "TEXT", "'system'"),
         ("global_settings", "hide_on_game", "INTEGER", "1"),
+        ("global_settings", "sidebar_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
+        ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
+        ("global_settings", "sidebar_height_ratio", "REAL", "1.0"),
+        ("global_settings", "sidebar_opacity", "REAL", "0.85"),
+        ("global_settings", "sidebar_clock_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_clock_format", "TEXT", "'%H:%M:%S'"),
+        ("global_settings", "sidebar_playtime_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_playtime_prefix", "TEXT", "'오늘 플레이 시간'"),
+        ("global_settings", "sidebar_volume_section_enabled", "INTEGER", "1"),
+        # GlobalSettings 테이블 - 스크린샷 설정
+        ("global_settings", "screenshot_enabled", "INTEGER", "1"),
+        ("global_settings", "screenshot_save_dir", "TEXT", "''"),
+        ("global_settings", "screenshot_gamepad_trigger", "INTEGER", "1"),
+        ("global_settings", "screenshot_disable_gamebar", "INTEGER", "0"),
+        ("global_settings", "screenshot_capture_mode", "TEXT", "'fullscreen'"),
+        ("global_settings", "screenshot_gamepad_button_index", "INTEGER", "-1"),
+        # Recording (OBS)
+        ("global_settings", "recording_enabled", "INTEGER", "0"),
+        ("global_settings", "obs_host", "TEXT", "'localhost'"),
+        ("global_settings", "obs_port", "INTEGER", "4455"),
+        ("global_settings", "obs_password", "TEXT", "''"),
+        ("global_settings", "obs_exe_path", "TEXT", "''"),
+        ("global_settings", "obs_auto_launch", "INTEGER", "0"),
+        ("global_settings", "obs_launch_hidden", "INTEGER", "1"),
+        ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
+        ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
     ]
     
     try:
@@ -152,6 +179,16 @@ def auto_migrate_database():
                 conn.commit()
                 if result.rowcount > 0:
                     print(f"[Migration] process_sessions: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+
+        # sidebar_auto_hide_sec → sidebar_auto_hide_ms 데이터 마이그레이션
+        with engine.connect() as conn:
+            existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
+            if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
+                conn.execute(text(
+                    "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
+                    "WHERE sidebar_auto_hide_ms = 3000"
+                ))
+                conn.commit()
 
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:

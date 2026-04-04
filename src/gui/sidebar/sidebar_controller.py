@@ -5,7 +5,7 @@ EdgeTriggerWindow 와 SidebarWidget 의 생명주기를 조율합니다.
 게임 종료 시 deactivate() 로 사이드바와 트리거를 비활성화합니다.
 """
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QScreen
@@ -50,6 +50,10 @@ class SidebarController:
         self._active_process: Optional[ManagedProcess] = None
         self._active_pid: Optional[int] = None
         self._game_start_timestamp: Optional[float] = None
+        self._on_stop_recording: Optional[Callable[[], None]] = None
+        self._on_reconnect_recording: Optional[Callable[[], None]] = None
+        self._get_recording_error: Optional[Callable[[], str]] = None
+        self._get_recording_elapsed_sec: Optional[Callable[[], int]] = None
 
         # 지연 생성 (화면 정보가 필요하므로 QApplication 초기화 이후)
         self._trigger: Optional[EdgeTriggerWindow] = None
@@ -138,6 +142,39 @@ class SidebarController:
 
         logger.debug("SidebarController cleanup 완료")
 
+    def set_recording_callbacks(
+        self,
+        *,
+        on_stop: Optional[Callable[[], None]] = None,
+        on_reconnect: Optional[Callable[[], None]] = None,
+        get_last_error: Optional[Callable[[], str]] = None,
+        get_elapsed_sec: Optional[Callable[[], int]] = None,
+    ) -> None:
+        """사이드바 녹화 제어 콜백을 주입합니다."""
+        if on_stop is not None:
+            self._on_stop_recording = on_stop
+        if on_reconnect is not None:
+            self._on_reconnect_recording = on_reconnect
+        if get_last_error is not None:
+            self._get_recording_error = get_last_error
+        if get_elapsed_sec is not None:
+            self._get_recording_elapsed_sec = get_elapsed_sec
+        if self._sidebar is not None:
+            self._sidebar.set_on_stop_recording(self._on_stop_recording)
+            self._sidebar.set_on_reconnect_recording(self._on_reconnect_recording)
+            self._sidebar.set_recording_error_provider(self._get_recording_error)
+            self._sidebar.set_recording_elapsed_provider(self._get_recording_elapsed_sec)
+
+    def dispatch_recording_state(self, state: str) -> None:
+        """사이드바에 녹화 상태를 전달합니다."""
+        if self._sidebar is not None:
+            self._sidebar.on_recording_state_changed(state)
+
+    def notify_screenshot_captured(self, path: str) -> None:
+        """사이드바에 새 스크린샷 캡처를 전달합니다."""
+        if self._sidebar is not None:
+            self._sidebar.on_screenshot_captured(path)
+
     # ------------------------------------------------------------------
     # 내부 메서드
     # ------------------------------------------------------------------
@@ -145,13 +182,18 @@ class SidebarController:
     def apply_settings(self, settings) -> None:
         """사이드바 설정을 런타임에 반영합니다."""
         if self._sidebar is not None:
-            auto_hide_ms = settings.sidebar_auto_hide_sec * 1000
+            auto_hide_ms = getattr(settings, 'sidebar_auto_hide_ms', 3000)
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
             self._sidebar.apply_visual_settings()
             self._sidebar.refresh_content()
             # sidebar_enabled=False 로 변경 시 즉시 숨김
             if not getattr(settings, 'sidebar_enabled', True) and self._sidebar._is_shown:
                 self._sidebar.slide_out()
+        if self._trigger is not None:
+            trigger_y_start = getattr(settings, 'sidebar_trigger_y_start', 0.1)
+            trigger_y_end = getattr(settings, 'sidebar_trigger_y_end', 0.9)
+            edge_width_px = getattr(settings, 'sidebar_edge_width_px', 2)
+            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""
@@ -183,14 +225,18 @@ class SidebarController:
 
         trigger_y_start = getattr(gs, 'sidebar_trigger_y_start', 0.1) if gs else 0.1
         trigger_y_end = getattr(gs, 'sidebar_trigger_y_end', 0.9) if gs else 0.9
-        auto_hide_sec = getattr(gs, 'sidebar_auto_hide_sec', 3) if gs else 3
-        auto_hide_ms = int(auto_hide_sec * 1000)
+        auto_hide_ms = int(getattr(gs, 'sidebar_auto_hide_ms', 3000) if gs else 3000)
+        edge_width_px = int(getattr(gs, 'sidebar_edge_width_px', 2) if gs else 2)
 
         if self._sidebar is None:
             self._sidebar = SidebarWidget(
                 data_manager=self._data_manager,
                 auto_hide_ms=auto_hide_ms,
                 screen=screen,
+                stop_recording=self._on_stop_recording,
+                reconnect_recording=self._on_reconnect_recording,
+                get_recording_error=self._get_recording_error,
+                get_recording_elapsed=self._get_recording_elapsed_sec,
             )
         else:
             # 설정 갱신
@@ -202,10 +248,11 @@ class SidebarController:
                 trigger_y_start=trigger_y_start,
                 trigger_y_end=trigger_y_end,
                 cooldown_sec=1.0,
+                trigger_width_px=edge_width_px,
                 screen=screen,
             )
         else:
-            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0)
+            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
 
     def _on_edge_triggered(self) -> None:
         """EdgeTriggerWindow 가 커서 진입을 감지했을 때 호출됩니다."""

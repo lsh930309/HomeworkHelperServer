@@ -73,8 +73,6 @@ class GlobalSettingsSchema(BaseModel):
     run_on_startup: bool = False
     always_on_top: bool = False
     run_as_admin: bool = False
-    notify_on_launch_success: bool = True
-    notify_on_launch_failure: bool = True
     notify_on_mandatory_time: bool = True
     notify_on_cycle_deadline: bool = True
     notify_on_sleep_correction: bool = True
@@ -87,7 +85,8 @@ class GlobalSettingsSchema(BaseModel):
     hide_on_game: bool = True
     # 사이드바
     sidebar_enabled: bool = True
-    sidebar_auto_hide_sec: int = 3
+    sidebar_auto_hide_ms: int = 3000
+    sidebar_edge_width_px: int = 2
     sidebar_height_ratio: float = 1.0
     sidebar_opacity: float = 0.85
     sidebar_clock_enabled: bool = True
@@ -95,6 +94,23 @@ class GlobalSettingsSchema(BaseModel):
     sidebar_playtime_enabled: bool = True
     sidebar_playtime_prefix: str = "오늘 플레이 시간"
     sidebar_volume_section_enabled: bool = True
+    # 스크린샷 설정
+    screenshot_enabled: bool = True
+    screenshot_save_dir: str = ""
+    screenshot_gamepad_trigger: bool = True
+    screenshot_disable_gamebar: bool = False
+    screenshot_capture_mode: str = "fullscreen"
+    screenshot_gamepad_button_index: int = -1
+    # Recording (OBS)
+    recording_enabled: bool = False
+    obs_host: str = "localhost"
+    obs_port: int = 4455
+    obs_password: str = ""
+    obs_exe_path: str = ""
+    obs_auto_launch: bool = False
+    obs_launch_hidden: bool = True
+    obs_watch_output_dir: bool = True
+    recording_hold_threshold_ms: int = 800
 
 
 class ProcessSessionCreate(BaseModel):

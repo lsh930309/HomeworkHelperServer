@@ -140,8 +140,6 @@ class GlobalSettings:
                  run_on_startup: bool = False,
                  always_on_top: bool = False,
                  run_as_admin: bool = False,
-                 notify_on_launch_success: bool = True,
-                 notify_on_launch_failure: bool = True,
                  notify_on_mandatory_time: bool = True,
                  notify_on_cycle_deadline: bool = True,
                  notify_on_sleep_correction: bool = True,
@@ -157,7 +155,8 @@ class GlobalSettings:
                  sidebar_enabled: bool = True,
                  sidebar_trigger_y_start: float = 0.1,
                  sidebar_trigger_y_end: float = 0.9,
-                 sidebar_auto_hide_sec: int = 3,
+                 sidebar_auto_hide_ms: int = 3000,
+                 sidebar_edge_width_px: int = 2,
                  sidebar_effect: str = "acrylic",
                  sidebar_height_ratio: float = 1.0,
                  sidebar_opacity: float = 0.85,
@@ -165,7 +164,24 @@ class GlobalSettings:
                  sidebar_clock_format: str = "%H:%M:%S",
                  sidebar_playtime_enabled: bool = True,
                  sidebar_playtime_prefix: str = "오늘 플레이 시간",
-                 sidebar_volume_section_enabled: bool = True):
+                 sidebar_volume_section_enabled: bool = True,
+                 # 스크린샷 설정
+                 screenshot_enabled: bool = True,
+                 screenshot_save_dir: str = "",
+                 screenshot_gamepad_trigger: bool = True,
+                 screenshot_disable_gamebar: bool = False,
+                 screenshot_capture_mode: str = "fullscreen",
+                 screenshot_gamepad_button_index: int = -1,
+                 # Recording (OBS)
+                 recording_enabled: bool = False,
+                 obs_host: str = "localhost",
+                 obs_port: int = 4455,
+                 obs_password: str = "",
+                 obs_exe_path: str = "",
+                 obs_auto_launch: bool = False,
+                 obs_launch_hidden: bool = True,
+                 obs_watch_output_dir: bool = True,
+                 recording_hold_threshold_ms: int = 800):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -175,8 +191,6 @@ class GlobalSettings:
         self.always_on_top = always_on_top
         self.run_as_admin = run_as_admin # <<< 새 속성 초기화
         # 알림 옵션
-        self.notify_on_launch_success = notify_on_launch_success
-        self.notify_on_launch_failure = notify_on_launch_failure
         self.notify_on_mandatory_time = notify_on_mandatory_time
         self.notify_on_cycle_deadline = notify_on_cycle_deadline
         self.notify_on_sleep_correction = notify_on_sleep_correction
@@ -191,7 +205,8 @@ class GlobalSettings:
         self.sidebar_enabled = sidebar_enabled
         self.sidebar_trigger_y_start = sidebar_trigger_y_start
         self.sidebar_trigger_y_end = sidebar_trigger_y_end
-        self.sidebar_auto_hide_sec = sidebar_auto_hide_sec
+        self.sidebar_auto_hide_ms = sidebar_auto_hide_ms
+        self.sidebar_edge_width_px = sidebar_edge_width_px
         self.sidebar_effect = sidebar_effect
         self.sidebar_height_ratio = sidebar_height_ratio
         self.sidebar_opacity = sidebar_opacity
@@ -200,6 +215,23 @@ class GlobalSettings:
         self.sidebar_playtime_enabled = sidebar_playtime_enabled
         self.sidebar_playtime_prefix = sidebar_playtime_prefix
         self.sidebar_volume_section_enabled = sidebar_volume_section_enabled
+        # 스크린샷
+        self.screenshot_enabled = screenshot_enabled
+        self.screenshot_save_dir = screenshot_save_dir
+        self.screenshot_gamepad_trigger = screenshot_gamepad_trigger
+        self.screenshot_disable_gamebar = screenshot_disable_gamebar
+        self.screenshot_capture_mode = screenshot_capture_mode
+        self.screenshot_gamepad_button_index = screenshot_gamepad_button_index
+        # Recording (OBS)
+        self.recording_enabled = recording_enabled
+        self.obs_host = obs_host
+        self.obs_port = obs_port
+        self.obs_password = obs_password
+        self.obs_exe_path = obs_exe_path
+        self.obs_auto_launch = obs_auto_launch
+        self.obs_launch_hidden = obs_launch_hidden
+        self.obs_watch_output_dir = obs_watch_output_dir
+        self.recording_hold_threshold_ms = recording_hold_threshold_ms
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -221,10 +253,9 @@ class GlobalSettings:
         if 'run_as_admin' not in data:
             data['run_as_admin'] = False
         # 알림 옵션들 역호환 기본값 추가
-        if 'notify_on_launch_success' not in data:
-            data['notify_on_launch_success'] = True
-        if 'notify_on_launch_failure' not in data:
-            data['notify_on_launch_failure'] = True
+        # notify_on_launch_success / notify_on_launch_failure 는 제거됨 — 구버전 DB 값은 무시
+        data.pop('notify_on_launch_success', None)
+        data.pop('notify_on_launch_failure', None)
         if 'notify_on_mandatory_time' not in data:
             data['notify_on_mandatory_time'] = True
         if 'notify_on_cycle_deadline' not in data:
@@ -249,7 +280,13 @@ class GlobalSettings:
         _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
         data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
         data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
-        data['sidebar_auto_hide_sec'] = max(0, int(data.get('sidebar_auto_hide_sec', 3)))
+        # sidebar_auto_hide_ms 하위 호환성 (구버전: sidebar_auto_hide_sec)
+        if 'sidebar_auto_hide_ms' not in data and 'sidebar_auto_hide_sec' in data:
+            data['sidebar_auto_hide_ms'] = max(0, int(data['sidebar_auto_hide_sec'])) * 1000
+        else:
+            data['sidebar_auto_hide_ms'] = max(0, int(data.get('sidebar_auto_hide_ms', 3000)))
+        data.pop('sidebar_auto_hide_sec', None)
+        data['sidebar_edge_width_px'] = max(1, min(50, int(data.get('sidebar_edge_width_px', 2))))
         _effect = data.get('sidebar_effect', 'acrylic')
         if _effect not in ('mica', 'acrylic', 'none'):
             _effect = 'acrylic'
@@ -261,6 +298,26 @@ class GlobalSettings:
         data['sidebar_playtime_enabled'] = bool(data.get('sidebar_playtime_enabled', True))
         data['sidebar_playtime_prefix'] = str(data.get('sidebar_playtime_prefix', '오늘 플레이 시간'))
         data['sidebar_volume_section_enabled'] = bool(data.get('sidebar_volume_section_enabled', True))
+        # 스크린샷 설정 하위 호환성
+        data['screenshot_enabled'] = bool(data.get('screenshot_enabled', True))
+        data['screenshot_save_dir'] = str(data.get('screenshot_save_dir', ''))
+        data['screenshot_gamepad_trigger'] = bool(data.get('screenshot_gamepad_trigger', True))
+        data['screenshot_disable_gamebar'] = bool(data.get('screenshot_disable_gamebar', False))
+        _cap_mode = data.get('screenshot_capture_mode', 'fullscreen')
+        if _cap_mode not in ('fullscreen', 'game_window'):
+            _cap_mode = 'fullscreen'
+        data['screenshot_capture_mode'] = _cap_mode
+        data['screenshot_gamepad_button_index'] = int(data.get('screenshot_gamepad_button_index', -1))
+        # Recording (OBS) 하위 호환성
+        data['recording_enabled'] = bool(data.get('recording_enabled', False))
+        data['obs_host'] = str(data.get('obs_host', 'localhost'))
+        data['obs_port'] = int(data.get('obs_port', 4455))
+        data['obs_password'] = str(data.get('obs_password', ''))
+        data['obs_exe_path'] = str(data.get('obs_exe_path', ''))
+        data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
+        data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
+        data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
+        data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
         return cls(**data)
     
 class WebShortcut:

@@ -75,6 +75,7 @@ class IconDownloader(QThread):
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
     request_table_refresh_signal = pyqtSignal() # 테이블 새로고침 요청 시그널
+    _recording_state_sig = pyqtSignal(str)       # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
 
     # UI 색상 정의
     COLOR_INCOMPLETE = QColor("red")      # 미완료 상태 색상
@@ -108,11 +109,11 @@ class MainWindow(QMainWindow):
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
 
-        self.system_notifier = Notifier(QApplication.applicationName()) # 시스템 알림 객체 생성
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
-        # 시스템 알림 콜백을 GUI 알림 처리기에 연결
-        if hasattr(self.system_notifier, 'main_window_activated_callback'):
-            self.system_notifier.main_window_activated_callback = self.gui_notification_handler.process_system_notification_activation
+        self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
+            QApplication.applicationName(),
+            main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
+        )
 
         self.scheduler = Scheduler(self.data_manager, self.system_notifier, self.process_monitor) # 스케줄러 객체 생성
 
@@ -132,9 +133,11 @@ class MainWindow(QMainWindow):
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
+        self._mute_retry_tokens: dict[str, int] = {}
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
+        self._recover_gamebar_setting_if_needed()
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
@@ -157,6 +160,34 @@ class MainWindow(QMainWindow):
 
         # 사이드바 컨트롤러 초기화
         self._sidebar_controller = SidebarController(self.data_manager, self)
+
+        # 스크린샷 매니저
+        from src.screenshot import ScreenshotManager
+        gs = getattr(self.data_manager, 'global_settings', None)
+        self._screenshot_manager = ScreenshotManager(
+            get_target_hwnd=self._get_screenshot_target_hwnd,
+            long_press_threshold_ms=getattr(gs, 'recording_hold_threshold_ms', 800),
+        )
+        self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
+        self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)
+        self._apply_screenshot_settings(sync_runtime=False)
+
+        # 녹화 매니저
+        from src.recording import RecordingManager
+        self._recording_manager = RecordingManager()
+        self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
+        self._screenshot_manager.set_on_long_press(self._recording_manager.on_recording_toggle)
+        self._recording_state_sig.connect(self._dispatch_recording_state_to_sidebar)
+        self._sidebar_controller.set_recording_callbacks(
+            on_stop=self._recording_manager.stop_recording,
+            on_reconnect=self._recording_manager.reconnect,
+            get_last_error=self._recording_manager.get_last_error,
+            get_elapsed_sec=self._recording_manager.get_elapsed_sec,
+        )
+        self._apply_recording_settings()
+
+        # 앱 시작 즉시 게임패드 훅 활성화 (게임 실행 전에도 전역 동작)
+        self._start_screenshot_manager()
 
         # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
         self._saved_geometry = None
@@ -546,6 +577,8 @@ class MainWindow(QMainWindow):
             self.data_manager.save_global_settings(updated)
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
+            self._apply_screenshot_settings()
+            self._apply_recording_settings()
 
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
@@ -788,6 +821,13 @@ class MainWindow(QMainWindow):
                     pid=running_pid,
                     game_start_timestamp=None,
                 )
+                # 스크린샷 매니저 시작
+                self._start_screenshot_manager()
+                # 사이드바 생성 직후 RecordingManager의 현재 상태를 즉시 동기화
+                # (앱 시작 시 연결 시도가 사이드바 생성보다 먼저 완료되는 경우
+                #  상태 변경 신호가 버려지므로, 여기서 강제로 한 번 재전송)
+                if hasattr(self, '_recording_manager'):
+                    self._recording_state_sig.emit(self._recording_manager.get_state())
         elif not any_game_running and self._is_game_mode_active:
             # 모든 게임이 종료되었고, 게임 모드가 활성화되어 있었다면
             self._is_game_mode_active = False
@@ -1055,17 +1095,12 @@ class MainWindow(QMainWindow):
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
         if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
-            # 설정에 따라 실행 성공 알림 전송
-            if self.data_manager.global_settings.notify_on_launch_success:
-                self.system_notifier.send_notification(title="프로세스 실행", message=f"'{p_launch.name}' 실행함.", task_id_to_highlight=None)
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 시도.", 3000)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
-            if self.data_manager.global_settings.notify_on_launch_failure:
-                self.system_notifier.send_notification(title="실행 실패", message=f"'{p_launch.name}' 실행 실패. 로그 확인.", task_id_to_highlight=None)
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
@@ -1587,6 +1622,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_sidebar_controller'):
             self._sidebar_controller.cleanup()
 
+        # 3-2. 녹화 매니저 종료
+        if hasattr(self, '_recording_manager'):
+            self._recording_manager.shutdown()
+
+        # 3-3. Game Bar 설정 복원
+        self._restore_gamebar_setting()
+
         # 4. QApplication 종료
         app_instance = QApplication.instance()
         if app_instance:
@@ -1796,6 +1838,7 @@ class MainWindow(QMainWindow):
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
         if not pid:
             self._volume_applied_pids.pop(process.id, None)
+            self._mute_retry_tokens.pop(process.id, None)
             return
 
         default_volume = getattr(process, "default_volume", None)
@@ -1805,8 +1848,227 @@ class MainWindow(QMainWindow):
                 self._volume_applied_pids[process.id] = pid
 
         # default_muted 적용 (default_volume 미설정이어도 항상 적용)
+        # 게임 시작 직후 오디오 세션이 없을 수 있으므로 실패 시 재시도
+        process_id = process.id
         default_muted = getattr(process, "default_muted", False)
-        audio_control.set_mute(pid, default_muted)
+        retry_token = self._mute_retry_tokens.get(process_id, 0) + 1
+        self._mute_retry_tokens[process_id] = retry_token
+        if not audio_control.set_mute(pid, default_muted):
+            from PyQt6.QtCore import QTimer
+            remaining_delays = [1000, 3000, 5000]
+
+            def get_current_default_muted() -> Optional[bool]:
+                for managed in getattr(self.data_manager, "managed_processes", []):
+                    if managed.id == process_id:
+                        return getattr(managed, "default_muted", False)
+                return None
+
+            def try_set_mute(
+                target_pid: int,
+                muted: bool,
+                delays: list[int],
+                token: int,
+            ) -> None:
+                if self._mute_retry_tokens.get(process_id) != token:
+                    return
+                if self._get_active_pid(process_id) != target_pid:
+                    return
+                current_muted = get_current_default_muted()
+                if current_muted is None or current_muted != muted:
+                    return
+                if audio_control.set_mute(target_pid, muted) or not delays:
+                    return
+                next_delay = delays[0]
+                QTimer.singleShot(
+                    next_delay,
+                    lambda p=target_pid, m=muted, d=delays[1:], t=token: try_set_mute(p, m, d, t),
+                )
+
+            try_set_mute(pid, default_muted, remaining_delays, retry_token)
+
+    # ── 스크린샷 ────────────────────────────────────────────────
+
+    def _get_screenshot_target_hwnd(self) -> Optional[int]:
+        """포커스된 등록 게임 창의 HWND 반환. 등록 게임이 아니면 None."""
+        import ctypes
+        import ctypes.wintypes as wt
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid_c = wt.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_c))
+        pid = pid_c.value
+        active_pids = set()
+        if self.process_monitor:
+            active_snapshot = dict(self.process_monitor.active_monitored_processes)
+            active_pids = {
+                entry.get('pid')
+                for entry in active_snapshot.values()
+                if entry.get('pid')
+            }
+        return hwnd if pid in active_pids else None
+
+    def _get_screenshot_game_name(self) -> str:
+        """포커스된 등록 게임의 이름 반환. 없으면 빈 문자열."""
+        import ctypes
+        import ctypes.wintypes as wt
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd or not self.process_monitor:
+            return ""
+        pid_c = wt.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_c))
+        pid = pid_c.value
+        active = dict(self.process_monitor.active_monitored_processes)
+        managed_map = {p.id: p for p in getattr(self.data_manager, 'managed_processes', [])}
+        for proc_id, entry in active.items():
+            if entry.get('pid') == pid:
+                proc = managed_map.get(proc_id)
+                if proc:
+                    return proc.name
+        return ""
+
+    def _apply_screenshot_settings(self, *, sync_runtime: bool = True) -> None:
+        """GlobalSettings의 스크린샷 설정을 ScreenshotManager에 반영합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None or self._screenshot_manager is None:
+            return
+        save_dir = getattr(gs, 'screenshot_save_dir', '') or None
+        self._screenshot_manager.set_save_dir(save_dir)
+        self._screenshot_manager.set_capture_mode(
+            getattr(gs, 'screenshot_capture_mode', 'fullscreen')
+        )
+        self._screenshot_manager.set_long_press_threshold(
+            getattr(gs, 'recording_hold_threshold_ms', 800)
+        )
+        if getattr(gs, 'screenshot_disable_gamebar', False):
+            self._set_gamebar_capture(False)
+        else:
+            self._restore_gamebar_setting()
+        if sync_runtime:
+            self._sync_screenshot_manager_state(gs)
+
+    def _apply_recording_settings(self) -> None:
+        """GlobalSettings의 녹화 설정을 RecordingManager에 반영합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None or not hasattr(self, '_recording_manager'):
+            return
+        self._recording_manager.apply_settings(gs)
+
+    def _on_recording_state_changed(self, state: str) -> None:
+        """RecordingManager 상태 변경 콜백 — 백그라운드 스레드에서 호출될 수 있음.
+        pyqtSignal을 통해 메인 스레드로 안전하게 릴레이."""
+        self._recording_state_sig.emit(state)
+
+    def _dispatch_recording_state_to_sidebar(self, state: str) -> None:
+        """메인 스레드에서 실행되는 실제 사이드바 업데이트."""
+        if hasattr(self, '_sidebar_controller'):
+            self._sidebar_controller.dispatch_recording_state(state)
+
+    def _start_screenshot_manager(self) -> None:
+        """현재 설정 기준으로 스크린샷 매니저 상태를 동기화합니다."""
+        if self._screenshot_manager is None:
+            return
+        self._apply_screenshot_settings(sync_runtime=True)
+
+    def _sync_screenshot_manager_state(self, gs: Optional[GlobalSettings] = None) -> None:
+        """스크린샷 훅의 런타임 시작/중지 상태를 현재 설정과 맞춥니다."""
+        if self._screenshot_manager is None:
+            return
+        if gs is None:
+            gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None:
+            self._screenshot_manager.stop()
+            return
+        should_run = bool(
+            getattr(gs, 'screenshot_enabled', True)
+            and getattr(gs, 'screenshot_gamepad_trigger', True)
+        )
+        if should_run:
+            self._screenshot_manager.start()
+        else:
+            self._screenshot_manager.stop()
+
+    def _on_screenshot_captured(self, path: str) -> None:
+        """캡처 완료 콜백 — 사이드바 썸네일 갱신."""
+        logger.info("스크린샷 저장됨: %s", path)
+        if self._sidebar_controller is not None:
+            self._sidebar_controller.notify_screenshot_captured(path)
+
+    _gamebar_original_value: Optional[int] = None
+    _gamebar_original_value_key = "system/gamebar_original_value"
+
+    def _persist_gamebar_original_value(self) -> None:
+        """Game Bar 원래 값을 QSettings에 저장하거나 제거합니다."""
+        if self._gamebar_original_value is None:
+            self._settings.remove(self._gamebar_original_value_key)
+        else:
+            self._settings.setValue(self._gamebar_original_value_key, self._gamebar_original_value)
+        self._settings.sync()
+
+    def _load_persisted_gamebar_original_value(self) -> Optional[int]:
+        """QSettings에 저장된 Game Bar 원래 값을 로드합니다."""
+        value = self._settings.value(self._gamebar_original_value_key)
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning("저장된 Game Bar 원래 값이 잘못되었습니다: %r", value)
+            self._settings.remove(self._gamebar_original_value_key)
+            self._settings.sync()
+            return None
+
+    def _recover_gamebar_setting_if_needed(self) -> None:
+        """이전 비정상 종료로 남은 Game Bar 설정이 있으면 앱 시작 시 복원합니다."""
+        if self._gamebar_original_value is not None:
+            return
+        persisted_value = self._load_persisted_gamebar_original_value()
+        if persisted_value is None:
+            return
+        self._gamebar_original_value = persisted_value
+        logger.info("이전 세션의 Game Bar 설정을 복원합니다.")
+        self._restore_gamebar_setting()
+
+    def _set_gamebar_capture(self, enabled: bool) -> None:
+        """Game Bar 스크린샷 캡처 활성화 여부를 레지스트리로 제어합니다."""
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE
+            ) as key:
+                if self._gamebar_original_value is None:
+                    try:
+                        val, _ = winreg.QueryValueEx(key, "AppCaptureEnabled")
+                        self._gamebar_original_value = int(val)
+                    except FileNotFoundError:
+                        self._gamebar_original_value = 1
+                    self._persist_gamebar_original_value()
+                winreg.SetValueEx(key, "AppCaptureEnabled", 0, winreg.REG_DWORD,
+                                  1 if enabled else 0)
+            logger.info("Game Bar AppCaptureEnabled → %d", 1 if enabled else 0)
+        except Exception as exc:
+            logger.warning("Game Bar 레지스트리 설정 실패: %s", exc, exc_info=True)
+
+    def _restore_gamebar_setting(self) -> None:
+        """Game Bar 설정을 원래 값으로 복원합니다."""
+        if self._gamebar_original_value is None:
+            self._gamebar_original_value = self._load_persisted_gamebar_original_value()
+            if self._gamebar_original_value is None:
+                return
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE
+            ) as key:
+                winreg.SetValueEx(key, "AppCaptureEnabled", 0, winreg.REG_DWORD,
+                                  self._gamebar_original_value)
+            logger.info("Game Bar AppCaptureEnabled 복원 → %d", self._gamebar_original_value)
+            self._gamebar_original_value = None
+            self._persist_gamebar_original_value()
+        except Exception as exc:
+            logger.warning("Game Bar 레지스트리 복원 실패: %s", exc, exc_info=True)
 
     # ─────────────────────────────
 
@@ -2268,37 +2530,3 @@ class MainWindow(QMainWindow):
 
         result = msg_box.exec()
         return result == QMessageBox.StandardButton.Yes
-
-    def open_label_studio_manager(self):
-        """Label Studio Helper 설치/관리 다이얼로그 표시"""
-        try:
-            from src.utils.lsh_installer import LabelStudioHelperDialog
-            
-            if LabelStudioHelperDialog is None:
-                QMessageBox.warning(
-                    self,
-                    "기능 없음",
-                    "Label Studio Helper 설치 도우미를 사용할 수 없습니다."
-                )
-                return
-            
-            dialog = LabelStudioHelperDialog(self)
-            dialog.exec()
-
-            status_bar = self.statusBar()
-            if status_bar:
-                status_bar.showMessage("Label Studio Helper 다이얼로그 닫힘", 2000)
-
-        except ImportError as e:
-            QMessageBox.critical(
-                self,
-                "모듈 로드 오류",
-                f"Label Studio Helper 설치 도우미를 로드할 수 없습니다:\n{str(e)}"
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "오류",
-                f"Label Studio Helper 다이얼로그 실행 실패:\n{e}"
-            )
-

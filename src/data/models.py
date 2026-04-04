@@ -61,8 +61,6 @@ class GlobalSettings(Base):
     run_on_startup = Column(Boolean, default=False)
     always_on_top = Column(Boolean, default=False)
     run_as_admin = Column(Boolean, default=False)
-    notify_on_launch_success = Column(Boolean, default=True)
-    notify_on_launch_failure = Column(Boolean, default=True)
     notify_on_mandatory_time = Column(Boolean, default=True)
     notify_on_cycle_deadline = Column(Boolean, default=True)
     notify_on_sleep_correction = Column(Boolean, default=True)
@@ -77,7 +75,8 @@ class GlobalSettings(Base):
 
     # 사이드바
     sidebar_enabled = Column(Boolean, default=True)
-    sidebar_auto_hide_sec = Column(Integer, default=3)
+    sidebar_auto_hide_ms = Column(Integer, default=3000)
+    sidebar_edge_width_px = Column(Integer, default=2)
     sidebar_height_ratio = Column(Float, default=1.0)
     sidebar_opacity = Column(Float, default=0.85)
     sidebar_clock_enabled = Column(Boolean, default=True)
@@ -85,6 +84,23 @@ class GlobalSettings(Base):
     sidebar_playtime_enabled = Column(Boolean, default=True)
     sidebar_playtime_prefix = Column(String, default="오늘 플레이 시간")
     sidebar_volume_section_enabled = Column(Boolean, default=True)
+    # 스크린샷 설정
+    screenshot_enabled = Column(Boolean, default=True)
+    screenshot_save_dir = Column(String, default="")
+    screenshot_gamepad_trigger = Column(Boolean, default=True)
+    screenshot_disable_gamebar = Column(Boolean, default=False)
+    screenshot_capture_mode = Column(String, default="fullscreen")
+    screenshot_gamepad_button_index = Column(Integer, default=-1)
+    # Recording (OBS)
+    recording_enabled = Column(Boolean, default=False)
+    obs_host = Column(String, default="localhost")
+    obs_port = Column(Integer, default=4455)
+    obs_password = Column(String, default="")
+    obs_exe_path = Column(String, default="")
+    obs_auto_launch = Column(Boolean, default=False)
+    obs_launch_hidden = Column(Boolean, default=True)
+    obs_watch_output_dir = Column(Boolean, default=True)
+    recording_hold_threshold_ms = Column(Integer, default=800)
 
 
 class ProcessSession(Base):
