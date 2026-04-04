@@ -163,8 +163,10 @@ class MainWindow(QMainWindow):
 
         # 스크린샷 매니저
         from src.screenshot import ScreenshotManager
+        gs = getattr(self.data_manager, 'global_settings', None)
         self._screenshot_manager = ScreenshotManager(
             get_target_hwnd=self._get_screenshot_target_hwnd,
+            long_press_threshold_ms=getattr(gs, 'recording_hold_threshold_ms', 800),
         )
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
         self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)

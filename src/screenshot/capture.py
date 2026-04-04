@@ -209,8 +209,7 @@ def _save_as_png(bmp, width: int, height: int, save_path: Path) -> str:
         try:
             _write_png_stdlib(width, height, bytes(raw), save_path)
         except Exception as exc:
-            logger.error("stdlib PNG 저장 실패: %s", exc)
-            raise
+            raise IOError(f"PNG 저장 실패: {save_path}") from exc
     return str(save_path)
 
 

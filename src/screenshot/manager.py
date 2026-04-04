@@ -27,11 +27,13 @@ class ScreenshotManager:
         self,
         save_dir: Optional[str] = None,
         get_target_hwnd: Optional[Callable[[], Optional[int]]] = None,
+        long_press_threshold_ms: int = 800,
     ):
         """
         Args:
             save_dir: 스크린샷 저장 디렉터리.
             get_target_hwnd: 게임 창 모드 캡처 시 대상 HWND 반환 콜백.
+            long_press_threshold_ms: 롱프레스(녹화 토글) 판정 임계값.
         """
         self._save_dir = save_dir
         self._get_target_hwnd = get_target_hwnd
@@ -44,6 +46,7 @@ class ScreenshotManager:
             on_screenshot=self._on_trigger,
             on_long_press=self._on_long_press_trigger,
         )
+        self.set_long_press_threshold(long_press_threshold_ms)
 
     # ── 공개 API ────────────────────────────────────────────────
 

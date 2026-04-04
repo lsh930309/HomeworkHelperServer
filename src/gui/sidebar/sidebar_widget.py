@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
-    Qt, QPropertyAnimation, QEasingCurve, QRect, QTimer,
-    QRunnable, QThreadPool, pyqtSlot,
+    Qt, QObject, QPropertyAnimation, QEasingCurve, QRect, QTimer,
+    QRunnable, QThreadPool, pyqtSignal, pyqtSlot,
 )
-from PyQt6.QtGui import QScreen, QColor
+from PyQt6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
@@ -37,6 +37,41 @@ _THUMB_W = 76
 _THUMB_H = 57
 _THUMB_COLS = 3
 _THUMB_MAX_CELLS = _THUMB_COLS * 3  # 최대 9셀 (마지막 1셀은 폴더 버튼)
+
+
+class _ThumbnailLoadSignals(QObject):
+    loaded = pyqtSignal(int, str, object)
+
+
+class _ThumbnailLoadTask(QRunnable):
+    def __init__(self, request_id: int, path: str, signals: _ThumbnailLoadSignals):
+        super().__init__()
+        self._request_id = request_id
+        self._path = path
+        self._signals = signals
+
+    @staticmethod
+    def _build_thumbnail(path: str) -> Optional[QImage]:
+        image = QImage(path)
+        if image.isNull():
+            return None
+        scaled = image.scaled(
+            _THUMB_W,
+            _THUMB_H,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x_off = max(0, (scaled.width() - _THUMB_W) // 2)
+        y_off = max(0, (scaled.height() - _THUMB_H) // 2)
+        return scaled.copy(x_off, y_off, _THUMB_W, _THUMB_H)
+
+    def run(self) -> None:
+        try:
+            image = self._build_thumbnail(self._path)
+        except Exception:
+            logger.exception("썸네일 로드 실패: %s", self._path)
+            image = None
+        self._signals.loaded.emit(self._request_id, self._path, image)
 
 
 def _tint_icon_white(icon) -> "QIcon":
@@ -119,6 +154,7 @@ class SidebarWidget(QWidget):
         data_manager,
         auto_hide_ms: int = _DEFAULT_AUTO_HIDE_MS,
         screen: Optional[QScreen] = None,
+        stop_recording: Optional[Callable[[], None]] = None,
         reconnect_recording: Optional[Callable[[], None]] = None,
         get_recording_error: Optional[Callable[[], str]] = None,
         get_recording_elapsed: Optional[Callable[[], int]] = None,
@@ -133,12 +169,17 @@ class SidebarWidget(QWidget):
         self._data_manager = data_manager
         self._auto_hide_ms = auto_hide_ms
         self._is_shown = False
+        self._stop_recording_callback = stop_recording
         self._reconnect_recording = reconnect_recording
         self._get_recording_error = get_recording_error
         self._get_recording_elapsed = get_recording_elapsed
+        self._rec_state = "obs_offline"
+        self._rec_elapsed_sec = 0
 
         # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
         self._playtime_labels: dict = {}
+        self._thumb_buttons: dict[str, QPushButton] = {}
+        self._thumb_request_id = 0
 
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -182,6 +223,11 @@ class SidebarWidget(QWidget):
         self._clock_timer.setInterval(1000)
         self._clock_timer.timeout.connect(self._update_clock)
 
+        # 녹화 상태 갱신 타이머 (1초)
+        self._rec_timer = QTimer(self)
+        self._rec_timer.setInterval(1000)
+        self._rec_timer.timeout.connect(self._update_rec_timer)
+
         # 커서 위치 폴링 타이머 (200ms) — leaveEvent 오탐 방지
         self._cursor_poll_timer = QTimer(self)
         self._cursor_poll_timer.setInterval(200)
@@ -191,6 +237,12 @@ class SidebarWidget(QWidget):
         self._volume_save_timers: dict = {}
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
+
+        # 썸네일 디코딩용 스레드풀
+        self._thumb_pool = QThreadPool(self)
+        self._thumb_pool.setMaxThreadCount(2)
+        self._thumb_signals = _ThumbnailLoadSignals(self)
+        self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
 
         # Win32 외부 클릭 감지 상태
         self._lbutton_was_down: bool = False
@@ -958,16 +1010,6 @@ class SidebarWidget(QWidget):
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
 
-        # 녹화 상태
-        self._rec_state = "obs_offline"
-        self._rec_elapsed_sec = 0
-        self._stop_recording_callback = None
-
-        # 녹화 타이머 (1초)
-        self._rec_timer = QTimer(self)
-        self._rec_timer.setInterval(1000)
-        self._rec_timer.timeout.connect(self._update_rec_timer)
-
         return section
 
     def set_on_stop_recording(self, fn) -> None:
@@ -1058,6 +1100,10 @@ class SidebarWidget(QWidget):
     @pyqtSlot()
     def _refresh_screenshot_thumbnails(self) -> None:
         """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
+        self._thumb_request_id += 1
+        request_id = self._thumb_request_id
+        self._thumb_buttons = {}
+
         # 그리드 초기화
         while self._thumb_grid_layout.count():
             item = self._thumb_grid_layout.takeAt(0)
@@ -1094,7 +1140,7 @@ class SidebarWidget(QWidget):
         # 썸네일 셀 추가
         for idx, fp in enumerate(shown):
             row, col = divmod(idx, _THUMB_COLS)
-            cell = self._make_thumb_cell(fp)
+            cell = self._make_thumb_cell(fp, request_id)
             self._thumb_grid_layout.addWidget(cell, row, col)
 
         # 폴더 버튼 (마지막 셀)
@@ -1125,10 +1171,8 @@ class SidebarWidget(QWidget):
         row, col = divmod(next_idx, _THUMB_COLS)
         self._thumb_grid_layout.addWidget(folder_btn, row, col)
 
-    def _make_thumb_cell(self, filepath) -> QPushButton:
+    def _make_thumb_cell(self, filepath, request_id: int) -> QPushButton:
         """썸네일 셀 QPushButton을 반환합니다."""
-        from PyQt6.QtGui import QPixmap, QIcon
-        from PyQt6.QtCore import Qt as _Qt
         btn = QPushButton()
         btn.setFixedSize(_THUMB_W, _THUMB_H)
         btn.setToolTip(str(filepath.name))
@@ -1141,27 +1185,30 @@ class SidebarWidget(QWidget):
             }
             QPushButton:hover { border-color: rgba(100,160,255,180); }
         """)
-        # 썸네일 로드 (동기, 작은 파일이므로 허용)
-        try:
-            pixmap = QPixmap(str(filepath))
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    _THUMB_W, _THUMB_H,
-                    _Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    _Qt.TransformationMode.SmoothTransformation,
-                )
-                x_off = (scaled.width() - _THUMB_W) // 2
-                y_off = (scaled.height() - _THUMB_H) // 2
-                cropped = scaled.copy(x_off, y_off, _THUMB_W, _THUMB_H)
-                btn.setIcon(QIcon(cropped))
-                btn.setIconSize(cropped.size())
-        except Exception:
-            logger.exception("썸네일 로드 실패: %s", filepath)
+        path_str = str(filepath)
+        self._thumb_buttons[path_str] = btn
+        self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
         _fp = filepath
         btn.clicked.connect(
             lambda _checked=False, p=_fp: __import__('os').startfile(str(p))
         )
         return btn
+
+    @pyqtSlot(int, str, object)
+    def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
+        if request_id != self._thumb_request_id:
+            return
+        btn = self._thumb_buttons.get(filepath)
+        if btn is None or image is None:
+            return
+        try:
+            pixmap = QPixmap.fromImage(image)
+            if pixmap.isNull():
+                return
+            btn.setIcon(QIcon(pixmap))
+            btn.setIconSize(pixmap.size())
+        except Exception:
+            logger.exception("썸네일 적용 실패: %s", filepath)
 
     def _on_capture_now_clicked(self) -> None:
         """'지금 촬영' 버튼 클릭 핸들러."""

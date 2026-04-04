@@ -233,11 +233,11 @@ class SidebarController:
                 data_manager=self._data_manager,
                 auto_hide_ms=auto_hide_ms,
                 screen=screen,
+                stop_recording=self._on_stop_recording,
                 reconnect_recording=self._on_reconnect_recording,
                 get_recording_error=self._get_recording_error,
                 get_recording_elapsed=self._get_recording_elapsed_sec,
             )
-            self.set_recording_callbacks()
         else:
             # 설정 갱신
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
