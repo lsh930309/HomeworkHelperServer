@@ -64,6 +64,7 @@ class HoYoLabService:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client_lock = threading.RLock()
         self._request_lock = threading.Lock()
+        self._closed = False
     
     def is_available(self) -> bool:
         """genshin.py 라이브러리가 사용 가능한지 확인"""
@@ -75,6 +76,10 @@ class HoYoLabService:
     
     def _get_client_unlocked(self) -> Optional["genshin.Client"]:
         """락을 보유한 상태에서 genshin.py 클라이언트를 준비합니다."""
+        if self._closed:
+            logger.debug("닫힌 HoYoLab 서비스에서 클라이언트 생성을 건너뜁니다.")
+            return None
+
         if not GENSHIN_AVAILABLE:
             logger.warning("genshin.py 라이브러리가 설치되지 않았습니다.")
             return None
@@ -148,6 +153,9 @@ class HoYoLabService:
 
         try:
             with self._request_lock:
+                if self._closed:
+                    logger.debug("닫힌 HoYoLab 서비스에서 스타레일 요청을 건너뜁니다.")
+                    return None
                 return self._run_async(self._async_get_starrail_stamina(client))
         except Exception as e:
             logger.error(f"스타레일 스태미나 조회 실패: {e}")
@@ -192,6 +200,9 @@ class HoYoLabService:
 
         try:
             with self._request_lock:
+                if self._closed:
+                    logger.debug("닫힌 HoYoLab 서비스에서 ZZZ 요청을 건너뜁니다.")
+                    return None
                 return self._run_async(self._async_get_zzz_stamina(client))
         except Exception as e:
             logger.error(f"ZZZ 배터리 조회 실패: {e}")
@@ -231,6 +242,7 @@ class HoYoLabService:
     def close(self) -> None:
         """클라이언트 연결 종료"""
         with self._client_lock:
+            self._closed = True
             client = self._client
             self._client = None
 
