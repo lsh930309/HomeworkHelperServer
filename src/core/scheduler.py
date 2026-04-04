@@ -395,7 +395,9 @@ class Scheduler:
         current_statuses = self.build_visual_status_snapshot()
         if not self._last_visual_statuses:
             self._last_visual_statuses = current_statuses
-            return False
+            if self.status_change_callback:
+                self.status_change_callback()
+            return True
 
         if self._last_visual_statuses != current_statuses:
             # 상태 변경 시 콜백 함수 호출
@@ -404,7 +406,6 @@ class Scheduler:
                 self.status_change_callback()
             return True # 상태 변경됨
 
-        self._last_visual_statuses = current_statuses
         return False # 상태 변경 없음
 
 def example_global_on_click_handler(received_task_id: Optional[str]):

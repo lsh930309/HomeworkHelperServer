@@ -300,8 +300,12 @@ class MainWindow(QMainWindow):
         self.request_table_refresh_signal.connect(self.populate_process_list_slot) # 테이블 새로고침 시그널 연결
         self._last_timer_tick = time.time()  # 절전 복귀 감지용 마지막 타이머 틱 시간
         self._ui_refresh_tick_count = 0
-        self.monitor_timer = QTimer(self); self.monitor_timer.timeout.connect(self._on_monitor_timer_tick); self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
-        self.scheduler_timer = QTimer(self); self.scheduler_timer.timeout.connect(self.run_scheduler_check); self.scheduler_timer.start(1000) # 스케줄러 타이머 (1초)
+        self.monitor_timer = QTimer(self)
+        self.monitor_timer.timeout.connect(self._on_monitor_timer_tick)
+        self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
+        self.scheduler_timer = QTimer(self)
+        self.scheduler_timer.timeout.connect(self.run_scheduler_check)
+        self.scheduler_timer.start(1000) # 스케줄러 타이머 (1초)
 
         # 메인 GUI 표시 갱신 타이머
         self.ui_refresh_timer = QTimer(self)
@@ -2277,7 +2281,7 @@ class MainWindow(QMainWindow):
     def _progress_bar_value(self, percentage: float) -> int:
         """진행률 백분율을 ProgressBar 내부 값으로 변환합니다."""
         clamped = max(0.0, min(percentage, 100.0))
-        return int(round(clamped * self._PROGRESS_BAR_SCALE))
+        return round(clamped * self._PROGRESS_BAR_SCALE)
 
     def _progress_color_bucket(self, percentage: float) -> int:
         """진행률에 따른 색상 구간을 반환합니다."""
@@ -2425,8 +2429,13 @@ class MainWindow(QMainWindow):
                 parts = time_str.split(":")
                 if len(parts) >= 3:
                     return parts[2]
-            except Exception:
-                pass
+            except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "ProgressBar 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
+                    time_str,
+                    percentage,
+                    exc,
+                )
         return f"{percentage:.1f}%"
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:

@@ -64,6 +64,8 @@ class _StaminaFetchTask(QRunnable):
                     payload["fetched_at"] = stamina.updated_at.timestamp()
             else:
                 payload["error"] = "service unavailable or not configured"
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:
             payload["error"] = str(exc)
             logger.warning(
