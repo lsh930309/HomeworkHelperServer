@@ -63,6 +63,7 @@ class HoYoLabService:
         self._client: Optional["genshin.Client"] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client_lock = threading.RLock()
+        self._request_lock = threading.Lock()
     
     def is_available(self) -> bool:
         """genshin.py 라이브러리가 사용 가능한지 확인"""
@@ -145,11 +146,12 @@ class HoYoLabService:
             if not client:
                 return None
 
-            try:
+        try:
+            with self._request_lock:
                 return self._run_async(self._async_get_starrail_stamina(client))
-            except Exception as e:
-                logger.error(f"스타레일 스태미나 조회 실패: {e}")
-                return None
+        except Exception as e:
+            logger.error(f"스타레일 스태미나 조회 실패: {e}")
+            return None
     
     async def _async_get_starrail_stamina(self, client: "genshin.Client") -> Optional[StaminaInfo]:
         """스타레일 스태미나 비동기 조회"""
@@ -188,11 +190,12 @@ class HoYoLabService:
             if not client:
                 return None
 
-            try:
+        try:
+            with self._request_lock:
                 return self._run_async(self._async_get_zzz_stamina(client))
-            except Exception as e:
-                logger.error(f"ZZZ 배터리 조회 실패: {e}")
-                return None
+        except Exception as e:
+            logger.error(f"ZZZ 배터리 조회 실패: {e}")
+            return None
     
     async def _async_get_zzz_stamina(self, client: "genshin.Client") -> Optional[StaminaInfo]:
         """ZZZ 배터리 비동기 조회"""
@@ -228,13 +231,16 @@ class HoYoLabService:
     def close(self) -> None:
         """클라이언트 연결 종료"""
         with self._client_lock:
-            if self._client:
-                try:
-                    self._run_async(self._client.close())
-                except Exception as exc:
-                    logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
-                self._client = None
-                logger.info("HoYoLab 클라이언트 연결 종료")
+            client = self._client
+            self._client = None
+
+        if client:
+            try:
+                with self._request_lock:
+                    self._run_async(client.close())
+            except Exception as exc:
+                logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
+            logger.info("HoYoLab 클라이언트 연결 종료")
 
 
 # 전역 서비스 인스턴스 (싱글톤)
