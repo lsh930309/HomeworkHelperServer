@@ -72,29 +72,33 @@ class HoYoLabService:
         """HoYoLab 인증 정보가 설정되어 있는지 확인"""
         return self._config.is_configured()
     
+    def _get_client_unlocked(self) -> Optional["genshin.Client"]:
+        """락을 보유한 상태에서 genshin.py 클라이언트를 준비합니다."""
+        if not GENSHIN_AVAILABLE:
+            logger.warning("genshin.py 라이브러리가 설치되지 않았습니다.")
+            return None
+
+        if self._client is None:
+            credentials = self._config.load_credentials()
+            if not credentials:
+                logger.warning("HoYoLab 인증 정보가 없습니다.")
+                return None
+
+            cookies = {
+                "ltuid_v2": str(credentials.get("ltuid", "")),
+                "ltoken_v2": credentials.get("ltoken_v2", ""),
+                "ltmid_v2": credentials.get("ltmid_v2", ""),
+            }
+
+            self._client = genshin.Client(cookies=cookies)
+            logger.info("HoYoLab 클라이언트 초기화 완료")
+
+        return self._client
+
     def _get_client(self) -> Optional["genshin.Client"]:
         """genshin.py 클라이언트 인스턴스 반환 (lazy initialization)"""
         with self._client_lock:
-            if not GENSHIN_AVAILABLE:
-                logger.warning("genshin.py 라이브러리가 설치되지 않았습니다.")
-                return None
-
-            if self._client is None:
-                credentials = self._config.load_credentials()
-                if not credentials:
-                    logger.warning("HoYoLab 인증 정보가 없습니다.")
-                    return None
-
-                cookies = {
-                    "ltuid_v2": str(credentials.get("ltuid", "")),
-                    "ltoken_v2": credentials.get("ltoken_v2", ""),
-                    "ltmid_v2": credentials.get("ltmid_v2", ""),
-                }
-
-                self._client = genshin.Client(cookies=cookies)
-                logger.info("HoYoLab 클라이언트 초기화 완료")
-
-            return self._client
+            return self._get_client_unlocked()
     
     def _run_async(self, coro):
         """비동기 코루틴을 동기적으로 실행
@@ -137,7 +141,7 @@ class HoYoLabService:
     def get_starrail_stamina(self) -> Optional[StaminaInfo]:
         """붕괴: 스타레일 개척력 정보 조회"""
         with self._client_lock:
-            client = self._get_client()
+            client = self._get_client_unlocked()
             if not client:
                 return None
 
@@ -180,7 +184,7 @@ class HoYoLabService:
     def get_zzz_stamina(self) -> Optional[StaminaInfo]:
         """젠레스 존 제로 배터리 정보 조회"""
         with self._client_lock:
-            client = self._get_client()
+            client = self._get_client_unlocked()
             if not client:
                 return None
 
@@ -227,8 +231,8 @@ class HoYoLabService:
             if self._client:
                 try:
                     self._run_async(self._client.close())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
                 self._client = None
                 logger.info("HoYoLab 클라이언트 연결 종료")
 
