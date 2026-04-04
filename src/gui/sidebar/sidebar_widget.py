@@ -121,6 +121,7 @@ class SidebarWidget(QWidget):
         screen: Optional[QScreen] = None,
         reconnect_recording: Optional[Callable[[], None]] = None,
         get_recording_error: Optional[Callable[[], str]] = None,
+        get_recording_elapsed: Optional[Callable[[], int]] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(
@@ -134,6 +135,7 @@ class SidebarWidget(QWidget):
         self._is_shown = False
         self._reconnect_recording = reconnect_recording
         self._get_recording_error = get_recording_error
+        self._get_recording_elapsed = get_recording_elapsed
 
         # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
         self._playtime_labels: dict = {}
@@ -980,10 +982,14 @@ class SidebarWidget(QWidget):
         """최근 녹화 연결 오류 메시지를 제공하는 콜백을 등록합니다."""
         self._get_recording_error = fn
 
+    def set_recording_elapsed_provider(self, fn: Optional[Callable[[], int]]) -> None:
+        """현재 녹화 경과 시간을 초 단위로 제공하는 콜백을 등록합니다."""
+        self._get_recording_elapsed = fn
+
     def on_recording_state_changed(self, state: str) -> None:
         """MainWindow에서 호출하는 슬롯. state: 'idle'|'recording'|'connecting'|'obs_offline'"""
         self._rec_state = state
-        if state == "recording":
+        if state != "recording":
             self._rec_elapsed_sec = 0
         self._update_rec_ui()
 
@@ -991,6 +997,9 @@ class SidebarWidget(QWidget):
         state = getattr(self, '_rec_state', 'obs_offline')
         elapsed = getattr(self, '_rec_elapsed_sec', 0)
         if state == "recording":
+            if self._get_recording_elapsed:
+                elapsed = max(0, int(self._get_recording_elapsed()))
+                self._rec_elapsed_sec = elapsed
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
             self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
@@ -1018,9 +1027,8 @@ class SidebarWidget(QWidget):
             self._rec_connect_btn.setToolTip(err if err else "")
 
     def _update_rec_timer(self) -> None:
-        """1초 tick. recording 상태일 때만 elapsed 증가."""
+        """1초 tick. recording 상태일 때 표시 시간을 갱신."""
         if getattr(self, '_rec_state', '') == "recording":
-            self._rec_elapsed_sec = getattr(self, '_rec_elapsed_sec', 0) + 1
             self._update_rec_ui()
 
     def _on_rec_stop_clicked(self) -> None:
@@ -1037,6 +1045,7 @@ class SidebarWidget(QWidget):
         gs = getattr(self._data_manager, 'global_settings', None)
         enabled = getattr(gs, 'recording_enabled', False) if gs else False
         self._recording_section.setVisible(enabled)
+        self._update_rec_ui()
 
     def _refresh_screenshot_section(self) -> None:
         """스크린샷 섹션 표시 여부를 설정에 따라 갱신합니다."""

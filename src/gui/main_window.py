@@ -133,9 +133,11 @@ class MainWindow(QMainWindow):
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
+        self._mute_retry_tokens: dict[str, int] = {}
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
+        self._recover_gamebar_setting_if_needed()
 
         self._set_window_icon() # 창 아이콘 설정
         self.tray_manager = TrayManager(self) # 트레이 아이콘 관리자 생성
@@ -166,7 +168,7 @@ class MainWindow(QMainWindow):
         )
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
         self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)
-        self._apply_screenshot_settings()
+        self._apply_screenshot_settings(sync_runtime=False)
 
         # 녹화 매니저
         from src.recording import RecordingManager
@@ -178,6 +180,7 @@ class MainWindow(QMainWindow):
             on_stop=self._recording_manager.stop_recording,
             on_reconnect=self._recording_manager.reconnect,
             get_last_error=self._recording_manager.get_last_error,
+            get_elapsed_sec=self._recording_manager.get_elapsed_sec,
         )
         self._apply_recording_settings()
 
@@ -1833,6 +1836,7 @@ class MainWindow(QMainWindow):
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
         if not pid:
             self._volume_applied_pids.pop(process.id, None)
+            self._mute_retry_tokens.pop(process.id, None)
             return
 
         default_volume = getattr(process, "default_volume", None)
@@ -1843,21 +1847,42 @@ class MainWindow(QMainWindow):
 
         # default_muted 적용 (default_volume 미설정이어도 항상 적용)
         # 게임 시작 직후 오디오 세션이 없을 수 있으므로 실패 시 재시도
+        process_id = process.id
         default_muted = getattr(process, "default_muted", False)
+        retry_token = self._mute_retry_tokens.get(process_id, 0) + 1
+        self._mute_retry_tokens[process_id] = retry_token
         if not audio_control.set_mute(pid, default_muted):
             from PyQt6.QtCore import QTimer
             remaining_delays = [1000, 3000, 5000]
 
-            def try_set_mute(target_pid: int, muted: bool, delays: list[int]) -> None:
+            def get_current_default_muted() -> Optional[bool]:
+                for managed in getattr(self.data_manager, "managed_processes", []):
+                    if managed.id == process_id:
+                        return getattr(managed, "default_muted", False)
+                return None
+
+            def try_set_mute(
+                target_pid: int,
+                muted: bool,
+                delays: list[int],
+                token: int,
+            ) -> None:
+                if self._mute_retry_tokens.get(process_id) != token:
+                    return
+                if self._get_active_pid(process_id) != target_pid:
+                    return
+                current_muted = get_current_default_muted()
+                if current_muted is None or current_muted != muted:
+                    return
                 if audio_control.set_mute(target_pid, muted) or not delays:
                     return
                 next_delay = delays[0]
                 QTimer.singleShot(
                     next_delay,
-                    lambda p=target_pid, m=muted, d=delays[1:]: try_set_mute(p, m, d),
+                    lambda p=target_pid, m=muted, d=delays[1:], t=token: try_set_mute(p, m, d, t),
                 )
 
-            try_set_mute(pid, default_muted, remaining_delays)
+            try_set_mute(pid, default_muted, remaining_delays, retry_token)
 
     # ── 스크린샷 ────────────────────────────────────────────────
 
@@ -1900,7 +1925,7 @@ class MainWindow(QMainWindow):
                     return proc.name
         return ""
 
-    def _apply_screenshot_settings(self) -> None:
+    def _apply_screenshot_settings(self, *, sync_runtime: bool = True) -> None:
         """GlobalSettings의 스크린샷 설정을 ScreenshotManager에 반영합니다."""
         gs = getattr(self.data_manager, 'global_settings', None)
         if gs is None or self._screenshot_manager is None:
@@ -1917,6 +1942,8 @@ class MainWindow(QMainWindow):
             self._set_gamebar_capture(False)
         else:
             self._restore_gamebar_setting()
+        if sync_runtime:
+            self._sync_screenshot_manager_state(gs)
 
     def _apply_recording_settings(self) -> None:
         """GlobalSettings의 녹화 설정을 RecordingManager에 반영합니다."""
@@ -1936,16 +1963,28 @@ class MainWindow(QMainWindow):
             self._sidebar_controller.dispatch_recording_state(state)
 
     def _start_screenshot_manager(self) -> None:
-        """게임 실행 시 스크린샷 매니저를 시작합니다."""
-        gs = getattr(self.data_manager, 'global_settings', None)
+        """현재 설정 기준으로 스크린샷 매니저 상태를 동기화합니다."""
+        if self._screenshot_manager is None:
+            return
+        self._apply_screenshot_settings(sync_runtime=True)
+
+    def _sync_screenshot_manager_state(self, gs: Optional[GlobalSettings] = None) -> None:
+        """스크린샷 훅의 런타임 시작/중지 상태를 현재 설정과 맞춥니다."""
+        if self._screenshot_manager is None:
+            return
         if gs is None:
+            gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None:
+            self._screenshot_manager.stop()
             return
-        if not getattr(gs, 'screenshot_enabled', True):
-            return
-        if not getattr(gs, 'screenshot_gamepad_trigger', True):
-            return
-        self._apply_screenshot_settings()
-        self._screenshot_manager.start()
+        should_run = bool(
+            getattr(gs, 'screenshot_enabled', True)
+            and getattr(gs, 'screenshot_gamepad_trigger', True)
+        )
+        if should_run:
+            self._screenshot_manager.start()
+        else:
+            self._screenshot_manager.stop()
 
     def _on_screenshot_captured(self, path: str) -> None:
         """캡처 완료 콜백 — 사이드바 썸네일 갱신."""
@@ -1954,6 +1993,39 @@ class MainWindow(QMainWindow):
             self._sidebar_controller.notify_screenshot_captured(path)
 
     _gamebar_original_value: Optional[int] = None
+    _gamebar_original_value_key = "system/gamebar_original_value"
+
+    def _persist_gamebar_original_value(self) -> None:
+        """Game Bar 원래 값을 QSettings에 저장하거나 제거합니다."""
+        if self._gamebar_original_value is None:
+            self._settings.remove(self._gamebar_original_value_key)
+        else:
+            self._settings.setValue(self._gamebar_original_value_key, self._gamebar_original_value)
+        self._settings.sync()
+
+    def _load_persisted_gamebar_original_value(self) -> Optional[int]:
+        """QSettings에 저장된 Game Bar 원래 값을 로드합니다."""
+        value = self._settings.value(self._gamebar_original_value_key)
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning("저장된 Game Bar 원래 값이 잘못되었습니다: %r", value)
+            self._settings.remove(self._gamebar_original_value_key)
+            self._settings.sync()
+            return None
+
+    def _recover_gamebar_setting_if_needed(self) -> None:
+        """이전 비정상 종료로 남은 Game Bar 설정이 있으면 앱 시작 시 복원합니다."""
+        if self._gamebar_original_value is not None:
+            return
+        persisted_value = self._load_persisted_gamebar_original_value()
+        if persisted_value is None:
+            return
+        self._gamebar_original_value = persisted_value
+        logger.info("이전 세션의 Game Bar 설정을 복원합니다.")
+        self._restore_gamebar_setting()
 
     def _set_gamebar_capture(self, enabled: bool) -> None:
         """Game Bar 스크린샷 캡처 활성화 여부를 레지스트리로 제어합니다."""
@@ -1969,6 +2041,7 @@ class MainWindow(QMainWindow):
                         self._gamebar_original_value = int(val)
                     except FileNotFoundError:
                         self._gamebar_original_value = 1
+                    self._persist_gamebar_original_value()
                 winreg.SetValueEx(key, "AppCaptureEnabled", 0, winreg.REG_DWORD,
                                   1 if enabled else 0)
             logger.info("Game Bar AppCaptureEnabled → %d", 1 if enabled else 0)
@@ -1978,7 +2051,9 @@ class MainWindow(QMainWindow):
     def _restore_gamebar_setting(self) -> None:
         """Game Bar 설정을 원래 값으로 복원합니다."""
         if self._gamebar_original_value is None:
-            return
+            self._gamebar_original_value = self._load_persisted_gamebar_original_value()
+            if self._gamebar_original_value is None:
+                return
         try:
             import winreg
             key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
@@ -1989,6 +2064,7 @@ class MainWindow(QMainWindow):
                                   self._gamebar_original_value)
             logger.info("Game Bar AppCaptureEnabled 복원 → %d", self._gamebar_original_value)
             self._gamebar_original_value = None
+            self._persist_gamebar_original_value()
         except Exception as exc:
             logger.warning("Game Bar 레지스트리 복원 실패: %s", exc, exc_info=True)
 
@@ -2452,5 +2528,3 @@ class MainWindow(QMainWindow):
 
         result = msg_box.exec()
         return result == QMessageBox.StandardButton.Yes
-
-

@@ -53,6 +53,7 @@ class SidebarController:
         self._on_stop_recording: Optional[Callable[[], None]] = None
         self._on_reconnect_recording: Optional[Callable[[], None]] = None
         self._get_recording_error: Optional[Callable[[], str]] = None
+        self._get_recording_elapsed_sec: Optional[Callable[[], int]] = None
 
         # 지연 생성 (화면 정보가 필요하므로 QApplication 초기화 이후)
         self._trigger: Optional[EdgeTriggerWindow] = None
@@ -147,6 +148,7 @@ class SidebarController:
         on_stop: Optional[Callable[[], None]] = None,
         on_reconnect: Optional[Callable[[], None]] = None,
         get_last_error: Optional[Callable[[], str]] = None,
+        get_elapsed_sec: Optional[Callable[[], int]] = None,
     ) -> None:
         """사이드바 녹화 제어 콜백을 주입합니다."""
         if on_stop is not None:
@@ -155,10 +157,13 @@ class SidebarController:
             self._on_reconnect_recording = on_reconnect
         if get_last_error is not None:
             self._get_recording_error = get_last_error
+        if get_elapsed_sec is not None:
+            self._get_recording_elapsed_sec = get_elapsed_sec
         if self._sidebar is not None:
             self._sidebar.set_on_stop_recording(self._on_stop_recording)
             self._sidebar.set_on_reconnect_recording(self._on_reconnect_recording)
             self._sidebar.set_recording_error_provider(self._get_recording_error)
+            self._sidebar.set_recording_elapsed_provider(self._get_recording_elapsed_sec)
 
     def dispatch_recording_state(self, state: str) -> None:
         """사이드바에 녹화 상태를 전달합니다."""
@@ -230,6 +235,7 @@ class SidebarController:
                 screen=screen,
                 reconnect_recording=self._on_reconnect_recording,
                 get_recording_error=self._get_recording_error,
+                get_recording_elapsed=self._get_recording_elapsed_sec,
             )
             self.set_recording_callbacks()
         else:
