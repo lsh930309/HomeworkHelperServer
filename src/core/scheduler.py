@@ -33,6 +33,7 @@ class Scheduler:
         self.daily_task_reminder_before_reset_hours: float = 1.0
         # 스태미나 알림 추적
         self.notified_stamina_full: Set[str] = set()  # 스태미나 알림을 보낸 프로세스 ID
+        self._last_visual_statuses: Dict[str, str] = {}
 
     def _get_time_from_str(self, time_str: str) -> Optional[datetime.time]:
         try:
@@ -147,6 +148,22 @@ class Scheduler:
             return PROC_STATE_INCOMPLETE
         else:
             return PROC_STATE_COMPLETED
+
+    def build_visual_status_snapshot(
+        self,
+        now_dt: Optional[datetime.datetime] = None,
+    ) -> Dict[str, str]:
+        """현재 시점의 프로세스별 시각적 상태 스냅샷을 생성합니다."""
+        current_dt = now_dt or datetime.datetime.now()
+        gs = self.data_manager.global_settings
+        return {
+            process.id: self.determine_process_visual_status(process, current_dt, gs)
+            for process in self.data_manager.managed_processes
+        }
+
+    def invalidate_visual_status_snapshot(self) -> None:
+        """다음 검사에서 상태 변경을 다시 계산하도록 캐시를 비웁니다."""
+        self._last_visual_statuses = {}
 
     def check_mandatory_times(self): # (send_notification에서 on_click_callback 제거된 버전)
         now = datetime.datetime.now()
@@ -365,11 +382,6 @@ class Scheduler:
 
     def run_all_checks(self) -> bool:
         """모든 스케줄러 검사를 실행하고, 프로세스 상태의 시각적 변경 여부를 반환합니다."""
-        initial_statuses = {
-            p.id: self.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings)
-            for p in self.data_manager.managed_processes
-        }
-
         # 주기적 로그 제거 (GUI 성능 개선)
         # current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # print(f"\n[{current_time_str}] 스케줄러 검사 실행...")
@@ -380,18 +392,19 @@ class Scheduler:
         self.check_stamina_notifications()  # 스태미나 알림 체크 추가
         # print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 스케줄러 검사 완료.")
 
-        # 검사 실행 후 상태를 다시 확인하여 변경 여부 감지
-        final_statuses = {
-            p.id: self.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings)
-            for p in self.data_manager.managed_processes
-        }
+        current_statuses = self.build_visual_status_snapshot()
+        if not self._last_visual_statuses:
+            self._last_visual_statuses = current_statuses
+            return False
 
-        if initial_statuses != final_statuses:
+        if self._last_visual_statuses != current_statuses:
             # 상태 변경 시 콜백 함수 호출
+            self._last_visual_statuses = current_statuses
             if self.status_change_callback:
                 self.status_change_callback()
             return True # 상태 변경됨
-        
+
+        self._last_visual_statuses = current_statuses
         return False # 상태 변경 없음
 
 def example_global_on_click_handler(received_task_id: Optional[str]):

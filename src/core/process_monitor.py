@@ -3,6 +3,7 @@ import psutil
 import time
 import os
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Protocol
 from src.data.data_models import ManagedProcess
@@ -31,6 +32,29 @@ class ProcessesDataPort(Protocol):
     def update_session_stamina(self, session_id: int, stamina_at_end: int) -> bool: ...
 
 
+@dataclass(frozen=True)
+class ProcessLifecycleEvent:
+    process_id: str
+    process_name: str
+    session_id: Optional[int]
+    timestamp: float
+    stamina_tracking_enabled: bool
+    hoyolab_game_id: Optional[str]
+    pid: Optional[int] = None
+    stamina_at_end: Optional[int] = None
+    stamina_max: Optional[int] = None
+
+    def is_hoyoverse_game(self) -> bool:
+        return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
+
+
+@dataclass(frozen=True)
+class ProcessMonitorTickResult:
+    changed: bool
+    started: List[ProcessLifecycleEvent] = field(default_factory=list)
+    stopped: List[ProcessLifecycleEvent] = field(default_factory=list)
+
+
 class ProcessMonitor:
     def __init__(self, data_manager: ProcessesDataPort):
         self.data_manager = data_manager
@@ -56,8 +80,10 @@ class ProcessMonitor:
         except Exception: 
             return path 
 
-    def check_and_update_statuses(self) -> bool:
+    def check_and_update_statuses(self) -> ProcessMonitorTickResult:
         changed_occurred = False 
+        started_events: List[ProcessLifecycleEvent] = []
+        stopped_events: List[ProcessLifecycleEvent] = []
         current_system_processes: Dict[Optional[str], List[psutil.Process]] = {}
         
         for proc in psutil.process_iter(['pid', 'name', 'exe', 'create_time']):
@@ -106,6 +132,17 @@ class ProcessMonitor:
                                 'start_time_approx': start_timestamp,
                                 'session_id': session.id if session else None
                             }
+                            started_events.append(
+                                ProcessLifecycleEvent(
+                                    process_id=managed_proc.id,
+                                    process_name=managed_proc.name,
+                                    session_id=session.id if session else None,
+                                    timestamp=start_timestamp,
+                                    stamina_tracking_enabled=managed_proc.stamina_tracking_enabled,
+                                    hoyolab_game_id=managed_proc.hoyolab_game_id,
+                                    pid=actual_process_instance.pid,
+                                )
+                            )
                             logger.info(f"Process STARTED: '{managed_proc.name}' (PID: {actual_process_instance.pid}, Session ID: {session.id if session else 'N/A'})")
                             changed_occurred = True # <<< 프로세스 시작 시에도 변경으로 간주
                         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
@@ -143,9 +180,25 @@ class ProcessMonitor:
                     if self.data_manager.update_process(managed_proc):
                          changed_occurred = True
 
+                    stopped_events.append(
+                        ProcessLifecycleEvent(
+                            process_id=managed_proc.id,
+                            process_name=managed_proc.name,
+                            session_id=session_id,
+                            timestamp=termination_time,
+                            stamina_tracking_enabled=managed_proc.stamina_tracking_enabled,
+                            hoyolab_game_id=managed_proc.hoyolab_game_id,
+                            stamina_at_end=stamina_at_end,
+                            stamina_max=managed_proc.stamina_max,
+                        )
+                    )
                     logger.info(f"Last played updated: {time.ctime(termination_time)}")
-        
-        return changed_occurred
+
+        return ProcessMonitorTickResult(
+            changed=changed_occurred,
+            started=started_events,
+            stopped=stopped_events,
+        )
 
     def _update_stamina_on_game_exit(self, process: ManagedProcess) -> Optional[int]:
         """게임 종료 시 HoYoLab에서 스태미나 정보 조회 및 저장
@@ -171,7 +224,7 @@ class ProcessMonitor:
             if stamina:
                 process.stamina_current = stamina.current
                 process.stamina_max = stamina.max
-                process.stamina_updated_at = time.time()
+                process.stamina_updated_at = stamina.updated_at.timestamp()
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 업데이트: {stamina.current}/{stamina.max}")
                 return stamina.current
             else:
@@ -225,7 +278,7 @@ class ProcessMonitor:
             if process.stamina_current is None or process.stamina_updated_at is None:
                 process.stamina_current = actual_current
                 process.stamina_max = stamina.max
-                process.stamina_updated_at = time.time()
+                process.stamina_updated_at = stamina.updated_at.timestamp()
                 self.data_manager.update_process(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
@@ -274,7 +327,7 @@ class ProcessMonitor:
             # 5. 현재 스태미나 정보 업데이트
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
-            process.stamina_updated_at = time.time()
+            process.stamina_updated_at = stamina.updated_at.timestamp()
             self.data_manager.update_process(process)
             _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 

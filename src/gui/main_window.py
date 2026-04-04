@@ -36,6 +36,7 @@ from src.utils.process import get_qicon_for_file
 from src.utils.windows import set_startup_shortcut, get_startup_shortcut_status
 from src.core.launcher import Launcher
 from src.core.notifier import Notifier
+from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
@@ -91,6 +92,10 @@ class MainWindow(QMainWindow):
     COL_LAUNCH_BTN = 3
     COL_STATUS = 4
     TOTAL_COLUMNS = 5 # 전체 컬럼 개수
+    _PROGRESS_BAR_SCALE = 10
+    _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
+    _UI_REFRESH_INTERVAL_MS = 1000
+    _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -108,6 +113,11 @@ class MainWindow(QMainWindow):
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
+        self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
+            self.data_manager,
+            self.process_monitor,
+            self,
+        )
 
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
         self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
@@ -117,8 +127,8 @@ class MainWindow(QMainWindow):
 
         self.scheduler = Scheduler(self.data_manager, self.system_notifier, self.process_monitor) # 스케줄러 객체 생성
 
-        # 스케줄러의 상태 변경 콜백 함수 설정
-        self.scheduler.status_change_callback = self._refresh_status_columns_immediate
+        # 메인 GUI는 별도 heartbeat에서 표시 갱신을 처리합니다.
+        self.scheduler.status_change_callback = None
 
         # 게임 프리셋 매니저 초기화
         self.preset_manager = GamePresetManager()
@@ -289,23 +299,15 @@ class MainWindow(QMainWindow):
         # 시그널 및 타이머 설정
         self.request_table_refresh_signal.connect(self.populate_process_list_slot) # 테이블 새로고침 시그널 연결
         self._last_timer_tick = time.time()  # 절전 복귀 감지용 마지막 타이머 틱 시간
+        self._ui_refresh_tick_count = 0
         self.monitor_timer = QTimer(self); self.monitor_timer.timeout.connect(self._on_monitor_timer_tick); self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
         self.scheduler_timer = QTimer(self); self.scheduler_timer.timeout.connect(self.run_scheduler_check); self.scheduler_timer.start(1000) # 스케줄러 타이머 (1초)
 
-        # 웹 버튼 상태 새로고침 타이머
-        self.web_button_refresh_timer = QTimer(self) # 웹 버튼 상태 새로고침 타이머
-        self.web_button_refresh_timer.timeout.connect(self._refresh_web_button_states) # 타이머 타임아웃 시그널 연결
-        self.web_button_refresh_timer.start(1000 * 60) # 1분마다 웹 버튼 상태 갱신 (1000ms * 60)
-
-        # 상태 컬럼 자동 업데이트 타이머
-        self.status_column_refresh_timer = QTimer(self) # 상태 컬럼 자동 업데이트 타이머
-        self.status_column_refresh_timer.timeout.connect(self._refresh_status_columns) # 타이머 타임아웃 시그널 연결
-        self.status_column_refresh_timer.start(1000 * 30) # 30초마다 상태 컬럼 갱신 (1000ms * 30)
-
-        # 프로그레스 바 실시간 갱신 타이머
-        self.progress_bar_refresh_timer = QTimer(self)
-        self.progress_bar_refresh_timer.timeout.connect(self._refresh_progress_bars)
-        self.progress_bar_refresh_timer.start(1000) # 1초마다 프로그레스 바 갱신
+        # 메인 GUI 표시 갱신 타이머
+        self.ui_refresh_timer = QTimer(self)
+        self.ui_refresh_timer.timeout.connect(self._on_ui_refresh_tick)
+        self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
+        QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
@@ -397,6 +399,21 @@ class MainWindow(QMainWindow):
 
         logger.info("절전 복귀 UI 갱신 완료")
 
+    def _on_ui_refresh_tick(self) -> None:
+        """메인 GUI의 동적 표시를 주기적으로 갱신합니다."""
+        start_time = time.time()
+        self._ui_refresh_tick_count += 1
+
+        self._refresh_status_columns()
+        self._refresh_progress_bars()
+
+        if self._ui_refresh_tick_count % self._WEB_BUTTON_REFRESH_INTERVAL_TICKS == 0:
+            self._refresh_web_button_states()
+
+        execution_time = (time.time() - start_time) * 1000
+        if execution_time > 100:
+            logger.warning(f"ui_refresh_timer 실행 시간 초과: {execution_time:.1f}ms")
+
     def _ensure_timers_running(self):
         """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
 
@@ -413,17 +430,9 @@ class MainWindow(QMainWindow):
             self.scheduler_timer.start(1000)
             timers_restarted.append('scheduler_timer')
 
-        if hasattr(self, 'status_column_refresh_timer') and not self.status_column_refresh_timer.isActive():
-            self.status_column_refresh_timer.start(1000 * 30)
-            timers_restarted.append('status_column_refresh_timer')
-
-        if hasattr(self, 'web_button_refresh_timer') and not self.web_button_refresh_timer.isActive():
-            self.web_button_refresh_timer.start(1000 * 60)
-            timers_restarted.append('web_button_refresh_timer')
-
-        if hasattr(self, 'progress_bar_refresh_timer') and not self.progress_bar_refresh_timer.isActive():
-            self.progress_bar_refresh_timer.start(1000)
-            timers_restarted.append('progress_bar_refresh_timer')
+        if hasattr(self, 'ui_refresh_timer') and not self.ui_refresh_timer.isActive():
+            self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
+            timers_restarted.append('ui_refresh_timer')
 
     def _restore_window_state(self):
         """절전 복귀 후 창 상태를 복원합니다.
@@ -775,9 +784,14 @@ class MainWindow(QMainWindow):
 
     def run_process_monitor_check(self):
         """실행 중인 프로세스를 확인하고 상태 변경 시 테이블을 새로고침합니다."""
-        status_changed = self.process_monitor.check_and_update_statuses() # 상태 변경 감지
+        monitor_result = self.process_monitor.check_and_update_statuses() # 상태 변경 감지
 
-        if status_changed:
+        for event in monitor_result.started:
+            self._hoyolab_reconcile.handle_process_started(event)
+        for event in monitor_result.stopped:
+            self._hoyolab_reconcile.handle_process_stopped(event)
+
+        if monitor_result.changed:
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage("프로세스 상태 변경 감지됨.", 2000)
@@ -984,6 +998,7 @@ class MainWindow(QMainWindow):
 
         self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
         self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
+        self.scheduler.invalidate_visual_status_snapshot()
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
@@ -1342,7 +1357,7 @@ class MainWindow(QMainWindow):
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
         if execution_time > 100:
-            logger.warning(f"status_column_refresh_timer 실행 시간 초과: {execution_time:.1f}ms")
+            logger.warning(f"_refresh_status_columns 실행 시간 초과: {execution_time:.1f}ms")
 
     def _refresh_status_columns_immediate(self):
         """상태 컬럼을 즉시 새로고침합니다 (중요한 시각 변경 시 호출)."""
@@ -1605,10 +1620,8 @@ class MainWindow(QMainWindow):
             self.monitor_timer.stop()
         if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive():
             self.scheduler_timer.stop()
-        if hasattr(self, 'web_button_refresh_timer') and self.web_button_refresh_timer.isActive():
-            self.web_button_refresh_timer.stop()
-        if hasattr(self, 'status_column_refresh_timer') and self.status_column_refresh_timer.isActive():
-            self.status_column_refresh_timer.stop()
+        if hasattr(self, 'ui_refresh_timer') and self.ui_refresh_timer.isActive():
+            self.ui_refresh_timer.stop()
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
@@ -1625,6 +1638,9 @@ class MainWindow(QMainWindow):
         # 3-2. 녹화 매니저 종료
         if hasattr(self, '_recording_manager'):
             self._recording_manager.shutdown()
+
+        if hasattr(self, '_hoyolab_reconcile'):
+            self._hoyolab_reconcile.shutdown()
 
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
@@ -2243,8 +2259,8 @@ class MainWindow(QMainWindow):
     def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
         """스타일이 적용된 QProgressBar 생성"""
         progress_bar = QProgressBar()
-        progress_bar.setValue(int(min(percentage, 100)))
-        progress_bar.setMaximum(100)
+        progress_bar.setValue(self._progress_bar_value(percentage))
+        progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
         progress_bar.setMinimum(0)
         
         # 높이 설정 (행 높이에 맞게 자동 조절)
@@ -2253,76 +2269,54 @@ class MainWindow(QMainWindow):
         # 텍스트 표시 설정
         progress_bar.setTextVisible(True)
         progress_bar.setFormat(format_text)
-        
-
-        
-        # 진행률에 따른 색상 설정 (다크 모드 배경)
-        if percentage >= 100:
-            # 100% 이상: 빨간색 (접속 필요)
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #404040;
-                    border-radius: 2px;
-                    text-align: center;
-                    background-color: #2d2d2d;
-                    color: white;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #ff4444;
-                    border-radius: 1px;
-                }
-            """)
-        elif percentage >= 80:
-            # 80% 이상: 주황색 (곧 접속 필요)
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #404040;
-                    border-radius: 2px;
-                    text-align: center;
-                    background-color: #2d2d2d;
-                    color: white;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #ff8800;
-                    border-radius: 1px;
-                }
-            """)
-        elif percentage >= 50:
-            # 50% 이상: 노란색 (중간 진행)
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #404040;
-                    border-radius: 2px;
-                    text-align: center;
-                    background-color: #2d2d2d;
-                    color: white;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #ffcc00;
-                    border-radius: 1px;
-                }
-            """)
-        else:
-            # 50% 미만: 초록색 (여유 있음)
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #404040;
-                    border-radius: 2px;
-                    text-align: center;
-                    background-color: #2d2d2d;
-                    color: white;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #44cc44;
-                    border-radius: 1px;
-                }
-            """)
+        progress_bar.setProperty("color_bucket", self._progress_color_bucket(percentage))
+        self._apply_progress_bar_style(progress_bar, percentage)
         
         return progress_bar
+
+    def _progress_bar_value(self, percentage: float) -> int:
+        """진행률 백분율을 ProgressBar 내부 값으로 변환합니다."""
+        clamped = max(0.0, min(percentage, 100.0))
+        return int(round(clamped * self._PROGRESS_BAR_SCALE))
+
+    def _progress_color_bucket(self, percentage: float) -> int:
+        """진행률에 따른 색상 구간을 반환합니다."""
+        if percentage >= 100:
+            return 3
+        if percentage >= 80:
+            return 2
+        if percentage >= 50:
+            return 1
+        return 0
+
+    def _progress_bar_stylesheet(self, chunk_color: str) -> str:
+        """공통 ProgressBar 스타일시트를 생성합니다."""
+        return f"""
+            QProgressBar {{
+                border: 1px solid #404040;
+                border-radius: 2px;
+                text-align: center;
+                background-color: #2d2d2d;
+                color: white;
+                font-weight: bold;
+            }}
+            QProgressBar::chunk {{
+                background-color: {chunk_color};
+                border-radius: 1px;
+            }}
+        """
+
+    def _apply_progress_bar_style(self, progress_bar: QProgressBar, percentage: float) -> None:
+        """진행률 구간에 맞는 스타일을 ProgressBar에 적용합니다."""
+        if percentage >= 100:
+            chunk_color = "#ff4444"
+        elif percentage >= 80:
+            chunk_color = "#ff8800"
+        elif percentage >= 50:
+            chunk_color = "#ffcc00"
+        else:
+            chunk_color = "#44cc44"
+        progress_bar.setStyleSheet(self._progress_bar_stylesheet(chunk_color))
 
     def _refresh_progress_bars(self):
         """프로그레스 바들을 실시간으로 갱신합니다.
@@ -2378,107 +2372,33 @@ class MainWindow(QMainWindow):
                 progress_bar = current_widget
 
             # Progress Bar 업데이트
+            expects_progress_widget = not (percentage == 0.0 and not time_str.startswith("STAMINA:"))
+            if expects_progress_widget != (progress_bar is not None):
+                self.process_table.setCellWidget(
+                    row,
+                    self.COL_LAST_PLAYED,
+                    self._create_progress_bar_widget(process, percentage, time_str),
+                )
+                updated_count += 1
+                continue
+
             if progress_bar:
-                old_value = progress_bar.value()
-                new_value = int(percentage)
+                new_value = self._progress_bar_value(percentage)
+                new_format = self._get_progress_bar_format(percentage, time_str)
+                new_bucket = self._progress_color_bucket(percentage)
 
-                # 값이 변경되었을 때만 업데이트 (최적화)
-                if old_value != new_value:
+                if progress_bar.value() != new_value:
                     progress_bar.setValue(new_value)
-
-                    # 스태미나 형식인지 확인하여 적절한 format 적용
-                    if time_str.startswith("STAMINA:"):
-                        try:
-                            parts = time_str.split(":")
-                            if len(parts) >= 3:
-                                stamina_text = parts[2]  # "120/300" 추출
-                                progress_bar.setFormat(stamina_text)
-                            else:
-                                progress_bar.setFormat(f"{percentage:.1f}%")
-                        except Exception:
-                            progress_bar.setFormat(f"{percentage:.1f}%")
-                    else:
-                        progress_bar.setFormat(f"{percentage:.1f}%")
-
                     updated_count += 1
 
-                    # 색상 구간 결정 (0-49: 초록, 50-79: 노랑, 80-99: 주황, 100+: 빨강)
-                    def get_color_range(pct):
-                        if pct >= 100:
-                            return 3  # 빨강
-                        elif pct >= 80:
-                            return 2  # 주황
-                        elif pct >= 50:
-                            return 1  # 노랑
-                        else:
-                            return 0  # 초록
+                if progress_bar.format() != new_format:
+                    progress_bar.setFormat(new_format)
+                    updated_count += 1
 
-                    # 색상 구간이 바뀌었을 때만 스타일시트 업데이트 (최적화)
-                    old_range = get_color_range(old_value)
-                    new_range = get_color_range(percentage)
-
-                    if old_range != new_range:
-                        # 진행률에 따른 색상 업데이트
-                        if percentage >= 100:
-                            progress_bar.setStyleSheet("""
-                                QProgressBar {
-                                    border: 1px solid #404040;
-                                    border-radius: 2px;
-                                    text-align: center;
-                                    background-color: #2d2d2d;
-                                    color: white;
-                                    font-weight: bold;
-                                }
-                                QProgressBar::chunk {
-                                    background-color: #ff4444;
-                                    border-radius: 1px;
-                                }
-                            """)
-                        elif percentage >= 80:
-                            progress_bar.setStyleSheet("""
-                                QProgressBar {
-                                    border: 1px solid #404040;
-                                    border-radius: 2px;
-                                    text-align: center;
-                                    background-color: #2d2d2d;
-                                    color: white;
-                                    font-weight: bold;
-                                }
-                                QProgressBar::chunk {
-                                    background-color: #ff8800;
-                                    border-radius: 1px;
-                                }
-                            """)
-                        elif percentage >= 50:
-                            progress_bar.setStyleSheet("""
-                                QProgressBar {
-                                    border: 1px solid #404040;
-                                    border-radius: 2px;
-                                    text-align: center;
-                                    background-color: #2d2d2d;
-                                    color: white;
-                                    font-weight: bold;
-                                }
-                                QProgressBar::chunk {
-                                    background-color: #ffcc00;
-                                    border-radius: 1px;
-                                }
-                            """)
-                        else:
-                            progress_bar.setStyleSheet("""
-                                QProgressBar {
-                                    border: 1px solid #404040;
-                                    border-radius: 2px;
-                                    text-align: center;
-                                    background-color: #2d2d2d;
-                                    color: white;
-                                    font-weight: bold;
-                                }
-                                QProgressBar::chunk {
-                                    background-color: #44cc44;
-                                    border-radius: 1px;
-                                }
-                            """)
+                if progress_bar.property("color_bucket") != new_bucket:
+                    progress_bar.setProperty("color_bucket", new_bucket)
+                    self._apply_progress_bar_style(progress_bar, percentage)
+                    updated_count += 1
 
             # QLabel 업데이트 (컨테이너 내부의 라벨 - "기록 없음" 표시)
             else:
@@ -2496,7 +2416,18 @@ class MainWindow(QMainWindow):
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
         if execution_time > 100:
-            logger.warning(f"progress_bar_refresh_timer 실행 시간 초과: {execution_time:.1f}ms (업데이트: {updated_count}개)")
+            logger.warning(f"_refresh_progress_bars 실행 시간 초과: {execution_time:.1f}ms (업데이트: {updated_count}개)")
+
+    def _get_progress_bar_format(self, percentage: float, time_str: str) -> str:
+        """ProgressBar 표시 문자열을 반환합니다."""
+        if time_str.startswith("STAMINA:"):
+            try:
+                parts = time_str.split(":")
+                if len(parts) >= 3:
+                    return parts[2]
+            except Exception:
+                pass
+        return f"{percentage:.1f}%"
 
     def _on_launcher_restart_request(self, launcher_name: str) -> bool:
         """
