@@ -319,7 +319,6 @@ class MainWindow(QMainWindow):
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
         self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
-        self.process_table.cellDoubleClicked.connect(self._on_process_table_double_clicked)
         self.process_table.setShowGrid(False)
         self.process_table.verticalHeader().hide()
 
@@ -1001,7 +1000,11 @@ class MainWindow(QMainWindow):
             st_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter) # 텍스트 가운데 정렬
             self.process_table.setItem(r, self.COL_STATUS, st_item)
             self._apply_status_item_style(st_item, st_str, df_bg, df_fg)
-            self.process_table.setCellWidget(r, self.COL_STATUS, self._create_status_badge_widget(st_str))
+            self.process_table.setCellWidget(
+                r,
+                self.COL_STATUS,
+                self._create_status_badge_widget(st_str, p.id),
+            )
 
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
@@ -1013,15 +1016,22 @@ class MainWindow(QMainWindow):
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
-        item = self.process_table.itemAt(pos) # 클릭 위치의 아이템 가져오기
-        if not item: return # 아이템 없으면 반환
+        row = self.process_table.rowAt(pos.y())
+        if row < 0:
+            return
+        self._show_table_context_menu_for_row(
+            row,
+            self.process_table.viewport().mapToGlobal(pos),
+        )
 
-        name_item = self.process_table.item(item.row(), self.COL_NAME)
+    def _show_table_context_menu_for_row(self, row: int, global_pos: QPoint) -> None:
+        """주어진 행에 대한 기본 컨텍스트 메뉴를 표시합니다."""
+        name_item = self.process_table.item(row, self.COL_NAME)
         if not name_item:
             return
-        pid = name_item.data(Qt.ItemDataRole.UserRole) # 선택된 행의 프로세스 ID 가져오기
-        if not pid: return # ID 없으면 반환
-
+        pid = name_item.data(Qt.ItemDataRole.UserRole)
+        if not pid:
+            return
         menu = QMenu(self) # 컨텍스트 메뉴 생성
         edit_act = QAction("편집", self) # 편집 액션
         del_act = QAction("삭제", self) # 삭제 액션
@@ -1030,7 +1040,7 @@ class MainWindow(QMainWindow):
         del_act.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid)) # 삭제 액션 시그널 연결
 
         menu.addActions([edit_act, del_act]) # 메뉴에 액션 추가
-        menu.exec(self.process_table.mapToGlobal(pos)) # 컨텍스트 메뉴 표시
+        menu.exec(global_pos) # 컨텍스트 메뉴 표시
 
     def handle_edit_action_for_row(self, pid:str): # 게임 수정
         """선택된 게임 프로세스의 정보를 수정하는 대화 상자를 엽니다."""
@@ -1155,17 +1165,20 @@ class MainWindow(QMainWindow):
     def _set_launch_preference(self, pid: str, preference: str):
         """기본 실행 방식을 영구 저장"""
         p = self.data_manager.get_process_by_id(pid)
-        if not p or preference not in ("shortcut", "direct"):
+        if not p or preference not in ("shortcut", "direct", "launcher"):
             return
 
-        current_pref = getattr(p, "preferred_launch_type", "shortcut") or "shortcut"
-        if current_pref == "auto":
-            current_pref = "shortcut"
+        current_pref = self._normalize_launch_preference(
+            getattr(p, "preferred_launch_type", "shortcut")
+        )
 
         if current_pref == preference:
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
+                status_bar.showMessage(
+                    f"이미 '{self._launch_preference_label(preference)}'로 설정되어 있습니다.",
+                    3000,
+                )
             return
 
         updated_data = p.to_dict() if hasattr(p, "to_dict") else p.__dict__.copy()
@@ -1177,11 +1190,29 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(
-                    f"기본 실행 방식이 '{('바로가기 선호' if preference == 'shortcut' else '프로세스 선호')}'로 저장되었습니다.",
+                    f"기본 실행 방식이 '{self._launch_preference_label(preference)}'로 저장되었습니다.",
                     4000
                 )
         else:
             QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
+
+    def _normalize_launch_preference(self, preference: Optional[str]) -> str:
+        """저장된 실행 방식 값을 UI 표시용 표준 값으로 정규화합니다."""
+        normalized = (preference or "shortcut").strip().lower()
+        if normalized == "auto":
+            return "shortcut"
+        if normalized not in {"shortcut", "direct", "launcher"}:
+            return "shortcut"
+        return normalized
+
+    def _launch_preference_label(self, preference: str) -> str:
+        """실행 방식 값을 사용자 표시용 한글 레이블로 반환합니다."""
+        normalized = self._normalize_launch_preference(preference)
+        return {
+            "shortcut": "바로가기 선호",
+            "direct": "프로세스 선호",
+            "launcher": "런처 선호",
+        }.get(normalized, "바로가기 선호")
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
@@ -1190,9 +1221,9 @@ class MainWindow(QMainWindow):
         p = self.data_manager.get_process_by_id(pid)
         if not p: return
 
-        current_pref = getattr(p, "preferred_launch_type", "shortcut") or "shortcut"
-        if current_pref == "auto":
-            current_pref = "shortcut"
+        current_pref = self._normalize_launch_preference(
+            getattr(p, "preferred_launch_type", "shortcut")
+        )
 
         menu = QMenu(button)
 
@@ -1214,6 +1245,13 @@ class MainWindow(QMainWindow):
         if not p.monitoring_path:
             direct_action.setEnabled(False)
 
+        launcher_action = menu.addAction("런처 선호 (런처 우선 실행)")
+        launcher_action.setCheckable(True)
+        launcher_action.setChecked(current_pref == "launcher")
+        launcher_action.triggered.connect(
+            functools.partial(self._set_launch_preference, pid, "launcher")
+        )
+
         menu.exec(button.mapToGlobal(pos))
 
     def _build_process_actions_menu(self, pid: str, parent: QWidget) -> QMenu:
@@ -1231,9 +1269,9 @@ class MainWindow(QMainWindow):
 
         if process.monitoring_path != process.launch_path and process.launch_path:
             menu.addSeparator()
-            current_pref = getattr(process, "preferred_launch_type", "shortcut") or "shortcut"
-            if current_pref == "auto":
-                current_pref = "shortcut"
+            current_pref = self._normalize_launch_preference(
+                getattr(process, "preferred_launch_type", "shortcut")
+            )
 
             shortcut_action = menu.addAction("기본 실행: 바로가기 선호")
             shortcut_action.setCheckable(True)
@@ -1249,7 +1287,41 @@ class MainWindow(QMainWindow):
                 functools.partial(self._set_launch_preference, pid, "direct")
             )
 
+            launcher_action = menu.addAction("기본 실행: 런처 선호")
+            launcher_action.setCheckable(True)
+            launcher_action.setChecked(current_pref == "launcher")
+            launcher_action.triggered.connect(
+                functools.partial(self._set_launch_preference, pid, "launcher")
+            )
+
         return menu
+
+    def _bind_table_row_context_menu(self, widget: QWidget, process_id: str) -> None:
+        """표시 전용 셀 위젯에서 우클릭 시 행 컨텍스트 메뉴를 열도록 연결합니다."""
+        widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        widget.customContextMenuRequested.connect(
+            functools.partial(self._show_table_context_menu_for_process, process_id, widget)
+        )
+
+    def _show_table_context_menu_for_process(
+        self,
+        process_id: str,
+        widget: QWidget,
+        position: QPoint,
+    ) -> None:
+        """셀 위젯에서 전달된 우클릭 요청을 행 기준 컨텍스트 메뉴로 연결합니다."""
+        row = self._find_table_row_by_process_id(process_id)
+        if row < 0:
+            return
+        self._show_table_context_menu_for_row(row, widget.mapToGlobal(position))
+
+    def _find_table_row_by_process_id(self, process_id: str) -> int:
+        """현재 테이블에서 process_id에 해당하는 행 번호를 반환합니다."""
+        for row in range(self.process_table.rowCount()):
+            name_item = self.process_table.item(row, self.COL_NAME)
+            if name_item and name_item.data(Qt.ItemDataRole.UserRole) == process_id:
+                return row
+        return -1
 
     def _create_process_action_cell(self, process: ManagedProcess) -> QWidget:
         """실행 버튼과 명시적 관리 메뉴를 포함하는 셀 위젯을 생성합니다."""
@@ -1264,10 +1336,10 @@ class MainWindow(QMainWindow):
         launch_btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, process.id))
 
         if process.monitoring_path != process.launch_path and process.launch_path:
-            current_pref = getattr(process, "preferred_launch_type", "shortcut")
-            if current_pref == "auto":
-                current_pref = "shortcut"
-            pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
+            current_pref = self._normalize_launch_preference(
+                getattr(process, "preferred_launch_type", "shortcut")
+            )
+            pref_label = self._launch_preference_label(current_pref)
             launch_btn.setToolTip(f"현재 기본 실행 방식: {pref_label}")
 
             launch_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1285,6 +1357,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(launch_btn)
         layout.addWidget(menu_btn)
+        self._bind_table_row_context_menu(container, process.id)
         return container
 
     def _on_process_table_double_clicked(self, row: int, _column: int) -> None:
@@ -1482,6 +1555,8 @@ class MainWindow(QMainWindow):
         
         # 웹 버튼 로드 완료 후 창 너비 조절
         self._adjust_window_width_for_web_buttons()
+        if hasattr(self, "process_table"):
+            QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
 
     def _handle_web_button_clicked(self, shortcut_id: str, url: str):
         """웹 바로가기 버튼 클릭 시 호출됩니다. URL을 열고, 필요한 경우 상태를 업데이트합니다."""
@@ -1846,9 +1921,9 @@ class MainWindow(QMainWindow):
         if menu_bar and not menu_bar.isHidden():
             total_height += menu_bar.sizeHint().height()
         
-        # 상단 버튼 영역 높이
-        if hasattr(self, 'top_button_area_layout'):
-            total_height += self.top_button_area_layout.sizeHint().height()
+        # 상단 헤더 영역 높이
+        if hasattr(self, '_top_action_frame'):
+            total_height += self._top_action_frame.sizeHint().height()
             total_height += 10  # 레이아웃 여백
         
         # 테이블 높이
@@ -2218,14 +2293,17 @@ class MainWindow(QMainWindow):
             else:
                 # 아이콘이 없으면 공간 확보
                 icon_label.setFixedSize(18, 18)
+            icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout.addWidget(icon_label)
 
             # 텍스트 라벨
             text_label = QLabel(time_str)
             text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             text_label.setStyleSheet(style_tokens.progress_placeholder_label_stylesheet())
+            text_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
             container._progress_label_ref = text_label
+            self._bind_table_row_context_menu(container, process.id)
 
             return container
 
@@ -2254,12 +2332,15 @@ class MainWindow(QMainWindow):
                     else:
                         # 아이콘이 없어도 공간 확보
                         icon_label.setFixedSize(18, 18)
+                    icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                     layout.addWidget(icon_label)
 
                     # Progress Bar
                     progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
+                    progress_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                     layout.addWidget(progress_bar, 1)
                     container._progress_bar_ref = progress_bar
+                    self._bind_table_row_context_menu(container, process.id)
 
                     return container
             except Exception as e:
@@ -2282,12 +2363,15 @@ class MainWindow(QMainWindow):
         else:
             # 아이콘이 없으면 공간 확보
             icon_label.setFixedSize(18, 18)
+        icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(icon_label)
 
         # Progress Bar
         progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
+        progress_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(progress_bar, 1)  # stretch factor 1로 남은 공간 채움
         container._progress_bar_ref = progress_bar
+        self._bind_table_row_context_menu(container, process.id)
 
         return container
     
@@ -2382,7 +2466,7 @@ class MainWindow(QMainWindow):
         elif status == PROC_STATE_COMPLETED:
             status_item.setBackground(self.COLOR_COMPLETED)
 
-    def _create_status_badge_widget(self, status: str) -> QWidget:
+    def _create_status_badge_widget(self, status: str, process_id: Optional[str] = None) -> QWidget:
         """상태 컬럼용 배지 위젯을 생성합니다."""
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -2392,8 +2476,11 @@ class MainWindow(QMainWindow):
         badge.setObjectName("StatusBadge")
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(style_tokens.status_badge_stylesheet(status))
+        badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(badge)
         container._status_badge_ref = badge
+        if process_id:
+            self._bind_table_row_context_menu(container, process_id)
         return container
 
     def _update_status_badge_widget(self, row: int, status: str) -> None:
@@ -2403,7 +2490,13 @@ class MainWindow(QMainWindow):
         if badge is None and isinstance(widget, QLabel):
             badge = widget
         if badge is None:
-            self.process_table.setCellWidget(row, self.COL_STATUS, self._create_status_badge_widget(status))
+            name_item = self.process_table.item(row, self.COL_NAME)
+            process_id = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+            self.process_table.setCellWidget(
+                row,
+                self.COL_STATUS,
+                self._create_status_badge_widget(status, process_id),
+            )
             return
         if badge.text() != status:
             badge.setText(status)

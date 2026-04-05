@@ -287,6 +287,8 @@ class ProcessDialog(QDialog):
 
         template = {
             "display_name": display_name,
+            # Steam/Epic 같은 클라이언트 설치 게임은 .lnk/.url 바로가기를
+            # 모니터링 대상으로 두는 경우가 많으므로 basename을 그대로 보존한다.
             "exe_patterns": [exe_name] if exe_name else [],
             "server_reset_time": reset_time,
             "default_cycle_hours": cycle_hours_int,
