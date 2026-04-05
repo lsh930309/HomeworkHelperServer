@@ -317,6 +317,7 @@ class MainWindow(QMainWindow):
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
         self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
+        self.process_table.cellDoubleClicked.connect(self._on_process_table_double_clicked)
         self.process_table.setShowGrid(False)
         self.process_table.verticalHeader().hide()
 
@@ -989,25 +990,8 @@ class MainWindow(QMainWindow):
             progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
             self.process_table.setCellWidget(r, self.COL_LAST_PLAYED, progress_widget)
 
-            # 실행 버튼 컬럼
-            btn = QPushButton("실행")
-            btn.setMinimumHeight(28)
-            btn.setStyleSheet(style_tokens.secondary_table_button_stylesheet())
-            btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id)) # 버튼 클릭 시그널 연결
-            
-            # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
-            if p.monitoring_path != p.launch_path and p.launch_path:
-                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                btn.customContextMenuRequested.connect(
-                    functools.partial(self._show_launch_context_menu, p.id, btn)
-                )
-                current_pref = getattr(p, "preferred_launch_type", "shortcut")
-                if current_pref == "auto":
-                    current_pref = "shortcut"
-                pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
-                btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
-            
-            self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, btn) # 셀에 버튼 위젯 설정
+            # 실행/관리 컬럼
+            self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, self._create_process_action_cell(p))
 
             # 상태 컬럼
             st_str = self.scheduler.determine_process_visual_status(p, now_dt, gs) # 시각적 상태 결정
@@ -1229,6 +1213,86 @@ class MainWindow(QMainWindow):
             direct_action.setEnabled(False)
 
         menu.exec(button.mapToGlobal(pos))
+
+    def _build_process_actions_menu(self, pid: str, parent: QWidget) -> QMenu:
+        """행 우측 `⋯` 버튼용 명시적 액션 메뉴를 생성합니다."""
+        menu = QMenu(parent)
+        process = self.data_manager.get_process_by_id(pid)
+        if process is None:
+            return menu
+
+        edit_action = menu.addAction("편집")
+        edit_action.triggered.connect(functools.partial(self.handle_edit_action_for_row, pid))
+
+        delete_action = menu.addAction("삭제")
+        delete_action.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid))
+
+        if process.monitoring_path != process.launch_path and process.launch_path:
+            menu.addSeparator()
+            current_pref = getattr(process, "preferred_launch_type", "shortcut") or "shortcut"
+            if current_pref == "auto":
+                current_pref = "shortcut"
+
+            shortcut_action = menu.addAction("기본 실행: 바로가기 선호")
+            shortcut_action.setCheckable(True)
+            shortcut_action.setChecked(current_pref == "shortcut")
+            shortcut_action.triggered.connect(
+                functools.partial(self._set_launch_preference, pid, "shortcut")
+            )
+
+            direct_action = menu.addAction("기본 실행: 프로세스 선호")
+            direct_action.setCheckable(True)
+            direct_action.setChecked(current_pref == "direct")
+            direct_action.triggered.connect(
+                functools.partial(self._set_launch_preference, pid, "direct")
+            )
+
+        return menu
+
+    def _create_process_action_cell(self, process: ManagedProcess) -> QWidget:
+        """실행 버튼과 명시적 관리 메뉴를 포함하는 셀 위젯을 생성합니다."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        launch_btn = QPushButton("실행")
+        launch_btn.setMinimumHeight(28)
+        launch_btn.setStyleSheet(style_tokens.secondary_table_button_stylesheet())
+        launch_btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, process.id))
+
+        if process.monitoring_path != process.launch_path and process.launch_path:
+            current_pref = getattr(process, "preferred_launch_type", "shortcut")
+            if current_pref == "auto":
+                current_pref = "shortcut"
+            pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
+            launch_btn.setToolTip(f"현재 기본 실행 방식: {pref_label}")
+
+            launch_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            launch_btn.customContextMenuRequested.connect(
+                functools.partial(self._show_launch_context_menu, process.id, launch_btn)
+            )
+
+        menu_btn = QToolButton()
+        menu_btn.setText("⋯")
+        menu_btn.setToolTip("편집, 삭제, 실행 방식 설정")
+        menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setFixedSize(24, 28)
+        menu_btn.setStyleSheet(style_tokens.inline_menu_toolbutton_stylesheet())
+        menu_btn.setMenu(self._build_process_actions_menu(process.id, menu_btn))
+
+        layout.addWidget(launch_btn)
+        layout.addWidget(menu_btn)
+        return container
+
+    def _on_process_table_double_clicked(self, row: int, _column: int) -> None:
+        """행 더블클릭 시 해당 게임 편집 다이얼로그를 엽니다."""
+        name_item = self.process_table.item(row, self.COL_NAME)
+        if not name_item:
+            return
+        process_id = name_item.data(Qt.ItemDataRole.UserRole)
+        if process_id:
+            self.handle_edit_action_for_row(process_id)
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
         """새 게임 프로세스를 추가하는 대화 상자를 엽니다."""

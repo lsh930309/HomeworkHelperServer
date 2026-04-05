@@ -320,6 +320,26 @@ QPushButton:pressed {
 """
 
 
+def inline_menu_toolbutton_stylesheet() -> str:
+    """테이블 행의 보조 메뉴 버튼 스타일을 반환합니다."""
+    return """
+QToolButton {
+    background: palette(button);
+    border: 1px solid palette(midlight);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-weight: 700;
+}
+QToolButton:hover {
+    background: palette(midlight);
+    border-color: palette(mid);
+}
+QToolButton:pressed {
+    background: palette(mid);
+}
+"""
+
+
 def menu_tool_button_stylesheet() -> str:
     """메뉴바 우측 볼륨 토글 버튼 스타일을 반환합니다."""
     return """
