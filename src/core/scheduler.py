@@ -18,6 +18,7 @@ PROC_STATE_RUNNING = "실행중"
 
 class Scheduler:
     def __init__(self, data_manager: DataManager, notifier: Notifier, process_monitor: ProcessMonitor):
+        """알림 중복 방지 상태와 시각 상태 스냅샷 캐시를 초기화합니다."""
         self.data_manager = data_manager
         self.notifier = notifier
         self.process_monitor = process_monitor
@@ -33,14 +34,17 @@ class Scheduler:
         self.daily_task_reminder_before_reset_hours: float = 1.0
         # 스태미나 알림 추적
         self.notified_stamina_full: Set[str] = set()  # 스태미나 알림을 보낸 프로세스 ID
+        self._last_visual_statuses: Dict[str, str] = {}
 
     def _get_time_from_str(self, time_str: str) -> Optional[datetime.time]:
+        """`HH:MM` 문자열을 `datetime.time`으로 파싱하고 실패 시 `None`을 반환합니다."""
         try:
             return datetime.datetime.strptime(time_str, "%H:%M").time()
         except (ValueError, TypeError):
             return None
 
     def _get_next_sleep_period(self, now_dt: datetime.datetime, gs: GlobalSettings) -> Optional[Tuple[datetime.datetime, datetime.datetime]]:
+        """현재 시점 기준으로 적용해야 할 다음 수면 구간의 시작과 종료를 계산합니다."""
         sleep_start_t = self._get_time_from_str(gs.sleep_start_time_str)
         sleep_end_t = self._get_time_from_str(gs.sleep_end_time_str)
 
@@ -148,7 +152,24 @@ class Scheduler:
         else:
             return PROC_STATE_COMPLETED
 
+    def build_visual_status_snapshot(
+        self,
+        now_dt: Optional[datetime.datetime] = None,
+    ) -> Dict[str, str]:
+        """현재 시점의 프로세스별 시각적 상태 스냅샷을 생성합니다."""
+        current_dt = now_dt or datetime.datetime.now()
+        gs = self.data_manager.global_settings
+        return {
+            process.id: self.determine_process_visual_status(process, current_dt, gs)
+            for process in self.data_manager.managed_processes
+        }
+
+    def invalidate_visual_status_snapshot(self) -> None:
+        """다음 검사에서 상태 변경을 다시 계산하도록 캐시를 비웁니다."""
+        self._last_visual_statuses = {}
+
     def check_mandatory_times(self): # (send_notification에서 on_click_callback 제거된 버전)
+        """오늘 아직 처리하지 않은 고정 접속 시각에 대해 1회 알림을 보냅니다."""
         now = datetime.datetime.now()
         current_time = now.time()
         today_date_str = now.date().isoformat()
@@ -178,6 +199,7 @@ class Scheduler:
                             self.already_notified_mandatory_today.add(notification_key)
 
     def check_user_cycles(self): # (send_notification에서 on_click_callback 제거된 버전)
+        """사용자 정의 접속 주기의 마감 임박 구간에 들어온 작업에 대해 알림을 보냅니다."""
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
 
@@ -224,6 +246,7 @@ class Scheduler:
                     pass # Or self.notified_cycle_deadlines.pop(process.id, None) if logic requires
 
     def check_sleep_corrected_cycles(self): # (send_notification에서 on_click_callback 제거된 버전)
+        """수면 시간과 겹치는 주기 마감을 잠들기 전 알림 시점으로 앞당겨 처리합니다."""
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
         sleep_period = self._get_next_sleep_period(now_dt, gs)
@@ -260,6 +283,7 @@ class Scheduler:
                         self.notified_cycle_deadlines[process.id] = original_deadline_dt.timestamp()
 
     def check_daily_reset_tasks(self): # (send_notification에서 on_click_callback 제거된 버전)
+        """서버 리셋 전에 아직 플레이하지 않은 일일 과제 대상에 대해 마감 알림을 보냅니다."""
         now_dt = datetime.datetime.now()
 
         for process in self.data_manager.managed_processes:
@@ -365,11 +389,6 @@ class Scheduler:
 
     def run_all_checks(self) -> bool:
         """모든 스케줄러 검사를 실행하고, 프로세스 상태의 시각적 변경 여부를 반환합니다."""
-        initial_statuses = {
-            p.id: self.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings)
-            for p in self.data_manager.managed_processes
-        }
-
         # 주기적 로그 제거 (GUI 성능 개선)
         # current_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # print(f"\n[{current_time_str}] 스케줄러 검사 실행...")
@@ -380,18 +399,20 @@ class Scheduler:
         self.check_stamina_notifications()  # 스태미나 알림 체크 추가
         # print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 스케줄러 검사 완료.")
 
-        # 검사 실행 후 상태를 다시 확인하여 변경 여부 감지
-        final_statuses = {
-            p.id: self.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings)
-            for p in self.data_manager.managed_processes
-        }
+        current_statuses = self.build_visual_status_snapshot()
+        if not self._last_visual_statuses:
+            self._last_visual_statuses = current_statuses
+            if self.status_change_callback:
+                self.status_change_callback()
+            return True
 
-        if initial_statuses != final_statuses:
+        if self._last_visual_statuses != current_statuses:
             # 상태 변경 시 콜백 함수 호출
+            self._last_visual_statuses = current_statuses
             if self.status_change_callback:
                 self.status_change_callback()
             return True # 상태 변경됨
-        
+
         return False # 상태 변경 없음
 
 def example_global_on_click_handler(received_task_id: Optional[str]):

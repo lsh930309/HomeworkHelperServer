@@ -5,6 +5,7 @@ genshin.py 라이브러리를 사용하여 HoYoLab API와 통신합니다.
 """
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -61,6 +62,9 @@ class HoYoLabService:
         self._config = config or HoYoLabConfig()
         self._client: Optional["genshin.Client"] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client_lock = threading.RLock()
+        self._request_lock = threading.Lock()
+        self._closed = False
     
     def is_available(self) -> bool:
         """genshin.py 라이브러리가 사용 가능한지 확인"""
@@ -70,28 +74,37 @@ class HoYoLabService:
         """HoYoLab 인증 정보가 설정되어 있는지 확인"""
         return self._config.is_configured()
     
-    def _get_client(self) -> Optional["genshin.Client"]:
-        """genshin.py 클라이언트 인스턴스 반환 (lazy initialization)"""
+    def _get_client_unlocked(self) -> Optional["genshin.Client"]:
+        """락을 보유한 상태에서 genshin.py 클라이언트를 준비합니다."""
+        if self._closed:
+            logger.debug("닫힌 HoYoLab 서비스에서 클라이언트 생성을 건너뜁니다.")
+            return None
+
         if not GENSHIN_AVAILABLE:
             logger.warning("genshin.py 라이브러리가 설치되지 않았습니다.")
             return None
-        
+
         if self._client is None:
             credentials = self._config.load_credentials()
             if not credentials:
                 logger.warning("HoYoLab 인증 정보가 없습니다.")
                 return None
-            
+
             cookies = {
                 "ltuid_v2": str(credentials.get("ltuid", "")),
                 "ltoken_v2": credentials.get("ltoken_v2", ""),
                 "ltmid_v2": credentials.get("ltmid_v2", ""),
             }
-            
+
             self._client = genshin.Client(cookies=cookies)
             logger.info("HoYoLab 클라이언트 초기화 완료")
-        
+
         return self._client
+
+    def _get_client(self) -> Optional["genshin.Client"]:
+        """genshin.py 클라이언트 인스턴스 반환 (lazy initialization)"""
+        with self._client_lock:
+            return self._get_client_unlocked()
     
     def _run_async(self, coro):
         """비동기 코루틴을 동기적으로 실행
@@ -133,12 +146,17 @@ class HoYoLabService:
     
     def get_starrail_stamina(self) -> Optional[StaminaInfo]:
         """붕괴: 스타레일 개척력 정보 조회"""
-        client = self._get_client()
-        if not client:
-            return None
-        
+        with self._client_lock:
+            client = self._get_client_unlocked()
+            if not client:
+                return None
+
         try:
-            return self._run_async(self._async_get_starrail_stamina(client))
+            with self._request_lock:
+                if self._closed:
+                    logger.debug("닫힌 HoYoLab 서비스에서 스타레일 요청을 건너뜁니다.")
+                    return None
+                return self._run_async(self._async_get_starrail_stamina(client))
         except Exception as e:
             logger.error(f"스타레일 스태미나 조회 실패: {e}")
             return None
@@ -175,12 +193,17 @@ class HoYoLabService:
     
     def get_zzz_stamina(self) -> Optional[StaminaInfo]:
         """젠레스 존 제로 배터리 정보 조회"""
-        client = self._get_client()
-        if not client:
-            return None
-        
+        with self._client_lock:
+            client = self._get_client_unlocked()
+            if not client:
+                return None
+
         try:
-            return self._run_async(self._async_get_zzz_stamina(client))
+            with self._request_lock:
+                if self._closed:
+                    logger.debug("닫힌 HoYoLab 서비스에서 ZZZ 요청을 건너뜁니다.")
+                    return None
+                return self._run_async(self._async_get_zzz_stamina(client))
         except Exception as e:
             logger.error(f"ZZZ 배터리 조회 실패: {e}")
             return None
@@ -218,30 +241,38 @@ class HoYoLabService:
     
     def close(self) -> None:
         """클라이언트 연결 종료"""
-        if self._client:
-            try:
-                self._run_async(self._client.close())
-            except Exception:
-                pass
+        with self._client_lock:
+            self._closed = True
+            client = self._client
             self._client = None
+
+        if client:
+            try:
+                with self._request_lock:
+                    self._run_async(client.close())
+            except Exception as exc:
+                logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
             logger.info("HoYoLab 클라이언트 연결 종료")
 
 
 # 전역 서비스 인스턴스 (싱글톤)
 _service_instance: Optional[HoYoLabService] = None
+_service_lock = threading.Lock()
 
 
 def get_hoyolab_service() -> HoYoLabService:
     """HoYoLabService 싱글톤 인스턴스 반환"""
     global _service_instance
-    if _service_instance is None:
-        _service_instance = HoYoLabService()
+    with _service_lock:
+        if _service_instance is None or getattr(_service_instance, "_closed", False):
+            _service_instance = HoYoLabService()
     return _service_instance
 
 
 def reset_hoyolab_service() -> None:
     """HoYoLabService 인스턴스 리셋 (설정 변경 시 호출)"""
     global _service_instance
-    if _service_instance:
-        _service_instance.close()
-    _service_instance = None
+    with _service_lock:
+        if _service_instance:
+            _service_instance.close()
+        _service_instance = None
