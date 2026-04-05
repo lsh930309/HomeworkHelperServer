@@ -62,6 +62,8 @@ PROGRESS_TEXT: Final[str] = "white"
 PREVIEW_BORDER: Final[str] = "#ccc"
 PREVIEW_BG: Final[str] = "white"
 PRIMARY_ACTION_BG: Final[str] = "#e1f5fe"
+PRIMARY_ACTION_BG_HOVER: Final[str] = "#cbefff"
+PRIMARY_ACTION_BORDER: Final[str] = "#a7ddf2"
 
 
 def text_style(
@@ -259,6 +261,65 @@ def primary_action_button_stylesheet() -> str:
     return f"font-weight: bold; background-color: {PRIMARY_ACTION_BG};"
 
 
+def primary_toolbar_button_stylesheet() -> str:
+    """메인 창 상단의 핵심 액션 버튼 스타일을 반환합니다."""
+    return f"""
+QPushButton {{
+    background: {PRIMARY_ACTION_BG};
+    border: 1px solid {PRIMARY_ACTION_BORDER};
+    border-radius: 7px;
+    padding: 6px 12px;
+    font-weight: 600;
+}}
+QPushButton:hover {{
+    background: {PRIMARY_ACTION_BG_HOVER};
+}}
+QPushButton:pressed {{
+    background: {PRIMARY_ACTION_BORDER};
+}}
+"""
+
+
+def compact_icon_button_stylesheet() -> str:
+    """메인 창의 작은 아이콘 액션 버튼 스타일을 반환합니다."""
+    return """
+QPushButton {
+    background: palette(base);
+    border: 1px solid palette(midlight);
+    border-radius: 7px;
+    padding: 4px 8px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: palette(button);
+    border-color: palette(mid);
+}
+QPushButton:pressed {
+    background: palette(midlight);
+}
+"""
+
+
+def secondary_table_button_stylesheet() -> str:
+    """테이블 내부의 보조 액션 버튼 스타일을 반환합니다."""
+    return """
+QPushButton {
+    background: palette(button);
+    border: 1px solid palette(midlight);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background: palette(midlight);
+    border-color: palette(mid);
+}
+QPushButton:pressed {
+    background: palette(mid);
+}
+"""
+
+
 def menu_tool_button_stylesheet() -> str:
     """메뉴바 우측 볼륨 토글 버튼 스타일을 반환합니다."""
     return """
@@ -281,6 +342,92 @@ QToolButton:pressed {
     background: palette(dark);
 }
 """
+
+
+def toolbar_frame_stylesheet(object_name: str = "TopActionBar") -> str:
+    """메인 창 상단 액션 프레임 스타일을 반환합니다."""
+    return f"""
+QFrame#{object_name} {{
+    background: palette(base);
+    border: 1px solid palette(midlight);
+    border-radius: 10px;
+}}
+"""
+
+
+def summary_chip_stylesheet(kind: str = "neutral") -> str:
+    """요약 칩 스타일을 반환합니다."""
+    presets = {
+        "neutral": ("rgba(120, 140, 180, 40)", "rgba(120, 140, 180, 80)", "palette(window-text)"),
+        "running": ("rgba(255, 210, 90, 60)", "rgba(255, 210, 90, 110)", "palette(window-text)"),
+        "attention": ("rgba(255, 105, 105, 60)", "rgba(255, 105, 105, 110)", "palette(window-text)"),
+        "completed": ("rgba(110, 200, 140, 55)", "rgba(110, 200, 140, 105)", "palette(window-text)"),
+    }
+    background, border, color = presets.get(kind, presets["neutral"])
+    return f"""
+QLabel {{
+    background: {background};
+    border: 1px solid {border};
+    border-radius: 9px;
+    color: {color};
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+}}
+"""
+
+
+def status_badge_stylesheet(status: str) -> str:
+    """상태 문자열에 맞는 배지 스타일을 반환합니다."""
+    presets = {
+        "실행중": ("rgba(255, 213, 79, 70)", "rgba(255, 213, 79, 140)", "palette(window-text)"),
+        "미완료": ("rgba(239, 83, 80, 70)", "rgba(239, 83, 80, 140)", "palette(window-text)"),
+        "완료됨": ("rgba(102, 187, 106, 70)", "rgba(102, 187, 106, 140)", "palette(window-text)"),
+    }
+    background, border, color = presets.get(
+        status,
+        ("rgba(120, 140, 180, 40)", "rgba(120, 140, 180, 80)", "palette(window-text)"),
+    )
+    return f"""
+QLabel {{
+    background: {background};
+    border: 1px solid {border};
+    border-radius: 8px;
+    color: {color};
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}}
+"""
+
+
+def main_table_stylesheet() -> str:
+    """메인 프로세스 테이블 스타일을 반환합니다."""
+    return """
+QTableWidget {
+    border: 1px solid palette(midlight);
+    border-radius: 10px;
+    gridline-color: transparent;
+    padding: 2px;
+}
+QHeaderView::section {
+    background: palette(button);
+    border: none;
+    border-bottom: 1px solid palette(midlight);
+    padding: 6px 8px;
+    font-weight: 600;
+}
+QTableWidget::item {
+    padding: 4px 6px;
+}
+"""
+
+
+def progress_placeholder_label_stylesheet() -> str:
+    """진행률 정보가 없을 때 사용하는 보조 라벨 스타일을 반환합니다."""
+    return (
+        "color: palette(mid); font-size: 11px; font-weight: 500; padding-left: 2px;"
+    )
 
 
 def progress_bar_stylesheet(chunk_color: str) -> str:
@@ -316,8 +463,30 @@ QPushButton:hover {{ border-color: {BORDER_HIGHLIGHT}; }}
 
 def web_shortcut_button_stylesheet(state: str, *, red: str, green: str) -> str:
     """웹 바로가기 버튼 상태에 맞는 스타일을 반환합니다."""
+    background = "palette(button)"
+    border = "palette(midlight)"
+    color = "palette(button-text)"
     if state == "RED":
-        return f"background-color: {red};"
-    if state == "GREEN":
-        return f"background-color: {green};"
-    return ""
+        background = red
+        border = red
+        color = "white"
+    elif state == "GREEN":
+        background = green
+        border = green
+        color = "white"
+    return f"""
+QPushButton {{
+    background: {background};
+    color: {color};
+    border: 1px solid {border};
+    border-radius: 7px;
+    padding: 4px 10px;
+    font-weight: 600;
+}}
+QPushButton:hover {{
+    border-color: palette(highlight);
+}}
+QPushButton:pressed {{
+    background: palette(midlight);
+}}
+"""

@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton,
+    QLabel, QProgressBar, QSlider, QToolButton, QFrame,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
+    _WINDOW_BASE_WIDTH = 470
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -137,9 +138,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
         # 창 너비 설정: 고정 너비 (절전 복귀 시 안정성 확보)
-        self.setMinimumWidth(470)
-        self.setFixedWidth(470)  # 고정 너비 설정
-        self.setGeometry(100, 100, 470, 300) # 창 초기 위치 및 크기 설정
+        self.setMinimumWidth(self._WINDOW_BASE_WIDTH)
+        self.setFixedWidth(self._WINDOW_BASE_WIDTH)  # 고정 너비 설정
+        self.setGeometry(100, 100, self._WINDOW_BASE_WIDTH, 300) # 창 초기 위치 및 크기 설정
 
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
@@ -209,16 +210,26 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget) # 중앙 위젯 설정
         main_layout = QVBoxLayout(central_widget) # 메인 수직 레이아웃 생성
 
+        # 상단 액션 프레임
+        self._top_action_frame = QFrame()
+        self._top_action_frame.setObjectName("TopActionBar")
+        self._top_action_frame.setStyleSheet(style_tokens.toolbar_frame_stylesheet())
+        top_action_frame_layout = QVBoxLayout(self._top_action_frame)
+        top_action_frame_layout.setContentsMargins(10, 8, 10, 8)
+        top_action_frame_layout.setSpacing(6)
+
         # 상단 버튼 영역 레이아웃 (게임 추가 버튼 + 동적 웹 버튼들 + 웹 바로가기 추가 버튼)
         self.top_button_area_layout = QHBoxLayout() # 수평 레이아웃
+        self.top_button_area_layout.setContentsMargins(0, 0, 0, 0)
         self.add_game_button = QPushButton("새 게임 추가") # '새 게임 추가' 버튼 생성
+        self.add_game_button.setStyleSheet(style_tokens.primary_toolbar_button_stylesheet())
         self.add_game_button.clicked.connect(self.open_add_process_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_game_button) # 레이아웃에 버튼 추가
 
         self.top_button_area_layout.addStretch(1) # 버튼들 사이의 공간 확장
 
         self.dynamic_web_buttons_layout = QHBoxLayout() # 동적 웹 버튼들을 위한 수평 레이아웃
-        self.dynamic_web_buttons_layout.setSpacing(3) # 버튼 간격을 더 작게 설정
+        self.dynamic_web_buttons_layout.setSpacing(4) # 버튼 간격을 더 작게 설정
         self.top_button_area_layout.addLayout(self.dynamic_web_buttons_layout) # 상단 버튼 영역에 동적 웹 버튼 레이아웃 추가
 
         self.add_web_shortcut_button = QPushButton("+") # 웹 바로가기 추가 버튼 생성
@@ -229,6 +240,7 @@ class MainWindow(QMainWindow):
         text_width = font_metrics.horizontalAdvance(" + ") # 텍스트 너비 계산 (양 옆 공백 포함)
         icon_button_size = text_width + 8 # 아이콘 버튼 크기 (여유 공간 추가)
         self.add_web_shortcut_button.setFixedSize(icon_button_size, icon_button_size) # 버튼 크기 고정
+        self.add_web_shortcut_button.setStyleSheet(style_tokens.compact_icon_button_stylesheet())
 
         self.add_web_shortcut_button.clicked.connect(self._open_add_web_shortcut_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_web_shortcut_button) # 상단 버튼 영역에 웹 바로가기 추가 버튼 추가
@@ -238,6 +250,7 @@ class MainWindow(QMainWindow):
         self.dashboard_button.setToolTip("통계 대시보드 열기")
         self.dashboard_button.setText("📊")  # 차트 이모지
         self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
+        self.dashboard_button.setStyleSheet(style_tokens.compact_icon_button_stylesheet())
         self.dashboard_button.clicked.connect(lambda: self.open_webpage("http://127.0.0.1:8000/dashboard"))
         self.top_button_area_layout.addWidget(self.dashboard_button)
 
@@ -247,6 +260,7 @@ class MainWindow(QMainWindow):
         self.github_button.setText("GH") # 아이콘 로딩 전 기본 텍스트
         # 크기를 다른 아이콘 버튼과 맞춤
         self.github_button.setFixedSize(icon_button_size, icon_button_size)
+        self.github_button.setStyleSheet(style_tokens.compact_icon_button_stylesheet())
         self.github_button.clicked.connect(lambda: self.open_webpage("https://github.com/lsh930309/HomeworkHelperServer"))
         self.top_button_area_layout.addWidget(self.github_button)
 
@@ -265,17 +279,46 @@ class MainWindow(QMainWindow):
         self.icon_downloader.icon_ready.connect(self.set_github_button_icon) # 아이콘 다운로더에 연결
         self.icon_downloader.start()
 
-        main_layout.addLayout(self.top_button_area_layout) # 메인 레이아웃에 상단 버튼 영역 추가
+        top_action_frame_layout.addLayout(self.top_button_area_layout)
+
+        self._summary_layout = QHBoxLayout()
+        self._summary_layout.setContentsMargins(0, 0, 0, 0)
+        self._summary_layout.setSpacing(6)
+        self._summary_total_label = QLabel()
+        self._summary_running_label = QLabel()
+        self._summary_attention_label = QLabel()
+        self._summary_completed_label = QLabel()
+        self._summary_total_label.setStyleSheet(style_tokens.summary_chip_stylesheet("neutral"))
+        self._summary_running_label.setStyleSheet(style_tokens.summary_chip_stylesheet("running"))
+        self._summary_attention_label.setStyleSheet(style_tokens.summary_chip_stylesheet("attention"))
+        self._summary_completed_label.setStyleSheet(style_tokens.summary_chip_stylesheet("completed"))
+        for label in (
+            self._summary_total_label,
+            self._summary_running_label,
+            self._summary_attention_label,
+            self._summary_completed_label,
+        ):
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._summary_layout.addWidget(label)
+        self._summary_layout.addStretch(1)
+        top_action_frame_layout.addLayout(self._summary_layout)
+
+        main_layout.addWidget(self._top_action_frame) # 메인 레이아웃에 상단 버튼 영역 추가
 
         # 프로세스 테이블 설정
         self.process_table = QTableWidget() # 테이블 위젯 생성
+        self.process_table.setObjectName("ProcessTable")
         self.process_table.setColumnCount(self.TOTAL_COLUMNS) # 컬럼 개수 설정
         self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태"]) # 헤더 라벨 설정
+        self.process_table.setStyleSheet(style_tokens.main_table_stylesheet())
         self._configure_table_header() # 테이블 헤더 상세 설정
         self.process_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers) # 편집 불가 설정
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
         self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
+        self.process_table.setShowGrid(False)
+        self.process_table.verticalHeader().hide()
 
         # 테이블 크기 정책 설정 - 스크롤바 없이 내용에 맞게 조절
         self.process_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -295,6 +338,7 @@ class MainWindow(QMainWindow):
         # 초기 데이터 로드 및 UI 업데이트
         self.populate_process_list() # 프로세스 목록 채우기
         self._load_and_display_web_buttons() # 웹 바로가기 버튼 로드 및 표시
+        self._update_summary_labels()
         self._adjust_window_height_for_table_rows() # 테이블 내용에 맞게 창 높이 조절
 
         # 시그널 및 타이머 설정
@@ -499,7 +543,9 @@ class MainWindow(QMainWindow):
             h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.Fixed) # 진행률 컬럼: 고정 폭
             h.resizeSection(self.COL_LAST_PLAYED, 120)  # 진행률 컬럼 폭 120px로 고정
             h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
+            h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Fixed) # 상태 컬럼: 내용에 맞게
+            h.resizeSection(self.COL_STATUS, 76)
+            h.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
     def _create_menu_bar(self):
         mb = self.menuBar()
@@ -897,18 +943,8 @@ class MainWindow(QMainWindow):
             st_item = self.process_table.item(r, self.COL_STATUS)
             if st_item and st_item.text() != st_str:
                 st_item.setText(st_str)
-                st_item.setForeground(df_fg)  # 기본 글자색 설정
-
-                # 상태에 따른 배경색 설정
-                if st_str == PROC_STATE_RUNNING:
-                    st_item.setBackground(self.COLOR_RUNNING)
-                    st_item.setForeground(QColor("black"))
-                elif st_str == PROC_STATE_INCOMPLETE:
-                    st_item.setBackground(self.COLOR_INCOMPLETE)
-                elif st_str == PROC_STATE_COMPLETED:
-                    st_item.setBackground(self.COLOR_COMPLETED)
-                else:
-                    st_item.setBackground(df_bg)
+                self._apply_status_item_style(st_item, st_str, df_bg, df_fg)
+                self._update_status_badge_widget(r, st_str)
                 has_changes = True
 
             # 새로 실행된 프로세스에 기본 볼륨 자동 적용
@@ -917,6 +953,7 @@ class MainWindow(QMainWindow):
 
         # 상태 변경과 별개로 진행률 컬럼은 전용 refresh 루프에서 갱신한다.
         self._refresh_progress_bars()
+        self._update_summary_labels()
 
         # 실제 변경사항이 있을 때만 상태바 메시지 표시
         if has_changes:
@@ -954,6 +991,8 @@ class MainWindow(QMainWindow):
 
             # 실행 버튼 컬럼
             btn = QPushButton("실행")
+            btn.setMinimumHeight(28)
+            btn.setStyleSheet(style_tokens.secondary_table_button_stylesheet())
             btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id)) # 버튼 클릭 시그널 연결
             
             # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
@@ -975,13 +1014,8 @@ class MainWindow(QMainWindow):
             st_item = QTableWidgetItem(st_str)
             st_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter) # 텍스트 가운데 정렬
             self.process_table.setItem(r, self.COL_STATUS, st_item)
-            st_item.setForeground(df_fg) # 기본 글자색 설정
-
-            # 상태에 따른 배경색 설정
-            if st_str == PROC_STATE_RUNNING: st_item.setBackground(self.COLOR_RUNNING); st_item.setForeground(QColor("black")) # 실행 중: 노란색 배경, 검은색 글자
-            elif st_str == PROC_STATE_INCOMPLETE: st_item.setBackground(self.COLOR_INCOMPLETE) # 미완료: 빨간색 배경
-            elif st_str == PROC_STATE_COMPLETED: st_item.setBackground(self.COLOR_COMPLETED) # 완료: 초록색 배경
-            else: st_item.setBackground(df_bg) # 그 외: 기본 배경색
+            self._apply_status_item_style(st_item, st_str, df_bg, df_fg)
+            self.process_table.setCellWidget(r, self.COL_STATUS, self._create_status_badge_widget(st_str))
 
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
@@ -989,6 +1023,7 @@ class MainWindow(QMainWindow):
         self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
         self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
         self.scheduler.invalidate_visual_status_snapshot()
+        self._update_summary_labels()
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
@@ -1330,21 +1365,14 @@ class MainWindow(QMainWindow):
                 palette = self.process_table.palette()
                 df_bg, df_fg = palette.base(), palette.text()
                 
-                status_item.setBackground(df_bg)  # 기본 배경색으로 초기화
-                status_item.setForeground(df_fg)  # 기본 글자색으로 초기화
-                
-                if new_status == PROC_STATE_RUNNING:
-                    status_item.setBackground(self.COLOR_RUNNING)
-                    status_item.setForeground(QColor("black"))
-                elif new_status == PROC_STATE_INCOMPLETE:
-                    status_item.setBackground(self.COLOR_INCOMPLETE)
-                elif new_status == PROC_STATE_COMPLETED:
-                    status_item.setBackground(self.COLOR_COMPLETED)
+                self._apply_status_item_style(status_item, new_status, df_bg, df_fg)
+                self._update_status_badge_widget(r, new_status)
 
         # 상태 변경이 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
         if status_changes > 0:
             if self.process_table.viewport():
                 self.process_table.viewport().update()
+            self._update_summary_labels()
 
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
@@ -1373,6 +1401,7 @@ class MainWindow(QMainWindow):
             button = QPushButton(sc_data.name) # 버튼 텍스트는 바로가기 이름
             # 버튼 크기를 텍스트에 맞게 최적화
             button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            button.setMinimumHeight(28)
             # 버튼 클릭 시 _handle_web_button_clicked 메소드 호출 (ID와 URL 전달)
             button.clicked.connect(functools.partial(self._handle_web_button_clicked, sc_data.id, sc_data.url))
             button.setProperty("shortcut_id", sc_data.id) # 버튼에 바로가기 ID 저장 (나중에 참조용)
@@ -1670,23 +1699,8 @@ class MainWindow(QMainWindow):
         # 테이블의 고정 높이 설정
         self.process_table.setFixedHeight(table_content_height)
         
-        # 웹 버튼이 있을 때만 창 너비 조절
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
-        
-        # 창 너비 결정 (고정 너비 + 웹 버튼)
-        if web_button_count > 0:
-            target_width = 400
-        else:
-            target_width = 470
-
-        # 너비 제약 업데이트 (setFixedWidth 으로 min/max 동시 설정)
+        # 너비 제약 업데이트 (디자인 철학상 고정 폭 유지)
+        target_width = self._WINDOW_BASE_WIDTH
         self.setFixedWidth(target_width)
 
         # 창 높이 계산
@@ -1705,7 +1719,7 @@ class MainWindow(QMainWindow):
         total_height = menu_height + top_button_height + table_content_height + status_height + layout_margin
         
         # 창 크기 설정 (너비는 고정, 높이만 조절)
-        self.resize(target_width, total_height)
+        self.resize(self._WINDOW_BASE_WIDTH, total_height)
         self.show()
         
         # print(f"윈도우 크기 조절됨. 새 크기: {self.width()}x{self.height()}, 테이블 높이: {table_content_height}, 웹 버튼 개수: {web_button_count}")
@@ -1716,31 +1730,9 @@ class MainWindow(QMainWindow):
 
     def _adjust_window_width_for_web_buttons(self):
         """웹 바로가기 버튼 추가/삭제 시에만 창 너비를 조절합니다."""
-        # 웹 버튼 개수 확인
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
-        
-        # 창 너비 결정 (최초 창 너비보다 작은 값으로는 축소되지 않음)
-        if web_button_count > 0:
-            target_width = 400  # 웹 버튼이 있을 때의 고정 너비
-        else:
-            target_width = 470  # 웹 버튼이 없을 때의 고정 너비
-        
-        # 현재 너비가 목표 너비와 다르면 조절
         current_width = self.width()
-        if current_width != target_width:
-            # 창 최소 너비 제거 후 너비 설정
-            current_min_width = self.minimumWidth()
-            self.setMinimumWidth(0)  # 최소 너비 제거
-            self.resize(target_width, self.height())
-            self.setMinimumWidth(current_min_width)  # 원래 최소 너비 복원
-            # print(f"웹 버튼에 따른 창 너비 조절: {current_width} -> {target_width}")
+        if current_width != self._WINDOW_BASE_WIDTH:
+            self.resize(self._WINDOW_BASE_WIDTH, self.height())
 
     def _adjust_window_height_for_table_rows(self):
         """테이블 내용에 맞게 창 높이를 조절합니다.
@@ -2164,6 +2156,7 @@ class MainWindow(QMainWindow):
             # 텍스트 라벨
             text_label = QLabel(time_str)
             text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            text_label.setStyleSheet(style_tokens.progress_placeholder_label_stylesheet())
             layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
 
             return container
@@ -2296,6 +2289,75 @@ class MainWindow(QMainWindow):
         else:
             chunk_color = "#44cc44"
         progress_bar.setStyleSheet(self._progress_bar_stylesheet(chunk_color))
+
+    def _apply_status_item_style(
+        self,
+        status_item: QTableWidgetItem,
+        status: str,
+        default_bg,
+        default_fg,
+    ) -> None:
+        """상태 아이템의 내부 텍스트/배경을 정리합니다.
+
+        실제 화면 표시는 셀 위젯 배지를 사용하지만, 정렬/데이터 보존을 위해
+        QTableWidgetItem도 함께 유지합니다.
+        """
+        status_item.setForeground(default_fg)
+        status_item.setBackground(default_bg)
+        if status == PROC_STATE_RUNNING:
+            status_item.setForeground(QColor("black"))
+            status_item.setBackground(self.COLOR_RUNNING)
+        elif status == PROC_STATE_INCOMPLETE:
+            status_item.setBackground(self.COLOR_INCOMPLETE)
+        elif status == PROC_STATE_COMPLETED:
+            status_item.setBackground(self.COLOR_COMPLETED)
+
+    def _create_status_badge_widget(self, status: str) -> QWidget:
+        """상태 컬럼용 배지 위젯을 생성합니다."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(0)
+        badge = QLabel(status)
+        badge.setObjectName("StatusBadge")
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(style_tokens.status_badge_stylesheet(status))
+        layout.addWidget(badge)
+        return container
+
+    def _update_status_badge_widget(self, row: int, status: str) -> None:
+        """기존 상태 배지 위젯의 텍스트와 스타일을 갱신합니다."""
+        widget = self.process_table.cellWidget(row, self.COL_STATUS)
+        badge = None
+        if widget is not None:
+            badge = widget.findChild(QLabel, "StatusBadge")
+        if badge is None:
+            self.process_table.setCellWidget(row, self.COL_STATUS, self._create_status_badge_widget(status))
+            return
+        badge.setText(status)
+        badge.setStyleSheet(style_tokens.status_badge_stylesheet(status))
+
+    def _update_summary_labels(self) -> None:
+        """메인 창 상단 요약 배지를 최신 상태로 갱신합니다."""
+        processes = getattr(self.data_manager, "managed_processes", [])
+        total = len(processes)
+        current_dt = datetime.datetime.now()
+        gs = self.data_manager.global_settings
+        running = 0
+        attention = 0
+        completed = 0
+        for process in processes:
+            status = self.scheduler.determine_process_visual_status(process, current_dt, gs)
+            if status == PROC_STATE_RUNNING:
+                running += 1
+            elif status == PROC_STATE_INCOMPLETE:
+                attention += 1
+            elif status == PROC_STATE_COMPLETED:
+                completed += 1
+        self._summary_total_label.setText(f"전체 <b>{total}</b>")
+        self._summary_running_label.setText(f"실행 중 <b>{running}</b>")
+        self._summary_attention_label.setText(f"확인 필요 <b>{attention}</b>")
+        self._summary_completed_label.setText(f"완료 <b>{completed}</b>")
 
     def _refresh_progress_bars(self):
         """프로그레스 바들을 실시간으로 갱신합니다.
