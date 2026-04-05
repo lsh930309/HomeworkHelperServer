@@ -97,7 +97,6 @@ class _StaminaPersistTask(QRunnable):
         session_id: Optional[int],
         lifecycle_token: int,
         request_seq: int,
-        process_snapshot: dict,
         fetched_current: int,
         fetched_max: int,
         fetched_at: float,
@@ -114,7 +113,6 @@ class _StaminaPersistTask(QRunnable):
         self._session_id = session_id
         self._lifecycle_token = lifecycle_token
         self._request_seq = request_seq
-        self._process_snapshot = dict(process_snapshot)
         self._fetched_current = fetched_current
         self._fetched_max = fetched_max
         self._fetched_at = fetched_at
@@ -131,13 +129,19 @@ class _StaminaPersistTask(QRunnable):
             "fetched_at": self._fetched_at,
             "corrected_exit_current": self._applied_session_stamina,
             "aborted": False,
+            "persist_succeeded": False,
         }
         try:
             if self._should_abort():
                 result["aborted"] = True
                 return
 
-            updated_process = ManagedProcess.from_dict(self._process_snapshot)
+            live_process = self._data_manager.get_process_by_id(self._process_id)
+            if live_process is None:
+                result["error"] = "process missing during persistence"
+                return
+
+            updated_process = ManagedProcess.from_dict(live_process.to_dict())
             process_changed = (
                 updated_process.stamina_current != self._fetched_current
                 or updated_process.stamina_max != self._fetched_max
@@ -146,12 +150,14 @@ class _StaminaPersistTask(QRunnable):
             updated_process.stamina_current = self._fetched_current
             updated_process.stamina_max = self._fetched_max
             updated_process.stamina_updated_at = self._fetched_at
+            process_persist_succeeded = True
 
             if process_changed:
                 if self._should_abort():
                     result["aborted"] = True
                     return
-                if self._data_manager.update_process(updated_process):
+                process_persist_succeeded = self._data_manager.update_process(updated_process)
+                if process_persist_succeeded:
                     logger.info(
                         "[HoYoLab] 재동기화 반영: '%s' %s/%s",
                         self._process_name,
@@ -165,7 +171,9 @@ class _StaminaPersistTask(QRunnable):
                         self._fetched_current,
                         self._fetched_max,
                     )
+                    result["error"] = "process persistence failed"
 
+            session_persist_succeeded = True
             if self._allow_session_correction and self._session_id is not None:
                 recovered = int(
                     max(0.0, self._fetched_at - self._exit_timestamp)
@@ -181,10 +189,11 @@ class _StaminaPersistTask(QRunnable):
                     if self._should_abort():
                         result["aborted"] = True
                         return
-                    if self._data_manager.update_session_stamina(
+                    session_persist_succeeded = self._data_manager.update_session_stamina(
                         self._session_id,
                         corrected_exit_current,
-                    ):
+                    )
+                    if session_persist_succeeded:
                         logger.info(
                             "[HoYoLab] 세션 보정 반영: '%s' session=%s stamina=%s",
                             self._process_name,
@@ -198,6 +207,11 @@ class _StaminaPersistTask(QRunnable):
                             self._session_id,
                             corrected_exit_current,
                         )
+                        result["error"] = "session persistence failed"
+
+            result["persist_succeeded"] = (
+                process_persist_succeeded and session_persist_succeeded
+            )
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -408,7 +422,6 @@ class HoYoStaminaReconcileCoordinator(QObject):
                     session_id=job.session_id,
                     lifecycle_token=job.lifecycle_token,
                     request_seq=job.request_seq,
-                    process_snapshot=process.to_dict(),
                     fetched_current=stamina.current,
                     fetched_max=stamina.max,
                     fetched_at=fetched_at,
@@ -462,6 +475,15 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         data = payload if isinstance(payload, dict) else {}
+        process = self._data_manager.get_process_by_id(process_id)
+        if (
+            process is None
+            or not process.is_hoyoverse_game()
+            or process.hoyolab_game_id != job.game_id
+        ):
+            self._finish_job(process_id, "process metadata changed")
+            return
+
         if data.get("error"):
             logger.warning(
                 "[HoYoLab] 재동기화 저장 후처리 실패: process_id=%s, error=%s",
@@ -471,6 +493,17 @@ class HoYoStaminaReconcileCoordinator(QObject):
             if job.finish_on_success:
                 self._finish_job(process_id, "startup refresh failed")
                 return
+
+        if not data.get("persist_succeeded", False):
+            if job.finish_on_success:
+                self._finish_job(process_id, "startup refresh failed")
+                return
+            fetched_at = float(data.get("fetched_at", time.time()))
+            if fetched_at - job.exit_timestamp >= self.RECONCILE_WINDOW_SEC:
+                self._finish_job(process_id, "reconcile window elapsed")
+                return
+            self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
+            return
 
         corrected_exit_current = data.get("corrected_exit_current")
         if corrected_exit_current is not None:
