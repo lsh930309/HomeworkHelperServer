@@ -181,6 +181,36 @@ class PresetEditorDialog(QDialog):
         """호요버스 체크 여부에 따라 콤보박스 활성화"""
         self.hoyolab_game_combo.setEnabled(checked)
 
+    def _normalize_launch_type_value(self, launch_type: Optional[str]) -> str:
+        """표준 실행 방식만 정규화하고 그 외 값은 그대로 보존합니다."""
+        raw_value = (launch_type or "").strip()
+        if not raw_value:
+            return "shortcut"
+
+        lowered = raw_value.lower()
+        if lowered == "auto":
+            return "shortcut"
+        if lowered in {"shortcut", "direct", "launcher"}:
+            return lowered
+        return raw_value
+
+    def _ensure_launch_type_option(self, launch_type: Optional[str]) -> str:
+        """프리셋에 저장된 실행 방식이 콤보에 없으면 추가해 round-trip을 보장합니다."""
+        normalized = self._normalize_launch_type_value(launch_type)
+        if self.launch_type_combo.findData(normalized) >= 0:
+            return normalized
+
+        label_map = {
+            "shortcut": "기본 (바로가기 우선)",
+            "direct": "프로세스 직접 실행 우선",
+            "launcher": "런처 우선",
+        }
+        self.launch_type_combo.addItem(
+            label_map.get(normalized, f"기존 값 유지 ({normalized})"),
+            normalized,
+        )
+        return normalized
+
     def _load_presets(self):
         """프리셋 목록 로드 및 표시"""
         self.preset_list_widget.clear()
@@ -253,7 +283,7 @@ class PresetEditorDialog(QDialog):
         mandatory_times = template.get("mandatory_times") or []
         self.mandatory_times_edit.setText(", ".join(mandatory_times))
 
-        launch_type = template.get("preferred_launch_type", "shortcut")
+        launch_type = self._ensure_launch_type_option(template.get("preferred_launch_type", "shortcut"))
         idx = self.launch_type_combo.findData(launch_type)
         self.launch_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
@@ -317,7 +347,7 @@ class PresetEditorDialog(QDialog):
             self.mandatory_times_edit.clear()
             
         # [NEW] Launch Type
-        launch_type = preset.get("preferred_launch_type", "shortcut")
+        launch_type = self._ensure_launch_type_option(preset.get("preferred_launch_type", "shortcut"))
         idx = self.launch_type_combo.findData(launch_type)
         if idx >= 0:
             self.launch_type_combo.setCurrentIndex(idx)

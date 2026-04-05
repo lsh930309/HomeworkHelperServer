@@ -267,16 +267,12 @@ class ProcessDialog(QDialog):
             QMessageBox.warning(self, "입력 필요", "모니터링 경로를 먼저 입력해야 프리셋으로 저장할 수 있습니다.")
             return
 
+        schedule_values = self._collect_schedule_values(show_error=True)
+        if schedule_values is None:
+            return
+
         exe_name = os.path.basename(exe_path)
         display_name = self.name_edit.text().strip() or os.path.splitext(exe_name)[0] or "새 프리셋"
-        reset_time = self.server_reset_time_edit.text().strip() or None
-        cycle_hours = self.user_cycle_hours_edit.text().strip()
-        cycle_hours_int = int(cycle_hours) if cycle_hours.isdigit() else None
-        mandatory_times = [
-            t.strip()
-            for t in self.mandatory_times_edit.text().strip().split(",")
-            if t.strip()
-        ]
         is_hoyoverse = (
             hasattr(self, "stamina_tracking_checkbox")
             and self.stamina_tracking_checkbox.isChecked()
@@ -290,10 +286,12 @@ class ProcessDialog(QDialog):
             # Steam/Epic 같은 클라이언트 설치 게임은 .lnk/.url 바로가기를
             # 모니터링 대상으로 두는 경우가 많으므로 basename을 그대로 보존한다.
             "exe_patterns": [exe_name] if exe_name else [],
-            "server_reset_time": reset_time,
-            "default_cycle_hours": cycle_hours_int,
-            "mandatory_times": mandatory_times,
-            "preferred_launch_type": self.launch_type_combo.currentData() if hasattr(self, "launch_type_combo") else "shortcut",
+            "server_reset_time": schedule_values["server_reset_time"],
+            "default_cycle_hours": schedule_values["user_cycle_hours"],
+            "mandatory_times": schedule_values["mandatory_times"],
+            "preferred_launch_type": self._ensure_launch_type_option(
+                self.launch_type_combo.currentData() if hasattr(self, "launch_type_combo") else "shortcut"
+            ),
             "is_hoyoverse": is_hoyoverse,
             "hoyolab_game_id": hoyolab_game_id,
         }
@@ -433,13 +431,22 @@ class ProcessDialog(QDialog):
         # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
 
+    def _normalize_launch_type_value(self, launch_type: Optional[str]) -> str:
+        """표준 실행 방식만 정규화하고, 그 외 값은 원문 그대로 보존합니다."""
+        raw_value = (launch_type or "").strip()
+        if not raw_value:
+            return "shortcut"
+
+        lowered = raw_value.lower()
+        if lowered == "auto":
+            return "shortcut"
+        if lowered in {"shortcut", "direct", "launcher"}:
+            return lowered
+        return raw_value
+
     def _ensure_launch_type_option(self, launch_type: Optional[str]) -> str:
         """저장된 실행 방식이 콤보에 없으면 추가해 round-trip을 보장합니다."""
-        normalized = (launch_type or "shortcut").strip().lower()
-        if normalized == "auto":
-            normalized = "shortcut"
-        if not normalized:
-            normalized = "shortcut"
+        normalized = self._normalize_launch_type_value(launch_type)
 
         if self.launch_type_combo.findData(normalized) >= 0:
             return normalized
@@ -783,31 +790,60 @@ class ProcessDialog(QDialog):
         except ValueError:
             return False
 
+    def _collect_schedule_values(self, *, show_error: bool) -> Optional[Dict[str, Any]]:
+        """현재 폼의 시간 관련 입력을 공통 규칙으로 검증/정규화합니다."""
+        reset_time_str = self.server_reset_time_edit.text().strip()
+        if reset_time_str and not self.validate_time_format(reset_time_str):
+            if show_error:
+                QMessageBox.warning(
+                    self,
+                    "입력 오류",
+                    f"서버 초기화 시각 형식이 잘못되었습니다 (HH:MM): {reset_time_str}",
+                )
+            return None
+
+        cycle_hours_str = self.user_cycle_hours_edit.text().strip()
+        user_cycle_hours: Optional[int] = None
+        if cycle_hours_str:
+            try:
+                user_cycle_hours = int(cycle_hours_str)
+            except ValueError:
+                if show_error:
+                    QMessageBox.warning(
+                        self,
+                        "입력 오류",
+                        f"사용자 실행 주기는 숫자로 입력해야 합니다: {cycle_hours_str}",
+                    )
+                return None
+
+        mandatory_times_raw = self.mandatory_times_edit.text().strip()
+        mandatory_times_list: List[str] = []
+        if mandatory_times_raw:
+            times = [t.strip() for t in mandatory_times_raw.split(",") if t.strip()]
+            for time_str in times:
+                if not self.validate_time_format(time_str):
+                    if show_error:
+                        QMessageBox.warning(
+                            self,
+                            "입력 오류",
+                            f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {time_str}",
+                        )
+                    return None
+            mandatory_times_list = times
+
+        return {
+            "server_reset_time": reset_time_str or None,
+            "user_cycle_hours": user_cycle_hours,
+            "mandatory_times": mandatory_times_list,
+        }
+
     def accept_data(self):
         if not self.monitoring_path_edit.text().strip():
             QMessageBox.warning(self, "입력 오류", "모니터링 경로를 입력해야 합니다.")
             return
 
-        reset_time_str = self.server_reset_time_edit.text().strip()
-        if reset_time_str and not self.validate_time_format(reset_time_str):
-            QMessageBox.warning(self, "입력 오류", f"서버 초기화 시각 형식이 잘못되었습니다 (HH:MM): {reset_time_str}")
+        if self._collect_schedule_values(show_error=True) is None:
             return
-
-        cycle_hours_str = self.user_cycle_hours_edit.text().strip()
-        if cycle_hours_str:
-            try:
-                int(cycle_hours_str)
-            except ValueError:
-                QMessageBox.warning(self, "입력 오류", f"사용자 실행 주기는 숫자로 입력해야 합니다: {cycle_hours_str}")
-                return
-
-        mandatory_times_list_str = self.mandatory_times_edit.text().strip()
-        if mandatory_times_list_str:
-            times = [t.strip() for t in mandatory_times_list_str.split(",")]
-            for t_str in times:
-                if t_str and not self.validate_time_format(t_str):
-                    QMessageBox.warning(self, "입력 오류", f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {t_str}")
-                    return
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -816,23 +852,12 @@ class ProcessDialog(QDialog):
         if not monitoring_path:
             return None
 
+        schedule_values = self._collect_schedule_values(show_error=False)
+        if schedule_values is None:
+            return None
+
         launch_path = self.launch_path_edit.text().strip()
         final_launch_path = launch_path if launch_path else monitoring_path
-        server_reset_time_str = self.server_reset_time_edit.text().strip()
-        server_reset_time = server_reset_time_str if server_reset_time_str else None
-        user_cycle_hours_str = self.user_cycle_hours_edit.text().strip()
-        user_cycle_hours: Optional[int] = None
-        if user_cycle_hours_str:
-            try:
-                user_cycle_hours = int(user_cycle_hours_str)
-            except ValueError:
-                user_cycle_hours = None
-
-        mandatory_times_raw = self.mandatory_times_edit.text().strip()
-        mandatory_times_list: List[str] = []
-        if mandatory_times_raw:
-            mandatory_times_list = [t.strip() for t in mandatory_times_raw.split(",") if t.strip()]
-
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
         # 실행 방식 선택
@@ -857,9 +882,9 @@ class ProcessDialog(QDialog):
             "name": name,
             "monitoring_path": monitoring_path,
             "launch_path": final_launch_path,
-            "server_reset_time_str": server_reset_time,
-            "user_cycle_hours": user_cycle_hours,
-            "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
+            "server_reset_time_str": schedule_values["server_reset_time"],
+            "user_cycle_hours": schedule_values["user_cycle_hours"],
+            "mandatory_times_str": schedule_values["mandatory_times"] if schedule_values["mandatory_times"] else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
             "preferred_launch_type": preferred_launch_type,
             "user_preset_id": user_preset_id,
