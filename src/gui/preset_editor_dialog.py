@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QPixmap
 
+from src.gui import style_tokens
 from src.utils.game_preset_manager import GamePresetManager
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ class PresetEditorDialog(QDialog):
         # 스태미나/재화 아이콘
         self.icon_preview_label = QLabel()
         self.icon_preview_label.setFixedSize(48, 48)
-        self.icon_preview_label.setStyleSheet("border: 1px solid #ccc; background: white;")
+        self.icon_preview_label.setStyleSheet(style_tokens.preview_frame_stylesheet())
         self.icon_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.icon_path_edit = QLineEdit()
@@ -161,7 +162,7 @@ class PresetEditorDialog(QDialog):
         
         self.save_btn = QPushButton("프리셋 등록/저장")
         self.save_btn.setMinimumHeight(40)
-        self.save_btn.setStyleSheet("font-weight: bold; background-color: #e1f5fe;")
+        self.save_btn.setStyleSheet(style_tokens.primary_action_button_stylesheet())
         self.save_btn.clicked.connect(self._save_preset)
         save_btn_layout.addWidget(self.save_btn)
         

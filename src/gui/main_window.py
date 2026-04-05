@@ -38,6 +38,7 @@ from src.core.launcher import Launcher
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
+from src.gui import style_tokens
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
@@ -541,26 +542,7 @@ class MainWindow(QMainWindow):
         self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
         self._volume_btn.setCheckable(True)
         self._volume_btn.clicked.connect(self._toggle_volume_panel)
-        self._volume_btn.setStyleSheet("""
-            QToolButton {
-                border: 1px solid transparent;
-                border-radius: 4px;
-                background: transparent;
-                padding: 2px 6px;
-            }
-            QToolButton:hover {
-                background: palette(midlight);
-                border-color: palette(mid);
-            }
-            QToolButton:checked {
-                background: palette(highlight);
-                color: palette(highlighted-text);
-                border-color: palette(highlight);
-            }
-            QToolButton:pressed {
-                background: palette(dark);
-            }
-        """)
+        self._volume_btn.setStyleSheet(style_tokens.menu_tool_button_stylesheet())
 
         self._always_on_top_cb = QCheckBox("항상 위")
         self._always_on_top_cb.setToolTip("창을 항상 위에 표시")
@@ -1283,11 +1265,13 @@ class MainWindow(QMainWindow):
 
     def _apply_button_style(self, button: QPushButton, state: str):
         """버튼 상태에 따라 스타일시트를 적용합니다."""
-        button.setStyleSheet("") # 기존 스타일 초기화
-        if state == "RED":
-            button.setStyleSheet(f"background-color: {self.COLOR_WEB_BTN_RED.name()};") # 빨간색 배경
-        elif state == "GREEN":
-            button.setStyleSheet(f"background-color: {self.COLOR_WEB_BTN_GREEN.name()};") # 초록색 배경
+        button.setStyleSheet(
+            style_tokens.web_shortcut_button_stylesheet(
+                state,
+                red=self.COLOR_WEB_BTN_RED.name(),
+                green=self.COLOR_WEB_BTN_GREEN.name(),
+            )
+        )
 
     def _refresh_web_button_states(self):
         """동적으로 생성된 모든 웹 바로가기 버튼의 상태를 새로고침합니다."""
@@ -2299,20 +2283,7 @@ class MainWindow(QMainWindow):
 
     def _progress_bar_stylesheet(self, chunk_color: str) -> str:
         """공통 ProgressBar 스타일시트를 생성합니다."""
-        return f"""
-            QProgressBar {{
-                border: 1px solid #404040;
-                border-radius: 2px;
-                text-align: center;
-                background-color: #2d2d2d;
-                color: white;
-                font-weight: bold;
-            }}
-            QProgressBar::chunk {{
-                background-color: {chunk_color};
-                border-radius: 1px;
-            }}
-        """
+        return style_tokens.progress_bar_stylesheet(chunk_color)
 
     def _apply_progress_bar_style(self, progress_bar: QProgressBar, percentage: float) -> None:
         """진행률 구간에 맞는 스타일을 ProgressBar에 적용합니다."""
