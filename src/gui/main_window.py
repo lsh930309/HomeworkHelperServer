@@ -319,6 +319,7 @@ class MainWindow(QMainWindow):
         self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
         self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
         self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
+        self.process_table.cellDoubleClicked.connect(self._on_process_table_double_clicked)
         self.process_table.setShowGrid(False)
         self.process_table.verticalHeader().hide()
 
@@ -1169,7 +1170,8 @@ class MainWindow(QMainWindow):
             return
 
         current_pref = self._normalize_launch_preference(
-            getattr(p, "preferred_launch_type", "shortcut")
+            getattr(p, "preferred_launch_type", "shortcut"),
+            fallback=None,
         )
 
         if current_pref == preference:
@@ -1196,23 +1198,34 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
 
-    def _normalize_launch_preference(self, preference: Optional[str]) -> str:
+    def _normalize_launch_preference(
+        self,
+        preference: Optional[str],
+        *,
+        fallback: Optional[str] = "shortcut",
+    ) -> Optional[str]:
         """저장된 실행 방식 값을 UI 표시용 표준 값으로 정규화합니다."""
-        normalized = (preference or "shortcut").strip().lower()
-        if normalized == "auto":
+        normalized = (preference or "").strip().lower()
+        if not normalized or normalized == "auto":
             return "shortcut"
         if normalized not in {"shortcut", "direct", "launcher"}:
-            return "shortcut"
+            return fallback
         return normalized
 
-    def _launch_preference_label(self, preference: str) -> str:
+    def _launch_preference_label(self, preference: Optional[str]) -> str:
         """실행 방식 값을 사용자 표시용 한글 레이블로 반환합니다."""
-        normalized = self._normalize_launch_preference(preference)
-        return {
+        normalized = self._normalize_launch_preference(preference, fallback=None)
+        labels = {
             "shortcut": "바로가기 선호",
             "direct": "프로세스 선호",
             "launcher": "런처 선호",
-        }.get(normalized, "바로가기 선호")
+        }
+        if normalized in labels:
+            return labels[normalized]
+        raw_value = (preference or "").strip()
+        if not raw_value:
+            return labels["shortcut"]
+        return f"기존 값 유지 ({raw_value})"
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
@@ -1223,7 +1236,8 @@ class MainWindow(QMainWindow):
             return
 
         current_pref = self._normalize_launch_preference(
-            getattr(p, "preferred_launch_type", "shortcut")
+            getattr(p, "preferred_launch_type", "shortcut"),
+            fallback=None,
         )
 
         menu = QMenu(button)
@@ -1271,7 +1285,8 @@ class MainWindow(QMainWindow):
         if process.monitoring_path != process.launch_path and process.launch_path:
             menu.addSeparator()
             current_pref = self._normalize_launch_preference(
-                getattr(process, "preferred_launch_type", "shortcut")
+                getattr(process, "preferred_launch_type", "shortcut"),
+                fallback=None,
             )
 
             shortcut_action = menu.addAction("기본 실행: 바로가기 선호")
@@ -1337,10 +1352,12 @@ class MainWindow(QMainWindow):
         launch_btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, process.id))
 
         if process.monitoring_path != process.launch_path and process.launch_path:
+            raw_pref = getattr(process, "preferred_launch_type", "shortcut")
             current_pref = self._normalize_launch_preference(
-                getattr(process, "preferred_launch_type", "shortcut")
+                raw_pref,
+                fallback=None,
             )
-            pref_label = self._launch_preference_label(current_pref)
+            pref_label = self._launch_preference_label(current_pref or raw_pref)
             launch_btn.setToolTip(f"현재 기본 실행 방식: {pref_label}")
 
             launch_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1360,6 +1377,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(menu_btn)
         self._bind_table_row_context_menu(container, process.id)
         return container
+
+    def _on_process_table_double_clicked(self, row: int, _column: int) -> None:
+        """행 더블클릭 시 해당 게임 편집 다이얼로그를 엽니다."""
+        name_item = self.process_table.item(row, self.COL_NAME)
+        if not name_item:
+            return
+        process_id = name_item.data(Qt.ItemDataRole.UserRole)
+        if process_id:
+            self.handle_edit_action_for_row(process_id)
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
         """새 게임 프로세스를 추가하는 대화 상자를 엽니다."""

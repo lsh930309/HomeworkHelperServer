@@ -874,12 +874,18 @@ class GlobalSettingsDialog(QDialog):
         self.setWindowTitle("전역 설정")
         self.current_settings = current_settings
         self.resize(560, 620)
-        self.setMinimumSize(520, 460)
 
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:
             available = screen.availableGeometry()
-            self.setMaximumSize(max(520, available.width() - 80), max(460, available.height() - 80))
+            max_w = max(320, available.width() - 80)
+            max_h = max(240, available.height() - 80)
+            min_w = min(520, max_w)
+            min_h = min(460, max_h)
+            self.setMinimumSize(min_w, min_h)
+            self.setMaximumSize(max_w, max_h)
+        else:
+            self.setMinimumSize(520, 460)
 
         outer_layout = QVBoxLayout(self)
         scroll = QScrollArea()
