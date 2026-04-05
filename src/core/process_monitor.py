@@ -45,6 +45,7 @@ class ProcessLifecycleEvent:
     stamina_max: Optional[int] = None
 
     def is_hoyoverse_game(self) -> bool:
+        """현재 lifecycle 이벤트가 HoYoLab 기반 스태미나 추적 대상인지 반환합니다."""
         return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
 
 
@@ -57,6 +58,7 @@ class ProcessMonitorTickResult:
 
 class ProcessMonitor:
     def __init__(self, data_manager: ProcessesDataPort):
+        """실행 중 프로세스 캐시와 HoYoLab lazy service 참조를 초기화합니다."""
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
         self._hoyolab_service = None  # Lazy initialization
@@ -73,6 +75,7 @@ class ProcessMonitor:
         return self._hoyolab_service
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
+        """실행 파일 경로를 비교 가능한 절대 경로 형태로 정규화합니다."""
         if not path: 
             return None
         try: 
@@ -81,6 +84,7 @@ class ProcessMonitor:
             return path 
 
     def check_and_update_statuses(self) -> ProcessMonitorTickResult:
+        """시스템 프로세스 스냅샷과 내부 캐시를 비교해 시작/종료 이벤트를 기록합니다."""
         changed_occurred = False 
         started_events: List[ProcessLifecycleEvent] = []
         stopped_events: List[ProcessLifecycleEvent] = []

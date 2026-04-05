@@ -44,6 +44,7 @@ class _StaminaFetchTask(QRunnable):
         game_id: str,
         signals: _StaminaFetchSignals,
     ):
+        """백그라운드 fetch 결과를 현재 reconcile job에 다시 매칭할 식별자를 저장합니다."""
         super().__init__()
         self._process_id = process_id
         self._lifecycle_token = lifecycle_token
@@ -52,6 +53,7 @@ class _StaminaFetchTask(QRunnable):
         self._signals = signals
 
     def run(self) -> None:
+        """워커 스레드에서 HoYoLab 스태미나를 조회하고 결과를 메인 스레드로 전달합니다."""
         payload = {"stamina": None, "fetched_at": time.time()}
         try:
             from src.services.hoyolab import get_hoyolab_service
@@ -91,6 +93,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
     RECOVERY_RATE_SEC = 360
 
     def __init__(self, data_manager, process_monitor: ProcessMonitor, parent: Optional[QObject] = None):
+        """프로세스 lifecycle과 서버 재조회 결과를 연결할 상태와 워커를 준비합니다."""
         super().__init__(parent)
         self._data_manager = data_manager
         self._process_monitor = process_monitor
@@ -174,14 +177,17 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._finish_job(process_id, "shutdown")
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
+        """같은 프로세스의 이전 시작/종료 시퀀스를 무효화할 새 토큰을 발급합니다."""
         next_token = self._lifecycle_tokens.get(process_id, 0) + 1
         self._lifecycle_tokens[process_id] = next_token
         return next_token
 
     def _current_lifecycle_token(self, process_id: str) -> int:
+        """현재 프로세스에 대해 가장 최근에 발급된 lifecycle 토큰을 반환합니다."""
         return self._lifecycle_tokens.get(process_id, 0)
 
     def _schedule_attempt(self, process_id: str, delay_ms: int) -> None:
+        """기존 예약을 교체하고 지정한 지연 뒤에 다음 재조회 시도를 예약합니다."""
         job = self._jobs.get(process_id)
         if job is None or self._shutting_down:
             return
@@ -197,6 +203,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         job.timer = timer
 
     def _start_attempt(self, process_id: str, lifecycle_token: int) -> None:
+        """현재 job/token이 여전히 유효할 때만 백그라운드 fetch를 시작합니다."""
         job = self._jobs.get(process_id)
         if (
             job is None
@@ -231,6 +238,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         request_seq: int,
         payload: object,
     ) -> None:
+        """유효한 응답만 반영하고, 안정화 여부에 따라 다음 시도 또는 종료를 결정합니다."""
         job = self._jobs.get(process_id)
         if (
             self._shutting_down
@@ -289,6 +297,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
 
     def _apply_authoritative_process_stamina(self, process, stamina, fetched_at: float) -> None:
+        """서버가 반환한 최신 스태미나 스냅샷을 프로세스 저장 상태에 반영합니다."""
         changed = (
             process.stamina_current != stamina.current
             or process.stamina_max != stamina.max
@@ -316,6 +325,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         fetched_max: int,
         fetched_at: float,
     ) -> None:
+        """조회 시각 기준 현재값을 종료 시점 값으로 역산해 세션 기록을 보정합니다."""
         if job.session_id is None:
             return
 
@@ -335,6 +345,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             job.applied_session_stamina = corrected_exit_current
 
     def _finish_job(self, process_id: str, reason: str) -> None:
+        """프로세스의 active reconcile job과 연결된 타이머를 정리하고 종료합니다."""
         job = self._jobs.pop(process_id, None)
         if job is None:
             return
