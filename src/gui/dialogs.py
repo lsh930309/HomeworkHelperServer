@@ -360,10 +360,13 @@ class ProcessDialog(QDialog):
                 
         # [NEW] Launch Type
         if "preferred_launch_type" in preset and hasattr(self, 'launch_type_combo'):
-            l_type = preset["preferred_launch_type"]
-            idx = self.launch_type_combo.findData(l_type)
-            if idx >= 0:
-                self.launch_type_combo.setCurrentIndex(idx)
+            launch_type = self._ensure_launch_type_option(
+                preset["preferred_launch_type"]
+            )
+            for i in range(self.launch_type_combo.count()):
+                if self.launch_type_combo.itemData(i) == launch_type:
+                    self.launch_type_combo.setCurrentIndex(i)
+                    break
 
         # 호요버스 게임 설정
         if preset.get("is_hoyoverse", False):
