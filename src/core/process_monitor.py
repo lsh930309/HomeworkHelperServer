@@ -178,9 +178,6 @@ class ProcessMonitor:
                     else:
                         logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
 
-                    if self.data_manager.update_process(managed_proc):
-                         changed_occurred = True
-
                     stopped_events.append(
                         ProcessLifecycleEvent(
                             process_id=managed_proc.id,
@@ -193,6 +190,12 @@ class ProcessMonitor:
                             stamina_max=managed_proc.stamina_max,
                         )
                     )
+                    changed_occurred = True
+                    if not self.data_manager.update_process(managed_proc):
+                        logger.warning(
+                            "Process STOPPED 상태 저장 실패: process_id=%s",
+                            managed_proc.id,
+                        )
                     logger.info(f"Last played updated: {time.ctime(termination_time)}")
 
         return ProcessMonitorTickResult(

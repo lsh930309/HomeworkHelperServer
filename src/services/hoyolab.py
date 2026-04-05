@@ -263,10 +263,9 @@ _service_lock = threading.Lock()
 def get_hoyolab_service() -> HoYoLabService:
     """HoYoLabService 싱글톤 인스턴스 반환"""
     global _service_instance
-    if _service_instance is None:
-        with _service_lock:
-            if _service_instance is None:
-                _service_instance = HoYoLabService()
+    with _service_lock:
+        if _service_instance is None or getattr(_service_instance, "_closed", False):
+            _service_instance = HoYoLabService()
     return _service_instance
 
 
