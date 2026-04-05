@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup, QScrollArea,
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -254,156 +254,69 @@ class ProcessDialog(QDialog):
         from src.gui.preset_editor_dialog import PresetEditorDialog
         dialog = PresetEditorDialog(self)
 
-        # 프리셋 변경 시 메인 윈도우 새로고침
-        def on_presets_changed():
-            # MainWindow 찾기 (ProcessDialog의 parent 체인을 따라 올라감)
-            main_window = self.parent()
-            while main_window and not hasattr(main_window, 'refresh_presets_and_ui'):
-                main_window = main_window.parent()
-
-            if main_window and hasattr(main_window, 'refresh_presets_and_ui'):
-                main_window.refresh_presets_and_ui()
-
-        dialog.presets_changed.connect(on_presets_changed)
+        dialog.presets_changed.connect(self._refresh_parent_main_window_presets)
         dialog.exec()
         self._refresh_preset_combo()
 
     def _on_save_as_preset_clicked(self):
-        """현재 설정을 신규 프리셋으로 바로 저장 (간단한 입력 다이얼로그)"""
-        from PyQt6.QtWidgets import QInputDialog, QLineEdit
-        from src.utils.game_preset_manager import GamePresetManager
-        import re
-        import os
+        """현재 입력값을 템플릿으로 넘겨 프리셋 에디터에서 바로 저장합니다."""
+        from src.gui.preset_editor_dialog import PresetEditorDialog
 
-        # 현재 입력값 수집
-        name = self.name_edit.text().strip()
         exe_path = self.monitoring_path_edit.text().strip()
-        reset_time = self.server_reset_time_edit.text().strip()
-        cycle_hours = self.user_cycle_hours_edit.text().strip()
-        mandatory_times = self.mandatory_times_edit.text().strip()
-        launch_type = self.launch_type_combo.currentData() if hasattr(self, 'launch_type_combo') else "shortcut"
-
-        # 1. 프리셋 ID 입력 (신규)
-        manager = GamePresetManager()
-        preset_id = None
-        while True:
-            preset_id, ok = QInputDialog.getText(
-                self,
-                "프리셋 ID",
-                "프리셋 ID를 입력하세요 (영문 소문자, 숫자, 언더스코어만):",
-                QLineEdit.EchoMode.Normal
-            )
-            if not ok:
-                return
-
-            preset_id = preset_id.strip().lower()
-
-            # ID 유효성 검사
-            if not re.match(r'^[a-z0-9_]+$', preset_id):
-                QMessageBox.warning(
-                    self, "입력 오류",
-                    "ID는 영문 소문자, 숫자, 언더스코어만 사용할 수 있습니다."
-                )
-                continue
-
-            # 중복 ID 체크
-            if manager.get_preset_by_id(preset_id):
-                reply = QMessageBox.question(
-                    self, "ID 중복",
-                    f"'{preset_id}' ID가 이미 존재합니다. 덮어쓰시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                if reply == QMessageBox.StandardButton.No:
-                    continue
-
-            break  # 유효한 ID 입력 완료
-
-        # 2. 프리셋 표시 이름 입력 (기존 로직)
-        if not name:
-            name, ok = QInputDialog.getText(
-                self, "프리셋 이름", "프리셋 표시 이름을 입력하세요:"
-            )
-            if not ok or not name.strip():
-                return
-            name = name.strip()
-
-        # 3. 실행 파일 패턴 입력 (기본값: 모니터링 경로의 파일명)
-        default_exe = os.path.basename(exe_path) if exe_path else ""
-        exe_pattern, ok = QInputDialog.getText(
-            self,
-            "실행 파일 패턴",
-            "프리셋을 인식할 실행 파일 이름을 입력하세요:\n(예: game.exe)",
-            QLineEdit.EchoMode.Normal,
-            default_exe
-        )
-        if not ok or not exe_pattern.strip():
-            QMessageBox.warning(self, "취소됨", "실행 파일 패턴은 필수입니다.")
+        if not exe_path:
+            QMessageBox.warning(self, "입력 필요", "모니터링 경로를 먼저 입력해야 프리셋으로 저장할 수 있습니다.")
             return
-        exe_pattern = exe_pattern.strip()
-        
-        # mandatory_times 파싱
-        mandatory_times_list = []
-        if mandatory_times:
-            mandatory_times_list = [t.strip() for t in mandatory_times.split(",") if t.strip()]
 
-        # cycle_hours 파싱
-        cycle_hours_int = None
-        if cycle_hours:
-            try:
-                cycle_hours_int = int(cycle_hours)
-            except ValueError:
-                pass
-
-        # 호요버스 설정
-        is_hoyoverse = hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked()
+        exe_name = os.path.basename(exe_path)
+        display_name = self.name_edit.text().strip() or os.path.splitext(exe_name)[0] or "새 프리셋"
+        reset_time = self.server_reset_time_edit.text().strip() or None
+        cycle_hours = self.user_cycle_hours_edit.text().strip()
+        cycle_hours_int = int(cycle_hours) if cycle_hours.isdigit() else None
+        mandatory_times = [
+            t.strip()
+            for t in self.mandatory_times_edit.text().strip().split(",")
+            if t.strip()
+        ]
+        is_hoyoverse = (
+            hasattr(self, "stamina_tracking_checkbox")
+            and self.stamina_tracking_checkbox.isChecked()
+        )
         hoyolab_game_id = None
-        if is_hoyoverse and hasattr(self, 'hoyolab_game_combo'):
+        if is_hoyoverse and hasattr(self, "hoyolab_game_combo"):
             hoyolab_game_id = self.hoyolab_game_combo.currentData()
 
-        # 프리셋 데이터 구성 (모든 필드 명시적 포함)
-        preset_data = {
-            # 기본 필드
-            "id": preset_id,
-            "display_name": name,
-            "exe_patterns": [exe_pattern],
-            "is_hoyoverse": is_hoyoverse,
-            "preferred_launch_type": launch_type,
-            "mandatory_times": mandatory_times_list,
-
-            # 아이콘 (사용자가 직접 설정할 수 없으므로 null)
-            "icon_path": None,
-            "icon_type": None,
-
-            # 호요버스/게임 설정
-            "hoyolab_game_id": hoyolab_game_id if is_hoyoverse else None,
-            "server_reset_time": reset_time if reset_time else None,
+        template = {
+            "display_name": display_name,
+            "exe_patterns": [exe_name] if exe_name else [],
+            "server_reset_time": reset_time,
             "default_cycle_hours": cycle_hours_int,
-            "stamina_name": None,
-            "stamina_max_default": None,
-            "stamina_recovery_minutes": None,
-            "launcher_patterns": None
+            "mandatory_times": mandatory_times,
+            "preferred_launch_type": self.launch_type_combo.currentData() if hasattr(self, "launch_type_combo") else "shortcut",
+            "is_hoyoverse": is_hoyoverse,
+            "hoyolab_game_id": hoyolab_game_id,
         }
-        
-        # 4. 프리셋 저장
-        try:
-            # 중복 ID는 이미 위에서 확인하여 덮어쓰기 동의를 받았으므로 바로 저장
-            existing = manager.get_preset_by_id(preset_id)
-            if existing:
-                success = manager.update_user_preset(preset_id, preset_data)
-            else:
-                success = manager.add_user_preset(preset_data)
-            
-            if success:
-                QMessageBox.information(
-                    self, 
-                    "저장 완료", 
-                    f"프리셋 '{name}'이(가) 저장되었습니다."
-                )
-                self._refresh_preset_combo()
-            else:
-                QMessageBox.critical(self, "저장 실패", "프리셋 저장에 실패했습니다.")
-        except Exception as e:
-            QMessageBox.critical(self, "오류", f"프리셋 저장 중 오류 발생:\n{str(e)}")
+
+        dialog = PresetEditorDialog(self)
+        dialog.presets_changed.connect(self._refresh_parent_main_window_presets)
+        dialog.prepare_new_preset(template)
+        dialog.exec()
+
+        self._refresh_preset_combo()
+        saved_preset_id = dialog.get_last_saved_preset_id()
+        if saved_preset_id:
+            for i in range(self.preset_combo.count()):
+                preset_data = self.preset_combo.itemData(i)
+                if preset_data and preset_data.get("id") == saved_preset_id:
+                    self.preset_combo.setCurrentIndex(i)
+                    break
+
+    def _refresh_parent_main_window_presets(self) -> None:
+        """상위 MainWindow가 있으면 프리셋 관련 UI를 다시 그립니다."""
+        main_window = self.parent()
+        while main_window and not hasattr(main_window, 'refresh_presets_and_ui'):
+            main_window = main_window.parent()
+        if main_window and hasattr(main_window, 'refresh_presets_and_ui'):
+            main_window.refresh_presets_and_ui()
 
     def _on_apply_preset_clicked(self):
         """선택한 프리셋 적용"""
@@ -934,9 +847,22 @@ class GlobalSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("전역 설정")
         self.current_settings = current_settings
-        self.setMinimumWidth(400)
+        self.resize(560, 620)
+        self.setMinimumSize(520, 460)
 
-        self.form_layout = QFormLayout(self)  # 변수명 변경
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.setMaximumSize(max(520, available.width() - 80), max(460, available.height() - 80))
+
+        outer_layout = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        outer_layout.addWidget(scroll)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setSpacing(12)
+        scroll.setWidget(content)
 
         # === 화면 배율 설정 (OS DPI 무시) ===
         self.scale_combo = QComboBox()
@@ -999,32 +925,40 @@ class GlobalSettingsDialog(QDialog):
         self.stamina_threshold_spinbox.setSuffix(" 개 전")
         self.stamina_threshold_spinbox.setToolTip("스태미나가 (최대 - 이 값) 이상일 때 알림")
 
-        # 화면 배율 섹션 (맨 위에 배치)
-        self.form_layout.addRow("화면 배율:", scale_layout)
-        self.form_layout.addRow(QLabel(""))  # 구분선
+        appearance_group = QGroupBox("표시 및 실행")
+        appearance_form = QFormLayout(appearance_group)
+        appearance_form.addRow("화면 배율:", scale_layout)
+        appearance_form.addRow("테마:", theme_rb_layout)
+        appearance_form.addRow(self.run_on_startup_checkbox)
+        appearance_form.addRow(self.run_as_admin_checkbox)
+        appearance_form.addRow(self.hide_on_game_checkbox)
+        content_layout.addWidget(appearance_group)
 
-        self.form_layout.addRow("테마:", theme_rb_layout)
-        self.form_layout.addRow(QLabel(""))  # 구분선
-        self.form_layout.addRow("수면 시작 시각:", self.sleep_start_edit)
-        self.form_layout.addRow("수면 종료 시각:", self.sleep_end_edit)
-        self.form_layout.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
-        self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
-        self.form_layout.addRow(self.run_on_startup_checkbox)
-        self.form_layout.addRow(self.run_as_admin_checkbox)
-        self.form_layout.addRow(self.hide_on_game_checkbox)
-        # 알림 설정 섹션
-        self.form_layout.addRow(QLabel("알림 설정:"))
-        self.form_layout.addRow(self.notify_on_mandatory_time_checkbox)
-        self.form_layout.addRow(self.notify_on_cycle_deadline_checkbox)
-        self.form_layout.addRow(self.notify_on_sleep_correction_checkbox)
-        self.form_layout.addRow(self.notify_on_daily_reset_checkbox)
-        # 스태미나 알림 섹션
-        self.form_layout.addRow(QLabel("\n스태미나 알림 (호요버스 게임):"))
-        self.form_layout.addRow(self.stamina_notify_checkbox)
-        self.form_layout.addRow("알림 시점:", self.stamina_threshold_spinbox)
+        schedule_group = QGroupBox("알림 기준 시각")
+        schedule_form = QFormLayout(schedule_group)
+        schedule_form.addRow("수면 시작 시각:", self.sleep_start_edit)
+        schedule_form.addRow("수면 종료 시각:", self.sleep_end_edit)
+        schedule_form.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
+        schedule_form.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
+        content_layout.addWidget(schedule_group)
+
+        notify_group = QGroupBox("알림 유형")
+        notify_layout = QVBoxLayout(notify_group)
+        notify_layout.addWidget(self.notify_on_mandatory_time_checkbox)
+        notify_layout.addWidget(self.notify_on_cycle_deadline_checkbox)
+        notify_layout.addWidget(self.notify_on_sleep_correction_checkbox)
+        notify_layout.addWidget(self.notify_on_daily_reset_checkbox)
+        content_layout.addWidget(notify_group)
+
+        stamina_group = QGroupBox("호요버스 스태미나 알림")
+        stamina_form = QFormLayout(stamina_group)
+        stamina_form.addRow(self.stamina_notify_checkbox)
+        stamina_form.addRow("알림 시점:", self.stamina_threshold_spinbox)
+        content_layout.addWidget(stamina_group)
+        content_layout.addStretch(1)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        self.form_layout.addRow(self.button_box)
+        outer_layout.addWidget(self.button_box)
 
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)

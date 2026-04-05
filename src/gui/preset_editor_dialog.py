@@ -27,6 +27,7 @@ class PresetEditorDialog(QDialog):
         self.resize(800, 650)
         
         self.manager = GamePresetManager()
+        self._last_saved_preset_id: Optional[str] = None
         
         # 현재 편집 중인 원본 프리셋 ID (rename 시 원본 추적용)
         self._original_preset_id: Optional[str] = None
@@ -195,7 +196,7 @@ class PresetEditorDialog(QDialog):
             
             self.preset_list_widget.addItem(item)
 
-    def _start_add_new_mode(self):
+    def _start_add_new_mode(self, template: Optional[Dict[str, Any]] = None):
         """신규 추가 모드로 전환"""
         self.preset_list_widget.clearSelection()
         self._original_preset_id = None  # 신규 모드에서는 원본 ID 없음
@@ -213,10 +214,68 @@ class PresetEditorDialog(QDialog):
         self.hoyolab_game_combo.setCurrentIndex(0)
 
         self.is_hoyoverse_check.setChecked(False)
+        self.icon_path_edit.clear()
+        self.icon_preview_label.clear()
 
         self.save_btn.setText("신규 프리셋 등록")
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
+
+        if template:
+            self._apply_new_preset_template(template)
+
+    def prepare_new_preset(self, template: Optional[Dict[str, Any]] = None) -> None:
+        """외부 다이얼로그에서 신규 프리셋 추가 모드로 진입할 때 사용합니다."""
+        self._start_add_new_mode(template)
+
+    def _apply_new_preset_template(self, template: Dict[str, Any]) -> None:
+        """ProcessDialog 등에서 전달된 템플릿으로 신규 프리셋 폼을 미리 채웁니다."""
+        from PyQt6.QtCore import QTime
+
+        display_name = (template.get("display_name") or "").strip()
+        exe_patterns = template.get("exe_patterns") or []
+        first_exe = exe_patterns[0] if exe_patterns else ""
+        suggested_id = (template.get("id") or self._suggest_preset_id(display_name, first_exe)).strip()
+        if suggested_id:
+            self.id_edit.setText(suggested_id)
+        self.name_edit.setText(display_name)
+        self.exe_patterns_edit.setPlainText("\n".join(exe_patterns))
+
+        reset_time = template.get("server_reset_time")
+        if reset_time:
+            parsed = QTime.fromString(reset_time, "HH:mm")
+            self.reset_time_edit.setTime(parsed if parsed.isValid() else self.reset_time_edit.minimumTime())
+        else:
+            self.reset_time_edit.setTime(self.reset_time_edit.minimumTime())
+
+        self.cycle_hours_spin.setValue(int(template.get("default_cycle_hours") or 0))
+
+        mandatory_times = template.get("mandatory_times") or []
+        self.mandatory_times_edit.setText(", ".join(mandatory_times))
+
+        launch_type = template.get("preferred_launch_type", "shortcut")
+        idx = self.launch_type_combo.findData(launch_type)
+        self.launch_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        is_hoyo = bool(template.get("is_hoyoverse", False))
+        self.is_hoyoverse_check.setChecked(is_hoyo)
+        hoyolab_id = template.get("hoyolab_game_id")
+        if hoyolab_id:
+            idx = self.hoyolab_game_combo.findData(hoyolab_id)
+            self.hoyolab_game_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            self.hoyolab_game_combo.setCurrentIndex(0)
+
+    def _suggest_preset_id(self, display_name: str, exe_pattern: str) -> str:
+        """표시 이름 또는 실행 파일명을 기반으로 새 프리셋 ID를 제안합니다."""
+        import os
+        import re
+
+        seed = display_name.strip()
+        if not seed and exe_pattern:
+            seed = os.path.splitext(os.path.basename(exe_pattern))[0]
+        normalized = re.sub(r"[^a-z0-9]+", "_", seed.lower()).strip("_")
+        return normalized or "new_preset"
 
     def _on_preset_selected(self, current: QListWidgetItem, _previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
@@ -473,6 +532,7 @@ class PresetEditorDialog(QDialog):
             action = "추가"
             
         if success:
+            self._last_saved_preset_id = preset_id
             # 저장 성공 후 아이콘 리네임 실행 (ID 변경 시)
             if pending_icon_rename:
                 import os
@@ -497,6 +557,10 @@ class PresetEditorDialog(QDialog):
             self.presets_changed.emit()
         else:
             QMessageBox.critical(self, "실패", f"프리셋 {action}에 실패했습니다.")
+
+    def get_last_saved_preset_id(self) -> Optional[str]:
+        """이 다이얼로그에서 마지막으로 저장된 프리셋 ID를 반환합니다."""
+        return self._last_saved_preset_id
 
     def _delete_current_preset(self):
         """현재 선택된 프리셋 삭제"""
