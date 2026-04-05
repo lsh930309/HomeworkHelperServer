@@ -632,7 +632,7 @@ class SidebarWidget(QWidget):
         """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet("background: transparent; border-radius: 4px;")
+        row.setStyleSheet(style_tokens.soft_row_stylesheet())
         hl = QHBoxLayout(row)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)
@@ -887,6 +887,11 @@ class SidebarWidget(QWidget):
         header.addWidget(self._capture_now_btn)
         layout.addLayout(header)
 
+        helper = QLabel("공유 버튼을 짧게 누르거나 지금 촬영 버튼으로 즉시 캡처할 수 있습니다.")
+        helper.setWordWrap(True)
+        helper.setStyleSheet(style_tokens.helper_text_stylesheet())
+        layout.addWidget(helper)
+
         # 썸네일 그리드
         self._thumb_grid_container = QWidget()
         self._thumb_grid_container.setStyleSheet("background: transparent;")
@@ -934,6 +939,11 @@ class SidebarWidget(QWidget):
         self._rec_connect_btn.setStyleSheet(style_tokens.accent_outline_button_stylesheet(font_size=11))
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
+
+        self._rec_hint_label = QLabel("공유 버튼을 길게 누르면 녹화를 시작하거나 종료합니다.")
+        self._rec_hint_label.setWordWrap(True)
+        self._rec_hint_label.setStyleSheet(style_tokens.helper_text_stylesheet())
+        layout.addWidget(self._rec_hint_label)
 
         return section
 
@@ -1056,6 +1066,7 @@ class SidebarWidget(QWidget):
         from pathlib import Path
         save_path = Path(save_dir_str)
         if not save_path.exists():
+            self._show_thumbnail_empty_state("스크린샷 폴더를 아직 찾을 수 없습니다.")
             return
 
         # 최신 파일 목록 (png + jpg + bmp)
@@ -1069,6 +1080,10 @@ class SidebarWidget(QWidget):
         max_shown = _THUMB_MAX_CELLS - 1  # 마지막 셀 = 폴더 버튼
         shown = files[:max_shown]
         remaining = max(0, len(files) - max_shown)
+
+        if not shown and remaining == 0:
+            self._show_thumbnail_empty_state("최근 스크린샷이 없습니다.\n게임 중 공유 버튼 또는 지금 촬영 버튼을 사용해 보세요.")
+            return
 
         # 썸네일 셀 추가
         for idx, fp in enumerate(shown):
@@ -1109,6 +1124,14 @@ class SidebarWidget(QWidget):
             lambda _checked=False, p=_fp: __import__('os').startfile(str(p))
         )
         return btn
+
+    def _show_thumbnail_empty_state(self, message: str) -> None:
+        """썸네일 영역에 빈 상태 안내를 표시합니다."""
+        label = QLabel(message)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        label.setStyleSheet(style_tokens.empty_state_tile_stylesheet())
+        self._thumb_grid_layout.addWidget(label, 0, 0, 1, _THUMB_COLS)
 
     @pyqtSlot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:

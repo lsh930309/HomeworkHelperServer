@@ -450,6 +450,32 @@ def progress_placeholder_label_stylesheet() -> str:
     )
 
 
+def helper_text_stylesheet() -> str:
+    """보조 안내 문구 스타일을 반환합니다."""
+    return "color: rgba(255,255,255,110); font-size: 10px;"
+
+
+def soft_row_stylesheet() -> str:
+    """목록 행용 은은한 카드 스타일을 반환합니다."""
+    return (
+        f"background: {SURFACE_SOFT_ALT}; border: 1px solid {BORDER_DEFAULT}; border-radius: 6px;"
+    )
+
+
+def empty_state_tile_stylesheet() -> str:
+    """빈 상태 타일 스타일을 반환합니다."""
+    return f"""
+QLabel {{
+    background: {SURFACE_SOFT_ALT};
+    border: 1px dashed {BORDER_DASHED};
+    border-radius: 6px;
+    color: {TEXT_MUTED_STRONG};
+    padding: 10px 12px;
+    font-size: 11px;
+}}
+"""
+
+
 def progress_bar_stylesheet(chunk_color: str) -> str:
     """메인 진행률 바 공통 스타일을 반환합니다."""
     return f"""
