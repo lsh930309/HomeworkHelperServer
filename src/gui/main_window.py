@@ -146,6 +146,8 @@ class MainWindow(QMainWindow):
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
+        self._web_buttons_by_id: dict[str, QPushButton] = {}
+        self._summary_snapshot: Optional[tuple[int, int, int, int]] = None
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -1364,6 +1366,8 @@ class MainWindow(QMainWindow):
 
     def _apply_button_style(self, button: QPushButton, state: str):
         """버튼 상태에 따라 스타일시트를 적용합니다."""
+        if button.property("shortcut_visual_state") == state:
+            return
         button.setStyleSheet(
             style_tokens.web_shortcut_button_stylesheet(
                 state,
@@ -1371,24 +1375,17 @@ class MainWindow(QMainWindow):
                 green=self.COLOR_WEB_BTN_GREEN.name(),
             )
         )
+        button.setProperty("shortcut_visual_state", state)
 
     def _refresh_web_button_states(self):
         """동적으로 생성된 모든 웹 바로가기 버튼의 상태를 새로고침합니다."""
-        # print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 웹 버튼 상태 새로고침") # 디버그용 로그
         current_dt = datetime.datetime.now()
-        for i in range(self.dynamic_web_buttons_layout.count()): # 레이아웃 내 모든 위젯에 대해 반복
-            item = self.dynamic_web_buttons_layout.itemAt(i)
-            if item is None:
+        for shortcut_id, button in list(self._web_buttons_by_id.items()):
+            shortcut = self.data_manager.get_web_shortcut_by_id(shortcut_id)
+            if shortcut is None:
                 continue
-            widget = item.widget()
-            if isinstance(widget, QPushButton): # 위젯이 QPushButton인 경우
-                button = widget
-                shortcut_id = button.property("shortcut_id") # 버튼 속성에서 바로가기 ID 가져오기
-                if shortcut_id:
-                    shortcut = self.data_manager.get_web_shortcut_by_id(shortcut_id) # ID로 바로가기 정보 가져오기
-                    if shortcut:
-                        state = self._determine_web_button_state(shortcut, current_dt) # 상태 결정
-                        self._apply_button_style(button, state) # 스타일 적용
+            state = self._determine_web_button_state(shortcut, current_dt)
+            self._apply_button_style(button, state)
 
     def _refresh_status_columns(self):
         """테이블의 상태 컬럼만 새로고침합니다."""
@@ -1396,6 +1393,10 @@ class MainWindow(QMainWindow):
         current_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
         status_changes = 0
+        processes_by_id = {
+            process.id: process
+            for process in self.data_manager.managed_processes
+        }
         
         for r in range(self.process_table.rowCount()):
             # 이름 컬럼에서 프로세스 ID 가져오기
@@ -1407,7 +1408,7 @@ class MainWindow(QMainWindow):
                 continue
             
             # 프로세스 정보 가져오기
-            process = self.data_manager.get_process_by_id(process_id)
+            process = processes_by_id.get(process_id)
             if not process:
                 continue
             
@@ -1458,6 +1459,7 @@ class MainWindow(QMainWindow):
     def _load_and_display_web_buttons(self):
         """저장된 웹 바로가기 정보를 불러와 동적 버튼으로 UI에 표시합니다."""
         self._clear_layout(self.dynamic_web_buttons_layout) # 기존 버튼들 모두 제거
+        self._web_buttons_by_id = {}
         shortcuts = self.data_manager.web_shortcuts # 모든 웹 바로가기 정보 가져오기
         current_dt = datetime.datetime.now()
 
@@ -1476,6 +1478,7 @@ class MainWindow(QMainWindow):
             state = self._determine_web_button_state(sc_data, current_dt) # 버튼 초기 상태 결정
             self._apply_button_style(button, state) # 스타일 적용
             self.dynamic_web_buttons_layout.addWidget(button) # 레이아웃에 버튼 추가
+            self._web_buttons_by_id[sc_data.id] = button
         
         # 웹 버튼 로드 완료 후 창 너비 조절
         self._adjust_window_width_for_web_buttons()
@@ -2222,6 +2225,7 @@ class MainWindow(QMainWindow):
             text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             text_label.setStyleSheet(style_tokens.progress_placeholder_label_stylesheet())
             layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
+            container._progress_label_ref = text_label
 
             return container
 
@@ -2255,6 +2259,7 @@ class MainWindow(QMainWindow):
                     # Progress Bar
                     progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
                     layout.addWidget(progress_bar, 1)
+                    container._progress_bar_ref = progress_bar
 
                     return container
             except Exception as e:
@@ -2282,6 +2287,7 @@ class MainWindow(QMainWindow):
         # Progress Bar
         progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
         layout.addWidget(progress_bar, 1)  # stretch factor 1로 남은 공간 채움
+        container._progress_bar_ref = progress_bar
 
         return container
     
@@ -2387,19 +2393,23 @@ class MainWindow(QMainWindow):
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(style_tokens.status_badge_stylesheet(status))
         layout.addWidget(badge)
+        container._status_badge_ref = badge
         return container
 
     def _update_status_badge_widget(self, row: int, status: str) -> None:
         """기존 상태 배지 위젯의 텍스트와 스타일을 갱신합니다."""
         widget = self.process_table.cellWidget(row, self.COL_STATUS)
-        badge = None
-        if widget is not None:
-            badge = widget.findChild(QLabel, "StatusBadge")
+        badge = getattr(widget, "_status_badge_ref", None) if widget is not None else None
+        if badge is None and isinstance(widget, QLabel):
+            badge = widget
         if badge is None:
             self.process_table.setCellWidget(row, self.COL_STATUS, self._create_status_badge_widget(status))
             return
-        badge.setText(status)
-        badge.setStyleSheet(style_tokens.status_badge_stylesheet(status))
+        if badge.text() != status:
+            badge.setText(status)
+        badge_style = style_tokens.status_badge_stylesheet(status)
+        if badge.styleSheet() != badge_style:
+            badge.setStyleSheet(badge_style)
 
     def _update_summary_labels(self) -> None:
         """메인 창 상단 요약 배지를 최신 상태로 갱신합니다."""
@@ -2418,10 +2428,23 @@ class MainWindow(QMainWindow):
                 attention += 1
             elif status == PROC_STATE_COMPLETED:
                 completed += 1
+        snapshot = (total, running, attention, completed)
+        if self._summary_snapshot == snapshot:
+            return
+        self._summary_snapshot = snapshot
         self._summary_total_label.setText(f"전체 <b>{total}</b>")
         self._summary_running_label.setText(f"실행 중 <b>{running}</b>")
         self._summary_attention_label.setText(f"확인 필요 <b>{attention}</b>")
         self._summary_completed_label.setText(f"완료 <b>{completed}</b>")
+
+    def _extract_progress_display_refs(self, current_widget: QWidget) -> tuple[Optional[QProgressBar], Optional[QLabel]]:
+        """진행률 셀에서 ProgressBar 또는 대체 라벨 참조를 빠르게 반환합니다."""
+        progress_bar = getattr(current_widget, "_progress_bar_ref", None)
+        text_label = getattr(current_widget, "_progress_label_ref", None)
+
+        if progress_bar is None and isinstance(current_widget, QProgressBar):
+            progress_bar = current_widget
+        return progress_bar, text_label
 
     def _refresh_progress_bars(self):
         """프로그레스 바들을 실시간으로 갱신합니다.
@@ -2433,7 +2456,10 @@ class MainWindow(QMainWindow):
         """
         start_time = time.time()
         now_dt = datetime.datetime.now()
-        processes = self.data_manager.managed_processes
+        processes_by_id = {
+            process.id: process
+            for process in self.data_manager.managed_processes
+        }
         updated_count = 0
 
         # 테이블의 각 행을 순회하면서 해당 행의 프로세스 ID를 찾아서 갱신
@@ -2447,13 +2473,7 @@ class MainWindow(QMainWindow):
             if not process_id:
                 continue
 
-            # 프로세스 ID로 해당 프로세스 찾기
-            process = None
-            for p in processes:
-                if p.id == process_id:
-                    process = p
-                    break
-
+            process = processes_by_id.get(process_id)
             if not process:
                 continue
 
@@ -2465,16 +2485,7 @@ class MainWindow(QMainWindow):
             # 새로운 진행률 계산
             percentage, time_str = self._calculate_progress_percentage(process, now_dt)
 
-            # 컨테이너 위젯인 경우 내부 Progress Bar 찾기 (Task #2에서 변경된 구조)
-            progress_bar = None
-            if isinstance(current_widget, QWidget):
-                # 컨테이너 내부에서 QProgressBar 찾기
-                for child in current_widget.findChildren(QProgressBar):
-                    progress_bar = child
-                    break
-            elif isinstance(current_widget, QProgressBar):
-                # 직접 QProgressBar인 경우 (하위 호환)
-                progress_bar = current_widget
+            progress_bar, text_label = self._extract_progress_display_refs(current_widget)
 
             # Progress Bar 업데이트
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith("STAMINA:"))
@@ -2507,11 +2518,9 @@ class MainWindow(QMainWindow):
 
             # QLabel 업데이트 (컨테이너 내부의 라벨 - "기록 없음" 표시)
             else:
-                for child in current_widget.findChildren(QLabel):
-                    if child.text() != time_str:
-                        child.setText(time_str)
-                        updated_count += 1
-                    break
+                if text_label and text_label.text() != time_str:
+                    text_label.setText(time_str)
+                    updated_count += 1
 
         # 업데이트가 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
         if updated_count > 0:
