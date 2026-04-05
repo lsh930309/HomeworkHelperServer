@@ -58,21 +58,18 @@ class ProcessMonitorTickResult:
 
 class ProcessMonitor:
     def __init__(self, data_manager: ProcessesDataPort):
-        """실행 중 프로세스 캐시와 HoYoLab lazy service 참조를 초기화합니다."""
+        """실행 중 프로세스 캐시를 초기화합니다."""
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
-        self._hoyolab_service = None  # Lazy initialization
 
     def _get_hoyolab_service(self):
-        """HoYoLab 서비스 인스턴스 (lazy init)"""
-        if self._hoyolab_service is None:
-            try:
-                from src.services.hoyolab import get_hoyolab_service
-                self._hoyolab_service = get_hoyolab_service()
-            except ImportError:
-                logger.warning("HoYoLab 서비스를 로드할 수 없습니다.")
-                return None
-        return self._hoyolab_service
+        """reset 이후에도 최신 전역 HoYoLab 서비스 인스턴스를 반환합니다."""
+        try:
+            from src.services.hoyolab import get_hoyolab_service
+            return get_hoyolab_service()
+        except ImportError:
+            logger.warning("HoYoLab 서비스를 로드할 수 없습니다.")
+            return None
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
         """실행 파일 경로를 비교 가능한 절대 경로 형태로 정규화합니다."""
