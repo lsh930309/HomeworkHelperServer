@@ -417,10 +417,12 @@ class ProcessDialog(QDialog):
         self.launch_type_combo = QComboBox()
         self.launch_type_combo.addItem("바로가기 선호 (기본)", "shortcut")
         self.launch_type_combo.addItem("프로세스 선호", "direct")
+        self.launch_type_combo.addItem("런처 선호", "launcher")
         self.launch_type_combo.setToolTip(
             "모니터링 경로와 실행 경로가 다를 때 기본 실행 대상을 선택합니다.\n"
             "• 바로가기 선호: 실행 경로(바로가기)를 우선 사용, 없으면 모니터링 경로 사용\n"
-            "• 프로세스 선호: 모니터링 경로(실행 파일)를 우선 사용, 없으면 실행 경로 사용"
+            "• 프로세스 선호: 모니터링 경로(실행 파일)를 우선 사용, 없으면 실행 경로 사용\n"
+            "• 런처 선호: 프리셋의 launcher_patterns 로 찾은 런처를 우선 사용하고, 없으면 기존 경로로 폴백"
         )
         launch_type_layout.addWidget(self.launch_type_combo)
         launch_type_layout.addStretch()
@@ -430,6 +432,26 @@ class ProcessDialog(QDialog):
         # 초기 상태 설정 (비활성화 - 경로가 같으면)
         # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
+
+    def _ensure_launch_type_option(self, launch_type: Optional[str]) -> str:
+        """저장된 실행 방식이 콤보에 없으면 추가해 round-trip을 보장합니다."""
+        normalized = (launch_type or "shortcut").strip().lower()
+        if normalized == "auto":
+            normalized = "shortcut"
+        if not normalized:
+            normalized = "shortcut"
+
+        if self.launch_type_combo.findData(normalized) >= 0:
+            return normalized
+
+        label_map = {
+            "shortcut": "바로가기 선호 (기본)",
+            "direct": "프로세스 선호",
+            "launcher": "런처 선호",
+        }
+        display_text = label_map.get(normalized, f"기존 값 유지 ({normalized})")
+        self.launch_type_combo.addItem(display_text, normalized)
+        return normalized
 
     def _update_launch_type_enabled(self, _=None):
         """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
@@ -643,9 +665,9 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택 로드
         if hasattr(self.existing_process, 'preferred_launch_type'):
-            launch_type = self.existing_process.preferred_launch_type
-            if launch_type == "auto":
-                launch_type = "shortcut"
+            launch_type = self._ensure_launch_type_option(
+                self.existing_process.preferred_launch_type
+            )
             for i in range(self.launch_type_combo.count()):
                 if self.launch_type_combo.itemData(i) == launch_type:
                     self.launch_type_combo.setCurrentIndex(i)
@@ -814,7 +836,9 @@ class ProcessDialog(QDialog):
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
         # 실행 방식 선택
-        preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
+        preferred_launch_type = self._ensure_launch_type_option(
+            self.launch_type_combo.currentData()
+        )
 
         # 프리셋 ID 추출
         preset_data = self.preset_combo.currentData()

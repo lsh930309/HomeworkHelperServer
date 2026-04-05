@@ -1219,7 +1219,8 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QMenu
         
         p = self.data_manager.get_process_by_id(pid)
-        if not p: return
+        if not p:
+            return
 
         current_pref = self._normalize_launch_preference(
             getattr(p, "preferred_launch_type", "shortcut")
@@ -1359,15 +1360,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(menu_btn)
         self._bind_table_row_context_menu(container, process.id)
         return container
-
-    def _on_process_table_double_clicked(self, row: int, _column: int) -> None:
-        """행 더블클릭 시 해당 게임 편집 다이얼로그를 엽니다."""
-        name_item = self.process_table.item(row, self.COL_NAME)
-        if not name_item:
-            return
-        process_id = name_item.data(Qt.ItemDataRole.UserRole)
-        if process_id:
-            self.handle_edit_action_for_row(process_id)
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
         """새 게임 프로세스를 추가하는 대화 상자를 엽니다."""
