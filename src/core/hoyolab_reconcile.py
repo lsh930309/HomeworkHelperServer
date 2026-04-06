@@ -354,14 +354,24 @@ class HoYoStaminaReconcileCoordinator(QObject):
         if job is None or self._shutting_down:
             return
 
+        if self._reconcile_window_elapsed(job.exit_timestamp):
+            self._finish_job(process_id, "reconcile window elapsed before scheduling")
+            return
+
         if job.timer is not None:
             job.timer.stop()
             job.timer.deleteLater()
 
+        remaining_ms = max(
+            0,
+            int((self.RECONCILE_WINDOW_SEC - max(0.0, time.time() - job.exit_timestamp)) * 1000),
+        )
+        effective_delay_ms = max(0, min(delay_ms, remaining_ms))
+
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda pid=process_id, token=job.lifecycle_token: self._start_attempt(pid, token))
-        timer.start(delay_ms)
+        timer.start(effective_delay_ms)
         job.timer = timer
 
     def _start_attempt(self, process_id: str, lifecycle_token: int) -> None:
@@ -373,6 +383,10 @@ class HoYoStaminaReconcileCoordinator(QObject):
             or lifecycle_token != job.lifecycle_token
             or job.in_flight
         ):
+            return
+
+        if self._reconcile_window_elapsed(job.exit_timestamp):
+            self._finish_job(process_id, "reconcile window elapsed before fetch")
             return
 
         job.in_flight = True
@@ -416,6 +430,10 @@ class HoYoStaminaReconcileCoordinator(QObject):
 
         data = payload if isinstance(payload, dict) else {}
         stamina = data.get("stamina")
+        fetched_at_value = data.get("fetched_at")
+        if not isinstance(fetched_at_value, (int, float)):
+            fetched_at_value = time.time()
+        fetched_at = float(fetched_at_value)
         process = self._data_manager.get_process_by_id(process_id)
         if (
             process is None
