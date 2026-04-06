@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
 )
 
 from src.data.data_models import ManagedProcess
-from src.gui import style_tokens
 from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
@@ -98,6 +97,50 @@ def _tint_icon_white(icon) -> "QIcon":
     return QIcon(result)
 
 
+# 슬라이더 스타일
+_SLIDER_STYLE = """
+QSlider::groove:horizontal {
+    height: 4px;
+    background: rgba(255,255,255,28);
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(100,160,255,200), stop:1 rgba(140,190,255,220));
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: rgba(220,230,255,240);
+    border: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin: -4px 0;
+}
+QSlider::handle:horizontal:hover {
+    background: white;
+}
+"""
+
+_MUTE_BTN_STYLE = """
+QPushButton {
+    border: 1px solid rgba(255,255,255,22);
+    border-radius: 3px;
+    background: rgba(255,255,255,10);
+    color: white;
+    font-size: 10px;
+}
+QPushButton:checked {
+    background: rgba(80,130,220,160);
+    border-color: rgba(100,160,255,180);
+    color: white;
+}
+QPushButton:hover:!checked {
+    background: rgba(255,255,255,22);
+}
+"""
+
+
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
@@ -147,7 +190,13 @@ class SidebarWidget(QWidget):
         # 내부 프레임 (반투명 배경 + 테두리)
         self._frame = QFrame(self)
         self._frame.setObjectName("SidebarFrame")
-        self._frame.setStyleSheet(style_tokens.sidebar_frame_stylesheet())
+        self._frame.setStyleSheet("""
+            QFrame#SidebarFrame {
+                background-color: rgba(12, 12, 16, 240);
+                border-left: 1px solid rgba(180, 200, 255, 18);
+                border-radius: 0px;
+            }
+        """)
         frame_layout = QVBoxLayout(self._frame)
         frame_layout.setContentsMargins(12, 16, 12, 12)
         frame_layout.setSpacing(8)
@@ -211,7 +260,17 @@ class SidebarWidget(QWidget):
         self._main_scroll = QScrollArea()
         self._main_scroll.setWidgetResizable(True)
         self._main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._main_scroll.setStyleSheet(style_tokens.transparent_scroll_area_stylesheet())
+        self._main_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QWidget#scroll_content { background: transparent; }
+            QScrollBar:vertical {
+                width: 4px; background: transparent; border-radius: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255,255,255,60); border-radius: 2px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
 
         self._scroll_content = QWidget()
         self._scroll_content.setObjectName("scroll_content")
@@ -227,15 +286,7 @@ class SidebarWidget(QWidget):
         clock_layout.setSpacing(2)
         self._clock_label = QLabel()
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clock_label.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_PRIMARY,
-                font_size=28,
-                font_weight=300,
-                letter_spacing=2,
-                background="transparent",
-            )
-        )
+        self._clock_label.setStyleSheet("color: rgba(220,230,255,240); font-size: 28px; font-weight: 300; letter-spacing: 2px; background: transparent;")
         clock_layout.addWidget(self._clock_label)
         self._scroll_layout.insertWidget(0, self._clock_widget)
 
@@ -252,13 +303,7 @@ class SidebarWidget(QWidget):
         vol_section_layout.setSpacing(4)
 
         vol_title = QLabel("볼륨")
-        vol_title.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_SECTION,
-                font_size=10,
-                letter_spacing=1,
-            )
-        )
+        vol_title.setStyleSheet("color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;")
         vol_section_layout.addWidget(vol_title)
 
         self._vol_list_container = QWidget()
@@ -285,7 +330,19 @@ class SidebarWidget(QWidget):
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         close_btn = QPushButton("닫기")
         close_btn.setFixedHeight(28)
-        close_btn.setStyleSheet(style_tokens.subtle_outline_button_stylesheet(font_size=11))
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,10);
+                color: rgba(255,255,255,160);
+                border: 1px solid rgba(255,255,255,18);
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: rgba(255,255,255,22);
+                color: white;
+            }
+        """)
         close_btn.clicked.connect(self.slide_out)
         layout.addWidget(close_btn)
 
@@ -441,7 +498,9 @@ class SidebarWidget(QWidget):
         구성: [아이콘 + 이름] / [오늘 플레이타임] / [게임 종료 버튼]
         """
         cluster = QWidget()
-        cluster.setStyleSheet(style_tokens.card_stylesheet())
+        cluster.setStyleSheet(
+            "QWidget { background: rgba(255,255,255,5); border: 1px solid rgba(255,255,255,10); border-radius: 8px; }"
+        )
         layout = QVBoxLayout(cluster)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(7)
@@ -452,19 +511,16 @@ class SidebarWidget(QWidget):
 
         icon_label = QLabel()
         icon_label.setFixedSize(40, 40)
-        icon_label.setStyleSheet(style_tokens.icon_frame_stylesheet())
+        icon_label.setStyleSheet(
+            "background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 10px;"
+        )
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setScaledContents(True)
         header.addWidget(icon_label)
 
         name_label = QLabel(process.name)
         name_label.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_EMPHASIS,
-                font_size=13,
-                font_weight=600,
-                background="transparent",
-            )
+            "color: rgba(235,240,255,240); font-weight: 600; font-size: 13px; background: transparent;"
         )
         name_label.setWordWrap(True)
         header.addWidget(name_label, 1)
@@ -479,11 +535,7 @@ class SidebarWidget(QWidget):
         playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
         playtime_label = QLabel("0분")
         playtime_label.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_TERTIARY,
-                font_size=11,
-                background="transparent",
-            )
+            "color: rgba(160,180,220,200); font-size: 11px; background: transparent;"
         )
         playtime_label.setVisible(playtime_enabled)
         layout.addWidget(playtime_label)
@@ -493,7 +545,17 @@ class SidebarWidget(QWidget):
         # ── 게임 종료 버튼 ──
         kill_btn = QPushButton("게임 종료")
         kill_btn.setFixedHeight(28)
-        kill_btn.setStyleSheet(style_tokens.danger_button_stylesheet(font_size=11))
+        kill_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(160, 30, 30, 160);
+                color: rgba(255,200,200,220);
+                border: 1px solid rgba(200, 60, 60, 120);
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover  { background: rgba(200, 40, 40, 200); color: white; }
+            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
+        """)
         kill_btn.clicked.connect(lambda _=False, p=pid: self._kill_process(p))
         layout.addWidget(kill_btn)
 
@@ -607,9 +669,7 @@ class SidebarWidget(QWidget):
         processes = getattr(self._data_manager, 'managed_processes', [])
         if not processes:
             empty = QLabel("등록된 게임 없음")
-            empty.setStyleSheet(
-                style_tokens.text_style(color=style_tokens.TEXT_MUTED_STRONG, font_size=11)
-            )
+            empty.setStyleSheet("color: rgba(255,255,255,100); font-size: 11px;")
             self._vol_list_layout.addWidget(empty)
             return
 
@@ -632,7 +692,7 @@ class SidebarWidget(QWidget):
         """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet(style_tokens.soft_row_stylesheet())
+        row.setStyleSheet("background: transparent; border-radius: 4px;")
         hl = QHBoxLayout(row)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)
@@ -640,22 +700,20 @@ class SidebarWidget(QWidget):
         dot_lbl = QLabel("●")
         dot_lbl.setFixedWidth(10)
         dot_lbl.setStyleSheet(
-            f"color: {style_tokens.STATUS_ACTIVE}; font-size: 7px;" if is_running
+            "color: rgba(80,200,120,220); font-size: 7px;" if is_running
             else "color: transparent; font-size: 7px;"
         )
         hl.addWidget(dot_lbl)
 
         name_lbl = QLabel(process.name)
-        name_lbl.setStyleSheet(
-            style_tokens.text_style(color=style_tokens.TEXT_SECONDARY, font_size=11)
-        )
+        name_lbl.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
         name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         hl.addWidget(name_lbl, 1)
 
         mute_btn = QPushButton()
         mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
-        mute_btn.setStyleSheet(style_tokens.mute_button_stylesheet(font_size=10, border_radius=3))
+        mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
         from PyQt6.QtWidgets import QStyle
         style = QApplication.style()
@@ -696,15 +754,13 @@ class SidebarWidget(QWidget):
         slider.setSingleStep(5)
         slider.setPageStep(5)
         slider.setFixedWidth(80)
-        slider.setStyleSheet(style_tokens.SLIDER_STYLE)
+        slider.setStyleSheet(_SLIDER_STYLE)
         slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
 
         val_lbl = QLabel()
         val_lbl.setFixedWidth(28)
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        val_lbl.setStyleSheet(
-            style_tokens.text_style(color=style_tokens.TEXT_TERTIARY, font_size=11)
-        )
+        val_lbl.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
 
         vol = getattr(process, 'default_volume', None) or 100
         if is_running:
@@ -872,25 +928,25 @@ class SidebarWidget(QWidget):
         header = QHBoxLayout()
         title = QLabel("스크린샷")
         title.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_SECTION,
-                font_size=10,
-                letter_spacing=1,
-            )
+            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
         )
         self._capture_now_btn = QPushButton("지금 촬영")
         self._capture_now_btn.setFixedHeight(28)
-        self._capture_now_btn.setStyleSheet(style_tokens.subtle_outline_button_stylesheet(font_size=11))
+        self._capture_now_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,10);
+                color: rgba(255,255,255,160);
+                border: 1px solid rgba(255,255,255,18);
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
+        """)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self._capture_now_btn)
         layout.addLayout(header)
-
-        helper = QLabel("공유 버튼을 짧게 누르거나 지금 촬영 버튼으로 즉시 캡처할 수 있습니다.")
-        helper.setWordWrap(True)
-        helper.setStyleSheet(style_tokens.helper_text_stylesheet())
-        layout.addWidget(helper)
 
         # 썸네일 그리드
         self._thumb_grid_container = QWidget()
@@ -912,23 +968,27 @@ class SidebarWidget(QWidget):
 
         title = QLabel("녹화")
         title.setStyleSheet(
-            style_tokens.text_style(
-                color=style_tokens.TEXT_SECTION,
-                font_size=10,
-                letter_spacing=1,
-            )
+            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
         )
         layout.addWidget(title)
 
         self._rec_status_label = QLabel("○ OBS 오프라인")
-        self._rec_status_label.setStyleSheet(
-            style_tokens.text_style(color=style_tokens.STATUS_DISABLED, font_size=12)
-        )
+        self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
         layout.addWidget(self._rec_status_label)
 
         self._rec_stop_btn = QPushButton("■ 녹화 종료")
         self._rec_stop_btn.setFixedHeight(28)
-        self._rec_stop_btn.setStyleSheet(style_tokens.danger_button_stylesheet(font_size=11))
+        self._rec_stop_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(160, 30, 30, 160);
+                color: rgba(255,200,200,220);
+                border: 1px solid rgba(200, 60, 60, 120);
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(200, 40, 40, 200); color: white; }
+            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
+        """)
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
         layout.addWidget(self._rec_stop_btn)
@@ -936,14 +996,19 @@ class SidebarWidget(QWidget):
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
         self._rec_connect_btn = QPushButton("↺ OBS 재연결")
         self._rec_connect_btn.setFixedHeight(26)
-        self._rec_connect_btn.setStyleSheet(style_tokens.accent_outline_button_stylesheet(font_size=11))
+        self._rec_connect_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,12);
+                color: rgba(180,200,240,200);
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: 5px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
+            QPushButton:pressed { background: rgba(255,255,255,8); }
+        """)
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
-
-        self._rec_hint_label = QLabel("공유 버튼을 길게 누르면 녹화를 시작하거나 종료합니다.")
-        self._rec_hint_label.setWordWrap(True)
-        self._rec_hint_label.setStyleSheet(style_tokens.helper_text_stylesheet())
-        layout.addWidget(self._rec_hint_label)
 
         return section
 
@@ -980,30 +1045,22 @@ class SidebarWidget(QWidget):
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
             self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
-            self._rec_status_label.setStyleSheet(
-                style_tokens.text_style(color=style_tokens.STATUS_RECORDING, font_size=12)
-            )
+            self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
             self._rec_stop_btn.show()
             self._rec_connect_btn.hide()
         elif state == "idle":
             self._rec_status_label.setText("● OBS 대기 중")
-            self._rec_status_label.setStyleSheet(
-                style_tokens.text_style(color=style_tokens.STATUS_SUCCESS, font_size=12)
-            )
+            self._rec_status_label.setStyleSheet("color: #5aaa5a; font-size: 12px;")
             self._rec_stop_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "connecting":
             self._rec_status_label.setText("○ OBS 연결 중...")
-            self._rec_status_label.setStyleSheet(
-                style_tokens.text_style(color=style_tokens.STATUS_WARNING, font_size=12)
-            )
+            self._rec_status_label.setStyleSheet("color: #aaa850; font-size: 12px;")
             self._rec_stop_btn.hide()
             self._rec_connect_btn.hide()
         else:  # obs_offline
             self._rec_status_label.setText("○ OBS 오프라인")
-            self._rec_status_label.setStyleSheet(
-                style_tokens.text_style(color=style_tokens.STATUS_DISABLED, font_size=12)
-            )
+            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
             self._rec_stop_btn.hide()
             self._rec_connect_btn.show()
             # 마지막 연결 실패 이유를 툴팁으로 표시
@@ -1066,7 +1123,6 @@ class SidebarWidget(QWidget):
         from pathlib import Path
         save_path = Path(save_dir_str)
         if not save_path.exists():
-            self._show_thumbnail_empty_state("스크린샷 폴더를 아직 찾을 수 없습니다.")
             return
 
         # 최신 파일 목록 (png + jpg + bmp)
@@ -1081,10 +1137,6 @@ class SidebarWidget(QWidget):
         shown = files[:max_shown]
         remaining = max(0, len(files) - max_shown)
 
-        if not shown and remaining == 0:
-            self._show_thumbnail_empty_state("최근 스크린샷이 없습니다.\n게임 중 공유 버튼 또는 지금 촬영 버튼을 사용해 보세요.")
-            return
-
         # 썸네일 셀 추가
         for idx, fp in enumerate(shown):
             row, col = divmod(idx, _THUMB_COLS)
@@ -1096,7 +1148,16 @@ class SidebarWidget(QWidget):
         folder_btn = QPushButton(folder_label)
         folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
         folder_btn.setToolTip("스크린샷 폴더 열기")
-        folder_btn.setStyleSheet(style_tokens.dashed_tile_button_stylesheet(font_size=11))
+        folder_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,8);
+                color: rgba(180,200,240,200);
+                border: 1px dashed rgba(255,255,255,25);
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
+        """)
         _dir = save_dir_str
 
         def _open_folder(d: str = _dir) -> None:
@@ -1115,7 +1176,15 @@ class SidebarWidget(QWidget):
         btn = QPushButton()
         btn.setFixedSize(_THUMB_W, _THUMB_H)
         btn.setToolTip(str(filepath.name))
-        btn.setStyleSheet(style_tokens.thumbnail_button_stylesheet())
+        btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,6);
+                border: 1px solid rgba(255,255,255,15);
+                border-radius: 3px;
+                padding: 0;
+            }
+            QPushButton:hover { border-color: rgba(100,160,255,180); }
+        """)
         path_str = str(filepath)
         self._thumb_buttons[path_str] = btn
         self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
@@ -1124,14 +1193,6 @@ class SidebarWidget(QWidget):
             lambda _checked=False, p=_fp: __import__('os').startfile(str(p))
         )
         return btn
-
-    def _show_thumbnail_empty_state(self, message: str) -> None:
-        """썸네일 영역에 빈 상태 안내를 표시합니다."""
-        label = QLabel(message)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setWordWrap(True)
-        label.setStyleSheet(style_tokens.empty_state_tile_stylesheet())
-        self._thumb_grid_layout.addWidget(label, 0, 0, 1, _THUMB_COLS)
 
     @pyqtSlot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:

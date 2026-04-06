@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup, QScrollArea,
+    QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -149,10 +149,10 @@ class ProcessDialog(QDialog):
         self.is_mandatory_time_enabled_checkbox = QCheckBox("특정 접속 시간 알림 활성화")
 
         self.form_layout.addRow(self.select_running_button)
-        
+
         # --- 프리셋 선택 섹션 추가 ---
         self._setup_preset_section()
-        
+
         self.form_layout.addRow("이름 (비워두면 자동 생성):", self.name_edit)
 
         monitor_path_layout = QHBoxLayout()
@@ -188,7 +188,7 @@ class ProcessDialog(QDialog):
         )
         self.button_box.accepted.connect(self.accept_data)
         self.button_box.rejected.connect(self.reject)
-        
+
         # 실행 방식 선택 콤보박스 활성화 상태 업데이트 (경로 변경 시)
         self.monitoring_path_edit.textChanged.connect(self._update_launch_type_enabled)
         self.launch_path_edit.textChanged.connect(self._update_launch_type_enabled)
@@ -199,22 +199,22 @@ class ProcessDialog(QDialog):
     def _setup_preset_section(self):
         """프리셋 선택 및 저장 섹션 설정"""
         from src.utils.game_preset_manager import GamePresetManager
-        
+
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("프리셋:"))
-        
+
         self.preset_combo = QComboBox()
         self.preset_combo.addItem("선택 안 함", None)
-        
+
         # 프리셋 목록 로드
         try:
             self.preset_manager = GamePresetManager()
             presets = self.preset_manager.get_all_presets()
-            
+
             # 정렬: 시스템 프리셋 먼저, 그 다음 이름순
             # (여기서는 간단히 이름순으로 정렬하되, 원본 순서도 고려할 수 있음)
             presets.sort(key=lambda p: p.get("display_name", ""))
-            
+
             for preset in presets:
                 display_name = preset.get("display_name", "Unknown")
                 preset_id = preset.get("id")
@@ -228,25 +228,25 @@ class ProcessDialog(QDialog):
             logger.warning(f"프리셋 로드 실패: {e}")
 
         preset_layout.addWidget(self.preset_combo, 1) # 늘어나도록 설정
-        
+
         # 적용 버튼
         self.apply_preset_button = QPushButton("적용")
         self.apply_preset_button.setToolTip("선택한 프리셋의 설정을 현재 입력창에 적용합니다.")
         self.apply_preset_button.clicked.connect(self._on_apply_preset_clicked)
         preset_layout.addWidget(self.apply_preset_button)
-        
+
         # 현재 설정을 프리셋으로 저장 버튼 (신규 추가 모드로 프리셋 에디터 열기)
         self.save_as_preset_button = QPushButton("현재 설정을 프리셋으로 저장")
         self.save_as_preset_button.setToolTip("현재 입력된 설정값으로 새 프리셋을 등록합니다.")
         self.save_as_preset_button.clicked.connect(self._on_save_as_preset_clicked)
         preset_layout.addWidget(self.save_as_preset_button)
-        
+
         # 프리셋 관리 버튼 (목록 보기/편집)
         self.manage_presets_button = QPushButton("프리셋 관리...")
         self.manage_presets_button.setToolTip("기존 프리셋 목록을 확인하고 편집합니다.")
         self.manage_presets_button.clicked.connect(self._open_preset_manager)
         preset_layout.addWidget(self.manage_presets_button)
-        
+
         self.form_layout.addRow(preset_layout)
 
     def _open_preset_manager(self):
@@ -254,76 +254,163 @@ class ProcessDialog(QDialog):
         from src.gui.preset_editor_dialog import PresetEditorDialog
         dialog = PresetEditorDialog(self)
 
-        dialog.presets_changed.connect(self._refresh_parent_main_window_presets)
+        # 프리셋 변경 시 메인 윈도우 새로고침
+        def on_presets_changed():
+            # MainWindow 찾기 (ProcessDialog의 parent 체인을 따라 올라감)
+            main_window = self.parent()
+            while main_window and not hasattr(main_window, 'refresh_presets_and_ui'):
+                main_window = main_window.parent()
+
+            if main_window and hasattr(main_window, 'refresh_presets_and_ui'):
+                main_window.refresh_presets_and_ui()
+
+        dialog.presets_changed.connect(on_presets_changed)
         dialog.exec()
         self._refresh_preset_combo()
 
     def _on_save_as_preset_clicked(self):
-        """현재 입력값을 템플릿으로 넘겨 프리셋 에디터에서 바로 저장합니다."""
-        from src.gui.preset_editor_dialog import PresetEditorDialog
+        """현재 설정을 신규 프리셋으로 바로 저장 (간단한 입력 다이얼로그)"""
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        from src.utils.game_preset_manager import GamePresetManager
+        import re
+        import os
 
+        # 현재 입력값 수집
+        name = self.name_edit.text().strip()
         exe_path = self.monitoring_path_edit.text().strip()
-        if not exe_path:
-            QMessageBox.warning(self, "입력 필요", "모니터링 경로를 먼저 입력해야 프리셋으로 저장할 수 있습니다.")
-            return
+        reset_time = self.server_reset_time_edit.text().strip()
+        cycle_hours = self.user_cycle_hours_edit.text().strip()
+        mandatory_times = self.mandatory_times_edit.text().strip()
+        launch_type = self.launch_type_combo.currentData() if hasattr(self, 'launch_type_combo') else "shortcut"
 
-        schedule_values = self._collect_schedule_values(show_error=True)
-        if schedule_values is None:
-            return
+        # 1. 프리셋 ID 입력 (신규)
+        manager = GamePresetManager()
+        preset_id = None
+        while True:
+            preset_id, ok = QInputDialog.getText(
+                self,
+                "프리셋 ID",
+                "프리셋 ID를 입력하세요 (영문 소문자, 숫자, 언더스코어만):",
+                QLineEdit.EchoMode.Normal
+            )
+            if not ok:
+                return
 
-        exe_name = os.path.basename(exe_path)
-        display_name = self.name_edit.text().strip() or os.path.splitext(exe_name)[0] or "새 프리셋"
-        is_hoyoverse = (
-            hasattr(self, "stamina_tracking_checkbox")
-            and self.stamina_tracking_checkbox.isChecked()
+            preset_id = preset_id.strip().lower()
+
+            # ID 유효성 검사
+            if not re.match(r'^[a-z0-9_]+$', preset_id):
+                QMessageBox.warning(
+                    self, "입력 오류",
+                    "ID는 영문 소문자, 숫자, 언더스코어만 사용할 수 있습니다."
+                )
+                continue
+
+            # 중복 ID 체크
+            if manager.get_preset_by_id(preset_id):
+                reply = QMessageBox.question(
+                    self, "ID 중복",
+                    f"'{preset_id}' ID가 이미 존재합니다. 덮어쓰시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    continue
+
+            break  # 유효한 ID 입력 완료
+
+        # 2. 프리셋 표시 이름 입력 (기존 로직)
+        if not name:
+            name, ok = QInputDialog.getText(
+                self, "프리셋 이름", "프리셋 표시 이름을 입력하세요:"
+            )
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+
+        # 3. 실행 파일 패턴 입력 (기본값: 모니터링 경로의 파일명)
+        default_exe = os.path.basename(exe_path) if exe_path else ""
+        exe_pattern, ok = QInputDialog.getText(
+            self,
+            "실행 파일 패턴",
+            "프리셋을 인식할 실행 파일 이름을 입력하세요:\n(예: game.exe)",
+            QLineEdit.EchoMode.Normal,
+            default_exe
         )
+        if not ok or not exe_pattern.strip():
+            QMessageBox.warning(self, "취소됨", "실행 파일 패턴은 필수입니다.")
+            return
+        exe_pattern = exe_pattern.strip()
+
+        # mandatory_times 파싱
+        mandatory_times_list = []
+        if mandatory_times:
+            mandatory_times_list = [t.strip() for t in mandatory_times.split(",") if t.strip()]
+
+        # cycle_hours 파싱
+        cycle_hours_int = None
+        if cycle_hours:
+            try:
+                cycle_hours_int = int(cycle_hours)
+            except ValueError:
+                pass
+
+        # 호요버스 설정
+        is_hoyoverse = hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked()
         hoyolab_game_id = None
-        if is_hoyoverse and hasattr(self, "hoyolab_game_combo"):
+        if is_hoyoverse and hasattr(self, 'hoyolab_game_combo'):
             hoyolab_game_id = self.hoyolab_game_combo.currentData()
 
-        template = {
-            "display_name": display_name,
-            # Steam/Epic 같은 클라이언트 설치 게임은 .lnk/.url 바로가기를
-            # 모니터링 대상으로 두는 경우가 많으므로 basename을 그대로 보존한다.
-            "exe_patterns": [exe_name] if exe_name else [],
-            "server_reset_time": schedule_values["server_reset_time"],
-            "default_cycle_hours": schedule_values["user_cycle_hours"],
-            "mandatory_times": schedule_values["mandatory_times"],
-            "preferred_launch_type": self._ensure_launch_type_option(
-                self.launch_type_combo.currentData() if hasattr(self, "launch_type_combo") else "shortcut"
-            ),
+        # 프리셋 데이터 구성 (모든 필드 명시적 포함)
+        preset_data = {
+            # 기본 필드
+            "id": preset_id,
+            "display_name": name,
+            "exe_patterns": [exe_pattern],
             "is_hoyoverse": is_hoyoverse,
-            "hoyolab_game_id": hoyolab_game_id,
+            "preferred_launch_type": launch_type,
+            "mandatory_times": mandatory_times_list,
+
+            # 아이콘 (사용자가 직접 설정할 수 없으므로 null)
+            "icon_path": None,
+            "icon_type": None,
+
+            # 호요버스/게임 설정
+            "hoyolab_game_id": hoyolab_game_id if is_hoyoverse else None,
+            "server_reset_time": reset_time if reset_time else None,
+            "default_cycle_hours": cycle_hours_int,
+            "stamina_name": None,
+            "stamina_max_default": None,
+            "stamina_recovery_minutes": None,
+            "launcher_patterns": None
         }
 
-        dialog = PresetEditorDialog(self)
-        dialog.presets_changed.connect(self._refresh_parent_main_window_presets)
-        dialog.prepare_new_preset(template)
-        dialog.exec()
+        # 4. 프리셋 저장
+        try:
+            # 중복 ID는 이미 위에서 확인하여 덮어쓰기 동의를 받았으므로 바로 저장
+            existing = manager.get_preset_by_id(preset_id)
+            if existing:
+                success = manager.update_user_preset(preset_id, preset_data)
+            else:
+                success = manager.add_user_preset(preset_data)
 
-        self._refresh_preset_combo()
-        saved_preset_id = dialog.get_last_saved_preset_id()
-        if saved_preset_id:
-            for i in range(self.preset_combo.count()):
-                preset_data = self.preset_combo.itemData(i)
-                if preset_data and preset_data.get("id") == saved_preset_id:
-                    self.preset_combo.setCurrentIndex(i)
-                    break
-
-    def _refresh_parent_main_window_presets(self) -> None:
-        """상위 MainWindow가 있으면 프리셋 관련 UI를 다시 그립니다."""
-        main_window = self.parent()
-        while main_window and not hasattr(main_window, 'refresh_presets_and_ui'):
-            main_window = main_window.parent()
-        if main_window and hasattr(main_window, 'refresh_presets_and_ui'):
-            main_window.refresh_presets_and_ui()
+            if success:
+                QMessageBox.information(
+                    self,
+                    "저장 완료",
+                    f"프리셋 '{name}'이(가) 저장되었습니다."
+                )
+                self._refresh_preset_combo()
+            else:
+                QMessageBox.critical(self, "저장 실패", "프리셋 저장에 실패했습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"프리셋 저장 중 오류 발생:\n{str(e)}")
 
     def _on_apply_preset_clicked(self):
         """선택한 프리셋 적용"""
         preset = self.preset_combo.currentData()
         if not preset:
             return
-            
+
         reply = QMessageBox.question(
             self,
             "프리셋 적용",
@@ -331,7 +418,7 @@ class ProcessDialog(QDialog):
             "현재 입력된 내용이 덮어씌워질 수 있습니다.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
             self._apply_preset_data(preset)
             QMessageBox.information(self, "적용 완료", "프리셋 설정이 적용되었습니다.")
@@ -341,15 +428,15 @@ class ProcessDialog(QDialog):
         # 이름 적용 (비어있거나 덮어쓰기)
         if hasattr(self, 'name_edit'):
             self.name_edit.setText(preset.get("display_name", ""))
-            
+
         # 서버 초기화 시간
         if "server_reset_time" in preset:
             self.server_reset_time_edit.setText(preset["server_reset_time"])
-            
+
         # 사용자 주기
         if "default_cycle_hours" in preset:
             self.user_cycle_hours_edit.setText(str(preset["default_cycle_hours"]))
-            
+
         # [NEW] Mandatory Times
         if "mandatory_times" in preset and hasattr(self, 'mandatory_times_edit'):
             m_times = preset["mandatory_times"]
@@ -357,16 +444,13 @@ class ProcessDialog(QDialog):
                 self.mandatory_times_edit.setText(", ".join(m_times))
             else:
                 self.mandatory_times_edit.setText(str(m_times))
-                
+
         # [NEW] Launch Type
         if "preferred_launch_type" in preset and hasattr(self, 'launch_type_combo'):
-            launch_type = self._ensure_launch_type_option(
-                preset["preferred_launch_type"]
-            )
-            for i in range(self.launch_type_combo.count()):
-                if self.launch_type_combo.itemData(i) == launch_type:
-                    self.launch_type_combo.setCurrentIndex(i)
-                    break
+            l_type = preset["preferred_launch_type"]
+            idx = self.launch_type_combo.findData(l_type)
+            if idx >= 0:
+                self.launch_type_combo.setCurrentIndex(idx)
 
         # 호요버스 게임 설정
         if preset.get("is_hoyoverse", False):
@@ -381,29 +465,29 @@ class ProcessDialog(QDialog):
                     if index >= 0:
                         self.hoyolab_game_combo.setCurrentIndex(index)
 
-    # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만, 
+    # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만,
     # multi_replace는 덮어쓰기이므로, 기존 _on_save_as_preset_clicked 메서드 전체를 이 청크로 대체하는 게 나을 수도 있음.
     # 하지만 여기서는 _apply_preset_data 뒤에 오는 _on_save_as_preset_clicked를 제거해야 함.
-    # 해당 메서드는 파일 뒷부분에 있음. 
+    # 해당 메서드는 파일 뒷부분에 있음.
     # 차라리 별도 청크로 삭제 처리.
 
     def _refresh_preset_combo(self):
         """프리셋 콤보박스 목록 갱신"""
         current_data = self.preset_combo.currentData()
-        
+
         self.preset_combo.clear()
         self.preset_combo.addItem("선택 안 함", None)
-        
+
         self.preset_manager.reload()
         presets = self.preset_manager.get_all_presets()
         presets.sort(key=lambda p: p.get("display_name", ""))
-        
+
         for preset in presets:
             display_name = preset.get("display_name", "Unknown")
             preset_id = preset.get("id")
             if not preset_id: continue
             self.preset_combo.addItem(display_name, preset)
-            
+
         # 이전에 선택했던 항목 복구 시도
         if current_data:
             index = self.preset_combo.findData(current_data)
@@ -414,68 +498,37 @@ class ProcessDialog(QDialog):
         """실행 방식 선택 섹션 설정"""
         launch_type_layout = QHBoxLayout()
         launch_type_layout.addWidget(QLabel("실행 방식:"))
-        
+
         self.launch_type_combo = QComboBox()
         self.launch_type_combo.addItem("바로가기 선호 (기본)", "shortcut")
         self.launch_type_combo.addItem("프로세스 선호", "direct")
-        self.launch_type_combo.addItem("런처 선호", "launcher")
         self.launch_type_combo.setToolTip(
             "모니터링 경로와 실행 경로가 다를 때 기본 실행 대상을 선택합니다.\n"
             "• 바로가기 선호: 실행 경로(바로가기)를 우선 사용, 없으면 모니터링 경로 사용\n"
-            "• 프로세스 선호: 모니터링 경로(실행 파일)를 우선 사용, 없으면 실행 경로 사용\n"
-            "• 런처 선호: 프리셋의 launcher_patterns 로 찾은 런처를 우선 사용하고, 없으면 기존 경로로 폴백"
+            "• 프로세스 선호: 모니터링 경로(실행 파일)를 우선 사용, 없으면 실행 경로 사용"
         )
         launch_type_layout.addWidget(self.launch_type_combo)
         launch_type_layout.addStretch()
-        
+
         self.form_layout.addRow(launch_type_layout)
-        
+
         # 초기 상태 설정 (비활성화 - 경로가 같으면)
         # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
-
-    def _normalize_launch_type_value(self, launch_type: Optional[str]) -> str:
-        """표준 실행 방식만 정규화하고, 그 외 값은 원문 그대로 보존합니다."""
-        raw_value = (launch_type or "").strip()
-        if not raw_value:
-            return "shortcut"
-
-        lowered = raw_value.lower()
-        if lowered == "auto":
-            return "shortcut"
-        if lowered in {"shortcut", "direct", "launcher"}:
-            return lowered
-        return raw_value
-
-    def _ensure_launch_type_option(self, launch_type: Optional[str]) -> str:
-        """저장된 실행 방식이 콤보에 없으면 추가해 round-trip을 보장합니다."""
-        normalized = self._normalize_launch_type_value(launch_type)
-
-        if self.launch_type_combo.findData(normalized) >= 0:
-            return normalized
-
-        label_map = {
-            "shortcut": "바로가기 선호 (기본)",
-            "direct": "프로세스 선호",
-            "launcher": "런처 선호",
-        }
-        display_text = label_map.get(normalized, f"기존 값 유지 ({normalized})")
-        self.launch_type_combo.addItem(display_text, normalized)
-        return normalized
 
     def _update_launch_type_enabled(self, _=None):
         """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
         # 콤보박스가 아직 생성되지 않은 경우 무시
         if not hasattr(self, 'launch_type_combo'):
             return
-            
+
         monitoring = self.monitoring_path_edit.text().strip()
         launch = self.launch_path_edit.text().strip()
-        
+
         # 실행 경로가 비어있거나 모니터링 경로와 같으면 비활성화
         is_different = bool(launch and monitoring != launch)
         self.launch_type_combo.setEnabled(is_different)
-        
+
 
     def _setup_stamina_section(self):
         """스태미나 추적 섹션 설정 (호요버스 게임 전용)"""
@@ -675,9 +728,9 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택 로드
         if hasattr(self.existing_process, 'preferred_launch_type'):
-            launch_type = self._ensure_launch_type_option(
-                self.existing_process.preferred_launch_type
-            )
+            launch_type = self.existing_process.preferred_launch_type
+            if launch_type == "auto":
+                launch_type = "shortcut"
             for i in range(self.launch_type_combo.count()):
                 if self.launch_type_combo.itemData(i) == launch_type:
                     self.launch_type_combo.setCurrentIndex(i)
@@ -731,7 +784,7 @@ class ProcessDialog(QDialog):
                     from src.utils.game_preset_manager import GamePresetManager
                     manager = GamePresetManager()
                     preset = manager.detect_game_from_exe(exe_path)
-                    
+
                     if preset:
                         self._apply_preset_data(preset)
                         logger.debug(f"프리셋 '{preset.get('id')}' 자동 감지 및 적용 완료")
@@ -748,12 +801,12 @@ class ProcessDialog(QDialog):
             "모든 파일 (*)"
         ]
         filter_string = ";;".join(filters)
-        
+
         # QFileDialog.getOpenFileName은 선택된 파일의 경로를 반환합니다.
         # .lnk나 .url 파일의 경우, 해당 파일 자체의 경로가 반환됩니다 (대상의 경로가 아님).
         file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "파일 선택", 
+            self,
+            "파일 선택",
             "",  # 시작 디렉토리 (비워두면 마지막 사용 디렉토리 또는 기본값)
             filter_string
         )
@@ -768,16 +821,16 @@ class ProcessDialog(QDialog):
                     # 복사된 파일 경로를 입력 필드에 설정
                     path_edit_widget.setText(copied_path)
                     QMessageBox.information(
-                        self, 
-                        "바로가기 파일 복사 완료", 
+                        self,
+                        "바로가기 파일 복사 완료",
                         f"바로가기 파일이 자동으로 복사되었습니다.\n원본: {os.path.basename(file_path)}\n복사본: {os.path.basename(copied_path)}"
                     )
                 else:
                     # 복사 실패 시 원본 경로 사용
                     path_edit_widget.setText(file_path)
                     QMessageBox.warning(
-                        self, 
-                        "바로가기 파일 복사 실패", 
+                        self,
+                        "바로가기 파일 복사 실패",
                         f"바로가기 파일 복사에 실패했습니다. 원본 경로를 사용합니다.\n{file_path}"
                     )
             else:
@@ -787,85 +840,37 @@ class ProcessDialog(QDialog):
     def validate_time_format(self, time_str: str) -> bool:
         if not time_str:
             return True
-        return self._normalize_time_value(time_str) is not None
-
-    def _normalize_time_value(self, time_str: str) -> Optional[str]:
-        """시간 문자열을 HH:MM 형식으로 정규화합니다."""
-        raw = time_str.strip()
-        if not raw:
-            return None
         try:
-            parsed = datetime.datetime.strptime(raw, "%H:%M")
+            datetime.datetime.strptime(time_str, "%H:%M")
+            return True
         except ValueError:
-            return None
-        return parsed.strftime("%H:%M")
-
-    def _collect_schedule_values(self, *, show_error: bool) -> Optional[Dict[str, Any]]:
-        """현재 폼의 시간 관련 입력을 공통 규칙으로 검증/정규화합니다."""
-        reset_time_str = self.server_reset_time_edit.text().strip()
-        normalized_reset_time = self._normalize_time_value(reset_time_str) if reset_time_str else None
-        if reset_time_str and normalized_reset_time is None:
-            if show_error:
-                QMessageBox.warning(
-                    self,
-                    "입력 오류",
-                    f"서버 초기화 시각 형식이 잘못되었습니다 (HH:MM): {reset_time_str}",
-                )
-            return None
-
-        cycle_hours_str = self.user_cycle_hours_edit.text().strip()
-        user_cycle_hours: Optional[int] = None
-        if cycle_hours_str:
-            try:
-                user_cycle_hours = int(cycle_hours_str)
-            except ValueError:
-                if show_error:
-                    QMessageBox.warning(
-                        self,
-                        "입력 오류",
-                        f"사용자 실행 주기는 숫자로 입력해야 합니다: {cycle_hours_str}",
-                    )
-                return None
-            if user_cycle_hours < 0 or user_cycle_hours > 168:
-                if show_error:
-                    QMessageBox.warning(
-                        self,
-                        "입력 오류",
-                        f"사용자 실행 주기는 0~168 범위로 입력해야 합니다: {cycle_hours_str}",
-                    )
-                return None
-            if user_cycle_hours == 0:
-                user_cycle_hours = None
-
-        mandatory_times_raw = self.mandatory_times_edit.text().strip()
-        mandatory_times_list: List[str] = []
-        if mandatory_times_raw:
-            times = [t.strip() for t in mandatory_times_raw.split(",") if t.strip()]
-            for time_str in times:
-                normalized_time = self._normalize_time_value(time_str)
-                if normalized_time is None:
-                    if show_error:
-                        QMessageBox.warning(
-                            self,
-                            "입력 오류",
-                            f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {time_str}",
-                        )
-                    return None
-                mandatory_times_list.append(normalized_time)
-
-        return {
-            "server_reset_time": normalized_reset_time,
-            "user_cycle_hours": user_cycle_hours,
-            "mandatory_times": mandatory_times_list,
-        }
+            return False
 
     def accept_data(self):
         if not self.monitoring_path_edit.text().strip():
             QMessageBox.warning(self, "입력 오류", "모니터링 경로를 입력해야 합니다.")
             return
 
-        if self._collect_schedule_values(show_error=True) is None:
+        reset_time_str = self.server_reset_time_edit.text().strip()
+        if reset_time_str and not self.validate_time_format(reset_time_str):
+            QMessageBox.warning(self, "입력 오류", f"서버 초기화 시각 형식이 잘못되었습니다 (HH:MM): {reset_time_str}")
             return
+
+        cycle_hours_str = self.user_cycle_hours_edit.text().strip()
+        if cycle_hours_str:
+            try:
+                int(cycle_hours_str)
+            except ValueError:
+                QMessageBox.warning(self, "입력 오류", f"사용자 실행 주기는 숫자로 입력해야 합니다: {cycle_hours_str}")
+                return
+
+        mandatory_times_list_str = self.mandatory_times_edit.text().strip()
+        if mandatory_times_list_str:
+            times = [t.strip() for t in mandatory_times_list_str.split(",")]
+            for t_str in times:
+                if t_str and not self.validate_time_format(t_str):
+                    QMessageBox.warning(self, "입력 오류", f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {t_str}")
+                    return
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -874,18 +879,27 @@ class ProcessDialog(QDialog):
         if not monitoring_path:
             return None
 
-        schedule_values = self._collect_schedule_values(show_error=False)
-        if schedule_values is None:
-            return None
-
         launch_path = self.launch_path_edit.text().strip()
         final_launch_path = launch_path if launch_path else monitoring_path
+        server_reset_time_str = self.server_reset_time_edit.text().strip()
+        server_reset_time = server_reset_time_str if server_reset_time_str else None
+        user_cycle_hours_str = self.user_cycle_hours_edit.text().strip()
+        user_cycle_hours: Optional[int] = None
+        if user_cycle_hours_str:
+            try:
+                user_cycle_hours = int(user_cycle_hours_str)
+            except ValueError:
+                user_cycle_hours = None
+
+        mandatory_times_raw = self.mandatory_times_edit.text().strip()
+        mandatory_times_list: List[str] = []
+        if mandatory_times_raw:
+            mandatory_times_list = [t.strip() for t in mandatory_times_raw.split(",") if t.strip()]
+
         is_mandatory_enabled = self.is_mandatory_time_enabled_checkbox.isChecked()
 
         # 실행 방식 선택
-        preferred_launch_type = self._ensure_launch_type_option(
-            self.launch_type_combo.currentData()
-        )
+        preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
 
         # 프리셋 ID 추출
         preset_data = self.preset_combo.currentData()
@@ -904,9 +918,9 @@ class ProcessDialog(QDialog):
             "name": name,
             "monitoring_path": monitoring_path,
             "launch_path": final_launch_path,
-            "server_reset_time_str": schedule_values["server_reset_time"],
-            "user_cycle_hours": schedule_values["user_cycle_hours"],
-            "mandatory_times_str": schedule_values["mandatory_times"] if schedule_values["mandatory_times"] else None,
+            "server_reset_time_str": server_reset_time,
+            "user_cycle_hours": user_cycle_hours,
+            "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
             "preferred_launch_type": preferred_launch_type,
             "user_preset_id": user_preset_id,
@@ -920,28 +934,9 @@ class GlobalSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("전역 설정")
         self.current_settings = current_settings
-        self.resize(560, 620)
+        self.setMinimumWidth(400)
 
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            max_w = max(320, available.width() - 80)
-            max_h = max(240, available.height() - 80)
-            min_w = min(520, max_w)
-            min_h = min(460, max_h)
-            self.setMinimumSize(min_w, min_h)
-            self.setMaximumSize(max_w, max_h)
-        else:
-            self.setMinimumSize(520, 460)
-
-        outer_layout = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer_layout.addWidget(scroll)
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setSpacing(12)
-        scroll.setWidget(content)
+        self.form_layout = QFormLayout(self)  # 변수명 변경
 
         # === 화면 배율 설정 (OS DPI 무시) ===
         self.scale_combo = QComboBox()
@@ -950,10 +945,10 @@ class GlobalSettingsDialog(QDialog):
         self.scale_combo.addItem("150%", 150)
         self.scale_combo.addItem("175%", 175)
         self.scale_combo.addItem("200%", 200)
-        
+
         scale_info_label = QLabel("※ 변경 시 앱 재시작 필요")
         scale_info_label.setStyleSheet("color: #888888; font-size: 9pt;")
-        
+
         scale_layout = QHBoxLayout()
         scale_layout.addWidget(self.scale_combo)
         scale_layout.addWidget(scale_info_label)
@@ -1004,46 +999,38 @@ class GlobalSettingsDialog(QDialog):
         self.stamina_threshold_spinbox.setSuffix(" 개 전")
         self.stamina_threshold_spinbox.setToolTip("스태미나가 (최대 - 이 값) 이상일 때 알림")
 
-        appearance_group = QGroupBox("표시 및 실행")
-        appearance_form = QFormLayout(appearance_group)
-        appearance_form.addRow("화면 배율:", scale_layout)
-        appearance_form.addRow("테마:", theme_rb_layout)
-        appearance_form.addRow(self.run_on_startup_checkbox)
-        appearance_form.addRow(self.run_as_admin_checkbox)
-        appearance_form.addRow(self.hide_on_game_checkbox)
-        content_layout.addWidget(appearance_group)
+        # 화면 배율 섹션 (맨 위에 배치)
+        self.form_layout.addRow("화면 배율:", scale_layout)
+        self.form_layout.addRow(QLabel(""))  # 구분선
 
-        schedule_group = QGroupBox("알림 기준 시각")
-        schedule_form = QFormLayout(schedule_group)
-        schedule_form.addRow("수면 시작 시각:", self.sleep_start_edit)
-        schedule_form.addRow("수면 종료 시각:", self.sleep_end_edit)
-        schedule_form.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
-        schedule_form.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
-        content_layout.addWidget(schedule_group)
-
-        notify_group = QGroupBox("알림 유형")
-        notify_layout = QVBoxLayout(notify_group)
-        notify_layout.addWidget(self.notify_on_mandatory_time_checkbox)
-        notify_layout.addWidget(self.notify_on_cycle_deadline_checkbox)
-        notify_layout.addWidget(self.notify_on_sleep_correction_checkbox)
-        notify_layout.addWidget(self.notify_on_daily_reset_checkbox)
-        content_layout.addWidget(notify_group)
-
-        stamina_group = QGroupBox("호요버스 스태미나 알림")
-        stamina_form = QFormLayout(stamina_group)
-        stamina_form.addRow(self.stamina_notify_checkbox)
-        stamina_form.addRow("알림 시점:", self.stamina_threshold_spinbox)
-        content_layout.addWidget(stamina_group)
-        content_layout.addStretch(1)
+        self.form_layout.addRow("테마:", theme_rb_layout)
+        self.form_layout.addRow(QLabel(""))  # 구분선
+        self.form_layout.addRow("수면 시작 시각:", self.sleep_start_edit)
+        self.form_layout.addRow("수면 종료 시각:", self.sleep_end_edit)
+        self.form_layout.addRow("수면 보정 알림 (수면 시작 기준):", self.sleep_correction_hours_spinbox)
+        self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
+        self.form_layout.addRow(self.run_on_startup_checkbox)
+        self.form_layout.addRow(self.run_as_admin_checkbox)
+        self.form_layout.addRow(self.hide_on_game_checkbox)
+        # 알림 설정 섹션
+        self.form_layout.addRow(QLabel("알림 설정:"))
+        self.form_layout.addRow(self.notify_on_mandatory_time_checkbox)
+        self.form_layout.addRow(self.notify_on_cycle_deadline_checkbox)
+        self.form_layout.addRow(self.notify_on_sleep_correction_checkbox)
+        self.form_layout.addRow(self.notify_on_daily_reset_checkbox)
+        # 스태미나 알림 섹션
+        self.form_layout.addRow(QLabel("\n스태미나 알림 (호요버스 게임):"))
+        self.form_layout.addRow(self.stamina_notify_checkbox)
+        self.form_layout.addRow("알림 시점:", self.stamina_threshold_spinbox)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        outer_layout.addWidget(self.button_box)
+        self.form_layout.addRow(self.button_box)
 
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
 
         self.populate_settings()
-        
+
         # 배율 초기값 로드 (ini 파일에서)
         self._load_scale_setting()
 
@@ -1055,16 +1042,16 @@ class GlobalSettingsDialog(QDialog):
                 app_data = os.getenv('APPDATA', os.path.expanduser('~'))
             else:
                 app_data = os.path.expanduser('~/.config')
-            
+
             config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
-            
+
             if os.path.exists(config_path):
                 config = configparser.ConfigParser()
                 config.read(config_path, encoding='utf-8')
                 scale_percent = config.getint('Display', 'scale_percent', fallback=100)
             else:
                 scale_percent = 100
-            
+
             # 콤보박스에서 해당 값 선택
             for i in range(self.scale_combo.count()):
                 if self.scale_combo.itemData(i) == scale_percent:
@@ -1072,7 +1059,7 @@ class GlobalSettingsDialog(QDialog):
                     break
         except Exception as e:
             logger.warning(f"배율 설정 로드 실패: {e}")
-    
+
     def _save_scale_setting(self, scale_percent: int):
         """ini 파일에 배율 설정 저장"""
         try:
@@ -1081,14 +1068,14 @@ class GlobalSettingsDialog(QDialog):
                 app_data = os.getenv('APPDATA', os.path.expanduser('~'))
             else:
                 app_data = os.path.expanduser('~/.config')
-            
+
             config_dir = os.path.join(app_data, 'HomeworkHelper')
             os.makedirs(config_dir, exist_ok=True)
             config_path = os.path.join(config_dir, 'display_settings.ini')
-            
+
             config = configparser.ConfigParser()
             config['Display'] = {'scale_percent': str(scale_percent)}
-            
+
             with open(config_path, 'w', encoding='utf-8') as f:
                 config.write(f)
 
@@ -1097,11 +1084,11 @@ class GlobalSettingsDialog(QDialog):
         except Exception as e:
             logger.warning(f"배율 설정 저장 실패: {e}")
             return False
-    
+
     def accept(self):
         """설정 저장 시 배율 변경 확인 및 재시작 안내"""
         new_scale = self.scale_combo.currentData()
-        
+
         # 기존 배율과 비교
         try:
             import configparser
@@ -1109,14 +1096,14 @@ class GlobalSettingsDialog(QDialog):
                 app_data = os.getenv('APPDATA', os.path.expanduser('~'))
             else:
                 app_data = os.path.expanduser('~/.config')
-            
+
             config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
             old_scale = 100
             if os.path.exists(config_path):
                 config = configparser.ConfigParser()
                 config.read(config_path, encoding='utf-8')
                 old_scale = config.getint('Display', 'scale_percent', fallback=100)
-            
+
             # 배율이 변경된 경우
             if new_scale != old_scale:
                 self._save_scale_setting(new_scale)
@@ -1129,7 +1116,7 @@ class GlobalSettingsDialog(QDialog):
         except Exception as e:
             logger.warning(f"배율 변경 확인 실패: {e}")
             self._save_scale_setting(new_scale)
-        
+
         super().accept()
 
     def populate_settings(self):
@@ -1176,12 +1163,12 @@ class GlobalSettingsDialog(QDialog):
             theme='light' if self.theme_light_rb.isChecked() else 'dark' if self.theme_dark_rb.isChecked() else 'system',
             hide_on_game=self.hide_on_game_checkbox.isChecked(),
         )
-        
+
 class WebShortcutDialog(QDialog):
     """ 웹 바로 가기 버튼 추가 또는 편집을 위한 다이얼로그 """
     def __init__(self, parent: Optional[QWidget] = None, shortcut_data: Optional[Dict[str, Any]] = None):
         super().__init__(parent)
-        
+
         self.is_edit_mode = shortcut_data is not None
         self.setWindowTitle("웹 바로 가기 편집" if self.is_edit_mode else "새 웹 바로 가기 추가")
         self.setMinimumWidth(350)
@@ -1191,7 +1178,7 @@ class WebShortcutDialog(QDialog):
         self.name_edit = QLineEdit()
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("예: https://www.google.com")
-        
+
         # 새로고침 시각 입력 필드 (HH:MM, 선택 사항)
         self.refresh_time_edit = QLineEdit()
         self.refresh_time_edit.setPlaceholderText("HH:MM (예: 09:00), 비워두면 기능 미적용")
@@ -1237,11 +1224,11 @@ class WebShortcutDialog(QDialog):
         if not name:
             QMessageBox.warning(self, "입력 오류", "버튼 이름을 입력해야 합니다.")
             self.name_edit.setFocus(); return
-        
+
         if not url:
             QMessageBox.warning(self, "입력 오류", "웹 URL을 입력해야 합니다.")
             self.url_edit.setFocus(); return
-        
+
         if not (url.startswith("http://") or url.startswith("https://") or "://" in url):
             reply = QMessageBox.warning(self, "URL 형식 경고",
                                         f"입력하신 URL '{url}'이 일반적인 웹 주소 형식이 아닐 수 있습니다.\n"
@@ -1250,11 +1237,11 @@ class WebShortcutDialog(QDialog):
                                         QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 self.url_edit.setFocus(); return
-        
+
         if refresh_time_str and not self._is_valid_hhmm(refresh_time_str):
             QMessageBox.warning(self, "입력 오류", "새로고침 시각 형식이 잘못되었습니다 (HH:MM 형식 또는 빈 값).")
             self.refresh_time_edit.setFocus(); return
-            
+
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -1272,16 +1259,16 @@ class WebShortcutDialog(QDialog):
 
 class HoYoLabSettingsDialog(QDialog):
     """HoYoLab 인증 정보 설정 다이얼로그
-    
+
     브라우저 쿠키 자동 추출 또는 수동 입력을 통해 HoYoLab 인증 정보를 설정합니다.
     """
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("HoYoLab 설정")
         self.setMinimumWidth(450)
-        
+
         layout = QVBoxLayout(self)
-        
+
         # 안내 문구
         info_label = QLabel(
             "HoYoLab 게임 스태미나(개척력/배터리) 조회를 위해\n"
@@ -1290,22 +1277,22 @@ class HoYoLabSettingsDialog(QDialog):
 
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
-        
+
 
         # 자동 추출 버튼
         auto_group = QGroupBox("자동 추출")
         auto_layout = QVBoxLayout()
-        
+
         extract_btn_layout = QHBoxLayout()
         self.extract_chrome_btn = QPushButton("크롬에서 추출")
         self.extract_edge_btn = QPushButton("엣지에서 추출")
         self.extract_firefox_btn = QPushButton("파이어폭스에서 추출")
-        
+
         extract_btn_layout.addWidget(self.extract_chrome_btn)
         extract_btn_layout.addWidget(self.extract_edge_btn)
         extract_btn_layout.addWidget(self.extract_firefox_btn)
         auto_layout.addLayout(extract_btn_layout)
-        
+
         # HoYoLab 로그인 버튼
         login_btn_layout = QHBoxLayout()
         self.open_hoyolab_btn = QPushButton("호요랩 로그인 열기")
@@ -1313,49 +1300,49 @@ class HoYoLabSettingsDialog(QDialog):
         login_btn_layout.addWidget(self.open_hoyolab_btn)
         login_btn_layout.addWidget(self.show_guide_btn)
         auto_layout.addLayout(login_btn_layout)
-        
+
         self.extract_status_label = QLabel("")
         auto_layout.addWidget(self.extract_status_label)
-        
+
         auto_group.setLayout(auto_layout)
         layout.addWidget(auto_group)
-        
+
         # 수동 입력
         manual_group = QGroupBox("수동 입력 (고급)")
         manual_layout = QFormLayout()
-        
+
         self.ltuid_edit = QLineEdit()
         self.ltuid_edit.setPlaceholderText("숫자로 된 사용자 ID")
         self.ltoken_edit = QLineEdit()
         self.ltoken_edit.setPlaceholderText("ltoken_v2 쿠키 값")
         self.ltmid_edit = QLineEdit()
         self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값")
-        
+
         manual_layout.addRow("LTUID:", self.ltuid_edit)
         manual_layout.addRow("LTOKEN_V2:", self.ltoken_edit)
         manual_layout.addRow("LTMID_V2:", self.ltmid_edit)
-        
+
         manual_group.setLayout(manual_layout)
         layout.addWidget(manual_group)
-        
+
         # 상태 표시
         self.status_label = QLabel()
         self._update_status()
         layout.addWidget(self.status_label)
-        
+
         # 버튼박스
         button_layout = QHBoxLayout()
         self.clear_btn = QPushButton("인증 정보 삭제")
         self.clear_btn.setStyleSheet("color: #ff6666;")
         button_layout.addWidget(self.clear_btn)
         button_layout.addStretch()
-        
+
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         button_layout.addWidget(self.button_box)
         layout.addLayout(button_layout)
-        
+
         # 시그널 연결
         self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
         self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
@@ -1365,10 +1352,10 @@ class HoYoLabSettingsDialog(QDialog):
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.button_box.accepted.connect(self._save_and_accept)
         self.button_box.rejected.connect(self.reject)
-        
+
         # 기존 설정 로드
         self._load_existing_credentials()
-    
+
     def _update_status(self):
         """현재 인증 상태 업데이트"""
         try:
@@ -1383,7 +1370,7 @@ class HoYoLabSettingsDialog(QDialog):
         except Exception as e:
             self.status_label.setText(f"⚠️ 상태 확인 실패: {e}")
             self.status_label.setStyleSheet("color: #ffcc00;")
-    
+
     def _load_existing_credentials(self):
         """기존 저장된 인증 정보 로드"""
         try:
@@ -1401,12 +1388,12 @@ class HoYoLabSettingsDialog(QDialog):
                     self.ltmid_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
         except Exception:
             pass
-    
+
     def _extract_cookies(self, browser: str):
         """브라우저에서 쿠키 자동 추출"""
         try:
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
-            
+
             extractor = BrowserCookieExtractor()
             if not extractor.is_available():
                 QMessageBox.warning(
@@ -1414,12 +1401,12 @@ class HoYoLabSettingsDialog(QDialog):
                     "쿠키 추출을 위한 라이브러리(pywin32, pycryptodome)가 설치되지 않았습니다."
                 )
                 return
-            
+
             self.extract_status_label.setText(f"{browser}에서 쿠키 추출 중...")
             self.extract_status_label.repaint()
-            
+
             cookies = extractor.extract_from_browser(browser)
-            
+
             if cookies:
                 self.ltuid_edit.setText(str(cookies.get("ltuid", "")))
                 self.ltoken_edit.setText(cookies.get("ltoken_v2", ""))
@@ -1432,11 +1419,11 @@ class HoYoLabSettingsDialog(QDialog):
                     "HoYoLab에 로그인한 후 다시 시도하세요."
                 )
                 self.extract_status_label.setStyleSheet("color: #ff6666;")
-                
+
         except Exception as e:
             self.extract_status_label.setText(f"❌ 추출 실패: {e}")
             self.extract_status_label.setStyleSheet("color: #ff6666;")
-    
+
     def _open_hoyolab(self):
         """HoYoLab 웹사이트 열기"""
         try:
@@ -1447,7 +1434,7 @@ class HoYoLabSettingsDialog(QDialog):
         except Exception as e:
             import webbrowser
             webbrowser.open("https://www.hoyolab.com/home")
-    
+
     def _show_manual_guide(self):
         """수동 쿠키 추출 가이드 표시"""
         guide_text = """<h3>수동 쿠키 추출 가이드</h3>
@@ -1502,44 +1489,44 @@ class HoYoLabSettingsDialog(QDialog):
                 from src.utils.hoyolab_config import HoYoLabConfig
                 config = HoYoLabConfig()
                 config.clear_credentials()
-                
+
                 self.ltuid_edit.clear()
                 self.ltoken_edit.clear()
                 self.ltmid_edit.clear()
                 self._update_status()
-                
+
                 QMessageBox.information(self, "완료", "인증 정보가 삭제되었습니다.")
             except Exception as e:
                 QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
-    
+
     def _save_and_accept(self):
         """인증 정보 저장"""
         ltuid_str = self.ltuid_edit.text().strip()
         ltoken = self.ltoken_edit.text().strip()
         ltmid = self.ltmid_edit.text().strip()
-        
+
         # 마스킹된 값인지 확인 (변경 안 한 경우)
         if ltoken == "••••••••" or ltmid == "••••••••":
             self.accept()  # 변경 없이 닫기
             return
-        
+
         if not ltuid_str or not ltoken or not ltmid:
             QMessageBox.warning(
                 self, "입력 오류",
                 "모든 필드를 입력하거나 자동 추출을 사용하세요."
             )
             return
-        
+
         try:
             ltuid = int(ltuid_str)
         except ValueError:
             QMessageBox.warning(self, "입력 오류", "LTUID는 숫자여야 합니다.")
             return
-        
+
         try:
             from src.utils.hoyolab_config import HoYoLabConfig
             from src.services.hoyolab import reset_hoyolab_service
-            
+
             config = HoYoLabConfig()
             if config.save_credentials(ltuid, ltoken, ltmid):
                 reset_hoyolab_service()  # 서비스 인스턴스 리셋
@@ -1547,6 +1534,6 @@ class HoYoLabSettingsDialog(QDialog):
                 self.accept()
             else:
                 QMessageBox.warning(self, "저장 실패", "인증 정보 저장에 실패했습니다.")
-                
+
         except Exception as e:
             QMessageBox.warning(self, "오류", f"저장 실패: {e}")

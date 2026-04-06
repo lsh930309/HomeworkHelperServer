@@ -4,7 +4,6 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QDoubleSpinBox, QSpinBox, QLineEdit, QGroupBox,
     QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog,
-    QScrollArea, QApplication, QWidget,
 )
 from PyQt6.QtCore import Qt
 
@@ -17,25 +16,13 @@ class SidebarSettingsDialog(QDialog):
     def __init__(self, settings: GlobalSettings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("사이드바 설정")
-        self.resize(760, 700)
-        self.setMinimumSize(700, 520)
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            self.setMaximumSize(max(700, available.width() - 80), max(520, available.height() - 80))
+        self.setMinimumWidth(860)
         self._settings = settings
         self._build_ui()
 
     def _build_ui(self) -> None:
-        outer_layout = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer_layout.addWidget(scroll)
-
-        content = QWidget()
-        main_layout = QVBoxLayout(content)
+        main_layout = QVBoxLayout(self)
         main_layout.setSpacing(12)
-        scroll.setWidget(content)
 
         # ── 2컬럼 레이아웃 ──
         columns = QHBoxLayout()
@@ -258,7 +245,7 @@ class SidebarSettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        outer_layout.addWidget(buttons)
+        main_layout.addWidget(buttons)
 
     def _browse_screenshot_dir(self) -> None:
         current = self._ss_save_dir_edit.text().strip()

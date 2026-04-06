@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QPixmap
 
-from src.gui import style_tokens
 from src.utils.game_preset_manager import GamePresetManager
 
 logger = logging.getLogger(__name__)
@@ -27,7 +26,6 @@ class PresetEditorDialog(QDialog):
         self.resize(800, 650)
         
         self.manager = GamePresetManager()
-        self._last_saved_preset_id: Optional[str] = None
         
         # 현재 편집 중인 원본 프리셋 ID (rename 시 원본 추적용)
         self._original_preset_id: Optional[str] = None
@@ -91,7 +89,7 @@ class PresetEditorDialog(QDialog):
         # 스태미나/재화 아이콘
         self.icon_preview_label = QLabel()
         self.icon_preview_label.setFixedSize(48, 48)
-        self.icon_preview_label.setStyleSheet(style_tokens.preview_frame_stylesheet())
+        self.icon_preview_label.setStyleSheet("border: 1px solid #ccc; background: white;")
         self.icon_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.icon_path_edit = QLineEdit()
@@ -163,7 +161,7 @@ class PresetEditorDialog(QDialog):
         
         self.save_btn = QPushButton("프리셋 등록/저장")
         self.save_btn.setMinimumHeight(40)
-        self.save_btn.setStyleSheet(style_tokens.primary_action_button_stylesheet())
+        self.save_btn.setStyleSheet("font-weight: bold; background-color: #e1f5fe;")
         self.save_btn.clicked.connect(self._save_preset)
         save_btn_layout.addWidget(self.save_btn)
         
@@ -181,36 +179,6 @@ class PresetEditorDialog(QDialog):
         """호요버스 체크 여부에 따라 콤보박스 활성화"""
         self.hoyolab_game_combo.setEnabled(checked)
 
-    def _normalize_launch_type_value(self, launch_type: Optional[str]) -> str:
-        """표준 실행 방식만 정규화하고 그 외 값은 그대로 보존합니다."""
-        raw_value = (launch_type or "").strip()
-        if not raw_value:
-            return "shortcut"
-
-        lowered = raw_value.lower()
-        if lowered == "auto":
-            return "shortcut"
-        if lowered in {"shortcut", "direct", "launcher"}:
-            return lowered
-        return raw_value
-
-    def _ensure_launch_type_option(self, launch_type: Optional[str]) -> str:
-        """프리셋에 저장된 실행 방식이 콤보에 없으면 추가해 round-trip을 보장합니다."""
-        normalized = self._normalize_launch_type_value(launch_type)
-        if self.launch_type_combo.findData(normalized) >= 0:
-            return normalized
-
-        label_map = {
-            "shortcut": "기본 (바로가기 우선)",
-            "direct": "프로세스 직접 실행 우선",
-            "launcher": "런처 우선",
-        }
-        self.launch_type_combo.addItem(
-            label_map.get(normalized, f"기존 값 유지 ({normalized})"),
-            normalized,
-        )
-        return normalized
-
     def _load_presets(self):
         """프리셋 목록 로드 및 표시"""
         self.preset_list_widget.clear()
@@ -226,7 +194,7 @@ class PresetEditorDialog(QDialog):
             
             self.preset_list_widget.addItem(item)
 
-    def _start_add_new_mode(self, template: Optional[Dict[str, Any]] = None):
+    def _start_add_new_mode(self):
         """신규 추가 모드로 전환"""
         self.preset_list_widget.clearSelection()
         self._original_preset_id = None  # 신규 모드에서는 원본 ID 없음
@@ -244,69 +212,10 @@ class PresetEditorDialog(QDialog):
         self.hoyolab_game_combo.setCurrentIndex(0)
 
         self.is_hoyoverse_check.setChecked(False)
-        self.icon_path_edit.clear()
-        self.icon_preview_label.clear()
 
         self.save_btn.setText("신규 프리셋 등록")
         self.save_btn.setEnabled(True)
         self.delete_btn.setEnabled(False)
-
-        if template:
-            self._apply_new_preset_template(template)
-
-    def prepare_new_preset(self, template: Optional[Dict[str, Any]] = None) -> None:
-        """외부 다이얼로그에서 신규 프리셋 추가 모드로 진입할 때 사용합니다."""
-        self._start_add_new_mode(template)
-
-    def _apply_new_preset_template(self, template: Dict[str, Any]) -> None:
-        """ProcessDialog 등에서 전달된 템플릿으로 신규 프리셋 폼을 미리 채웁니다."""
-        from PyQt6.QtCore import QTime
-
-        display_name = (template.get("display_name") or "").strip()
-        exe_patterns = template.get("exe_patterns") or []
-        first_exe = exe_patterns[0] if exe_patterns else ""
-        suggested_id = (template.get("id") or self._suggest_preset_id(display_name, first_exe)).strip()
-        if suggested_id:
-            self.id_edit.setText(suggested_id)
-        self.name_edit.setText(display_name)
-        self.exe_patterns_edit.setPlainText("\n".join(exe_patterns))
-
-        reset_time = template.get("server_reset_time")
-        if reset_time:
-            parsed = QTime.fromString(reset_time, "HH:mm")
-            self.reset_time_edit.setTime(parsed if parsed.isValid() else self.reset_time_edit.minimumTime())
-        else:
-            self.reset_time_edit.setTime(self.reset_time_edit.minimumTime())
-
-        self.cycle_hours_spin.setValue(int(template.get("default_cycle_hours") or 0))
-
-        mandatory_times = template.get("mandatory_times") or []
-        self.mandatory_times_edit.setText(", ".join(mandatory_times))
-
-        launch_type = self._ensure_launch_type_option(template.get("preferred_launch_type", "shortcut"))
-        idx = self.launch_type_combo.findData(launch_type)
-        self.launch_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
-
-        is_hoyo = bool(template.get("is_hoyoverse", False))
-        self.is_hoyoverse_check.setChecked(is_hoyo)
-        hoyolab_id = template.get("hoyolab_game_id")
-        if hoyolab_id:
-            idx = self.hoyolab_game_combo.findData(hoyolab_id)
-            self.hoyolab_game_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        else:
-            self.hoyolab_game_combo.setCurrentIndex(0)
-
-    def _suggest_preset_id(self, display_name: str, exe_pattern: str) -> str:
-        """표시 이름 또는 실행 파일명을 기반으로 새 프리셋 ID를 제안합니다."""
-        import os
-        import re
-
-        seed = display_name.strip()
-        normalized = re.sub(r"[^a-z0-9]+", "_", seed.lower()).strip("_")
-        if not normalized and exe_pattern:
-            exe_seed = os.path.splitext(os.path.basename(exe_pattern))[0]
-            normalized = re.sub(r"[^a-z0-9]+", "_", exe_seed.lower()).strip("_")
-        return normalized or "new_preset"
 
     def _on_preset_selected(self, current: QListWidgetItem, _previous: QListWidgetItem):
         """목록에서 프리셋 선택 시 상세 정보 표시"""
@@ -348,7 +257,7 @@ class PresetEditorDialog(QDialog):
             self.mandatory_times_edit.clear()
             
         # [NEW] Launch Type
-        launch_type = self._ensure_launch_type_option(preset.get("preferred_launch_type", "shortcut"))
+        launch_type = preset.get("preferred_launch_type", "shortcut")
         idx = self.launch_type_combo.findData(launch_type)
         if idx >= 0:
             self.launch_type_combo.setCurrentIndex(idx)
@@ -563,7 +472,6 @@ class PresetEditorDialog(QDialog):
             action = "추가"
             
         if success:
-            self._last_saved_preset_id = preset_id
             # 저장 성공 후 아이콘 리네임 실행 (ID 변경 시)
             if pending_icon_rename:
                 import os
@@ -588,10 +496,6 @@ class PresetEditorDialog(QDialog):
             self.presets_changed.emit()
         else:
             QMessageBox.critical(self, "실패", f"프리셋 {action}에 실패했습니다.")
-
-    def get_last_saved_preset_id(self) -> Optional[str]:
-        """이 다이얼로그에서 마지막으로 저장된 프리셋 ID를 반환합니다."""
-        return self._last_saved_preset_id
 
     def _delete_current_preset(self):
         """현재 선택된 프리셋 삭제"""
