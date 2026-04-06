@@ -280,6 +280,37 @@ QPushButton:pressed {{
 """
 
 
+def toolbar_text_button_stylesheet(
+    *,
+    background: str = "palette(button)",
+    border: str = "palette(midlight)",
+    color: str = "palette(button-text)",
+    hover_background: str = "palette(button)",
+    hover_border: str = "palette(mid)",
+    pressed_background: str = "palette(midlight)",
+    pressed_border: str = "palette(mid)",
+) -> str:
+    """메인 창 상단의 일반 텍스트 버튼 스타일을 반환합니다."""
+    return f"""
+QPushButton {{
+    background: {background};
+    color: {color};
+    border: 1px solid {border};
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-weight: 500;
+}}
+QPushButton:hover {{
+    background: {hover_background};
+    border-color: {hover_border};
+}}
+QPushButton:pressed {{
+    background: {pressed_background};
+    border-color: {pressed_border};
+}}
+"""
+
+
 def compact_icon_button_stylesheet() -> str:
     """메인 창의 작은 아이콘 액션 버튼 스타일을 반환합니다."""
     return """
@@ -512,27 +543,32 @@ def web_shortcut_button_stylesheet(state: str, *, red: str, green: str) -> str:
     background = "palette(button)"
     border = "palette(midlight)"
     color = "palette(button-text)"
+    hover_background = "palette(button)"
+    hover_border = "palette(mid)"
+    pressed_background = "palette(midlight)"
+    pressed_border = "palette(mid)"
     if state == "RED":
         background = red
         border = red
         color = "white"
+        hover_background = red
+        hover_border = red
+        pressed_background = red
+        pressed_border = red
     elif state == "GREEN":
         background = green
         border = green
         color = "white"
-    return f"""
-QPushButton {{
-    background: {background};
-    color: {color};
-    border: 1px solid {border};
-    border-radius: 7px;
-    padding: 4px 10px;
-    font-weight: 600;
-}}
-QPushButton:hover {{
-    border-color: palette(highlight);
-}}
-QPushButton:pressed {{
-    background: palette(midlight);
-}}
-"""
+        hover_background = green
+        hover_border = green
+        pressed_background = green
+        pressed_border = green
+    return toolbar_text_button_stylesheet(
+        background=background,
+        border=border,
+        color=color,
+        hover_background=hover_background,
+        hover_border=hover_border,
+        pressed_background=pressed_background,
+        pressed_border=pressed_border,
+    )

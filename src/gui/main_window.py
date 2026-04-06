@@ -214,6 +214,7 @@ class MainWindow(QMainWindow):
         # 상단 버튼 영역 레이아웃 (게임 추가 버튼 + 동적 웹 버튼들 + 웹 바로가기 추가 버튼)
         self.top_button_area_layout = QHBoxLayout() # 수평 레이아웃
         self.add_game_button = QPushButton("새 게임 추가") # '새 게임 추가' 버튼 생성
+        self.add_game_button.setStyleSheet(style_tokens.toolbar_text_button_stylesheet())
         self.add_game_button.clicked.connect(self.open_add_process_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_game_button) # 레이아웃에 버튼 추가
 
