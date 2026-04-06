@@ -302,9 +302,10 @@ class PresetEditorDialog(QDialog):
         import re
 
         seed = display_name.strip()
-        if not seed and exe_pattern:
-            seed = os.path.splitext(os.path.basename(exe_pattern))[0]
         normalized = re.sub(r"[^a-z0-9]+", "_", seed.lower()).strip("_")
+        if not normalized and exe_pattern:
+            exe_seed = os.path.splitext(os.path.basename(exe_pattern))[0]
+            normalized = re.sub(r"[^a-z0-9]+", "_", exe_seed.lower()).strip("_")
         return normalized or "new_preset"
 
     def _on_preset_selected(self, current: QListWidgetItem, _previous: QListWidgetItem):

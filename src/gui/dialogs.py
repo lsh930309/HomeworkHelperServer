@@ -787,16 +787,24 @@ class ProcessDialog(QDialog):
     def validate_time_format(self, time_str: str) -> bool:
         if not time_str:
             return True
+        return self._normalize_time_value(time_str) is not None
+
+    def _normalize_time_value(self, time_str: str) -> Optional[str]:
+        """시간 문자열을 HH:MM 형식으로 정규화합니다."""
+        raw = time_str.strip()
+        if not raw:
+            return None
         try:
-            datetime.datetime.strptime(time_str, "%H:%M")
-            return True
+            parsed = datetime.datetime.strptime(raw, "%H:%M")
         except ValueError:
-            return False
+            return None
+        return parsed.strftime("%H:%M")
 
     def _collect_schedule_values(self, *, show_error: bool) -> Optional[Dict[str, Any]]:
         """현재 폼의 시간 관련 입력을 공통 규칙으로 검증/정규화합니다."""
         reset_time_str = self.server_reset_time_edit.text().strip()
-        if reset_time_str and not self.validate_time_format(reset_time_str):
+        normalized_reset_time = self._normalize_time_value(reset_time_str) if reset_time_str else None
+        if reset_time_str and normalized_reset_time is None:
             if show_error:
                 QMessageBox.warning(
                     self,
@@ -818,13 +826,24 @@ class ProcessDialog(QDialog):
                         f"사용자 실행 주기는 숫자로 입력해야 합니다: {cycle_hours_str}",
                     )
                 return None
+            if user_cycle_hours < 0 or user_cycle_hours > 168:
+                if show_error:
+                    QMessageBox.warning(
+                        self,
+                        "입력 오류",
+                        f"사용자 실행 주기는 0~168 범위로 입력해야 합니다: {cycle_hours_str}",
+                    )
+                return None
+            if user_cycle_hours == 0:
+                user_cycle_hours = None
 
         mandatory_times_raw = self.mandatory_times_edit.text().strip()
         mandatory_times_list: List[str] = []
         if mandatory_times_raw:
             times = [t.strip() for t in mandatory_times_raw.split(",") if t.strip()]
             for time_str in times:
-                if not self.validate_time_format(time_str):
+                normalized_time = self._normalize_time_value(time_str)
+                if normalized_time is None:
                     if show_error:
                         QMessageBox.warning(
                             self,
@@ -832,10 +851,10 @@ class ProcessDialog(QDialog):
                             f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {time_str}",
                         )
                     return None
-            mandatory_times_list = times
+                mandatory_times_list.append(normalized_time)
 
         return {
-            "server_reset_time": reset_time_str or None,
+            "server_reset_time": normalized_reset_time,
             "user_cycle_hours": user_cycle_hours,
             "mandatory_times": mandatory_times_list,
         }

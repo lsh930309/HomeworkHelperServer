@@ -92,11 +92,6 @@ class VolumePopoverPanel(QWidget):
         )
         outer.addWidget(header)
 
-        helper = QLabel("실행 중인 게임은 즉시 반영되고, 대기 중인 게임은 기본 볼륨만 저장됩니다.")
-        helper.setWordWrap(True)
-        helper.setStyleSheet(style_tokens.helper_text_stylesheet())
-        outer.addWidget(helper)
-
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet(
@@ -151,9 +146,8 @@ class VolumePopoverPanel(QWidget):
         pid가 None이면 게임이 실행 중이 아님을 의미하며, 기본 볼륨 설정만 가능합니다."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet(style_tokens.soft_row_stylesheet())
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
         # 게임 아이콘
