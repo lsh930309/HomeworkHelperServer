@@ -270,9 +270,18 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         token = self._current_lifecycle_token(event.process_id)
+        process = self._data_manager.get_process_by_id(event.process_id)
+        baseline_current = event.stamina_at_end
+        baseline_max = event.stamina_max
+        if process is not None:
+            if baseline_current is None:
+                baseline_current = process.stamina_current
+            if baseline_max is None:
+                baseline_max = process.stamina_max
+
         baseline_signature = None
-        if event.stamina_at_end is not None and event.stamina_max is not None:
-            baseline_signature = (event.stamina_at_end, event.stamina_max)
+        if baseline_current is not None and baseline_max is not None:
+            baseline_signature = (baseline_current, baseline_max)
 
         job = _ReconcileJob(
             process_id=event.process_id,
@@ -334,6 +343,10 @@ class HoYoStaminaReconcileCoordinator(QObject):
     def _current_lifecycle_token(self, process_id: str) -> int:
         """현재 프로세스에 대해 가장 최근에 발급된 lifecycle 토큰을 반환합니다."""
         return self._lifecycle_tokens.get(process_id, 0)
+
+    def _reconcile_window_elapsed(self, exit_timestamp: float) -> bool:
+        """재동기화 윈도우 만료 여부를 로컬 wall-clock 기준으로 판단합니다."""
+        return time.time() - exit_timestamp >= self.RECONCILE_WINDOW_SEC
 
     def _schedule_attempt(self, process_id: str, delay_ms: int) -> None:
         """기존 예약을 교체하고 지정한 지연 뒤에 다음 재조회 시도를 예약합니다."""
@@ -403,8 +416,6 @@ class HoYoStaminaReconcileCoordinator(QObject):
 
         data = payload if isinstance(payload, dict) else {}
         stamina = data.get("stamina")
-        fetched_at = float(data.get("fetched_at", time.time()))
-
         process = self._data_manager.get_process_by_id(process_id)
         if (
             process is None
@@ -444,7 +455,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._finish_job(process_id, "startup refresh failed")
             return
 
-        if fetched_at - job.exit_timestamp >= self.RECONCILE_WINDOW_SEC:
+        if self._reconcile_window_elapsed(job.exit_timestamp):
             self._finish_job(process_id, "reconcile window elapsed")
             return
 
@@ -498,8 +509,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             if job.finish_on_success:
                 self._finish_job(process_id, "startup refresh failed")
                 return
-            fetched_at = float(data.get("fetched_at", time.time()))
-            if fetched_at - job.exit_timestamp >= self.RECONCILE_WINDOW_SEC:
+            if self._reconcile_window_elapsed(job.exit_timestamp):
                 self._finish_job(process_id, "reconcile window elapsed")
                 return
             self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
@@ -536,8 +546,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
                 self._finish_job(process_id, "stamina stabilized")
                 return
 
-        fetched_at = float(data.get("fetched_at", time.time()))
-        if fetched_at - job.exit_timestamp >= self.RECONCILE_WINDOW_SEC:
+        if self._reconcile_window_elapsed(job.exit_timestamp):
             self._finish_job(process_id, "reconcile window elapsed")
             return
 
