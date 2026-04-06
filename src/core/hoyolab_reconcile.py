@@ -27,7 +27,9 @@ class _ReconcileJob:
     in_flight: bool = False
     request_seq: int = 0
     attempts_started: int = 0
+    baseline_signature: Optional[tuple[int, int]] = None
     observed_signature: Optional[tuple[int, int]] = None
+    saw_non_baseline_signature: bool = False
     stable_hits: int = 0
     applied_session_stamina: Optional[int] = None
 
@@ -268,11 +270,9 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         token = self._current_lifecycle_token(event.process_id)
-        observed_signature = None
-        stable_hits = 0
+        baseline_signature = None
         if event.stamina_at_end is not None and event.stamina_max is not None:
-            observed_signature = (event.stamina_at_end, event.stamina_max)
-            stable_hits = 1
+            baseline_signature = (event.stamina_at_end, event.stamina_max)
 
         job = _ReconcileJob(
             process_id=event.process_id,
@@ -281,8 +281,8 @@ class HoYoStaminaReconcileCoordinator(QObject):
             game_id=event.hoyolab_game_id or "",
             exit_timestamp=event.timestamp,
             lifecycle_token=token,
-            observed_signature=observed_signature,
-            stable_hits=stable_hits,
+            baseline_signature=baseline_signature,
+            observed_signature=baseline_signature,
             applied_session_stamina=event.stamina_at_end,
         )
         self._jobs[event.process_id] = job
@@ -521,7 +521,18 @@ class HoYoStaminaReconcileCoordinator(QObject):
                 job.observed_signature = signature
                 job.stable_hits = 1
 
-            if job.stable_hits >= self.REQUIRED_STABLE_HITS:
+            if job.baseline_signature is not None and not job.saw_non_baseline_signature:
+                if signature != job.baseline_signature:
+                    job.saw_non_baseline_signature = True
+                else:
+                    # 종료 직후 stale 응답과 같은 값이 반복되는 것만으로는
+                    # 서버 반영이 끝났다고 볼 수 없으므로 전체 윈도우 동안 계속 재조회한다.
+                    job.stable_hits = 0
+
+            allow_stabilized_finish = (
+                job.baseline_signature is None or job.saw_non_baseline_signature
+            )
+            if allow_stabilized_finish and job.stable_hits >= self.REQUIRED_STABLE_HITS:
                 self._finish_job(process_id, "stamina stabilized")
                 return
 
