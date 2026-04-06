@@ -1228,49 +1228,6 @@ class MainWindow(QMainWindow):
 
         menu.exec(button.mapToGlobal(pos))
 
-    def _build_process_actions_menu(self, pid: str, parent: QWidget) -> QMenu:
-        """행 우측 `⋯` 버튼용 명시적 액션 메뉴를 생성합니다."""
-        menu = QMenu(parent)
-        process = self.data_manager.get_process_by_id(pid)
-        if process is None:
-            return menu
-
-        edit_action = menu.addAction("편집")
-        edit_action.triggered.connect(functools.partial(self.handle_edit_action_for_row, pid))
-
-        delete_action = menu.addAction("삭제")
-        delete_action.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid))
-
-        if process.monitoring_path != process.launch_path and process.launch_path:
-            menu.addSeparator()
-            current_pref = self._normalize_launch_preference(
-                getattr(process, "preferred_launch_type", "shortcut"),
-                fallback=None,
-            )
-
-            shortcut_action = menu.addAction("기본 실행: 바로가기 선호")
-            shortcut_action.setCheckable(True)
-            shortcut_action.setChecked(current_pref == "shortcut")
-            shortcut_action.triggered.connect(
-                functools.partial(self._set_launch_preference, pid, "shortcut")
-            )
-
-            direct_action = menu.addAction("기본 실행: 프로세스 선호")
-            direct_action.setCheckable(True)
-            direct_action.setChecked(current_pref == "direct")
-            direct_action.triggered.connect(
-                functools.partial(self._set_launch_preference, pid, "direct")
-            )
-
-            launcher_action = menu.addAction("기본 실행: 런처 선호")
-            launcher_action.setCheckable(True)
-            launcher_action.setChecked(current_pref == "launcher")
-            launcher_action.triggered.connect(
-                functools.partial(self._set_launch_preference, pid, "launcher")
-            )
-
-        return menu
-
     def _bind_table_row_context_menu(self, widget: QWidget, process_id: str) -> None:
         """표시 전용 셀 위젯에서 우클릭 시 행 컨텍스트 메뉴를 열도록 연결합니다."""
         widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1297,15 +1254,6 @@ class MainWindow(QMainWindow):
             if name_item and name_item.data(Qt.ItemDataRole.UserRole) == process_id:
                 return row
         return -1
-
-    def _on_process_table_double_clicked(self, row: int, _column: int) -> None:
-        """행 더블클릭 시 해당 게임 편집 다이얼로그를 엽니다."""
-        name_item = self.process_table.item(row, self.COL_NAME)
-        if not name_item:
-            return
-        process_id = name_item.data(Qt.ItemDataRole.UserRole)
-        if process_id:
-            self.handle_edit_action_for_row(process_id)
 
     def open_add_process_dialog(self): # "새 게임 추가" 버튼에 연결
         """새 게임 프로세스를 추가하는 대화 상자를 엽니다."""
