@@ -254,7 +254,7 @@ class MainWindow(QMainWindow):
         # 창 배경색과 텍스트 색상의 밝기를 비교하여 다크 모드 여부 판단
         # 다크 모드에서는 보통 텍스트가 배경보다 밝습니다.
         is_dark_theme = palette.color(QPalette.ColorRole.WindowText).lightness() > palette.color(QPalette.ColorRole.Window).lightness()
-        
+
         if is_dark_theme:
             favicon_url = "https://github.githubassets.com/favicons/favicon-dark.svg" # 다크 모드용 아이콘
         else:
@@ -288,7 +288,7 @@ class MainWindow(QMainWindow):
         # 아이콘 크기: 행 높이(36px)에서 여백을 뺀 28px로 설정 (DPI 배율은 get_qicon_for_file 내부에서 적용)
         self._table_icon_logical_size = 28
         self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
-        
+
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
 
         # 초기 데이터 로드 및 UI 업데이트
@@ -882,7 +882,7 @@ class MainWindow(QMainWindow):
         """프로세스 상태 컬럼만 업데이트합니다. 버튼은 유지하여 포커스 문제를 방지합니다."""
         if not hasattr(self, 'process_table') or not self.process_table:
             return
-            
+
         processes_by_id = {
             process.id: process
             for process in self.data_manager.managed_processes
@@ -973,7 +973,7 @@ class MainWindow(QMainWindow):
             # 실행 버튼 컬럼
             btn = QPushButton("실행")
             btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id)) # 버튼 클릭 시그널 연결
-            
+
             # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
             if p.monitoring_path != p.launch_path and p.launch_path:
                 btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -985,7 +985,7 @@ class MainWindow(QMainWindow):
                     current_pref = "shortcut"
                 pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
                 btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
-            
+
             self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, btn) # 셀에 버튼 위젯 설정
 
             # 상태 컬럼
@@ -1087,7 +1087,7 @@ class MainWindow(QMainWindow):
         """선택된 게임 프로세스를 실행합니다."""
         p_launch = self.data_manager.get_process_by_id(pid) # ID로 프로세스 정보 가져오기
         if not p_launch: QMessageBox.warning(self, "오류", f"ID '{pid}' 프로세스 없음."); return
-        
+
         # preferred_launch_type에 따라 실행 경로 결정
         launch_type = getattr(p_launch, 'preferred_launch_type', 'shortcut') or 'shortcut'
         if launch_type == 'direct':
@@ -1114,7 +1114,7 @@ class MainWindow(QMainWindow):
         else:
             # 레거시 'auto' 등: 실행 경로가 있으면 사용, 없으면 모니터링 경로
             launch_target = p_launch.launch_path or p_launch.monitoring_path
-        
+
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
         if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
@@ -1132,12 +1132,12 @@ class MainWindow(QMainWindow):
         """특정 경로로 프로세스 실행 (우클릭 메뉴용)"""
         p_launch = self.data_manager.get_process_by_id(pid)
         if not p_launch: return
-        
+
         launch_target = p_launch.launch_path if use_shortcut else p_launch.monitoring_path
         if not launch_target:
             QMessageBox.warning(self, "오류", f"해당 경로가 없습니다.")
             return
-        
+
         if self.launcher.launch_process(launch_target):
             status_bar = self.statusBar()
             if status_bar:
@@ -1183,7 +1183,7 @@ class MainWindow(QMainWindow):
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
         from PyQt6.QtWidgets import QMenu
-        
+
         p = self.data_manager.get_process_by_id(pid)
         if not p: return
 
@@ -1313,7 +1313,7 @@ class MainWindow(QMainWindow):
         current_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
         status_changes = 0
-        
+
         for r in range(self.process_table.rowCount()):
             # 이름 컬럼에서 프로세스 ID 가져오기
             name_item = self.process_table.item(r, self.COL_NAME)
@@ -1322,33 +1322,33 @@ class MainWindow(QMainWindow):
             process_id = name_item.data(Qt.ItemDataRole.UserRole)
             if not process_id:
                 continue
-            
+
             # 프로세스 정보 가져오기
             process = self.data_manager.get_process_by_id(process_id)
             if not process:
                 continue
-            
+
             # 새로운 상태 결정
             new_status = self.scheduler.determine_process_visual_status(process, current_dt, gs)
-            
+
             # 상태 컬럼 아이템 가져오기
             status_item = self.process_table.item(r, self.COL_STATUS)
             if not status_item:
                 continue
-            
+
             # 상태가 변경된 경우에만 업데이트
             if status_item.text() != new_status:
                 old_status = status_item.text()
                 status_item.setText(new_status)
                 status_changes += 1
-                
+
                 # 상태에 따른 배경색 설정
                 palette = self.process_table.palette()
                 df_bg, df_fg = palette.base(), palette.text()
-                
+
                 status_item.setBackground(df_bg)  # 기본 배경색으로 초기화
                 status_item.setForeground(df_fg)  # 기본 글자색으로 초기화
-                
+
                 if new_status == PROC_STATE_RUNNING:
                     status_item.setBackground(self.COLOR_RUNNING)
                     status_item.setForeground(QColor("black"))
@@ -1399,7 +1399,7 @@ class MainWindow(QMainWindow):
             state = self._determine_web_button_state(sc_data, current_dt) # 버튼 초기 상태 결정
             self._apply_button_style(button, state) # 스타일 적용
             self.dynamic_web_buttons_layout.addWidget(button) # 레이아웃에 버튼 추가
-        
+
         # 웹 버튼 로드 완료 후 창 너비 조절
         self._adjust_window_width_for_web_buttons()
 
@@ -1685,7 +1685,7 @@ class MainWindow(QMainWindow):
 
         # 테이블의 고정 높이 설정
         self.process_table.setFixedHeight(table_content_height)
-        
+
         # 웹 버튼이 있을 때만 창 너비 조절
         web_button_count = 0
         if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
@@ -1695,7 +1695,7 @@ class MainWindow(QMainWindow):
                     widget = item.widget()
                     if widget and widget.isVisible():
                         web_button_count += 1
-        
+
         # 창 너비 결정 (고정 너비 + 웹 버튼)
         if web_button_count > 0:
             target_width = 400
@@ -1714,16 +1714,16 @@ class MainWindow(QMainWindow):
         status_bar = self.statusBar()
         menu_height = menu_bar.height() if menu_bar else 0
         status_height = status_bar.height() if status_bar else 0
-        
+
         top_button_height = 35
         layout_margin = 15
-        
+
         total_height = menu_height + top_button_height + table_content_height + status_height + layout_margin
-        
+
         # 창 크기 설정 (너비는 고정, 높이만 조절)
         self.resize(target_width, total_height)
         self.show()
-        
+
         # print(f"윈도우 크기 조절됨. 새 크기: {self.width()}x{self.height()}, 테이블 높이: {table_content_height}, 웹 버튼 개수: {web_button_count}")
 
     def _adjust_window_height_to_table(self):
@@ -1741,13 +1741,13 @@ class MainWindow(QMainWindow):
                     widget = item.widget()
                     if widget and widget.isVisible():
                         web_button_count += 1
-        
+
         # 창 너비 결정 (최초 창 너비보다 작은 값으로는 축소되지 않음)
         if web_button_count > 0:
             target_width = 400  # 웹 버튼이 있을 때의 고정 너비
         else:
             target_width = 470  # 웹 버튼이 없을 때의 고정 너비
-        
+
         # 현재 너비가 목표 너비와 다르면 조절
         current_width = self.width()
         if current_width != target_width:
@@ -1760,18 +1760,18 @@ class MainWindow(QMainWindow):
 
     def _adjust_window_height_for_table_rows(self):
         """테이블 내용에 맞게 창 높이를 조절합니다.
-        
+
         명시적으로 크기를 계산하고 setFixedHeight로 설정하여 절전 복귀 시 안정성 확보.
         """
         # 1. 테이블 높이 계산
         current_row_count = self.process_table.rowCount()
         table_height = 0
-        
+
         # 헤더 높이 추가
         header = self.process_table.horizontalHeader()
         if header and not header.isHidden():
             table_height += header.height()
-        
+
         # 행 높이 계산
         if current_row_count > 0:
             for i in range(current_row_count):
@@ -1779,52 +1779,52 @@ class MainWindow(QMainWindow):
         else:
             # 행이 없을 경우 기본 행 높이 추가
             table_height += self.fontMetrics().height() + 12
-        
+
         # 테이블 테두리 두께 고려
         table_height += self.process_table.frameWidth() * 2
-        
+
         # 2. 테이블 고정 높이 설정
         self.process_table.setFixedHeight(table_height)
-        
+
         # 3. 레이아웃 재계산 요청
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
-        
+
         # 4. 테이블 geometry 업데이트 요청
         self.process_table.updateGeometry()
-        
+
         # 5. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
         total_height = 0
-        
+
         # 메뉴바 높이
         menu_bar = self.menuBar()
         if menu_bar and not menu_bar.isHidden():
             total_height += menu_bar.sizeHint().height()
-        
+
         # 상단 버튼 영역 높이
         if hasattr(self, 'top_button_area_layout'):
             total_height += self.top_button_area_layout.sizeHint().height()
             total_height += 10  # 레이아웃 여백
-        
+
         # 테이블 높이
         total_height += table_height
-        
+
         # 상태바 높이
         status_bar = self.statusBar()
         if status_bar and not status_bar.isHidden():
             total_height += status_bar.sizeHint().height()
-        
+
         # 창 프레임 및 레이아웃 여백 추가
         total_height += 20  # 여유 공간
-        
+
         # 6. 창 높이를 고정 (너비는 이미 고정되어 있음)
         self.setFixedHeight(total_height)
-        
+
         # 7. 화면 업데이트
         self.update()
-        
+
         # 8. 정상 상태의 창 크기/위치 저장 (절전 복귀 시 복원에 사용)
         self._saved_size = self.size()
         self._saved_geometry = self.geometry()
@@ -2113,27 +2113,27 @@ class MainWindow(QMainWindow):
                 # 특수 포맷: "STAMINA:game_id:current/max" (아이콘 표시용)
                 result = f"STAMINA:{hoyolab_game_id}:{predicted}/{max_stamina}"
                 return percentage, result
-        
+
         # 기존 시간 기반 계산
         if not process.last_played_timestamp or not process.user_cycle_hours:
             return 0.0, "기록 없음"
-        
+
         try:
             last_played_dt = datetime.datetime.fromtimestamp(process.last_played_timestamp)
             cycle_hours = process.user_cycle_hours
-            
+
             # 경과 시간 계산 (시간 단위)
             elapsed_hours = (current_dt - last_played_dt).total_seconds() / 3600
-            
+
             # 진행률 계산 (0.0 ~ 1.0)
             progress = min(elapsed_hours / cycle_hours, 1.0)
-            
+
             # 백분율로 변환
             percentage = progress * 100
-            
+
             # 남은 시간 계산
             remaining_hours = max(cycle_hours - elapsed_hours, 0)
-            
+
             if remaining_hours >= 24:
                 remaining_days = int(remaining_hours // 24)
                 remaining_hours_remainder = remaining_hours % 24
@@ -2146,7 +2146,7 @@ class MainWindow(QMainWindow):
             else:
                 remaining_minutes = int(remaining_hours * 60)
                 time_str = f"{remaining_minutes}분"
-            
+
             return percentage, time_str
 
 
@@ -2243,7 +2243,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(progress_bar, 1)  # stretch factor 1로 남은 공간 채움
 
         return container
-    
+
     def _get_stamina_icon_path(self, process) -> Optional[str]:
         """프로세스에 해당하는 스태미나/재화 아이콘 경로 반환 (프리셋 기반)"""
         from src.utils.icon_helper import resolve_preset_icon_path
@@ -2263,23 +2263,23 @@ class MainWindow(QMainWindow):
             return None
 
         return resolve_preset_icon_path(icon_path, icon_type)
-    
+
     def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
         """스타일이 적용된 QProgressBar 생성"""
         progress_bar = QProgressBar()
         progress_bar.setValue(self._progress_bar_value(percentage))
         progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
         progress_bar.setMinimum(0)
-        
+
         # 높이 설정 (행 높이에 맞게 자동 조절)
         progress_bar.setMinimumHeight(20)
-        
+
         # 텍스트 표시 설정
         progress_bar.setTextVisible(True)
         progress_bar.setFormat(format_text)
         progress_bar.setProperty("color_bucket", self._progress_color_bucket(percentage))
         self._apply_progress_bar_style(progress_bar, percentage)
-        
+
         return progress_bar
 
     def _progress_bar_value(self, percentage: float) -> int:
