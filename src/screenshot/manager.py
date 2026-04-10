@@ -28,14 +28,17 @@ class ScreenshotManager:
         save_dir: Optional[str] = None,
         get_target_hwnd: Optional[Callable[[], Optional[int]]] = None,
         long_press_threshold_ms: int = 800,
+        trigger_vk: int = 0xB2,
     ):
         """
         Args:
             save_dir: 스크린샷 저장 디렉터리.
             get_target_hwnd: 게임 창 모드 캡처 시 대상 HWND 반환 콜백.
             long_press_threshold_ms: 롱프레스(녹화 토글) 판정 임계값.
+            trigger_vk: 트리거로 사용할 가상 키 코드.
         """
         self._save_dir = save_dir
+        self._trigger_vk: int = trigger_vk
         self._get_target_hwnd = get_target_hwnd
         self._get_game_name: Optional[Callable[[], str]] = None
         self._impl = None
@@ -68,6 +71,12 @@ class ScreenshotManager:
     def set_capture_mode(self, mode: str) -> None:
         """캡처 모드 설정. 'fullscreen' | 'game_window'."""
         self._capture_mode = mode
+
+    def set_trigger_vk(self, vk: int) -> None:
+        """트리거 VK 코드를 변경합니다. 훅이 실행 중이면 즉시 반영됩니다."""
+        self._trigger_vk = vk
+        if self._impl:
+            self._impl.set_trigger_vk(vk)
 
     def set_long_press_threshold(self, threshold_ms: int) -> None:
         """롱프레스(녹화 토글) 임계값을 밀리초 단위로 설정합니다."""
@@ -132,7 +141,7 @@ class ScreenshotManager:
     def _create_impl(self):
         try:
             from src.screenshot.method_a import MethodA
-            return MethodA(dispatcher=self._dispatcher)
+            return MethodA(dispatcher=self._dispatcher, trigger_vk=self._trigger_vk)
         except Exception as exc:
             logger.error("MethodA 초기화 실패: %s", exc)
             return None

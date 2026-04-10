@@ -177,6 +177,7 @@ class MainWindow(QMainWindow):
         self._screenshot_manager = ScreenshotManager(
             get_target_hwnd=self._get_screenshot_target_hwnd,
             long_press_threshold_ms=getattr(gs, 'recording_hold_threshold_ms', 800),
+            trigger_vk=getattr(gs, 'screenshot_trigger_vk', 0xB2),
         )
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
         self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)
@@ -1963,6 +1964,9 @@ class MainWindow(QMainWindow):
         )
         self._screenshot_manager.set_long_press_threshold(
             getattr(gs, 'recording_hold_threshold_ms', 800)
+        )
+        self._screenshot_manager.set_trigger_vk(
+            getattr(gs, 'screenshot_trigger_vk', 0xB2)
         )
         if getattr(gs, 'screenshot_disable_gamebar', False):
             self._set_gamebar_capture(False)

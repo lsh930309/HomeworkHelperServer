@@ -24,14 +24,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-WH_KEYBOARD_LL = 13
-WM_KEYDOWN     = 0x0100
-WM_KEYUP       = 0x0101
-WM_SYSKEYDOWN  = 0x0104
-WM_SYSKEYUP    = 0x0105
-WM_QUIT        = 0x0012
-VK_MEDIA_STOP  = 0xB2     # 미디어 정지 키 (게임 UI 전환 미유발)
-PM_REMOVE      = 0x0001
+WH_KEYBOARD_LL       = 13
+WM_KEYDOWN           = 0x0100
+WM_KEYUP             = 0x0101
+WM_SYSKEYDOWN        = 0x0104
+WM_SYSKEYUP          = 0x0105
+WM_QUIT              = 0x0012
+PM_REMOVE            = 0x0001
+DEFAULT_TRIGGER_VK   = 0xB2   # 미디어 정지 키 (기본값)
 
 HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
@@ -49,9 +49,10 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
 class MethodA:
     """WH_KEYBOARD_LL 훅 기반 스크린샷 트리거."""
 
-    def __init__(self, dispatcher=None):
+    def __init__(self, dispatcher=None, trigger_vk: int = DEFAULT_TRIGGER_VK):
         self._callback: Optional[Callable] = None
         self._dispatcher = dispatcher
+        self._trigger_vk: int = trigger_vk
         self._thread: Optional[threading.Thread] = None
         self._thread_id: int = 0
         self._running: bool = False
@@ -59,8 +60,12 @@ class MethodA:
     # ── 공개 API ────────────────────────────────────────────────
 
     def set_callback(self, fn: Callable) -> None:
-        """VK_MEDIA_STOP 감지 시 호출될 함수를 등록합니다."""
+        """트리거 키 감지 시 호출될 함수를 등록합니다."""
         self._callback = fn
+
+    def set_trigger_vk(self, vk: int) -> None:
+        """트리거 VK 코드를 변경합니다. 훅 재시작 없이 즉시 반영됩니다."""
+        self._trigger_vk = vk
 
     def start(self) -> None:
         """훅 스레드를 시작합니다."""
@@ -98,11 +103,11 @@ class MethodA:
         def _handler(nCode: int, wParam: int, lParam: int) -> int:
             if nCode >= 0:
                 kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                if kb.vkCode == VK_MEDIA_STOP:
+                if kb.vkCode == self._trigger_vk:
                     if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
                         if not self._key_held:
                             self._key_held = True
-                            logger.debug("MethodA: VK_MEDIA_STOP 키 다운 감지")
+                            logger.debug("MethodA: 트리거 키 다운 감지 (VK=0x%02X)", self._trigger_vk)
                             if self._dispatcher:
                                 self._dispatcher.on_press()
                             elif self._callback:
@@ -115,7 +120,7 @@ class MethodA:
                     elif wParam in (WM_KEYUP, WM_SYSKEYUP):
                         if self._key_held:
                             self._key_held = False
-                            logger.debug("MethodA: VK_MEDIA_STOP 키 업 감지")
+                            logger.debug("MethodA: 트리거 키 업 감지 (VK=0x%02X)", self._trigger_vk)
                             if self._dispatcher:
                                 self._dispatcher.on_release()
                         return 1  # 이벤트 삭제

@@ -172,6 +172,7 @@ class GlobalSettings:
                  screenshot_disable_gamebar: bool = False,
                  screenshot_capture_mode: str = "fullscreen",
                  screenshot_gamepad_button_index: int = -1,
+                 screenshot_trigger_vk: int = 0xB2,
                  # Recording (OBS)
                  recording_enabled: bool = False,
                  obs_host: str = "localhost",
@@ -222,6 +223,7 @@ class GlobalSettings:
         self.screenshot_disable_gamebar = screenshot_disable_gamebar
         self.screenshot_capture_mode = screenshot_capture_mode
         self.screenshot_gamepad_button_index = screenshot_gamepad_button_index
+        self.screenshot_trigger_vk = screenshot_trigger_vk
         # Recording (OBS)
         self.recording_enabled = recording_enabled
         self.obs_host = obs_host
@@ -308,6 +310,7 @@ class GlobalSettings:
             _cap_mode = 'fullscreen'
         data['screenshot_capture_mode'] = _cap_mode
         data['screenshot_gamepad_button_index'] = int(data.get('screenshot_gamepad_button_index', -1))
+        data['screenshot_trigger_vk'] = int(data.get('screenshot_trigger_vk', 0xB2))
         # Recording (OBS) 하위 호환성
         data['recording_enabled'] = bool(data.get('recording_enabled', False))
         data['obs_host'] = str(data.get('obs_host', 'localhost'))

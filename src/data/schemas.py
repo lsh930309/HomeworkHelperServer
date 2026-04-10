@@ -101,6 +101,7 @@ class GlobalSettingsSchema(BaseModel):
     screenshot_disable_gamebar: bool = False
     screenshot_capture_mode: str = "fullscreen"
     screenshot_gamepad_button_index: int = -1
+    screenshot_trigger_vk: int = 0xB2          # 트리거 가상 키 코드 (기본: 미디어 정지)
     # Recording (OBS)
     recording_enabled: bool = False
     obs_host: str = "localhost"
