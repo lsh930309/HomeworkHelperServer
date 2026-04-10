@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
-    Qt, QObject, QPropertyAnimation, QEasingCurve, QRect, QTimer,
-    QRunnable, QThreadPool, pyqtSignal, pyqtSlot,
+    Qt, QAbstractAnimation, QObject, QPropertyAnimation, QEasingCurve,
+    QPoint, QRect, QTimer, QRunnable, QThreadPool, pyqtSignal, pyqtSlot,
 )
 from PyQt6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
@@ -32,11 +32,15 @@ _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함
 _DEFAULT_AUTO_HIDE_MS = 3000
 
-# 스크린샷 썸네일 크기 (px)
+# 스크린샷/녹화 썸네일 크기 (px)
 _THUMB_W = 76
 _THUMB_H = 57
 _THUMB_COLS = 3
 _THUMB_MAX_CELLS = _THUMB_COLS * 3  # 최대 9셀 (마지막 1셀은 폴더 버튼)
+
+# 고화질 썸네일 로드 크기 (hover 확대 시 선명도 확보)
+_THUMB_HIRES_W = _THUMB_W * 2   # 152px
+_THUMB_HIRES_H = _THUMB_H * 2   # 114px
 
 
 class _ThumbnailLoadSignals(QObject):
@@ -44,6 +48,8 @@ class _ThumbnailLoadSignals(QObject):
 
 
 class _ThumbnailLoadTask(QRunnable):
+    """이미지 파일(PNG/JPG) 고화질 썸네일 비동기 로드 태스크."""
+
     def __init__(self, request_id: int, path: str, signals: _ThumbnailLoadSignals):
         super().__init__()
         self._request_id = request_id
@@ -55,15 +61,16 @@ class _ThumbnailLoadTask(QRunnable):
         image = QImage(path)
         if image.isNull():
             return None
+        # 2배 해상도로 로드 — hover 확대 시 선명도 확보
         scaled = image.scaled(
-            _THUMB_W,
-            _THUMB_H,
+            _THUMB_HIRES_W,
+            _THUMB_HIRES_H,
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x_off = max(0, (scaled.width() - _THUMB_W) // 2)
-        y_off = max(0, (scaled.height() - _THUMB_H) // 2)
-        return scaled.copy(x_off, y_off, _THUMB_W, _THUMB_H)
+        x_off = max(0, (scaled.width() - _THUMB_HIRES_W) // 2)
+        y_off = max(0, (scaled.height() - _THUMB_HIRES_H) // 2)
+        return scaled.copy(x_off, y_off, _THUMB_HIRES_W, _THUMB_HIRES_H)
 
     def run(self) -> None:
         try:
@@ -72,6 +79,287 @@ class _ThumbnailLoadTask(QRunnable):
             logger.exception("썸네일 로드 실패: %s", self._path)
             image = None
         self._signals.loaded.emit(self._request_id, self._path, image)
+
+
+class _VideoThumbnailLoadTask(QRunnable):
+    """MP4 비디오 썸네일 비동기 로드 태스크 (Windows Shell API 사용)."""
+
+    def __init__(self, request_id: int, path: str, signals: _ThumbnailLoadSignals) -> None:
+        super().__init__()
+        self._request_id = request_id
+        self._path = path
+        self._signals = signals
+
+    @staticmethod
+    def _extract_thumbnail(path: str, w: int, h: int) -> Optional[QImage]:
+        """Windows IShellItemImageFactory로 비디오 썸네일을 추출합니다."""
+        try:
+            import ctypes
+            import ctypes.wintypes as wintypes
+            from ctypes import POINTER, byref, c_int, c_uint, c_void_p, c_wchar_p
+
+            shell32 = ctypes.windll.shell32
+            ole32 = ctypes.windll.ole32
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+
+            ole32.CoInitializeEx(None, 0)  # COINIT_APARTMENTTHREADED
+
+            def _make_guid(s: str):
+                import uuid
+                b = uuid.UUID(s).bytes_le
+                return (ctypes.c_byte * 16)(*b)
+
+            IID_IShellItem = _make_guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")
+            IID_ISIIF = _make_guid("BCC18B79-BA16-442F-80C4-8A59C30C463B")
+
+            psi = c_void_p()
+            hr = shell32.SHCreateItemFromParsingName(
+                c_wchar_p(path), None,
+                byref(IID_IShellItem), byref(psi),
+            )
+            if hr != 0 or not psi:
+                return None
+
+            vtbl = ctypes.cast(psi, POINTER(POINTER(c_void_p)))
+            QI_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, POINTER(ctypes.c_byte * 16), POINTER(c_void_p))(vtbl[0][0])
+            Release_si = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl[0][2])
+
+            psiif = c_void_p()
+            hr = QI_fn(psi, byref(IID_ISIIF), byref(psiif))
+            Release_si(psi)
+
+            if hr != 0 or not psiif:
+                return None
+
+            class _SIZE(ctypes.Structure):
+                _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+            vtbl2 = ctypes.cast(psiif, POINTER(POINTER(c_void_p)))
+            GetImage_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, _SIZE, c_uint, POINTER(wintypes.HBITMAP))(vtbl2[0][3])
+            Release_siif = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl2[0][2])
+
+            SIIGBF_BIGGERSIZEOK = 0x1
+            hbm = wintypes.HBITMAP()
+            hr = GetImage_fn(psiif, _SIZE(w, h), SIIGBF_BIGGERSIZEOK, byref(hbm))
+            Release_siif(psiif)
+
+            if hr != 0 or not hbm:
+                return None
+
+            class _BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+                    ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+                    ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+                    ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+                    ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+                    ("biClrImportant", ctypes.c_uint32),
+                ]
+
+            hdc = user32.GetDC(0)
+            bih = _BITMAPINFOHEADER()
+            bih.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+            bih.biWidth = w
+            bih.biHeight = -h  # top-down DIB
+            bih.biPlanes = 1
+            bih.biBitCount = 32
+            bih.biCompression = 0  # BI_RGB
+
+            buf = ctypes.create_string_buffer(w * h * 4)
+            gdi32.GetDIBits(hdc, hbm, 0, h, buf, byref(bih), 0)
+            user32.ReleaseDC(0, hdc)
+            gdi32.DeleteObject(hbm)
+
+            img = QImage(buf, w, h, w * 4, QImage.Format.Format_ARGB32)
+            return img.copy()  # buf GC 전에 복사
+
+        except Exception as exc:
+            logger.debug("비디오 썸네일 추출 실패 (%s): %s", path, exc)
+            return None
+
+    @staticmethod
+    def _make_placeholder(w: int, h: int) -> QImage:
+        """썸네일 추출 실패 시 회색 플레이 아이콘 플레이스홀더."""
+        from PyQt6.QtGui import QPainter, QPainterPath
+        img = QImage(w, h, QImage.Format.Format_ARGB32)
+        img.fill(QColor(40, 40, 50, 255))
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        size = min(w, h) * 0.35
+        cx, cy = w / 2, h / 2
+        path = QPainterPath()
+        path.moveTo(cx - size * 0.4, cy - size * 0.5)
+        path.lineTo(cx + size * 0.6, cy)
+        path.lineTo(cx - size * 0.4, cy + size * 0.5)
+        path.closeSubpath()
+        painter.fillPath(path, QColor(160, 160, 180, 200))
+        painter.end()
+        return img
+
+    def run(self) -> None:
+        image = self._extract_thumbnail(self._path, _THUMB_HIRES_W, _THUMB_HIRES_H)
+        if image is None:
+            image = self._make_placeholder(_THUMB_HIRES_W, _THUMB_HIRES_H)
+        self._signals.loaded.emit(self._request_id, self._path, image)
+
+
+class _ThumbPopup(QLabel):
+    """썸네일 호버 확대 팝업. leaveEvent를 원본 셀에 릴레이한다."""
+
+    def __init__(self, parent: QWidget, cell: "_HoverThumbCell") -> None:
+        super().__init__(parent)
+        self._cell = cell
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("""
+            QLabel {
+                background: rgba(12,12,16,230);
+                border: 1px solid rgba(100,160,255,180);
+                border-radius: 4px;
+            }
+        """)
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self._cell._collapse_popup()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._cell._on_click:
+            self._cell._on_click()
+        super().mousePressEvent(event)
+
+
+class _HoverThumbCell(QLabel):
+    """썸네일 셀. 마우스 오버 시 1.5배 확대 팝업을 부드럽게 표시한다."""
+
+    _EXPAND = 1.5
+    _EXPAND_MS = 150
+    _COLLAPSE_MS = 120
+
+    def __init__(
+        self,
+        base_w: int,
+        base_h: int,
+        popup_parent: QWidget,
+        on_click: Optional[Callable[[], None]] = None,
+        tooltip: str = "",
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._base_w = base_w
+        self._base_h = base_h
+        self._exp_w = int(base_w * self._EXPAND)
+        self._exp_h = int(base_h * self._EXPAND)
+        self._popup_parent = popup_parent  # 팝업이 붙을 부모 (사이드바 프레임)
+        self._on_click = on_click
+        self._hi_pixmap: Optional[QPixmap] = None
+        self._popup: Optional[_ThumbPopup] = None
+        self._expand_anim: Optional[QPropertyAnimation] = None
+        self._collapse_anim: Optional[QPropertyAnimation] = None
+
+        self.setFixedSize(base_w, base_h)
+        self.setToolTip(tooltip)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("""
+            QLabel {
+                background: rgba(255,255,255,6);
+                border: 1px solid rgba(255,255,255,15);
+                border-radius: 3px;
+            }
+        """)
+
+    def set_hi_pixmap(self, pixmap: QPixmap) -> None:
+        """고화질 픽셀맵을 저장하고 기본 크기로 표시합니다."""
+        self._hi_pixmap = pixmap
+        lo = pixmap.scaled(
+            self._base_w, self._base_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x_off = max(0, (lo.width() - self._base_w) // 2)
+        y_off = max(0, (lo.height() - self._base_h) // 2)
+        self.setPixmap(lo.copy(x_off, y_off, self._base_w, self._base_h))
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        if self._hi_pixmap is None:
+            return
+
+        # 진행 중인 축소 애니메이션 중단
+        if self._collapse_anim and self._collapse_anim.state() == QAbstractAnimation.State.Running:
+            self._collapse_anim.stop()
+            if self._popup:
+                self._popup.deleteLater()
+                self._popup = None
+
+        if self._popup is not None:
+            return
+
+        pos = self.mapTo(self._popup_parent, QPoint(0, 0))
+        cx = pos.x() + self._base_w // 2
+        cy = pos.y() + self._base_h // 2
+
+        start_rect = QRect(pos.x(), pos.y(), self._base_w, self._base_h)
+        end_rect = QRect(
+            cx - self._exp_w // 2,
+            cy - self._exp_h // 2,
+            self._exp_w, self._exp_h,
+        )
+
+        pop_pix = self._hi_pixmap.scaled(
+            self._exp_w, self._exp_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x_off = max(0, (pop_pix.width() - self._exp_w) // 2)
+        y_off = max(0, (pop_pix.height() - self._exp_h) // 2)
+        pop_pix = pop_pix.copy(x_off, y_off, self._exp_w, self._exp_h)
+
+        self._popup = _ThumbPopup(self._popup_parent, self)
+        self._popup.setPixmap(pop_pix)
+        self._popup.setGeometry(start_rect)
+        self._popup.raise_()
+        self._popup.show()
+
+        self._expand_anim = QPropertyAnimation(self._popup, b"geometry", self._popup)
+        self._expand_anim.setDuration(self._EXPAND_MS)
+        self._expand_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._expand_anim.setStartValue(start_rect)
+        self._expand_anim.setEndValue(end_rect)
+        self._expand_anim.start()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        # 마우스가 팝업 위로 이동한 경우 팝업이 leaveEvent를 처리함
+        if self._popup and self._popup.underMouse():
+            return
+        self._collapse_popup()
+
+    def _collapse_popup(self) -> None:
+        if self._popup is None:
+            return
+
+        popup = self._popup
+        self._popup = None
+
+        if self._expand_anim and self._expand_anim.state() == QAbstractAnimation.State.Running:
+            self._expand_anim.stop()
+
+        pos = self.mapTo(self._popup_parent, QPoint(0, 0))
+        end_rect = QRect(pos.x(), pos.y(), self._base_w, self._base_h)
+
+        self._collapse_anim = QPropertyAnimation(popup, b"geometry", popup)
+        self._collapse_anim.setDuration(self._COLLAPSE_MS)
+        self._collapse_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._collapse_anim.setEndValue(end_rect)
+        self._collapse_anim.finished.connect(popup.deleteLater)
+        self._collapse_anim.start()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._on_click:
+            self._on_click()
+        super().mousePressEvent(event)
 
 
 def _tint_icon_white(icon) -> "QIcon":
@@ -173,13 +461,17 @@ class SidebarWidget(QWidget):
         self._reconnect_recording = reconnect_recording
         self._get_recording_error = get_recording_error
         self._get_recording_elapsed = get_recording_elapsed
+        self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
+        self._recording_output_dir: str = ""
 
         # {process_id: (QLabel, start_timestamp)} — 플레이타임 레이블 트래킹
         self._playtime_labels: dict = {}
-        self._thumb_buttons: dict[str, QPushButton] = {}
+        self._thumb_buttons: dict[str, _HoverThumbCell] = {}
         self._thumb_request_id = 0
+        self._rec_thumb_buttons: dict[str, _HoverThumbCell] = {}
+        self._rec_thumb_request_id = 0
 
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -238,11 +530,17 @@ class SidebarWidget(QWidget):
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
 
-        # 썸네일 디코딩용 스레드풀
+        # 스크린샷 썸네일 디코딩용 스레드풀
         self._thumb_pool = QThreadPool(self)
         self._thumb_pool.setMaxThreadCount(2)
         self._thumb_signals = _ThumbnailLoadSignals(self)
         self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
+
+        # 녹화 썸네일 디코딩용 스레드풀 (별도)
+        self._rec_thumb_pool = QThreadPool(self)
+        self._rec_thumb_pool.setMaxThreadCount(2)
+        self._rec_thumb_signals = _ThumbnailLoadSignals(self)
+        self._rec_thumb_signals.loaded.connect(self._apply_rec_thumbnail_result)
 
         # Win32 외부 클릭 감지 상태
         self._lbutton_was_down: bool = False
@@ -371,6 +669,7 @@ class SidebarWidget(QWidget):
         self._refresh_screenshot_section()
         self._refresh_screenshot_thumbnails()
         self._refresh_recording_section()
+        self._refresh_recording_thumbnails()
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -966,11 +1265,31 @@ class SidebarWidget(QWidget):
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(4)
 
+        # 헤더 행: 제목 + [지금 녹화] 버튼
+        header = QHBoxLayout()
         title = QLabel("녹화")
         title.setStyleSheet(
             "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
         )
-        layout.addWidget(title)
+        self._rec_start_btn = QPushButton("지금 녹화")
+        self._rec_start_btn.setFixedHeight(28)
+        self._rec_start_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(180,40,40,160);
+                color: rgba(255,200,200,220);
+                border: 1px solid rgba(220,60,60,120);
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(220,50,50,200); color: white; }
+            QPushButton:pressed { background: rgba(140,20,20,220); }
+        """)
+        self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
+        self._rec_start_btn.hide()
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self._rec_start_btn)
+        layout.addLayout(header)
 
         self._rec_status_label = QLabel("○ OBS 오프라인")
         self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
@@ -1010,6 +1329,14 @@ class SidebarWidget(QWidget):
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
 
+        # 녹화 썸네일 그리드
+        self._rec_thumb_grid_container = QWidget()
+        self._rec_thumb_grid_container.setStyleSheet("background: transparent;")
+        self._rec_thumb_grid_layout = QGridLayout(self._rec_thumb_grid_container)
+        self._rec_thumb_grid_layout.setSpacing(3)
+        self._rec_thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._rec_thumb_grid_container)
+
         return section
 
     def set_on_stop_recording(self, fn) -> None:
@@ -1027,6 +1354,15 @@ class SidebarWidget(QWidget):
     def set_recording_elapsed_provider(self, fn: Optional[Callable[[], int]]) -> None:
         """현재 녹화 경과 시간을 초 단위로 제공하는 콜백을 등록합니다."""
         self._get_recording_elapsed = fn
+
+    def set_on_start_recording(self, fn: Optional[Callable[[], None]]) -> None:
+        """[지금 녹화] 버튼 클릭 시 호출될 콜백을 등록합니다."""
+        self._start_recording_callback = fn
+
+    def set_recording_output_dir(self, path: str) -> None:
+        """녹화 출력 폴더 경로를 설정하고 갤러리를 갱신합니다."""
+        self._recording_output_dir = path
+        self._refresh_recording_thumbnails()
 
     def on_recording_state_changed(self, state: str) -> None:
         """MainWindow에서 호출하는 슬롯. state: 'idle'|'recording'|'connecting'|'obs_offline'"""
@@ -1047,21 +1383,25 @@ class SidebarWidget(QWidget):
             self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
             self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
             self._rec_stop_btn.show()
+            self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "idle":
             self._rec_status_label.setText("● OBS 대기 중")
             self._rec_status_label.setStyleSheet("color: #5aaa5a; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_start_btn.show()
             self._rec_connect_btn.hide()
         elif state == "connecting":
             self._rec_status_label.setText("○ OBS 연결 중...")
             self._rec_status_label.setStyleSheet("color: #aaa850; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         else:  # obs_offline
             self._rec_status_label.setText("○ OBS 오프라인")
             self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
             self._rec_stop_btn.hide()
+            self._rec_start_btn.hide()
             self._rec_connect_btn.show()
             # 마지막 연결 실패 이유를 툴팁으로 표시
             err = self._get_recording_error() if self._get_recording_error else ""
@@ -1081,6 +1421,11 @@ class SidebarWidget(QWidget):
         """OBS 재연결 버튼 클릭 — 연결만 시도하고 녹화는 시작하지 않는다."""
         if self._reconnect_recording:
             self._reconnect_recording()
+
+    def _on_rec_start_clicked(self) -> None:
+        """[지금 녹화] 버튼 클릭 — 카운트다운 콜백을 호출합니다."""
+        if self._start_recording_callback:
+            self._start_recording_callback()
 
     def _refresh_recording_section(self) -> None:
         """recording_enabled 설정에 따라 섹션 show/hide."""
@@ -1171,42 +1516,36 @@ class SidebarWidget(QWidget):
         row, col = divmod(next_idx, _THUMB_COLS)
         self._thumb_grid_layout.addWidget(folder_btn, row, col)
 
-    def _make_thumb_cell(self, filepath, request_id: int) -> QPushButton:
-        """썸네일 셀 QPushButton을 반환합니다."""
-        btn = QPushButton()
-        btn.setFixedSize(_THUMB_W, _THUMB_H)
-        btn.setToolTip(str(filepath.name))
-        btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,6);
-                border: 1px solid rgba(255,255,255,15);
-                border-radius: 3px;
-                padding: 0;
-            }
-            QPushButton:hover { border-color: rgba(100,160,255,180); }
-        """)
+    def _make_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
+        """썸네일 셀 _HoverThumbCell을 반환합니다."""
         path_str = str(filepath)
-        self._thumb_buttons[path_str] = btn
-        self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
         _fp = filepath
-        btn.clicked.connect(
-            lambda _checked=False, p=_fp: __import__('os').startfile(str(p))
+
+        def _open() -> None:
+            os.startfile(path_str)
+
+        cell = _HoverThumbCell(
+            _THUMB_W, _THUMB_H,
+            popup_parent=self._frame,
+            on_click=_open,
+            tooltip=filepath.name,
         )
-        return btn
+        self._thumb_buttons[path_str] = cell
+        self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
+        return cell
 
     @pyqtSlot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
         if request_id != self._thumb_request_id:
             return
-        btn = self._thumb_buttons.get(filepath)
-        if btn is None or image is None:
+        cell = self._thumb_buttons.get(filepath)
+        if cell is None or image is None:
             return
         try:
             pixmap = QPixmap.fromImage(image)
             if pixmap.isNull():
                 return
-            btn.setIcon(QIcon(pixmap))
-            btn.setIconSize(pixmap.size())
+            cell.set_hi_pixmap(pixmap)
         except Exception:
             logger.exception("썸네일 적용 실패: %s", filepath)
 
@@ -1234,6 +1573,104 @@ class SidebarWidget(QWidget):
             self, "_refresh_screenshot_thumbnails",
             Qt.ConnectionType.QueuedConnection,
         )
+
+    @pyqtSlot()
+    def _refresh_recording_thumbnails(self) -> None:
+        """녹화 썸네일 그리드를 최신 MP4 파일로 갱신합니다."""
+        self._rec_thumb_request_id += 1
+        request_id = self._rec_thumb_request_id
+        self._rec_thumb_buttons = {}
+
+        # 그리드 초기화
+        while self._rec_thumb_grid_layout.count():
+            item = self._rec_thumb_grid_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        output_dir = self._recording_output_dir
+        if not output_dir:
+            return
+
+        rec_path = Path(output_dir)
+        if not rec_path.exists():
+            return
+
+        # 최신 MP4 파일 목록
+        files = sorted(
+            [f for f in rec_path.iterdir() if f.suffix.lower() == '.mp4' and f.is_file()],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+
+        max_shown = _THUMB_MAX_CELLS - 1
+        shown = files[:max_shown]
+        remaining = max(0, len(files) - max_shown)
+
+        # 썸네일 셀 추가
+        for idx, fp in enumerate(shown):
+            row, col = divmod(idx, _THUMB_COLS)
+            cell = self._make_rec_thumb_cell(fp, request_id)
+            self._rec_thumb_grid_layout.addWidget(cell, row, col)
+
+        # 폴더 버튼 (마지막 셀)
+        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_btn = QPushButton(folder_label)
+        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
+        folder_btn.setToolTip("녹화 폴더 열기")
+        folder_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255,255,255,8);
+                color: rgba(180,200,240,200);
+                border: 1px dashed rgba(255,255,255,25);
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
+        """)
+        _dir = output_dir
+
+        def _open_rec_folder(d: str = _dir) -> None:
+            if Path(d).exists():
+                os.startfile(d)
+
+        folder_btn.clicked.connect(lambda _checked=False: _open_rec_folder())
+        next_idx = len(shown)
+        row, col = divmod(next_idx, _THUMB_COLS)
+        self._rec_thumb_grid_layout.addWidget(folder_btn, row, col)
+
+    def _make_rec_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
+        """녹화 썸네일 셀 _HoverThumbCell을 반환합니다."""
+        path_str = str(filepath)
+
+        def _open() -> None:
+            os.startfile(path_str)
+
+        cell = _HoverThumbCell(
+            _THUMB_W, _THUMB_H,
+            popup_parent=self._frame,
+            on_click=_open,
+            tooltip=filepath.name,
+        )
+        self._rec_thumb_buttons[path_str] = cell
+        self._rec_thumb_pool.start(
+            _VideoThumbnailLoadTask(request_id, path_str, self._rec_thumb_signals)
+        )
+        return cell
+
+    @pyqtSlot(int, str, object)
+    def _apply_rec_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
+        if request_id != self._rec_thumb_request_id:
+            return
+        cell = self._rec_thumb_buttons.get(filepath)
+        if cell is None or image is None:
+            return
+        try:
+            pixmap = QPixmap.fromImage(image)
+            if pixmap.isNull():
+                return
+            cell.set_hi_pixmap(pixmap)
+        except Exception:
+            logger.exception("녹화 썸네일 적용 실패: %s", filepath)
 
     def _on_slide_out_finished(self) -> None:
         try:
