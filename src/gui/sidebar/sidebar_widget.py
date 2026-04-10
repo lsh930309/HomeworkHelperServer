@@ -480,8 +480,10 @@ class SidebarWidget(QWidget):
         self._playtime_labels: dict = {}
         self._thumb_buttons: dict[str, _HoverThumbCell] = {}
         self._thumb_request_id = 0
+        self._thumb_cache: dict[str, tuple[float, "QPixmap"]] = {}  # path → (mtime, pixmap)
         self._rec_thumb_buttons: dict[str, _HoverThumbCell] = {}
         self._rec_thumb_request_id = 0
+        self._rec_thumb_cache: dict[str, tuple[float, "QPixmap"]] = {}  # path → (mtime, pixmap)
 
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1526,6 +1528,10 @@ class SidebarWidget(QWidget):
         row, col = divmod(next_idx, _THUMB_COLS)
         self._thumb_grid_layout.addWidget(folder_btn, row, col)
 
+        # 현재 표시 목록에 없는 캐시 항목 제거
+        shown_paths = {str(fp) for fp in shown}
+        self._thumb_cache = {k: v for k, v in self._thumb_cache.items() if k in shown_paths}
+
     def _make_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """썸네일 셀 _HoverThumbCell을 반환합니다."""
         path_str = str(filepath)
@@ -1541,6 +1547,17 @@ class SidebarWidget(QWidget):
             tooltip=filepath.name,
         )
         self._thumb_buttons[path_str] = cell
+
+        # 캐시 히트 시 즉시 표시, 미스 시 비동기 로드
+        try:
+            mtime = filepath.stat().st_mtime
+            cached = self._thumb_cache.get(path_str)
+            if cached and cached[0] == mtime:
+                cell.set_hi_pixmap(cached[1])
+                return cell
+        except OSError:
+            pass
+
         self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
         return cell
 
@@ -1556,6 +1573,13 @@ class SidebarWidget(QWidget):
             if pixmap.isNull():
                 return
             cell.set_hi_pixmap(pixmap)
+            # 캐시에 저장
+            try:
+                from pathlib import Path
+                mtime = Path(filepath).stat().st_mtime
+                self._thumb_cache[filepath] = (mtime, pixmap)
+            except OSError:
+                pass
         except Exception:
             logger.exception("썸네일 적용 실패: %s", filepath)
 
@@ -1648,6 +1672,10 @@ class SidebarWidget(QWidget):
         row, col = divmod(next_idx, _THUMB_COLS)
         self._rec_thumb_grid_layout.addWidget(folder_btn, row, col)
 
+        # 현재 표시 목록에 없는 캐시 항목 제거
+        rec_shown_paths = {str(fp) for fp in shown}
+        self._rec_thumb_cache = {k: v for k, v in self._rec_thumb_cache.items() if k in rec_shown_paths}
+
     def _make_rec_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """녹화 썸네일 셀 _HoverThumbCell을 반환합니다."""
         path_str = str(filepath)
@@ -1662,6 +1690,17 @@ class SidebarWidget(QWidget):
             tooltip=filepath.name,
         )
         self._rec_thumb_buttons[path_str] = cell
+
+        # 캐시 히트 시 즉시 표시, 미스 시 비동기 로드
+        try:
+            mtime = filepath.stat().st_mtime
+            cached = self._rec_thumb_cache.get(path_str)
+            if cached and cached[0] == mtime:
+                cell.set_hi_pixmap(cached[1])
+                return cell
+        except OSError:
+            pass
+
         self._rec_thumb_pool.start(
             _VideoThumbnailLoadTask(request_id, path_str, self._rec_thumb_signals)
         )
@@ -1679,6 +1718,13 @@ class SidebarWidget(QWidget):
             if pixmap.isNull():
                 return
             cell.set_hi_pixmap(pixmap)
+            # 캐시에 저장
+            try:
+                from pathlib import Path
+                mtime = Path(filepath).stat().st_mtime
+                self._rec_thumb_cache[filepath] = (mtime, pixmap)
+            except OSError:
+                pass
         except Exception:
             logger.exception("녹화 썸네일 적용 실패: %s", filepath)
 
