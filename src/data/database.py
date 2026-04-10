@@ -127,6 +127,7 @@ def auto_migrate_database():
         ("global_settings", "obs_auto_launch", "INTEGER", "0"),
         ("global_settings", "obs_launch_hidden", "INTEGER", "1"),
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
+        ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
     ]
     

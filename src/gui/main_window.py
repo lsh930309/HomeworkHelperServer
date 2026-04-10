@@ -2032,7 +2032,11 @@ class MainWindow(QMainWindow):
         gs = getattr(self.data_manager, 'global_settings', None)
         if gs is None or not getattr(gs, 'obs_watch_output_dir', True):
             return ""
-        # GlobalSettings에 명시적 경로 필드가 없으므로 OBS 설정에서 자동 읽기
+        # 수동 지정 경로 우선
+        manual = getattr(gs, 'obs_recording_output_dir', '').strip()
+        if manual:
+            return manual
+        # 없으면 OBS INI에서 자동 읽기
         try:
             from src.recording.obs_config_reader import read_obs_config
             output_dir = read_obs_config().get("output_dir", "")

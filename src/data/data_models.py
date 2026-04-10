@@ -182,6 +182,7 @@ class GlobalSettings:
                  obs_auto_launch: bool = False,
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
+                 obs_recording_output_dir: str = "",
                  recording_hold_threshold_ms: int = 800):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
@@ -233,6 +234,7 @@ class GlobalSettings:
         self.obs_auto_launch = obs_auto_launch
         self.obs_launch_hidden = obs_launch_hidden
         self.obs_watch_output_dir = obs_watch_output_dir
+        self.obs_recording_output_dir = obs_recording_output_dir
         self.recording_hold_threshold_ms = recording_hold_threshold_ms
 
     def to_dict(self) -> Dict:
@@ -320,6 +322,7 @@ class GlobalSettings:
         data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
         data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
+        data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))
         data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
         return cls(**data)
     

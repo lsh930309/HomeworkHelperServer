@@ -227,6 +227,17 @@ class SidebarSettingsDialog(QDialog):
         self._obs_launch_hidden_cb.setEnabled(self._obs_auto_launch_cb.isChecked())
         rec_form.addRow("  최소화 상태로 실행", self._obs_launch_hidden_cb)
 
+        # 녹화 출력 폴더
+        rec_out_row = QHBoxLayout()
+        self._rec_output_dir_edit = QLineEdit(getattr(self._settings, 'obs_recording_output_dir', ''))
+        self._rec_output_dir_edit.setPlaceholderText("비워두면 OBS 설정 자동 감지 (~/Videos 폴백)")
+        rec_browse_btn = QPushButton("찾기...")
+        rec_browse_btn.setFixedWidth(60)
+        rec_browse_btn.clicked.connect(self._browse_recording_dir)
+        rec_out_row.addWidget(self._rec_output_dir_edit)
+        rec_out_row.addWidget(rec_browse_btn)
+        rec_form.addRow("녹화 출력 폴더", rec_out_row)
+
         # 기타
         self._obs_watch_output_cb = QCheckBox()
         self._obs_watch_output_cb.setChecked(getattr(self._settings, 'obs_watch_output_dir', True))
@@ -270,6 +281,15 @@ class SidebarSettingsDialog(QDialog):
         chosen = QFileDialog.getExistingDirectory(self, "스크린샷 저장 폴더 선택", start)
         if chosen:
             self._ss_save_dir_edit.setText(chosen)
+
+    def _browse_recording_dir(self) -> None:
+        current = self._rec_output_dir_edit.text().strip()
+        start = current if current and os.path.isdir(current) else str(
+            __import__('pathlib').Path.home() / "Videos"
+        )
+        chosen = QFileDialog.getExistingDirectory(self, "녹화 출력 폴더 선택", start)
+        if chosen:
+            self._rec_output_dir_edit.setText(chosen)
 
     def _browse_obs_exe(self) -> None:
         current = self._obs_exe_edit.text().strip()
@@ -352,6 +372,7 @@ class SidebarSettingsDialog(QDialog):
         gs.obs_exe_path = self._obs_exe_edit.text().strip()
         gs.obs_auto_launch = self._obs_auto_launch_cb.isChecked()
         gs.obs_launch_hidden = self._obs_launch_hidden_cb.isChecked()
+        gs.obs_recording_output_dir = self._rec_output_dir_edit.text().strip()
         gs.obs_watch_output_dir = self._obs_watch_output_cb.isChecked()
         gs.recording_hold_threshold_ms = self._rec_hold_spin.value()
         return gs
