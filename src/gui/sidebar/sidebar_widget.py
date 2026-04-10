@@ -204,37 +204,16 @@ class _VideoThumbnailLoadTask(QRunnable):
         self._signals.loaded.emit(self._request_id, self._path, image)
 
 
-class _ThumbPopup(QLabel):
-    """썸네일 호버 확대 팝업. leaveEvent를 원본 셀에 릴레이한다."""
-
-    def __init__(self, parent: QWidget, cell: "_HoverThumbCell") -> None:
-        super().__init__(parent)
-        self._cell = cell
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background: rgba(12,12,16,230);
-                border: 1px solid rgba(100,160,255,180);
-                border-radius: 4px;
-            }
-        """)
-
-    def leaveEvent(self, event) -> None:
-        super().leaveEvent(event)
-        self._cell._collapse_popup()
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._cell._on_click:
-            self._cell._on_click()
-        super().mousePressEvent(event)
-
-
 class _HoverThumbCell(QLabel):
-    """썸네일 셀. 마우스 오버 시 1.5배 확대 팝업을 부드럽게 표시한다."""
+    """썸네일 셀. 마우스 오버 시 1.5배 확대 팝업을 표시한다.
+
+    팝업은 popup_parent(사이드바 프레임)의 직접 자식으로 생성되어 레이아웃 위에 표시됩니다.
+    """
 
     _EXPAND = 1.5
     _EXPAND_MS = 150
     _COLLAPSE_MS = 120
+    _COLLAPSE_DELAY_MS = 50   # leaveEvent 후 축소를 지연(경계 근처 깜빡임 방지)
 
     def __init__(
         self,
@@ -250,12 +229,18 @@ class _HoverThumbCell(QLabel):
         self._base_h = base_h
         self._exp_w = int(base_w * self._EXPAND)
         self._exp_h = int(base_h * self._EXPAND)
-        self._popup_parent = popup_parent  # 팝업이 붙을 부모 (사이드바 프레임)
+        self._popup_parent = popup_parent
         self._on_click = on_click
         self._hi_pixmap: Optional[QPixmap] = None
-        self._popup: Optional[_ThumbPopup] = None
+        self._popup: Optional[QLabel] = None
         self._expand_anim: Optional[QPropertyAnimation] = None
         self._collapse_anim: Optional[QPropertyAnimation] = None
+
+        # 지연 축소 타이머
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.setInterval(self._COLLAPSE_DELAY_MS)
+        self._collapse_timer.timeout.connect(self._collapse_popup)
 
         self.setFixedSize(base_w, base_h)
         self.setToolTip(tooltip)
@@ -283,17 +268,18 @@ class _HoverThumbCell(QLabel):
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
-        if self._hi_pixmap is None:
-            return
+        self._collapse_timer.stop()
 
-        # 진행 중인 축소 애니메이션 중단
-        if self._collapse_anim and self._collapse_anim.state() == QAbstractAnimation.State.Running:
-            self._collapse_anim.stop()
-            if self._popup:
-                self._popup.deleteLater()
-                self._popup = None
-
+        # 진행 중인 축소 애니메이션과 팝업 정리
+        self._stop_anim(attr="_collapse_anim")
         if self._popup is not None:
+            try:
+                self._popup.deleteLater()
+            except RuntimeError:
+                pass
+            self._popup = None
+
+        if self._hi_pixmap is None:
             return
 
         pos = self.mapTo(self._popup_parent, QPoint(0, 0))
@@ -307,54 +293,78 @@ class _HoverThumbCell(QLabel):
             self._exp_w, self._exp_h,
         )
 
-        pop_pix = self._hi_pixmap.scaled(
+        pix = self._hi_pixmap.scaled(
             self._exp_w, self._exp_h,
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x_off = max(0, (pop_pix.width() - self._exp_w) // 2)
-        y_off = max(0, (pop_pix.height() - self._exp_h) // 2)
-        pop_pix = pop_pix.copy(x_off, y_off, self._exp_w, self._exp_h)
+        x_off = max(0, (pix.width() - self._exp_w) // 2)
+        y_off = max(0, (pix.height() - self._exp_h) // 2)
+        pix = pix.copy(x_off, y_off, self._exp_w, self._exp_h)
 
-        self._popup = _ThumbPopup(self._popup_parent, self)
-        self._popup.setPixmap(pop_pix)
-        self._popup.setGeometry(start_rect)
-        self._popup.raise_()
-        self._popup.show()
+        popup = QLabel(self._popup_parent)
+        popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        popup.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        popup.setStyleSheet("QLabel { background: rgba(12,12,16,220); border-radius: 4px; }")
+        popup.setPixmap(pix)
+        popup.setGeometry(start_rect)
+        popup.raise_()
+        popup.show()
+        self._popup = popup
 
-        self._expand_anim = QPropertyAnimation(self._popup, b"geometry", self._popup)
-        self._expand_anim.setDuration(self._EXPAND_MS)
-        self._expand_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._expand_anim.setStartValue(start_rect)
-        self._expand_anim.setEndValue(end_rect)
-        self._expand_anim.start()
+        self._stop_anim(attr="_expand_anim")
+        anim = QPropertyAnimation(popup, b"geometry", self)  # self를 parent로 — 수명 관리
+        anim.setDuration(self._EXPAND_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(start_rect)
+        anim.setEndValue(end_rect)
+        anim.start()
+        self._expand_anim = anim
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
-        # 마우스가 팝업 위로 이동한 경우 팝업이 leaveEvent를 처리함
-        if self._popup and self._popup.underMouse():
-            return
-        self._collapse_popup()
+        self._collapse_timer.start()
 
     def _collapse_popup(self) -> None:
+        self._stop_anim(attr="_expand_anim")
+
         if self._popup is None:
             return
-
-        popup = self._popup
-        self._popup = None
-
-        if self._expand_anim and self._expand_anim.state() == QAbstractAnimation.State.Running:
-            self._expand_anim.stop()
 
         pos = self.mapTo(self._popup_parent, QPoint(0, 0))
         end_rect = QRect(pos.x(), pos.y(), self._base_w, self._base_h)
 
-        self._collapse_anim = QPropertyAnimation(popup, b"geometry", popup)
-        self._collapse_anim.setDuration(self._COLLAPSE_MS)
-        self._collapse_anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._collapse_anim.setEndValue(end_rect)
-        self._collapse_anim.finished.connect(popup.deleteLater)
-        self._collapse_anim.start()
+        anim = QPropertyAnimation(self._popup, b"geometry", self)  # self가 parent
+        anim.setDuration(self._COLLAPSE_MS)
+        anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        anim.setEndValue(end_rect)
+        anim.finished.connect(self._on_collapse_done)
+        anim.start()
+        self._collapse_anim = anim
+
+    def _on_collapse_done(self) -> None:
+        if self._popup is not None:
+            try:
+                self._popup.deleteLater()
+            except RuntimeError:
+                pass
+            self._popup = None
+        if self._collapse_anim is not None:
+            try:
+                self._collapse_anim.deleteLater()
+            except RuntimeError:
+                pass
+            self._collapse_anim = None
+
+    def _stop_anim(self, attr: str) -> None:
+        anim = getattr(self, attr, None)
+        if anim is not None:
+            try:
+                anim.stop()
+                anim.deleteLater()
+            except RuntimeError:
+                pass
+            setattr(self, attr, None)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._on_click:

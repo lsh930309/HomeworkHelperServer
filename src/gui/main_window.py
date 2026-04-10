@@ -2021,11 +2021,11 @@ class MainWindow(QMainWindow):
         from src.gui.countdown_overlay import CountdownOverlay
         from PyQt6.QtWidgets import QApplication
         screen = QApplication.primaryScreen()
-        overlay = CountdownOverlay(
+        self._countdown_overlay = CountdownOverlay(
             on_complete=self._recording_manager.start_recording,
             screen=screen,
         )
-        overlay.start()
+        self._countdown_overlay.start()
 
     def _get_recording_output_dir(self) -> str:
         """OBS 녹화 출력 폴더 경로를 반환합니다."""
@@ -2035,9 +2035,14 @@ class MainWindow(QMainWindow):
         # GlobalSettings에 명시적 경로 필드가 없으므로 OBS 설정에서 자동 읽기
         try:
             from src.recording.obs_config_reader import read_obs_config
-            return read_obs_config().get("output_dir", "")
+            output_dir = read_obs_config().get("output_dir", "")
         except Exception:
-            return ""
+            output_dir = ""
+        # OBS가 기본 출력 경로를 사용 중이면 INI에 기록되지 않으므로 fallback
+        if not output_dir:
+            import os
+            output_dir = os.path.join(os.path.expanduser("~"), "Videos")
+        return output_dir
 
     def _start_screenshot_manager(self) -> None:
         """현재 설정 기준으로 스크린샷 매니저 상태를 동기화합니다."""
