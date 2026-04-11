@@ -14,7 +14,7 @@
 
 **게임 일일 루틴 자동 관리 시스템**
 
-프로세스 모니터링 • 스마트 알림 • HoYoLab 스태미나 추적 • RESTful API
+프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • RESTful API
 
 [다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
 
@@ -150,6 +150,26 @@ sequenceDiagram
 - **세션 기록**: 게임별 실행 시작/종료 타임스탬프
 - **플레이 패턴**: 프로세스별 세션 이력 및 통계
 - **RESTful API**: FastAPI 기반 데이터 조회/분석 인터페이스
+
+### 🖥️ 인게임 오버레이 사이드바
+
+- **자동 활성화**: 게임 실행 감지 시 화면 우측 가장자리에 트리거 대기
+- **엣지 트리거**: 마우스를 화면 우측 끝에 올리면 반투명 사이드바 슬라이드인
+- **스크린샷 갤러리**: 최근 8개 스크린샷 썸네일 — 클릭으로 열기, 우클릭으로 복사/삭제
+- **녹화 제어**: OBS WebSocket 연동, 원클릭 녹화 시작(3초 카운트다운) / 중지
+- **녹화 갤러리**: 최근 MP4 파일 썸네일 그리드 (Windows Shell API 미리보기)
+- **볼륨 제어**: 실행 중인 게임 프로세스 음량 실시간 조절
+- **플레이 타임**: 현재 세션 경과 시간 표시
+- **게임패드 연동**: 짧게 누르면 스크린샷, 길게 누르면 녹화 토글
+- **자동 숨김**: 지정 시간 후 슬라이드아웃, 화면 구성 변경 시 자동 재배치
+
+### 📸 스크린샷 & OBS 녹화
+
+- **게임패드 스크린샷**: 버튼 단축키로 전체 화면 또는 게임 창만 캡처
+- **저장 경로 설정**: 캡처 파일 저장 폴더 수동 지정
+- **OBS WebSocket 5.x**: 자동 연결 / 수동 재연결 / 자동 실행 지원
+- **카운트다운 오버레이**: 녹화 시작 전 3초 전체화면 카운트다운
+- **녹화 출력 폴더**: OBS INI 자동 감지 또는 수동 지정
 
 ### 🔧 시스템 기능
 
@@ -346,11 +366,29 @@ HomeworkHelperServer/
 │   │   └── game_presets.json    # 게임 프리셋 정의
 │   │
 │   ├── gui/                      # GUI 레이어
+│   │   ├── sidebar/             # 인게임 오버레이 사이드바
+│   │   │   ├── sidebar_widget.py       # 사이드바 UI (갤러리·녹화·볼륨)
+│   │   │   ├── sidebar_controller.py   # 생명주기 관리 (게임 실행/종료 연동)
+│   │   │   ├── edge_trigger_window.py  # 마우스 우측 가장자리 감지
+│   │   │   └── win32_effects.py        # Acrylic/Blur 배경 효과
+│   │   ├── countdown_overlay.py # 녹화 시작 3초 카운트다운 오버레이
 │   │   ├── dialogs.py           # 프로세스/바로가기 추가 다이얼로그
 │   │   ├── gui_notification_handler.py  # GUI 알림 핸들러
 │   │   ├── main_window.py       # 메인 윈도우
 │   │   ├── preset_editor_dialog.py      # 게임 프리셋 편집기
+│   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
 │   │   └── tray_manager.py      # 시스템 트레이 관리
+│   │
+│   ├── screenshot/               # 스크린샷 시스템
+│   │   ├── capture.py           # 캡처 로직 (GDI BitBlt / mss)
+│   │   ├── manager.py           # 중앙 컨트롤러
+│   │   ├── method_a.py          # WH_KEYBOARD_LL 훅 기반 캡처
+│   │   └── trigger_dispatcher.py # 홀드 시간 분기 (스크린샷/녹화)
+│   │
+│   ├── recording/                # OBS 녹화 시스템
+│   │   ├── manager.py           # 상태 머신 (idle/recording/connecting/obs_offline)
+│   │   ├── obs_client.py        # OBS WebSocket 5.x 클라이언트
+│   │   └── obs_config_reader.py # OBS INI 설정 자동 읽기
 │   │
 │   ├── services/                 # 외부 서비스 통합
 │   │   └── hoyolab.py           # HoYoLab API (스태미나 조회)
@@ -466,6 +504,26 @@ FastAPI 서버와 통신하는 HTTP 클라이언트
 
 ### 🖥️ GUI 모듈
 
+#### `sidebar/sidebar_widget.py` - 사이드바 UI
+- 스크린샷 갤러리 (썸네일 캐시, 우클릭 복사/삭제)
+- 녹화 갤러리 (MP4 썸네일, Windows Shell API)
+- 녹화 상태 표시 및 시작/중지 버튼
+- 볼륨 슬라이더 (게임 프로세스별)
+- 호버 시 흰색 테두리 하이라이트
+
+#### `sidebar/sidebar_controller.py` - 사이드바 생명주기
+- 게임 실행 감지 시 트리거 활성화
+- 게임 종료 시 사이드바/트리거 비활성화
+- 디스플레이 변경(해상도, 가상 디스플레이) 시 자동 재배치
+
+#### `sidebar/edge_trigger_window.py` - 엣지 트리거
+- 화면 우측 가장자리 마우스 진입 감지
+- 트리거 영역(Y 비율), 폭(px), 쿨다운 설정 가능
+
+#### `countdown_overlay.py` - 카운트다운 오버레이
+- 녹화 시작 전 3 → 2 → 1 전체화면 카운트다운
+- `WA_TranslucentBackground` 반투명 위젯
+
 #### `main_window.py` - 메인 윈도우
 - 프로세스 목록 표시
 - 실행 버튼 및 상태 표시
@@ -474,7 +532,11 @@ FastAPI 서버와 통신하는 HTTP 클라이언트
 #### `dialogs.py` - 다이얼로그
 - 프로세스 추가/편집 다이얼로그
 - 웹 바로가기 추가/편집 다이얼로그
-- 설정 다이얼로그
+
+#### `sidebar_settings_dialog.py` - 사이드바·녹화 설정
+- 사이드바 위치·효과·자동숨김 설정
+- 스크린샷 저장 경로, 게임패드 버튼 지정
+- OBS 연결 정보, 녹화 출력 폴더, OBS 자동 실행 설정
 
 #### `tray_manager.py` - 트레이 관리
 - 시스템 트레이 아이콘
@@ -484,6 +546,39 @@ FastAPI 서버와 통신하는 HTTP 클라이언트
 #### `gui_notification_handler.py` - GUI 알림
 - GUI 이벤트 루프와 통합
 - 알림 큐 관리
+
+---
+
+### 📸 Screenshot 모듈
+
+#### `screenshot/manager.py` - 스크린샷 매니저
+- 캡처 방식(Method A: WH_KEYBOARD_LL) 고정 관리
+- 게임 이름 기반 파일명 자동 생성
+- 저장 경로 런타임 변경 지원
+
+#### `screenshot/trigger_dispatcher.py` - 트리거 분기
+- 게임패드 버튼 홀드 시간으로 동작 분기
+- 짧게(500ms 미만): 스크린샷, 길게(800ms+): 녹화 토글
+
+#### `screenshot/capture.py` - 캡처 로직
+- `mss` 전체화면 캡처 / GDI BitBlt 게임 창 캡처
+- 실패 시 전체 화면으로 자동 폴백
+
+---
+
+### 🎬 Recording 모듈
+
+#### `recording/manager.py` - 녹화 매니저
+- 상태 머신: `idle` / `recording` / `connecting` / `obs_offline`
+- OBS 자동 실행 후 WebSocket 연결 (최대 2회 재시도)
+- 경과 시간 추적 (`get_elapsed_sec()`)
+
+#### `recording/obs_client.py` - OBS WebSocket 클라이언트
+- OBS WebSocket 5.x 프로토콜
+- 녹화 상태 변경 이벤트 콜백
+
+#### `recording/obs_config_reader.py` - OBS 설정 읽기
+- OBS INI 파일에서 포트 / 비밀번호 / 출력 경로 자동 추출
 
 ---
 
@@ -578,6 +673,9 @@ PUT    /settings               # 전역 설정 수정
 | **Pydantic** | 2.11 | 데이터 검증 |
 | **requests** | 2.32 | HTTP 클라이언트 |
 | **genshin** | 1.6+ | HoYoLab API |
+| **obsws-python** | 1.7+ | OBS WebSocket 5.x 클라이언트 |
+| **winshell** | 0.6 | Windows 특수 폴더 / 휴지통 이동 |
+| **mss** | 9.x | 고속 스크린샷 캡처 |
 | **PyInstaller** | 6.x | 실행 파일 빌드 |
 | **tqdm** | 4.67 | 진행률 표시 |
 
