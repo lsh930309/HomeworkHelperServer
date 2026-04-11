@@ -346,8 +346,9 @@ HomeworkHelperServer/
 │   └── requirements.txt          # 의존성 목록
 │
 ├── 🔧 src/                       # 소스 코드
-│   ├── api/                      # API 클라이언트
-│   │   └── client.py             # FastAPI 서버와 통신
+│   ├── api/                      # API 레이어
+│   │   ├── client.py             # FastAPI 서버와 통신
+│   │   └── dashboard/            # 웹 대시보드 (FastAPI 라우터·템플릿·정적 파일)
 │   │
 │   ├── core/                     # 핵심 로직
 │   │   ├── instance_manager.py  # 싱글톤 인스턴스 관리
@@ -376,8 +377,9 @@ HomeworkHelperServer/
 │   │   ├── gui_notification_handler.py  # GUI 알림 핸들러
 │   │   ├── main_window.py       # 메인 윈도우
 │   │   ├── preset_editor_dialog.py      # 게임 프리셋 편집기
-│   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
-│   │   └── tray_manager.py      # 시스템 트레이 관리
+│   │   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
+│   │   ├── tray_manager.py      # 시스템 트레이 관리
+│   │   └── volume_panel.py      # 게임별 볼륨 조절 팝오버 패널
 │   │
 │   ├── screenshot/               # 스크린샷 시스템
 │   │   ├── capture.py           # 캡처 로직 (GDI BitBlt / mss)
