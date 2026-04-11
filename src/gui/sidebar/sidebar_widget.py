@@ -222,6 +222,7 @@ class _HoverThumbCell(QLabel):
         base_h: int,
         popup_parent: Optional[QWidget] = None,  # 하위 호환용, 무시
         on_click: Optional[Callable[[], None]] = None,
+        on_right_click: Optional[Callable[[], None]] = None,
         tooltip: str = "",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -229,6 +230,7 @@ class _HoverThumbCell(QLabel):
         self._base_w = base_w
         self._base_h = base_h
         self._on_click = on_click
+        self._on_right_click = on_right_click
         self._hi_pixmap: Optional[QPixmap] = None
 
         self.setFixedSize(base_w, base_h)
@@ -260,6 +262,8 @@ class _HoverThumbCell(QLabel):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._on_click:
             self._on_click()
+        elif event.button() == Qt.MouseButton.RightButton and self._on_right_click:
+            self._on_right_click()
         super().mousePressEvent(event)
 
 
@@ -1431,10 +1435,60 @@ class SidebarWidget(QWidget):
         def _open() -> None:
             os.startfile(path_str)
 
+        def _show_context_menu() -> None:
+            from PyQt6.QtWidgets import QMenu, QMessageBox
+            from PyQt6.QtGui import QCursor
+            menu = QMenu()
+            menu.setStyleSheet("""
+                QMenu {
+                    background: #1e1e2a; color: white;
+                    border: 1px solid rgba(255,255,255,30);
+                    border-radius: 4px; padding: 2px;
+                }
+                QMenu::item { padding: 5px 18px; border-radius: 3px; }
+                QMenu::item:selected { background: rgba(255,255,255,15); }
+            """)
+            copy_act = menu.addAction("복사")
+            menu.addSeparator()
+            del_act = menu.addAction("삭제")
+            action = menu.exec(QCursor.pos())
+            if action == copy_act:
+                _copy_file(path_str)
+            elif action == del_act:
+                _delete_file(path_str)
+
+        def _copy_file(path: str) -> None:
+            from PyQt6.QtCore import QMimeData, QUrl
+            from PyQt6.QtWidgets import QApplication
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(path)])
+            QApplication.clipboard().setMimeData(mime)
+
+        def _delete_file(path: str) -> None:
+            from PyQt6.QtWidgets import QMessageBox
+            from pathlib import Path as _Path
+            reply = QMessageBox.question(
+                self, "삭제 확인",
+                f"'{_Path(path).name}'을(를) 휴지통으로 이동하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                import winshell
+                winshell.delete_file(path, allow_undo=True, no_confirm=True, silent=True)
+            except Exception:
+                logger.exception("파일 휴지통 이동 실패: %s", path)
+                return
+            self._thumb_cache.pop(path, None)
+            self._refresh_screenshot_thumbnails()
+
         cell = _HoverThumbCell(
             _THUMB_W, _THUMB_H,
             popup_parent=self._frame,
             on_click=_open,
+            on_right_click=_show_context_menu,
             tooltip=filepath.name,
         )
         self._thumb_buttons[path_str] = cell
