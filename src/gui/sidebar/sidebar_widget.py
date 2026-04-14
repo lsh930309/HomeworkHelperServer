@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
+from src.utils.clipboard import copy_file_to_clipboard
 
 logger = logging.getLogger(__name__)
 
@@ -1430,7 +1431,6 @@ class SidebarWidget(QWidget):
     def _make_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """썸네일 셀 _HoverThumbCell을 반환합니다."""
         path_str = str(filepath)
-        _fp = filepath
 
         def _open() -> None:
             os.startfile(path_str)
@@ -1458,31 +1458,14 @@ class SidebarWidget(QWidget):
                 _delete_file(path_str)
 
         def _copy_file(path: str) -> None:
-            from PyQt6.QtCore import QMimeData, QUrl
-            from PyQt6.QtWidgets import QApplication
-            mime = QMimeData()
-            mime.setUrls([QUrl.fromLocalFile(path)])
-            QApplication.clipboard().setMimeData(mime)
+            copy_file_to_clipboard(path)
 
         def _delete_file(path: str) -> None:
-            from PyQt6.QtWidgets import QMessageBox
-            from pathlib import Path as _Path
-            reply = QMessageBox.question(
-                self, "삭제 확인",
-                f"'{_Path(path).name}'을(를) 휴지통으로 이동하시겠습니까?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+            self._delete_gallery_file(
+                path,
+                cache=self._thumb_cache,
+                refresh=self._refresh_screenshot_thumbnails,
             )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-            try:
-                import winshell
-                winshell.delete_file(path, allow_undo=True, no_confirm=True, silent=True)
-            except Exception:
-                logger.exception("파일 휴지통 이동 실패: %s", path)
-                return
-            self._thumb_cache.pop(path, None)
-            self._refresh_screenshot_thumbnails()
 
         cell = _HoverThumbCell(
             _THUMB_W, _THUMB_H,
@@ -1505,6 +1488,36 @@ class SidebarWidget(QWidget):
 
         self._thumb_pool.start(_ThumbnailLoadTask(request_id, path_str, self._thumb_signals))
         return cell
+
+    def _delete_gallery_file(
+        self,
+        path: str,
+        *,
+        cache: dict,
+        refresh: Callable[[], None],
+    ) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            self,
+            "삭제 확인",
+            f"'{Path(path).name}'을(를) 휴지통으로 이동하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            import winshell
+
+            winshell.delete_file(path, allow_undo=True, no_confirm=True, silent=True)
+        except Exception:
+            logger.exception("파일 휴지통 이동 실패: %s", path)
+            return
+
+        cache.pop(path, None)
+        refresh()
 
     @pyqtSlot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
@@ -1628,10 +1641,34 @@ class SidebarWidget(QWidget):
         def _open() -> None:
             os.startfile(path_str)
 
+        def _show_context_menu() -> None:
+            from PyQt6.QtWidgets import QMenu
+            from PyQt6.QtGui import QCursor
+
+            menu = QMenu()
+            menu.setStyleSheet("""
+                QMenu {
+                    background: #1e1e2a; color: white;
+                    border: 1px solid rgba(255,255,255,30);
+                    border-radius: 4px; padding: 2px;
+                }
+                QMenu::item { padding: 5px 18px; border-radius: 3px; }
+                QMenu::item:selected { background: rgba(255,255,255,15); }
+            """)
+            del_act = menu.addAction("삭제")
+            action = menu.exec(QCursor.pos())
+            if action == del_act:
+                self._delete_gallery_file(
+                    path_str,
+                    cache=self._rec_thumb_cache,
+                    refresh=self._refresh_recording_thumbnails,
+                )
+
         cell = _HoverThumbCell(
             _THUMB_W, _THUMB_H,
             popup_parent=self._frame,
             on_click=_open,
+            on_right_click=_show_context_menu,
             tooltip=filepath.name,
         )
         self._rec_thumb_buttons[path_str] = cell

@@ -95,3 +95,4 @@ certs/.thumbprint
 # 개인별 로컬 설정만 제외 (.claude/settings.local.json)
 .claude/
 .omc/
+.omx/
