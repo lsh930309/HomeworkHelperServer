@@ -584,6 +584,64 @@ def ensure_release_dir(gui):
     return RELEASE_DIR
 
 
+
+def build_dashboard_frontend(gui):
+    """대시보드 프론트엔드 번들을 안정적인 정적 파일명으로 생성."""
+    frontend_dir = PROJECT_ROOT / "src" / "api" / "dashboard" / "frontend"
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        gui.log("  (대시보드 프론트엔드 package.json 없음 - 건너뜀)")
+        return True
+
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        gui.log("  ⚠ npm을 찾을 수 없어 체크인된 대시보드 번들을 사용합니다.", 'warning')
+        return True
+
+    gui.log_section("대시보드 프론트엔드 빌드")
+    gui.set_status("대시보드 프론트엔드 빌드 중...")
+    gui.set_progress(22)
+
+    install_cmd = [npm_cmd, "ci"] if (frontend_dir / "package-lock.json").exists() else [npm_cmd, "install"]
+    for cmd in (install_cmd, [npm_cmd, "run", "build"]):
+        gui.log(f"실행: {' '.join(cmd)}")
+        try:
+            process = subprocess.run(
+                cmd,
+                cwd=frontend_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False,
+            )
+        except Exception as e:
+            gui.log(f"✗ 대시보드 빌드 명령 실행 실패: {e}", 'error')
+            return False
+        if process.stdout:
+            for line in process.stdout.splitlines():
+                if line.strip():
+                    gui.log(f"  {line}")
+        if process.returncode != 0:
+            gui.log(f"✗ 대시보드 빌드 실패 (exit={process.returncode})", 'error')
+            return False
+
+    # 런타임은 templates/dashboard.html의 안정적인 asset URL을 사용하므로
+    # Vite가 생성한 보조 index.html은 패키징 대상에서 제거합니다.
+    for generated in (
+        PROJECT_ROOT / "src" / "api" / "dashboard" / "static" / "index.html",
+        frontend_dir / "tsconfig.tsbuildinfo",
+    ):
+        if generated.exists():
+            try:
+                generated.unlink()
+            except Exception as e:
+                gui.log(f"  ⚠ 생성 파일 정리 실패 ({generated.name}): {e}", 'warning')
+
+    gui.log("✓ 대시보드 프론트엔드 빌드 완료", 'success')
+    return True
+
 def build_with_pyinstaller(gui):
     """PyInstaller로 빌드"""
     gui.log_section("PyInstaller 빌드 시작 (onedir 모드)")
@@ -996,7 +1054,12 @@ def run_build_process(gui, version_info):
             # 2. 정리
             clean_build_artifacts(gui)
 
-            # 3. PyInstaller 빌드
+            # 3. 대시보드 프론트엔드 빌드
+            if not build_dashboard_frontend(gui):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return

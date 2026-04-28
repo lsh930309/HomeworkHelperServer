@@ -1,0 +1,1 @@
+{"scripts":{"dev":"vite --host 127.0.0.1","build":"tsc -b && vite build","preview":"vite preview --host 127.0.0.1"},"dependencies":{"@vitejs/plugin-react":"latest","echarts":"^5.5.1","htm":"^3.1.1","react":"^18.3.1","react-dom":"^18.3.1","typescript":"latest","vite":"latest"},"devDependencies":{"@types/react":"^19.2.14","@types/react-dom":"^19.2.3"}}

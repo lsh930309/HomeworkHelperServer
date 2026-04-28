@@ -96,3 +96,8 @@ certs/.thumbprint
 .claude/
 .omc/
 .omx/
+
+# JavaScript
+node_modules/
+tsconfig.tsbuildinfo
+*.tsbuildinfo

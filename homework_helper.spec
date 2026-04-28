@@ -1,4 +1,4 @@
-﻿# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python ; coding: utf-8 -*-
 
 # HomeworkHelper - PyInstaller spec (onedir 모드)
 # Label Studio Helper 분리 후 정리된 버전
@@ -6,13 +6,32 @@
 import sys
 from pathlib import Path
 
+
+def collect_tree(src, dest, excludes=()):
+    src_path = Path(src)
+    rows = []
+    for path in src_path.rglob('*'):
+        rel = path.relative_to(src_path)
+        rel_posix = rel.as_posix()
+        if path.is_dir():
+            continue
+        if any(path.match(pattern) or rel_posix.startswith(pattern.rstrip('/') + '/') for pattern in excludes):
+            continue
+        rows.append((str(path), str(Path(dest) / rel.parent)))
+    return rows
+
 a = Analysis(
     ['homework_helper.pyw'],
     pathex=[],
     binaries=[],
     datas=[
-        ('assets', 'assets'),
-        ('src', 'src'),
+        *collect_tree('assets', 'assets'),
+        *collect_tree('src', 'src', excludes=(
+            'api/dashboard/frontend/node_modules',
+            '**/__pycache__',
+            '**/*.pyc',
+            '**/tsconfig.tsbuildinfo',
+        )),
     ],
     hiddenimports=[
         # FastAPI/Backend
