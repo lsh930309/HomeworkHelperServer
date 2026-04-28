@@ -172,6 +172,7 @@ class GlobalSettings:
                  screenshot_disable_gamebar: bool = False,
                  screenshot_capture_mode: str = "fullscreen",
                  screenshot_gamepad_button_index: int = -1,
+                 screenshot_trigger_vk: int = 0xB2,
                  # Recording (OBS)
                  recording_enabled: bool = False,
                  obs_host: str = "localhost",
@@ -181,6 +182,7 @@ class GlobalSettings:
                  obs_auto_launch: bool = False,
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
+                 obs_recording_output_dir: str = "",
                  recording_hold_threshold_ms: int = 800):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
@@ -222,6 +224,7 @@ class GlobalSettings:
         self.screenshot_disable_gamebar = screenshot_disable_gamebar
         self.screenshot_capture_mode = screenshot_capture_mode
         self.screenshot_gamepad_button_index = screenshot_gamepad_button_index
+        self.screenshot_trigger_vk = screenshot_trigger_vk
         # Recording (OBS)
         self.recording_enabled = recording_enabled
         self.obs_host = obs_host
@@ -231,6 +234,7 @@ class GlobalSettings:
         self.obs_auto_launch = obs_auto_launch
         self.obs_launch_hidden = obs_launch_hidden
         self.obs_watch_output_dir = obs_watch_output_dir
+        self.obs_recording_output_dir = obs_recording_output_dir
         self.recording_hold_threshold_ms = recording_hold_threshold_ms
 
     def to_dict(self) -> Dict:
@@ -308,6 +312,7 @@ class GlobalSettings:
             _cap_mode = 'fullscreen'
         data['screenshot_capture_mode'] = _cap_mode
         data['screenshot_gamepad_button_index'] = int(data.get('screenshot_gamepad_button_index', -1))
+        data['screenshot_trigger_vk'] = int(data.get('screenshot_trigger_vk', 0xB2))
         # Recording (OBS) 하위 호환성
         data['recording_enabled'] = bool(data.get('recording_enabled', False))
         data['obs_host'] = str(data.get('obs_host', 'localhost'))
@@ -317,6 +322,7 @@ class GlobalSettings:
         data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
         data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
+        data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))
         data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
         return cls(**data)
     

@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox, QSpinBox, QLineEdit, QGroupBox,
     QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QMetaObject, pyqtSlot, Q_ARG
 
 from src.data.data_models import GlobalSettings
 
@@ -18,6 +18,7 @@ class SidebarSettingsDialog(QDialog):
         self.setWindowTitle("사이드바 설정")
         self.setMinimumWidth(860)
         self._settings = settings
+        self._ss_trigger_vk: int = getattr(settings, 'screenshot_trigger_vk', 0xB2)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -164,6 +165,20 @@ class SidebarSettingsDialog(QDialog):
             self._ss_capture_mode_combo.setCurrentIndex(idx)
         ss_form.addRow("캡처 대상", self._ss_capture_mode_combo)
 
+        # 트리거 버튼 매핑
+        from src.screenshot.key_capture import vk_to_display_name
+        trigger_row = QHBoxLayout()
+        self._ss_trigger_label = QLabel(
+            f"{vk_to_display_name(self._ss_trigger_vk)} (0x{self._ss_trigger_vk:02X})"
+        )
+        self._ss_trigger_btn = QPushButton("설정...")
+        self._ss_trigger_btn.setFixedWidth(70)
+        self._ss_trigger_btn.clicked.connect(self._capture_trigger_key)
+        trigger_row.addWidget(self._ss_trigger_label)
+        trigger_row.addStretch()
+        trigger_row.addWidget(self._ss_trigger_btn)
+        ss_form.addRow("트리거 버튼", trigger_row)
+
         right_col.addWidget(ss_group)
 
         # ── 녹화 (OBS) 설정 ──
@@ -212,6 +227,17 @@ class SidebarSettingsDialog(QDialog):
         self._obs_launch_hidden_cb.setEnabled(self._obs_auto_launch_cb.isChecked())
         rec_form.addRow("  최소화 상태로 실행", self._obs_launch_hidden_cb)
 
+        # 녹화 출력 폴더
+        rec_out_row = QHBoxLayout()
+        self._rec_output_dir_edit = QLineEdit(getattr(self._settings, 'obs_recording_output_dir', ''))
+        self._rec_output_dir_edit.setPlaceholderText("비워두면 OBS 설정 자동 감지 (~/Videos 폴백)")
+        rec_browse_btn = QPushButton("찾기...")
+        rec_browse_btn.setFixedWidth(60)
+        rec_browse_btn.clicked.connect(self._browse_recording_dir)
+        rec_out_row.addWidget(self._rec_output_dir_edit)
+        rec_out_row.addWidget(rec_browse_btn)
+        rec_form.addRow("녹화 출력 폴더", rec_out_row)
+
         # 기타
         self._obs_watch_output_cb = QCheckBox()
         self._obs_watch_output_cb.setChecked(getattr(self._settings, 'obs_watch_output_dir', True))
@@ -256,6 +282,15 @@ class SidebarSettingsDialog(QDialog):
         if chosen:
             self._ss_save_dir_edit.setText(chosen)
 
+    def _browse_recording_dir(self) -> None:
+        current = self._rec_output_dir_edit.text().strip()
+        start = current if current and os.path.isdir(current) else str(
+            __import__('pathlib').Path.home() / "Videos"
+        )
+        chosen = QFileDialog.getExistingDirectory(self, "녹화 출력 폴더 선택", start)
+        if chosen:
+            self._rec_output_dir_edit.setText(chosen)
+
     def _browse_obs_exe(self) -> None:
         current = self._obs_exe_edit.text().strip()
         start_dir = os.path.dirname(current) if current and os.path.isfile(current) else "C:\\Program Files"
@@ -277,6 +312,38 @@ class SidebarSettingsDialog(QDialog):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "OBS 설정 불러오기", f"OBS 설정을 읽지 못했습니다:\n{e}")
 
+    def _capture_trigger_key(self) -> None:
+        """'설정...' 버튼 클릭 시 다음 키 입력을 트리거로 등록합니다."""
+        self._ss_trigger_btn.setEnabled(False)
+        self._ss_trigger_btn.setText("버튼을 누르세요...")
+
+        from src.screenshot.key_capture import capture_one_key
+        capture_one_key(
+            timeout_sec=10.0,
+            on_captured=lambda vk: QMetaObject.invokeMethod(
+                self, "_on_trigger_captured",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, vk),
+            ),
+            on_timeout=lambda: QMetaObject.invokeMethod(
+                self, "_on_trigger_timeout",
+                Qt.ConnectionType.QueuedConnection,
+            ),
+        )
+
+    @pyqtSlot(int)
+    def _on_trigger_captured(self, vk: int) -> None:
+        from src.screenshot.key_capture import vk_to_display_name
+        self._ss_trigger_vk = vk
+        self._ss_trigger_label.setText(f"{vk_to_display_name(vk)} (0x{vk:02X})")
+        self._ss_trigger_btn.setText("설정...")
+        self._ss_trigger_btn.setEnabled(True)
+
+    @pyqtSlot()
+    def _on_trigger_timeout(self) -> None:
+        self._ss_trigger_btn.setText("설정...")
+        self._ss_trigger_btn.setEnabled(True)
+
     def get_updated_settings(self) -> GlobalSettings:
         """변경된 설정을 반영한 GlobalSettings 를 반환합니다."""
         import copy
@@ -296,6 +363,7 @@ class SidebarSettingsDialog(QDialog):
         gs.screenshot_gamepad_trigger = self._ss_gamepad_cb.isChecked()
         gs.screenshot_disable_gamebar = self._ss_disable_gamebar_cb.isChecked()
         gs.screenshot_capture_mode = self._ss_capture_mode_combo.currentData()
+        gs.screenshot_trigger_vk = self._ss_trigger_vk
         # Recording (OBS)
         gs.recording_enabled = self._rec_enabled_cb.isChecked()
         gs.obs_host = self._obs_host_edit.text().strip() or "localhost"
@@ -304,6 +372,7 @@ class SidebarSettingsDialog(QDialog):
         gs.obs_exe_path = self._obs_exe_edit.text().strip()
         gs.obs_auto_launch = self._obs_auto_launch_cb.isChecked()
         gs.obs_launch_hidden = self._obs_launch_hidden_cb.isChecked()
+        gs.obs_recording_output_dir = self._rec_output_dir_edit.text().strip()
         gs.obs_watch_output_dir = self._obs_watch_output_cb.isChecked()
         gs.recording_hold_threshold_ms = self._rec_hold_spin.value()
         return gs

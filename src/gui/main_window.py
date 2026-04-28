@@ -76,7 +76,8 @@ class IconDownloader(QThread):
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
     request_table_refresh_signal = pyqtSignal() # 테이블 새로고침 요청 시그널
-    _recording_state_sig = pyqtSignal(str)       # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
+    _recording_state_sig = pyqtSignal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
+    _gamepad_countdown_sig = pyqtSignal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
 
     # UI 색상 정의
     COLOR_INCOMPLETE = QColor("red")      # 미완료 상태 색상
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         self._screenshot_manager = ScreenshotManager(
             get_target_hwnd=self._get_screenshot_target_hwnd,
             long_press_threshold_ms=getattr(gs, 'recording_hold_threshold_ms', 800),
+            trigger_vk=getattr(gs, 'screenshot_trigger_vk', 0xB2),
         )
         self._screenshot_manager.set_on_captured(self._on_screenshot_captured)
         self._screenshot_manager.set_game_name_provider(self._get_screenshot_game_name)
@@ -186,13 +188,16 @@ class MainWindow(QMainWindow):
         from src.recording import RecordingManager
         self._recording_manager = RecordingManager()
         self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
-        self._screenshot_manager.set_on_long_press(self._recording_manager.on_recording_toggle)
+        self._screenshot_manager.set_on_long_press(self._on_gamepad_long_press)
         self._recording_state_sig.connect(self._dispatch_recording_state_to_sidebar)
+        self._gamepad_countdown_sig.connect(self._show_countdown_then_record)
         self._sidebar_controller.set_recording_callbacks(
             on_stop=self._recording_manager.stop_recording,
             on_reconnect=self._recording_manager.reconnect,
+            on_start=self._show_countdown_then_record,
             get_last_error=self._recording_manager.get_last_error,
             get_elapsed_sec=self._recording_manager.get_elapsed_sec,
+            get_output_dir=self._get_recording_output_dir,
         )
         self._apply_recording_settings()
 
@@ -1964,6 +1969,9 @@ class MainWindow(QMainWindow):
         self._screenshot_manager.set_long_press_threshold(
             getattr(gs, 'recording_hold_threshold_ms', 800)
         )
+        self._screenshot_manager.set_trigger_vk(
+            getattr(gs, 'screenshot_trigger_vk', 0xB2)
+        )
         if getattr(gs, 'screenshot_disable_gamebar', False):
             self._set_gamebar_capture(False)
         else:
@@ -1987,6 +1995,58 @@ class MainWindow(QMainWindow):
         """메인 스레드에서 실행되는 실제 사이드바 업데이트."""
         if hasattr(self, '_sidebar_controller'):
             self._sidebar_controller.dispatch_recording_state(state)
+
+    def _on_gamepad_long_press(self) -> None:
+        """게임패드 롱프레스(800ms+) 처리 — 훅 스레드에서 호출될 수 있음.
+
+        녹화 중이면 즉시 중지, idle이면 카운트다운 후 시작.
+        """
+        if not hasattr(self, '_recording_manager'):
+            return
+        state = self._recording_manager.get_state()
+        if state == "recording":
+            self._recording_manager.stop_recording()
+        elif state == "idle":
+            self._gamepad_countdown_sig.emit()  # 메인 스레드로 릴레이
+        else:
+            # obs_offline / connecting: 기존 동작 (자동 연결 + 녹화)
+            self._recording_manager.on_recording_toggle()
+
+    def _show_countdown_then_record(self) -> None:
+        """3초 카운트다운 오버레이를 표시하고 완료 시 녹화를 시작합니다.
+        반드시 메인 스레드에서 호출해야 합니다.
+        """
+        if not hasattr(self, '_recording_manager'):
+            return
+        from src.gui.countdown_overlay import CountdownOverlay
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        self._countdown_overlay = CountdownOverlay(
+            on_complete=self._recording_manager.start_recording,
+            screen=screen,
+        )
+        self._countdown_overlay.start()
+
+    def _get_recording_output_dir(self) -> str:
+        """OBS 녹화 출력 폴더 경로를 반환합니다."""
+        gs = getattr(self.data_manager, 'global_settings', None)
+        if gs is None or not getattr(gs, 'obs_watch_output_dir', True):
+            return ""
+        # 수동 지정 경로 우선
+        manual = getattr(gs, 'obs_recording_output_dir', '').strip()
+        if manual:
+            return manual
+        # 없으면 OBS INI에서 자동 읽기
+        try:
+            from src.recording.obs_config_reader import read_obs_config
+            output_dir = read_obs_config().get("output_dir", "")
+        except Exception:
+            output_dir = ""
+        # OBS가 기본 출력 경로를 사용 중이면 INI에 기록되지 않으므로 fallback
+        if not output_dir:
+            import os
+            output_dir = os.path.join(os.path.expanduser("~"), "Videos")
+        return output_dir
 
     def _start_screenshot_manager(self) -> None:
         """현재 설정 기준으로 스크린샷 매니저 상태를 동기화합니다."""
