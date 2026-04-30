@@ -75,10 +75,12 @@ def _session_end(session: models.ProcessSession, now_ts: float | None = None) ->
     return now_ts
 
 
-def _effective_duration(session: models.ProcessSession, now_ts: float | None = None) -> float:
-    if session.session_duration is not None:
-        return max(0.0, float(session.session_duration))
+def _session_duration(session: models.ProcessSession, now_ts: float | None = None) -> float:
     return max(0.0, _session_end(session, now_ts) - float(session.start_timestamp))
+
+
+def _effective_duration(session: models.ProcessSession, now_ts: float | None = None) -> float:
+    return _session_duration(session, now_ts)
 
 
 def _iter_overlaps(
@@ -105,15 +107,8 @@ def _query_sessions(db: Any, start_dt: dt.datetime, end_dt: dt.datetime, game_id
     start_ts = start_dt.timestamp()
     end_ts = end_dt.timestamp()
     query = db.query(models.ProcessSession).filter(
+        models.ProcessSession.start_timestamp >= start_ts,
         models.ProcessSession.start_timestamp < end_ts,
-        (
-            (models.ProcessSession.end_timestamp.is_(None))
-            | (models.ProcessSession.end_timestamp >= start_ts)
-            | (
-                models.ProcessSession.session_duration.isnot(None)
-                & ((models.ProcessSession.start_timestamp + models.ProcessSession.session_duration) >= start_ts)
-            )
-        ),
     )
     if game_id and game_id != "all":
         query = query.filter(models.ProcessSession.process_id == game_id)
@@ -137,15 +132,12 @@ def _normalize_all_time_range(
     if start_date > EPOCH_DATE:
         return start_date, end_date, start_dt, end_dt
 
-    spans = [
-        (overlap_start.date(), (overlap_end - dt.timedelta(microseconds=1)).date())
-        for _, overlap_start, overlap_end, _ in _iter_overlaps(sessions, start_dt, end_dt)
-    ]
-    if not spans:
+    session_dates = [dt.datetime.fromtimestamp(float(session.start_timestamp)).date() for session in sessions]
+    if not session_dates:
         return end_date, end_date, dt.datetime.combine(end_date, dt.time.min), dt.datetime.combine(end_date + dt.timedelta(days=1), dt.time.min)
 
-    actual_start = min(start for start, _ in spans)
-    actual_end = min(end_date, max(end for _, end in spans))
+    actual_start = min(session_dates)
+    actual_end = min(end_date, max(session_dates))
     if actual_end < actual_start:
         actual_end = actual_start
     return (
@@ -168,6 +160,18 @@ def _sessions_for_range(
     sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
     start_date, end_date, start_dt, end_dt = _normalize_all_time_range(start_date, end_date, start_dt, end_dt, sessions)
     return start_date, end_date, start_dt, end_dt, sessions
+
+
+def _data_bounds(db: Any, game_id: str | None = None, show_unregistered: bool = False) -> tuple[dt.date, dt.date]:
+    query = db.query(models.ProcessSession)
+    if game_id and game_id != "all":
+        query = query.filter(models.ProcessSession.process_id == game_id)
+    sessions = _filter_registered(db, query.order_by(models.ProcessSession.start_timestamp.asc()).all(), show_unregistered)
+    session_dates = [dt.datetime.fromtimestamp(float(session.start_timestamp)).date() for session in sessions]
+    today = _today()
+    if not session_dates:
+        return today, today
+    return min(session_dates), max(session_dates)
 
 
 def _registered_process_maps(db: Any) -> tuple[set[str], dict[str, str]]:
@@ -224,21 +228,21 @@ def _aggregate_summary(sessions: list[models.ProcessSession], start_dt: dt.datet
     longest: dict[str, Any] | None = None
     session_count = 0
 
-    for session, overlap_start, overlap_end, overlap_seconds in _iter_overlaps(sessions, start_dt, end_dt):
-        total_seconds += overlap_seconds
+    for session in sessions:
+        session_seconds = _effective_duration(session)
+        if session_seconds <= 0:
+            continue
+        total_seconds += session_seconds
         session_count += 1
         game = games.setdefault(
             session.process_id,
             {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "session_count": 0},
         )
-        game["total_seconds"] += overlap_seconds
+        game["total_seconds"] += session_seconds
         game["session_count"] += 1
-        for date_key, seconds in _split_by_day(overlap_start, overlap_end):
-            if seconds > 0:
-                played_dates.add(date_key)
-        full_duration = _effective_duration(session)
-        if longest is None or full_duration > longest["duration_seconds"]:
-            longest = _serialize_session(session, full_duration)
+        played_dates.add(dt.datetime.fromtimestamp(float(session.start_timestamp)).strftime(DATE_FORMAT))
+        if longest is None or session_seconds > longest["duration_seconds"]:
+            longest = _serialize_session(session, session_seconds)
 
     game_rows = sorted(games.values(), key=lambda row: row["total_seconds"], reverse=True)
     for row in game_rows:
@@ -285,6 +289,22 @@ def update_settings(settings: dict = Body(...)):
     return {"status": "ok"}
 
 
+@router.get("/api/analytics/range")
+def get_analytics_range(
+    game_id: str = Query("all"),
+    show_unregistered: bool = Query(False),
+):
+    """Return the actual session date bounds for all-time range selection."""
+    from src.data.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        start_date, end_date = _data_bounds(db, game_id, show_unregistered)
+        return {"start": start_date.isoformat(), "end": end_date.isoformat()}
+    finally:
+        db.close()
+
+
 @router.get("/api/analytics/timeline")
 def get_analytics_timeline(
     start: str | None = Query(None),
@@ -293,7 +313,7 @@ def get_analytics_timeline(
     game_id: str = Query("all"),
     show_unregistered: bool = Query(False),
 ):
-    """Continuous play timeline split by local day."""
+    """Daily timeline based on each session's start date and duration."""
     from src.data.database import SessionLocal
 
     try:
@@ -309,23 +329,24 @@ def get_analytics_timeline(
         days = {date_key: {"date": date_key, "total_seconds": 0.0, "games": {}} for date_key in _date_list(start_date, end_date)}
         games: dict[str, dict[str, Any]] = {}
 
-        for session, overlap_start, overlap_end, _ in _iter_overlaps(sessions, start_dt, end_dt):
+        for session in sessions:
+            date_key = dt.datetime.fromtimestamp(float(session.start_timestamp)).strftime(DATE_FORMAT)
+            seconds = _effective_duration(session)
+            if date_key not in days or seconds <= 0:
+                continue
             game_total = games.setdefault(
                 session.process_id,
                 {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0},
             )
-            for date_key, seconds in _split_by_day(overlap_start, overlap_end):
-                if date_key not in days:
-                    continue
-                day = days[date_key]
-                day["total_seconds"] += seconds
-                game_total["total_seconds"] += seconds
-                game_day = day["games"].setdefault(
-                    session.process_id,
-                    {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "sessions": 0},
-                )
-                game_day["total_seconds"] += seconds
-                game_day["sessions"] += 1
+            day = days[date_key]
+            day["total_seconds"] += seconds
+            game_total["total_seconds"] += seconds
+            game_day = day["games"].setdefault(
+                session.process_id,
+                {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "sessions": 0},
+            )
+            game_day["total_seconds"] += seconds
+            game_day["sessions"] += 1
 
         day_rows = []
         for day in days.values():
@@ -459,8 +480,8 @@ def get_analytics_sessions(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
         rows = []
-        for session, _, _, overlap_seconds in _iter_overlaps(sessions, start_dt, end_dt):
-            rows.append(_serialize_session(session, overlap_seconds))
+        for session in sessions:
+            rows.append(_serialize_session(session))
         rows.sort(key=lambda row: row["start_timestamp"], reverse=True)
         return {"range": {"start": start_date.isoformat(), "end": end_date.isoformat()}, "sessions": rows[:limit]}
     finally:

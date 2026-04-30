@@ -27,11 +27,13 @@ a = Analysis(
     datas=[
         *collect_tree('assets', 'assets'),
         *collect_tree('src', 'src', excludes=(
-            'api/dashboard/frontend/node_modules',
+            'api/dashboard/frontend',
+            'api/dashboard/static',
             '**/__pycache__',
             '**/*.pyc',
             '**/tsconfig.tsbuildinfo',
         )),
+        *collect_tree('build/dashboard-static', 'src/api/dashboard/static'),
     ],
     hiddenimports=[
         # FastAPI/Backend

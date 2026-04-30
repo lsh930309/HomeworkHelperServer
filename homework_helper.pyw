@@ -575,14 +575,16 @@ def run_server_main():
 
     # === 대시보드 라우터 및 정적 파일 등록 ===
     from fastapi.staticfiles import StaticFiles
-    from pathlib import Path
     from src.api.dashboard import router as dashboard_router
+    from src.api.dashboard.static_files import dashboard_static_dir
     
     # 정적 파일 서빙 (CSS, JS)
-    dashboard_static_dir = Path(__file__).parent / "src" / "api" / "dashboard" / "static"
-    if dashboard_static_dir.exists():
-        app.mount("/static/dashboard", StaticFiles(directory=str(dashboard_static_dir)), name="dashboard_static")
-        logger.info(f"정적 파일 서빙 등록: {dashboard_static_dir}")
+    dashboard_static_path = dashboard_static_dir()
+    if dashboard_static_path.exists():
+        app.mount("/static/dashboard", StaticFiles(directory=str(dashboard_static_path)), name="dashboard_static")
+        logger.info(f"정적 파일 서빙 등록: {dashboard_static_path}")
+    else:
+        logger.warning(f"대시보드 정적 파일 없음: {dashboard_static_path}")
     
     app.include_router(dashboard_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")

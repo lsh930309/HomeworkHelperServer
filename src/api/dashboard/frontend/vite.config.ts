@@ -5,8 +5,8 @@ export default defineConfig({
   base: '/static/dashboard/',
   plugins: [react()],
   build: {
-    outDir: '../static',
-    emptyOutDir: false,
+    outDir: '../../../../build/dashboard-static',
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         entryFileNames: 'dashboard.js',

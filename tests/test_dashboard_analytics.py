@@ -42,7 +42,7 @@ def _ts(value: str) -> float:
     return dt.datetime.strptime(value, "%Y-%m-%d %H:%M").timestamp()
 
 
-def test_timeline_splits_session_across_date_boundary(monkeypatch):
+def test_timeline_buckets_full_session_duration_on_start_date(monkeypatch):
     client = _client_with_seed(
         monkeypatch,
         sessions=[models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-01 23:30"), end_timestamp=_ts("2026-04-02 00:30"), session_duration=3600)],
@@ -50,8 +50,8 @@ def test_timeline_splits_session_across_date_boundary(monkeypatch):
     response = client.get("/api/analytics/timeline?start=2026-04-01&end=2026-04-02")
     assert response.status_code == 200
     days = {row["date"]: row for row in response.json()["days"]}
-    assert days["2026-04-01"]["total_seconds"] == 1800
-    assert days["2026-04-02"]["total_seconds"] == 1800
+    assert days["2026-04-01"]["total_seconds"] == 3600
+    assert days["2026-04-02"]["total_seconds"] == 0
 
 
 def test_summary_includes_previous_period_delta(monkeypatch):
@@ -108,16 +108,33 @@ def test_stale_open_sessions_do_not_inflate_playtime(monkeypatch):
     assert body["metrics"]["longest_session"]["duration_seconds"] == 3600
 
 
-def test_all_time_range_is_clamped_to_actual_sessions(monkeypatch):
+def test_all_time_range_is_clamped_to_actual_session_start_dates(monkeypatch):
     client = _client_with_seed(
         monkeypatch,
-        sessions=[models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-01 10:00"), end_timestamp=_ts("2026-04-03 11:00"), session_duration=49 * 3600)],
+        sessions=[
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-01 10:00"), end_timestamp=_ts("2026-04-03 11:00"), session_duration=49 * 3600),
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-05 10:00"), end_timestamp=_ts("2026-04-05 11:00"), session_duration=3600),
+        ],
     )
     response = client.get("/api/analytics/timeline?start=1970-01-01&end=2026-04-30")
     assert response.status_code == 200
     body = response.json()
-    assert body["range"] == {"start": "2026-04-01", "end": "2026-04-03"}
-    assert [day["date"] for day in body["days"]] == ["2026-04-01", "2026-04-02", "2026-04-03"]
+    assert body["range"] == {"start": "2026-04-01", "end": "2026-04-05"}
+    assert [day["date"] for day in body["days"]] == ["2026-04-01", "2026-04-02", "2026-04-03", "2026-04-04", "2026-04-05"]
+    assert body["days"][0]["total_seconds"] == 49 * 3600
+
+
+def test_analytics_range_returns_actual_session_bounds(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        sessions=[
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-03-31 10:00"), end_timestamp=_ts("2026-03-31 11:00"), session_duration=3600),
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-30 10:00"), end_timestamp=_ts("2026-04-30 11:00"), session_duration=3600),
+        ],
+    )
+    response = client.get("/api/analytics/range")
+    assert response.status_code == 200
+    assert response.json() == {"start": "2026-03-31", "end": "2026-04-30"}
 
 
 def test_empty_all_time_summary_avoids_decades_long_range(monkeypatch):
@@ -138,9 +155,3 @@ def test_dashboard_entrypoint_uses_stable_packaged_assets(monkeypatch):
     assert '/static/dashboard/dashboard.js' in html
     assert '/static/dashboard/vite/' not in html
 
-
-def test_packaged_dashboard_bundle_mounts_react_app():
-    bundle = Path("src/api/dashboard/static/dashboard.js").read_text(encoding="utf-8")
-    assert "createRoot" in bundle
-    assert "/api/analytics/" in bundle
-    assert "플레이 데이터를 불러오는 중" in bundle
