@@ -93,6 +93,42 @@ def test_empty_database_returns_zero_summary(monkeypatch):
     assert response.json()["metrics"]["total_seconds"] == 0
 
 
+def test_stale_open_sessions_do_not_inflate_playtime(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        sessions=[
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-01 10:00"), end_timestamp=_ts("2026-04-01 11:00"), session_duration=3600),
+            models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-01-01 00:00"), end_timestamp=None, session_duration=None),
+        ],
+    )
+    response = client.get("/api/analytics/summary?start=2026-01-01&end=2026-04-01")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metrics"]["total_seconds"] == 3600
+    assert body["metrics"]["longest_session"]["duration_seconds"] == 3600
+
+
+def test_all_time_range_is_clamped_to_actual_sessions(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        sessions=[models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=_ts("2026-04-01 10:00"), end_timestamp=_ts("2026-04-03 11:00"), session_duration=49 * 3600)],
+    )
+    response = client.get("/api/analytics/timeline?start=1970-01-01&end=2026-04-30")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["range"] == {"start": "2026-04-01", "end": "2026-04-03"}
+    assert [day["date"] for day in body["days"]] == ["2026-04-01", "2026-04-02", "2026-04-03"]
+
+
+def test_empty_all_time_summary_avoids_decades_long_range(monkeypatch):
+    client = _client_with_seed(monkeypatch, sessions=[])
+    response = client.get("/api/analytics/summary?start=1970-01-01&end=2026-04-30")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["range"] == {"start": "2026-04-30", "end": "2026-04-30"}
+    assert body["metrics"]["no_play_days"] == 1
+
+
 def test_dashboard_entrypoint_uses_stable_packaged_assets(monkeypatch):
     client = _client_with_seed(monkeypatch, sessions=[])
     response = client.get("/dashboard")

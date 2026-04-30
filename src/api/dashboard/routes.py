@@ -26,6 +26,8 @@ TEMPLATE_DIR = BASE_DIR / "templates"
 
 SECONDS_PER_DAY = 86_400
 DATE_FORMAT = "%Y-%m-%d"
+EPOCH_DATE = dt.date(1970, 1, 1)
+MAX_OPEN_SESSION_SECONDS = 24 * 60 * 60
 
 
 def _today() -> dt.date:
@@ -67,7 +69,10 @@ def _session_end(session: models.ProcessSession, now_ts: float | None = None) ->
         return float(session.end_timestamp)
     if session.session_duration is not None:
         return float(session.start_timestamp) + float(session.session_duration)
-    return now_ts if now_ts is not None else dt.datetime.now().timestamp()
+    now_ts = now_ts if now_ts is not None else dt.datetime.now().timestamp()
+    if now_ts - float(session.start_timestamp) > MAX_OPEN_SESSION_SECONDS:
+        return float(session.start_timestamp)
+    return now_ts
 
 
 def _effective_duration(session: models.ProcessSession, now_ts: float | None = None) -> float:
@@ -113,6 +118,56 @@ def _query_sessions(db: Any, start_dt: dt.datetime, end_dt: dt.datetime, game_id
     if game_id and game_id != "all":
         query = query.filter(models.ProcessSession.process_id == game_id)
     return query.order_by(models.ProcessSession.start_timestamp.asc()).all()
+
+
+def _normalize_all_time_range(
+    start_date: dt.date,
+    end_date: dt.date,
+    start_dt: dt.datetime,
+    end_dt: dt.datetime,
+    sessions: list[models.ProcessSession],
+) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime]:
+    """Clamp open-ended "all time" requests to the actual playable data span.
+
+    The frontend historically used 1970-01-01 as the "all" lower bound. Keeping
+    that range literally makes averages/no-play days meaningless and can push
+    previous-period math before the Unix epoch on Windows. For all-time requests,
+    derive the visible span from valid session overlaps instead.
+    """
+    if start_date > EPOCH_DATE:
+        return start_date, end_date, start_dt, end_dt
+
+    spans = [
+        (overlap_start.date(), (overlap_end - dt.timedelta(microseconds=1)).date())
+        for _, overlap_start, overlap_end, _ in _iter_overlaps(sessions, start_dt, end_dt)
+    ]
+    if not spans:
+        return end_date, end_date, dt.datetime.combine(end_date, dt.time.min), dt.datetime.combine(end_date + dt.timedelta(days=1), dt.time.min)
+
+    actual_start = min(start for start, _ in spans)
+    actual_end = min(end_date, max(end for _, end in spans))
+    if actual_end < actual_start:
+        actual_end = actual_start
+    return (
+        actual_start,
+        actual_end,
+        dt.datetime.combine(actual_start, dt.time.min),
+        dt.datetime.combine(actual_end + dt.timedelta(days=1), dt.time.min),
+    )
+
+
+def _sessions_for_range(
+    db: Any,
+    start_date: dt.date,
+    end_date: dt.date,
+    start_dt: dt.datetime,
+    end_dt: dt.datetime,
+    game_id: str | None,
+    show_unregistered: bool,
+) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime, list[models.ProcessSession]]:
+    sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
+    start_date, end_date, start_dt, end_dt = _normalize_all_time_range(start_date, end_date, start_dt, end_dt, sessions)
+    return start_date, end_date, start_dt, end_dt, sessions
 
 
 def _registered_process_maps(db: Any) -> tuple[set[str], dict[str, str]]:
@@ -248,7 +303,9 @@ def get_analytics_timeline(
 
     db = SessionLocal()
     try:
-        sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
+        start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
+            db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
+        )
         days = {date_key: {"date": date_key, "total_seconds": 0.0, "games": {}} for date_key in _date_list(start_date, end_date)}
         games: dict[str, dict[str, Any]] = {}
 
@@ -306,21 +363,28 @@ def get_analytics_summary(
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    period = end_dt - start_dt
-    prev_start_dt = start_dt - period
-    prev_end_dt = start_dt
     db = SessionLocal()
     try:
-        current_sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
-        previous_sessions = _filter_registered(db, _query_sessions(db, prev_start_dt, prev_end_dt, game_id), show_unregistered)
+        start_date, end_date, start_dt, end_dt, current_sessions = _sessions_for_range(
+            db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
+        )
+        period = end_dt - start_dt
+        prev_start_dt = start_dt - period
+        prev_end_dt = start_dt
+        if prev_start_dt.date() < EPOCH_DATE:
+            previous_sessions = []
+            previous_range = None
+        else:
+            previous_sessions = _filter_registered(db, _query_sessions(db, prev_start_dt, prev_end_dt, game_id), show_unregistered)
+            previous_range = {
+                "start": prev_start_dt.date().isoformat(),
+                "end": (prev_end_dt - dt.timedelta(days=1)).date().isoformat(),
+            }
         current = _aggregate_summary(current_sessions, start_dt, end_dt)
         previous = _aggregate_summary(previous_sessions, prev_start_dt, prev_end_dt)
         return {
             "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
-            "previous_range": {
-                "start": prev_start_dt.date().isoformat(),
-                "end": (prev_end_dt - dt.timedelta(days=1)).date().isoformat(),
-            },
+            "previous_range": previous_range,
             "metrics": current,
             "previous_metrics": previous,
             "deltas": {
@@ -351,7 +415,9 @@ def get_analytics_patterns(
 
     db = SessionLocal()
     try:
-        sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
+        start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
+            db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
+        )
         matrix = defaultdict(float)
         for _, overlap_start, overlap_end, _ in _iter_overlaps(sessions, start_dt, end_dt):
             for weekday, hour, seconds in _split_by_hour(overlap_start, overlap_end):
@@ -389,7 +455,9 @@ def get_analytics_sessions(
 
     db = SessionLocal()
     try:
-        sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
+        start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
+            db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
+        )
         rows = []
         for session, _, _, overlap_seconds in _iter_overlaps(sessions, start_dt, end_dt):
             rows.append(_serialize_session(session, overlap_seconds))
