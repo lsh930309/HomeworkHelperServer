@@ -101,3 +101,10 @@ def test_dashboard_entrypoint_uses_stable_packaged_assets(monkeypatch):
     assert '/static/dashboard/dashboard.css' in html
     assert '/static/dashboard/dashboard.js' in html
     assert '/static/dashboard/vite/' not in html
+
+
+def test_packaged_dashboard_bundle_mounts_react_app():
+    bundle = Path("src/api/dashboard/static/dashboard.js").read_text(encoding="utf-8")
+    assert "createRoot" in bundle
+    assert "/api/analytics/" in bundle
+    assert "플레이 데이터를 불러오는 중" in bundle
