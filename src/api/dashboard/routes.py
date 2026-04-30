@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import os
+from dataclasses import dataclass
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -28,6 +29,28 @@ SECONDS_PER_DAY = 86_400
 DATE_FORMAT = "%Y-%m-%d"
 EPOCH_DATE = dt.date(1970, 1, 1)
 MAX_OPEN_SESSION_SECONDS = 24 * 60 * 60
+
+
+@dataclass
+class AnalyticsSession:
+    """Read-only session shape used by dashboard analytics.
+
+    Some historical rows can remain open after the app was closed while a game
+    kept running. For A/B validation we merge such an orphan open row with the
+    next completed row for the same game in analytics only, without mutating DB
+    rows.
+    """
+
+    id: int | None
+    process_id: str
+    process_name: str
+    start_timestamp: float
+    end_timestamp: float
+    session_duration: float
+    user_preset_id: str | None = None
+    stamina_at_end: int | None = None
+    source_session_ids: tuple[int | None, ...] = ()
+    merged_from_open_session: bool = False
 
 
 def _today() -> dt.date:
@@ -107,12 +130,124 @@ def _query_sessions(db: Any, start_dt: dt.datetime, end_dt: dt.datetime, game_id
     start_ts = start_dt.timestamp()
     end_ts = end_dt.timestamp()
     query = db.query(models.ProcessSession).filter(
-        models.ProcessSession.start_timestamp >= start_ts,
         models.ProcessSession.start_timestamp < end_ts,
+        (
+            (models.ProcessSession.end_timestamp.is_(None))
+            | (models.ProcessSession.end_timestamp >= start_ts)
+            | (
+                models.ProcessSession.session_duration.isnot(None)
+                & ((models.ProcessSession.start_timestamp + models.ProcessSession.session_duration) >= start_ts)
+            )
+        ),
     )
     if game_id and game_id != "all":
         query = query.filter(models.ProcessSession.process_id == game_id)
     return query.order_by(models.ProcessSession.start_timestamp.asc()).all()
+
+
+def _query_all_sessions(db: Any, game_id: str | None = None) -> list[models.ProcessSession]:
+    query = db.query(models.ProcessSession)
+    if game_id and game_id != "all":
+        query = query.filter(models.ProcessSession.process_id == game_id)
+    return query.order_by(models.ProcessSession.start_timestamp.asc()).all()
+
+
+def _valid_completed_end(session: Any) -> float | None:
+    if session.end_timestamp is None:
+        return None
+    end_ts = float(session.end_timestamp)
+    if end_ts <= float(session.start_timestamp):
+        return None
+    return end_ts
+
+
+def _to_analytics_session(session: models.ProcessSession) -> AnalyticsSession | None:
+    end_ts = _valid_completed_end(session)
+    if end_ts is None:
+        return None
+    start_ts = float(session.start_timestamp)
+    return AnalyticsSession(
+        id=getattr(session, "id", None),
+        process_id=session.process_id,
+        process_name=session.process_name,
+        start_timestamp=start_ts,
+        end_timestamp=end_ts,
+        session_duration=end_ts - start_ts,
+        user_preset_id=getattr(session, "user_preset_id", None),
+        stamina_at_end=getattr(session, "stamina_at_end", None),
+        source_session_ids=(getattr(session, "id", None),),
+    )
+
+
+def _merge_open_sessions_with_next_completed(sessions: list[models.ProcessSession]) -> list[AnalyticsSession]:
+    """Apply option A for dashboard analytics without mutating stored rows.
+
+    An orphan open row is treated as the beginning of the immediately following
+    completed row for the same game. The completed row consumed by that merge is
+    skipped so the same lifetime is not counted twice. Open rows without a later
+    completed row remain untrusted and are excluded.
+    """
+    by_process: dict[str, list[models.ProcessSession]] = defaultdict(list)
+    for session in sorted(sessions, key=lambda row: (row.process_id, float(row.start_timestamp), getattr(row, "id", 0) or 0)):
+        by_process[session.process_id].append(session)
+
+    merged: list[AnalyticsSession] = []
+    consumed_completed_ids: set[int | None] = set()
+
+    for process_sessions in by_process.values():
+        for index, session in enumerate(process_sessions):
+            session_id = getattr(session, "id", None)
+            if session_id in consumed_completed_ids:
+                continue
+
+            if session.end_timestamp is None:
+                next_completed = None
+                for candidate in process_sessions[index + 1:]:
+                    candidate_id = getattr(candidate, "id", None)
+                    if candidate_id in consumed_completed_ids:
+                        continue
+                    if _valid_completed_end(candidate) is not None:
+                        next_completed = candidate
+                        break
+                if next_completed is None:
+                    continue
+
+                start_ts = float(session.start_timestamp)
+                end_ts = float(next_completed.end_timestamp)
+                if end_ts <= start_ts:
+                    continue
+                next_id = getattr(next_completed, "id", None)
+                consumed_completed_ids.add(next_id)
+                merged.append(AnalyticsSession(
+                    id=session_id,
+                    process_id=session.process_id,
+                    process_name=session.process_name or next_completed.process_name,
+                    start_timestamp=start_ts,
+                    end_timestamp=end_ts,
+                    session_duration=end_ts - start_ts,
+                    user_preset_id=getattr(session, "user_preset_id", None) or getattr(next_completed, "user_preset_id", None),
+                    stamina_at_end=getattr(next_completed, "stamina_at_end", None),
+                    source_session_ids=(session_id, next_id),
+                    merged_from_open_session=True,
+                ))
+                continue
+
+            analytics_session = _to_analytics_session(session)
+            if analytics_session is not None:
+                merged.append(analytics_session)
+
+    return sorted(merged, key=lambda row: (float(row.start_timestamp), row.id or 0))
+
+
+def _analytics_span_dates(sessions: list[AnalyticsSession]) -> list[tuple[dt.date, dt.date]]:
+    spans = []
+    for session in sessions:
+        start_ts = float(session.start_timestamp)
+        end_ts = float(session.end_timestamp)
+        if end_ts <= start_ts:
+            continue
+        spans.append((dt.datetime.fromtimestamp(start_ts).date(), (dt.datetime.fromtimestamp(end_ts) - dt.timedelta(microseconds=1)).date()))
+    return spans
 
 
 def _normalize_all_time_range(
@@ -120,7 +255,7 @@ def _normalize_all_time_range(
     end_date: dt.date,
     start_dt: dt.datetime,
     end_dt: dt.datetime,
-    sessions: list[models.ProcessSession],
+    sessions: list[AnalyticsSession],
 ) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime]:
     """Clamp open-ended "all time" requests to the actual playable data span.
 
@@ -132,12 +267,12 @@ def _normalize_all_time_range(
     if start_date > EPOCH_DATE:
         return start_date, end_date, start_dt, end_dt
 
-    session_dates = [dt.datetime.fromtimestamp(float(session.start_timestamp)).date() for session in sessions]
-    if not session_dates:
+    spans = _analytics_span_dates(sessions)
+    if not spans:
         return end_date, end_date, dt.datetime.combine(end_date, dt.time.min), dt.datetime.combine(end_date + dt.timedelta(days=1), dt.time.min)
 
-    actual_start = min(session_dates)
-    actual_end = min(end_date, max(session_dates))
+    actual_start = min(start for start, _ in spans)
+    actual_end = min(end_date, max(end for _, end in spans))
     if actual_end < actual_start:
         actual_end = actual_start
     return (
@@ -156,22 +291,21 @@ def _sessions_for_range(
     end_dt: dt.datetime,
     game_id: str | None,
     show_unregistered: bool,
-) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime, list[models.ProcessSession]]:
-    sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt, game_id), show_unregistered)
+) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime, list[AnalyticsSession]]:
+    raw_sessions = _filter_registered(db, _query_all_sessions(db, game_id), show_unregistered)
+    sessions = _merge_open_sessions_with_next_completed(raw_sessions)
     start_date, end_date, start_dt, end_dt = _normalize_all_time_range(start_date, end_date, start_dt, end_dt, sessions)
     return start_date, end_date, start_dt, end_dt, sessions
 
 
 def _data_bounds(db: Any, game_id: str | None = None, show_unregistered: bool = False) -> tuple[dt.date, dt.date]:
-    query = db.query(models.ProcessSession)
-    if game_id and game_id != "all":
-        query = query.filter(models.ProcessSession.process_id == game_id)
-    sessions = _filter_registered(db, query.order_by(models.ProcessSession.start_timestamp.asc()).all(), show_unregistered)
-    session_dates = [dt.datetime.fromtimestamp(float(session.start_timestamp)).date() for session in sessions]
+    raw_sessions = _filter_registered(db, _query_all_sessions(db, game_id), show_unregistered)
+    sessions = _merge_open_sessions_with_next_completed(raw_sessions)
+    spans = _analytics_span_dates(sessions)
     today = _today()
-    if not session_dates:
+    if not spans:
         return today, today
-    return min(session_dates), max(session_dates)
+    return min(start for start, _ in spans), max(end for _, end in spans)
 
 
 def _registered_process_maps(db: Any) -> tuple[set[str], dict[str, str]]:
@@ -204,7 +338,7 @@ def _split_by_hour(start: dt.datetime, end: dt.datetime) -> Iterable[tuple[int, 
         cursor = chunk_end
 
 
-def _serialize_session(session: models.ProcessSession, duration_seconds: float | None = None) -> dict[str, Any]:
+def _serialize_session(session: Any, duration_seconds: float | None = None) -> dict[str, Any]:
     raw_end = _session_end(session)
     duration = _effective_duration(session) if duration_seconds is None else duration_seconds
     return {
@@ -215,12 +349,14 @@ def _serialize_session(session: models.ProcessSession, duration_seconds: float |
         "end_timestamp": session.end_timestamp,
         "effective_end_timestamp": raw_end,
         "duration_seconds": round(duration, 3),
-        "is_active": session.end_timestamp is None,
+        "is_active": False,
         "stamina_at_end": getattr(session, "stamina_at_end", None),
+        "source_session_ids": list(getattr(session, "source_session_ids", (getattr(session, "id", None),))),
+        "merged_from_open_session": bool(getattr(session, "merged_from_open_session", False)),
     }
 
 
-def _aggregate_summary(sessions: list[models.ProcessSession], start_dt: dt.datetime, end_dt: dt.datetime) -> dict[str, Any]:
+def _aggregate_summary(sessions: list[AnalyticsSession], start_dt: dt.datetime, end_dt: dt.datetime) -> dict[str, Any]:
     days = max(1, math.ceil((end_dt - start_dt).total_seconds() / SECONDS_PER_DAY))
     total_seconds = 0.0
     played_dates: set[str] = set()
@@ -228,21 +364,21 @@ def _aggregate_summary(sessions: list[models.ProcessSession], start_dt: dt.datet
     longest: dict[str, Any] | None = None
     session_count = 0
 
-    for session in sessions:
-        session_seconds = _effective_duration(session)
-        if session_seconds <= 0:
-            continue
-        total_seconds += session_seconds
+    for session, overlap_start, overlap_end, overlap_seconds in _iter_overlaps(sessions, start_dt, end_dt):
+        total_seconds += overlap_seconds
         session_count += 1
         game = games.setdefault(
             session.process_id,
             {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "session_count": 0},
         )
-        game["total_seconds"] += session_seconds
+        game["total_seconds"] += overlap_seconds
         game["session_count"] += 1
-        played_dates.add(dt.datetime.fromtimestamp(float(session.start_timestamp)).strftime(DATE_FORMAT))
-        if longest is None or session_seconds > longest["duration_seconds"]:
-            longest = _serialize_session(session, session_seconds)
+        for date_key, seconds in _split_by_day(overlap_start, overlap_end):
+            if seconds > 0:
+                played_dates.add(date_key)
+        full_duration = _effective_duration(session)
+        if longest is None or full_duration > longest["duration_seconds"]:
+            longest = _serialize_session(session, full_duration)
 
     game_rows = sorted(games.values(), key=lambda row: row["total_seconds"], reverse=True)
     for row in game_rows:
@@ -329,24 +465,23 @@ def get_analytics_timeline(
         days = {date_key: {"date": date_key, "total_seconds": 0.0, "games": {}} for date_key in _date_list(start_date, end_date)}
         games: dict[str, dict[str, Any]] = {}
 
-        for session in sessions:
-            date_key = dt.datetime.fromtimestamp(float(session.start_timestamp)).strftime(DATE_FORMAT)
-            seconds = _effective_duration(session)
-            if date_key not in days or seconds <= 0:
-                continue
+        for session, overlap_start, overlap_end, _ in _iter_overlaps(sessions, start_dt, end_dt):
             game_total = games.setdefault(
                 session.process_id,
                 {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0},
             )
-            day = days[date_key]
-            day["total_seconds"] += seconds
-            game_total["total_seconds"] += seconds
-            game_day = day["games"].setdefault(
-                session.process_id,
-                {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "sessions": 0},
-            )
-            game_day["total_seconds"] += seconds
-            game_day["sessions"] += 1
+            for date_key, seconds in _split_by_day(overlap_start, overlap_end):
+                if date_key not in days:
+                    continue
+                day = days[date_key]
+                day["total_seconds"] += seconds
+                game_total["total_seconds"] += seconds
+                game_day = day["games"].setdefault(
+                    session.process_id,
+                    {"process_id": session.process_id, "process_name": session.process_name, "total_seconds": 0.0, "sessions": 0},
+                )
+                game_day["total_seconds"] += seconds
+                game_day["sessions"] += 1
 
         day_rows = []
         for day in days.values():
@@ -396,7 +531,8 @@ def get_analytics_summary(
             previous_sessions = []
             previous_range = None
         else:
-            previous_sessions = _filter_registered(db, _query_sessions(db, prev_start_dt, prev_end_dt, game_id), show_unregistered)
+            previous_raw_sessions = _filter_registered(db, _query_all_sessions(db, game_id), show_unregistered)
+            previous_sessions = _merge_open_sessions_with_next_completed(previous_raw_sessions)
             previous_range = {
                 "start": prev_start_dt.date().isoformat(),
                 "end": (prev_end_dt - dt.timedelta(days=1)).date().isoformat(),
@@ -480,8 +616,8 @@ def get_analytics_sessions(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
         rows = []
-        for session in sessions:
-            rows.append(_serialize_session(session))
+        for session, _, _, overlap_seconds in _iter_overlaps(sessions, start_dt, end_dt):
+            rows.append(_serialize_session(session, overlap_seconds))
         rows.sort(key=lambda row: row["start_timestamp"], reverse=True)
         return {"range": {"start": start_date.isoformat(), "end": end_date.isoformat()}, "sessions": rows[:limit]}
     finally:
