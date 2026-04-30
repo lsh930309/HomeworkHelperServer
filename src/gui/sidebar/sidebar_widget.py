@@ -636,6 +636,12 @@ class SidebarWidget(QWidget):
 
     def cleanup(self) -> None:
         """타이머와 애니메이션을 정리합니다."""
+        for timer in self._volume_save_timers.values():
+            if timer.isActive():
+                timer.stop()
+                timer.timeout.emit()
+        self._volume_save_timers.clear()
+        self._save_pool.waitForDone(2000)
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
         self._clock_timer.stop()
