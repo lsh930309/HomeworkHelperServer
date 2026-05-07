@@ -331,6 +331,15 @@ class VolumePopoverPanel(QWidget):
         """프로세스의 볼륨 설정을 워커 스레드에서 DB에 저장."""
         self._save_pool.start(_VolumeSaveRunnable(self._data_manager, process))
 
+    def cleanup(self) -> None:
+        """앱 종료 시 대기 중인 볼륨 저장 타이머를 즉시 발화하고 스레드풀 완료를 기다립니다."""
+        for timer in self._volume_save_timers.values():
+            if timer.isActive():
+                timer.stop()
+                timer.timeout.emit()
+        self._volume_save_timers.clear()
+        self._save_pool.waitForDone(2000)
+
     def hideEvent(self, event):
         """패널이 숨겨질 때 (외부 클릭 포함) 콜백을 호출합니다."""
         super().hideEvent(event)

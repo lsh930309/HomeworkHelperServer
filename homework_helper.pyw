@@ -217,18 +217,24 @@ def start_api_server() -> bool:
     try:
         # 이미 서버가 실행 중인지 확인
         if is_server_running():
-            print("API 서버가 이미 실행 중입니다. 기존 서버를 사용합니다.")
-            # 서버가 준비될 때까지 대기
-            if wait_for_server_ready():
-                return True
+            print("기존 API 서버 발견. 종료 후 재시작합니다...")
+            # 직접 참조가 있으면 terminate, 없으면 PID 파일로 종료
+            if api_server_process and api_server_process.is_alive():
+                api_server_process.terminate()
+                api_server_process.join(timeout=3)
             else:
-                print("기존 서버가 응답하지 않습니다. 서버를 재시작합니다.")
-                # PID 파일 삭제하고 재시작
                 data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
                 pid_file = os.path.join(data_dir, "db_server.pid")
                 try:
+                    with open(pid_file, 'r') as f:
+                        old_pid = int(f.read().strip())
+                    os.kill(old_pid, signal.SIGTERM)
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+                try:
                     os.remove(pid_file)
-                except:
+                except FileNotFoundError:
                     pass
 
         print("API 서버를 독립 프로세스로 시작합니다...")
@@ -569,14 +575,16 @@ def run_server_main():
 
     # === 대시보드 라우터 및 정적 파일 등록 ===
     from fastapi.staticfiles import StaticFiles
-    from pathlib import Path
     from src.api.dashboard import router as dashboard_router
+    from src.api.dashboard.static_files import dashboard_static_dir
     
     # 정적 파일 서빙 (CSS, JS)
-    dashboard_static_dir = Path(__file__).parent / "src" / "api" / "dashboard" / "static"
-    if dashboard_static_dir.exists():
-        app.mount("/static/dashboard", StaticFiles(directory=str(dashboard_static_dir)), name="dashboard_static")
-        logger.info(f"정적 파일 서빙 등록: {dashboard_static_dir}")
+    dashboard_static_path = dashboard_static_dir()
+    if dashboard_static_path.exists():
+        app.mount("/static/dashboard", StaticFiles(directory=str(dashboard_static_path)), name="dashboard_static")
+        logger.info(f"정적 파일 서빙 등록: {dashboard_static_path}")
+    else:
+        logger.warning(f"대시보드 정적 파일 없음: {dashboard_static_path}")
     
     app.include_router(dashboard_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
@@ -587,17 +595,15 @@ def run_server_main():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
 def stop_api_server():
-    """
-    독립 프로세스로 실행된 API 서버를 종료합니다.
-    주의: 이 함수는 더 이상 자동으로 호출되지 않습니다.
-    서버는 독립적으로 실행되며, 사용자가 수동으로 종료하거나 시스템 종료 시 graceful shutdown됩니다.
-    """
+    """독립 프로세스로 실행된 API 서버를 종료합니다."""
     global api_server_process
-    if api_server_process:
-        print(f"API 서버(PID: {api_server_process.pid})는 독립 프로세스로 계속 실행됩니다.")
-        # 더 이상 서버를 종료하지 않음
-        # api_server_process.terminate()
-        # api_server_process.wait()
+    if api_server_process and api_server_process.is_alive():
+        print(f"API 서버(PID: {api_server_process.pid}) 종료 중...")
+        api_server_process.terminate()
+        api_server_process.join(timeout=5)
+        if api_server_process.is_alive():
+            api_server_process.kill()
+        print("API 서버 종료 완료.")
 
 def ensure_process_table_schema():
     """
@@ -756,6 +762,7 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
     main_window.show() # 메인 윈도우 표시
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
+    stop_api_server()       # GUI 종료 후 API 서버 명시 종료
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
 if __name__ == "__main__":

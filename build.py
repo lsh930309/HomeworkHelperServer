@@ -18,9 +18,15 @@ import queue
 import traceback
 from pathlib import Path
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, scrolledtext
-from tkinter import font as tkfont
+try:
+    import tkinter as tk
+    from tkinter import ttk, scrolledtext
+    from tkinter import font as tkfont
+except ModuleNotFoundError:  # pragma: no cover - headless build/test environments
+    tk = None
+    ttk = None
+    scrolledtext = None
+    tkfont = None
 
 # ==================== 설정 ====================
 PROJECT_ROOT = Path(__file__).parent
@@ -28,6 +34,9 @@ RELEASE_DIR = PROJECT_ROOT / "release"
 ARCHIVES_DIR = RELEASE_DIR / "archives"
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
+DASHBOARD_FRONTEND_DIR = PROJECT_ROOT / "src" / "api" / "dashboard" / "frontend"
+DASHBOARD_STATIC_BUILD_DIR = BUILD_DIR / "dashboard-static"
+DASHBOARD_CACHE_DIR = BUILD_DIR / "dashboard-cache"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -584,6 +593,75 @@ def ensure_release_dir(gui):
     return RELEASE_DIR
 
 
+
+def build_dashboard_frontend(gui):
+    """대시보드 프론트엔드 번들을 ignored build 디렉터리에 생성."""
+    frontend_dir = DASHBOARD_FRONTEND_DIR
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        gui.log("  (대시보드 프론트엔드 package.json 없음 - 건너뜀)")
+        return True
+
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        gui.log("  ✗ npm을 찾을 수 없어 대시보드 번들을 생성할 수 없습니다.", 'error')
+        return False
+
+    gui.log_section("대시보드 프론트엔드 빌드")
+    gui.set_status("대시보드 프론트엔드 빌드 중...")
+    gui.set_progress(22)
+
+    install_cmd = [npm_cmd, "ci"] if (frontend_dir / "package-lock.json").exists() else [npm_cmd, "install"]
+    for cmd in (install_cmd, [npm_cmd, "run", "build"]):
+        gui.log(f"실행: {' '.join(cmd)}")
+        try:
+            process = subprocess.run(
+                cmd,
+                cwd=frontend_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False,
+            )
+        except Exception as e:
+            gui.log(f"✗ 대시보드 빌드 명령 실행 실패: {e}", 'error')
+            return False
+        if process.stdout:
+            for line in process.stdout.splitlines():
+                if line.strip():
+                    gui.log(f"  {line}")
+        if process.returncode != 0:
+            gui.log(f"✗ 대시보드 빌드 실패 (exit={process.returncode})", 'error')
+            return False
+
+    expected = (
+        DASHBOARD_STATIC_BUILD_DIR / "dashboard.js",
+        DASHBOARD_STATIC_BUILD_DIR / "dashboard.css",
+    )
+    missing = [path for path in expected if not path.exists()]
+    if missing:
+        gui.log("✗ 대시보드 빌드 산출물이 없습니다: " + ", ".join(str(path) for path in missing), 'error')
+        return False
+
+    # 과거 빌드가 소스 트리에 남긴 산출물은 패키징 입력이 되지 않도록 제거합니다.
+    for stale in (
+        PROJECT_ROOT / "src" / "api" / "dashboard" / "static" / "index.html",
+        PROJECT_ROOT / "src" / "api" / "dashboard" / "static" / "dashboard.js",
+        PROJECT_ROOT / "src" / "api" / "dashboard" / "static" / "dashboard.css",
+        frontend_dir / "tsconfig.tsbuildinfo",
+    ):
+        if stale.exists():
+            try:
+                stale.unlink()
+                gui.log(f"  ✓ 소스 트리 산출물 제거: {stale.relative_to(PROJECT_ROOT)}")
+            except Exception as e:
+                gui.log(f"  ⚠ 생성 파일 정리 실패 ({stale.name}): {e}", 'warning')
+
+    gui.log(f"✓ 대시보드 프론트엔드 빌드 완료: {DASHBOARD_STATIC_BUILD_DIR.relative_to(PROJECT_ROOT)}", 'success')
+    return True
+
 def build_with_pyinstaller(gui):
     """PyInstaller로 빌드"""
     gui.log_section("PyInstaller 빌드 시작 (onedir 모드)")
@@ -996,7 +1074,12 @@ def run_build_process(gui, version_info):
             # 2. 정리
             clean_build_artifacts(gui)
 
-            # 3. PyInstaller 빌드
+            # 3. 대시보드 프론트엔드 빌드
+            if not build_dashboard_frontend(gui):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return

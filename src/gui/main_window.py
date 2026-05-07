@@ -1644,7 +1644,11 @@ class MainWindow(QMainWindow):
         if self._instance_manager and hasattr(self._instance_manager, 'cleanup'):
             self._instance_manager.cleanup()
 
-        # 3-1. 사이드바 컨트롤러 정리
+        # 3-1. 볼륨 패널 정리 (대기 중인 볼륨 저장 타이머 플러시)
+        if hasattr(self, '_volume_panel') and self._volume_panel:
+            self._volume_panel.cleanup()
+
+        # 3-2. 사이드바 컨트롤러 정리
         if hasattr(self, '_sidebar_controller'):
             self._sidebar_controller.cleanup()
 
