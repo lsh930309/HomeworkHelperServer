@@ -101,3 +101,7 @@ certs/.thumbprint
 node_modules/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Tauri generated files
+src-tauri/gen/
+src-tauri/target/

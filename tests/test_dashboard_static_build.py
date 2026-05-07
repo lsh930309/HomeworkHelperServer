@@ -76,6 +76,40 @@ def test_build_dashboard_frontend_writes_only_ignored_build_dirs(monkeypatch, tm
     assert not (frontend_dir / "tsconfig.tsbuildinfo").exists()
 
 
+def test_build_main_gui_frontend_writes_only_ignored_build_dirs(monkeypatch, tmp_path):
+    project_root = tmp_path
+    frontend_dir = project_root / "src" / "gui" / "new_gui" / "frontend"
+    static_build_dir = project_root / "build" / "main-gui-static"
+    cache_dir = project_root / "build" / "main-gui-cache"
+    frontend_dir.mkdir(parents=True)
+    (frontend_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (frontend_dir / "tsconfig.tsbuildinfo").write_text("stale", encoding="utf-8")
+
+    monkeypatch.setattr(build, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(build, "MAIN_GUI_FRONTEND_DIR", frontend_dir)
+    monkeypatch.setattr(build, "MAIN_GUI_STATIC_BUILD_DIR", static_build_dir)
+    monkeypatch.setattr(build, "MAIN_GUI_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(build.shutil, "which", lambda name: "/usr/bin/npm")
+
+    def fake_run(cmd, cwd, **kwargs):
+        assert cwd == frontend_dir
+        if cmd[-1] == "build":
+            static_build_dir.mkdir(parents=True)
+            cache_dir.mkdir(parents=True)
+            (static_build_dir / "main-gui.js").write_text("fetch('/api/gui/main-state')", encoding="utf-8")
+            (static_build_dir / "main-gui.css").write_text("body{}", encoding="utf-8")
+            (cache_dir / "tsconfig.tsbuildinfo").write_text("cache", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok")
+
+    monkeypatch.setattr(build.subprocess, "run", fake_run)
+
+    assert build.build_main_gui_frontend(DummyGui()) is True
+    assert (static_build_dir / "main-gui.js").exists()
+    assert (static_build_dir / "main-gui.css").exists()
+    assert (cache_dir / "tsconfig.tsbuildinfo").exists()
+    assert not (frontend_dir / "tsconfig.tsbuildinfo").exists()
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec

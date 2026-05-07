@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HomeworkHelper",
+  "version": "0.1.0",
+  "identifier": "com.lsh930309.homeworkhelper",
+  "build": {
+    "beforeDevCommand": "cd src/gui/new_gui/frontend && npm run dev",
+    "beforeBuildCommand": "cd src/gui/new_gui/frontend && npm run build",
+    "devUrl": "http://127.0.0.1:1430",
+    "frontendDist": "../build/main-gui-static"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "숙제 관리자",
+        "width": 520,
+        "height": 360,
+        "minWidth": 520,
+        "maxWidth": 520,
+        "resizable": false,
+        "maximizable": false,
+        "fullscreen": false,
+        "center": true,
+        "visible": true,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "backgroundColor": "#0b1120",
+        "zoomHotkeysEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": [],
+    "icon": [
+      "../assets/icons/app/app_icon.ico"
+    ],
+    "resources": {
+      "../assets/fonts/NEXONLv1GothicOTFBold.otf": "assets/fonts/NEXONLv1GothicOTFBold.otf"
+    }
+  }
+}

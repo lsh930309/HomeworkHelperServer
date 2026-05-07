@@ -438,6 +438,18 @@ def run_server_main():
         logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
 
     app = FastAPI()
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:1430",
+            "http://localhost:1430",
+            "tauri://localhost",
+            "https://tauri.localhost",
+        ],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     # Dependency
     def get_db():
@@ -576,6 +588,7 @@ def run_server_main():
     # === 대시보드 라우터 및 정적 파일 등록 ===
     from fastapi.staticfiles import StaticFiles
     from src.api.dashboard import router as dashboard_router
+    from src.api.gui import router as main_gui_router
     from src.api.dashboard.static_files import dashboard_static_dir
     
     # 정적 파일 서빙 (CSS, JS)
@@ -587,7 +600,9 @@ def run_server_main():
         logger.warning(f"대시보드 정적 파일 없음: {dashboard_static_path}")
     
     app.include_router(dashboard_router)
+    app.include_router(main_gui_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
+    logger.info("메인 GUI 라우터 등록 완료 (/api/gui/*)")
 
 
     import uvicorn

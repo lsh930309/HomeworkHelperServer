@@ -37,6 +37,10 @@ DIST_DIR = PROJECT_ROOT / "dist"
 DASHBOARD_FRONTEND_DIR = PROJECT_ROOT / "src" / "api" / "dashboard" / "frontend"
 DASHBOARD_STATIC_BUILD_DIR = BUILD_DIR / "dashboard-static"
 DASHBOARD_CACHE_DIR = BUILD_DIR / "dashboard-cache"
+MAIN_GUI_FRONTEND_DIR = PROJECT_ROOT / "src" / "gui" / "new_gui" / "frontend"
+MAIN_GUI_STATIC_BUILD_DIR = BUILD_DIR / "main-gui-static"
+MAIN_GUI_CACHE_DIR = BUILD_DIR / "main-gui-cache"
+TAURI_DIR = PROJECT_ROOT / "src-tauri"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -662,6 +666,69 @@ def build_dashboard_frontend(gui):
     gui.log(f"✓ 대시보드 프론트엔드 빌드 완료: {DASHBOARD_STATIC_BUILD_DIR.relative_to(PROJECT_ROOT)}", 'success')
     return True
 
+
+def build_main_gui_frontend(gui):
+    """Tauri 메인 GUI 프론트엔드 번들을 ignored build 디렉터리에 생성."""
+    frontend_dir = MAIN_GUI_FRONTEND_DIR
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        gui.log("  (메인 GUI 프론트엔드 package.json 없음 - 건너뜀)")
+        return True
+
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        gui.log("  ✗ npm을 찾을 수 없어 메인 GUI 번들을 생성할 수 없습니다.", 'error')
+        return False
+
+    gui.log_section("메인 GUI 프론트엔드 빌드")
+    gui.set_status("메인 GUI 프론트엔드 빌드 중...")
+    gui.set_progress(23)
+
+    install_cmd = [npm_cmd, "ci"] if (frontend_dir / "package-lock.json").exists() else [npm_cmd, "install"]
+    for cmd in (install_cmd, [npm_cmd, "run", "build"]):
+        gui.log(f"실행: {' '.join(cmd)}")
+        try:
+            process = subprocess.run(
+                cmd,
+                cwd=frontend_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False,
+            )
+        except Exception as e:
+            gui.log(f"✗ 메인 GUI 빌드 명령 실행 실패: {e}", 'error')
+            return False
+        if process.stdout:
+            for line in process.stdout.splitlines():
+                if line.strip():
+                    gui.log(f"  {line}")
+        if process.returncode != 0:
+            gui.log(f"✗ 메인 GUI 빌드 실패 (exit={process.returncode})", 'error')
+            return False
+
+    expected = (
+        MAIN_GUI_STATIC_BUILD_DIR / "main-gui.js",
+        MAIN_GUI_STATIC_BUILD_DIR / "main-gui.css",
+    )
+    missing = [path for path in expected if not path.exists()]
+    if missing:
+        gui.log("✗ 메인 GUI 빌드 산출물이 없습니다: " + ", ".join(str(path) for path in missing), 'error')
+        return False
+
+    stale = frontend_dir / "tsconfig.tsbuildinfo"
+    if stale.exists():
+        try:
+            stale.unlink()
+            gui.log(f"  ✓ 소스 트리 산출물 제거: {stale.relative_to(PROJECT_ROOT)}")
+        except Exception as e:
+            gui.log(f"  ⚠ 생성 파일 정리 실패 ({stale.name}): {e}", 'warning')
+
+    gui.log(f"✓ 메인 GUI 프론트엔드 빌드 완료: {MAIN_GUI_STATIC_BUILD_DIR.relative_to(PROJECT_ROOT)}", 'success')
+    return True
+
 def build_with_pyinstaller(gui):
     """PyInstaller로 빌드"""
     gui.log_section("PyInstaller 빌드 시작 (onedir 모드)")
@@ -1076,6 +1143,11 @@ def run_build_process(gui, version_info):
 
             # 3. 대시보드 프론트엔드 빌드
             if not build_dashboard_frontend(gui):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            # 3-1. Tauri 메인 GUI 프론트엔드 빌드
+            if not build_main_gui_frontend(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 

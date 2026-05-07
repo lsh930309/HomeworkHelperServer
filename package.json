@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "build:dashboard": "npm --prefix src/api/dashboard/frontend run build",
+    "build:main-gui": "npm --prefix src/gui/new_gui/frontend run build",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}
