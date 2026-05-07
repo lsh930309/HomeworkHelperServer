@@ -445,6 +445,7 @@ def run_server_main():
             "http://127.0.0.1:1430",
             "http://localhost:1430",
             "tauri://localhost",
+            "http://tauri.localhost",
             "https://tauri.localhost",
         ],
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

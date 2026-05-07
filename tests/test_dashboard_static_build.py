@@ -171,3 +171,10 @@ def test_installer_has_optional_new_gui_preview_shortcut_and_shutdown_guard():
     assert "#define HasNewGuiShell FileExists" in installer
     assert "{#MyAppName} 새 GUI 미리보기" in installer
     assert "taskkill', '/F /IM homework_helper_gui.exe" in installer
+
+
+def test_packaged_server_allows_tauri_http_origin_for_preview_shell():
+    entrypoint = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    assert '"http://tauri.localhost"' in entrypoint
+    assert '"tauri://localhost"' in entrypoint
+
