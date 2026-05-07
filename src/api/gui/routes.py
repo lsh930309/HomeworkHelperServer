@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-from typing import Any
+from typing import Any, Iterable
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -28,6 +28,54 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+
+
+def _normalize_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        return os.path.normcase(os.path.abspath(path))
+    except Exception:
+        return path
+
+
+def _running_process_ids(processes: Iterable[models.Process]) -> set[str]:
+    """Return process ids that are actually running on the OS.
+
+    The legacy PyQt GUI marks [실행중] from ProcessMonitor's live process cache,
+    not from stale open DB sessions.  The preview GUI has no long-running
+    ProcessMonitor yet, so it performs a read-only psutil snapshot instead.
+    """
+    wanted = {
+        normalized: process.id
+        for process in processes
+        if (normalized := _normalize_path(process.monitoring_path))
+    }
+    if not wanted:
+        return set()
+
+    try:
+        import psutil
+    except Exception:
+        return set()
+
+    running: set[str] = set()
+    try:
+        iterator = psutil.process_iter(["exe"])
+        for proc in iterator:
+            try:
+                exe = _normalize_path(proc.info.get("exe"))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+            except Exception:
+                continue
+            if exe in wanted:
+                running.add(wanted[exe])
+    except Exception:
+        return set()
+    return running
 
 
 def _predicted_stamina(process: models.Process) -> tuple[int, int] | None:
@@ -217,12 +265,7 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     processes = crud.get_processes(db)
     shortcuts = crud.get_shortcuts(db, limit=500)
     settings = crud.get_settings(db)
-    active_ids = {
-        session.process_id
-        for session in db.query(models.ProcessSession)
-        .filter(models.ProcessSession.end_timestamp.is_(None))
-        .all()
-    }
+    active_ids = _running_process_ids(processes)
     now_dt = dt.datetime.now()
     return {
         "generated_at": now_dt.isoformat(),

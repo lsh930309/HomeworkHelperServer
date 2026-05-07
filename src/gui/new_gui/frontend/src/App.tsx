@@ -1,5 +1,6 @@
 import React from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 
 type Progress = {
@@ -127,9 +128,17 @@ export default function App() {
     }
   };
 
-  const openUrl = (url: string) => {
+  const openUrl = async (url: string) => {
     const target = url.startsWith('/') ? `${API_BASE}${url}` : url;
-    window.open(target, '_blank', 'noopener,noreferrer');
+    try {
+      if (isTauri) {
+        await invoke('open_external_url', { url: target });
+      } else {
+        window.open(target, '_blank', 'noopener,noreferrer');
+      }
+    } catch (e: any) {
+      setError(e?.message || '외부 링크를 열 수 없습니다.');
+    }
   };
 
   if (!state) {

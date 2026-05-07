@@ -80,7 +80,39 @@ def test_main_state_preserves_db_boundary_and_returns_compact_rows(monkeypatch):
     assert body["web_shortcuts"][0]["id"] == "web-a"
 
 
-def test_main_state_marks_open_session_as_running(monkeypatch):
+def test_main_state_does_not_treat_stale_open_session_as_running(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="game-completed",
+                name="Completed Game",
+                monitoring_path="run.exe",
+                launch_path="run.lnk",
+                last_played_timestamp=dt.datetime.now().timestamp(),
+                user_cycle_hours=24,
+            )
+        ],
+        sessions=[
+            models.ProcessSession(
+                process_id="game-completed",
+                process_name="Completed Game",
+                start_timestamp=_ts("2026-04-01 10:00"),
+                end_timestamp=None,
+            )
+        ],
+    )
+
+    response = client.get("/api/gui/main-state")
+
+    assert response.status_code == 200
+    assert response.json()["processes"][0]["status"] == "완료됨"
+
+
+def test_main_state_marks_actual_running_process_as_running(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    monkeypatch.setattr(gui_routes, "_running_process_ids", lambda processes: {"game-running"})
     client = _client_with_seed(
         monkeypatch,
         processes=[
@@ -89,14 +121,8 @@ def test_main_state_marks_open_session_as_running(monkeypatch):
                 name="Running Game",
                 monitoring_path="run.exe",
                 launch_path="run.lnk",
-            )
-        ],
-        sessions=[
-            models.ProcessSession(
-                process_id="game-running",
-                process_name="Running Game",
-                start_timestamp=_ts("2026-04-01 10:00"),
-                end_timestamp=None,
+                last_played_timestamp=dt.datetime.now().timestamp(),
+                user_cycle_hours=24,
             )
         ],
     )

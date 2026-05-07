@@ -33,6 +33,38 @@ fn backend_base_url() -> &'static str {
     BACKEND_BASE_URL
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("허용되지 않은 URL 형식입니다.".into());
+    }
+
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("rundll32.exe");
+        command.args(["url.dll,FileProtocolHandler", url.as_str()]);
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url.as_str());
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url.as_str());
+        command
+    };
+
+    command.spawn().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn backend_is_ready() -> bool {
     TcpStream::connect((BACKEND_HOST, BACKEND_PORT)).is_ok()
 }
@@ -87,7 +119,10 @@ fn spawn_packaged_backend_if_needed() -> Option<Child> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![backend_base_url])
+        .invoke_handler(tauri::generate_handler![
+            backend_base_url,
+            open_external_url
+        ])
         .setup(|app| {
             let backend = spawn_packaged_backend_if_needed();
             app.manage(PackagedBackend(Mutex::new(backend)));
