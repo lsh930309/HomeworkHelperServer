@@ -6,6 +6,8 @@
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
+#define MyNewGuiExeName "homework_helper_gui.exe"
+#define HasNewGuiShell FileExists("dist\homework_helper\homework_helper_gui.exe")
 
 [Setup]
 ; 기본 정보
@@ -60,6 +62,9 @@ Source: "dist\homework_helper\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 [Icons]
 ; 시작 메뉴
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+#if HasNewGuiShell
+Name: "{group}\{#MyAppName} 새 GUI 미리보기"; Filename: "{app}\{#MyNewGuiExeName}"
+#endif
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 ; 바탕화면 바로가기 (사용자 선택 시)
@@ -157,8 +162,13 @@ procedure KillAllAppProcesses();
 var
   ResultCode: Integer;
 begin
-  // 메인 GUI 프로세스 종료
+  // 기존 PyQt GUI/백엔드 프로세스 종료
   Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+#if HasNewGuiShell
+  // 선택형 Tauri 새 GUI shell 종료
+  Exec('taskkill', '/F /IM homework_helper_gui.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+#endif
   
   // 잠시 대기 (프로세스 종료 완료 대기)
   Sleep(500);
@@ -171,6 +181,10 @@ end;
 function IsAppRunning(): Boolean;
 begin
   Result := IsProcessRunning('homework_helper.exe');
+#if HasNewGuiShell
+  if not Result then
+    Result := IsProcessRunning('homework_helper_gui.exe');
+#endif
 end;
 
 // 설치 전 실행 중인 프로세스 종료

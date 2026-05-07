@@ -1,6 +1,12 @@
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+_TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
+os.environ["HOME"] = _TEST_HOME
+os.environ.setdefault("APPDATA", str(Path(_TEST_HOME) / "AppData" / "Roaming"))
 
 import build
 from src.api.dashboard.static_files import dashboard_static_dir
@@ -115,3 +121,53 @@ def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec
     assert "'api/dashboard/frontend'" in spec
     assert "'api/dashboard/static'" in spec
+
+
+def test_new_gui_shell_packaging_is_opt_in(monkeypatch):
+    monkeypatch.delenv(build.NEW_GUI_PACKAGE_ENV, raising=False)
+    monkeypatch.setattr(build.shutil, "which", lambda name: (_ for _ in ()).throw(AssertionError("npm should not be required")))
+
+    assert build.package_new_gui_enabled() is False
+    assert build.build_new_gui_shell(DummyGui()) is True
+
+
+def test_build_and_stage_new_gui_shell_when_enabled(monkeypatch, tmp_path):
+    project_root = tmp_path
+    tauri_dir = project_root / "src-tauri"
+    shell_source = tauri_dir / "target" / "release" / "homework-helper-shell.exe"
+    app_folder = project_root / "dist" / "homework_helper"
+    tauri_dir.mkdir(parents=True)
+
+    monkeypatch.setenv(build.NEW_GUI_PACKAGE_ENV, "1")
+    monkeypatch.setattr(build, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(build, "TAURI_DIR", tauri_dir)
+    monkeypatch.setattr(build, "TAURI_SHELL_SOURCE", shell_source)
+    monkeypatch.setattr(build, "APP_FOLDER", app_folder)
+    monkeypatch.setattr(build.shutil, "which", lambda name: "/usr/bin/npm")
+
+    def fake_run(cmd, cwd, **kwargs):
+        assert cwd == project_root
+        assert cmd[-2:] == ["--", "--no-bundle"]
+        shell_source.parent.mkdir(parents=True)
+        shell_source.write_bytes(b"tauri shell")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok")
+
+    monkeypatch.setattr(build.subprocess, "run", fake_run)
+
+    assert build.package_new_gui_enabled() is True
+    assert build.build_new_gui_shell(DummyGui()) is True
+    assert build.stage_new_gui_shell(DummyGui()) is True
+    assert (app_folder / build.TAURI_SHELL_DIST_NAME).read_bytes() == b"tauri shell"
+    assert app_folder / build.TAURI_SHELL_DIST_NAME in build.code_sign_targets()
+
+
+def test_pyinstaller_spec_excludes_new_gui_frontend_source_tree():
+    spec = Path("homework_helper.spec").read_text(encoding="utf-8")
+    assert "'gui/new_gui/frontend'" in spec
+
+
+def test_installer_has_optional_new_gui_preview_shortcut_and_shutdown_guard():
+    installer = Path("installer.iss").read_text(encoding="utf-8")
+    assert "#define HasNewGuiShell FileExists" in installer
+    assert "{#MyAppName} 새 GUI 미리보기" in installer
+    assert "taskkill', '/F /IM homework_helper_gui.exe" in installer

@@ -34,3 +34,21 @@
 - `requirements.txt`를 runtime/dev/windows 빌드 의존성으로 나누거나 `pyproject.toml`로 이동한다.
 - `src/gui/main_window.py`의 런타임 로직을 API 서비스 계층으로 이동한다.
 - Inno staging 단계를 명시화해 `{app}\homework_helper.exe`, `{app}\backend\...`, `{app}\assets\...` 배치를 테스트한다.
+
+## 선택형 패키징 준비
+
+Windows smoke가 끝나기 전까지 기존 installer의 기본 실행 파일은 `homework_helper.exe`로 유지한다. 새 Tauri shell은 다음 환경변수를 명시했을 때만 패키지에 포함된다.
+
+```powershell
+$env:HH_PACKAGE_NEW_GUI = "1"
+python build.py
+```
+
+이 모드에서 build.py는 다음 작업을 추가로 수행한다.
+
+1. `npm run tauri:build -- --no-bundle`로 Tauri shell을 생성한다.
+2. `src-tauri/target/release/homework-helper-shell.exe`를 `dist/homework_helper/homework_helper_gui.exe`로 복사한다.
+3. 코드 서명 대상에 `homework_helper_gui.exe`를 추가한다.
+4. Inno Setup은 shell 파일이 존재할 때만 시작 메뉴에 `HomeworkHelper 새 GUI 미리보기` 바로가기를 추가하고, 업데이트 중 해당 프로세스도 종료한다.
+
+Tauri shell은 설치 폴더 옆의 `homework_helper.exe --run-server`를 sidecar 백엔드로 실행할 준비가 되어 있다. 따라서 shell을 단독 실행해도 기존 FastAPI/SQLite 경계는 Python 백엔드가 계속 소유한다. 이 구조는 DB 직접 접근을 피하기 위한 중간 전환 단계이며, 기본 바로가기를 새 GUI로 바꾸는 것은 Windows 업데이트 smoke와 기능 parity 확인 이후에만 진행한다.

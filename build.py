@@ -41,6 +41,9 @@ MAIN_GUI_FRONTEND_DIR = PROJECT_ROOT / "src" / "gui" / "new_gui" / "frontend"
 MAIN_GUI_STATIC_BUILD_DIR = BUILD_DIR / "main-gui-static"
 MAIN_GUI_CACHE_DIR = BUILD_DIR / "main-gui-cache"
 TAURI_DIR = PROJECT_ROOT / "src-tauri"
+TAURI_SHELL_DIST_NAME = "homework_helper_gui.exe"
+TAURI_SHELL_SOURCE = TAURI_DIR / "target" / "release" / "homework-helper-shell.exe"
+NEW_GUI_PACKAGE_ENV = "HH_PACKAGE_NEW_GUI"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -597,6 +600,95 @@ def ensure_release_dir(gui):
     return RELEASE_DIR
 
 
+def package_new_gui_enabled():
+    """새 Tauri GUI shell을 설치 패키지에 포함할지 여부를 반환합니다.
+
+    기본값은 꺼짐입니다. Windows smoke 전까지 기존 PyQt 설치/업데이트 경로를
+    보존하기 위해 명시적으로 HH_PACKAGE_NEW_GUI=1일 때만 shell을 패키지에 싣습니다.
+    """
+    value = os.environ.get(NEW_GUI_PACKAGE_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _run_logged_command(gui, cmd, cwd, failure_label):
+    gui.log(f"실행: {' '.join(map(str, cmd))}")
+    try:
+        process = subprocess.run(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            check=False,
+        )
+    except Exception as e:
+        gui.log(f"✗ {failure_label} 명령 실행 실패: {e}", 'error')
+        return False
+    if process.stdout:
+        for line in process.stdout.splitlines():
+            if line.strip():
+                gui.log(f"  {line}")
+    if process.returncode != 0:
+        gui.log(f"✗ {failure_label} 실패 (exit={process.returncode})", 'error')
+        return False
+    return True
+
+
+def build_new_gui_shell(gui):
+    """선택적으로 Tauri shell 실행 파일을 빌드합니다.
+
+    PyQt 기반 기존 설치 흐름은 기본값으로 유지합니다. 새 GUI shell은
+    HH_PACKAGE_NEW_GUI=1인 Windows 패키징 smoke에서만 생성합니다.
+    """
+    if not package_new_gui_enabled():
+        gui.log(f"  (새 GUI shell 패키징 비활성화: {NEW_GUI_PACKAGE_ENV}=1 설정 시 포함)")
+        return True
+
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        gui.log("  ✗ npm을 찾을 수 없어 Tauri shell을 빌드할 수 없습니다.", 'error')
+        return False
+
+    gui.log_section("Tauri 새 GUI shell 빌드")
+    gui.set_status("Tauri 새 GUI shell 빌드 중...")
+    gui.set_progress(24)
+
+    if not _run_logged_command(gui, [npm_cmd, "run", "tauri:build", "--", "--no-bundle"], PROJECT_ROOT, "Tauri shell 빌드"):
+        return False
+
+    if not TAURI_SHELL_SOURCE.exists():
+        gui.log(f"✗ Tauri shell 산출물이 없습니다: {TAURI_SHELL_SOURCE}", 'error')
+        return False
+
+    gui.log(f"✓ Tauri 새 GUI shell 빌드 완료: {TAURI_SHELL_SOURCE.relative_to(PROJECT_ROOT)}", 'success')
+    return True
+
+
+def stage_new_gui_shell(gui):
+    """선택적으로 Tauri shell을 PyInstaller 배포 폴더에 복사합니다."""
+    if not package_new_gui_enabled():
+        return True
+
+    if not TAURI_SHELL_SOURCE.exists():
+        gui.log(f"✗ Tauri shell 산출물이 없어 패키지에 포함할 수 없습니다: {TAURI_SHELL_SOURCE}", 'error')
+        return False
+
+    APP_FOLDER.mkdir(parents=True, exist_ok=True)
+    target = APP_FOLDER / TAURI_SHELL_DIST_NAME
+    shutil.copy2(TAURI_SHELL_SOURCE, target)
+    gui.log(f"  ✓ 새 GUI shell 포함: {target.relative_to(PROJECT_ROOT)}", 'success')
+    return True
+
+
+def code_sign_targets():
+    targets = [APP_FOLDER / "homework_helper.exe"]
+    if package_new_gui_enabled():
+        targets.append(APP_FOLDER / TAURI_SHELL_DIST_NAME)
+    return targets
+
+
 
 def build_dashboard_frontend(gui):
     """대시보드 프론트엔드 번들을 ignored build 디렉터리에 생성."""
@@ -1151,14 +1243,24 @@ def run_build_process(gui, version_info):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
+            # 3-2. 선택형 Tauri shell 빌드 (기본 installer 경로는 유지)
+            if not build_new_gui_shell(gui):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
             # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 4. 메인 exe 코드 서명
+            # 4-1. 선택형 Tauri shell을 PyInstaller 배포 폴더에 포함
+            if not stage_new_gui_shell(gui):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            # 4-2. exe 코드 서명
             gui.set_progress(62)
-            if not sign_build_artifacts(gui, version_info):
+            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets()):
                 gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
                 gui.show_complete(False, auto_close_delay=0)
                 return

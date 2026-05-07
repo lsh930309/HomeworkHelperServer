@@ -702,6 +702,21 @@ def ensure_process_table_schema():
         print(f"테이블 스키마 확인/수정 중 오류: {e}")
 
 
+def run_schema_migration_check():
+    """앱 업데이트 시 필요한 DB 스키마 마이그레이션을 한 번 수행합니다."""
+    try:
+        from src.migration import SchemaMigrator
+        print("\n=== 스키마 버전 체크 ===")
+        migrator = SchemaMigrator()
+        if not migrator.check_and_migrate():
+            print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
+        else:
+            print("=== 스키마 체크 완료 ===\n")
+    except Exception as e:
+        print(f"스키마 마이그레이션 체크 중 오류: {e}")
+        # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
+
+
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
     # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
@@ -800,20 +815,15 @@ if __name__ == "__main__":
     # === 스키마 자동 마이그레이션 ===
     # 앱 업데이트 시 스키마 구조가 변경된 경우 자동으로 마이그레이션합니다.
     # 사용자에게는 보이지 않으며, 실패 시에만 경고를 표시합니다.
-    try:
-        from src.migration import SchemaMigrator
-        print("\n=== 스키마 버전 체크 ===")
-        migrator = SchemaMigrator()
-        if not migrator.check_and_migrate():
-            print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
-        else:
-            print("=== 스키마 체크 완료 ===\n")
-    except Exception as e:
-        print(f"스키마 마이그레이션 체크 중 오류: {e}")
-        # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
+    run_schema_migration_check()
+
+    # Tauri shell이 패키지 내 sidecar 백엔드로 실행할 수 있는 서버 전용 모드입니다.
+    # 기존 PyQt 기본 실행 경로는 그대로 유지합니다.
+    if "--run-server" in sys.argv:
+        run_server_main()
+        sys.exit(0)
 
     # GUI 애플리케이션 실행
-    # (multiprocessing.Process 방식에서는 --run-server 분기 불필요)
     check_admin_requirement()
 
     # API 서버 시작 및 준비 확인
