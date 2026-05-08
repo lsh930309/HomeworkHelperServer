@@ -163,6 +163,7 @@ def test_main_state_reports_stamina_progress_without_schema_changes(monkeypatch)
 def test_main_state_syncs_running_process_into_session_history(monkeypatch):
     import src.api.gui.routes as gui_routes
 
+    gui_routes._preview_owned_session_ids.clear()
     monkeypatch.setattr(
         gui_routes,
         "_running_process_ids",
@@ -190,7 +191,10 @@ def test_main_state_syncs_running_process_into_session_history(monkeypatch):
     assert body["runtime_sync"]["started"][0]["process_id"] == "game-running"
 
 
-def test_main_state_closes_stale_open_session_and_updates_last_played(monkeypatch):
+def test_main_state_does_not_close_unowned_stale_open_session(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    gui_routes._preview_owned_session_ids.clear()
     client = _client_with_seed(
         monkeypatch,
         processes=[
@@ -217,7 +221,39 @@ def test_main_state_closes_stale_open_session_and_updates_last_played(monkeypatc
 
     assert response.status_code == 200
     body = response.json()
-    assert body["runtime_sync"]["stopped"][0]["process_id"] == "game-stopped"
+    assert body["runtime_sync"]["stopped"] == []
+    assert body["processes"][0]["last_played_timestamp"] is None
+
+
+def test_main_state_only_closes_preview_owned_session(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    gui_routes._preview_owned_session_ids.clear()
+    active_ids = {"game-owned"}
+    monkeypatch.setattr(gui_routes, "_running_process_ids", lambda processes: set(active_ids))
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="game-owned",
+                name="Owned Game",
+                monitoring_path="owned.exe",
+                launch_path="owned.lnk",
+                last_played_timestamp=None,
+                user_cycle_hours=24,
+            )
+        ],
+    )
+
+    started = client.get("/api/gui/main-state")
+    assert started.status_code == 200
+    assert started.json()["runtime_sync"]["started"][0]["process_id"] == "game-owned"
+
+    active_ids.clear()
+    stopped = client.get("/api/gui/main-state")
+    assert stopped.status_code == 200
+    body = stopped.json()
+    assert body["runtime_sync"]["stopped"][0]["process_id"] == "game-owned"
     assert body["processes"][0]["last_played_timestamp"] is not None
 
 

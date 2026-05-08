@@ -30,6 +30,7 @@ SECONDS_PER_DAY = 86_400
 DATE_FORMAT = "%Y-%m-%d"
 EPOCH_DATE = dt.date(1970, 1, 1)
 MAX_OPEN_SESSION_SECONDS = 24 * 60 * 60
+MAX_COMPLETED_SESSION_SECONDS = 7 * SECONDS_PER_DAY
 MIN_SMART_SESSION_SECONDS = 60
 MIN_LONG_SESSION_SECONDS = 3 * 60 * 60
 
@@ -261,6 +262,7 @@ def _completed_session_filter(start_ts: float | None = None, end_ts: float | Non
     clauses = [
         models.ProcessSession.end_timestamp.isnot(None),
         models.ProcessSession.end_timestamp > models.ProcessSession.start_timestamp,
+        models.ProcessSession.end_timestamp <= models.ProcessSession.start_timestamp + MAX_COMPLETED_SESSION_SECONDS,
     ]
     if end_ts is not None:
         clauses.append(models.ProcessSession.start_timestamp < end_ts)

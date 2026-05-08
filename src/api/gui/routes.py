@@ -82,6 +82,8 @@ class RuntimeSyncResult(BaseModel):
     stopped: list[dict[str, Any]]
 
 
+_preview_owned_session_ids: dict[str, int] = {}
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -197,10 +199,10 @@ def _sync_runtime_sessions(
 ) -> RuntimeSyncResult:
     """Reconcile OS process state into DB session records.
 
-    The preview GUI does not own a persistent ``ProcessMonitor`` instance like
-    the PyQt app.  Polling this API keeps play history compatible by creating
-    one open session per actually running process and closing stale open
-    sessions once the process disappears.
+    The preview GUI must not close sessions created by the legacy PyQt
+    ``ProcessMonitor``.  It only ends sessions that this Python backend process
+    created and tracked in memory, so a passive main-state refresh cannot turn
+    old open records into huge completed sessions.
     """
     snapshots = snapshots if snapshots is not None else _running_process_snapshots(processes)
     active_ids = set(snapshots.keys())
@@ -225,6 +227,7 @@ def _sync_runtime_sessions(
                 user_preset_id=process.user_preset_id,
             ),
         )
+        _preview_owned_session_ids[process.id] = session.id
         started.append(
             {
                 "process_id": process.id,
@@ -235,22 +238,26 @@ def _sync_runtime_sessions(
             }
         )
 
-    open_sessions = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp == None).all()
-    for session in open_sessions:
-        if session.process_id in active_ids:
+    for process_id, session_id in list(_preview_owned_session_ids.items()):
+        if process_id in active_ids:
             continue
-        process = by_id.get(session.process_id)
-        ended = crud.end_session(db, session.id, now_ts)
+        process = by_id.get(process_id)
+        active_session = crud.get_active_session_by_process_id(db, process_id)
+        if active_session is None or active_session.id != session_id:
+            _preview_owned_session_ids.pop(process_id, None)
+            continue
+        ended = crud.end_session(db, session_id, now_ts)
         if process is not None:
             process.last_played_timestamp = now_ts
             db.add(process)
             db.commit()
             db.refresh(process)
+        _preview_owned_session_ids.pop(process_id, None)
         stopped.append(
             {
-                "process_id": session.process_id,
-                "process_name": session.process_name,
-                "session_id": session.id,
+                "process_id": process_id,
+                "process_name": active_session.process_name,
+                "session_id": session_id,
                 "timestamp": now_ts,
                 "duration": ended.session_duration if ended else None,
             }

@@ -127,6 +127,35 @@ def test_open_session_without_next_completed_is_excluded(monkeypatch):
     assert body["metrics"]["longest_session"] is None
 
 
+def test_impossibly_long_completed_session_is_excluded(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        sessions=[
+            models.ProcessSession(
+                process_id="game-a",
+                process_name="Game A",
+                start_timestamp=_ts("2026-01-01 00:00"),
+                end_timestamp=_ts("2026-01-20 00:00"),
+                session_duration=19 * 24 * 3600,
+            ),
+            models.ProcessSession(
+                process_id="game-a",
+                process_name="Game A",
+                start_timestamp=_ts("2026-01-21 10:00"),
+                end_timestamp=_ts("2026-01-21 12:00"),
+                session_duration=7200,
+            ),
+        ],
+    )
+
+    response = client.get("/api/analytics/summary?start=2026-01-01&end=2026-01-31")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metrics"]["total_seconds"] == 7200
+    assert body["metrics"]["session_count"] == 1
+
+
 def test_all_time_range_is_clamped_to_actual_session_start_dates(monkeypatch):
     client = _client_with_seed(
         monkeypatch,
