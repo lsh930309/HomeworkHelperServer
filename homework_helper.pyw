@@ -341,7 +341,6 @@ def run_server_main():
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
-    from src.data.session_repair import repair_preview_session_pollution
 
     # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
     backup_database()
@@ -376,26 +375,6 @@ def run_server_main():
         ensure_process_table_schema()
     except Exception as e:
         logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
-
-    # 새 GUI 미리보기의 2026-05 세션 동기화 버그가 기존 PyQt open session을
-    # 장기 완료 세션으로 닫아버린 경우를 자동 복구합니다.
-    # backup_database()가 이미 실행된 뒤라 원본은 backups/app_data.backup.1.db에 남습니다.
-    try:
-        repair_db = SessionLocal()
-        try:
-            repair_report = repair_preview_session_pollution(repair_db)
-            if repair_report.repaired_sessions:
-                logger.warning(
-                    "새 GUI 세션 오염 자동 복구 완료: sessions=%s, processes=%s",
-                    repair_report.repaired_session_ids,
-                    repair_report.restored_last_played,
-                )
-            else:
-                logger.info("새 GUI 세션 오염 자동 복구: 대상 없음")
-        finally:
-            repair_db.close()
-    except Exception as e:
-        logger.error(f"새 GUI 세션 오염 자동 복구 실패: {e}", exc_info=True)
 
     # 주기적 WAL checkpoint 백그라운드 스레드
     def periodic_checkpoint(interval=60):
