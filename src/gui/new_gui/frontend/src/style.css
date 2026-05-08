@@ -320,3 +320,36 @@ select:focus {
 .shell[data-theme="light"] .modal {
   background: rgba(255, 255, 255, 0.86);
 }
+
+.beholder-panel {
+  display: grid;
+  gap: 10px;
+}
+.beholder-panel > strong {
+  color: #fecaca;
+  font-size: 1.05rem;
+}
+.beholder-panel dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  max-height: 340px;
+  overflow: auto;
+}
+.beholder-panel dt {
+  color: #93a4bd;
+  font-weight: 700;
+}
+.beholder-panel dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.shell[data-theme="light"] .beholder-panel > strong { color: #991b1b; }
+.backup-list {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+}

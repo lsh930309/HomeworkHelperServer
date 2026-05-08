@@ -54,6 +54,30 @@ type GuiSettings = {
   recording_enabled: boolean;
 };
 
+type BeholderIncident = {
+  id: number;
+  severity: 'info' | 'warning' | 'critical';
+  status: string;
+  operation_kind: string;
+  actor: string;
+  target_summary?: string | null;
+  suspected_cause?: string | null;
+  current_state_summary?: string | null;
+  proposed_change_summary?: string | null;
+  risk_score: number;
+  risk_factors: string[];
+  safe_recommendation?: string | null;
+  created_at: number;
+};
+
+class BeholderIncidentError extends Error {
+  incident: BeholderIncident;
+  constructor(incident: BeholderIncident) {
+    super(incident.safe_recommendation || 'Beholder가 비정상 데이터 변경을 차단했습니다.');
+    this.incident = incident;
+  }
+}
+
 type MainState = {
   generated_at: string;
   settings: GuiSettings;
@@ -94,7 +118,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `요청 실패 (${response.status})`);
+  if (!response.ok) {
+    if (response.status === 409 && body.beholder_incident) throw new BeholderIncidentError(body.beholder_incident);
+    throw new Error(body.detail || `요청 실패 (${response.status})`);
+  }
   return body as T;
 }
 
@@ -213,6 +240,90 @@ function Modal({ title, children, onClose }: React.PropsWithChildren<{ title: st
         {children}
       </section>
     </div>
+  );
+}
+
+
+function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIncident; onClose: () => void; onResolved: () => void }) {
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [backups, setBackups] = React.useState<Array<{ slot: number; modified_at: number; size: number }>>([]);
+  const resolve = async (action: 'deny' | 'quarantine' | 'allow_once') => {
+    setBusy(action);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await fetchJson<{ override_token?: string }>(`/api/beholder/incidents/${incident.id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      });
+      if (action === 'allow_once' && result.override_token) {
+        setMessage('1회 허용 토큰이 발급되었습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.');
+      } else {
+        onResolved();
+        onClose();
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const loadBackups = async () => {
+    setError(null);
+    try {
+      const body = await fetchJson<{ backups: Array<{ slot: number; modified_at: number; size: number }> }>('/api/beholder/backups');
+      setBackups(body.backups || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+  const restore = async (slot: number) => {
+    if (!window.confirm(`backup.${slot}로 DB를 복구할까요? 현재 DB는 복구 직전 snapshot으로 보존됩니다.`)) return;
+    setBusy(`restore-${slot}`);
+    try {
+      await fetchJson('/api/beholder/backups/restore', { method: 'POST', body: JSON.stringify({ slot }) });
+      setMessage('백업 복구가 완료되었습니다. 앱을 재시작해 주세요.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Modal title="Beholder 데이터 보호 경고" onClose={onClose}>
+      <div className="beholder-panel">
+        <strong>비정상 데이터 변경이 차단되었습니다.</strong>
+        <p>Beholder가 DB에 급격한 변화가 생길 수 있는 요청을 커밋 전에 막았습니다.</p>
+        <dl>
+          <dt>심각도 / 위험도</dt><dd>{incident.severity} · {incident.risk_score}/100</dd>
+          <dt>동작</dt><dd>{incident.operation_kind} / {incident.actor}</dd>
+          <dt>의심 원인</dt><dd>{incident.suspected_cause || '-'}</dd>
+          <dt>현재 DB 상태</dt><dd>{incident.current_state_summary || '-'}</dd>
+          <dt>허용 시 변경</dt><dd>{incident.proposed_change_summary || '-'}</dd>
+          <dt>위험 신호</dt><dd>{(incident.risk_factors || []).join(', ') || '-'}</dd>
+          <dt>권장 조치</dt><dd>{incident.safe_recommendation || '차단을 유지하세요.'}</dd>
+        </dl>
+        {backups.length > 0 && (
+          <div className="backup-list">
+            {backups.map((backup) => (
+              <button className="ghost" key={backup.slot} onClick={() => restore(backup.slot)}>
+                backup.{backup.slot} · {new Date(backup.modified_at * 1000).toLocaleString()} · {backup.size} bytes
+              </button>
+            ))}
+          </div>
+        )}
+        {message && <div className="notice compact">{message}</div>}
+        {error && <div className="error compact">{error}</div>}
+        <div className="modal-actions">
+          <button className="ghost" disabled={Boolean(busy)} onClick={() => resolve('deny')}>차단 유지</button>
+          <button className="ghost" disabled={Boolean(busy)} onClick={() => resolve('quarantine')}>격리</button>
+          <button className="ghost" disabled={Boolean(busy)} onClick={loadBackups}>백업에서 복구</button>
+          <button className="danger" disabled={Boolean(busy)} onClick={() => resolve('allow_once')}>이번 한 번 허용</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -417,7 +528,17 @@ export default function App() {
   const [editingProcess, setEditingProcess] = React.useState<ProcessRow | 'new' | null>(null);
   const [editingShortcut, setEditingShortcut] = React.useState<WebShortcut | 'new' | null>(null);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [beholderIncident, setBeholderIncident] = React.useState<BeholderIncident | null>(null);
   const isTauri = isTauriRuntime();
+
+  const handleError = React.useCallback((e: any) => {
+    if (e instanceof BeholderIncidentError) {
+      setBeholderIncident(e.incident);
+      if (isTauri) getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => undefined);
+      return;
+    }
+    setError(e.message || String(e));
+  }, [isTauri]);
 
   useContentSizedWindow(rootRef, isTauri);
   useWindowPlacement(isTauri);
@@ -432,13 +553,23 @@ export default function App() {
           getCurrentWebview().setZoom(1).catch(() => undefined);
         }
       })
-      .catch((e) => setError(e.message));
-  }, [isTauri]);
+      .catch(handleError);
+  }, [handleError, isTauri]);
 
   React.useEffect(() => {
     load();
     const id = window.setInterval(load, 1000);
-    return () => window.clearInterval(id);
+    const incidentId = window.setInterval(() => {
+      fetchJson<{ incidents: BeholderIncident[] }>('/api/beholder/incidents/active')
+        .then((body) => {
+          if (body.incidents?.[0]) setBeholderIncident(body.incidents[0]);
+        })
+        .catch(() => undefined);
+    }, 2000);
+    return () => {
+      window.clearInterval(id);
+      window.clearInterval(incidentId);
+    };
   }, [load]);
 
   const launch = async (process: ProcessRow) => {
@@ -450,7 +581,7 @@ export default function App() {
       }
       load();
     } catch (e: any) {
-      setError(e.message);
+      handleError(e);
     } finally {
       setBusyId(null);
     }
@@ -462,7 +593,7 @@ export default function App() {
       await fetchJson(`/api/gui/processes/${process.id}`, { method: 'DELETE' });
       load();
     } catch (e: any) {
-      setError(e.message);
+      handleError(e);
     }
   };
 
@@ -485,7 +616,7 @@ export default function App() {
       await openUrl(shortcut.url);
       load();
     } catch (e: any) {
-      setError(e.message);
+      handleError(e);
     }
   };
 
@@ -495,7 +626,7 @@ export default function App() {
       await fetchJson(`/api/gui/web-shortcuts/${shortcut.id}`, { method: 'DELETE' });
       load();
     } catch (e: any) {
-      setError(e.message);
+      handleError(e);
     }
   };
 
@@ -591,6 +722,7 @@ export default function App() {
         />
       )}
       {settingsOpen && <SettingsModal settings={state.settings} onClose={() => setSettingsOpen(false)} onSaved={load} />}
+      {beholderIncident && <BeholderModal incident={beholderIncident} onClose={() => setBeholderIncident(null)} onResolved={load} />}
     </main>
   );
 }

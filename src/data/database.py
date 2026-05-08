@@ -97,6 +97,13 @@ def auto_migrate_database():
         ("process_sessions", "stamina_at_end", "INTEGER", None),
         ("process_sessions", "process_name", "TEXT", None),
         ("process_sessions", "session_duration", "REAL", None),
+        # Beholder session metadata (nullable for legacy DB compatibility)
+        ("process_sessions", "session_status", "TEXT", None),
+        ("process_sessions", "session_owner", "TEXT", None),
+        ("process_sessions", "heartbeat_timestamp", "REAL", None),
+        ("process_sessions", "lease_token", "TEXT", None),
+        ("process_sessions", "close_reason", "TEXT", None),
+        ("process_sessions", "guard_flags", "TEXT", None),
         # Process 테이블 - 앱 볼륨 제어
         ("managed_processes", "default_volume", "INTEGER", None),
         ("managed_processes", "default_muted", "INTEGER", "0"),

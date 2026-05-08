@@ -116,3 +116,33 @@ class ProcessSession(Base):
     session_duration = Column(Float, nullable=True)  # 세션 길이 (초 단위, 종료 시 계산)
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
     stamina_at_end = Column(Integer, nullable=True)  # 종료 시점 스태미나
+
+    # Beholder metadata (nullable for legacy DB compatibility)
+    session_status = Column(String, nullable=True)
+    session_owner = Column(String, nullable=True)
+    heartbeat_timestamp = Column(Float, nullable=True)
+    lease_token = Column(String, nullable=True)
+    close_reason = Column(String, nullable=True)
+    guard_flags = Column(JSON, nullable=True)
+
+
+class BeholderIncident(Base):
+    """A blocked or user-actionable Beholder data safety incident."""
+    __tablename__ = "beholder_incidents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    severity = Column(String, nullable=False, default="warning")
+    status = Column(String, nullable=False, default="pending")
+    operation_kind = Column(String, nullable=False)
+    actor = Column(String, nullable=False)
+    target_summary = Column(String, nullable=True)
+    suspected_cause = Column(String, nullable=True)
+    current_state_summary = Column(String, nullable=True)
+    proposed_change_summary = Column(String, nullable=True)
+    risk_score = Column(Integer, nullable=False, default=0)
+    risk_factors = Column(JSON, nullable=True)
+    safe_recommendation = Column(String, nullable=True)
+    created_at = Column(Float, nullable=False)
+    resolved_at = Column(Float, nullable=True)
+    override_token = Column(String, nullable=True, index=True)
+    override_used_at = Column(Float, nullable=True)

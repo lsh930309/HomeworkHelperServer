@@ -1,9 +1,18 @@
 # api_client.py
 
 import requests
-from typing import List, Optional
+from typing import Any, List, Optional
 import os
 from src.data.data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
+
+
+class BeholderIncidentRequired(requests.HTTPError):
+    """Raised when the backend blocks a DB mutation and creates an incident."""
+
+    def __init__(self, response: requests.Response, incident: dict[str, Any]):
+        self.incident = incident
+        super().__init__(incident.get("safe_recommendation") or response.text, response=response)
+
 
 class ApiClient:
     """
@@ -16,16 +25,80 @@ class ApiClient:
         if dyn_port:
             base_url = f"http://127.0.0.1:{dyn_port}"
         self.base_url = base_url
+        self.latest_beholder_incident: dict[str, Any] | None = None
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
         self.global_settings: GlobalSettings = self._fetch_global_settings()
 
+
+    def _raise_for_status(self, response: requests.Response) -> None:
+        if response.status_code == 409:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            incident = body.get("beholder_incident")
+            if incident:
+                self.latest_beholder_incident = incident
+                raise BeholderIncidentRequired(response, incident)
+        response.raise_for_status()
+
+    def pop_latest_beholder_incident(self) -> dict[str, Any] | None:
+        incident = self.latest_beholder_incident
+        self.latest_beholder_incident = None
+        return incident
+
+    def get_active_beholder_incidents(self) -> list[dict[str, Any]]:
+        try:
+            response = requests.get(f"{self.base_url}/api/beholder/incidents/active", timeout=5)
+            self._raise_for_status(response)
+            return response.json().get("incidents", [])
+        except requests.RequestException as e:
+            print(f"Beholder incident 조회 실패: {e}")
+            return []
+
+    def resolve_beholder_incident(self, incident_id: int, action: str) -> dict[str, Any] | None:
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/beholder/incidents/{incident_id}/resolve",
+                json={"action": action},
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Beholder incident 결정 저장 실패: {e}")
+            return None
+
+
+    def get_beholder_backups(self) -> list[dict[str, Any]]:
+        try:
+            response = requests.get(f"{self.base_url}/api/beholder/backups", timeout=5)
+            self._raise_for_status(response)
+            return response.json().get("backups", [])
+        except requests.RequestException as e:
+            print(f"Beholder 백업 목록 조회 실패: {e}")
+            return []
+
+    def restore_beholder_backup(self, slot: int) -> dict[str, Any] | None:
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/beholder/backups/restore",
+                json={"slot": slot},
+                timeout=20,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Beholder 백업 복구 실패: {e}")
+            return None
+
     def _fetch_all_processes(self) -> List[ManagedProcess]:
         """서버에서 모든 프로세스 목록을 가져옵니다."""
         try:
             response = requests.get(f"{self.base_url}/processes", timeout=10)
-            response.raise_for_status()  # 200번대 상태 코드가 아니면 에러 발생
+            self._raise_for_status(response)  # 200번대 상태 코드가 아니면 에러 발생
             processes_data = response.json()
             # JSON 딕셔너리 리스트를 ManagedProcess 객체 리스트로 변환
             return [ManagedProcess.from_dict(p) for p in processes_data]
@@ -44,7 +117,7 @@ class ApiClient:
                 del data_to_send['id']
 
             response = requests.post(f"{self.base_url}/processes", json=data_to_send, timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다. (전체 목록을 다시 가져오는 것이 가장 간단하고 확실함)
             self.managed_processes = self._fetch_all_processes()
@@ -57,7 +130,7 @@ class ApiClient:
         """ID로 프로세스를 서버에서 삭제합니다."""
         try:
             response = requests.delete(f"{self.base_url}/processes/{process_id}", timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
@@ -74,7 +147,7 @@ class ApiClient:
                 del data_to_send['id'] # id는 경로로 전달하므로 본문에서는 제외
 
             response = requests.put(f"{self.base_url}/processes/{updated_process.id}", json=data_to_send, timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
@@ -95,7 +168,7 @@ class ApiClient:
         """서버에서 모든 웹 바로 가기 목록을 가져옵니다."""
         try:
             response = requests.get(f"{self.base_url}/shortcuts", timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             shortcuts_data = response.json()
             return [WebShortcut.from_dict(sc) for sc in shortcuts_data]
         except requests.RequestException as e:
@@ -110,7 +183,7 @@ class ApiClient:
                 del data_to_send['id']
 
             response = requests.post(f"{self.base_url}/shortcuts", json=data_to_send, timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -123,7 +196,7 @@ class ApiClient:
         """ID로 웹 바로 가기를 서버에서 삭제합니다."""
         try:
             response = requests.delete(f"{self.base_url}/shortcuts/{shortcut_id}", timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -140,7 +213,7 @@ class ApiClient:
                 del data_to_send['id']
 
             response = requests.put(f"{self.base_url}/shortcuts/{updated_shortcut.id}", json=data_to_send, timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -161,7 +234,7 @@ class ApiClient:
         """서버에서 전역 설정을 가져옵니다."""
         try:
             response = requests.get(f"{self.base_url}/settings", timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             return GlobalSettings.from_dict(response.json())
         except requests.RequestException as e:
             print(f"전역 설정을 불러오는 데 실패했습니다: {e}")
@@ -171,7 +244,7 @@ class ApiClient:
         """전역 설정을 서버에 업데이트합니다."""
         try:
             response = requests.put(f"{self.base_url}/settings", json=updated_settings.to_dict(), timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
 
             # 서버로부터 최종적으로 저장된 데이터를 응답으로 받습니다.
             saved_settings_data = response.json()
@@ -194,8 +267,13 @@ class ApiClient:
                 "process_name": process_name,
                 "start_timestamp": start_timestamp
             }
-            response = requests.post(f"{self.base_url}/sessions", json=data, timeout=10)
-            response.raise_for_status()
+            response = requests.post(
+                f"{self.base_url}/sessions",
+                json=data,
+                headers={"X-HH-Beholder-Actor": "process_monitor", "X-HH-Beholder-Operation": "runtime_start"},
+                timeout=10,
+            )
+            self._raise_for_status(response)
             return ProcessSession.from_dict(response.json())
         except requests.RequestException as e:
             print(f"세션 시작 실패: {e}")
@@ -213,9 +291,10 @@ class ApiClient:
             response = requests.put(
                 f"{self.base_url}/sessions/{session_id}/end",
                 json=data,
+                headers={"X-HH-Beholder-Actor": "process_monitor", "X-HH-Beholder-Operation": "runtime_stop"},
                 timeout=10
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             return ProcessSession.from_dict(response.json())
         except requests.RequestException as e:
             print(f"세션 종료 실패: {e}")
@@ -225,7 +304,7 @@ class ApiClient:
         """특정 프로세스의 현재 활성 세션 조회"""
         try:
             response = requests.get(f"{self.base_url}/sessions/process/{process_id}/active", timeout=10)
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
             return ProcessSession.from_dict(data) if data else None
         except requests.RequestException as e:
@@ -240,7 +319,7 @@ class ApiClient:
                 params={"skip": skip, "limit": limit},
                 timeout=10
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             sessions_data = response.json()
             return [ProcessSession.from_dict(s) for s in sessions_data]
         except requests.RequestException as e:
@@ -255,7 +334,7 @@ class ApiClient:
                 params={"skip": skip, "limit": limit},
                 timeout=10
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             sessions_data = response.json()
             return [ProcessSession.from_dict(s) for s in sessions_data]
         except requests.RequestException as e:
@@ -268,7 +347,7 @@ class ApiClient:
             response = requests.get(f"{self.base_url}/sessions/process/{process_id}/last", timeout=10)
             if response.status_code == 404:
                 return None
-            response.raise_for_status()
+            self._raise_for_status(response)
             return ProcessSession.from_dict(response.json())
         except requests.RequestException as e:
             print(f"마지막 세션 조회 실패: {e}")
@@ -282,7 +361,7 @@ class ApiClient:
                 params={"stamina_at_end": stamina_at_end},
                 timeout=10
             )
-            response.raise_for_status()
+            self._raise_for_status(response)
             return True
         except requests.RequestException as e:
             print(f"세션 스태미나 업데이트 실패: {e}")

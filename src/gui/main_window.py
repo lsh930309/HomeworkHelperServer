@@ -16,13 +16,14 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton,
+    QLabel, QProgressBar, QSlider, QToolButton, QInputDialog,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
 from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog
+from src.gui.beholder_dialog import BeholderIncidentDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
@@ -145,6 +146,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
+        self._beholder_seen_incidents: set[int] = set()
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -316,6 +318,11 @@ class MainWindow(QMainWindow):
         self.ui_refresh_timer = QTimer(self)
         self.ui_refresh_timer.timeout.connect(self._on_ui_refresh_tick)
         self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
+
+        self.beholder_timer = QTimer(self)
+        self.beholder_timer.timeout.connect(self._poll_beholder_incidents)
+        self.beholder_timer.start(1500)
+        QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -326,6 +333,71 @@ class MainWindow(QMainWindow):
             status_bar.showMessage("준비 완료.", 5000) # 상태 표시줄 메시지
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
+
+
+    def _poll_beholder_incidents(self):
+        """Show Beholder incidents promptly in the PyQt main GUI."""
+        incident = self.data_manager.pop_latest_beholder_incident()
+        incidents = [incident] if incident else self.data_manager.get_active_beholder_incidents()
+        for item in incidents:
+            if not item:
+                continue
+            incident_id = item.get("id")
+            if incident_id in self._beholder_seen_incidents:
+                continue
+            if incident_id is not None:
+                self._beholder_seen_incidents.add(incident_id)
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+            dialog = BeholderIncidentDialog(item, self)
+            dialog.exec()
+            if dialog.action == "restore_backup":
+                self._handle_beholder_restore_request()
+            elif incident_id is not None:
+                result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
+                if dialog.action == "allow_once" and result and result.get("override_token"):
+                    QMessageBox.information(
+                        self,
+                        "Beholder 허용 토큰 발급",
+                        "이번 요청을 1회 허용하는 토큰을 발급했습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.",
+                    )
+            break
+
+    def _handle_beholder_restore_request(self):
+        backups = self.data_manager.get_beholder_backups()
+        if not backups:
+            QMessageBox.warning(self, "Beholder 백업 복구", "사용 가능한 DB 백업을 찾지 못했습니다.")
+            return
+        labels = [
+            f"backup.{item.get('slot')} · {datetime.datetime.fromtimestamp(item.get('modified_at', 0)).strftime('%Y-%m-%d %H:%M:%S')} · {item.get('size', 0)} bytes"
+            for item in backups
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Beholder 백업 복구",
+            "복구할 백업을 선택하세요. 현재 DB는 복구 직전 별도 snapshot으로 보존됩니다.",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+        slot = backups[labels.index(choice)].get("slot")
+        confirm = QMessageBox.question(
+            self,
+            "백업 복구 확인",
+            f"backup.{slot}로 DB를 교체합니다. 계속할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        result = self.data_manager.restore_beholder_backup(int(slot))
+        if result and result.get("ok"):
+            QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
+        else:
+            QMessageBox.warning(self, "Beholder 백업 복구", "복구에 실패했습니다.")
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""

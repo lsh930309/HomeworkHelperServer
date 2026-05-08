@@ -337,9 +337,10 @@ def run_server_main():
         logger.error(f"PID 파일 생성 실패: {e}")
 
     # --- main.py의 내용을 여기로 통합 ---
-    from fastapi import FastAPI, Depends, HTTPException
+    from fastapi import FastAPI, Depends, HTTPException, Header
+    from fastapi.responses import JSONResponse
     from sqlalchemy.orm import Session
-    from src.data import crud, models, schemas
+    from src.data import crud, models, schemas, beholder
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
 
     # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
@@ -438,6 +439,16 @@ def run_server_main():
         logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
 
     app = FastAPI()
+
+    @app.exception_handler(beholder.BeholderBlocked)
+    async def beholder_blocked_handler(request, exc):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": exc.incident.safe_recommendation or "Beholder가 비정상 데이터 변경을 차단했습니다.",
+                "beholder_incident": beholder.incident_to_dict(exc.incident),
+            },
+        )
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
         CORSMiddleware,
@@ -533,18 +544,41 @@ def run_server_main():
 
     # create / read / update [process sessions]
     @app.post("/sessions", response_model=schemas.ProcessSessionSchema, status_code=201)
-    def create_new_session(session_data: schemas.ProcessSessionCreate, db: Session = Depends(get_db)):
+    def create_new_session(
+        session_data: schemas.ProcessSessionCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """새로운 프로세스 세션 시작"""
-        return crud.create_session(db=db, session=session_data)
+        return crud.create_session(
+            db=db,
+            session=session_data,
+            actor=x_hh_beholder_actor or "process_monitor",
+            operation_kind=x_hh_beholder_operation or "runtime_start",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
-    def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
+    def end_process_session(
+        session_id: int,
+        end_data: schemas.ProcessSessionUpdate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """프로세스 세션 종료"""
         ended_session = crud.end_session(
             db=db,
             session_id=session_id,
             end_timestamp=end_data.end_timestamp,
-            stamina_at_end=end_data.stamina_at_end
+            stamina_at_end=end_data.stamina_at_end,
+            actor=x_hh_beholder_actor or "process_monitor",
+            operation_kind=x_hh_beholder_operation or "runtime_stop",
+            close_reason=end_data.close_reason or "process_exit",
+            override_token=x_hh_beholder_override,
         )
         if ended_session is None:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
@@ -590,6 +624,7 @@ def run_server_main():
     from fastapi.staticfiles import StaticFiles
     from src.api.dashboard import router as dashboard_router
     from src.api.gui import router as main_gui_router
+    from src.api.beholder_routes import router as beholder_router
     from src.api.dashboard.static_files import dashboard_static_dir
     
     # 정적 파일 서빙 (CSS, JS)
@@ -602,6 +637,7 @@ def run_server_main():
     
     app.include_router(dashboard_router)
     app.include_router(main_gui_router)
+    app.include_router(beholder_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
     logger.info("메인 GUI 라우터 등록 완료 (/api/gui/*)")
 

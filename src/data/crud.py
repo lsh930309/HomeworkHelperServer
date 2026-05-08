@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, IntegrityError
 from src.data import models
 from src.data import schemas
+from src.data import beholder
 from typing import Optional
 import uuid
 import time
@@ -152,9 +153,29 @@ def update_settings(db: Session, settings: schemas.GlobalSettingsSchema):
 
 # process session management functions
 @db_retry_on_lock
-def create_session(db: Session, session: schemas.ProcessSessionCreate):
+def create_session(
+    db: Session,
+    session: schemas.ProcessSessionCreate,
+    *,
+    operation_kind: str = "runtime_start",
+    actor: str = "process_monitor",
+    override_token: str | None = None,
+):
     """새로운 프로세스 세션 시작 기록"""
-    db_session = models.ProcessSession(**session.dict())
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
+        actor=actor,
+        allowed_tables={"process_sessions"},
+        override_token=override_token,
+    )
+    beholder.guard_session_start(db, session, operation)
+    session_data = session.dict()
+    session_data.setdefault("session_owner", actor)
+    if not session_data.get("session_owner"):
+        session_data["session_owner"] = actor
+    session_data.setdefault("session_status", "open")
+    session_data.setdefault("heartbeat_timestamp", session_data.get("start_timestamp"))
+    db_session = models.ProcessSession(**session_data)
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
@@ -162,12 +183,32 @@ def create_session(db: Session, session: schemas.ProcessSessionCreate):
 
 
 @db_retry_on_lock
-def end_session(db: Session, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None):
+def end_session(
+    db: Session,
+    session_id: int,
+    end_timestamp: float,
+    stamina_at_end: Optional[int] = None,
+    *,
+    operation_kind: str = "runtime_stop",
+    actor: str = "process_monitor",
+    close_reason: str = "process_exit",
+    override_token: str | None = None,
+):
     """프로세스 세션 종료 기록"""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={"process_sessions", "managed_processes"},
+            override_token=override_token,
+        )
+        beholder.guard_session_end(db, db_session, end_timestamp, operation)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
+        db_session.session_status = "closed"
+        db_session.close_reason = close_reason
+        db_session.heartbeat_timestamp = end_timestamp
         if stamina_at_end is not None:
             db_session.stamina_at_end = stamina_at_end
         db.commit()

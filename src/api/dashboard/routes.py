@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from src.data import models
 from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size
@@ -263,6 +263,7 @@ def _completed_session_filter(start_ts: float | None = None, end_ts: float | Non
         models.ProcessSession.end_timestamp.isnot(None),
         models.ProcessSession.end_timestamp > models.ProcessSession.start_timestamp,
         models.ProcessSession.end_timestamp <= models.ProcessSession.start_timestamp + MAX_COMPLETED_SESSION_SECONDS,
+        or_(models.ProcessSession.session_status.is_(None), models.ProcessSession.session_status == "closed"),
     ]
     if end_ts is not None:
         clauses.append(models.ProcessSession.start_timestamp < end_ts)
