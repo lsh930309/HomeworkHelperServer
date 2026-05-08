@@ -56,6 +56,8 @@ android/.cxx/
 *.db
 *.sqlite
 *.sqlite3
+HomeworkHelper.zip
+local-artifacts/
 
 # ===========================
 # 스크린샷 로컬 설정
