@@ -206,6 +206,12 @@ def test_dashboard_entrypoint_uses_stable_packaged_assets(monkeypatch):
     assert '/static/dashboard/vite/' not in html
 
 
+def test_icon_cache_uses_same_appdata_root_as_database():
+    from src.api.dashboard import icons
+
+    assert Path(icons.ICON_CACHE_DIR).parent == Path(database.get_app_data_dir())
+    assert Path(icons.ICON_CACHE_DIR).name == "icon_cache"
+
 
 def test_games_api_groups_normalized_names_and_returns_icon_candidate(monkeypatch):
     import src.api.dashboard.routes as routes

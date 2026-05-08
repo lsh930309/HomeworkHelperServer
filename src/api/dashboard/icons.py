@@ -5,12 +5,10 @@ import os
 import hashlib
 from pathlib import Path
 
+from src.data.database import get_app_data_dir
+
 # 아이콘 캐시 디렉토리
-ICON_CACHE_DIR = os.path.join(
-    os.getenv('APPDATA', os.path.expanduser('~')), 
-    'HomeworkHelper', 
-    'icon_cache'
-)
+ICON_CACHE_DIR = os.path.join(get_app_data_dir(), 'icon_cache')
 
 def generate_game_color(index: int, total: int) -> str:
     """HSL 기반 동적 색상 생성 (Hue 균등분할, S=80%, L=55%)"""
