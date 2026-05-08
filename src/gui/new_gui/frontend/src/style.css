@@ -43,6 +43,8 @@ button.ghost {
 }
 
 button.ghost:hover { background: rgba(30, 41, 59, 0.94); }
+button.primary { background: linear-gradient(135deg, #2563eb, #7c3aed); box-shadow: 0 0 0 1px rgba(147, 197, 253, 0.22), 0 10px 24px rgba(37, 99, 235, 0.24); }
+button.primary:hover { background: linear-gradient(135deg, #1d4ed8, #6d28d9); }
 button.danger { background: rgba(185, 28, 28, 0.9); }
 button.danger:hover { background: rgba(220, 38, 38, 0.96); }
 button.tiny { border-radius: 8px; padding: 4px 6px; font-size: 10px; }

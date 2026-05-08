@@ -198,3 +198,67 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
 
     settings = crud.get_settings(db)
     assert settings.sidebar_height_ratio == 1.0
+
+
+def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="game-open",
+        name="Open Game",
+        monitoring_path="C:/Games/Open.exe",
+        launch_path="C:/Games/Open.lnk",
+    ))
+    db.add(models.ProcessSession(
+        process_id=process.id,
+        process_name=process.name,
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        session_status="open",
+    ))
+    db.commit()
+
+    try:
+        crud.delete_process(db, process.id)
+        assert False, "deleting a process with an open session should be blocked"
+    except beholder.BeholderBlocked as exc:
+        incident = exc.incident
+        payload = beholder.incident_to_dict(incident)
+
+    assert payload["recommended_action"] == "close_sessions_and_delete_process"
+    assert "delete_process_with_open_sessions" in payload["risk_factors"]
+    assert db.query(models.Process).filter_by(id="game-open").first() is not None
+
+    result = beholder.resolve_incident_action(db, incident, "close_sessions_and_delete_process")
+    assert result["action"] == "close_sessions_and_delete_process"
+    assert db.query(models.Process).filter_by(id="game-open").first() is None
+    closed = db.query(models.ProcessSession).filter_by(process_id="game-open").one()
+    assert closed.end_timestamp is not None
+    assert closed.close_reason == "beholder_close_before_process_delete"
+
+
+def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        stamina_at_end=10,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.update_session_stamina(db, session.id, -1)
+        assert False, "negative stamina should be blocked"
+    except beholder.BeholderBlocked as exc:
+        assert "invalid_negative_stamina" in exc.incident.risk_factors
+
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.stamina_at_end == 10

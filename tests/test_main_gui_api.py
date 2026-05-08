@@ -355,3 +355,23 @@ def test_settings_persistence_contract_includes_sidebar_dialog_fields():
 
     assert required <= schema_fields
     assert required <= model_columns
+
+
+def test_web_shortcut_open_uses_guarded_crud_path(monkeypatch, tmp_path):
+    import src.data.crud as crud_mod
+
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    client = _client_with_seed(monkeypatch, shortcuts=[models.WebShortcut(
+        id="web-guarded",
+        name="출석",
+        url="https://example.test",
+        refresh_time_str="05:00",
+        last_reset_timestamp=None,
+    )])
+
+    response = client.post("/api/gui/web-shortcuts/web-guarded/open")
+
+    assert response.status_code == 200
+    assert response.json()["last_reset_timestamp"] is not None
+    snapshots = list((tmp_path / "backups" / "mutations" / "web_shortcuts").glob("*.json"))
+    assert snapshots, "guarded shortcut runtime write should leave a pre-mutation snapshot"

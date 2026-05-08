@@ -24,6 +24,13 @@ STATUS_RESOLVED = "resolved"
 MAX_UNEVIDENCED_SESSION_SECONDS = 7 * 24 * 60 * 60
 MAX_HEARTBEAT_GAP_SECONDS = 10 * 60
 GLOBAL_SETTINGS_TABLE = "global_settings"
+MANAGED_PROCESSES_TABLE = "managed_processes"
+WEB_SHORTCUTS_TABLE = "web_shortcuts"
+PROCESS_SESSIONS_TABLE = "process_sessions"
+
+PROCESS_FIELDS = {column.name for column in models.Process.__table__.columns}
+WEB_SHORTCUT_FIELDS = {column.name for column in models.WebShortcut.__table__.columns}
+SESSION_FIELDS = {column.name for column in models.ProcessSession.__table__.columns}
 
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
@@ -232,7 +239,22 @@ def session_status_for(session: models.ProcessSession) -> str:
     return "legacy_unknown"
 
 
+def _table_label(table: str) -> str:
+    return {
+        GLOBAL_SETTINGS_TABLE: "설정",
+        MANAGED_PROCESSES_TABLE: "게임 항목",
+        WEB_SHORTCUTS_TABLE: "웹 바로가기",
+        PROCESS_SESSIONS_TABLE: "플레이 기록",
+    }.get(table, table)
+
+
+def _operation_context(operation: BeholderOperation) -> dict[str, Any]:
+    return dict(operation.evidence.get("context") or {})
+
+
 def guard_table_write(db: Session, operation: BeholderOperation, table: str, columns: set[str] | None = None) -> None:
+    if consume_override_token(db, operation.override_token, operation.kind):
+        return
     if table not in operation.allowed_tables:
         incident = create_incident(
             db,
@@ -264,13 +286,79 @@ def guard_table_write(db: Session, operation: BeholderOperation, table: str, col
                 proposed_change_summary=f"허용되지 않은 컬럼={disallowed}",
                 risk_score=92,
                 risk_factors=["unauthorized_column_write", *disallowed],
-                safe_recommendation="변경을 차단했습니다. 각 설정 다이얼로그에서 필요한 항목만 다시 저장하세요.",
-                user_title="설정 변경 범위가 비정상적으로 넓습니다",
-                user_summary="현재 화면에서 바꿀 수 없는 설정까지 동시에 바뀌려고 했습니다.",
-                user_impact="설정 덮어쓰기 또는 초기화 재발을 막기 위해 저장하지 않았습니다.",
+                safe_recommendation="변경을 차단했습니다. 앱의 정상 화면에서 필요한 항목만 다시 저장하세요.",
+                user_title=f"{_table_label(table)} 변경 범위가 비정상적으로 넓습니다",
+                user_summary=f"현재 요청에서 바꿀 수 없는 {_table_label(table)} 데이터까지 동시에 바뀌려고 했습니다.",
+                user_impact="의도하지 않은 덮어쓰기나 데이터 증발을 막기 위해 저장하지 않았습니다.",
             )
             raise BeholderBlocked(incident)
 
+
+
+def guard_process_delete(db: Session, process: models.Process, operation: BeholderOperation) -> None:
+    if consume_override_token(db, operation.override_token, operation.kind):
+        return
+    guard_table_write(db, operation, MANAGED_PROCESSES_TABLE, {"id"})
+    open_sessions = db.query(models.ProcessSession).filter(
+        models.ProcessSession.process_id == process.id,
+        models.ProcessSession.end_timestamp.is_(None),
+    ).all()
+    if not open_sessions:
+        return
+    context = _operation_context(operation)
+    context.update({
+        "process_id": process.id,
+        "process_name": process.name,
+        "open_session_ids": [session.id for session in open_sessions],
+        "actor": operation.actor,
+    })
+    incident = create_incident(
+        db,
+        severity=SEVERITY_WARNING,
+        operation=operation,
+        target_summary=f"process_id={process.id}",
+        suspected_cause="실행 중으로 기록된 세션이 남아 있는 게임 항목을 삭제하려 했습니다.",
+        current_state_summary=f"열린 세션 {len(open_sessions)}건이 존재합니다: {[session.id for session in open_sessions]}",
+        proposed_change_summary="게임 항목 삭제 및 해당 항목으로 접근 가능한 기록 연결 상실 가능",
+        risk_score=72,
+        risk_factors=["delete_process_with_open_sessions", "runtime_history_orphan_risk"],
+        safe_recommendation="먼저 열린 세션을 닫은 뒤 삭제하거나, 비홀더의 정리 후 삭제 액션을 선택하세요.",
+        user_title="플레이 기록이 열린 게임을 삭제하려고 했습니다",
+        user_summary="이 게임의 플레이 기록이 아직 종료되지 않았습니다. 그대로 삭제하면 기록 해석이 어려워질 수 있습니다.",
+        user_impact="게임 항목 삭제는 보류되었고 기존 데이터는 유지됩니다.",
+        recommended_action="close_sessions_and_delete_process",
+        available_actions=[
+            {"id": "close_sessions_and_delete_process", "label": "기록 닫고 게임 삭제", "description": "열린 기록을 현재 시각으로 종료한 뒤 게임 항목을 삭제합니다.", "recommended": True},
+            {"id": "deny", "label": "차단 유지", "description": "삭제하지 않고 현재 상태를 유지합니다."},
+            {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 삭제라면 한 번만 허용합니다.", "danger": True},
+        ],
+        resolution_metadata={"action_context": context},
+    )
+    raise BeholderBlocked(incident)
+
+
+def guard_process_session_update(db: Session, session: models.ProcessSession, columns: set[str], operation: BeholderOperation) -> None:
+    guard_table_write(db, operation, PROCESS_SESSIONS_TABLE, columns)
+    if "stamina_at_end" in columns:
+        proposed_values = operation.evidence.get("proposed_values") or {}
+        value = proposed_values.get("stamina_at_end", getattr(session, "stamina_at_end", None))
+        if value is not None and value < 0:
+            incident = create_incident(
+                db,
+                severity=SEVERITY_CRITICAL,
+                operation=operation,
+                target_summary=f"session_id={session.id}",
+                suspected_cause="세션 스태미나 값이 음수로 저장되려 했습니다.",
+                current_state_summary=f"현재 stamina_at_end={value}",
+                proposed_change_summary="음수 스태미나 저장",
+                risk_score=88,
+                risk_factors=["invalid_negative_stamina"],
+                safe_recommendation="저장을 차단했습니다. 정상 범위의 값을 다시 저장하세요.",
+                user_title="플레이 기록 값이 비정상입니다",
+                user_summary="저장하려는 스태미나 값이 음수라 기록을 망칠 수 있습니다.",
+                user_impact="이번 변경은 반영되지 않았고 기존 기록은 유지됩니다.",
+            )
+            raise BeholderBlocked(incident)
 
 def guard_settings_update(db: Session, current_settings: models.GlobalSettings, update_data: dict[str, Any], operation: BeholderOperation) -> None:
     if consume_override_token(db, operation.override_token, operation.kind):
@@ -436,6 +524,8 @@ def resolve_incident_action(db: Session, incident: models.BeholderIncident, acti
         return _continue_existing_session(db, incident)
     if action == "close_previous_and_start_new":
         return _close_previous_and_start_new(db, incident)
+    if action == "close_sessions_and_delete_process":
+        return _close_sessions_and_delete_process(db, incident)
     raise ValueError("지원하지 않는 Beholder 결정입니다.")
 
 
@@ -505,3 +595,40 @@ def _close_previous_and_start_new(db: Session, incident: models.BeholderIncident
     db.commit()
     db.refresh(new_session)
     return {"incident": incident_to_dict(updated), "session_id": new_session.id, "action": "close_previous_and_start_new"}
+
+
+def _close_sessions_and_delete_process(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    context = _context_for(incident)
+    process_id = context.get("process_id")
+    if not process_id:
+        raise ValueError("삭제할 게임 항목 정보를 찾지 못했습니다.")
+    now = time.time()
+    open_sessions = _open_sessions_for_context(db, context)
+    for session in open_sessions:
+        session.end_timestamp = now
+        session.session_duration = max(0.0, now - float(session.start_timestamp))
+        session.session_status = "closed"
+        session.close_reason = "beholder_close_before_process_delete"
+        session.heartbeat_timestamp = now
+        db.add(session)
+    process = db.query(models.Process).filter(models.Process.id == process_id).first()
+    if process is None:
+        raise ValueError("삭제할 게임 항목을 찾지 못했습니다.")
+    db.delete(process)
+    updated = mark_incident(
+        db,
+        incident.id,
+        STATUS_RESOLVED,
+        {
+            "selected_action": "close_sessions_and_delete_process",
+            "deleted_process_id": process_id,
+            "closed_session_ids": [session.id for session in open_sessions],
+        },
+    )
+    db.commit()
+    return {
+        "incident": incident_to_dict(updated),
+        "process_id": process_id,
+        "closed_session_ids": [session.id for session in open_sessions],
+        "action": "close_sessions_and_delete_process",
+    }

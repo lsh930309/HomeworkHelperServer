@@ -47,36 +47,85 @@ def get_process_by_id(db: Session, process_id: str):
     return db.query(models.Process).filter(models.Process.id == process_id).first()
 
 @db_retry_on_lock
-def create_process(db: Session, process: schemas.ProcessCreateSchema):
-    process_data = process.dict()
-
+def create_process(
+    db: Session,
+    process: schemas.ProcessCreateSchema,
+    *,
+    actor: str = "process_editor",
+    operation_kind: str = "process_create",
+    override_token: str | None = None,
+):
+    process_data = _dump_schema(process)
     provided_id = process_data.pop('id', None)
-    db_process = models.Process(
-        id = provided_id if provided_id else str(uuid.uuid4()),
-        **process_data
+    process_id = provided_id if provided_id else str(uuid.uuid4())
+    _guard_write(
+        db,
+        table=beholder.MANAGED_PROCESSES_TABLE,
+        columns=set(process_data) | {"id"},
+        actor=actor,
+        operation_kind=operation_kind,
+        allowed_fields=beholder.PROCESS_FIELDS,
+        context={"process_id": process_id, "process_name": process_data.get("name")},
+        override_token=override_token,
     )
+    db_process = models.Process(id=process_id, **process_data)
     db.add(db_process)
     db.commit()
     db.refresh(db_process)
     return db_process
 
 @db_retry_on_lock
-def delete_process(db: Session, process_id: str):
+def delete_process(
+    db: Session,
+    process_id: str,
+    *,
+    actor: str = "process_editor",
+    operation_kind: str = "process_delete",
+    override_token: str | None = None,
+):
     db_process = get_process_by_id(db, process_id)
     if db_process:
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_FIELDS},
+            evidence={"changed_fields": ["id"], "context": {"process_id": process_id, "process_name": db_process.name}},
+            override_token=override_token,
+        )
+        beholder.guard_process_delete(db, db_process, operation)
+        backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         db.delete(db_process)
         db.commit()
     return db_process
 
 @db_retry_on_lock
-def update_process(db: Session, process_id: str, process: schemas.ProcessCreateSchema):
+def update_process(
+    db: Session,
+    process_id: str,
+    process: schemas.ProcessCreateSchema,
+    *,
+    actor: str = "process_editor",
+    operation_kind: str = "process_update",
+    override_token: str | None = None,
+):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        # None 값도 명시적으로 업데이트 (NULL로 설정 가능)
-        # exclude_unset=True로 실제로 전달된 필드만 업데이트
-        update_data = process.dict(exclude_unset=True)
-        # PK 변조 방지: id 필드가 포함되어 있으면 제거
+        update_data = _dump_schema(process, exclude_unset=True)
         update_data.pop("id", None)
+        changed = {key for key, value in update_data.items() if hasattr(db_process, key) and getattr(db_process, key) != value}
+        _guard_write(
+            db,
+            table=beholder.MANAGED_PROCESSES_TABLE,
+            columns=changed,
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields=beholder.PROCESS_FIELDS - {"id"},
+            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            override_token=override_token,
+        )
+        if changed:
+            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -91,25 +140,60 @@ def get_shortcuts(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.WebShortcut).offset(skip).limit(limit).all()
 
 @db_retry_on_lock
-def create_shortcut(db: Session, shortcut: schemas.WebShortcutCreate):
-    shortcut_data = shortcut.dict()
+def create_shortcut(
+    db: Session,
+    shortcut: schemas.WebShortcutCreate,
+    *,
+    actor: str = "web_shortcut_editor",
+    operation_kind: str = "shortcut_create",
+    override_token: str | None = None,
+):
+    shortcut_data = _dump_schema(shortcut)
     provided_id = shortcut_data.pop('id', None)
-    db_shortcut = models.WebShortcut(
-        id = provided_id if provided_id else str(uuid.uuid4()),
-        **shortcut_data
+    shortcut_id = provided_id if provided_id else str(uuid.uuid4())
+    _guard_write(
+        db,
+        table=beholder.WEB_SHORTCUTS_TABLE,
+        columns=set(shortcut_data) | {"id"},
+        actor=actor,
+        operation_kind=operation_kind,
+        allowed_fields=beholder.WEB_SHORTCUT_FIELDS,
+        context={"shortcut_id": shortcut_id, "shortcut_name": shortcut_data.get("name")},
+        override_token=override_token,
     )
+    db_shortcut = models.WebShortcut(id=shortcut_id, **shortcut_data)
     db.add(db_shortcut)
     db.commit()
     db.refresh(db_shortcut)
     return db_shortcut
 
 @db_retry_on_lock
-def update_shortcut(db: Session, shortcut_id: str, shortcut: schemas.WebShortcutCreate):
+def update_shortcut(
+    db: Session,
+    shortcut_id: str,
+    shortcut: schemas.WebShortcutCreate,
+    *,
+    actor: str = "web_shortcut_editor",
+    operation_kind: str = "shortcut_update",
+    override_token: str | None = None,
+):
     db_shortcut = get_shortcut_by_id(db, shortcut_id)
     if db_shortcut:
-        update_data = shortcut.dict(exclude_unset=True)
-        # PK 변조 방지: id 필드가 포함되어 있으면 제거
+        update_data = _dump_schema(shortcut, exclude_unset=True)
         update_data.pop("id", None)
+        changed = {key for key, value in update_data.items() if hasattr(db_shortcut, key) and getattr(db_shortcut, key) != value}
+        _guard_write(
+            db,
+            table=beholder.WEB_SHORTCUTS_TABLE,
+            columns=changed,
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields=beholder.WEB_SHORTCUT_FIELDS - {"id"},
+            context={"shortcut_id": shortcut_id, "shortcut_name": getattr(db_shortcut, "name", None)},
+            override_token=override_token,
+        )
+        if changed:
+            backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_shortcut, key, value)
         db.commit()
@@ -117,9 +201,27 @@ def update_shortcut(db: Session, shortcut_id: str, shortcut: schemas.WebShortcut
     return db_shortcut
 
 @db_retry_on_lock
-def delete_shortcut(db: Session, shortcut_id: str):
+def delete_shortcut(
+    db: Session,
+    shortcut_id: str,
+    *,
+    actor: str = "web_shortcut_editor",
+    operation_kind: str = "shortcut_delete",
+    override_token: str | None = None,
+):
     db_shortcut = get_shortcut_by_id(db, shortcut_id)
     if db_shortcut:
+        _guard_write(
+            db,
+            table=beholder.WEB_SHORTCUTS_TABLE,
+            columns={"id"},
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields=beholder.WEB_SHORTCUT_FIELDS,
+            context={"shortcut_id": shortcut_id, "shortcut_name": db_shortcut.name},
+            override_token=override_token,
+        )
+        backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         db.delete(db_shortcut)
         db.commit()
     return db_shortcut
@@ -128,6 +230,45 @@ def _dump_schema(model: Any, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)
     return model.dict(**kwargs)
+
+
+def _model_to_dict(model: Any) -> dict[str, Any]:
+    return {column.name: getattr(model, column.name) for column in model.__table__.columns}
+
+
+def backup_model_snapshot(model: Any, *, table: str, reason: str, max_backups: int = 50) -> str | None:
+    try:
+        backup_dir = Path(base_dir) / "backups" / "mutations" / table
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        model_id = getattr(model, "id", "row")
+        path = backup_dir / f"{table}.{model_id}.{int(time.time() * 1000)}.{reason}.json"
+        payload = {
+            "created_at": time.time(),
+            "reason": reason,
+            "table": table,
+            "row": _model_to_dict(model),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        snapshots = sorted(backup_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for old in snapshots[max_backups:]:
+            old.unlink(missing_ok=True)
+        return str(path)
+    except Exception as exc:
+        logger.warning("%s snapshot backup failed: %s", table, exc)
+        return None
+
+
+def _guard_write(db: Session, *, table: str, columns: set[str], actor: str, operation_kind: str, allowed_fields: set[str], context: dict[str, Any] | None = None, override_token: str | None = None) -> beholder.BeholderOperation:
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
+        actor=actor,
+        allowed_tables={table},
+        allowed_columns={table: allowed_fields},
+        evidence={"changed_fields": sorted(columns), "context": context or {}},
+        override_token=override_token,
+    )
+    beholder.guard_table_write(db, operation, table, columns)
+    return operation
 
 
 def _settings_to_dict(settings: models.GlobalSettings) -> dict[str, Any]:
@@ -258,7 +399,7 @@ def create_session(
     operation = beholder.BeholderOperation(
         kind=operation_kind,
         actor=actor,
-        allowed_tables={"process_sessions"},
+        allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
         override_token=override_token,
     )
     beholder.guard_session_start(db, session, operation)
@@ -293,7 +434,7 @@ def end_session(
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
-            allowed_tables={"process_sessions", "managed_processes"},
+            allowed_tables={beholder.PROCESS_SESSIONS_TABLE, beholder.MANAGED_PROCESSES_TABLE},
             override_token=override_token,
         )
         beholder.guard_session_end(db, db_session, end_timestamp, operation)
@@ -340,12 +481,66 @@ def get_last_session(db: Session, process_id: str):
 
 
 @db_retry_on_lock
-def update_session_stamina(db: Session, session_id: int, stamina_at_end: int) -> bool:
+def update_session_stamina(
+    db: Session,
+    session_id: int,
+    stamina_at_end: int,
+    *,
+    actor: str = "runtime_stamina_tracker",
+    operation_kind: str = "session_stamina_update",
+    override_token: str | None = None,
+) -> bool:
     """세션의 종료 스태미나 값을 업데이트합니다."""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"stamina_at_end"}},
+            evidence={
+                "changed_fields": ["stamina_at_end"],
+                "context": {"session_id": session_id},
+                "proposed_values": {"stamina_at_end": stamina_at_end},
+            },
+            override_token=override_token,
+        )
+        beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.stamina_at_end = stamina_at_end
         db.commit()
         db.refresh(db_session)
         return True
     return False
+
+
+@db_retry_on_lock
+def mark_shortcut_opened(
+    db: Session,
+    shortcut_id: str,
+    opened_at: float,
+    *,
+    actor: str = "web_shortcut_runtime",
+    operation_kind: str = "shortcut_opened",
+    override_token: str | None = None,
+):
+    shortcut = get_shortcut_by_id(db, shortcut_id)
+    if not shortcut:
+        return None
+    if shortcut.refresh_time_str:
+        _guard_write(
+            db,
+            table=beholder.WEB_SHORTCUTS_TABLE,
+            columns={"last_reset_timestamp"},
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields={"last_reset_timestamp"},
+            context={"shortcut_id": shortcut_id, "shortcut_name": shortcut.name},
+            override_token=override_token,
+        )
+        backup_model_snapshot(shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
+        shortcut.last_reset_timestamp = opened_at
+        db.add(shortcut)
+        db.commit()
+        db.refresh(shortcut)
+    return shortcut

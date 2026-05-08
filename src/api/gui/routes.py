@@ -435,14 +435,9 @@ def delete_web_shortcut(shortcut_id: str, db: Session = Depends(get_db)) -> dict
 
 @router.post("/web-shortcuts/{shortcut_id}/open")
 def mark_web_shortcut_opened(shortcut_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    shortcut = crud.get_shortcut_by_id(db, shortcut_id)
+    shortcut = crud.mark_shortcut_opened(db, shortcut_id, time.time(), actor="new_gui_web_shortcut_runtime")
     if shortcut is None:
         raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
-    if shortcut.refresh_time_str:
-        shortcut.last_reset_timestamp = time.time()
-        db.add(shortcut)
-        db.commit()
-        db.refresh(shortcut)
     return _shortcut_to_gui(shortcut) | {"ok": True}
 
 
