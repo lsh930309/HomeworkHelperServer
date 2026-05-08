@@ -116,6 +116,14 @@ def test_build_main_gui_frontend_writes_only_ignored_build_dirs(monkeypatch, tmp
     assert not (frontend_dir / "tsconfig.tsbuildinfo").exists()
 
 
+def test_main_gui_dev_server_proxies_api_for_browser_visual_checks():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+    vite_config = Path("src/gui/new_gui/frontend/vite.config.ts").read_text(encoding="utf-8")
+
+    assert "import.meta.env.DEV ? '' : 'http://127.0.0.1:8000'" in app_source
+    assert "'/api': 'http://127.0.0.1:8000'" in vite_config
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec
@@ -167,4 +175,3 @@ def test_packaged_server_allows_tauri_http_origin_for_preview_shell():
     entrypoint = Path("homework_helper.pyw").read_text(encoding="utf-8")
     assert '"http://tauri.localhost"' in entrypoint
     assert '"tauri://localhost"' in entrypoint
-

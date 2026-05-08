@@ -135,7 +135,7 @@ type ContextMenuState = {
   items: ContextMenuItem[];
 };
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
