@@ -460,13 +460,12 @@ def patch_settings(settings_patch: SettingsPatch, db: Session = Depends(get_db))
         raise HTTPException(status_code=422, detail="theme 값이 올바르지 않습니다.")
 
     startup_changed = "run_on_startup" in data and bool(data["run_on_startup"]) != bool(settings.run_on_startup)
-    for key, value in data.items():
-        if value is not None and hasattr(settings, key):
-            setattr(settings, key, value)
-
-    db.add(settings)
-    db.commit()
-    db.refresh(settings)
+    settings = crud.patch_settings(
+        db,
+        data,
+        actor="new_gui_settings",
+        allowed_fields=set((SettingsPatch.model_fields if hasattr(SettingsPatch, "model_fields") else SettingsPatch.__fields__).keys()),
+    )
 
     startup_applied: bool | None = None
     if startup_changed:

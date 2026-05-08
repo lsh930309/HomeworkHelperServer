@@ -113,6 +113,9 @@ def auto_migrate_database():
         ("global_settings", "sidebar_enabled", "INTEGER", "1"),
         ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
         ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
+        ("global_settings", "sidebar_trigger_y_start", "REAL", "0.1"),
+        ("global_settings", "sidebar_trigger_y_end", "REAL", "0.9"),
+        ("global_settings", "sidebar_effect", "TEXT", "'acrylic'"),
         ("global_settings", "sidebar_height_ratio", "REAL", "1.0"),
         ("global_settings", "sidebar_opacity", "REAL", "0.85"),
         ("global_settings", "sidebar_clock_enabled", "INTEGER", "1"),
@@ -127,6 +130,7 @@ def auto_migrate_database():
         ("global_settings", "screenshot_disable_gamebar", "INTEGER", "0"),
         ("global_settings", "screenshot_capture_mode", "TEXT", "'fullscreen'"),
         ("global_settings", "screenshot_gamepad_button_index", "INTEGER", "-1"),
+        ("global_settings", "screenshot_trigger_vk", "INTEGER", "178"),
         # Recording (OBS)
         ("global_settings", "recording_enabled", "INTEGER", "0"),
         ("global_settings", "obs_host", "TEXT", "'localhost'"),
@@ -138,6 +142,13 @@ def auto_migrate_database():
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
+        # Beholder incident UX / resolution metadata
+        ("beholder_incidents", "user_title", "TEXT", None),
+        ("beholder_incidents", "user_summary", "TEXT", None),
+        ("beholder_incidents", "user_impact", "TEXT", None),
+        ("beholder_incidents", "recommended_action", "TEXT", None),
+        ("beholder_incidents", "available_actions", "TEXT", None),
+        ("beholder_incidents", "resolution_metadata", "TEXT", None),
     ]
     
     try:

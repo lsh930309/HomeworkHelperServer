@@ -240,10 +240,15 @@ class ApiClient:
             print(f"전역 설정을 불러오는 데 실패했습니다: {e}")
             return GlobalSettings()
         
-    def save_global_settings(self, updated_settings: GlobalSettings) -> bool:
+    def save_global_settings(self, updated_settings: GlobalSettings, actor: str = "settings_full_update") -> bool:
         """전역 설정을 서버에 업데이트합니다."""
         try:
-            response = requests.put(f"{self.base_url}/settings", json=updated_settings.to_dict(), timeout=10)
+            response = requests.put(
+                f"{self.base_url}/settings",
+                json=updated_settings.to_dict(),
+                headers={"X-HH-Beholder-Actor": actor, "X-HH-Beholder-Operation": "settings_update"},
+                timeout=10,
+            )
             self._raise_for_status(response)
 
             # 서버로부터 최종적으로 저장된 데이터를 응답으로 받습니다.

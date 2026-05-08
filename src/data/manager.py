@@ -47,7 +47,7 @@ class DataManager:
                     print(f"Error loading global settings from {path}: {e}.")
         return GlobalSettings()
 
-    def save_global_settings(self, settings=None):
+    def save_global_settings(self, settings=None, actor: str | None = None):
         """전역 설정을 파일에 저장합니다.
 
         Args:

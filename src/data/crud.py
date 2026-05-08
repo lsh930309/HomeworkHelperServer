@@ -3,10 +3,14 @@ from sqlalchemy.exc import OperationalError, IntegrityError
 from src.data import models
 from src.data import schemas
 from src.data import beholder
-from typing import Optional
+from typing import Any, Optional
+from pathlib import Path
+import json
 import uuid
 import time
 import logging
+
+from src.data.database import base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +124,41 @@ def delete_shortcut(db: Session, shortcut_id: str):
         db.commit()
     return db_shortcut
 
+def _dump_schema(model: Any, **kwargs: Any) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    return model.dict(**kwargs)
+
+
+def _settings_to_dict(settings: models.GlobalSettings) -> dict[str, Any]:
+    fields = beholder.allowed_settings_fields_for_actor("settings_full_update")
+    return {field: getattr(settings, field) for field in fields if hasattr(settings, field)}
+
+
+def _changed_fields(settings: models.GlobalSettings, update_data: dict[str, Any]) -> set[str]:
+    return {key for key, value in update_data.items() if hasattr(settings, key) and getattr(settings, key) != value}
+
+
+def backup_settings_snapshot(settings: models.GlobalSettings, *, reason: str = "settings_update", max_backups: int = 20) -> str | None:
+    try:
+        backup_dir = Path(base_dir) / "backups" / "settings"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        path = backup_dir / f"global_settings.{int(time.time() * 1000)}.{reason}.json"
+        payload = {
+            "created_at": time.time(),
+            "reason": reason,
+            "settings": _settings_to_dict(settings),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        snapshots = sorted(backup_dir.glob("global_settings.*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for old in snapshots[max_backups:]:
+            old.unlink(missing_ok=True)
+        return str(path)
+    except Exception as exc:
+        logger.warning("settings snapshot backup failed: %s", exc)
+        return None
+
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):
@@ -129,7 +168,7 @@ def get_settings(db: Session):
     if not db_settings:
         print("기본 설정을 생성합니다.")
         # 기본 스키마로부터 딕셔너리를 만듭니다.
-        default_data = schemas.GlobalSettingsSchema().dict()
+        default_data = _dump_schema(schemas.GlobalSettingsSchema())
         # id를 추가하고 DB 모델 객체를 생성합니다.
         db_settings = models.GlobalSettings(id=1, **default_data)
 
@@ -140,14 +179,68 @@ def get_settings(db: Session):
     return db_settings
 
 @db_retry_on_lock
-def update_settings(db: Session, settings: schemas.GlobalSettingsSchema):
+def update_settings(
+    db: Session,
+    settings: schemas.GlobalSettingsSchema,
+    *,
+    actor: str = "settings_full_update",
+    operation_kind: str = "settings_update",
+    allowed_fields: set[str] | None = None,
+    override_token: str | None = None,
+):
     db_settings = get_settings(db)
     if db_settings:
-        update_data = settings.dict()
+        update_data = _dump_schema(settings)
+        allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
+        changed = _changed_fields(db_settings, update_data)
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.GLOBAL_SETTINGS_TABLE},
+            allowed_columns={beholder.GLOBAL_SETTINGS_TABLE: allowed},
+            evidence={"changed_fields": sorted(changed)},
+            override_token=override_token,
+        )
+        beholder.guard_settings_update(db, db_settings, update_data, operation)
+        if changed:
+            backup_settings_snapshot(db_settings, reason=operation_kind)
         for key, value in update_data.items():
-            setattr(db_settings, key, value)
+            if hasattr(db_settings, key):
+                setattr(db_settings, key, value)
         db.commit()
         db.refresh(db_settings)
+    return db_settings
+
+
+@db_retry_on_lock
+def patch_settings(
+    db: Session,
+    updates: dict[str, Any],
+    *,
+    actor: str,
+    allowed_fields: set[str] | None = None,
+    operation_kind: str = "settings_patch",
+    override_token: str | None = None,
+):
+    db_settings = get_settings(db)
+    update_data = {key: value for key, value in updates.items() if value is not None and hasattr(db_settings, key)}
+    allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
+    changed = _changed_fields(db_settings, update_data)
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
+        actor=actor,
+        allowed_tables={beholder.GLOBAL_SETTINGS_TABLE},
+        allowed_columns={beholder.GLOBAL_SETTINGS_TABLE: allowed},
+        evidence={"changed_fields": sorted(changed)},
+        override_token=override_token,
+    )
+    beholder.guard_settings_update(db, db_settings, update_data, operation)
+    if changed:
+        backup_settings_snapshot(db_settings, reason=operation_kind)
+    for key, value in update_data.items():
+        setattr(db_settings, key, value)
+    db.commit()
+    db.refresh(db_settings)
     return db_settings
 
 

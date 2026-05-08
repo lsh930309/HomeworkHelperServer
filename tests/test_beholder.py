@@ -117,3 +117,84 @@ def test_beholder_active_incidents_api_and_resolve(monkeypatch):
     assert resolved.status_code == 200
     assert resolved.json()["incident"]["status"] == "denied"
     assert client.get("/api/beholder/incidents/active").json()["incidents"] == []
+
+
+def test_duplicate_open_session_incident_offers_continue_action(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    db.add(models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 8, 10, 0).timestamp(),
+        session_status="open",
+        session_owner="process_monitor",
+    ))
+    db.commit()
+
+    try:
+        crud.create_session(db, schemas.ProcessSessionCreate(
+            process_id="game-a",
+            process_name="Game A",
+            start_timestamp=dt.datetime(2026, 5, 8, 11, 0).timestamp(),
+        ))
+        assert False, "duplicate open session should be blocked"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+
+    assert payload["recommended_action"] == "continue_existing_session"
+    assert "continue_existing_session" in {action["id"] for action in payload["available_actions"]}
+    assert payload["user_title"]
+
+
+def test_continue_existing_session_resolution_reuses_open_session(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    original = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 8, 10, 0).timestamp(),
+        session_status="open",
+        session_owner="process_monitor",
+    )
+    db.add(original)
+    db.commit()
+    db.refresh(original)
+
+    try:
+        crud.create_session(db, schemas.ProcessSessionCreate(
+            process_id="game-a",
+            process_name="Game A",
+            start_timestamp=dt.datetime(2026, 5, 8, 11, 0).timestamp(),
+        ))
+    except beholder.BeholderBlocked as exc:
+        incident = exc.incident
+
+    result = beholder.resolve_incident_action(db, incident, "continue_existing_session")
+    assert result["session_id"] == original.id
+    assert db.query(models.ProcessSession).count() == 1
+    db.refresh(original)
+    assert original.lease_token
+    assert original.guard_flags["continued_after_restart"] is True
+    assert db.query(models.BeholderIncident).one().status == beholder.STATUS_RESOLVED
+
+
+def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    crud.get_settings(db)
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_height_ratio": 0.5},
+            actor="new_gui_settings",
+            allowed_fields={"theme"},
+        )
+        assert False, "new GUI settings patch must not mutate sidebar detail fields"
+    except beholder.BeholderBlocked as exc:
+        assert "unauthorized_column_write" in exc.incident.risk_factors
+
+    settings = crud.get_settings(db)
+    assert settings.sidebar_height_ratio == 1.0

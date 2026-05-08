@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
         dlg = SidebarSettingsDialog(gs, self)
         if dlg.exec():
             updated = dlg.get_updated_settings()
-            self.data_manager.save_global_settings(updated)
+            self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog")
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
             self._apply_screenshot_settings()
@@ -687,7 +687,7 @@ class MainWindow(QMainWindow):
         """메뉴바 [항상 위] 체크박스 토글 시 즉시 적용 및 설정 저장."""
         gs = self.data_manager.global_settings
         gs.always_on_top = checked
-        self.data_manager.save_global_settings(gs)
+        self.data_manager.save_global_settings(gs, actor="global_settings_dialog")
         self._load_always_on_top_setting()
         self.show()
 
@@ -763,7 +763,7 @@ class MainWindow(QMainWindow):
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
             upd_gs = dlg.get_updated_settings() # 업데이트된 설정 가져오기
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
-            self.data_manager.save_global_settings(upd_gs)
+            self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
 
             # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
             def _log_admin_debug(msg):
@@ -796,7 +796,7 @@ class MainWindow(QMainWindow):
                         # 재시작 실패 시 설정 롤백
                         _log_admin_debug("재시작 실패, 설정 롤백")
                         upd_gs.run_as_admin = False
-                        self.data_manager.save_global_settings(upd_gs)
+                        self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
                         status_bar = self.statusBar()
                         if status_bar:
                             status_bar.showMessage("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)

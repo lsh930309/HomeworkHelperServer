@@ -23,6 +23,61 @@ STATUS_RESOLVED = "resolved"
 
 MAX_UNEVIDENCED_SESSION_SECONDS = 7 * 24 * 60 * 60
 MAX_HEARTBEAT_GAP_SECONDS = 10 * 60
+GLOBAL_SETTINGS_TABLE = "global_settings"
+
+RUNTIME_SETTINGS_FIELDS = {
+    "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
+    "sidebar_enabled", "screenshot_enabled", "recording_enabled",
+}
+SIDEBAR_SETTINGS_FIELDS = {
+    "sidebar_enabled", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
+    "sidebar_trigger_y_start", "sidebar_trigger_y_end", "sidebar_effect",
+    "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_enabled",
+    "sidebar_clock_format", "sidebar_playtime_enabled", "sidebar_playtime_prefix",
+    "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
+    "screenshot_gamepad_trigger", "screenshot_disable_gamebar", "screenshot_capture_mode",
+    "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
+    "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
+    "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
+    "recording_hold_threshold_ms",
+}
+GLOBAL_DIALOG_FIELDS = {
+    "sleep_start_time_str", "sleep_end_time_str", "sleep_correction_advance_notify_hours",
+    "cycle_deadline_advance_notify_hours", "run_on_startup", "always_on_top",
+    "run_as_admin", "notify_on_mandatory_time", "notify_on_cycle_deadline",
+    "notify_on_sleep_correction", "notify_on_daily_reset", "stamina_notify_enabled",
+    "stamina_notify_threshold", "theme", "hide_on_game",
+}
+
+
+def _schema_fields() -> set[str]:
+    from src.data import schemas
+    fields = getattr(schemas.GlobalSettingsSchema, "model_fields", None)
+    if fields is not None:
+        return set(fields)
+    return set(getattr(schemas.GlobalSettingsSchema, "__fields__", {}))
+
+
+def _schema_defaults() -> dict[str, Any]:
+    from src.data import schemas
+    schema = schemas.GlobalSettingsSchema()
+    if hasattr(schema, "model_dump"):
+        return schema.model_dump()
+    return schema.dict()
+
+
+def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
+    actor = actor or "settings_full_update"
+    all_fields = _schema_fields()
+    if actor in {"new_gui_settings", "main_gui_settings"}:
+        return set(RUNTIME_SETTINGS_FIELDS)
+    if actor == "sidebar_settings_dialog":
+        return set(SIDEBAR_SETTINGS_FIELDS)
+    if actor == "global_settings_dialog":
+        return set(GLOBAL_DIALOG_FIELDS)
+    if actor in {"settings_full_update", "settings_migration", "api_settings_put"}:
+        return all_fields
+    return set()
 
 
 @dataclass(frozen=True)
@@ -44,6 +99,9 @@ class BeholderBlocked(Exception):
 
 
 def incident_to_dict(incident: models.BeholderIncident) -> dict[str, Any]:
+    user_title = getattr(incident, "user_title", None) or _default_user_title(incident)
+    user_summary = getattr(incident, "user_summary", None) or incident.suspected_cause
+    user_impact = getattr(incident, "user_impact", None) or incident.proposed_change_summary
     return {
         "id": incident.id,
         "severity": incident.severity,
@@ -57,10 +115,33 @@ def incident_to_dict(incident: models.BeholderIncident) -> dict[str, Any]:
         "risk_score": incident.risk_score,
         "risk_factors": incident.risk_factors or [],
         "safe_recommendation": incident.safe_recommendation,
+        "user_title": user_title,
+        "user_summary": user_summary,
+        "user_impact": user_impact,
+        "recommended_action": getattr(incident, "recommended_action", None),
+        "available_actions": getattr(incident, "available_actions", None) or _default_actions(incident),
+        "resolution_metadata": getattr(incident, "resolution_metadata", None) or {},
         "created_at": incident.created_at,
         "resolved_at": incident.resolved_at,
         "has_override_token": bool(incident.override_token and not incident.override_used_at),
     }
+
+
+def _default_user_title(incident: models.BeholderIncident) -> str:
+    if incident.operation_kind.startswith("settings"):
+        return "설정 변경이 안전하지 않아 저장하지 않았습니다"
+    if incident.operation_kind.startswith("runtime_start"):
+        return "이전 플레이 기록과 새 기록이 충돌할 수 있습니다"
+    return "데이터 변경 확인이 필요합니다"
+
+
+def _default_actions(incident: models.BeholderIncident) -> list[dict[str, Any]]:
+    actions = [
+        {"id": "deny", "label": "차단 유지", "description": "이번 변경을 저장하지 않고 현재 DB를 유지합니다."},
+        {"id": "quarantine", "label": "격리", "description": "나중에 검토할 수 있도록 문제 상태로 표시합니다."},
+        {"id": "allow_once", "label": "이번 한 번 허용", "description": "동일 작업을 1회만 다시 허용합니다.", "danger": True},
+    ]
+    return actions
 
 
 def create_incident(
@@ -75,6 +156,12 @@ def create_incident(
     risk_score: int,
     risk_factors: list[str],
     safe_recommendation: str,
+    user_title: str | None = None,
+    user_summary: str | None = None,
+    user_impact: str | None = None,
+    recommended_action: str | None = None,
+    available_actions: list[dict[str, Any]] | None = None,
+    resolution_metadata: dict[str, Any] | None = None,
 ) -> models.BeholderIncident:
     incident = models.BeholderIncident(
         severity=severity,
@@ -88,6 +175,12 @@ def create_incident(
         risk_score=risk_score,
         risk_factors=risk_factors,
         safe_recommendation=safe_recommendation,
+        user_title=user_title,
+        user_summary=user_summary,
+        user_impact=user_impact,
+        recommended_action=recommended_action,
+        available_actions=available_actions,
+        resolution_metadata=resolution_metadata or {},
         created_at=time.time(),
     )
     db.add(incident)
@@ -139,6 +232,81 @@ def session_status_for(session: models.ProcessSession) -> str:
     return "legacy_unknown"
 
 
+def guard_table_write(db: Session, operation: BeholderOperation, table: str, columns: set[str] | None = None) -> None:
+    if table not in operation.allowed_tables:
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary=table,
+            suspected_cause="허용된 데이터 경로가 아닌 곳에서 DB 변경을 시도했습니다.",
+            current_state_summary="요청 actor가 해당 테이블 변경 권한을 제시하지 않았습니다.",
+            proposed_change_summary=f"{table} 테이블 변경 시도",
+            risk_score=90,
+            risk_factors=["unauthorized_table_write", table],
+            safe_recommendation="앱의 정상 설정/편집 화면에서 다시 시도하세요.",
+            user_title="앱 데이터 변경 경로를 확인해야 합니다",
+            user_summary="정상 화면에서 나온 요청인지 확인되지 않아 저장하지 않았습니다.",
+            user_impact="이번 변경은 반영되지 않았고 기존 데이터는 유지됩니다.",
+        )
+        raise BeholderBlocked(incident)
+    if columns:
+        allowed = operation.allowed_columns.get(table)
+        if allowed is not None and not columns <= allowed:
+            disallowed = sorted(columns - allowed)
+            incident = create_incident(
+                db,
+                severity=SEVERITY_CRITICAL,
+                operation=operation,
+                target_summary=table,
+                suspected_cause="한 화면에서 수정할 수 없는 설정 항목까지 함께 바뀌려 했습니다.",
+                current_state_summary=f"허용 컬럼={sorted(allowed)}",
+                proposed_change_summary=f"허용되지 않은 컬럼={disallowed}",
+                risk_score=92,
+                risk_factors=["unauthorized_column_write", *disallowed],
+                safe_recommendation="변경을 차단했습니다. 각 설정 다이얼로그에서 필요한 항목만 다시 저장하세요.",
+                user_title="설정 변경 범위가 비정상적으로 넓습니다",
+                user_summary="현재 화면에서 바꿀 수 없는 설정까지 동시에 바뀌려고 했습니다.",
+                user_impact="설정 덮어쓰기 또는 초기화 재발을 막기 위해 저장하지 않았습니다.",
+            )
+            raise BeholderBlocked(incident)
+
+
+def guard_settings_update(db: Session, current_settings: models.GlobalSettings, update_data: dict[str, Any], operation: BeholderOperation) -> None:
+    if consume_override_token(db, operation.override_token, operation.kind):
+        return
+    changed_fields = set(operation.evidence.get("changed_fields") or [])
+    if not changed_fields:
+        return
+    guard_table_write(db, operation, GLOBAL_SETTINGS_TABLE, changed_fields)
+
+    defaults = _schema_defaults()
+    defaulted = [field for field in changed_fields if field in defaults and update_data.get(field) == defaults[field]]
+    if len(changed_fields) >= 8 and len(defaulted) >= max(6, int(len(changed_fields) * 0.6)):
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="많은 설정이 동시에 기본값으로 되돌아가려 했습니다.",
+            current_state_summary=f"변경 대상 {len(changed_fields)}개: {sorted(changed_fields)}",
+            proposed_change_summary=f"그중 기본값 회귀 {len(defaulted)}개: {sorted(defaulted)}",
+            risk_score=96,
+            risk_factors=["bulk_settings_default_regression", *sorted(defaulted)],
+            safe_recommendation="저장을 차단했습니다. 설정 백업 또는 DB 백업에서 복구 가능성을 먼저 확인하세요.",
+            user_title="설정 초기화로 보이는 변경을 막았습니다",
+            user_summary="여러 설정이 한꺼번에 초기값으로 돌아가려고 했습니다.",
+            user_impact="저장했다면 사이드바/스크린샷/녹화 같은 개인 설정이 사라질 수 있었습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
+                {"id": "quarantine", "label": "나중에 검토", "description": "사건만 보류 상태로 표시합니다."},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 1회만 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
+
+
 def guard_session_start(db: Session, session_data: Any, operation: BeholderOperation) -> None:
     if consume_override_token(db, operation.override_token, operation.kind):
         return
@@ -148,17 +316,36 @@ def guard_session_start(db: Session, session_data: Any, operation: BeholderOpera
     ).all()
     live_open = [s for s in active if session_status_for(s) == "open"]
     if live_open:
+        context = {
+            "process_id": session_data.process_id,
+            "process_name": session_data.process_name,
+            "requested_start_timestamp": session_data.start_timestamp,
+            "requested_user_preset_id": getattr(session_data, "user_preset_id", None),
+            "actor": operation.actor,
+            "open_session_ids": [s.id for s in live_open],
+        }
         incident = create_incident(
             db,
             severity=SEVERITY_WARNING,
             operation=operation,
             target_summary=f"process_id={session_data.process_id}",
             suspected_cause="이미 열린 세션이 있는 상태에서 새 세션을 만들려는 시도입니다.",
-            current_state_summary=f"열린 세션 {len(live_open)}건이 존재합니다.",
+            current_state_summary=f"열린 세션 {len(live_open)}건이 존재합니다: {[s.id for s in live_open]}",
             proposed_change_summary="동일 게임에 새 open session 1건 추가",
             risk_score=65,
             risk_factors=["duplicate_open_session", "runtime_state_ambiguous"],
-            safe_recommendation="기존 open session 상태를 먼저 확인한 뒤 다시 시도하세요.",
+            safe_recommendation="기존 세션을 이어가거나, 기존 세션을 닫고 새 세션을 시작할지 선택하세요.",
+            user_title="이전 플레이 기록이 아직 열려 있습니다",
+            user_summary="앱이 재시작되면서 같은 게임의 새 플레이 기록을 만들려 했지만, 직전 기록이 아직 종료되지 않았습니다.",
+            user_impact="그대로 새 기록을 만들면 플레이 시간이 둘로 갈라지거나 중복 집계될 수 있습니다.",
+            recommended_action="continue_existing_session",
+            available_actions=[
+                {"id": "continue_existing_session", "label": "이전 세션 이어가기", "description": "직전 기록을 현재 실행 중인 게임 기록으로 계속 사용합니다.", "recommended": True},
+                {"id": "close_previous_and_start_new", "label": "이전 세션 닫고 새로 시작", "description": "이전 기록을 지금 시점에 종료하고 새 기록을 만듭니다."},
+                {"id": "deny", "label": "차단 유지", "description": "새 세션을 만들지 않습니다."},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "중복 세션 생성을 한 번만 허용합니다.", "danger": True},
+            ],
+            resolution_metadata={"action_context": context},
         )
         raise BeholderBlocked(incident)
 
@@ -214,17 +401,107 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
             risk_score=min(100, risk_score),
             risk_factors=risk_factors,
             safe_recommendation="이번 변경은 저장하지 않았습니다. 백업/세션 상태를 확인한 뒤 수동으로 결정하세요.",
+            user_title="플레이 기록 종료 시간이 안전하지 않습니다",
+            user_summary="현재 기록 상태와 종료 요청이 맞지 않아 플레이 시간이 크게 왜곡될 수 있습니다.",
+            user_impact="저장하면 과도하게 긴 기록이나 음수 기록이 생길 수 있어 차단했습니다.",
         )
         raise BeholderBlocked(incident)
 
 
-def mark_incident(db: Session, incident_id: int, status: str) -> models.BeholderIncident | None:
+def mark_incident(db: Session, incident_id: int, status: str, resolution_metadata: dict[str, Any] | None = None) -> models.BeholderIncident | None:
     incident = db.query(models.BeholderIncident).filter(models.BeholderIncident.id == incident_id).first()
     if not incident:
         return None
     incident.status = status
     incident.resolved_at = time.time()
+    if resolution_metadata:
+        current = getattr(incident, "resolution_metadata", None) or {}
+        current.update(resolution_metadata)
+        incident.resolution_metadata = current
     db.add(incident)
     db.commit()
     db.refresh(incident)
     return incident
+
+
+def resolve_incident_action(db: Session, incident: models.BeholderIncident, action: str) -> dict[str, Any]:
+    if action == "allow_once":
+        token = issue_override_token(db, incident)
+        return {"incident": incident_to_dict(incident), "override_token": token}
+    if action == "deny":
+        return {"incident": incident_to_dict(mark_incident(db, incident.id, STATUS_DENIED))}
+    if action == "quarantine":
+        return {"incident": incident_to_dict(mark_incident(db, incident.id, STATUS_QUARANTINED))}
+    if action == "continue_existing_session":
+        return _continue_existing_session(db, incident)
+    if action == "close_previous_and_start_new":
+        return _close_previous_and_start_new(db, incident)
+    raise ValueError("지원하지 않는 Beholder 결정입니다.")
+
+
+def _context_for(incident: models.BeholderIncident) -> dict[str, Any]:
+    meta = getattr(incident, "resolution_metadata", None) or {}
+    return dict(meta.get("action_context") or {})
+
+
+def _open_sessions_for_context(db: Session, context: dict[str, Any]) -> list[models.ProcessSession]:
+    ids = context.get("open_session_ids") or []
+    query = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None))
+    if ids:
+        query = query.filter(models.ProcessSession.id.in_(ids))
+    elif context.get("process_id"):
+        query = query.filter(models.ProcessSession.process_id == context["process_id"])
+    return query.order_by(models.ProcessSession.start_timestamp.desc()).all()
+
+
+def _continue_existing_session(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    context = _context_for(incident)
+    open_sessions = _open_sessions_for_context(db, context)
+    if not open_sessions:
+        raise ValueError("이어갈 수 있는 열린 세션을 찾지 못했습니다.")
+    session = open_sessions[0]
+    now = time.time()
+    session.session_status = "open"
+    session.session_owner = context.get("actor") or incident.actor
+    session.heartbeat_timestamp = now
+    session.lease_token = secrets.token_urlsafe(16)
+    flags = session.guard_flags or {}
+    if not isinstance(flags, dict):
+        flags = {"legacy_guard_flags": flags}
+    flags.update({"continued_after_restart": True, "continued_incident_id": incident.id, "continued_at": now})
+    session.guard_flags = flags
+    updated = mark_incident(db, incident.id, STATUS_RESOLVED, {"selected_action": "continue_existing_session", "continued_session_id": session.id})
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return {"incident": incident_to_dict(updated), "session_id": session.id, "action": "continue_existing_session"}
+
+
+def _close_previous_and_start_new(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    context = _context_for(incident)
+    now = time.time()
+    open_sessions = _open_sessions_for_context(db, context)
+    for session in open_sessions:
+        session.end_timestamp = now
+        session.session_duration = max(0.0, now - float(session.start_timestamp))
+        session.session_status = "closed"
+        session.close_reason = "beholder_close_previous_and_start_new"
+        session.heartbeat_timestamp = now
+        db.add(session)
+    new_session = models.ProcessSession(
+        process_id=context.get("process_id"),
+        process_name=context.get("process_name") or context.get("process_id") or "Unknown",
+        start_timestamp=context.get("requested_start_timestamp") or now,
+        user_preset_id=context.get("requested_user_preset_id"),
+        session_owner=context.get("actor") or incident.actor,
+        session_status="open",
+        heartbeat_timestamp=now,
+        lease_token=secrets.token_urlsafe(16),
+        guard_flags={"created_by_beholder_resolution": True, "incident_id": incident.id},
+    )
+    db.add(new_session)
+    db.flush()
+    updated = mark_incident(db, incident.id, STATUS_RESOLVED, {"selected_action": "close_previous_and_start_new", "new_session_id": new_session.id})
+    db.commit()
+    db.refresh(new_session)
+    return {"incident": incident_to_dict(updated), "session_id": new_session.id, "action": "close_previous_and_start_new"}

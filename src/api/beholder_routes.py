@@ -49,16 +49,10 @@ def resolve_incident(incident_id: int, payload: ResolveRequest, db: Session = De
     if incident is None:
         raise HTTPException(status_code=404, detail="Beholder incident를 찾을 수 없습니다.")
 
-    if payload.action == "allow_once":
-        token = beholder.issue_override_token(db, incident)
-        return {"incident": beholder.incident_to_dict(incident), "override_token": token}
-    if payload.action == "deny":
-        updated = beholder.mark_incident(db, incident_id, beholder.STATUS_DENIED)
-    elif payload.action == "quarantine":
-        updated = beholder.mark_incident(db, incident_id, beholder.STATUS_QUARANTINED)
-    else:
-        raise HTTPException(status_code=422, detail="지원하지 않는 Beholder 결정입니다.")
-    return {"incident": beholder.incident_to_dict(updated)}
+    try:
+        return beholder.resolve_incident_action(db, incident, payload.action)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _backup_files() -> list[dict[str, Any]]:

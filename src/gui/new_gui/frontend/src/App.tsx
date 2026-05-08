@@ -54,6 +54,14 @@ type GuiSettings = {
   recording_enabled: boolean;
 };
 
+type BeholderAction = {
+  id: string;
+  label: string;
+  description?: string;
+  recommended?: boolean;
+  danger?: boolean;
+};
+
 type BeholderIncident = {
   id: number;
   severity: 'info' | 'warning' | 'critical';
@@ -67,13 +75,18 @@ type BeholderIncident = {
   risk_score: number;
   risk_factors: string[];
   safe_recommendation?: string | null;
+  user_title?: string | null;
+  user_summary?: string | null;
+  user_impact?: string | null;
+  recommended_action?: string | null;
+  available_actions?: BeholderAction[];
   created_at: number;
 };
 
 class BeholderIncidentError extends Error {
   incident: BeholderIncident;
   constructor(incident: BeholderIncident) {
-    super(incident.safe_recommendation || 'Beholder가 비정상 데이터 변경을 차단했습니다.');
+    super(incident.user_summary || incident.safe_recommendation || 'Beholder가 비정상 데이터 변경을 차단했습니다.');
     this.incident = incident;
   }
 }
@@ -352,7 +365,7 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [backups, setBackups] = React.useState<Array<{ slot: number; modified_at: number; size: number }>>([]);
-  const resolve = async (action: 'deny' | 'quarantine' | 'allow_once') => {
+  const resolve = async (action: string) => {
     setBusy(action);
     setError(null);
     setMessage(null);
@@ -397,16 +410,16 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   return (
     <Modal title="Beholder 데이터 보호 경고" onClose={onClose}>
       <div className="beholder-panel">
-        <strong>비정상 데이터 변경이 차단되었습니다.</strong>
-        <p>Beholder가 DB에 급격한 변화가 생길 수 있는 요청을 커밋 전에 막았습니다.</p>
+        <strong>{incident.user_title || '데이터 변경 확인이 필요합니다'}</strong>
+        <p>{incident.user_summary || 'Beholder가 저장 전에 변경 내용을 확인했습니다.'}</p>
         <dl>
+          <dt>사용자 영향</dt><dd>{incident.user_impact || '-'}</dd>
+          <dt>권장 조치</dt><dd>{incident.safe_recommendation || '차단을 유지하세요.'}</dd>
           <dt>심각도 / 위험도</dt><dd>{incident.severity} · {incident.risk_score}/100</dd>
           <dt>동작</dt><dd>{incident.operation_kind} / {incident.actor}</dd>
-          <dt>의심 원인</dt><dd>{incident.suspected_cause || '-'}</dd>
           <dt>현재 DB 상태</dt><dd>{incident.current_state_summary || '-'}</dd>
-          <dt>허용 시 변경</dt><dd>{incident.proposed_change_summary || '-'}</dd>
+          <dt>저장하려던 변경</dt><dd>{incident.proposed_change_summary || '-'}</dd>
           <dt>위험 신호</dt><dd>{(incident.risk_factors || []).join(', ') || '-'}</dd>
-          <dt>권장 조치</dt><dd>{incident.safe_recommendation || '차단을 유지하세요.'}</dd>
         </dl>
         {backups.length > 0 && (
           <div className="backup-list">
@@ -420,10 +433,22 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
         {message && <div className="notice compact">{message}</div>}
         {error && <div className="error compact">{error}</div>}
         <div className="modal-actions">
-          <button className="ghost" disabled={Boolean(busy)} onClick={() => resolve('deny')}>차단 유지</button>
-          <button className="ghost" disabled={Boolean(busy)} onClick={() => resolve('quarantine')}>격리</button>
+          {(incident.available_actions || [
+            { id: 'deny', label: '차단 유지' },
+            { id: 'quarantine', label: '격리' },
+            { id: 'allow_once', label: '이번 한 번 허용', danger: true },
+          ]).map((action) => (
+            <button
+              key={action.id}
+              className={action.danger ? 'danger' : action.recommended ? 'primary' : 'ghost'}
+              title={action.description || ''}
+              disabled={Boolean(busy)}
+              onClick={() => resolve(action.id)}
+            >
+              {action.recommended ? '★ ' : ''}{action.label}
+            </button>
+          ))}
           <button className="ghost" disabled={Boolean(busy)} onClick={loadBackups}>백업에서 복구</button>
-          <button className="danger" disabled={Boolean(busy)} onClick={() => resolve('allow_once')}>이번 한 번 허용</button>
         </div>
       </div>
     </Modal>

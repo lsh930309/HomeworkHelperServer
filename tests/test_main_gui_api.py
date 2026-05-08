@@ -315,3 +315,43 @@ def test_gui_privilege_apply_wraps_admin_restart_helpers(monkeypatch):
     body = response.json()
     assert body["ok"] is True
     assert body["action"] == "run_as_admin"
+
+
+def test_gui_settings_patch_preserves_sidebar_detail_fields(monkeypatch, tmp_path):
+    import src.api.gui.routes as gui_routes
+    import src.data.crud as crud_mod
+
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    client = _client_with_seed(monkeypatch)
+    db = gui_routes.SessionLocal()
+    settings = db.query(models.GlobalSettings).filter_by(id=1).one()
+    settings.sidebar_trigger_y_start = 0.25
+    settings.sidebar_trigger_y_end = 0.75
+    settings.sidebar_effect = "glass"
+    settings.screenshot_trigger_vk = 179
+    settings.sidebar_height_ratio = 0.6
+    db.commit()
+    db.close()
+
+    response = client.patch("/api/gui/settings", json={"theme": "dark"})
+
+    assert response.status_code == 200
+    db = gui_routes.SessionLocal()
+    preserved = db.query(models.GlobalSettings).filter_by(id=1).one()
+    assert preserved.theme == "dark"
+    assert preserved.sidebar_trigger_y_start == 0.25
+    assert preserved.sidebar_trigger_y_end == 0.75
+    assert preserved.sidebar_effect == "glass"
+    assert preserved.screenshot_trigger_vk == 179
+    assert preserved.sidebar_height_ratio == 0.6
+    db.close()
+
+
+def test_settings_persistence_contract_includes_sidebar_dialog_fields():
+    Schema = __import__("src.data.schemas", fromlist=["GlobalSettingsSchema"]).GlobalSettingsSchema
+    schema_fields = set(Schema.model_fields if hasattr(Schema, "model_fields") else Schema.__fields__)
+    model_columns = {column.name for column in models.GlobalSettings.__table__.columns}
+    required = {"sidebar_trigger_y_start", "sidebar_trigger_y_end", "sidebar_effect", "screenshot_trigger_vk"}
+
+    assert required <= schema_fields
+    assert required <= model_columns

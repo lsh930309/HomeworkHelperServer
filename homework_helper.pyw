@@ -539,8 +539,22 @@ def run_server_main():
         return crud.get_settings(db)
 
     @app.put("/settings", response_model=schemas.GlobalSettingsSchema)
-    def update_global_settings(settings_data: schemas.GlobalSettingsSchema, db: Session = Depends(get_db)):
-        return crud.update_settings(db = db, settings = settings_data)
+    def update_global_settings(
+        settings_data: schemas.GlobalSettingsSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        actor = x_hh_beholder_actor or "settings_full_update"
+        return crud.update_settings(
+            db=db,
+            settings=settings_data,
+            actor=actor,
+            operation_kind=x_hh_beholder_operation or "settings_update",
+            allowed_fields=beholder.allowed_settings_fields_for_actor(actor),
+            override_token=x_hh_beholder_override,
+        )
 
     # create / read / update [process sessions]
     @app.post("/sessions", response_model=schemas.ProcessSessionSchema, status_code=201)
@@ -712,6 +726,21 @@ def ensure_process_table_schema():
                 if 'sidebar_auto_hide_sec' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_sec INTEGER DEFAULT 3"))
                     print("[Migration] global_settings.sidebar_auto_hide_sec 컬럼 추가됨")
+                if 'sidebar_auto_hide_ms' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_ms INTEGER DEFAULT 3000"))
+                    print("[Migration] global_settings.sidebar_auto_hide_ms 컬럼 추가됨")
+                if 'sidebar_edge_width_px' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_edge_width_px INTEGER DEFAULT 2"))
+                    print("[Migration] global_settings.sidebar_edge_width_px 컬럼 추가됨")
+                if 'sidebar_trigger_y_start' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_trigger_y_start REAL DEFAULT 0.1"))
+                    print("[Migration] global_settings.sidebar_trigger_y_start 컬럼 추가됨")
+                if 'sidebar_trigger_y_end' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_trigger_y_end REAL DEFAULT 0.9"))
+                    print("[Migration] global_settings.sidebar_trigger_y_end 컬럼 추가됨")
+                if 'sidebar_effect' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_effect TEXT DEFAULT 'acrylic'"))
+                    print("[Migration] global_settings.sidebar_effect 컬럼 추가됨")
                 if 'sidebar_height_ratio' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_height_ratio REAL DEFAULT 1.0"))
                     print("[Migration] global_settings.sidebar_height_ratio 컬럼 추가됨")
@@ -733,6 +762,19 @@ def ensure_process_table_schema():
                 if 'sidebar_volume_section_enabled' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_volume_section_enabled INTEGER DEFAULT 1"))
                     print("[Migration] global_settings.sidebar_volume_section_enabled 컬럼 추가됨")
+                if 'screenshot_trigger_vk' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN screenshot_trigger_vk INTEGER DEFAULT 178"))
+                    print("[Migration] global_settings.screenshot_trigger_vk 컬럼 추가됨")
+
+            incident_table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='beholder_incidents'")
+            ).fetchone()
+            if incident_table_exists:
+                incident_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(beholder_incidents)"))}
+                for col in ['user_title', 'user_summary', 'user_impact', 'recommended_action', 'available_actions', 'resolution_metadata']:
+                    if col not in incident_cols:
+                        conn.execute(text(f"ALTER TABLE beholder_incidents ADD COLUMN {col} TEXT"))
+                        print(f"[Migration] beholder_incidents.{col} 컬럼 추가됨")
 
             conn.commit()
     except Exception as e:
