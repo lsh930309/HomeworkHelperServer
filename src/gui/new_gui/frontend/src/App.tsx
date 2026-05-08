@@ -1,7 +1,7 @@
 import React from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow, LogicalSize, PhysicalPosition } from '@tauri-apps/api/window';
+import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition, primaryMonitor } from '@tauri-apps/api/window';
 
 type Progress = {
   kind: 'time' | 'stamina';
@@ -107,6 +107,21 @@ type ShortcutForm = {
   refresh_time_str: string;
 };
 
+type LaunchPreference = ProcessRow['preferred_launch_type'];
+
+type ContextMenuItem = {
+  label: string;
+  action: () => void;
+  kind?: 'normal' | 'danger';
+  disabled?: boolean;
+};
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+};
+
 const API_BASE = 'http://127.0.0.1:8000';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -129,16 +144,57 @@ function useContentSizedWindow(ref: React.RefObject<HTMLElement | null>, enabled
   React.useEffect(() => {
     if (!enabled || !ref.current) return;
     const win = getCurrentWindow();
+    let resizeToken = 0;
+
     const resize = () => {
-      if (!ref.current) return;
-      const rect = ref.current.getBoundingClientRect();
-      const height = clamp(Math.ceil(rect.height) + 2, 260, 920);
-      win.setSize(new LogicalSize(520, height)).catch(() => undefined);
+      const target = ref.current;
+      if (!target) return;
+      const token = ++resizeToken;
+      window.requestAnimationFrame(() => {
+        if (token !== resizeToken || !ref.current) return;
+        const root = ref.current;
+        const rect = root.getBoundingClientRect();
+        const measuredWidth = Math.max(root.scrollWidth, Math.ceil(rect.width));
+        const measuredHeight = Math.max(root.scrollHeight, Math.ceil(rect.height));
+
+        void (async () => {
+          try {
+            const monitor = await currentMonitor() || await primaryMonitor();
+            const scale = monitor?.scaleFactor || window.devicePixelRatio || 1;
+            const maxWidth = monitor ? Math.floor(monitor.workArea.size.width / scale) - 24 : 1400;
+            const maxHeight = monitor ? Math.floor(monitor.workArea.size.height / scale) - 24 : 1000;
+            const width = clamp(Math.ceil(measuredWidth) + 2, 500, Math.max(500, maxWidth));
+            const height = clamp(Math.ceil(measuredHeight) + 2, 260, Math.max(260, maxHeight));
+
+            await win.setSize(new LogicalSize(width, height));
+            await win.setResizable(false);
+
+            if (!monitor) return;
+            const [position, outerSize] = await Promise.all([win.outerPosition(), win.outerSize()]);
+            const minX = monitor.workArea.position.x;
+            const minY = monitor.workArea.position.y;
+            const maxX = minX + monitor.workArea.size.width - outerSize.width;
+            const maxY = minY + monitor.workArea.size.height - outerSize.height;
+            const x = clamp(position.x, minX, Math.max(minX, maxX));
+            const y = clamp(position.y, minY, Math.max(minY, maxY));
+            if (x !== position.x || y !== position.y) {
+              await win.setPosition(new PhysicalPosition(x, y));
+            }
+          } catch {
+            // Browser preview or platforms with incomplete window APIs keep the CSS size.
+          }
+        })();
+      });
     };
+
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(ref.current);
-    return () => observer.disconnect();
+    window.addEventListener('resize', resize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', resize);
+    };
   }, [enabled, ref]);
 }
 
@@ -227,6 +283,53 @@ function shortcutToForm(shortcut?: WebShortcut): ShortcutForm {
     url: shortcut?.url || 'https://',
     refresh_time_str: shortcut?.refresh_time_str || '',
   };
+}
+
+
+function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose: () => void }) {
+  React.useEffect(() => {
+    const close = () => onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
+
+  const x = Math.min(menu.x, Math.max(8, window.innerWidth - 178));
+  const y = Math.min(menu.y, Math.max(8, window.innerHeight - (menu.items.length * 34 + 12)));
+
+  return (
+    <div
+      className="context-menu"
+      role="menu"
+      style={{ left: x, top: y }}
+      onContextMenu={(event) => event.preventDefault()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      {menu.items.map((item) => (
+        <button
+          key={item.label}
+          className={item.kind === 'danger' ? 'danger-item' : undefined}
+          role="menuitem"
+          disabled={item.disabled}
+          onClick={() => {
+            if (item.disabled) return;
+            onClose();
+            item.action();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function Modal({ title, children, onClose }: React.PropsWithChildren<{ title: string; onClose: () => void }>) {
@@ -529,6 +632,7 @@ export default function App() {
   const [editingShortcut, setEditingShortcut] = React.useState<WebShortcut | 'new' | null>(null);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [beholderIncident, setBeholderIncident] = React.useState<BeholderIncident | null>(null);
+  const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const isTauri = isTauriRuntime();
 
   const handleError = React.useCallback((e: any) => {
@@ -587,6 +691,12 @@ export default function App() {
     }
   };
 
+  const openContextMenu = (event: React.MouseEvent, items: ContextMenuItem[]) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ x: event.clientX, y: event.clientY, items });
+  };
+
   const deleteProcess = async (process: ProcessRow) => {
     if (!window.confirm(`'${process.name}' 게임을 삭제할까요?`)) return;
     try {
@@ -596,6 +706,37 @@ export default function App() {
       handleError(e);
     }
   };
+
+  const setLaunchPreference = async (process: ProcessRow, preference: LaunchPreference) => {
+    try {
+      await fetchJson(`/api/gui/processes/${process.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(processPayload({
+          ...processToForm(process),
+          preferred_launch_type: preference,
+        })),
+      });
+      load();
+    } catch (e: any) {
+      handleError(e);
+    }
+  };
+
+  const processMenuItems = (process: ProcessRow): ContextMenuItem[] => [
+    { label: '편집', action: () => setEditingProcess(process) },
+    { label: '삭제', kind: 'danger', action: () => deleteProcess(process) },
+  ];
+
+  const launchPreferenceItems = (process: ProcessRow): ContextMenuItem[] => [
+    { label: '바로가기 선호', disabled: process.preferred_launch_type === 'shortcut', action: () => setLaunchPreference(process, 'shortcut') },
+    { label: '프로세스 선호', disabled: process.preferred_launch_type === 'direct', action: () => setLaunchPreference(process, 'direct') },
+    { label: '런처 우선', disabled: process.preferred_launch_type === 'launcher', action: () => setLaunchPreference(process, 'launcher') },
+  ];
+
+  const shortcutMenuItems = (shortcut: WebShortcut): ContextMenuItem[] => [
+    { label: '편집', action: () => setEditingShortcut(shortcut) },
+    { label: '삭제', kind: 'danger', action: () => deleteShortcut(shortcut) },
+  ];
 
   const openUrl = async (url: string) => {
     const target = url.startsWith('/') ? `${API_BASE}${url}` : url;
@@ -659,10 +800,12 @@ export default function App() {
       {state.web_shortcuts.length > 0 && (
         <section className="shortcut-card" aria-label="웹 바로가기">
           {state.web_shortcuts.map((shortcut) => (
-            <div className={`shortcut ${shortcut.state}`} key={shortcut.id}>
-              <button onClick={() => openShortcut(shortcut)} title={shortcut.url}>{shortcut.name}</button>
-              <button className="tiny ghost" onClick={() => setEditingShortcut(shortcut)}>수정</button>
-              <button className="tiny danger" onClick={() => deleteShortcut(shortcut)}>삭제</button>
+            <div
+              className={`shortcut ${shortcut.state}`}
+              key={shortcut.id}
+              onContextMenu={(event) => openContextMenu(event, shortcutMenuItems(shortcut))}
+            >
+              <button onClick={() => openShortcut(shortcut)} title={`${shortcut.url} · 우클릭: 편집/삭제`}>{shortcut.name}</button>
             </div>
           ))}
         </section>
@@ -674,29 +817,30 @@ export default function App() {
           <span>진행률</span>
           <span>실행</span>
           <span>상태</span>
-          <span>관리</span>
         </div>
         {state.processes.length === 0 ? (
           <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
         ) : (
           state.processes.map((process) => (
-            <article className="row" key={process.id}>
+            <article className="row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
               <div className="game">
                 <img src={`${API_BASE}${process.icon_url}`} alt="" />
                 <div>
                   <strong>{process.name}</strong>
-                  <span>{process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}</span>
+                  <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
                 </div>
               </div>
               <ProgressBar progress={process.progress} />
-              <button className="launch" disabled={busyId === process.id} onClick={() => launch(process)}>
+              <button
+                className="launch"
+                disabled={busyId === process.id}
+                onClick={() => launch(process)}
+                onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
+                title="우클릭: 실행 방식 선택"
+              >
                 {busyId === process.id ? '실행 중…' : '실행'}
               </button>
               <StatusBadge status={process.status} />
-              <div className="row-actions">
-                <button className="tiny ghost" onClick={() => setEditingProcess(process)}>수정</button>
-                <button className="tiny danger" onClick={() => deleteProcess(process)}>삭제</button>
-              </div>
             </article>
           ))
         )}
@@ -706,6 +850,8 @@ export default function App() {
         <span>마지막 갱신 {new Date(state.generated_at).toLocaleTimeString()}</span>
         <span>{state.settings.always_on_top ? '항상 위' : '일반 창'} · {state.settings.hide_on_game ? '게임 시 숨김' : '항상 표시'}</span>
       </footer>
+
+      {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}
 
       {editingProcess && (
         <ProcessModal
