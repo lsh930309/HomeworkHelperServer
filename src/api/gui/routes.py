@@ -69,21 +69,6 @@ class SettingsPatch(BaseModel):
     recording_enabled: bool | None = None
 
 
-class RuntimeProcessSnapshot(BaseModel):
-    process_id: str
-    pid: int | None = None
-    exe: str | None = None
-    start_timestamp: float | None = None
-
-
-class RuntimeSyncResult(BaseModel):
-    active_ids: list[str]
-    started: list[dict[str, Any]]
-    stopped: list[dict[str, Any]]
-
-
-_preview_owned_session_ids: dict[str, int] = {}
-
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -146,124 +131,6 @@ def _running_process_ids(processes: Iterable[models.Process]) -> set[str]:
     except Exception:
         return set()
     return running
-
-
-def _running_process_snapshots(processes: Iterable[models.Process]) -> dict[str, RuntimeProcessSnapshot]:
-    wanted = {
-        normalized: process.id
-        for process in processes
-        if (normalized := _normalize_path(process.monitoring_path))
-    }
-    if not wanted:
-        return {}
-
-    try:
-        import psutil
-    except Exception:
-        return {
-            process_id: RuntimeProcessSnapshot(process_id=process_id)
-            for process_id in _running_process_ids(processes)
-        }
-
-    snapshots: dict[str, RuntimeProcessSnapshot] = {}
-    try:
-        for proc in psutil.process_iter(["pid", "exe", "create_time"]):
-            try:
-                exe = _normalize_path(proc.info.get("exe"))
-            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
-                continue
-            except Exception:
-                continue
-            process_id = wanted.get(exe)
-            if process_id and process_id not in snapshots:
-                snapshots[process_id] = RuntimeProcessSnapshot(
-                    process_id=process_id,
-                    pid=proc.info.get("pid"),
-                    exe=exe,
-                    start_timestamp=proc.info.get("create_time"),
-                )
-    except Exception:
-        return {
-            process_id: RuntimeProcessSnapshot(process_id=process_id)
-            for process_id in _running_process_ids(processes)
-        }
-    for process_id in _running_process_ids(processes):
-        snapshots.setdefault(process_id, RuntimeProcessSnapshot(process_id=process_id))
-    return snapshots
-
-
-def _sync_runtime_sessions(
-    db: Session,
-    processes: list[models.Process],
-    snapshots: dict[str, RuntimeProcessSnapshot] | None = None,
-) -> RuntimeSyncResult:
-    """Reconcile OS process state into DB session records.
-
-    The preview GUI must not close sessions created by the legacy PyQt
-    ``ProcessMonitor``.  It only ends sessions that this Python backend process
-    created and tracked in memory, so a passive main-state refresh cannot turn
-    old open records into huge completed sessions.
-    """
-    snapshots = snapshots if snapshots is not None else _running_process_snapshots(processes)
-    active_ids = set(snapshots.keys())
-    by_id = {process.id: process for process in processes}
-    now_ts = time.time()
-    started: list[dict[str, Any]] = []
-    stopped: list[dict[str, Any]] = []
-
-    for process_id, snapshot in snapshots.items():
-        process = by_id.get(process_id)
-        if process is None:
-            continue
-        active_session = crud.get_active_session_by_process_id(db, process_id)
-        if active_session is not None:
-            continue
-        session = crud.create_session(
-            db,
-            schemas.ProcessSessionCreate(
-                process_id=process.id,
-                process_name=process.name,
-                start_timestamp=snapshot.start_timestamp or now_ts,
-                user_preset_id=process.user_preset_id,
-            ),
-        )
-        _preview_owned_session_ids[process.id] = session.id
-        started.append(
-            {
-                "process_id": process.id,
-                "process_name": process.name,
-                "session_id": session.id,
-                "pid": snapshot.pid,
-                "timestamp": session.start_timestamp,
-            }
-        )
-
-    for process_id, session_id in list(_preview_owned_session_ids.items()):
-        if process_id in active_ids:
-            continue
-        process = by_id.get(process_id)
-        active_session = crud.get_active_session_by_process_id(db, process_id)
-        if active_session is None or active_session.id != session_id:
-            _preview_owned_session_ids.pop(process_id, None)
-            continue
-        ended = crud.end_session(db, session_id, now_ts)
-        if process is not None:
-            process.last_played_timestamp = now_ts
-            db.add(process)
-            db.commit()
-            db.refresh(process)
-        _preview_owned_session_ids.pop(process_id, None)
-        stopped.append(
-            {
-                "process_id": process_id,
-                "process_name": active_session.process_name,
-                "session_id": session_id,
-                "timestamp": now_ts,
-                "duration": ended.session_duration if ended else None,
-            }
-        )
-
-    return RuntimeSyncResult(active_ids=sorted(active_ids), started=started, stopped=stopped)
 
 
 def _predicted_stamina(process: models.Process) -> tuple[int, int] | None:
@@ -473,10 +340,7 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     processes = crud.get_processes(db)
     shortcuts = crud.get_shortcuts(db, limit=500)
     settings = crud.get_settings(db)
-    sync_result = _sync_runtime_sessions(db, processes)
-    if sync_result.started or sync_result.stopped:
-        processes = crud.get_processes(db)
-    active_ids = set(sync_result.active_ids)
+    active_ids = _running_process_ids(processes)
     now_dt = dt.datetime.now()
     return {
         "generated_at": now_dt.isoformat(),
@@ -486,7 +350,6 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             for process in sorted(processes, key=lambda p: (p.name or "").casefold())
         ],
         "web_shortcuts": [_shortcut_to_gui(shortcut, now_dt) for shortcut in shortcuts],
-        "runtime_sync": _dump_model(sync_result),
         "dashboard_url": "/dashboard",
         "icon_quality": {
             "source": "dashboard-icon-cache",
@@ -498,12 +361,6 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             "appdata_path_owned_by_backend": True,
         },
     }
-
-
-@router.post("/runtime-sync")
-def sync_runtime(db: Session = Depends(get_db)) -> dict[str, Any]:
-    processes = crud.get_processes(db)
-    return _dump_model(_sync_runtime_sessions(db, processes))
 
 
 @router.post("/processes", status_code=201)

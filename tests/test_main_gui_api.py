@@ -160,15 +160,10 @@ def test_main_state_reports_stamina_progress_without_schema_changes(monkeypatch)
     assert progress["hoyolab_game_id"] == "zzz"
 
 
-def test_main_state_syncs_running_process_into_session_history(monkeypatch):
+def test_main_state_is_read_only_even_when_process_is_running(monkeypatch):
     import src.api.gui.routes as gui_routes
 
-    gui_routes._preview_owned_session_ids.clear()
-    monkeypatch.setattr(
-        gui_routes,
-        "_running_process_ids",
-        lambda processes: {"game-running"},
-    )
+    monkeypatch.setattr(gui_routes, "_running_process_ids", lambda processes: {"game-running"})
     client = _client_with_seed(
         monkeypatch,
         processes=[
@@ -188,13 +183,10 @@ def test_main_state_syncs_running_process_into_session_history(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["processes"][0]["status"] == "실행중"
-    assert body["runtime_sync"]["started"][0]["process_id"] == "game-running"
+    assert "runtime_sync" not in body
 
 
-def test_main_state_does_not_close_unowned_stale_open_session(monkeypatch):
-    import src.api.gui.routes as gui_routes
-
-    gui_routes._preview_owned_session_ids.clear()
+def test_main_state_does_not_mutate_existing_open_session(monkeypatch):
     client = _client_with_seed(
         monkeypatch,
         processes=[
@@ -220,41 +212,7 @@ def test_main_state_does_not_close_unowned_stale_open_session(monkeypatch):
     response = client.get("/api/gui/main-state")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["runtime_sync"]["stopped"] == []
-    assert body["processes"][0]["last_played_timestamp"] is None
-
-
-def test_main_state_only_closes_preview_owned_session(monkeypatch):
-    import src.api.gui.routes as gui_routes
-
-    gui_routes._preview_owned_session_ids.clear()
-    active_ids = {"game-owned"}
-    monkeypatch.setattr(gui_routes, "_running_process_ids", lambda processes: set(active_ids))
-    client = _client_with_seed(
-        monkeypatch,
-        processes=[
-            models.Process(
-                id="game-owned",
-                name="Owned Game",
-                monitoring_path="owned.exe",
-                launch_path="owned.lnk",
-                last_played_timestamp=None,
-                user_cycle_hours=24,
-            )
-        ],
-    )
-
-    started = client.get("/api/gui/main-state")
-    assert started.status_code == 200
-    assert started.json()["runtime_sync"]["started"][0]["process_id"] == "game-owned"
-
-    active_ids.clear()
-    stopped = client.get("/api/gui/main-state")
-    assert stopped.status_code == 200
-    body = stopped.json()
-    assert body["runtime_sync"]["stopped"][0]["process_id"] == "game-owned"
-    assert body["processes"][0]["last_played_timestamp"] is not None
+    assert response.json()["processes"][0]["last_played_timestamp"] is None
 
 
 def test_gui_process_crud_reuses_backend_models(monkeypatch):
