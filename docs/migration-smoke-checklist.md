@@ -1,0 +1,39 @@
+# Windows 마이그레이션 Smoke Checklist
+
+자동 테스트로 검증하기 어려운 Windows 전용 기능을 새 GUI 전환 전 수동 확인한다. 각 항목은 `tests/migration/feature_matrix.json`의 Feature ID와 연결된다.
+
+## 앱/패키징
+
+- [ ] APP-001: 설치 후 기본 `HomeworkHelper` 바로가기는 PyQt 앱을 실행한다.
+- [ ] APP-001: `HomeworkHelper 새 GUI 미리보기` 바로가기는 `homework_helper_gui.exe`를 실행한다.
+- [ ] APP-002: 두 번째 앱 실행 시 새 인스턴스가 뜨지 않고 기존 창이 활성화된다.
+- [ ] APP-002: 닫기/최소화/트레이 복원/트레이 종료가 정상 동작한다.
+- [ ] BUILD-001: `python build.py`만으로 새 GUI shell이 installer에 포함된다.
+
+## 게임/웹/설정
+
+- [ ] GAME-001: PyQt와 새 GUI에서 게임 추가/편집/삭제가 같은 DB에 반영된다.
+- [ ] GAME-002: 바로가기/직접 실행/런처 우선 실행이 동작한다.
+- [ ] WEB-001: 웹 바로가기 클릭/우클릭 편집/삭제/일일 초기화 상태가 동작한다.
+- [ ] SETTINGS-001: 전역 설정 저장 후 재시작해도 값이 보존된다.
+- [ ] SETTINGS-001: 관리자 권한 전환 및 시작프로그램 설정이 동작한다.
+
+## 런타임/데이터 안전
+
+- [ ] SESSION-001: 게임 시작/종료 시 세션이 정상 기록된다.
+- [ ] SESSION-001: 앱 재시작 후 중복 open session incident에서 “이전 세션 이어가기”가 동작한다.
+- [ ] BEHOLDER-001: PyQt와 새 GUI 모두 incident를 표시하고 선택 액션을 수행한다.
+- [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
+
+## PyQt fallback 유지 기능
+
+- [ ] SIDEBAR-001: 게임 실행 시 사이드바 표시/자동 숨김/볼륨/시계/플레이타임이 동작한다.
+- [ ] SCHEDULER-001: 필수 접속/주기/수면 보정/일일 리셋/스태미나 알림이 동작한다.
+- [ ] HOYOLAB-001: 쿠키 추출/수동 저장/스태미나 테스트/종료 후 동기화가 동작한다.
+- [ ] SCREENSHOT-001: 트리거 키/게임패드 스크린샷, 저장 폴더, capture mode가 동작한다.
+- [ ] RECORDING-001: OBS 설정 가져오기, 자동 실행, 녹화 시작/중지, 사이드바 상태 표시가 동작한다.
+- [ ] CLIPBOARD-001: 스크린샷 후 파일/이미지 클립보드 붙여넣기가 동작한다.
+
+## 대시보드/분석
+
+- [ ] DASHBOARD-001: 대시보드 열기, 날짜 범위 변경, 게임 필터, calendar, icon 표시가 동작한다.
