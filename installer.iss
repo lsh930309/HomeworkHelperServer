@@ -166,7 +166,7 @@ begin
   Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
 #if HasNewGuiShell
-  // 선택형 Tauri 새 GUI shell 종료
+  // Tauri 새 GUI shell 종료
   Exec('taskkill', '/F /IM homework_helper_gui.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 #endif
   

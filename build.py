@@ -43,7 +43,6 @@ MAIN_GUI_CACHE_DIR = BUILD_DIR / "main-gui-cache"
 TAURI_DIR = PROJECT_ROOT / "src-tauri"
 TAURI_SHELL_DIST_NAME = "homework_helper_gui.exe"
 TAURI_SHELL_SOURCE = TAURI_DIR / "target" / "release" / "homework-helper-shell.exe"
-NEW_GUI_PACKAGE_ENV = "HH_PACKAGE_NEW_GUI"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -600,15 +599,6 @@ def ensure_release_dir(gui):
     return RELEASE_DIR
 
 
-def package_new_gui_enabled():
-    """새 Tauri GUI shell을 설치 패키지에 포함할지 여부를 반환합니다.
-
-    기본값은 꺼짐입니다. Windows smoke 전까지 기존 PyQt 설치/업데이트 경로를
-    보존하기 위해 명시적으로 HH_PACKAGE_NEW_GUI=1일 때만 shell을 패키지에 싣습니다.
-    """
-    value = os.environ.get(NEW_GUI_PACKAGE_ENV, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
 
 def _run_logged_command(gui, cmd, cwd, failure_label):
     gui.log(f"실행: {' '.join(map(str, cmd))}")
@@ -637,15 +627,11 @@ def _run_logged_command(gui, cmd, cwd, failure_label):
 
 
 def build_new_gui_shell(gui):
-    """선택적으로 Tauri shell 실행 파일을 빌드합니다.
+    """Tauri 새 GUI shell 실행 파일을 항상 빌드합니다.
 
-    PyQt 기반 기존 설치 흐름은 기본값으로 유지합니다. 새 GUI shell은
-    HH_PACKAGE_NEW_GUI=1인 Windows 패키징 smoke에서만 생성합니다.
+    기본 실행 파일은 여전히 PyQt 기반 ``homework_helper.exe``입니다. 이 단계는
+    설치 패키지에 새 GUI 미리보기 shell을 항상 함께 포함하기 위한 것입니다.
     """
-    if not package_new_gui_enabled():
-        gui.log(f"  (새 GUI shell 패키징 비활성화: {NEW_GUI_PACKAGE_ENV}=1 설정 시 포함)")
-        return True
-
     npm_cmd = shutil.which("npm")
     if not npm_cmd:
         gui.log("  ✗ npm을 찾을 수 없어 Tauri shell을 빌드할 수 없습니다.", 'error')
@@ -667,10 +653,7 @@ def build_new_gui_shell(gui):
 
 
 def stage_new_gui_shell(gui):
-    """선택적으로 Tauri shell을 PyInstaller 배포 폴더에 복사합니다."""
-    if not package_new_gui_enabled():
-        return True
-
+    """Tauri 새 GUI shell을 PyInstaller 배포 폴더에 항상 복사합니다."""
     if not TAURI_SHELL_SOURCE.exists():
         gui.log(f"✗ Tauri shell 산출물이 없어 패키지에 포함할 수 없습니다: {TAURI_SHELL_SOURCE}", 'error')
         return False
@@ -683,10 +666,7 @@ def stage_new_gui_shell(gui):
 
 
 def code_sign_targets():
-    targets = [APP_FOLDER / "homework_helper.exe"]
-    if package_new_gui_enabled():
-        targets.append(APP_FOLDER / TAURI_SHELL_DIST_NAME)
-    return targets
+    return [APP_FOLDER / "homework_helper.exe", APP_FOLDER / TAURI_SHELL_DIST_NAME]
 
 
 
@@ -1243,7 +1223,7 @@ def run_build_process(gui, version_info):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 3-2. 선택형 Tauri shell 빌드 (기본 installer 경로는 유지)
+            # 3-2. Tauri 새 GUI shell 빌드 (기본 실행 파일은 PyQt 유지)
             if not build_new_gui_shell(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
@@ -1253,7 +1233,7 @@ def run_build_process(gui, version_info):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 4-1. 선택형 Tauri shell을 PyInstaller 배포 폴더에 포함
+            # 4-1. Tauri 새 GUI shell을 PyInstaller 배포 폴더에 포함
             if not stage_new_gui_shell(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return

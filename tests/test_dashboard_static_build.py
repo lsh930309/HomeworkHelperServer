@@ -123,22 +123,13 @@ def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     assert "'api/dashboard/static'" in spec
 
 
-def test_new_gui_shell_packaging_is_opt_in(monkeypatch):
-    monkeypatch.delenv(build.NEW_GUI_PACKAGE_ENV, raising=False)
-    monkeypatch.setattr(build.shutil, "which", lambda name: (_ for _ in ()).throw(AssertionError("npm should not be required")))
-
-    assert build.package_new_gui_enabled() is False
-    assert build.build_new_gui_shell(DummyGui()) is True
-
-
-def test_build_and_stage_new_gui_shell_when_enabled(monkeypatch, tmp_path):
+def test_build_and_stage_new_gui_shell_by_default(monkeypatch, tmp_path):
     project_root = tmp_path
     tauri_dir = project_root / "src-tauri"
     shell_source = tauri_dir / "target" / "release" / "homework-helper-shell.exe"
     app_folder = project_root / "dist" / "homework_helper"
     tauri_dir.mkdir(parents=True)
 
-    monkeypatch.setenv(build.NEW_GUI_PACKAGE_ENV, "1")
     monkeypatch.setattr(build, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(build, "TAURI_DIR", tauri_dir)
     monkeypatch.setattr(build, "TAURI_SHELL_SOURCE", shell_source)
@@ -154,7 +145,6 @@ def test_build_and_stage_new_gui_shell_when_enabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(build.subprocess, "run", fake_run)
 
-    assert build.package_new_gui_enabled() is True
     assert build.build_new_gui_shell(DummyGui()) is True
     assert build.stage_new_gui_shell(DummyGui()) is True
     assert (app_folder / build.TAURI_SHELL_DIST_NAME).read_bytes() == b"tauri shell"
@@ -166,7 +156,7 @@ def test_pyinstaller_spec_excludes_new_gui_frontend_source_tree():
     assert "'gui/new_gui/frontend'" in spec
 
 
-def test_installer_has_optional_new_gui_preview_shortcut_and_shutdown_guard():
+def test_installer_has_new_gui_preview_shortcut_and_shutdown_guard():
     installer = Path("installer.iss").read_text(encoding="utf-8")
     assert "#define HasNewGuiShell FileExists" in installer
     assert "{#MyAppName} 새 GUI 미리보기" in installer
