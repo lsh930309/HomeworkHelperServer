@@ -758,6 +758,8 @@ def get_playtime_stats(
             models.ProcessSession.start_timestamp >= start_timestamp,
             models.ProcessSession.start_timestamp < start_timestamp + (days * SECONDS_PER_DAY),
             models.ProcessSession.session_duration.isnot(None),
+            models.ProcessSession.session_duration > 0,
+            models.ProcessSession.session_duration <= MAX_COMPLETED_SESSION_SECONDS,
         )
         if game_id != "all":
             query = query.filter(models.ProcessSession.process_id == game_id)
@@ -817,6 +819,8 @@ def get_calendar_data(year: int = Query(...), month: int = Query(..., ge=0, le=1
             models.ProcessSession.start_timestamp >= start_date.timestamp(),
             models.ProcessSession.start_timestamp < end_date.timestamp(),
             models.ProcessSession.session_duration.isnot(None),
+            models.ProcessSession.session_duration > 0,
+            models.ProcessSession.session_duration <= MAX_COMPLETED_SESSION_SECONDS,
         ).group_by("play_date", models.ProcessSession.process_name).all()
         days_data = {}
         for row in results:
