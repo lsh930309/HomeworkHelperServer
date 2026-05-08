@@ -1,7 +1,7 @@
 import React from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+import { getCurrentWindow, LogicalSize, PhysicalPosition } from '@tauri-apps/api/window';
 
 type Progress = {
   kind: 'time' | 'stamina';
@@ -15,9 +15,20 @@ type Progress = {
 type ProcessRow = {
   id: string;
   name: string;
-  monitoring_path?: string;
-  launch_path?: string;
-  preferred_launch_type: string;
+  monitoring_path?: string | null;
+  launch_path?: string | null;
+  preferred_launch_type: 'shortcut' | 'direct' | 'launcher';
+  last_played_timestamp?: number | null;
+  server_reset_time_str?: string | null;
+  user_cycle_hours?: number | null;
+  mandatory_times_str?: string[] | null;
+  is_mandatory_time_enabled: boolean;
+  user_preset_id?: string | null;
+  stamina_tracking_enabled: boolean;
+  hoyolab_game_id?: string | null;
+  stamina_current?: number | null;
+  stamina_max?: number | null;
+  stamina_updated_at?: number | null;
   status: string;
   progress: Progress;
   icon_url: string;
@@ -27,26 +38,61 @@ type WebShortcut = {
   id: string;
   name: string;
   url: string;
+  refresh_time_str?: string | null;
+  last_reset_timestamp?: number | null;
+  state: 'default' | 'due' | 'done';
+};
+
+type GuiSettings = {
+  theme: 'system' | 'light' | 'dark';
+  always_on_top: boolean;
+  hide_on_game: boolean;
+  run_as_admin: boolean;
+  run_on_startup: boolean;
+  sidebar_enabled: boolean;
+  screenshot_enabled: boolean;
+  recording_enabled: boolean;
 };
 
 type MainState = {
   generated_at: string;
-  settings: {
-    theme: 'system' | 'light' | 'dark';
-    always_on_top: boolean;
-    hide_on_game: boolean;
-    run_as_admin: boolean;
-  };
+  settings: GuiSettings;
   processes: ProcessRow[];
   web_shortcuts: WebShortcut[];
   dashboard_url: string;
 };
 
+type ProcessForm = {
+  id?: string;
+  name: string;
+  monitoring_path: string;
+  launch_path: string;
+  preferred_launch_type: 'shortcut' | 'direct' | 'launcher';
+  server_reset_time_str: string;
+  user_cycle_hours: string;
+  mandatory_times_str: string;
+  is_mandatory_time_enabled: boolean;
+  stamina_tracking_enabled: boolean;
+  hoyolab_game_id: string;
+};
+
+type ShortcutForm = {
+  id?: string;
+  name: string;
+  url: string;
+  refresh_time_str: string;
+};
+
 const API_BASE = 'http://127.0.0.1:8000';
+const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    ...init,
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || `요청 실패 (${response.status})`);
   return body as T;
@@ -69,6 +115,31 @@ function useContentSizedWindow(ref: React.RefObject<HTMLElement | null>, enabled
   }, [enabled, ref]);
 }
 
+function useWindowPlacement(enabled: boolean) {
+  React.useEffect(() => {
+    if (!enabled) return;
+    const win = getCurrentWindow();
+    const raw = localStorage.getItem(WINDOW_POS_KEY);
+    if (raw) {
+      try {
+        const pos = JSON.parse(raw) as { x: number; y: number };
+        if (Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+          win.setPosition(new PhysicalPosition(pos.x, pos.y)).catch(() => undefined);
+        }
+      } catch {
+        localStorage.removeItem(WINDOW_POS_KEY);
+      }
+    }
+    let unlisten: (() => void) | undefined;
+    win.onMoved(({ payload }) => {
+      localStorage.setItem(WINDOW_POS_KEY, JSON.stringify({ x: payload.x, y: payload.y }));
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch(() => undefined);
+    return () => unlisten?.();
+  }, [enabled]);
+}
+
 function StatusBadge({ status }: { status: string }) {
   const kind = status === '실행중' ? 'running' : status === '미완료' ? 'incomplete' : 'done';
   return <span className={`status ${kind}`}>{status}</span>;
@@ -88,14 +159,268 @@ function ProgressBar({ progress }: { progress: Progress }) {
   );
 }
 
+function processToForm(process?: ProcessRow): ProcessForm {
+  return {
+    id: process?.id,
+    name: process?.name || '',
+    monitoring_path: process?.monitoring_path || '',
+    launch_path: process?.launch_path || '',
+    preferred_launch_type: process?.preferred_launch_type || 'shortcut',
+    server_reset_time_str: process?.server_reset_time_str || '',
+    user_cycle_hours: String(process?.user_cycle_hours ?? 24),
+    mandatory_times_str: (process?.mandatory_times_str || []).join(', '),
+    is_mandatory_time_enabled: Boolean(process?.is_mandatory_time_enabled),
+    stamina_tracking_enabled: Boolean(process?.stamina_tracking_enabled),
+    hoyolab_game_id: process?.hoyolab_game_id || '',
+  };
+}
+
+function processPayload(form: ProcessForm) {
+  return {
+    name: form.name.trim(),
+    monitoring_path: form.monitoring_path.trim(),
+    launch_path: form.launch_path.trim() || form.monitoring_path.trim(),
+    preferred_launch_type: form.preferred_launch_type,
+    server_reset_time_str: form.server_reset_time_str.trim() || null,
+    user_cycle_hours: Number.parseInt(form.user_cycle_hours, 10) || 24,
+    mandatory_times_str: form.mandatory_times_str
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+    is_mandatory_time_enabled: form.is_mandatory_time_enabled,
+    stamina_tracking_enabled: form.stamina_tracking_enabled,
+    hoyolab_game_id: form.stamina_tracking_enabled && form.hoyolab_game_id ? form.hoyolab_game_id : null,
+  };
+}
+
+function shortcutToForm(shortcut?: WebShortcut): ShortcutForm {
+  return {
+    id: shortcut?.id,
+    name: shortcut?.name || '',
+    url: shortcut?.url || 'https://',
+    refresh_time_str: shortcut?.refresh_time_str || '',
+  };
+}
+
+function Modal({ title, children, onClose }: React.PropsWithChildren<{ title: string; onClose: () => void }>) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <h2>{title}</h2>
+          <button className="ghost" onClick={onClose}>닫기</button>
+        </header>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function ProcessModal({ process, onClose, onSaved }: { process?: ProcessRow; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = React.useState<ProcessForm>(() => processToForm(process));
+  const [error, setError] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+
+  const update = <K extends keyof ProcessForm>(key: K, value: ProcessForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim() || !form.monitoring_path.trim()) {
+      setError('이름과 모니터링 경로는 필수입니다.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const path = form.id ? `/api/gui/processes/${form.id}` : '/api/gui/processes';
+      await fetchJson(path, {
+        method: form.id ? 'PUT' : 'POST',
+        body: JSON.stringify(processPayload(form)),
+      });
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title={form.id ? '게임 편집' : '게임 추가'} onClose={onClose}>
+      <form className="form-grid" onSubmit={submit}>
+        <label>이름<input value={form.name} onChange={(e) => update('name', e.target.value)} /></label>
+        <label>모니터링 경로<input value={form.monitoring_path} onChange={(e) => update('monitoring_path', e.target.value)} placeholder="C:\\Games\\Game.exe" /></label>
+        <label>실행 경로<input value={form.launch_path} onChange={(e) => update('launch_path', e.target.value)} placeholder="비우면 모니터링 경로 사용" /></label>
+        <div className="field-row">
+          <label>실행 방식
+            <select value={form.preferred_launch_type} onChange={(e) => update('preferred_launch_type', e.target.value as ProcessForm['preferred_launch_type'])}>
+              <option value="shortcut">바로가기 선호</option>
+              <option value="direct">프로세스 선호</option>
+              <option value="launcher">런처 우선</option>
+            </select>
+          </label>
+          <label>주기(시간)<input value={form.user_cycle_hours} onChange={(e) => update('user_cycle_hours', e.target.value)} inputMode="numeric" /></label>
+        </div>
+        <div className="field-row">
+          <label>서버 초기화<input value={form.server_reset_time_str} onChange={(e) => update('server_reset_time_str', e.target.value)} placeholder="HH:MM" /></label>
+          <label>특정 접속<input value={form.mandatory_times_str} onChange={(e) => update('mandatory_times_str', e.target.value)} placeholder="12:00, 18:00" /></label>
+        </div>
+        <label className="check"><input type="checkbox" checked={form.is_mandatory_time_enabled} onChange={(e) => update('is_mandatory_time_enabled', e.target.checked)} /> 특정 접속 시각 사용</label>
+        <label className="check"><input type="checkbox" checked={form.stamina_tracking_enabled} onChange={(e) => update('stamina_tracking_enabled', e.target.checked)} /> HoYoLab 스태미나 표시</label>
+        {form.stamina_tracking_enabled && (
+          <label>HoYoLab 게임
+            <select value={form.hoyolab_game_id} onChange={(e) => update('hoyolab_game_id', e.target.value)}>
+              <option value="">선택 안 함</option>
+              <option value="honkai_starrail">붕괴: 스타레일</option>
+              <option value="zenless_zone_zero">젠레스 존 제로</option>
+            </select>
+          </label>
+        )}
+        {error && <div className="error compact">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>취소</button>
+          <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = React.useState<ShortcutForm>(() => shortcutToForm(shortcut));
+  const [error, setError] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const update = <K extends keyof ShortcutForm>(key: K, value: ShortcutForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const path = form.id ? `/api/gui/web-shortcuts/${form.id}` : '/api/gui/web-shortcuts';
+      await fetchJson(path, {
+        method: form.id ? 'PUT' : 'POST',
+        body: JSON.stringify({
+          name: form.name.trim(),
+          url: form.url.trim(),
+          refresh_time_str: form.refresh_time_str.trim() || null,
+        }),
+      });
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title={form.id ? '웹 바로가기 편집' : '웹 바로가기 추가'} onClose={onClose}>
+      <form className="form-grid" onSubmit={submit}>
+        <label>버튼 이름<input value={form.name} onChange={(e) => update('name', e.target.value)} /></label>
+        <label>URL<input value={form.url} onChange={(e) => update('url', e.target.value)} /></label>
+        <label>매일 초기화 시각<input value={form.refresh_time_str} onChange={(e) => update('refresh_time_str', e.target.value)} placeholder="HH:MM, 선택" /></label>
+        {error && <div className="error compact">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="ghost" onClick={onClose}>취소</button>
+          <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = React.useState(settings);
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+
+  const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const applyPrivilege = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await fetchJson<{ ok: boolean; action: string }>('/api/gui/settings/apply-privilege', { method: 'POST' });
+      setMessage(result.ok
+        ? (result.action === 'none' ? '현재 권한 상태가 설정과 일치합니다.' : '권한 전환 요청을 보냈습니다.')
+        : '권한 전환 요청에 실패했습니다.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await fetchJson<GuiSettings & { startup_applied?: boolean | null; admin_restart_required?: boolean }>('/api/gui/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(form),
+      });
+      if (isTauriRuntime()) {
+        getCurrentWindow().setAlwaysOnTop(saved.always_on_top).catch(() => undefined);
+      }
+      setMessage(saved.admin_restart_required ? '관리자 권한 변경은 다음 실행/재시작 후 완전히 반영됩니다.' : '설정을 저장했습니다.');
+      onSaved();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="설정" onClose={onClose}>
+      <form className="form-grid" onSubmit={submit}>
+        <label>테마
+          <select value={form.theme} onChange={(e) => update('theme', e.target.value as GuiSettings['theme'])}>
+            <option value="system">시스템</option>
+            <option value="light">라이트</option>
+            <option value="dark">다크</option>
+          </select>
+        </label>
+        <div className="toggle-list">
+          <label className="check"><input type="checkbox" checked={form.always_on_top} onChange={(e) => update('always_on_top', e.target.checked)} /> 항상 위</label>
+          <label className="check"><input type="checkbox" checked={form.hide_on_game} onChange={(e) => update('hide_on_game', e.target.checked)} /> 게임 실행 시 숨김</label>
+          <label className="check"><input type="checkbox" checked={form.run_on_startup} onChange={(e) => update('run_on_startup', e.target.checked)} /> Windows 시작 시 실행</label>
+          <label className="check"><input type="checkbox" checked={form.run_as_admin} onChange={(e) => update('run_as_admin', e.target.checked)} /> 관리자 권한으로 실행</label>
+          <label className="check"><input type="checkbox" checked={form.sidebar_enabled} onChange={(e) => update('sidebar_enabled', e.target.checked)} /> 사이드바</label>
+          <label className="check"><input type="checkbox" checked={form.screenshot_enabled} onChange={(e) => update('screenshot_enabled', e.target.checked)} /> 스크린샷</label>
+          <label className="check"><input type="checkbox" checked={form.recording_enabled} onChange={(e) => update('recording_enabled', e.target.checked)} /> OBS 녹화</label>
+        </div>
+        {message && <div className="notice compact">{message}</div>}
+        {error && <div className="error compact">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="ghost" disabled={saving} onClick={applyPrivilege}>권한 재시작 적용</button>
+          <button type="button" className="ghost" onClick={onClose}>닫기</button>
+          <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export default function App() {
   const rootRef = React.useRef<HTMLElement | null>(null);
   const [state, setState] = React.useState<MainState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
-  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const [editingProcess, setEditingProcess] = React.useState<ProcessRow | 'new' | null>(null);
+  const [editingShortcut, setEditingShortcut] = React.useState<WebShortcut | 'new' | null>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const isTauri = isTauriRuntime();
 
   useContentSizedWindow(rootRef, isTauri);
+  useWindowPlacement(isTauri);
 
   const load = React.useCallback(() => {
     fetchJson<MainState>('/api/gui/main-state')
@@ -120,11 +445,24 @@ export default function App() {
     setBusyId(process.id);
     try {
       await fetchJson(`/api/gui/processes/${process.id}/launch`, { method: 'POST' });
+      if (isTauri && state?.settings.hide_on_game) {
+        getCurrentWindow().hide().catch(() => undefined);
+      }
       load();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const deleteProcess = async (process: ProcessRow) => {
+    if (!window.confirm(`'${process.name}' 게임을 삭제할까요?`)) return;
+    try {
+      await fetchJson(`/api/gui/processes/${process.id}`, { method: 'DELETE' });
+      load();
+    } catch (e: any) {
+      setError(e.message);
     }
   };
 
@@ -141,6 +479,26 @@ export default function App() {
     }
   };
 
+  const openShortcut = async (shortcut: WebShortcut) => {
+    try {
+      await fetchJson(`/api/gui/web-shortcuts/${shortcut.id}/open`, { method: 'POST' });
+      await openUrl(shortcut.url);
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const deleteShortcut = async (shortcut: WebShortcut) => {
+    if (!window.confirm(`'${shortcut.name}' 바로가기를 삭제할까요?`)) return;
+    try {
+      await fetchJson(`/api/gui/web-shortcuts/${shortcut.id}`, { method: 'DELETE' });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   if (!state) {
     return (
       <main className="shell loading" ref={rootRef}>
@@ -151,23 +509,33 @@ export default function App() {
   }
 
   return (
-    <main className="shell" ref={rootRef}>
+    <main className="shell" ref={rootRef} data-theme={state.settings.theme}>
       <header className="topbar">
         <div>
-          <div className="eyebrow">Windows Compact GUI</div>
+          <div className="eyebrow">HomeworkHelper 새 GUI 미리보기</div>
           <h1>숙제 관리자</h1>
         </div>
         <div className="actions">
-          <button onClick={() => openUrl(state.dashboard_url)}>📊</button>
-          {state.web_shortcuts.map((shortcut) => (
-            <button key={shortcut.id} onClick={() => openUrl(shortcut.url)} title={shortcut.url}>
-              {shortcut.name}
-            </button>
-          ))}
+          <button onClick={() => setEditingProcess('new')}>+ 게임</button>
+          <button onClick={() => setEditingShortcut('new')}>+ 웹</button>
+          <button onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
+          <button className="ghost" onClick={() => setSettingsOpen(true)}>설정</button>
         </div>
       </header>
 
       {error && <div className="error">API 오류: {error}</div>}
+
+      {state.web_shortcuts.length > 0 && (
+        <section className="shortcut-card" aria-label="웹 바로가기">
+          {state.web_shortcuts.map((shortcut) => (
+            <div className={`shortcut ${shortcut.state}`} key={shortcut.id}>
+              <button onClick={() => openShortcut(shortcut)} title={shortcut.url}>{shortcut.name}</button>
+              <button className="tiny ghost" onClick={() => setEditingShortcut(shortcut)}>수정</button>
+              <button className="tiny danger" onClick={() => deleteShortcut(shortcut)}>삭제</button>
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="table-card">
         <div className="table-head">
@@ -175,9 +543,10 @@ export default function App() {
           <span>진행률</span>
           <span>실행</span>
           <span>상태</span>
+          <span>관리</span>
         </div>
         {state.processes.length === 0 ? (
-          <div className="empty">등록된 게임이 없습니다. 설정/추가 모달은 다음 단계에서 연결됩니다.</div>
+          <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
         ) : (
           state.processes.map((process) => (
             <article className="row" key={process.id}>
@@ -185,7 +554,7 @@ export default function App() {
                 <img src={`${API_BASE}${process.icon_url}`} alt="" />
                 <div>
                   <strong>{process.name}</strong>
-                  <span>{process.preferred_launch_type === 'direct' ? '프로세스 선호' : '바로가기 선호'}</span>
+                  <span>{process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}</span>
                 </div>
               </div>
               <ProgressBar progress={process.progress} />
@@ -193,6 +562,10 @@ export default function App() {
                 {busyId === process.id ? '실행 중…' : '실행'}
               </button>
               <StatusBadge status={process.status} />
+              <div className="row-actions">
+                <button className="tiny ghost" onClick={() => setEditingProcess(process)}>수정</button>
+                <button className="tiny danger" onClick={() => deleteProcess(process)}>삭제</button>
+              </div>
             </article>
           ))
         )}
@@ -202,6 +575,22 @@ export default function App() {
         <span>마지막 갱신 {new Date(state.generated_at).toLocaleTimeString()}</span>
         <span>{state.settings.always_on_top ? '항상 위' : '일반 창'} · {state.settings.hide_on_game ? '게임 시 숨김' : '항상 표시'}</span>
       </footer>
+
+      {editingProcess && (
+        <ProcessModal
+          process={editingProcess === 'new' ? undefined : editingProcess}
+          onClose={() => setEditingProcess(null)}
+          onSaved={load}
+        />
+      )}
+      {editingShortcut && (
+        <ShortcutModal
+          shortcut={editingShortcut === 'new' ? undefined : editingShortcut}
+          onClose={() => setEditingShortcut(null)}
+          onSaved={load}
+        />
+      )}
+      {settingsOpen && <SettingsModal settings={state.settings} onClose={() => setSettingsOpen(false)} onSaved={load} />}
     </main>
   );
 }

@@ -158,3 +158,166 @@ def test_main_state_reports_stamina_progress_without_schema_changes(monkeypatch)
     assert progress["kind"] == "stamina"
     assert progress["label"] == "20/240"
     assert progress["hoyolab_game_id"] == "zzz"
+
+
+def test_main_state_syncs_running_process_into_session_history(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    monkeypatch.setattr(
+        gui_routes,
+        "_running_process_ids",
+        lambda processes: {"game-running"},
+    )
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="game-running",
+                name="Running Game",
+                monitoring_path="run.exe",
+                launch_path="run.lnk",
+                last_played_timestamp=None,
+                user_cycle_hours=24,
+            )
+        ],
+    )
+
+    response = client.get("/api/gui/main-state")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["processes"][0]["status"] == "실행중"
+    assert body["runtime_sync"]["started"][0]["process_id"] == "game-running"
+
+
+def test_main_state_closes_stale_open_session_and_updates_last_played(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="game-stopped",
+                name="Stopped Game",
+                monitoring_path="definitely-not-running.exe",
+                launch_path="run.lnk",
+                last_played_timestamp=None,
+                user_cycle_hours=24,
+            )
+        ],
+        sessions=[
+            models.ProcessSession(
+                process_id="game-stopped",
+                process_name="Stopped Game",
+                start_timestamp=_ts("2026-04-01 10:00"),
+                end_timestamp=None,
+            )
+        ],
+    )
+
+    response = client.get("/api/gui/main-state")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime_sync"]["stopped"][0]["process_id"] == "game-stopped"
+    assert body["processes"][0]["last_played_timestamp"] is not None
+
+
+def test_gui_process_crud_reuses_backend_models(monkeypatch):
+    client = _client_with_seed(monkeypatch)
+
+    created = client.post(
+        "/api/gui/processes",
+        json={
+            "name": "New Game",
+            "monitoring_path": "C:/Games/New.exe",
+            "launch_path": "C:/Games/New.lnk",
+            "preferred_launch_type": "direct",
+            "server_reset_time_str": "05:00",
+            "mandatory_times_str": ["12:00"],
+            "is_mandatory_time_enabled": True,
+        },
+    )
+    assert created.status_code == 201
+    process_id = created.json()["id"]
+    assert created.json()["preferred_launch_type"] == "direct"
+
+    updated = client.put(
+        f"/api/gui/processes/{process_id}",
+        json={
+            "name": "Renamed Game",
+            "monitoring_path": "C:/Games/New.exe",
+            "launch_path": "C:/Games/New.lnk",
+            "preferred_launch_type": "shortcut",
+            "server_reset_time_str": "06:00",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Renamed Game"
+
+    deleted = client.delete(f"/api/gui/processes/{process_id}")
+    assert deleted.status_code == 200
+
+
+def test_gui_web_shortcut_crud_and_open_refresh_state(monkeypatch):
+    client = _client_with_seed(monkeypatch)
+
+    created = client.post(
+        "/api/gui/web-shortcuts",
+        json={"name": "출석", "url": "https://example.test", "refresh_time_str": "05:00"},
+    )
+    assert created.status_code == 201
+    shortcut_id = created.json()["id"]
+    assert created.json()["state"] in {"due", "done"}
+
+    opened = client.post(f"/api/gui/web-shortcuts/{shortcut_id}/open")
+    assert opened.status_code == 200
+    assert opened.json()["last_reset_timestamp"] is not None
+
+    updated = client.put(
+        f"/api/gui/web-shortcuts/{shortcut_id}",
+        json={"name": "출석2", "url": "https://example.test/2", "refresh_time_str": None},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["state"] == "default"
+
+    deleted = client.delete(f"/api/gui/web-shortcuts/{shortcut_id}")
+    assert deleted.status_code == 200
+
+
+def test_gui_settings_patch_updates_preview_runtime_flags(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    monkeypatch.setattr(gui_routes, "set_startup_shortcut", lambda enabled: True)
+    client = _client_with_seed(monkeypatch)
+
+    response = client.patch(
+        "/api/gui/settings",
+        json={
+            "always_on_top": False,
+            "hide_on_game": False,
+            "run_on_startup": True,
+            "theme": "dark",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["always_on_top"] is False
+    assert body["hide_on_game"] is False
+    assert body["run_on_startup"] is True
+    assert body["startup_applied"] is True
+
+
+def test_gui_privilege_apply_wraps_admin_restart_helpers(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    monkeypatch.setattr(gui_routes, "is_admin", lambda: False)
+    monkeypatch.setattr(gui_routes, "run_as_admin", lambda: True)
+    client = _client_with_seed(monkeypatch)
+    client.patch("/api/gui/settings", json={"run_as_admin": True})
+
+    response = client.post("/api/gui/settings/apply-privilege")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["action"] == "run_as_admin"

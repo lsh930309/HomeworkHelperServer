@@ -9,15 +9,37 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
+import time
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.core.launcher import Launcher
-from src.data import crud, models
+from src.data import crud, models, schemas
 from src.data.database import SessionLocal
 from src.utils.game_preset_manager import GamePresetManager
+
+try:
+    from src.utils.windows import set_startup_shortcut
+except Exception:
+    def set_startup_shortcut(enable: bool) -> bool:
+        return False
+
+try:
+    from src.utils.admin import is_admin, restart_as_normal, run_as_admin
+except Exception:
+    def is_admin() -> bool:
+        return False
+
+    def restart_as_normal() -> bool:
+        return False
+
+    def run_as_admin() -> bool:
+        return False
 
 router = APIRouter(prefix="/api/gui", tags=["main-gui"])
 
@@ -30,6 +52,52 @@ def get_db():
         db.close()
 
 
+def _dump_model(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    return model.dict(**kwargs)
+
+
+class SettingsPatch(BaseModel):
+    theme: str | None = None
+    always_on_top: bool | None = None
+    hide_on_game: bool | None = None
+    run_as_admin: bool | None = None
+    run_on_startup: bool | None = None
+    sidebar_enabled: bool | None = None
+    screenshot_enabled: bool | None = None
+    recording_enabled: bool | None = None
+
+
+class RuntimeProcessSnapshot(BaseModel):
+    process_id: str
+    pid: int | None = None
+    exe: str | None = None
+    start_timestamp: float | None = None
+
+
+class RuntimeSyncResult(BaseModel):
+    active_ids: list[str]
+    started: list[dict[str, Any]]
+    stopped: list[dict[str, Any]]
+
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _validate_time_or_none(value: str | None, field: str) -> str | None:
+    if value in (None, ""):
+        return None
+    if not _TIME_RE.match(value):
+        raise HTTPException(status_code=422, detail=f"{field}은 HH:MM 형식이어야 합니다.")
+    return value
+
+
+def _validate_url(value: str, field: str = "url") -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=422, detail=f"{field}은 http(s) URL이어야 합니다.")
+    return value
 
 
 def _normalize_path(path: str | None) -> str | None:
@@ -76,6 +144,119 @@ def _running_process_ids(processes: Iterable[models.Process]) -> set[str]:
     except Exception:
         return set()
     return running
+
+
+def _running_process_snapshots(processes: Iterable[models.Process]) -> dict[str, RuntimeProcessSnapshot]:
+    wanted = {
+        normalized: process.id
+        for process in processes
+        if (normalized := _normalize_path(process.monitoring_path))
+    }
+    if not wanted:
+        return {}
+
+    try:
+        import psutil
+    except Exception:
+        return {
+            process_id: RuntimeProcessSnapshot(process_id=process_id)
+            for process_id in _running_process_ids(processes)
+        }
+
+    snapshots: dict[str, RuntimeProcessSnapshot] = {}
+    try:
+        for proc in psutil.process_iter(["pid", "exe", "create_time"]):
+            try:
+                exe = _normalize_path(proc.info.get("exe"))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+            except Exception:
+                continue
+            process_id = wanted.get(exe)
+            if process_id and process_id not in snapshots:
+                snapshots[process_id] = RuntimeProcessSnapshot(
+                    process_id=process_id,
+                    pid=proc.info.get("pid"),
+                    exe=exe,
+                    start_timestamp=proc.info.get("create_time"),
+                )
+    except Exception:
+        return {
+            process_id: RuntimeProcessSnapshot(process_id=process_id)
+            for process_id in _running_process_ids(processes)
+        }
+    for process_id in _running_process_ids(processes):
+        snapshots.setdefault(process_id, RuntimeProcessSnapshot(process_id=process_id))
+    return snapshots
+
+
+def _sync_runtime_sessions(
+    db: Session,
+    processes: list[models.Process],
+    snapshots: dict[str, RuntimeProcessSnapshot] | None = None,
+) -> RuntimeSyncResult:
+    """Reconcile OS process state into DB session records.
+
+    The preview GUI does not own a persistent ``ProcessMonitor`` instance like
+    the PyQt app.  Polling this API keeps play history compatible by creating
+    one open session per actually running process and closing stale open
+    sessions once the process disappears.
+    """
+    snapshots = snapshots if snapshots is not None else _running_process_snapshots(processes)
+    active_ids = set(snapshots.keys())
+    by_id = {process.id: process for process in processes}
+    now_ts = time.time()
+    started: list[dict[str, Any]] = []
+    stopped: list[dict[str, Any]] = []
+
+    for process_id, snapshot in snapshots.items():
+        process = by_id.get(process_id)
+        if process is None:
+            continue
+        active_session = crud.get_active_session_by_process_id(db, process_id)
+        if active_session is not None:
+            continue
+        session = crud.create_session(
+            db,
+            schemas.ProcessSessionCreate(
+                process_id=process.id,
+                process_name=process.name,
+                start_timestamp=snapshot.start_timestamp or now_ts,
+                user_preset_id=process.user_preset_id,
+            ),
+        )
+        started.append(
+            {
+                "process_id": process.id,
+                "process_name": process.name,
+                "session_id": session.id,
+                "pid": snapshot.pid,
+                "timestamp": session.start_timestamp,
+            }
+        )
+
+    open_sessions = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp == None).all()
+    for session in open_sessions:
+        if session.process_id in active_ids:
+            continue
+        process = by_id.get(session.process_id)
+        ended = crud.end_session(db, session.id, now_ts)
+        if process is not None:
+            process.last_played_timestamp = now_ts
+            db.add(process)
+            db.commit()
+            db.refresh(process)
+        stopped.append(
+            {
+                "process_id": session.process_id,
+                "process_name": session.process_name,
+                "session_id": session.id,
+                "timestamp": now_ts,
+                "duration": ended.session_duration if ended else None,
+            }
+        )
+
+    return RuntimeSyncResult(active_ids=sorted(active_ids), started=started, stopped=stopped)
 
 
 def _predicted_stamina(process: models.Process) -> tuple[int, int] | None:
@@ -229,19 +410,39 @@ def _process_to_gui_row(process: models.Process, status: str, now_dt: dt.datetim
         "user_preset_id": process.user_preset_id,
         "stamina_tracking_enabled": bool(process.stamina_tracking_enabled),
         "hoyolab_game_id": process.hoyolab_game_id,
+        "stamina_current": process.stamina_current,
+        "stamina_max": process.stamina_max,
+        "stamina_updated_at": process.stamina_updated_at,
         "status": status,
         "progress": _progress(process, now_dt),
         "icon_url": f"/api/dashboard/icons/{process.id}?size=128",
     }
 
 
-def _shortcut_to_gui(shortcut: models.WebShortcut) -> dict[str, Any]:
+def _shortcut_state(shortcut: models.WebShortcut, now_dt: dt.datetime) -> str:
+    refresh_time = _parse_time(shortcut.refresh_time_str)
+    if not refresh_time:
+        return "default"
+    reset_today = now_dt.replace(hour=refresh_time.hour, minute=refresh_time.minute, second=0, microsecond=0)
+    if now_dt < reset_today:
+        reset_today -= dt.timedelta(days=1)
+    last_reset = (
+        dt.datetime.fromtimestamp(float(shortcut.last_reset_timestamp))
+        if shortcut.last_reset_timestamp
+        else None
+    )
+    return "done" if last_reset and last_reset >= reset_today else "due"
+
+
+def _shortcut_to_gui(shortcut: models.WebShortcut, now_dt: dt.datetime | None = None) -> dict[str, Any]:
+    now_dt = now_dt or dt.datetime.now()
     return {
         "id": shortcut.id,
         "name": shortcut.name,
         "url": shortcut.url,
         "refresh_time_str": shortcut.refresh_time_str,
         "last_reset_timestamp": shortcut.last_reset_timestamp,
+        "state": _shortcut_state(shortcut, now_dt),
     }
 
 
@@ -265,7 +466,10 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     processes = crud.get_processes(db)
     shortcuts = crud.get_shortcuts(db, limit=500)
     settings = crud.get_settings(db)
-    active_ids = _running_process_ids(processes)
+    sync_result = _sync_runtime_sessions(db, processes)
+    if sync_result.started or sync_result.stopped:
+        processes = crud.get_processes(db)
+    active_ids = set(sync_result.active_ids)
     now_dt = dt.datetime.now()
     return {
         "generated_at": now_dt.isoformat(),
@@ -274,7 +478,8 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             _process_to_gui_row(process, _visual_status(process, settings, now_dt, active_ids), now_dt)
             for process in sorted(processes, key=lambda p: (p.name or "").casefold())
         ],
-        "web_shortcuts": [_shortcut_to_gui(shortcut) for shortcut in shortcuts],
+        "web_shortcuts": [_shortcut_to_gui(shortcut, now_dt) for shortcut in shortcuts],
+        "runtime_sync": _dump_model(sync_result),
         "dashboard_url": "/dashboard",
         "icon_quality": {
             "source": "dashboard-icon-cache",
@@ -285,6 +490,151 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             "direct_sqlite_access": False,
             "appdata_path_owned_by_backend": True,
         },
+    }
+
+
+@router.post("/runtime-sync")
+def sync_runtime(db: Session = Depends(get_db)) -> dict[str, Any]:
+    processes = crud.get_processes(db)
+    return _dump_model(_sync_runtime_sessions(db, processes))
+
+
+@router.post("/processes", status_code=201)
+def create_process(process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)) -> dict[str, Any]:
+    _validate_time_or_none(process_data.server_reset_time_str, "server_reset_time_str")
+    for mandatory in process_data.mandatory_times_str or []:
+        _validate_time_or_none(mandatory, "mandatory_times_str")
+    if process_data.preferred_launch_type not in {"shortcut", "direct", "launcher"}:
+        raise HTTPException(status_code=422, detail="preferred_launch_type 값이 올바르지 않습니다.")
+    process = crud.create_process(db, process_data)
+    now_dt = dt.datetime.now()
+    return _process_to_gui_row(process, _visual_status(process, crud.get_settings(db), now_dt, set()), now_dt)
+
+
+@router.put("/processes/{process_id}")
+def update_process(
+    process_id: str,
+    process_data: schemas.ProcessCreateSchema,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _validate_time_or_none(process_data.server_reset_time_str, "server_reset_time_str")
+    for mandatory in process_data.mandatory_times_str or []:
+        _validate_time_or_none(mandatory, "mandatory_times_str")
+    if process_data.preferred_launch_type not in {"shortcut", "direct", "launcher"}:
+        raise HTTPException(status_code=422, detail="preferred_launch_type 값이 올바르지 않습니다.")
+    process = crud.update_process(db, process_id, process_data)
+    if process is None:
+        raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+    now_dt = dt.datetime.now()
+    return _process_to_gui_row(process, _visual_status(process, crud.get_settings(db), now_dt, _running_process_ids([process])), now_dt)
+
+
+@router.delete("/processes/{process_id}")
+def delete_process(process_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    process = crud.delete_process(db, process_id)
+    if process is None:
+        raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+    return {"message": "프로세스가 삭제되었습니다."}
+
+
+@router.post("/web-shortcuts", status_code=201)
+def create_web_shortcut(shortcut_data: schemas.WebShortcutCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    _validate_url(shortcut_data.url)
+    shortcut_data.refresh_time_str = _validate_time_or_none(shortcut_data.refresh_time_str, "refresh_time_str")
+    shortcut = crud.create_shortcut(db, shortcut_data)
+    return _shortcut_to_gui(shortcut)
+
+
+@router.put("/web-shortcuts/{shortcut_id}")
+def update_web_shortcut(
+    shortcut_id: str,
+    shortcut_data: schemas.WebShortcutCreate,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _validate_url(shortcut_data.url)
+    shortcut_data.refresh_time_str = _validate_time_or_none(shortcut_data.refresh_time_str, "refresh_time_str")
+    if not shortcut_data.refresh_time_str:
+        shortcut_data.last_reset_timestamp = None
+    shortcut = crud.update_shortcut(db, shortcut_id, shortcut_data)
+    if shortcut is None:
+        raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
+    return _shortcut_to_gui(shortcut)
+
+
+@router.delete("/web-shortcuts/{shortcut_id}")
+def delete_web_shortcut(shortcut_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    shortcut = crud.delete_shortcut(db, shortcut_id)
+    if shortcut is None:
+        raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
+    return {"message": "웹 바로 가기가 삭제되었습니다."}
+
+
+@router.post("/web-shortcuts/{shortcut_id}/open")
+def mark_web_shortcut_opened(shortcut_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    shortcut = crud.get_shortcut_by_id(db, shortcut_id)
+    if shortcut is None:
+        raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
+    if shortcut.refresh_time_str:
+        shortcut.last_reset_timestamp = time.time()
+        db.add(shortcut)
+        db.commit()
+        db.refresh(shortcut)
+    return _shortcut_to_gui(shortcut) | {"ok": True}
+
+
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_db)) -> dict[str, Any]:
+    settings = crud.get_settings(db)
+    return _settings_to_gui(settings)
+
+
+@router.patch("/settings")
+def patch_settings(settings_patch: SettingsPatch, db: Session = Depends(get_db)) -> dict[str, Any]:
+    settings = crud.get_settings(db)
+    data = _dump_model(settings_patch, exclude_unset=True)
+    if "theme" in data and data["theme"] not in {"system", "light", "dark"}:
+        raise HTTPException(status_code=422, detail="theme 값이 올바르지 않습니다.")
+
+    startup_changed = "run_on_startup" in data and bool(data["run_on_startup"]) != bool(settings.run_on_startup)
+    for key, value in data.items():
+        if value is not None and hasattr(settings, key):
+            setattr(settings, key, value)
+
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+
+    startup_applied: bool | None = None
+    if startup_changed:
+        startup_applied = set_startup_shortcut(bool(settings.run_on_startup))
+
+    body = _settings_to_gui(settings)
+    body["startup_applied"] = startup_applied
+    body["admin_restart_required"] = "run_as_admin" in data
+    return body
+
+
+@router.post("/settings/apply-privilege")
+def apply_privilege_setting(db: Session = Depends(get_db)) -> dict[str, Any]:
+    settings = crud.get_settings(db)
+    want_admin = bool(settings.run_as_admin)
+    currently_admin = bool(is_admin())
+
+    if want_admin and not currently_admin:
+        requested = bool(run_as_admin())
+        action = "run_as_admin"
+    elif not want_admin and currently_admin:
+        requested = bool(restart_as_normal())
+        action = "restart_as_normal"
+    else:
+        requested = True
+        action = "none"
+
+    return {
+        "ok": requested,
+        "action": action,
+        "want_admin": want_admin,
+        "currently_admin": currently_admin,
     }
 
 
