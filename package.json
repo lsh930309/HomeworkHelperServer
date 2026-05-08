@@ -4,7 +4,9 @@
     "build:dashboard": "npm --prefix src/api/dashboard/frontend run build",
     "build:main-gui": "npm --prefix src/gui/new_gui/frontend run build",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "verify:migration": "python tools/verify_project.py",
+    "verify:migration:full": "python tools/verify_project.py --full"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"
