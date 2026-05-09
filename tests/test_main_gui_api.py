@@ -460,3 +460,115 @@ def test_web_shortcut_open_uses_guarded_crud_path(monkeypatch, tmp_path):
     assert response.json()["last_reset_timestamp"] is not None
     snapshots = list((tmp_path / "backups" / "mutations" / "web_shortcuts").glob("*.json"))
     assert snapshots, "guarded shortcut runtime write should leave a pre-mutation snapshot"
+
+
+def test_gui_hoyolab_credentials_are_managed_without_exposing_tokens(monkeypatch, tmp_path):
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    monkeypatch.setattr(HoYoLabConfig, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(HoYoLabConfig, "_encrypt_data", lambda self, data: data)
+    monkeypatch.setattr(HoYoLabConfig, "_decrypt_data", lambda self, data: data)
+    client = _client_with_seed(monkeypatch)
+
+    initial = client.get("/api/gui/hoyolab/status")
+    assert initial.status_code == 200
+    assert "supported_games" in initial.json()
+
+    saved = client.put(
+        "/api/gui/hoyolab/credentials",
+        json={"ltuid": 12345, "ltoken_v2": "token-secret", "ltmid_v2": "mid-secret"},
+    )
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["configured"] is True
+    assert "token-secret" not in str(body)
+    assert "mid-secret" not in str(body)
+
+    status = client.get("/api/gui/hoyolab/status")
+    assert status.status_code == 200
+    assert status.json()["credentials_file_exists"] is True
+
+    cleared = client.delete("/api/gui/hoyolab/credentials")
+    assert cleared.status_code == 200
+    assert cleared.json()["credentials_file_exists"] is False
+
+
+def test_gui_hoyolab_extract_saves_cookies_without_returning_cookie_values(monkeypatch, tmp_path):
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    monkeypatch.setattr(HoYoLabConfig, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(HoYoLabConfig, "_encrypt_data", lambda self, data: data)
+    monkeypatch.setattr(HoYoLabConfig, "_decrypt_data", lambda self, data: data)
+
+    class FakeExtractor:
+        def extract_from_browser(self, browser):
+            assert browser == "chrome"
+            return {"ltuid": 123, "ltoken_v2": "extracted-token", "ltmid_v2": "extracted-mid"}
+
+    monkeypatch.setattr("src.utils.browser_cookie_extractor.BrowserCookieExtractor", FakeExtractor)
+    client = _client_with_seed(monkeypatch)
+
+    response = client.post("/api/gui/hoyolab/extract", json={"browser": "chrome"})
+
+    assert response.status_code == 200
+    assert response.json()["configured"] is True
+    assert "extracted-token" not in str(response.json())
+    assert client.post("/api/gui/hoyolab/extract", json={"browser": "netscape"}).status_code == 422
+
+
+def test_gui_hoyolab_stamina_refresh_can_persist_through_guarded_process_update(monkeypatch, tmp_path):
+    import src.api.gui.routes as gui_routes
+    import src.data.crud as crud_mod
+    import src.services.hoyolab as hoyolab_mod
+
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+
+    class FakeInfo:
+        game_id = "honkai_starrail"
+        game_name = "붕괴: 스타레일"
+        current = 144
+        max = 240
+        recover_time = 3600
+        full_time = None
+        updated_at = dt.datetime(2026, 5, 9, 12, 0, 0)
+
+    class FakeService:
+        def is_available(self):
+            return True
+
+        def is_configured(self):
+            return True
+
+        def get_stamina(self, game_id):
+            assert game_id == "honkai_starrail"
+            return FakeInfo()
+
+    monkeypatch.setattr(hoyolab_mod, "get_hoyolab_service", lambda: FakeService())
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="hoyo-game",
+                name="HoYo Game",
+                monitoring_path="hoyo.exe",
+                launch_path="hoyo.lnk",
+                stamina_tracking_enabled=True,
+                hoyolab_game_id="honkai_starrail",
+            )
+        ],
+    )
+
+    response = client.post(
+        "/api/gui/hoyolab/stamina",
+        json={"game_id": "honkai_starrail", "process_id": "hoyo-game", "persist_to_process": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["current"] == 144
+    db = gui_routes.SessionLocal()
+    saved = db.query(models.Process).filter_by(id="hoyo-game").one()
+    assert saved.stamina_current == 144
+    assert saved.stamina_max == 240
+    db.close()
+    snapshots = list((tmp_path / "backups" / "mutations" / "managed_processes").glob("*.json"))
+    assert snapshots, "new GUI HoYoLab runtime refresh should leave a guarded pre-mutation snapshot"

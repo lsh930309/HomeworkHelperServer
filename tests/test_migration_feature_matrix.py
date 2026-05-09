@@ -63,7 +63,7 @@ def test_feature_matrix_references_existing_tests_and_docs():
             assert test_name in known_tests, f"{feature_id} references missing test {test_name}"
 
 
-def test_new_gui_default_transition_is_blocked_while_missing_high_risk_features_exist():
+def test_new_gui_has_no_missing_high_risk_features_before_runtime_smoke_gate():
     matrix = _matrix()
     blockers = [
         feature["id"]
@@ -71,4 +71,4 @@ def test_new_gui_default_transition_is_blocked_while_missing_high_risk_features_
         if feature["new_gui_status"] == "missing" and feature["data_risk"] == "high"
     ]
 
-    assert sorted(blockers) == ["HOYOLAB-001"]
+    assert sorted(blockers) == []

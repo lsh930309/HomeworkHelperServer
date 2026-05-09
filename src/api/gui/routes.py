@@ -109,7 +109,36 @@ class SettingsPatch(BaseModel):
         extra = "forbid"
 
 
+class HoYoLabCredentialsPatch(BaseModel):
+    ltuid: int
+    ltoken_v2: str
+    ltmid_v2: str
+    starrail_uid: int | None = None
+    zzz_uid: int | None = None
+
+    class Config:
+        extra = "forbid"
+
+
+class HoYoLabExtractRequest(BaseModel):
+    browser: str
+
+    class Config:
+        extra = "forbid"
+
+
+class HoYoLabStaminaRequest(BaseModel):
+    game_id: str
+    process_id: str | None = None
+    persist_to_process: bool = False
+
+    class Config:
+        extra = "forbid"
+
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_HOYOLAB_GAME_IDS = {"honkai_starrail", "zenless_zone_zero"}
+_HOYOLAB_BROWSERS = {"chrome", "edge", "firefox"}
 
 
 def _validate_time_or_none(value: str | None, field: str) -> str | None:
@@ -411,6 +440,45 @@ def _settings_to_gui(settings: models.GlobalSettings) -> dict[str, Any]:
     return {field: getattr(settings, field) for field in fields}
 
 
+def _hoyolab_status_payload() -> dict[str, Any]:
+    from src.services.hoyolab import HoYoLabService
+    from src.utils.browser_cookie_extractor import DPAPI_AVAILABLE, CRYPTO_AVAILABLE
+    from src.utils.hoyolab_config import DPAPI_AVAILABLE as CREDENTIAL_DPAPI_AVAILABLE
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    config = HoYoLabConfig()
+    service = HoYoLabService(config=config)
+    credentials_file_exists = config.credentials_path.exists()
+    configured = service.is_configured()
+    return {
+        "configured": configured,
+        "credentials_file_exists": credentials_file_exists,
+        "credentials_loadable": configured,
+        "credentials_path": str(config.credentials_path),
+        "service_available": service.is_available(),
+        "dpapi_available": bool(CREDENTIAL_DPAPI_AVAILABLE),
+        "extractor_available": bool(DPAPI_AVAILABLE and CRYPTO_AVAILABLE),
+        "supported_browsers": ["chrome", "edge", "firefox"],
+        "supported_games": [
+            {"id": game_id, "name": meta["name"], "stamina_name": meta["stamina_name"]}
+            for game_id, meta in HoYoLabService.GAME_TYPES.items()
+        ],
+    }
+
+
+def _stamina_to_payload(info: Any) -> dict[str, Any]:
+    return {
+        "game_id": info.game_id,
+        "game_name": info.game_name,
+        "current": info.current,
+        "max": info.max,
+        "recover_time": info.recover_time,
+        "full_time": info.full_time.isoformat() if info.full_time else None,
+        "updated_at": info.updated_at.isoformat(),
+        "updated_at_timestamp": info.updated_at.timestamp(),
+    }
+
+
 @router.get("/main-state")
 def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Return a DB-safe snapshot for the Tauri/React main window."""
@@ -569,6 +637,110 @@ def apply_privilege_setting(db: Session = Depends(get_db)) -> dict[str, Any]:
         "want_admin": want_admin,
         "currently_admin": currently_admin,
     }
+
+
+@router.get("/hoyolab/status")
+def get_hoyolab_status() -> dict[str, Any]:
+    """Return HoYoLab credential/API capability state without exposing secrets."""
+    return _hoyolab_status_payload()
+
+
+@router.put("/hoyolab/credentials")
+def save_hoyolab_credentials(credentials: HoYoLabCredentialsPatch) -> dict[str, Any]:
+    if credentials.ltuid <= 0:
+        raise HTTPException(status_code=422, detail="ltuid 값이 올바르지 않습니다.")
+    if not credentials.ltoken_v2.strip() or not credentials.ltmid_v2.strip():
+        raise HTTPException(status_code=422, detail="필수 HoYoLab 쿠키 값이 비어 있습니다.")
+
+    from src.services.hoyolab import reset_hoyolab_service
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    config = HoYoLabConfig()
+    ok = config.save_credentials(
+        credentials.ltuid,
+        credentials.ltoken_v2.strip(),
+        credentials.ltmid_v2.strip(),
+        starrail_uid=credentials.starrail_uid,
+        zzz_uid=credentials.zzz_uid,
+    )
+    reset_hoyolab_service()
+    if not ok:
+        raise HTTPException(status_code=500, detail="HoYoLab 인증 정보 저장에 실패했습니다.")
+    return _hoyolab_status_payload() | {"ok": True}
+
+
+@router.delete("/hoyolab/credentials")
+def clear_hoyolab_credentials() -> dict[str, Any]:
+    from src.services.hoyolab import reset_hoyolab_service
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    ok = HoYoLabConfig().clear_credentials()
+    reset_hoyolab_service()
+    if not ok:
+        raise HTTPException(status_code=500, detail="HoYoLab 인증 정보 삭제에 실패했습니다.")
+    return _hoyolab_status_payload() | {"ok": True}
+
+
+@router.post("/hoyolab/extract")
+def extract_hoyolab_credentials(request: HoYoLabExtractRequest) -> dict[str, Any]:
+    browser = request.browser.lower()
+    if browser not in _HOYOLAB_BROWSERS:
+        raise HTTPException(status_code=422, detail="지원하지 않는 브라우저입니다.")
+
+    from src.services.hoyolab import reset_hoyolab_service
+    from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+    from src.utils.hoyolab_config import HoYoLabConfig
+
+    extractor = BrowserCookieExtractor()
+    cookies = extractor.extract_from_browser(browser)
+    if not cookies:
+        raise HTTPException(status_code=404, detail=f"{browser}에서 HoYoLab 쿠키를 찾을 수 없습니다.")
+    ok = HoYoLabConfig().save_credentials(
+        int(cookies.get("ltuid") or cookies.get("ltuid_v2") or 0),
+        str(cookies.get("ltoken_v2") or ""),
+        str(cookies.get("ltmid_v2") or ""),
+    )
+    reset_hoyolab_service()
+    if not ok:
+        raise HTTPException(status_code=500, detail="추출한 HoYoLab 인증 정보 저장에 실패했습니다.")
+    return _hoyolab_status_payload() | {"ok": True, "browser": browser}
+
+
+@router.post("/hoyolab/stamina")
+def get_hoyolab_stamina(request: HoYoLabStaminaRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if request.game_id not in _HOYOLAB_GAME_IDS:
+        raise HTTPException(status_code=422, detail="지원하지 않는 HoYoLab 게임입니다.")
+
+    from src.services.hoyolab import get_hoyolab_service
+
+    service = get_hoyolab_service()
+    if not service.is_available():
+        raise HTTPException(status_code=503, detail="HoYoLab API 라이브러리(genshin.py)를 사용할 수 없습니다.")
+    if not service.is_configured():
+        raise HTTPException(status_code=400, detail="HoYoLab 인증 정보가 설정되어 있지 않습니다.")
+
+    info = service.get_stamina(request.game_id)
+    if info is None:
+        raise HTTPException(status_code=502, detail="HoYoLab 스태미나 조회에 실패했습니다.")
+
+    body = _stamina_to_payload(info)
+    if request.persist_to_process:
+        if not request.process_id:
+            raise HTTPException(status_code=422, detail="persist_to_process에는 process_id가 필요합니다.")
+        process = crud.get_process_by_id(db, request.process_id)
+        if process is None:
+            raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        updated = crud.update_process_stamina(
+            db,
+            process.id,
+            stamina_current=info.current,
+            stamina_max=info.max,
+            stamina_updated_at=info.updated_at.timestamp(),
+            actor="new_gui_hoyolab_runtime",
+            operation_kind="process_stamina_refresh",
+        )
+        body["process"] = _process_to_gui_row(updated, _visual_status(updated, crud.get_settings(db), dt.datetime.now(), _running_process_ids([updated])), dt.datetime.now())
+    return body
 
 
 def _resolve_launch_target(process: models.Process) -> str | None:

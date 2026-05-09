@@ -270,8 +270,8 @@
       "name": "HoYoLab 쿠키 저장/추출, 스태미나 조회/보정/종료 후 재동기화",
       "category": "hoyolab",
       "pyqt_status": "complete",
-      "new_gui_status": "missing",
-      "api_or_boundary": "HoYoLabSettingsDialog, src/services/hoyolab.py, src/core/hoyolab_reconcile.py",
+      "new_gui_status": "partial",
+      "api_or_boundary": "HoYoLabSettingsDialog, /api/gui/hoyolab/*, src/services/hoyolab.py, src/core/hoyolab_reconcile.py",
       "data_owned": [
         "managed_processes.stamina_*",
         "process_sessions.stamina_at_end",
@@ -281,13 +281,16 @@
       "data_risk": "high",
       "automated_tests": [
         "test_main_state_reports_stamina_progress_without_schema_changes",
+        "test_gui_hoyolab_credentials_are_managed_without_exposing_tokens",
+        "test_gui_hoyolab_extract_saves_cookies_without_returning_cookie_values",
+        "test_gui_hoyolab_stamina_refresh_can_persist_through_guarded_process_update",
         "test_negative_session_stamina_is_blocked_without_mutating_session"
       ],
       "manual_smoke": [
-        "Chrome/Edge/Firefox 쿠키 추출",
-        "수동 쿠키 저장",
-        "스태미나 테스트 조회",
-        "게임 종료 후 stamina_at_end 기록"
+        "새 GUI 설정 HoYoLab 탭에서 Chrome/Edge/Firefox 쿠키 추출",
+        "새 GUI 설정 HoYoLab 탭에서 수동 쿠키 저장/삭제",
+        "새 GUI 설정 HoYoLab 탭에서 스태미나 테스트 조회",
+        "PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화"
       ]
     },
     {

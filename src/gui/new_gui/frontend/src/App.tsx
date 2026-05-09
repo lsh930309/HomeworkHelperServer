@@ -91,6 +91,31 @@ type GuiSettings = {
   recording_hold_threshold_ms: number;
 };
 
+type HoYoLabGame = {
+  id: 'honkai_starrail' | 'zenless_zone_zero';
+  name: string;
+  stamina_name: string;
+};
+
+type HoYoLabStatus = {
+  configured: boolean;
+  credentials_file_exists: boolean;
+  credentials_loadable: boolean;
+  credentials_path: string;
+  service_available: boolean;
+  dpapi_available: boolean;
+  extractor_available: boolean;
+  supported_browsers: string[];
+  supported_games: HoYoLabGame[];
+};
+
+type HoYoLabCredentialForm = {
+  ltuid: string;
+  ltoken_v2: string;
+  ltmid_v2: string;
+  test_game_id: HoYoLabGame['id'];
+};
+
 type BeholderAction = {
   id: string;
   label: string;
@@ -610,16 +635,35 @@ function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut;
 
 function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = React.useState(settings);
-  const [activeTab, setActiveTab] = React.useState<'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording'>('general');
+  const [activeTab, setActiveTab] = React.useState<'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab'>('general');
+  const [hoyolabStatus, setHoyolabStatus] = React.useState<HoYoLabStatus | null>(null);
+  const [hoyolabForm, setHoyolabForm] = React.useState<HoYoLabCredentialForm>({
+    ltuid: '',
+    ltoken_v2: '',
+    ltmid_v2: '',
+    test_game_id: 'honkai_starrail',
+  });
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
   const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  const updateHoYoLab = <K extends keyof HoYoLabCredentialForm>(key: K, value: HoYoLabCredentialForm[K]) => setHoyolabForm((prev) => ({ ...prev, [key]: value }));
   const updateNumber = <K extends keyof GuiSettings>(key: K, value: string) => {
     const parsed = Number(value);
     update(key, (Number.isFinite(parsed) ? parsed : 0) as GuiSettings[K]);
   };
+
+  const loadHoYoLabStatus = React.useCallback(async () => {
+    const status = await fetchJson<HoYoLabStatus>('/api/gui/hoyolab/status');
+    setHoyolabStatus(status);
+  }, []);
+
+  React.useEffect(() => {
+    if (activeTab === 'hoyolab') {
+      loadHoYoLabStatus().catch((e: any) => setError(e.message));
+    }
+  }, [activeTab, loadHoYoLabStatus]);
 
   const applyPrivilege = async () => {
     setSaving(true);
@@ -660,12 +704,89 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
     }
   };
 
+  const saveHoYoLabCredentials = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const ltuid = Number(hoyolabForm.ltuid);
+      if (!Number.isInteger(ltuid) || ltuid <= 0) throw new Error('LTUID는 양의 정수여야 합니다.');
+      const status = await fetchJson<HoYoLabStatus & { ok: boolean }>('/api/gui/hoyolab/credentials', {
+        method: 'PUT',
+        body: JSON.stringify({
+          ltuid,
+          ltoken_v2: hoyolabForm.ltoken_v2.trim(),
+          ltmid_v2: hoyolabForm.ltmid_v2.trim(),
+        }),
+      });
+      setHoyolabStatus(status);
+      setHoyolabForm((prev) => ({ ...prev, ltoken_v2: '', ltmid_v2: '' }));
+      setMessage('HoYoLab 인증 정보를 저장했습니다.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearHoYoLabCredentials = async () => {
+    if (!window.confirm('저장된 HoYoLab 인증 정보를 삭제할까요?')) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const status = await fetchJson<HoYoLabStatus & { ok: boolean }>('/api/gui/hoyolab/credentials', { method: 'DELETE' });
+      setHoyolabStatus(status);
+      setMessage('HoYoLab 인증 정보를 삭제했습니다.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const extractHoYoLabCredentials = async (browser: string) => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const status = await fetchJson<HoYoLabStatus & { ok: boolean; browser: string }>('/api/gui/hoyolab/extract', {
+        method: 'POST',
+        body: JSON.stringify({ browser }),
+      });
+      setHoyolabStatus(status);
+      setMessage(`${browser}에서 HoYoLab 쿠키를 추출해 저장했습니다.`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testHoYoLabStamina = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await fetchJson<{ game_name: string; current: number; max: number; recover_time: number }>('/api/gui/hoyolab/stamina', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: hoyolabForm.test_game_id }),
+      });
+      setMessage(`${result.game_name}: ${result.current}/${result.max} · 완전 회복까지 약 ${Math.floor(result.recover_time / 60)}분`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const tabs: Array<{ id: typeof activeTab; label: string }> = [
     { id: 'general', label: '일반' },
     { id: 'notify', label: '알림' },
     { id: 'sidebar', label: '사이드바' },
     { id: 'screenshot', label: '스크린샷' },
     { id: 'recording', label: 'OBS 녹화' },
+    { id: 'hoyolab', label: 'HoYoLab' },
   ];
 
   return (
@@ -789,6 +910,45 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
             <label>녹화 출력 폴더<input value={form.obs_recording_output_dir || ''} onChange={(e) => update('obs_recording_output_dir', e.target.value)} placeholder="비우면 OBS 설정 감지" /></label>
             <label>홀드 임계값(ms)<input type="number" min="100" max="2000" step="100" value={form.recording_hold_threshold_ms} onChange={(e) => updateNumber('recording_hold_threshold_ms', e.target.value)} /></label>
             <p className="hint">OBS 설정 자동 불러오기는 Windows 네이티브 후속 작업입니다. 저장 데이터는 기존 PyQt와 같은 DB 필드를 사용합니다.</p>
+          </section>
+        )}
+
+        {activeTab === 'hoyolab' && (
+          <section className="settings-section">
+            <div className={`hoyolab-status ${hoyolabStatus?.configured ? 'ok' : 'warn'}`}>
+              <strong>{hoyolabStatus?.configured ? 'HoYoLab 인증 정보가 준비됨' : 'HoYoLab 인증 정보가 필요함'}</strong>
+              <span>
+                {hoyolabStatus?.credentials_file_exists
+                  ? (hoyolabStatus.credentials_loadable ? '저장된 쿠키를 읽을 수 있습니다.' : '쿠키 파일은 있지만 이 환경에서 복호화할 수 없습니다.')
+                  : '저장된 쿠키 파일이 없습니다.'}
+              </span>
+              <small>저장 위치: {hoyolabStatus?.credentials_path || '확인 중…'}</small>
+            </div>
+            <p className="hint">
+              쿠키는 로컬 Windows 사용자 계정에 묶인 암호화 파일로 저장되며, 새 GUI는 토큰 값을 다시 표시하지 않습니다.
+              macOS 개발 환경에서는 기존 Windows DPAPI 쿠키를 복호화할 수 없어도 실제 Windows 설치본에서는 기존 방식 그대로 동작합니다.
+            </p>
+            <div className="field-row">
+              <button type="button" className="ghost" disabled={saving} onClick={() => extractHoYoLabCredentials('chrome')}>크롬에서 추출</button>
+              <button type="button" className="ghost" disabled={saving} onClick={() => extractHoYoLabCredentials('edge')}>엣지에서 추출</button>
+              <button type="button" className="ghost" disabled={saving} onClick={() => extractHoYoLabCredentials('firefox')}>파이어폭스에서 추출</button>
+            </div>
+            <div className="field-row">
+              <label>LTUID<input value={hoyolabForm.ltuid} onChange={(e) => updateHoYoLab('ltuid', e.target.value)} placeholder="숫자로 된 사용자 ID" /></label>
+              <label>테스트 게임
+                <select value={hoyolabForm.test_game_id} onChange={(e) => updateHoYoLab('test_game_id', e.target.value as HoYoLabCredentialForm['test_game_id'])}>
+                  <option value="honkai_starrail">붕괴: 스타레일</option>
+                  <option value="zenless_zone_zero">젠레스 존 제로</option>
+                </select>
+              </label>
+            </div>
+            <label>LTOKEN_V2<input type="password" value={hoyolabForm.ltoken_v2} onChange={(e) => updateHoYoLab('ltoken_v2', e.target.value)} placeholder="ltoken_v2 쿠키 값" /></label>
+            <label>LTMID_V2<input type="password" value={hoyolabForm.ltmid_v2} onChange={(e) => updateHoYoLab('ltmid_v2', e.target.value)} placeholder="ltmid_v2 쿠키 값" /></label>
+            <div className="field-row">
+              <button type="button" disabled={saving} onClick={saveHoYoLabCredentials}>수동 쿠키 저장</button>
+              <button type="button" className="ghost" disabled={saving || !hoyolabStatus?.configured} onClick={testHoYoLabStamina}>스태미나 조회 테스트</button>
+              <button type="button" className="danger" disabled={saving || !hoyolabStatus?.credentials_file_exists} onClick={clearHoYoLabCredentials}>인증 정보 삭제</button>
+            </div>
           </section>
         )}
 

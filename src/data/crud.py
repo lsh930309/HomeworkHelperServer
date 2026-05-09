@@ -132,6 +132,44 @@ def update_process(
         db.refresh(db_process)
     return db_process
 
+@db_retry_on_lock
+def update_process_stamina(
+    db: Session,
+    process_id: str,
+    *,
+    stamina_current: int,
+    stamina_max: int,
+    stamina_updated_at: float,
+    actor: str = "runtime_stamina_tracker",
+    operation_kind: str = "process_stamina_update",
+    override_token: str | None = None,
+):
+    db_process = get_process_by_id(db, process_id)
+    if db_process:
+        update_data = {
+            "stamina_current": stamina_current,
+            "stamina_max": stamina_max,
+            "stamina_updated_at": stamina_updated_at,
+        }
+        changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
+        _guard_write(
+            db,
+            table=beholder.MANAGED_PROCESSES_TABLE,
+            columns=changed,
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields={"stamina_current", "stamina_max", "stamina_updated_at"},
+            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            override_token=override_token,
+        )
+        if changed:
+            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        for key, value in update_data.items():
+            setattr(db_process, key, value)
+        db.commit()
+        db.refresh(db_process)
+    return db_process
+
 # shortcut management functions
 def get_shortcut_by_id(db: Session, shortcut_id: str):
     return db.query(models.WebShortcut).filter(models.WebShortcut.id == shortcut_id).first()

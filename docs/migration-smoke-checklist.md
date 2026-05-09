@@ -24,12 +24,13 @@
 - [ ] SESSION-001: 앱 재시작 후 중복 open session incident에서 “이전 세션 이어가기”가 동작한다.
 - [ ] BEHOLDER-001: PyQt와 새 GUI 모두 incident를 표시하고 선택 액션을 수행한다.
 - [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
+- [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 쿠키 자동 추출/수동 저장/삭제/스태미나 테스트 조회가 동작한다.
 
 ## PyQt fallback 유지 기능
 
 - [ ] SIDEBAR-001: 게임 실행 시 사이드바 표시/자동 숨김/볼륨/시계/플레이타임이 동작한다.
 - [ ] SCHEDULER-001: 필수 접속/주기/수면 보정/일일 리셋/스태미나 알림이 동작한다.
-- [ ] HOYOLAB-001: 쿠키 추출/수동 저장/스태미나 테스트/종료 후 동기화가 동작한다.
+- [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 `stamina_at_end` 기록 및 시작/종료 재동기화가 동작한다.
 - [ ] SCREENSHOT-001: 트리거 키/게임패드 스크린샷, 저장 폴더, capture mode가 동작한다.
 - [ ] RECORDING-001: OBS 설정 가져오기, 자동 실행, 녹화 시작/중지, 사이드바 상태 표시가 동작한다.
 - [ ] CLIPBOARD-001: 스크린샷 후 파일/이미지 클립보드 붙여넣기가 동작한다.
