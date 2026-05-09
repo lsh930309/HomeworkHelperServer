@@ -171,6 +171,19 @@ def test_installer_has_new_gui_preview_shortcut_and_shutdown_guard():
     assert "taskkill', '/F /IM homework_helper_gui.exe" in installer
 
 
+def test_tauri_preview_shell_has_single_instance_and_tray_runtime_hooks():
+    cargo_toml = Path("src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    shell_source = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+    assert "tauri-plugin-single-instance" in cargo_toml
+    assert 'features = ["tray-icon"]' in cargo_toml
+    assert "tauri_plugin_single_instance::init" in shell_source
+    assert "TrayIconBuilder::with_id" in shell_source
+    assert "WindowEvent::CloseRequested" in shell_source
+    assert "api.prevent_close()" in shell_source
+    assert '"quit" => app.exit(0)' in shell_source
+
+
 def test_packaged_server_allows_tauri_http_origin_for_preview_shell():
     entrypoint = Path("homework_helper.pyw").read_text(encoding="utf-8")
     assert '"http://tauri.localhost"' in entrypoint

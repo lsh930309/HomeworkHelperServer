@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use tauri::Manager;
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8000;
@@ -116,8 +120,25 @@ fn spawn_packaged_backend_if_needed() -> Option<Child> {
     }
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             backend_base_url,
@@ -130,7 +151,45 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_resizable(false);
             }
+
+            let show_item = MenuItemBuilder::with_id("show", "열기").build(app)?;
+            let hide_item = MenuItemBuilder::with_id("hide", "숨기기").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "종료").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .items(&[&show_item, &hide_item, &quit_item])
+                .build()?;
+
+            let mut tray = TrayIconBuilder::with_id("main-tray")
+                .tooltip("HomeworkHelper 새 GUI 미리보기")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
             Ok(())
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "hide" => hide_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .run(tauri::generate_context!())
         .expect("failed to run HomeworkHelper Tauri shell");

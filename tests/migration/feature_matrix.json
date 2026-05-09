@@ -31,16 +31,19 @@
       "name": "단일 인스턴스, 트레이 최소화/복원/종료",
       "category": "app_shell",
       "pyqt_status": "complete",
-      "new_gui_status": "missing",
-      "api_or_boundary": "src/core/instance_manager.py, src/gui/tray_manager.py",
+      "new_gui_status": "partial",
+      "api_or_boundary": "src/core/instance_manager.py, src/gui/tray_manager.py, src-tauri single-instance/tray shell hooks",
       "data_owned": [],
       "beholder_guarded": false,
       "data_risk": "medium",
-      "automated_tests": [],
+      "automated_tests": [
+        "test_tauri_preview_shell_has_single_instance_and_tray_runtime_hooks"
+      ],
       "manual_smoke": [
-        "두 번째 실행 시 기존 창 활성화",
-        "닫기 버튼이 트레이 최소화로 동작",
-        "트레이 메뉴 종료가 정상 종료"
+        "새 GUI 두 번째 실행 시 기존 창 활성화",
+        "새 GUI 닫기 버튼이 트레이 숨김으로 동작",
+        "새 GUI 트레이 메뉴 열기/숨기기/종료가 정상 동작",
+        "PyQt 기본 앱 단일 인스턴스/트레이 동작 유지"
       ]
     },
     {
