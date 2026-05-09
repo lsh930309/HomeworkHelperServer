@@ -301,6 +301,91 @@ def test_gui_settings_patch_updates_preview_runtime_flags(monkeypatch):
     assert body["startup_applied"] is True
 
 
+def test_gui_settings_get_returns_full_global_settings_contract(monkeypatch):
+    from src.data import schemas
+
+    client = _client_with_seed(monkeypatch)
+
+    response = client.get("/api/gui/settings")
+
+    assert response.status_code == 200
+    schema_fields = set(schemas.GlobalSettingsSchema.model_fields if hasattr(schemas.GlobalSettingsSchema, "model_fields") else schemas.GlobalSettingsSchema.__fields__)
+    assert schema_fields <= set(response.json())
+
+
+def test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    client = _client_with_seed(monkeypatch)
+
+    response = client.patch(
+        "/api/gui/settings",
+        json={
+            "sleep_start_time_str": "01:15",
+            "sleep_end_time_str": "07:45",
+            "sleep_correction_advance_notify_hours": 1.5,
+            "cycle_deadline_advance_notify_hours": 3.0,
+            "notify_on_mandatory_time": False,
+            "notify_on_cycle_deadline": False,
+            "notify_on_sleep_correction": False,
+            "notify_on_daily_reset": False,
+            "stamina_notify_enabled": False,
+            "stamina_notify_threshold": 35,
+            "sidebar_auto_hide_ms": 4321,
+            "sidebar_edge_width_px": 7,
+            "sidebar_trigger_y_start": 0.22,
+            "sidebar_trigger_y_end": 0.81,
+            "sidebar_effect": "glass",
+            "sidebar_height_ratio": 0.67,
+            "sidebar_opacity": 0.73,
+            "sidebar_clock_enabled": False,
+            "sidebar_clock_format": "%H:%M",
+            "sidebar_playtime_enabled": False,
+            "sidebar_playtime_prefix": "플레이",
+            "sidebar_volume_section_enabled": False,
+            "screenshot_save_dir": "C:/Shots",
+            "screenshot_gamepad_trigger": False,
+            "screenshot_disable_gamebar": True,
+            "screenshot_capture_mode": "game_window",
+            "screenshot_gamepad_button_index": 4,
+            "screenshot_trigger_vk": 179,
+            "obs_host": "127.0.0.1",
+            "obs_port": 4456,
+            "obs_password": "secret",
+            "obs_exe_path": "C:/OBS/obs64.exe",
+            "obs_auto_launch": True,
+            "obs_launch_hidden": False,
+            "obs_watch_output_dir": False,
+            "obs_recording_output_dir": "C:/Recordings",
+            "recording_hold_threshold_ms": 1200,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sidebar_effect"] == "glass"
+    assert body["screenshot_trigger_vk"] == 179
+    assert body["obs_port"] == 4456
+    assert body["stamina_notify_threshold"] == 35
+
+    db = gui_routes.SessionLocal()
+    saved = db.query(models.GlobalSettings).filter_by(id=1).one()
+    assert saved.sidebar_playtime_prefix == "플레이"
+    assert saved.screenshot_save_dir == "C:/Shots"
+    assert saved.obs_recording_output_dir == "C:/Recordings"
+    assert saved.notify_on_daily_reset is False
+    db.close()
+
+
+def test_gui_settings_patch_rejects_unknown_and_invalid_values(monkeypatch):
+    client = _client_with_seed(monkeypatch)
+
+    assert client.patch("/api/gui/settings", json={"unknown_setting": True}).status_code == 422
+    assert client.patch("/api/gui/settings", json={"sleep_start_time_str": "25:00"}).status_code == 422
+    assert client.patch("/api/gui/settings", json={"obs_port": 70000}).status_code == 422
+    assert client.patch("/api/gui/settings", json={"sidebar_trigger_y_start": 0.9, "sidebar_trigger_y_end": 0.1}).status_code == 422
+
+
 def test_gui_privilege_apply_wraps_admin_restart_helpers(monkeypatch):
     import src.api.gui.routes as gui_routes
 

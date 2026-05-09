@@ -59,14 +59,54 @@ def _dump_model(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
 
 
 class SettingsPatch(BaseModel):
-    theme: str | None = None
-    always_on_top: bool | None = None
-    hide_on_game: bool | None = None
-    run_as_admin: bool | None = None
+    sleep_start_time_str: str | None = None
+    sleep_end_time_str: str | None = None
+    sleep_correction_advance_notify_hours: float | None = None
+    cycle_deadline_advance_notify_hours: float | None = None
     run_on_startup: bool | None = None
+    always_on_top: bool | None = None
+    run_as_admin: bool | None = None
+    notify_on_mandatory_time: bool | None = None
+    notify_on_cycle_deadline: bool | None = None
+    notify_on_sleep_correction: bool | None = None
+    notify_on_daily_reset: bool | None = None
+    stamina_notify_enabled: bool | None = None
+    stamina_notify_threshold: int | None = None
+    theme: str | None = None
+    hide_on_game: bool | None = None
     sidebar_enabled: bool | None = None
+    sidebar_auto_hide_ms: int | None = None
+    sidebar_edge_width_px: int | None = None
+    sidebar_trigger_y_start: float | None = None
+    sidebar_trigger_y_end: float | None = None
+    sidebar_effect: str | None = None
+    sidebar_height_ratio: float | None = None
+    sidebar_opacity: float | None = None
+    sidebar_clock_enabled: bool | None = None
+    sidebar_clock_format: str | None = None
+    sidebar_playtime_enabled: bool | None = None
+    sidebar_playtime_prefix: str | None = None
+    sidebar_volume_section_enabled: bool | None = None
     screenshot_enabled: bool | None = None
+    screenshot_save_dir: str | None = None
+    screenshot_gamepad_trigger: bool | None = None
+    screenshot_disable_gamebar: bool | None = None
+    screenshot_capture_mode: str | None = None
+    screenshot_gamepad_button_index: int | None = None
+    screenshot_trigger_vk: int | None = None
     recording_enabled: bool | None = None
+    obs_host: str | None = None
+    obs_port: int | None = None
+    obs_password: str | None = None
+    obs_exe_path: str | None = None
+    obs_auto_launch: bool | None = None
+    obs_launch_hidden: bool | None = None
+    obs_watch_output_dir: bool | None = None
+    obs_recording_output_dir: str | None = None
+    recording_hold_threshold_ms: int | None = None
+
+    class Config:
+        extra = "forbid"
 
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -85,6 +125,52 @@ def _validate_url(value: str, field: str = "url") -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=422, detail=f"{field}은 http(s) URL이어야 합니다.")
     return value
+
+
+def _settings_patch_fields() -> set[str]:
+    return set(SettingsPatch.model_fields if hasattr(SettingsPatch, "model_fields") else SettingsPatch.__fields__)
+
+
+def _validate_number_range(data: dict[str, Any], field: str, minimum: float, maximum: float) -> None:
+    if field not in data or data[field] is None:
+        return
+    value = data[field]
+    if not isinstance(value, (int, float)) or value < minimum or value > maximum:
+        raise HTTPException(status_code=422, detail=f"{field} 값은 {minimum}~{maximum} 범위여야 합니다.")
+
+
+def _normalize_settings_patch(data: dict[str, Any]) -> dict[str, Any]:
+    for field in ("sleep_start_time_str", "sleep_end_time_str"):
+        if field in data:
+            data[field] = _validate_time_or_none(data[field], field) or "00:00"
+    if "theme" in data and data["theme"] not in {"system", "light", "dark"}:
+        raise HTTPException(status_code=422, detail="theme 값이 올바르지 않습니다.")
+    if "screenshot_capture_mode" in data and data["screenshot_capture_mode"] not in {"fullscreen", "game_window", "window"}:
+        raise HTTPException(status_code=422, detail="screenshot_capture_mode 값이 올바르지 않습니다.")
+
+    _validate_number_range(data, "sleep_correction_advance_notify_hours", 0, 5)
+    _validate_number_range(data, "cycle_deadline_advance_notify_hours", 0, 12)
+    _validate_number_range(data, "stamina_notify_threshold", 1, 100)
+    _validate_number_range(data, "sidebar_auto_hide_ms", 0, 60000)
+    _validate_number_range(data, "sidebar_edge_width_px", 1, 50)
+    _validate_number_range(data, "sidebar_trigger_y_start", 0, 1)
+    _validate_number_range(data, "sidebar_trigger_y_end", 0, 1)
+    _validate_number_range(data, "sidebar_height_ratio", 0.3, 1.0)
+    _validate_number_range(data, "sidebar_opacity", 0.1, 1.0)
+    _validate_number_range(data, "screenshot_gamepad_button_index", -1, 32)
+    _validate_number_range(data, "screenshot_trigger_vk", 0, 255)
+    _validate_number_range(data, "obs_port", 1, 65535)
+    _validate_number_range(data, "recording_hold_threshold_ms", 100, 2000)
+    y_start = data.get("sidebar_trigger_y_start")
+    y_end = data.get("sidebar_trigger_y_end")
+    if y_start is not None and y_end is not None and y_start > y_end:
+        raise HTTPException(status_code=422, detail="sidebar_trigger_y_start는 sidebar_trigger_y_end보다 클 수 없습니다.")
+    for field in ("sidebar_effect", "sidebar_clock_format", "sidebar_playtime_prefix", "screenshot_save_dir", "obs_host", "obs_password", "obs_exe_path", "obs_recording_output_dir"):
+        if field in data and data[field] is None:
+            data[field] = ""
+    if "obs_host" in data and not str(data["obs_host"]).strip():
+        data["obs_host"] = "localhost"
+    return data
 
 
 def _normalize_path(path: str | None) -> str | None:
@@ -321,17 +407,8 @@ def _shortcut_to_gui(shortcut: models.WebShortcut, now_dt: dt.datetime | None = 
 
 
 def _settings_to_gui(settings: models.GlobalSettings) -> dict[str, Any]:
-    return {
-        "theme": settings.theme,
-        "always_on_top": bool(settings.always_on_top),
-        "hide_on_game": bool(settings.hide_on_game),
-        "run_as_admin": bool(settings.run_as_admin),
-        "run_on_startup": bool(settings.run_on_startup),
-        "sidebar_enabled": bool(settings.sidebar_enabled),
-        "sidebar_auto_hide_ms": int(settings.sidebar_auto_hide_ms or 0),
-        "screenshot_enabled": bool(settings.screenshot_enabled),
-        "recording_enabled": bool(settings.recording_enabled),
-    }
+    fields = schemas.GlobalSettingsSchema.model_fields if hasattr(schemas.GlobalSettingsSchema, "model_fields") else schemas.GlobalSettingsSchema.__fields__
+    return {field: getattr(settings, field) for field in fields}
 
 
 @router.get("/main-state")
@@ -450,16 +527,14 @@ def get_settings(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.patch("/settings")
 def patch_settings(settings_patch: SettingsPatch, db: Session = Depends(get_db)) -> dict[str, Any]:
     settings = crud.get_settings(db)
-    data = _dump_model(settings_patch, exclude_unset=True)
-    if "theme" in data and data["theme"] not in {"system", "light", "dark"}:
-        raise HTTPException(status_code=422, detail="theme 값이 올바르지 않습니다.")
+    data = _normalize_settings_patch(_dump_model(settings_patch, exclude_unset=True))
 
     startup_changed = "run_on_startup" in data and bool(data["run_on_startup"]) != bool(settings.run_on_startup)
     settings = crud.patch_settings(
         db,
         data,
         actor="new_gui_settings",
-        allowed_fields=set((SettingsPatch.model_fields if hasattr(SettingsPatch, "model_fields") else SettingsPatch.__fields__).keys()),
+        allowed_fields=_settings_patch_fields(),
     )
 
     startup_applied: bool | None = None

@@ -55,6 +55,7 @@ GLOBAL_DIALOG_FIELDS = {
     "notify_on_sleep_correction", "notify_on_daily_reset", "stamina_notify_enabled",
     "stamina_notify_threshold", "theme", "hide_on_game",
 }
+NEW_GUI_SETTINGS_FIELDS = RUNTIME_SETTINGS_FIELDS | SIDEBAR_SETTINGS_FIELDS | GLOBAL_DIALOG_FIELDS
 
 
 def _schema_fields() -> set[str]:
@@ -77,7 +78,7 @@ def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
     actor = actor or "settings_full_update"
     all_fields = _schema_fields()
     if actor in {"new_gui_settings", "main_gui_settings"}:
-        return set(RUNTIME_SETTINGS_FIELDS)
+        return set(NEW_GUI_SETTINGS_FIELDS)
     if actor == "sidebar_settings_dialog":
         return set(SIDEBAR_SETTINGS_FIELDS)
     if actor == "global_settings_dialog":

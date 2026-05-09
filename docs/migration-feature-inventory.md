@@ -18,19 +18,25 @@
 | GAME-001 | 게임 CRUD/실행 방식 | complete | partial | high | CRUD/API/Beholder 테스트 필수 |
 | GAME-002 | 게임 실행 | complete | partial | medium | Windows smoke 필요 |
 | WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지 |
-| SETTINGS-001 | 전역 설정 | complete | partial | high | 저장 보존 테스트 필수 |
-| SETTINGS-002 | 설정 계약 동기화 | complete | partial | high | model/schema/runtime/migration 동기화 필수 |
-| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | missing | high | 새 GUI 기본 전환 전 구현 필요 |
+| SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 완료 |
+| SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
+| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 설정 편집 가능, runtime 구현 필요 |
 | SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder 테스트 필수 |
-| SCHEDULER-001 | 스케줄러/알림 | complete | missing | medium | Windows smoke 필요 |
+| SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 유지 |
 | HOYOLAB-001 | HoYoLab 스태미나 | complete | missing | high | PyQt fallback + smoke 필요 |
-| SCREENSHOT-001 | 스크린샷 | complete | missing | high | Windows smoke 필요 |
-| RECORDING-001 | OBS 녹화 | complete | missing | high | Windows smoke 필요 |
+| SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집 가능, capture runtime 필요 |
+| RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집 가능, OBS runtime 필요 |
 | BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 양쪽 UI incident UX 유지 |
 | BACKUP-001 | DB/설정/row 백업 | complete | partial | high | 복구 smoke 필요 |
 | BUILD-001 | 패키징 | complete | complete | medium | 기본 빌드에 새 GUI 포함 |
 | CLIPBOARD-001 | 클립보드 payload | complete | missing | low | PyQt 기능 유지 |
+
+## 실사용 데이터 복제 검증
+
+- 로컬에 `HomeworkHelper.zip`이 있으면 `tools/verify_project.py`는 ZIP에서 새 임시 AppData 복제본을 만들어 real-data fixture 검증을 함께 실행한다.
+- 원본 ZIP과 추출물은 Git 추적 대상이 아니며, 테스트는 복제 DB/리소스만 읽거나 수정한다.
+- `python tools/verify_project.py --require-real-data`는 ZIP 부재를 실패로 처리해 마이그레이션 작업자가 실사용 데이터 검증을 의무화할 때 사용한다.
 
 ## 운영 방식
 

@@ -44,14 +44,51 @@ type WebShortcut = {
 };
 
 type GuiSettings = {
-  theme: 'system' | 'light' | 'dark';
-  always_on_top: boolean;
-  hide_on_game: boolean;
-  run_as_admin: boolean;
+  sleep_start_time_str: string;
+  sleep_end_time_str: string;
+  sleep_correction_advance_notify_hours: number;
+  cycle_deadline_advance_notify_hours: number;
   run_on_startup: boolean;
+  always_on_top: boolean;
+  run_as_admin: boolean;
+  notify_on_mandatory_time: boolean;
+  notify_on_cycle_deadline: boolean;
+  notify_on_sleep_correction: boolean;
+  notify_on_daily_reset: boolean;
+  stamina_notify_enabled: boolean;
+  stamina_notify_threshold: number;
+  theme: 'system' | 'light' | 'dark';
+  hide_on_game: boolean;
   sidebar_enabled: boolean;
+  sidebar_auto_hide_ms: number;
+  sidebar_edge_width_px: number;
+  sidebar_trigger_y_start: number;
+  sidebar_trigger_y_end: number;
+  sidebar_effect: string;
+  sidebar_height_ratio: number;
+  sidebar_opacity: number;
+  sidebar_clock_enabled: boolean;
+  sidebar_clock_format: string;
+  sidebar_playtime_enabled: boolean;
+  sidebar_playtime_prefix: string;
+  sidebar_volume_section_enabled: boolean;
   screenshot_enabled: boolean;
+  screenshot_save_dir: string;
+  screenshot_gamepad_trigger: boolean;
+  screenshot_disable_gamebar: boolean;
+  screenshot_capture_mode: 'fullscreen' | 'game_window' | 'window';
+  screenshot_gamepad_button_index: number;
+  screenshot_trigger_vk: number;
   recording_enabled: boolean;
+  obs_host: string;
+  obs_port: number;
+  obs_password: string;
+  obs_exe_path: string;
+  obs_auto_launch: boolean;
+  obs_launch_hidden: boolean;
+  obs_watch_output_dir: boolean;
+  obs_recording_output_dir: string;
+  recording_hold_threshold_ms: number;
 };
 
 type BeholderAction = {
@@ -573,11 +610,16 @@ function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut;
 
 function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = React.useState(settings);
+  const [activeTab, setActiveTab] = React.useState<'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording'>('general');
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
   const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  const updateNumber = <K extends keyof GuiSettings>(key: K, value: string) => {
+    const parsed = Number(value);
+    update(key, (Number.isFinite(parsed) ? parsed : 0) as GuiSettings[K]);
+  };
 
   const applyPrivilege = async () => {
     setSaving(true);
@@ -609,6 +651,7 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
         getCurrentWindow().setAlwaysOnTop(saved.always_on_top).catch(() => undefined);
       }
       setMessage(saved.admin_restart_required ? '관리자 권한 변경은 다음 실행/재시작 후 완전히 반영됩니다.' : '설정을 저장했습니다.');
+      setForm(saved);
       onSaved();
     } catch (e: any) {
       setError(e.message);
@@ -617,25 +660,138 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
     }
   };
 
+  const tabs: Array<{ id: typeof activeTab; label: string }> = [
+    { id: 'general', label: '일반' },
+    { id: 'notify', label: '알림' },
+    { id: 'sidebar', label: '사이드바' },
+    { id: 'screenshot', label: '스크린샷' },
+    { id: 'recording', label: 'OBS 녹화' },
+  ];
+
   return (
     <Modal title="설정" onClose={onClose}>
-      <form className="form-grid" onSubmit={submit}>
-        <label>테마
-          <select value={form.theme} onChange={(e) => update('theme', e.target.value as GuiSettings['theme'])}>
-            <option value="system">시스템</option>
-            <option value="light">라이트</option>
-            <option value="dark">다크</option>
-          </select>
-        </label>
-        <div className="toggle-list">
-          <label className="check"><input type="checkbox" checked={form.always_on_top} onChange={(e) => update('always_on_top', e.target.checked)} /> 항상 위</label>
-          <label className="check"><input type="checkbox" checked={form.hide_on_game} onChange={(e) => update('hide_on_game', e.target.checked)} /> 게임 실행 시 숨김</label>
-          <label className="check"><input type="checkbox" checked={form.run_on_startup} onChange={(e) => update('run_on_startup', e.target.checked)} /> Windows 시작 시 실행</label>
-          <label className="check"><input type="checkbox" checked={form.run_as_admin} onChange={(e) => update('run_as_admin', e.target.checked)} /> 관리자 권한으로 실행</label>
-          <label className="check"><input type="checkbox" checked={form.sidebar_enabled} onChange={(e) => update('sidebar_enabled', e.target.checked)} /> 사이드바</label>
-          <label className="check"><input type="checkbox" checked={form.screenshot_enabled} onChange={(e) => update('screenshot_enabled', e.target.checked)} /> 스크린샷</label>
-          <label className="check"><input type="checkbox" checked={form.recording_enabled} onChange={(e) => update('recording_enabled', e.target.checked)} /> OBS 녹화</label>
+      <form className="form-grid settings-form" onSubmit={submit}>
+        <div className="settings-tabs" role="tablist" aria-label="설정 섹션">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={activeTab === tab.id ? 'active' : 'ghost'}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+
+        {activeTab === 'general' && (
+          <section className="settings-section">
+            <label>테마
+              <select value={form.theme} onChange={(e) => update('theme', e.target.value as GuiSettings['theme'])}>
+                <option value="system">시스템</option>
+                <option value="light">라이트</option>
+                <option value="dark">다크</option>
+              </select>
+            </label>
+            <div className="toggle-list">
+              <label className="check"><input type="checkbox" checked={form.always_on_top} onChange={(e) => update('always_on_top', e.target.checked)} /> 항상 위</label>
+              <label className="check"><input type="checkbox" checked={form.hide_on_game} onChange={(e) => update('hide_on_game', e.target.checked)} /> 게임 실행 시 숨김</label>
+              <label className="check"><input type="checkbox" checked={form.run_on_startup} onChange={(e) => update('run_on_startup', e.target.checked)} /> Windows 시작 시 실행</label>
+              <label className="check"><input type="checkbox" checked={form.run_as_admin} onChange={(e) => update('run_as_admin', e.target.checked)} /> 관리자 권한으로 실행</label>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'notify' && (
+          <section className="settings-section">
+            <div className="field-row">
+              <label>수면 시작<input value={form.sleep_start_time_str} onChange={(e) => update('sleep_start_time_str', e.target.value)} placeholder="HH:MM" /></label>
+              <label>수면 종료<input value={form.sleep_end_time_str} onChange={(e) => update('sleep_end_time_str', e.target.value)} placeholder="HH:MM" /></label>
+            </div>
+            <div className="field-row">
+              <label>수면 보정 알림(시간 전)<input type="number" min="0" max="5" step="0.5" value={form.sleep_correction_advance_notify_hours} onChange={(e) => updateNumber('sleep_correction_advance_notify_hours', e.target.value)} /></label>
+              <label>주기 마감 알림(시간 전)<input type="number" min="0" max="12" step="0.25" value={form.cycle_deadline_advance_notify_hours} onChange={(e) => updateNumber('cycle_deadline_advance_notify_hours', e.target.value)} /></label>
+            </div>
+            <div className="toggle-list">
+              <label className="check"><input type="checkbox" checked={form.notify_on_mandatory_time} onChange={(e) => update('notify_on_mandatory_time', e.target.checked)} /> 고정 접속 시간 알림</label>
+              <label className="check"><input type="checkbox" checked={form.notify_on_cycle_deadline} onChange={(e) => update('notify_on_cycle_deadline', e.target.checked)} /> 사용자 주기 만료 임박 알림</label>
+              <label className="check"><input type="checkbox" checked={form.notify_on_sleep_correction} onChange={(e) => update('notify_on_sleep_correction', e.target.checked)} /> 수면 보정 알림</label>
+              <label className="check"><input type="checkbox" checked={form.notify_on_daily_reset} onChange={(e) => update('notify_on_daily_reset', e.target.checked)} /> 일일 리셋 알림</label>
+              <label className="check"><input type="checkbox" checked={form.stamina_notify_enabled} onChange={(e) => update('stamina_notify_enabled', e.target.checked)} /> 스태미나 가득 참 알림</label>
+            </div>
+            <label>스태미나 알림 시점<input type="number" min="1" max="100" value={form.stamina_notify_threshold} onChange={(e) => updateNumber('stamina_notify_threshold', e.target.value)} /></label>
+          </section>
+        )}
+
+        {activeTab === 'sidebar' && (
+          <section className="settings-section">
+            <div className="toggle-list">
+              <label className="check"><input type="checkbox" checked={form.sidebar_enabled} onChange={(e) => update('sidebar_enabled', e.target.checked)} /> 사이드바 사용</label>
+              <label className="check"><input type="checkbox" checked={form.sidebar_clock_enabled} onChange={(e) => update('sidebar_clock_enabled', e.target.checked)} /> 현재 시간 표시</label>
+              <label className="check"><input type="checkbox" checked={form.sidebar_playtime_enabled} onChange={(e) => update('sidebar_playtime_enabled', e.target.checked)} /> 플레이타임 표시</label>
+              <label className="check"><input type="checkbox" checked={form.sidebar_volume_section_enabled} onChange={(e) => update('sidebar_volume_section_enabled', e.target.checked)} /> 볼륨 섹션 표시</label>
+            </div>
+            <div className="field-row">
+              <label>높이 비율<input type="number" min="0.3" max="1" step="0.05" value={form.sidebar_height_ratio} onChange={(e) => updateNumber('sidebar_height_ratio', e.target.value)} /></label>
+              <label>투명도<input type="number" min="0.1" max="1" step="0.05" value={form.sidebar_opacity} onChange={(e) => updateNumber('sidebar_opacity', e.target.value)} /></label>
+            </div>
+            <div className="field-row">
+              <label>자동 숨김(ms)<input type="number" min="0" max="60000" step="100" value={form.sidebar_auto_hide_ms} onChange={(e) => updateNumber('sidebar_auto_hide_ms', e.target.value)} /></label>
+              <label>엣지 감지(px)<input type="number" min="1" max="50" value={form.sidebar_edge_width_px} onChange={(e) => updateNumber('sidebar_edge_width_px', e.target.value)} /></label>
+            </div>
+            <div className="field-row">
+              <label>트리거 시작 Y<input type="number" min="0" max="1" step="0.01" value={form.sidebar_trigger_y_start} onChange={(e) => updateNumber('sidebar_trigger_y_start', e.target.value)} /></label>
+              <label>트리거 종료 Y<input type="number" min="0" max="1" step="0.01" value={form.sidebar_trigger_y_end} onChange={(e) => updateNumber('sidebar_trigger_y_end', e.target.value)} /></label>
+            </div>
+            <label>효과<input value={form.sidebar_effect} onChange={(e) => update('sidebar_effect', e.target.value)} placeholder="acrylic" /></label>
+            <label>시간 포맷<input value={form.sidebar_clock_format} onChange={(e) => update('sidebar_clock_format', e.target.value)} placeholder="%H:%M:%S" /></label>
+            <label>플레이타임 접두어<input value={form.sidebar_playtime_prefix} onChange={(e) => update('sidebar_playtime_prefix', e.target.value)} /></label>
+          </section>
+        )}
+
+        {activeTab === 'screenshot' && (
+          <section className="settings-section">
+            <div className="toggle-list">
+              <label className="check"><input type="checkbox" checked={form.screenshot_enabled} onChange={(e) => update('screenshot_enabled', e.target.checked)} /> 스크린샷 기능 사용</label>
+              <label className="check"><input type="checkbox" checked={form.screenshot_gamepad_trigger} onChange={(e) => update('screenshot_gamepad_trigger', e.target.checked)} /> 게임패드 트리거</label>
+              <label className="check"><input type="checkbox" checked={form.screenshot_disable_gamebar} onChange={(e) => update('screenshot_disable_gamebar', e.target.checked)} /> Game Bar 캡처 비활성화</label>
+            </div>
+            <label>저장 경로<input value={form.screenshot_save_dir || ''} onChange={(e) => update('screenshot_save_dir', e.target.value)} placeholder="비우면 기본 경로" /></label>
+            <label>캡처 대상
+              <select value={form.screenshot_capture_mode} onChange={(e) => update('screenshot_capture_mode', e.target.value as GuiSettings['screenshot_capture_mode'])}>
+                <option value="fullscreen">전체 화면</option>
+                <option value="game_window">포커스된 게임 창</option>
+                <option value="window">창</option>
+              </select>
+            </label>
+            <div className="field-row">
+              <label>게임패드 버튼 index<input type="number" min="-1" max="32" value={form.screenshot_gamepad_button_index} onChange={(e) => updateNumber('screenshot_gamepad_button_index', e.target.value)} /></label>
+              <label>트리거 VK<input type="number" min="0" max="255" value={form.screenshot_trigger_vk} onChange={(e) => updateNumber('screenshot_trigger_vk', e.target.value)} /></label>
+            </div>
+            <p className="hint">키 캡처 UI는 후속 단계에서 연결합니다. 현재는 저장된 가상 키 코드 값을 직접 보존/수정합니다.</p>
+          </section>
+        )}
+
+        {activeTab === 'recording' && (
+          <section className="settings-section">
+            <div className="toggle-list">
+              <label className="check"><input type="checkbox" checked={form.recording_enabled} onChange={(e) => update('recording_enabled', e.target.checked)} /> 녹화 기능 사용</label>
+              <label className="check"><input type="checkbox" checked={form.obs_auto_launch} onChange={(e) => update('obs_auto_launch', e.target.checked)} /> OBS 자동 실행</label>
+              <label className="check"><input type="checkbox" checked={form.obs_launch_hidden} onChange={(e) => update('obs_launch_hidden', e.target.checked)} /> 최소화 상태로 실행</label>
+              <label className="check"><input type="checkbox" checked={form.obs_watch_output_dir} onChange={(e) => update('obs_watch_output_dir', e.target.checked)} /> 출력 폴더 감시</label>
+            </div>
+            <div className="field-row">
+              <label>OBS 호스트<input value={form.obs_host} onChange={(e) => update('obs_host', e.target.value)} placeholder="localhost" /></label>
+              <label>OBS 포트<input type="number" min="1" max="65535" value={form.obs_port} onChange={(e) => updateNumber('obs_port', e.target.value)} /></label>
+            </div>
+            <label>OBS 비밀번호<input type="password" value={form.obs_password || ''} onChange={(e) => update('obs_password', e.target.value)} placeholder="비밀번호 없으면 비움" /></label>
+            <label>OBS 실행 파일<input value={form.obs_exe_path || ''} onChange={(e) => update('obs_exe_path', e.target.value)} placeholder="obs64.exe 경로" /></label>
+            <label>녹화 출력 폴더<input value={form.obs_recording_output_dir || ''} onChange={(e) => update('obs_recording_output_dir', e.target.value)} placeholder="비우면 OBS 설정 감지" /></label>
+            <label>홀드 임계값(ms)<input type="number" min="100" max="2000" step="100" value={form.recording_hold_threshold_ms} onChange={(e) => updateNumber('recording_hold_threshold_ms', e.target.value)} /></label>
+            <p className="hint">OBS 설정 자동 불러오기는 Windows 네이티브 후속 작업입니다. 저장 데이터는 기존 PyQt와 같은 DB 필드를 사용합니다.</p>
+          </section>
+        )}
+
         {message && <div className="notice compact">{message}</div>}
         {error && <div className="error compact">{error}</div>}
         <div className="modal-actions">

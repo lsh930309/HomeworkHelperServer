@@ -10,6 +10,7 @@ This repository is migrating from the PyQt GUI to a packaged Tauri/React preview
   - `docs/migration-smoke-checklist.md`
 - When adding, removing, or changing a user-visible feature, update the feature matrix and inventory in the same change.
 - When touching a high-risk data feature, add or update an automated test unless the behavior is Windows-only; for Windows-only behavior, add/update the smoke checklist entry.
+- When `HomeworkHelper.zip` exists at the repo root, use it as a read-only real AppData fixture and include clone-based real-data verification for GUI/API/DB/settings/Beholder/migration changes. Never mutate or commit the ZIP or extracted fixture.
 - Do not introduce UI/router direct DB commits. Writes must go through CRUD/API boundaries and Beholder where applicable.
 - The default installed GUI remains `homework_helper.exe`/PyQt until the migration matrix has no high-risk `new_gui_status=missing` blockers. `homework_helper_gui.exe` is a packaged preview shell.
 
@@ -19,6 +20,12 @@ For ordinary code changes, run the strongest feasible automated gate before comp
 
 ```bash
 python tools/verify_project.py
+```
+
+If `HomeworkHelper.zip` is present, this gate also runs real AppData clone checks. To require the fixture explicitly:
+
+```bash
+python tools/verify_project.py --require-real-data
 ```
 
 For packaging or Tauri shell changes, run the full gate:

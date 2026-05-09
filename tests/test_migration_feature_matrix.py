@@ -71,4 +71,4 @@ def test_new_gui_default_transition_is_blocked_while_missing_high_risk_features_
         if feature["new_gui_status"] == "missing" and feature["data_risk"] == "high"
     ]
 
-    assert sorted(blockers) == ["HOYOLAB-001", "RECORDING-001", "SCREENSHOT-001", "SIDEBAR-001"]
+    assert sorted(blockers) == ["HOYOLAB-001"]
