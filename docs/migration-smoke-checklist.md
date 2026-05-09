@@ -38,6 +38,7 @@
 - [ ] BEHOLDER-001: 게임/웹 편집 화면 저장 시 런타임 전용 필드(마지막 플레이, 스태미나, 웹 완료 시각)가 임의로 초기화되지 않는다.
 - [ ] BEHOLDER-001: 설정/스태미나 값이 허용 범위를 벗어날 때 저장이 차단되고 사용자에게 어떤 값이 문제인지 표시된다.
 - [ ] BEHOLDER-001: 새 GUI Beholder modal의 위험 신호는 내부 코드명 대신 사용자 언어로 표시된다.
+- [ ] BEHOLDER-001: 새 저장/편집 기능 추가 시 UI/API route에 직접 db.commit()이 없고 CRUD/Beholder 경계를 통과한다.
 - [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
 - [ ] BACKUP-001: 복구 preview에 현재 DB/백업의 게임·웹·플레이 기록 수와 복구 영향 안내가 표시된다.
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 쿠키 자동 추출/수동 저장/삭제/스태미나 테스트 조회가 동작한다.

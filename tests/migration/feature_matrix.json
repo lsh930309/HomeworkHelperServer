@@ -64,7 +64,8 @@
         "test_gui_process_crud_reuses_backend_models",
         "test_delete_process_with_open_session_offers_safe_cleanup_action",
         "test_process_crud_writes_snapshot_and_preserves_data_contract",
-        "test_process_editor_cannot_mutate_runtime_fields"
+        "test_process_editor_cannot_mutate_runtime_fields",
+        "test_ui_and_api_routes_do_not_commit_database_directly"
       ],
       "manual_smoke": [
         "PyQt에서 게임 추가/편집/삭제",
@@ -148,7 +149,8 @@
         "test_gui_settings_patch_rejects_unknown_and_invalid_values",
         "test_settings_guard_blocks_small_personalized_default_regression",
         "test_real_appdata_main_gui_state_and_icon_cache_use_clone",
-        "test_settings_guard_blocks_invalid_value_ranges"
+        "test_settings_guard_blocks_invalid_value_ranges",
+        "test_ui_and_api_routes_do_not_commit_database_directly"
       ],
       "manual_smoke": [
         "PyQt 전역 설정 저장",
@@ -225,7 +227,8 @@
         "test_continue_existing_session_resolution_reuses_open_session",
         "test_negative_session_stamina_is_blocked_without_mutating_session",
         "test_real_appdata_beholder_detects_legacy_open_sessions",
-        "test_end_session_blocks_negative_stamina_and_keeps_session_open"
+        "test_end_session_blocks_negative_stamina_and_keeps_session_open",
+        "test_ui_and_api_routes_do_not_commit_database_directly"
       ],
       "manual_smoke": [
         "게임 실행 후 세션 시작",
@@ -408,7 +411,8 @@
         "test_beholder_backup_preview_includes_user_safe_db_summary",
         "test_beholder_payload_localizes_invalid_value_risks",
         "test_beholder_payload_localizes_session_end_risks",
-        "test_end_session_blocks_negative_stamina_and_keeps_session_open"
+        "test_end_session_blocks_negative_stamina_and_keeps_session_open",
+        "test_ui_and_api_routes_do_not_commit_database_directly"
       ],
       "manual_smoke": [
         "PyQt incident dialog",

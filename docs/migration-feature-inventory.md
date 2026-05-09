@@ -6,7 +6,7 @@
 
 - `data_risk=high` 기능은 자동 보존 테스트 또는 Windows 수동 smoke 항목이 반드시 있어야 한다.
 - `new_gui_status=missing` 기능은 새 GUI 기본 전환 전 구현 또는 명시적 PyQt fallback 유지가 필요하다.
-- 모든 DB write는 API/CRUD/Beholder 경계를 지나야 하며, UI/router 직접 commit은 금지한다.
+- 모든 DB write는 API/CRUD/Beholder 경계를 지나야 하며, UI/router 직접 commit은 자동 테스트로 금지한다.
 - 기본 실행 파일은 아직 `homework_helper.exe`/PyQt이며, 새 GUI는 `homework_helper_gui.exe` 미리보기 shell이다.
 
 ## 기능 목록 요약
