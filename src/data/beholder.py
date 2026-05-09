@@ -73,6 +73,26 @@ PERSONALIZED_SETTINGS_FIELDS = {
     "recording_hold_threshold_ms",
 }
 
+SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
+    "sleep_correction_advance_notify_hours": (0, 5, "수면 보정 사전 알림 시간"),
+    "cycle_deadline_advance_notify_hours": (0, 12, "주기 마감 사전 알림 시간"),
+    "stamina_notify_threshold": (1, 100, "스태미나 알림 기준"),
+    "sidebar_auto_hide_ms": (0, 60000, "사이드바 자동 숨김 시간"),
+    "sidebar_edge_width_px": (1, 50, "사이드바 엣지 감지 폭"),
+    "sidebar_trigger_y_start": (0, 1, "사이드바 트리거 시작 위치"),
+    "sidebar_trigger_y_end": (0, 1, "사이드바 트리거 종료 위치"),
+    "sidebar_height_ratio": (0.3, 1.0, "사이드바 높이 비율"),
+    "sidebar_opacity": (0.1, 1.0, "사이드바 투명도"),
+    "screenshot_gamepad_button_index": (-1, 32, "게임패드 버튼 번호"),
+    "screenshot_trigger_vk": (0, 255, "스크린샷 트리거 키"),
+    "obs_port": (1, 65535, "OBS 포트"),
+    "recording_hold_threshold_ms": (100, 2000, "녹화 홀드 시간"),
+}
+SETTINGS_ENUM_RULES: dict[str, tuple[set[str], str]] = {
+    "theme": ({"system", "light", "dark"}, "테마"),
+    "screenshot_capture_mode": ({"fullscreen", "game_window", "window"}, "스크린샷 캡처 방식"),
+}
+
 
 def _schema_fields() -> set[str]:
     from src.data import schemas
@@ -181,6 +201,11 @@ def _user_friendly_risk_label(factor: str) -> str:
         "delete_process_with_open_sessions": "열린 기록이 있는 게임 삭제",
         "runtime_history_orphan_risk": "기록이 고아 데이터가 될 위험",
         "invalid_negative_stamina": "음수 스태미나 기록",
+        "invalid_setting_value": "설정 값 범위 오류",
+        "invalid_setting_relation": "설정 조합 오류",
+        "invalid_process_value": "게임 항목 값 범위 오류",
+        "invalid_stamina_range": "스태미나 현재/최대값 충돌",
+        "invalid_timestamp": "비정상 타임스탬프",
         "extreme_duration_without_sufficient_evidence": "비정상적으로 긴 플레이 시간",
     }.get(factor, factor)
 
@@ -364,6 +389,90 @@ def _current_boot_id() -> str | None:
         return None
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_hhmm(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split(":")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return False
+    hour, minute = (int(part) for part in parts)
+    return 0 <= hour <= 23 and 0 <= minute <= 59
+
+
+def _invalid_settings_values(
+    current_settings: models.GlobalSettings,
+    update_data: dict[str, Any],
+    changed_fields: set[str],
+) -> list[str]:
+    invalid: list[str] = []
+    for field, (minimum, maximum, _label) in SETTINGS_RANGE_RULES.items():
+        if field not in changed_fields:
+            continue
+        value = update_data.get(field)
+        if not _is_number(value) or float(value) < minimum or float(value) > maximum:
+            invalid.append(field)
+    for field, (allowed, _label) in SETTINGS_ENUM_RULES.items():
+        if field in changed_fields and update_data.get(field) not in allowed:
+            invalid.append(field)
+    for field in ("sleep_start_time_str", "sleep_end_time_str"):
+        if field in changed_fields and not _is_hhmm(update_data.get(field)):
+            invalid.append(field)
+
+    if {"sidebar_trigger_y_start", "sidebar_trigger_y_end"} & changed_fields:
+        y_start = update_data.get("sidebar_trigger_y_start", getattr(current_settings, "sidebar_trigger_y_start", None))
+        y_end = update_data.get("sidebar_trigger_y_end", getattr(current_settings, "sidebar_trigger_y_end", None))
+        if _is_number(y_start) and _is_number(y_end) and float(y_start) > float(y_end):
+            invalid.append("sidebar_trigger_y_start>sidebar_trigger_y_end")
+    return invalid
+
+
+def _invalid_process_values(
+    current_process: models.Process | None,
+    update_data: dict[str, Any],
+    changed_fields: set[str],
+) -> list[str]:
+    invalid: list[str] = []
+
+    def proposed(field: str) -> Any:
+        if field in update_data:
+            return update_data[field]
+        return getattr(current_process, field, None) if current_process is not None else None
+
+    if "preferred_launch_type" in changed_fields and update_data.get("preferred_launch_type") not in {"shortcut", "direct", "launcher"}:
+        invalid.append("preferred_launch_type")
+    if "user_cycle_hours" in changed_fields:
+        value = update_data.get("user_cycle_hours")
+        if not _is_number(value) or float(value) <= 0 or float(value) > 8760:
+            invalid.append("user_cycle_hours")
+    if "default_volume" in changed_fields:
+        value = update_data.get("default_volume")
+        if value is not None and (not _is_number(value) or float(value) < 0 or float(value) > 100):
+            invalid.append("default_volume")
+
+    for field in ("last_played_timestamp", "stamina_updated_at"):
+        if field in changed_fields:
+            value = update_data.get(field)
+            if value is not None and (not _is_number(value) or float(value) < 0):
+                invalid.append(field)
+
+    for field in ("stamina_current", "stamina_max"):
+        if field in changed_fields:
+            value = update_data.get(field)
+            if value is not None and (not _is_number(value) or float(value) < 0):
+                invalid.append(field)
+
+    current = proposed("stamina_current")
+    maximum = proposed("stamina_max")
+    if {"stamina_current", "stamina_max"} & changed_fields and current is not None and maximum is not None:
+        if _is_number(current) and _is_number(maximum) and float(current) > float(maximum):
+            invalid.append("stamina_current>stamina_max")
+    return invalid
+
+
 def guard_table_write(db: Session, operation: BeholderOperation, table: str, columns: set[str] | None = None) -> None:
     if consume_override_token(db, operation.override_token, operation.kind):
         return
@@ -405,6 +514,48 @@ def guard_table_write(db: Session, operation: BeholderOperation, table: str, col
             )
             raise BeholderBlocked(incident)
 
+
+def guard_process_update(
+    db: Session,
+    current_process: models.Process | None,
+    update_data: dict[str, Any],
+    operation: BeholderOperation,
+    columns: set[str] | None = None,
+) -> None:
+    if consume_override_token(db, operation.override_token, operation.kind):
+        return
+    changed_fields = set(columns if columns is not None else (operation.evidence.get("changed_fields") or []))
+    guard_table_write(db, operation, MANAGED_PROCESSES_TABLE, changed_fields)
+    invalid = _invalid_process_values(current_process, update_data, changed_fields)
+    if invalid:
+        risk_factors = ["invalid_process_value", *invalid]
+        if "stamina_current>stamina_max" in invalid:
+            risk_factors.append("invalid_stamina_range")
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary=f"process_id={getattr(current_process, 'id', None) or (operation.evidence.get('context') or {}).get('process_id', 'new')}",
+            suspected_cause="게임 항목 또는 런타임 상태에 저장될 값이 정상 범위를 벗어났습니다.",
+            current_state_summary=(
+                f"현재 값: cycle={getattr(current_process, 'user_cycle_hours', None)}, "
+                f"volume={getattr(current_process, 'default_volume', None)}, "
+                f"stamina={getattr(current_process, 'stamina_current', None)}/{getattr(current_process, 'stamina_max', None)}"
+            ),
+            proposed_change_summary=f"비정상 후보={invalid}, 요청 값={{{', '.join(f'{k}: {update_data.get(k)!r}' for k in sorted(changed_fields & set(update_data)))}}}",
+            risk_score=91,
+            risk_factors=risk_factors,
+            safe_recommendation="저장을 차단했습니다. 게임 편집/스태미나 갱신 값을 정상 범위로 다시 입력하세요.",
+            user_title="게임 데이터 값이 안전하지 않습니다",
+            user_summary="저장하려는 게임 설정이나 스태미나 값 중 정상 범위를 벗어난 항목이 있습니다.",
+            user_impact="그대로 저장하면 진행률, 알림, 플레이 상태 표시가 잘못 계산될 수 있어 기존 데이터를 유지했습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "비정상 값을 저장하지 않고 기존 게임 데이터를 유지합니다.", "recommended": True},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "외부 도구로 복구 중인 특수 상황이라면 한 번만 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
 
 
 def guard_process_delete(db: Session, process: models.Process, operation: BeholderOperation) -> None:
@@ -479,6 +630,35 @@ def guard_settings_update(db: Session, current_settings: models.GlobalSettings, 
     if not changed_fields:
         return
     guard_table_write(db, operation, GLOBAL_SETTINGS_TABLE, changed_fields)
+
+    invalid_values = _invalid_settings_values(current_settings, update_data, changed_fields)
+    if invalid_values:
+        relation_invalid = any(">" in item for item in invalid_values)
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="설정 화면에서 저장할 수 없는 범위 또는 조합의 값이 들어왔습니다.",
+            current_state_summary=f"현재 변경 대상: {sorted(changed_fields)}",
+            proposed_change_summary=f"비정상 설정 값: {invalid_values}",
+            risk_score=91,
+            risk_factors=[
+                "invalid_setting_value",
+                *invalid_values,
+                *(["invalid_setting_relation"] if relation_invalid else []),
+            ],
+            safe_recommendation="저장을 차단했습니다. 설정 창에서 허용 범위 안의 값으로 다시 저장하세요.",
+            user_title="설정 값이 안전한 범위를 벗어났습니다",
+            user_summary="저장하려는 설정 중 앱이 정상적으로 해석할 수 없는 값이 있습니다.",
+            user_impact="그대로 저장하면 사이드바 위치, 알림 시각, 캡처/녹화 동작이 비정상적으로 계산될 수 있어 기존 설정을 유지했습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "비정상 설정을 저장하지 않고 기존 설정을 유지합니다.", "recommended": True},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "백업 복구 등 의도한 특수 작업일 때만 한 번 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
 
     defaults = _schema_defaults()
     defaulted = [field for field in changed_fields if field in defaults and update_data.get(field) == defaults[field]]

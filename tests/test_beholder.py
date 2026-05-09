@@ -301,6 +301,38 @@ def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch
     assert crud.get_settings(db).screenshot_save_dir == "C:/Shots"
 
 
+def test_settings_guard_blocks_invalid_value_ranges(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    crud.patch_settings(
+        db,
+        {"sidebar_trigger_y_start": 0.2, "sidebar_trigger_y_end": 0.8},
+        actor="new_gui_settings",
+        allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+    )
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_trigger_y_start": 0.95, "sidebar_trigger_y_end": 0.1},
+            actor="new_gui_settings",
+            allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+        )
+        assert False, "invalid setting relations should be blocked centrally"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+        assert "invalid_setting_value" in payload["risk_factors"]
+        assert "invalid_setting_relation" in payload["risk_factors"]
+        assert payload["recommended_action"] == "deny"
+        assert "설정" in payload["user_title"]
+
+    settings = crud.get_settings(db)
+    assert settings.sidebar_trigger_y_start == 0.2
+    assert settings.sidebar_trigger_y_end == 0.8
+
+
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
@@ -436,6 +468,47 @@ def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp
     db.expire_all()
     unchanged = db.query(models.WebShortcut).filter_by(id=shortcut.id).one()
     assert unchanged.last_reset_timestamp == opened_at
+
+
+def test_process_runtime_stamina_guard_blocks_impossible_range(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="stamina-range",
+        name="Stamina Range",
+        monitoring_path="C:/Games/Stamina.exe",
+        launch_path="C:/Games/Stamina.lnk",
+    ))
+    crud.update_process_stamina(
+        db,
+        process.id,
+        stamina_current=20,
+        stamina_max=100,
+        stamina_updated_at=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+    )
+
+    try:
+        crud.update_process_stamina(
+            db,
+            process.id,
+            stamina_current=120,
+            stamina_max=100,
+            stamina_updated_at=dt.datetime(2026, 5, 8, 12, 5).timestamp(),
+        )
+        assert False, "current stamina greater than max should be blocked"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+        assert "invalid_process_value" in payload["risk_factors"]
+        assert "invalid_stamina_range" in payload["risk_factors"]
+        assert payload["recommended_action"] == "deny"
+        assert payload["user_impact"]
+
+    db.expire_all()
+    unchanged = db.query(models.Process).filter_by(id=process.id).one()
+    assert unchanged.stamina_current == 20
+    assert unchanged.stamina_max == 100
 
 
 def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):

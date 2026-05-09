@@ -144,7 +144,8 @@
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
         "test_gui_settings_patch_rejects_unknown_and_invalid_values",
         "test_settings_guard_blocks_small_personalized_default_regression",
-        "test_real_appdata_main_gui_state_and_icon_cache_use_clone"
+        "test_real_appdata_main_gui_state_and_icon_cache_use_clone",
+        "test_settings_guard_blocks_invalid_value_ranges"
       ],
       "manual_smoke": [
         "PyQt 전역 설정 저장",
@@ -169,7 +170,8 @@
         "test_settings_persistence_contract_includes_sidebar_dialog_fields",
         "test_global_settings_contract_covers_model_schema_runtime_and_migrations",
         "test_gui_settings_get_returns_full_global_settings_contract",
-        "test_real_appdata_zip_structure_and_db_integrity"
+        "test_real_appdata_zip_structure_and_db_integrity",
+        "test_settings_guard_blocks_invalid_value_ranges"
       ],
       "manual_smoke": []
     },
@@ -302,7 +304,8 @@
         "test_gui_hoyolab_credentials_are_managed_without_exposing_tokens",
         "test_gui_hoyolab_extract_saves_cookies_without_returning_cookie_values",
         "test_gui_hoyolab_stamina_refresh_can_persist_through_guarded_process_update",
-        "test_negative_session_stamina_is_blocked_without_mutating_session"
+        "test_negative_session_stamina_is_blocked_without_mutating_session",
+        "test_process_runtime_stamina_guard_blocks_impossible_range"
       ],
       "manual_smoke": [
         "새 GUI 설정 HoYoLab 탭에서 Chrome/Edge/Firefox 쿠키 추출",
@@ -389,7 +392,9 @@
         "test_new_gui_beholder_restore_uses_preview_before_restore",
         "test_beholder_payload_explains_risks_and_action_outcomes",
         "test_process_editor_cannot_mutate_runtime_fields",
-        "test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp"
+        "test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp",
+        "test_settings_guard_blocks_invalid_value_ranges",
+        "test_process_runtime_stamina_guard_blocks_impossible_range"
       ],
       "manual_smoke": [
         "PyQt incident dialog",

@@ -61,16 +61,15 @@ def create_process(
     provided_id = process_data.pop('id', None)
     process_id = provided_id if provided_id else str(uuid.uuid4())
     guard_columns = {key for key, value in process_data.items() if key in beholder.PROCESS_EDITOR_FIELDS or value is not None} | {"id"}
-    _guard_write(
-        db,
-        table=beholder.MANAGED_PROCESSES_TABLE,
-        columns=guard_columns,
+    operation = beholder.BeholderOperation(
+        kind=operation_kind,
         actor=actor,
-        operation_kind=operation_kind,
-        allowed_fields=beholder.PROCESS_EDITOR_FIELDS,
-        context={"process_id": process_id, "process_name": process_data.get("name")},
+        allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+        allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS},
+        evidence={"changed_fields": sorted(guard_columns), "context": {"process_id": process_id, "process_name": process_data.get("name")}},
         override_token=override_token,
     )
+    beholder.guard_process_update(db, None, process_data, operation, guard_columns)
     db_process = models.Process(id=process_id, **process_data)
     db.add(db_process)
     db.commit()
@@ -117,16 +116,15 @@ def update_process(
         update_data = _dump_schema(process, exclude_unset=True)
         update_data.pop("id", None)
         changed = {key for key, value in update_data.items() if hasattr(db_process, key) and getattr(db_process, key) != value}
-        _guard_write(
-            db,
-            table=beholder.MANAGED_PROCESSES_TABLE,
-            columns=changed,
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
             actor=actor,
-            operation_kind=operation_kind,
-            allowed_fields=beholder.PROCESS_EDITOR_FIELDS - {"id"},
-            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS - {"id"}},
+            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
             override_token=override_token,
         )
+        beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
             backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
@@ -155,16 +153,15 @@ def update_process_stamina(
             "stamina_updated_at": stamina_updated_at,
         }
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
-        _guard_write(
-            db,
-            table=beholder.MANAGED_PROCESSES_TABLE,
-            columns=changed,
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
             actor=actor,
-            operation_kind=operation_kind,
-            allowed_fields={"stamina_current", "stamina_max", "stamina_updated_at"},
-            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at"}},
+            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
             override_token=override_token,
         )
+        beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
             backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
@@ -197,16 +194,15 @@ def update_process_runtime_state(
         }
         update_data = {key: value for key, value in update_data.items() if value is not None}
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
-        _guard_write(
-            db,
-            table=beholder.MANAGED_PROCESSES_TABLE,
-            columns=changed,
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
             actor=actor,
-            operation_kind=operation_kind,
-            allowed_fields={"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"},
-            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}},
+            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
             override_token=override_token,
         )
+        beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
             backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
