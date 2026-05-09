@@ -27,7 +27,7 @@
 | HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회/즉시 새로고침 가능, 스태미나 범위 guard 유지, 종료 후 재동기화 runtime smoke 필요 |
 | SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집/키 캡처/최근 갤러리 보조 가능, capture runtime smoke 필요 |
 | RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집/OBS 설정 불러오기/최근 녹화물 보조 가능, OBS runtime 필요 |
-| BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 사용자 친화 incident UX/DB 요약 백업 preview/스마트 세션 복구/actor별 필드·값 범위 guard 유지, Windows 복구 smoke 필요 |
+| BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 사용자 친화 incident UX/내부 코드명 없는 위험 라벨/DB 요약 백업 preview/스마트 세션 복구/actor별 필드·값 범위 guard 유지, Windows 복구 smoke 필요 |
 | BACKUP-001 | DB/설정/row 백업 | complete | partial | high | 새 GUI 복구 preview에 DB 요약/영향 안내 제공, 실제 복구 smoke 필요 |
 | BUILD-001 | 패키징 | complete | complete | medium | 기본 빌드에 새 GUI 포함 |
 | CLIPBOARD-001 | 클립보드 payload | complete | partial | low | 새 GUI API payload 및 사이드바 갤러리 복사 경계 제공, gallery runtime smoke 필요 |

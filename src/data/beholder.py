@@ -93,6 +93,50 @@ SETTINGS_ENUM_RULES: dict[str, tuple[set[str], str]] = {
     "screenshot_capture_mode": ({"fullscreen", "game_window", "window"}, "스크린샷 캡처 방식"),
 }
 
+FIELD_LABELS: dict[str, str] = {
+    **{field: label for field, (_minimum, _maximum, label) in SETTINGS_RANGE_RULES.items()},
+    **{field: label for field, (_allowed, label) in SETTINGS_ENUM_RULES.items()},
+    "global_settings": "전체 설정",
+    "managed_processes": "게임 항목",
+    "web_shortcuts": "웹 바로가기",
+    "process_sessions": "플레이 기록",
+    "sleep_start_time_str": "수면 시작 시각",
+    "sleep_end_time_str": "수면 종료 시각",
+    "always_on_top": "항상 위",
+    "run_as_admin": "관리자 권한 실행",
+    "run_on_startup": "시작프로그램",
+    "hide_on_game": "게임 실행 시 숨김",
+    "notify_on_mandatory_time": "필수 시간 알림",
+    "notify_on_cycle_deadline": "주기 마감 알림",
+    "notify_on_sleep_correction": "수면 보정 알림",
+    "notify_on_daily_reset": "일일 초기화 알림",
+    "stamina_notify_enabled": "스태미나 알림",
+    "sidebar_enabled": "사이드바 사용",
+    "sidebar_clock_enabled": "사이드바 시계 표시",
+    "sidebar_playtime_enabled": "사이드바 플레이타임 표시",
+    "sidebar_volume_section_enabled": "사이드바 볼륨 영역",
+    "screenshot_enabled": "스크린샷 사용",
+    "screenshot_save_dir": "스크린샷 저장 폴더",
+    "screenshot_gamepad_trigger": "게임패드 스크린샷 트리거",
+    "screenshot_disable_gamebar": "Xbox Game Bar 비활성화",
+    "recording_enabled": "녹화 사용",
+    "obs_host": "OBS 호스트",
+    "obs_password": "OBS 비밀번호",
+    "obs_exe_path": "OBS 실행 파일",
+    "obs_auto_launch": "OBS 자동 실행",
+    "obs_launch_hidden": "OBS 숨김 실행",
+    "obs_watch_output_dir": "OBS 출력 폴더 감시",
+    "obs_recording_output_dir": "OBS 녹화 저장 폴더",
+    "preferred_launch_type": "실행 방식",
+    "user_cycle_hours": "반복 주기",
+    "default_volume": "기본 볼륨",
+    "last_played_timestamp": "마지막 플레이 시각",
+    "stamina_current": "현재 스태미나",
+    "stamina_max": "최대 스태미나",
+    "stamina_updated_at": "스태미나 갱신 시각",
+    "last_reset_timestamp": "웹 바로가기 완료 시각",
+}
+
 
 def _schema_fields() -> set[str]:
     from src.data import schemas
@@ -181,23 +225,22 @@ def _default_user_title(incident: models.BeholderIncident) -> str:
 
 
 def _user_friendly_risk_label(factor: str) -> str:
-    return {
+    labels = {
         "unauthorized_table_write": "정상 화면 밖 데이터 변경",
         "unauthorized_column_write": "현재 화면에서 바꿀 수 없는 항목 포함",
-        "last_played_timestamp": "마지막 플레이 시각 변경",
-        "stamina_current": "현재 스태미나 변경",
-        "stamina_max": "최대 스태미나 변경",
-        "stamina_updated_at": "스태미나 갱신 시각 변경",
-        "last_reset_timestamp": "웹 바로가기 완료 시각 변경",
         "bulk_settings_default_regression": "대량 설정 초기화 의심",
         "personalized_settings_default_regression": "개인화 설정 초기화 의심",
         "duplicate_open_session": "열린 플레이 기록 중복",
+        "runtime_state_ambiguous": "앱 재시작 후 현재 실행 상태 판단 필요",
+        "open_session_after_app_restart": "앱 재시작 후 닫히지 않은 기록",
         "duplicate_legacy_open_session": "이전 버전 열린 기록 충돌",
+        "legacy_open_session_stale": "오래된 열린 기록만 남아 있음",
         "open_session_after_restart": "앱 재시작 후 닫히지 않은 기록",
         "game_not_running": "현재 게임 미실행",
         "last_heartbeat_available": "마지막 앱 생존 시각 확인됨",
         "pc_reboot_detected": "PC 재부팅 정황",
         "legacy_open_session_without_heartbeat": "종료 시각 복구 불가",
+        "legacy_session_metadata_missing": "이전 버전 기록 정보 부족",
         "delete_process_with_open_sessions": "열린 기록이 있는 게임 삭제",
         "runtime_history_orphan_risk": "기록이 고아 데이터가 될 위험",
         "invalid_negative_stamina": "음수 스태미나 기록",
@@ -206,8 +249,28 @@ def _user_friendly_risk_label(factor: str) -> str:
         "invalid_process_value": "게임 항목 값 범위 오류",
         "invalid_stamina_range": "스태미나 현재/최대값 충돌",
         "invalid_timestamp": "비정상 타임스탬프",
+        "negative_duration": "종료 시간이 시작 시간보다 빠름",
+        "unknown_owner_long_session": "기록 소유자를 알 수 없는 장시간 세션",
         "extreme_duration_without_sufficient_evidence": "비정상적으로 긴 플레이 시간",
-    }.get(factor, factor)
+        "stale_heartbeat": "마지막 앱 생존 시각이 너무 오래됨",
+        "actor_not_runtime_owner": "런타임 담당자가 아닌 요청",
+    }
+    if factor in labels:
+        return labels[factor]
+    if factor in FIELD_LABELS:
+        return f"{FIELD_LABELS[factor]} 변경"
+    if factor.startswith("invalid_current_status:"):
+        status = factor.split(":", 1)[1]
+        status_label = {
+            "abandoned": "버려진 기록",
+            "quarantined": "격리된 기록",
+            "closed": "이미 닫힌 기록",
+        }.get(status, f"알 수 없는 상태({status})")
+        return f"{status_label}을 다시 종료하려는 요청"
+    if ">" in factor:
+        left, right = factor.split(">", 1)
+        return f"{FIELD_LABELS.get(left, left)} 값이 {FIELD_LABELS.get(right, right)}보다 큼"
+    return factor
 
 
 def _action_outcome(action_id: str) -> str:

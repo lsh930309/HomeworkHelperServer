@@ -403,7 +403,9 @@
         "test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp",
         "test_settings_guard_blocks_invalid_value_ranges",
         "test_process_runtime_stamina_guard_blocks_impossible_range",
-        "test_beholder_backup_preview_includes_user_safe_db_summary"
+        "test_beholder_backup_preview_includes_user_safe_db_summary",
+        "test_beholder_payload_localizes_invalid_value_risks",
+        "test_beholder_payload_localizes_session_end_risks"
       ],
       "manual_smoke": [
         "PyQt incident dialog",
@@ -413,7 +415,8 @@
         "복구 불가 legacy open session 정리",
         "기록 닫고 게임 삭제",
         "백업 복구",
-        "새 GUI Beholder modal에서 추천 액션/결과/위험 신호가 사용자 언어로 보임"
+        "새 GUI Beholder modal에서 추천 액션/결과/위험 신호가 사용자 언어로 보임",
+        "새 GUI Beholder modal의 위험 신호에 runtime_state_ambiguous/sidebar_trigger_y_start 같은 내부 코드명이 노출되지 않음"
       ]
     },
     {

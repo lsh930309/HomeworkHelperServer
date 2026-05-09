@@ -200,6 +200,8 @@ def test_duplicate_open_session_incident_offers_continue_action(monkeypatch):
     assert payload["recommended_action"] == "continue_existing_session"
     assert "continue_existing_session" in {action["id"] for action in payload["available_actions"]}
     assert payload["user_title"]
+    assert "앱 재시작 후 현재 실행 상태 판단 필요" in payload["risk_labels"]
+    assert "runtime_state_ambiguous" not in payload["risk_labels"]
 
 
 def test_legacy_open_session_duplicate_recommends_abandon_and_start_new(monkeypatch):
@@ -589,3 +591,60 @@ def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
     assert deny["recommended"] is True
     assert deny["outcome"]
     assert deny["recommended_reason"]
+
+
+def test_beholder_payload_localizes_invalid_value_risks(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    crud.get_settings(db)
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_trigger_y_start": 0.9, "sidebar_trigger_y_end": 0.1},
+            actor="new_gui_settings",
+            allowed_fields={"sidebar_trigger_y_start", "sidebar_trigger_y_end"},
+        )
+        assert False, "invalid sidebar trigger range should be blocked"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+
+    assert "설정 값 범위 오류" in payload["risk_labels"]
+    assert "설정 조합 오류" in payload["risk_labels"]
+    assert "사이드바 트리거 시작 위치 값이 사이드바 트리거 종료 위치보다 큼" in payload["risk_labels"]
+    assert all("sidebar_trigger" not in label for label in payload["risk_labels"])
+
+
+def test_beholder_payload_localizes_session_end_risks(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=start,
+        end_timestamp=start + 60,
+        session_duration=60,
+        session_status="closed",
+        session_owner="process_monitor",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(
+            db,
+            session.id,
+            start - 60,
+            actor="manual_debug_tool",
+            operation_kind="runtime_stop",
+        )
+        assert False, "negative duration and closed status should be blocked"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+
+    assert "종료 시간이 시작 시간보다 빠름" in payload["risk_labels"]
+    assert "이미 닫힌 기록을 다시 종료하려는 요청" in payload["risk_labels"]
+    assert "런타임 담당자가 아닌 요청" in payload["risk_labels"]
+    assert all("invalid_current_status" not in label for label in payload["risk_labels"])
