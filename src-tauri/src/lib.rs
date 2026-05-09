@@ -157,6 +157,18 @@ pub fn run() {
                 let _ = window.set_decorations(false);
                 let _ = window.set_skip_taskbar(true);
             }
+            for label in [
+                "settings-general",
+                "settings-notify",
+                "settings-sidebar",
+                "settings-screenshot",
+                "settings-recording",
+                "settings-hoyolab",
+            ] {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.set_resizable(false);
+                }
+            }
 
             let show_item = MenuItemBuilder::with_id("show", "열기").build(app)?;
             let hide_item = MenuItemBuilder::with_id("hide", "숨기기").build(app)?;

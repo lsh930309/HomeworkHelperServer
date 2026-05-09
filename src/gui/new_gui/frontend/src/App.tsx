@@ -1,7 +1,7 @@
 import React from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { invoke } from '@tauri-apps/api/core';
-import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition, primaryMonitor } from '@tauri-apps/api/window';
+import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition, primaryMonitor, Window } from '@tauri-apps/api/window';
 
 type Progress = {
   kind: 'time' | 'stamina';
@@ -197,6 +197,8 @@ type ContextMenuState = {
   items: ContextMenuItem[];
 };
 
+type SettingsTab = 'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab';
+
 const API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const SIDEBAR_PANEL_WIDTH = 320;
@@ -205,6 +207,14 @@ const SIDEBAR_TOTAL_WIDTH = SIDEBAR_PANEL_WIDTH + SIDEBAR_HANDLE_WIDTH;
 const SIDEBAR_MIN_HEIGHT = 360;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; windowLabel: string }> = [
+  { id: 'general', label: '일반', windowLabel: 'settings-general' },
+  { id: 'notify', label: '알림', windowLabel: 'settings-notify' },
+  { id: 'sidebar', label: '사이드바', windowLabel: 'settings-sidebar' },
+  { id: 'screenshot', label: '스크린샷', windowLabel: 'settings-screenshot' },
+  { id: 'recording', label: 'OBS 녹화', windowLabel: 'settings-recording' },
+  { id: 'hoyolab', label: 'HoYoLab', windowLabel: 'settings-hoyolab' },
+];
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -300,6 +310,36 @@ function useWindowPlacement(enabled: boolean) {
     }).catch(() => undefined);
     return () => unlisten?.();
   }, [enabled]);
+}
+
+async function showPopupWindow(label: string) {
+  const win = await Window.getByLabel(label);
+  if (!win) throw new Error(`팝업 창을 찾을 수 없습니다: ${label}`);
+  await win.show();
+  await win.unminimize();
+  await win.setFocus();
+}
+
+function PopupFrame({ title, children, className = '' }: React.PropsWithChildren<{ title: string; className?: string }>) {
+  const ref = React.useRef<HTMLElement | null>(null);
+  const isTauri = isTauriRuntime();
+  useContentSizedWindow(ref, isTauri);
+  const close = () => {
+    if (isTauri) getCurrentWindow().hide().catch(() => undefined);
+    else window.close();
+  };
+  return (
+    <main className={`popup-shell ${className}`} ref={ref}>
+      <header className="popup-head">
+        <div>
+          <div className="eyebrow">HomeworkHelper 새 GUI</div>
+          <h1>{title}</h1>
+        </div>
+        <button className="ghost" onClick={close}>닫기</button>
+      </header>
+      {children}
+    </main>
+  );
 }
 
 function useSidebarDrawerWindow(settings: GuiSettings | null, open: boolean, enabled: boolean) {
@@ -696,9 +736,21 @@ function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut;
   );
 }
 
-function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; onClose: () => void; onSaved: () => void }) {
+function SettingsModal({
+  settings,
+  onClose,
+  onSaved,
+  initialTab = 'general',
+  standalone = false,
+}: {
+  settings: GuiSettings;
+  onClose: () => void;
+  onSaved: () => void;
+  initialTab?: SettingsTab;
+  standalone?: boolean;
+}) {
   const [form, setForm] = React.useState(settings);
-  const [activeTab, setActiveTab] = React.useState<'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab'>('general');
+  const [activeTab, setActiveTab] = React.useState<SettingsTab>(initialTab);
   const [hoyolabStatus, setHoyolabStatus] = React.useState<HoYoLabStatus | null>(null);
   const [screenshotKeyInfo, setScreenshotKeyInfo] = React.useState<{ display_name: string; hex: string; capture_supported: boolean } | null>(null);
   const [hoyolabForm, setHoyolabForm] = React.useState<HoYoLabCredentialForm>({
@@ -893,25 +945,24 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
     }
   };
 
-  const tabs: Array<{ id: typeof activeTab; label: string }> = [
-    { id: 'general', label: '일반' },
-    { id: 'notify', label: '알림' },
-    { id: 'sidebar', label: '사이드바' },
-    { id: 'screenshot', label: '스크린샷' },
-    { id: 'recording', label: 'OBS 녹화' },
-    { id: 'hoyolab', label: 'HoYoLab' },
-  ];
+  const switchSettingsPanel = async (tab: SettingsTab) => {
+    setActiveTab(tab);
+    if (!standalone || !isTauriRuntime()) return;
+    const target = SETTINGS_TABS.find((item) => item.id === tab);
+    if (!target) return;
+    await showPopupWindow(target.windowLabel).catch((e) => setError(e.message));
+    getCurrentWindow().hide().catch(() => undefined);
+  };
 
-  return (
-    <Modal title="설정" onClose={onClose}>
+  const content = (
       <form className="form-grid settings-form" onSubmit={submit}>
         <div className="settings-tabs" role="tablist" aria-label="설정 섹션">
-          {tabs.map((tab) => (
+          {SETTINGS_TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               className={activeTab === tab.id ? 'active' : 'ghost'}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => switchSettingsPanel(tab.id)}
             >
               {tab.label}
             </button>
@@ -1080,8 +1131,12 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
           <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
         </div>
       </form>
-    </Modal>
   );
+
+  if (standalone) {
+    return <PopupFrame title={`설정 · ${SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label || ''}`} className="settings-popup">{content}</PopupFrame>;
+  }
+  return <Modal title="설정" onClose={onClose}>{content}</Modal>;
 }
 
 function formatPlaytime(timestamp?: number | null) {
@@ -1259,6 +1314,59 @@ function SidebarApp() {
         </footer>
       </section>
     </main>
+  );
+}
+
+function settingsTabFromRuntime(): SettingsTab {
+  const params = new URLSearchParams(window.location.search);
+  const queryTab = params.get('tab') as SettingsTab | null;
+  if (queryTab && SETTINGS_TABS.some((tab) => tab.id === queryTab)) return queryTab;
+  if (isTauriRuntime()) {
+    const label = getCurrentWindow().label;
+    const match = SETTINGS_TABS.find((tab) => tab.windowLabel === label);
+    if (match) return match.id;
+  }
+  return 'general';
+}
+
+function SettingsWindowApp() {
+  const [state, setState] = React.useState<MainState | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const tab = React.useMemo(() => settingsTabFromRuntime(), []);
+  const load = React.useCallback(() => {
+    fetchJson<MainState>('/api/gui/main-state')
+      .then((body) => {
+        setState(body);
+        setError(null);
+      })
+      .catch((e: any) => setError(e.message || String(e)));
+  }, []);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const close = () => {
+    if (isTauriRuntime()) getCurrentWindow().hide().catch(() => undefined);
+    else window.close();
+  };
+
+  if (!state) {
+    return (
+      <PopupFrame title="설정" className="settings-popup">
+        <p className="notice compact">{error || '설정을 불러오는 중…'}</p>
+      </PopupFrame>
+    );
+  }
+
+  return (
+    <SettingsModal
+      settings={state.settings}
+      initialTab={tab}
+      standalone
+      onClose={close}
+      onSaved={load}
+    />
   );
 }
 
@@ -1452,6 +1560,18 @@ function MainApp() {
     }
   };
 
+  const openSettings = async () => {
+    if (!isTauri) {
+      setSettingsOpen(true);
+      return;
+    }
+    try {
+      await showPopupWindow('settings-general');
+    } catch (e: any) {
+      handleError(e);
+    }
+  };
+
   if (!state) {
     return (
       <main className="shell loading" ref={rootRef}>
@@ -1472,7 +1592,7 @@ function MainApp() {
           <button onClick={() => setEditingProcess('new')}>+ 게임</button>
           <button onClick={() => setEditingShortcut('new')}>+ 웹</button>
           <button onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
-          <button className="ghost" onClick={() => setSettingsOpen(true)}>설정</button>
+          <button className="ghost" onClick={openSettings}>설정</button>
         </div>
       </header>
 
@@ -1555,7 +1675,10 @@ function MainApp() {
 }
 
 export default function App() {
-  const label = isTauriRuntime() ? getCurrentWindow().label : 'main';
+  const params = new URLSearchParams(window.location.search);
+  const queryWindow = params.get('window');
+  const label = queryWindow || (isTauriRuntime() ? getCurrentWindow().label : 'main');
   if (label === 'sidebar') return <SidebarApp />;
+  if (label.startsWith('settings-')) return <SettingsWindowApp />;
   return <MainApp />;
 }

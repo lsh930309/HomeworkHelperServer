@@ -62,6 +62,42 @@ button.tiny { border-radius: 8px; padding: 4px 6px; font-size: 10px; }
     linear-gradient(160deg, #111827 0%, #0f172a 100%);
 }
 
+.popup-shell {
+  position: relative;
+  display: inline-block;
+  width: max-content;
+  min-width: 500px;
+  min-height: 220px;
+  overflow: hidden;
+  padding: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.2), transparent 34%),
+    linear-gradient(160deg, #111827 0%, #0f172a 100%);
+}
+
+.popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.popup-head h1 {
+  max-width: 430px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-popup .settings-form {
+  width: 640px;
+  min-width: 640px;
+}
+
+.settings-popup .settings-section {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .loading {
   display: grid;
   place-content: center;
@@ -475,6 +511,7 @@ footer { margin-top: 8px; }
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .form-grid {

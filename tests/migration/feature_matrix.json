@@ -120,7 +120,7 @@
       "category": "settings",
       "pyqt_status": "complete",
       "new_gui_status": "complete",
-      "api_or_boundary": "/settings, /api/gui/settings",
+      "api_or_boundary": "src/api/gui/routes.py, DataManager.save_global_settings, src/gui/new_gui/frontend settings popup windows",
       "data_owned": [
         "global_settings.theme",
         "global_settings.always_on_top",
@@ -143,7 +143,8 @@
       "manual_smoke": [
         "PyQt 전역 설정 저장",
         "새 GUI 설정 저장",
-        "권한 재시작 적용"
+        "권한 재시작 적용",
+        "새 GUI 설정 패널별 별도 popup과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음"
       ]
     },
     {
