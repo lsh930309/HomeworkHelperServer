@@ -131,6 +131,14 @@ def test_new_gui_recording_settings_can_import_obs_config():
     assert "/api/gui/recording/obs-config" in app_source
 
 
+def test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "키 입력 캡처" in app_source
+    assert "/api/gui/screenshot/vk/" in app_source
+    assert "/api/gui/screenshot/capture-key" in app_source
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec

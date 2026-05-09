@@ -143,6 +143,13 @@ class ObsConfigPayload(BaseModel):
     exe_path: str
 
 
+class ScreenshotKeyCaptureRequest(BaseModel):
+    timeout_sec: float = 10.0
+
+    class Config:
+        extra = "forbid"
+
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _HOYOLAB_GAME_IDS = {"honkai_starrail", "zenless_zone_zero"}
 _HOYOLAB_BROWSERS = {"chrome", "edge", "firefox"}
@@ -762,6 +769,51 @@ def read_recording_obs_config() -> dict[str, Any]:
         exe_path=str(cfg.get("exe_path") or ""),
     )
     return _dump_model(payload)
+
+
+@router.get("/screenshot/vk/{vk}")
+def get_screenshot_vk_name(vk: int) -> dict[str, Any]:
+    from src.screenshot.key_capture import is_key_capture_supported, vk_to_display_name
+
+    if vk < 0 or vk > 255:
+        raise HTTPException(status_code=422, detail="VK 값은 0~255 범위여야 합니다.")
+    return {
+        "vk": vk,
+        "hex": f"0x{vk:02X}",
+        "display_name": vk_to_display_name(vk),
+        "capture_supported": is_key_capture_supported(),
+    }
+
+
+@router.post("/screenshot/capture-key")
+def capture_screenshot_trigger_key(request: ScreenshotKeyCaptureRequest) -> dict[str, Any]:
+    import threading
+
+    from src.screenshot.key_capture import capture_one_key, is_key_capture_supported, vk_to_display_name
+
+    if not is_key_capture_supported():
+        raise HTTPException(status_code=503, detail="이 환경에서는 키 캡처를 사용할 수 없습니다.")
+    timeout_sec = max(1.0, min(float(request.timeout_sec), 30.0))
+    event = threading.Event()
+    captured: dict[str, int | None] = {"vk": None}
+
+    def on_captured(vk: int) -> None:
+        captured["vk"] = vk
+        event.set()
+
+    def on_timeout() -> None:
+        event.set()
+
+    capture_one_key(timeout_sec=timeout_sec, on_captured=on_captured, on_timeout=on_timeout)
+    event.wait(timeout_sec + 1.0)
+    vk = captured["vk"]
+    if vk is None:
+        raise HTTPException(status_code=408, detail="키 입력 시간이 초과되었거나 ESC로 취소되었습니다.")
+    return {
+        "vk": vk,
+        "hex": f"0x{vk:02X}",
+        "display_name": vk_to_display_name(vk),
+    }
 
 
 def _resolve_launch_target(process: models.Process) -> str | None:

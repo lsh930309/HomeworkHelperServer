@@ -303,7 +303,7 @@
       "category": "screenshot",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "src/screenshot/*, SidebarSettingsDialog",
+      "api_or_boundary": "src/screenshot/*, /api/gui/screenshot/*, SidebarSettingsDialog",
       "data_owned": [
         "global_settings.screenshot_*"
       ],
@@ -311,10 +311,13 @@
       "data_risk": "high",
       "automated_tests": [
         "test_global_settings_contract_covers_model_schema_runtime_and_migrations",
-        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields"
+        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
+        "test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability",
+        "test_gui_screenshot_capture_key_rejects_unsupported_environment",
+        "test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key"
       ],
       "manual_smoke": [
-        "트리거 키 변경",
+        "새 GUI 키 입력 캡처로 트리거 키 변경 후 저장",
         "게임 중 스크린샷 저장",
         "저장 폴더 변경",
         "전체화면/window capture mode"

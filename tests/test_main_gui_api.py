@@ -595,3 +595,26 @@ def test_gui_recording_obs_config_import_wraps_existing_reader(monkeypatch):
         "output_dir": "C:/Recordings",
         "exe_path": "C:/OBS/bin/64bit/obs64.exe",
     }
+
+
+def test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability(monkeypatch):
+    client = _client_with_seed(monkeypatch)
+
+    response = client.get("/api/gui/screenshot/vk/178")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vk"] == 178
+    assert body["hex"] == "0xB2"
+    assert body["display_name"] == "미디어 정지"
+    assert isinstance(body["capture_supported"], bool)
+    assert client.get("/api/gui/screenshot/vk/999").status_code == 422
+
+
+def test_gui_screenshot_capture_key_rejects_unsupported_environment(monkeypatch):
+    monkeypatch.setattr("src.screenshot.key_capture.is_key_capture_supported", lambda: False)
+    client = _client_with_seed(monkeypatch)
+
+    response = client.post("/api/gui/screenshot/capture-key", json={"timeout_sec": 1})
+
+    assert response.status_code == 503

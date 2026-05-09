@@ -637,6 +637,7 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
   const [form, setForm] = React.useState(settings);
   const [activeTab, setActiveTab] = React.useState<'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab'>('general');
   const [hoyolabStatus, setHoyolabStatus] = React.useState<HoYoLabStatus | null>(null);
+  const [screenshotKeyInfo, setScreenshotKeyInfo] = React.useState<{ display_name: string; hex: string; capture_supported: boolean } | null>(null);
   const [hoyolabForm, setHoyolabForm] = React.useState<HoYoLabCredentialForm>({
     ltuid: '',
     ltoken_v2: '',
@@ -664,6 +665,14 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
       loadHoYoLabStatus().catch((e: any) => setError(e.message));
     }
   }, [activeTab, loadHoYoLabStatus]);
+
+  React.useEffect(() => {
+    if (activeTab === 'screenshot') {
+      fetchJson<{ display_name: string; hex: string; capture_supported: boolean }>(`/api/gui/screenshot/vk/${form.screenshot_trigger_vk}`)
+        .then(setScreenshotKeyInfo)
+        .catch(() => setScreenshotKeyInfo(null));
+    }
+  }, [activeTab, form.screenshot_trigger_vk]);
 
   const applyPrivilege = async () => {
     setSaving(true);
@@ -801,6 +810,26 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
     }
   };
 
+  const captureScreenshotKey = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage('캡처할 키를 10초 안에 누르세요. ESC는 취소입니다.');
+    try {
+      const captured = await fetchJson<{ vk: number; display_name: string; hex: string }>('/api/gui/screenshot/capture-key', {
+        method: 'POST',
+        body: JSON.stringify({ timeout_sec: 10 }),
+      });
+      update('screenshot_trigger_vk', captured.vk);
+      setScreenshotKeyInfo({ display_name: captured.display_name, hex: captured.hex, capture_supported: true });
+      setMessage(`${captured.display_name} (${captured.hex}) 키를 캡처했습니다. 적용하려면 저장을 누르세요.`);
+    } catch (e: any) {
+      setError(e.message);
+      setMessage(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const tabs: Array<{ id: typeof activeTab; label: string }> = [
     { id: 'general', label: '일반' },
     { id: 'notify', label: '알림' },
@@ -910,7 +939,11 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
               <label>게임패드 버튼 index<input type="number" min="-1" max="32" value={form.screenshot_gamepad_button_index} onChange={(e) => updateNumber('screenshot_gamepad_button_index', e.target.value)} /></label>
               <label>트리거 VK<input type="number" min="0" max="255" value={form.screenshot_trigger_vk} onChange={(e) => updateNumber('screenshot_trigger_vk', e.target.value)} /></label>
             </div>
-            <p className="hint">키 캡처 UI는 후속 단계에서 연결합니다. 현재는 저장된 가상 키 코드 값을 직접 보존/수정합니다.</p>
+            <div className="field-row">
+              <div className="key-chip">{screenshotKeyInfo ? `${screenshotKeyInfo.display_name} (${screenshotKeyInfo.hex})` : `VK ${form.screenshot_trigger_vk}`}</div>
+              <button type="button" className="ghost" disabled={saving || screenshotKeyInfo?.capture_supported === false} onClick={captureScreenshotKey}>키 입력 캡처</button>
+            </div>
+            <p className="hint">키 캡처는 Windows WH_KEYBOARD_LL 경로를 사용합니다. macOS 개발 환경에서는 이름 확인/숫자 입력만 가능하며, 실제 캡처는 Windows smoke에서 확인합니다.</p>
           </section>
         )}
 
