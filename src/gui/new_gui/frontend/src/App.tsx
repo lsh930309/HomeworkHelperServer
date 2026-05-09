@@ -199,6 +199,10 @@ type ContextMenuState = {
 
 const API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
+const SIDEBAR_PANEL_WIDTH = 320;
+const SIDEBAR_HANDLE_WIDTH = 28;
+const SIDEBAR_TOTAL_WIDTH = SIDEBAR_PANEL_WIDTH + SIDEBAR_HANDLE_WIDTH;
+const SIDEBAR_MIN_HEIGHT = 360;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -296,6 +300,51 @@ function useWindowPlacement(enabled: boolean) {
     }).catch(() => undefined);
     return () => unlisten?.();
   }, [enabled]);
+}
+
+function useSidebarDrawerWindow(settings: GuiSettings | null, open: boolean, enabled: boolean) {
+  React.useEffect(() => {
+    if (!enabled || !settings) return;
+    const win = getCurrentWindow();
+    let cancelled = false;
+    const applyGeometry = async () => {
+      try {
+        const monitor = await currentMonitor() || await primaryMonitor();
+        if (!monitor || cancelled) return;
+        const scale = monitor.scaleFactor || window.devicePixelRatio || 1;
+        const work = monitor.workArea;
+        const logicalHeight = clamp(
+          Math.floor((work.size.height / scale) * clamp(settings.sidebar_height_ratio ?? 1, 0.3, 1)),
+          SIDEBAR_MIN_HEIGHT,
+          Math.max(SIDEBAR_MIN_HEIGHT, Math.floor(work.size.height / scale)),
+        );
+        const physicalHeight = Math.floor(logicalHeight * scale);
+        const visibleWidth = open ? SIDEBAR_TOTAL_WIDTH : SIDEBAR_HANDLE_WIDTH;
+        const x = Math.floor(work.position.x + work.size.width - visibleWidth * scale);
+        const y = Math.floor(work.position.y + (work.size.height - physicalHeight) / 2);
+
+        await win.setResizable(false);
+        await win.setAlwaysOnTop(true);
+        await win.setDecorations(false);
+        await win.setSkipTaskbar(true);
+        await win.setSize(new LogicalSize(SIDEBAR_TOTAL_WIDTH, logicalHeight));
+        await win.setPosition(new PhysicalPosition(x, y));
+        if (settings.sidebar_enabled) await win.show();
+        else await win.hide();
+      } catch {
+        // Browser preview and incomplete platform APIs keep the CSS preview geometry.
+      }
+    };
+
+    applyGeometry();
+    window.addEventListener('resize', applyGeometry);
+    const id = window.setInterval(applyGeometry, 2000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('resize', applyGeometry);
+      window.clearInterval(id);
+    };
+  }, [settings, open, enabled]);
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1035,7 +1084,185 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
   );
 }
 
-export default function App() {
+function formatPlaytime(timestamp?: number | null) {
+  if (!timestamp) return '대기 중';
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
+}
+
+function SidebarApp() {
+  const [state, setState] = React.useState<MainState | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const [pinned, setPinned] = React.useState(false);
+  const [hoveringControls, setHoveringControls] = React.useState(false);
+  const [clock, setClock] = React.useState(() => new Date());
+  const hideTimerRef = React.useRef<number | null>(null);
+  const isTauri = isTauriRuntime();
+
+  const settings = state?.settings || null;
+  const activeProcess = React.useMemo(
+    () => state?.processes.find((process) => process.status === '실행중') || null,
+    [state],
+  );
+  const recordingEnabled = Boolean(settings?.recording_enabled);
+  const screenshotEnabled = Boolean(settings?.screenshot_enabled);
+  const sidebarEnabled = settings?.sidebar_enabled ?? true;
+  const autoHideMs = Math.max(0, settings?.sidebar_auto_hide_ms ?? 3000);
+
+  useSidebarDrawerWindow(settings, open || pinned, isTauri);
+
+  const load = React.useCallback(() => {
+    fetchJson<MainState>('/api/gui/main-state')
+      .then((body) => {
+        setState(body);
+        setError(null);
+      })
+      .catch((e: any) => setError(e.message || String(e)));
+  }, []);
+
+  React.useEffect(() => {
+    load();
+    const id = window.setInterval(load, 1000);
+    const clockId = window.setInterval(() => setClock(new Date()), 1000);
+    return () => {
+      window.clearInterval(id);
+      window.clearInterval(clockId);
+    };
+  }, [load]);
+
+  React.useEffect(() => {
+    if (!sidebarEnabled) return;
+    if (pinned || hoveringControls) {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+      return;
+    }
+    if (open && autoHideMs > 0) {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = window.setTimeout(() => setOpen(false), autoHideMs);
+    }
+    return () => {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    };
+  }, [autoHideMs, hoveringControls, open, pinned, sidebarEnabled]);
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPinned(false);
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const reveal = () => {
+    if (!sidebarEnabled) return;
+    setOpen(true);
+  };
+  const scheduleHide = () => {
+    if (pinned || hoveringControls || autoHideMs === 0) return;
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = window.setTimeout(() => setOpen(false), autoHideMs);
+  };
+  const togglePinned = () => {
+    setPinned((value) => {
+      const next = !value;
+      setOpen(next || open);
+      return next;
+    });
+  };
+
+  if (!sidebarEnabled) {
+    return <main className="sidebar-drawer disabled" aria-label="HomeworkHelper 사이드바 비활성" />;
+  }
+
+  return (
+    <main
+      className={`sidebar-drawer ${open || pinned ? 'open' : 'peek'} ${pinned ? 'pinned' : ''}`}
+      style={{ opacity: clamp(settings?.sidebar_opacity ?? 0.85, 0.1, 1) }}
+      onMouseEnter={reveal}
+      onMouseLeave={scheduleHide}
+    >
+      <button
+        className="drawer-handle"
+        aria-label={open || pinned ? '사이드바 접기' : '사이드바 열기'}
+        onClick={() => (open || pinned ? (setPinned(false), setOpen(false)) : reveal())}
+      >
+        <span className="handle-grip" />
+        {recordingEnabled && <span className="handle-dot" title="녹화 기능 사용 가능" />}
+        <span className="handle-text">{activeProcess ? 'PLAY' : 'HH'}</span>
+      </button>
+
+      <section className="drawer-panel">
+        <header className="drawer-head">
+          <div>
+            <div className="eyebrow">Smart Drawer</div>
+            <h2>{activeProcess?.name || '사이드바 대기'}</h2>
+          </div>
+          <div className="drawer-head-actions">
+            <button className={pinned ? 'primary tiny' : 'ghost tiny'} onClick={togglePinned}>{pinned ? '고정됨' : 'Pin'}</button>
+            <button className="ghost tiny" onClick={() => { setPinned(false); setOpen(false); }}>닫기</button>
+          </div>
+        </header>
+
+        {error && <div className="error compact">{error}</div>}
+
+        <div className="drawer-card focus">
+          <span>{settings?.sidebar_playtime_prefix || '오늘 플레이 시간'}</span>
+          <strong>{formatPlaytime(activeProcess?.last_played_timestamp)}</strong>
+          <small>{activeProcess ? activeProcess.status : '게임 실행 중 우측 손잡이로 빠르게 열 수 있습니다.'}</small>
+        </div>
+
+        {settings?.sidebar_clock_enabled && (
+          <div className="drawer-card clock-card">
+            <span>현재 시간</span>
+            <strong>{clock.toLocaleTimeString()}</strong>
+            <small>{settings.sidebar_clock_format || '%H:%M:%S'}</small>
+          </div>
+        )}
+
+        {settings?.sidebar_volume_section_enabled && (
+          <div
+            className="drawer-card"
+            onMouseEnter={() => setHoveringControls(true)}
+            onMouseLeave={() => setHoveringControls(false)}
+          >
+            <div className="drawer-row">
+              <span>앱 볼륨</span>
+              <strong>{activeProcess ? '준비됨' : '대기'}</strong>
+            </div>
+            <input className="drawer-slider" type="range" min="0" max="100" defaultValue="100" disabled={!activeProcess} />
+            <small>실제 볼륨 제어는 runtime API 연결 후 Beholder 경계를 통해 처리됩니다.</small>
+          </div>
+        )}
+
+        <div className="drawer-grid">
+          <div className={`drawer-chip ${screenshotEnabled ? 'on' : ''}`}>
+            <span>스크린샷</span>
+            <strong>{screenshotEnabled ? 'ON' : 'OFF'}</strong>
+          </div>
+          <div className={`drawer-chip ${recordingEnabled ? 'on recording' : ''}`}>
+            <span>녹화</span>
+            <strong>{recordingEnabled ? 'READY' : 'OFF'}</strong>
+          </div>
+        </div>
+
+        <footer className="drawer-foot">
+          <span>hover/click으로 열기 · Esc로 닫기</span>
+          <span>{pinned ? '자동숨김 일시정지' : `자동숨김 ${autoHideMs}ms`}</span>
+        </footer>
+      </section>
+    </main>
+  );
+}
+
+function MainApp() {
   const rootRef = React.useRef<HTMLElement | null>(null);
   const appInstanceIdRef = React.useRef<string>(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
   const [state, setState] = React.useState<MainState | null>(null);
@@ -1325,4 +1552,10 @@ export default function App() {
       {beholderIncident && <BeholderModal incident={beholderIncident} onClose={() => setBeholderIncident(null)} onResolved={load} />}
     </main>
   );
+}
+
+export default function App() {
+  const label = isTauriRuntime() ? getCurrentWindow().label : 'main';
+  if (label === 'sidebar') return <SidebarApp />;
+  return <MainApp />;
 }

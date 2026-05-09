@@ -151,6 +151,12 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_resizable(false);
             }
+            if let Some(window) = app.get_webview_window("sidebar") {
+                let _ = window.set_resizable(false);
+                let _ = window.set_always_on_top(true);
+                let _ = window.set_decorations(false);
+                let _ = window.set_skip_taskbar(true);
+            }
 
             let show_item = MenuItemBuilder::with_id("show", "열기").build(app)?;
             let hide_item = MenuItemBuilder::with_id("hide", "숨기기").build(app)?;

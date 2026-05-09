@@ -20,7 +20,7 @@
 | WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지 |
 | SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 및 개인화 기본값 회귀 차단 |
 | SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
-| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 설정 편집 가능, runtime 구현 필요 |
+| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 새 GUI preview 스마트 서랍 shell 구현, runtime API/Windows smoke 필요 |
 | SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder heartbeat 기반 정전/앱재시작/legacy open 대응 |
 | SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 유지 |

@@ -26,6 +26,24 @@
         "alwaysOnTop": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
+      },
+      {
+        "label": "sidebar",
+        "title": "HomeworkHelper 사이드바",
+        "width": 348,
+        "height": 640,
+        "minWidth": 348,
+        "minHeight": 360,
+        "resizable": false,
+        "maximizable": false,
+        "fullscreen": false,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#00000000",
+        "zoomHotkeysEnabled": false
       }
     ],
     "security": {

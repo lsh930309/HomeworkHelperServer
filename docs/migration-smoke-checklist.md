@@ -34,6 +34,7 @@
 ## PyQt fallback 유지 기능
 
 - [ ] SIDEBAR-001: 게임 실행 시 사이드바 표시/자동 숨김/볼륨/시계/플레이타임이 동작한다.
+- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이가 우측 edge에 표시되고 hover/click으로 열리며, Pin 고정/Escape 닫기/자동 숨김/high-DPI 위치 보정이 동작한다.
 - [ ] SCHEDULER-001: 필수 접속/주기/수면 보정/일일 리셋/스태미나 알림이 동작한다.
 - [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 `stamina_at_end` 기록 및 시작/종료 재동기화가 동작한다.
 - [ ] SCREENSHOT-001: 새 GUI 키 입력 캡처로 트리거 키 변경 후 게임패드 스크린샷, 저장 폴더, capture mode가 동작한다.

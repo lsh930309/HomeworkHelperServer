@@ -172,7 +172,7 @@
       "category": "sidebar",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "src/gui/sidebar/*, SidebarSettingsDialog",
+      "api_or_boundary": "src/gui/sidebar/*, SidebarSettingsDialog, src-tauri sidebar window, src/gui/new_gui/frontend SidebarApp",
       "data_owned": [
         "global_settings.sidebar_*"
       ],
@@ -187,7 +187,8 @@
         "게임 실행 시 사이드바 활성화",
         "엣지 트리거/자동 숨김",
         "볼륨 패널 조작",
-        "시계/플레이타임 표시"
+        "시계/플레이타임 표시",
+        "새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정"
       ]
     },
     {
