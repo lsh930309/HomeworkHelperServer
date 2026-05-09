@@ -154,6 +154,17 @@ def test_new_gui_sends_beholder_runtime_heartbeat():
     assert "tauri-preview" in app_source
 
 
+
+
+def test_dashboard_style_reuses_new_gui_visual_tokens():
+    style = Path("src/api/dashboard/frontend/src/style.css").read_text(encoding="utf-8")
+
+    assert "--button-primary" in style
+    assert "NEXON Lv1 Gothic" in style
+    assert "rgba(15, 23, 42, 0.74)" in style
+    assert "border-radius: 18px" in style
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec

@@ -134,12 +134,13 @@ def incident_to_dict(incident: models.BeholderIncident) -> dict[str, Any]:
         "proposed_change_summary": incident.proposed_change_summary,
         "risk_score": incident.risk_score,
         "risk_factors": incident.risk_factors or [],
+        "risk_labels": [_user_friendly_risk_label(item) for item in (incident.risk_factors or [])],
         "safe_recommendation": incident.safe_recommendation,
         "user_title": user_title,
         "user_summary": user_summary,
         "user_impact": user_impact,
         "recommended_action": getattr(incident, "recommended_action", None),
-        "available_actions": getattr(incident, "available_actions", None) or _default_actions(incident),
+        "available_actions": _enrich_actions(getattr(incident, "available_actions", None) or _default_actions(incident), getattr(incident, "recommended_action", None)),
         "resolution_metadata": getattr(incident, "resolution_metadata", None) or {},
         "created_at": incident.created_at,
         "resolved_at": incident.resolved_at,
@@ -155,13 +156,60 @@ def _default_user_title(incident: models.BeholderIncident) -> str:
     return "데이터 변경 확인이 필요합니다"
 
 
+def _user_friendly_risk_label(factor: str) -> str:
+    return {
+        "unauthorized_table_write": "정상 화면 밖 데이터 변경",
+        "unauthorized_column_write": "현재 화면에서 바꿀 수 없는 항목 포함",
+        "bulk_settings_default_regression": "대량 설정 초기화 의심",
+        "personalized_settings_default_regression": "개인화 설정 초기화 의심",
+        "duplicate_open_session": "열린 플레이 기록 중복",
+        "duplicate_legacy_open_session": "이전 버전 열린 기록 충돌",
+        "open_session_after_restart": "앱 재시작 후 닫히지 않은 기록",
+        "game_not_running": "현재 게임 미실행",
+        "last_heartbeat_available": "마지막 앱 생존 시각 확인됨",
+        "pc_reboot_detected": "PC 재부팅 정황",
+        "legacy_open_session_without_heartbeat": "종료 시각 복구 불가",
+        "delete_process_with_open_sessions": "열린 기록이 있는 게임 삭제",
+        "runtime_history_orphan_risk": "기록이 고아 데이터가 될 위험",
+        "invalid_negative_stamina": "음수 스태미나 기록",
+        "extreme_duration_without_sufficient_evidence": "비정상적으로 긴 플레이 시간",
+    }.get(factor, factor)
+
+
+def _action_outcome(action_id: str) -> str:
+    return {
+        "deny": "아무 데이터도 바꾸지 않고 현재 상태를 유지합니다.",
+        "quarantine": "데이터는 바꾸지 않고 이 사건을 보류/격리 상태로 표시합니다.",
+        "allow_once": "동일한 저장 요청을 한 번만 통과시킵니다. 의도한 변경일 때만 사용하세요.",
+        "continue_existing_session": "새 기록을 만들지 않고 기존 열린 세션을 계속 사용합니다.",
+        "close_previous_and_start_new": "이전 열린 세션을 지금 시각에 닫고 새 세션을 시작합니다.",
+        "close_at_last_app_heartbeat": "마지막으로 앱이 살아있던 시각에 세션을 정상 종료로 기록합니다.",
+        "abandon_open_sessions": "복구할 수 없는 열린 기록을 0초 abandoned 기록으로 정리합니다.",
+        "abandon_legacy_and_start_new": "오래된 열린 기록을 abandoned로 정리하고 현재 실행을 새 기록으로 시작합니다.",
+        "close_sessions_and_delete_process": "열린 세션을 안전하게 닫은 뒤 게임 항목을 삭제합니다.",
+    }.get(action_id, "선택한 방식으로 사건을 처리합니다.")
+
+
+def _enrich_actions(actions: list[dict[str, Any]], recommended_action: str | None = None) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for action in actions:
+        item = dict(action)
+        if recommended_action and item.get("id") == recommended_action:
+            item["recommended"] = True
+        item.setdefault("outcome", _action_outcome(str(item.get("id", ""))))
+        if item.get("recommended") and not item.get("recommended_reason"):
+            item["recommended_reason"] = "현재 증거 기준으로 데이터 왜곡 가능성이 가장 낮은 선택입니다."
+        enriched.append(item)
+    return enriched
+
+
 def _default_actions(incident: models.BeholderIncident) -> list[dict[str, Any]]:
     actions = [
-        {"id": "deny", "label": "차단 유지", "description": "이번 변경을 저장하지 않고 현재 DB를 유지합니다."},
-        {"id": "quarantine", "label": "격리", "description": "나중에 검토할 수 있도록 문제 상태로 표시합니다."},
-        {"id": "allow_once", "label": "이번 한 번 허용", "description": "동일 작업을 1회만 다시 허용합니다.", "danger": True},
+        {"id": "deny", "label": "차단 유지", "description": "이번 변경을 저장하지 않고 현재 DB를 유지합니다.", "recommended": True},
+        {"id": "quarantine", "label": "나중에 검토", "description": "데이터는 바꾸지 않고 사건만 보류 상태로 표시합니다."},
+        {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 변경일 때 동일 작업을 1회만 허용합니다.", "danger": True},
     ]
-    return actions
+    return _enrich_actions(actions, getattr(incident, "recommended_action", None) or "deny")
 
 
 def create_incident(

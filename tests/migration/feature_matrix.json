@@ -270,13 +270,15 @@
         "test_impossibly_long_completed_session_is_excluded",
         "test_dashboard_entrypoint_uses_stable_packaged_assets",
         "test_games_api_groups_normalized_names_and_returns_icon_candidate",
-        "test_real_appdata_main_gui_state_and_icon_cache_use_clone"
+        "test_real_appdata_main_gui_state_and_icon_cache_use_clone",
+        "test_dashboard_style_reuses_new_gui_visual_tokens"
       ],
       "manual_smoke": [
         "대시보드 열기",
         "날짜 범위 변경",
         "게임 필터",
-        "아이콘 표시"
+        "아이콘 표시",
+        "신규 GUI v6 톤앤매너와 버튼/card token 일관성"
       ]
     },
     {
@@ -382,7 +384,8 @@
         "test_open_session_recovery_closes_at_last_app_heartbeat",
         "test_real_appdata_beholder_detects_legacy_open_sessions",
         "test_delete_process_with_open_session_offers_safe_cleanup_action",
-        "test_new_gui_beholder_restore_uses_preview_before_restore"
+        "test_new_gui_beholder_restore_uses_preview_before_restore",
+        "test_beholder_payload_explains_risks_and_action_outcomes"
       ],
       "manual_smoke": [
         "PyQt incident dialog",
@@ -391,7 +394,8 @@
         "마지막 앱 heartbeat 시각으로 세션 닫기",
         "복구 불가 legacy open session 정리",
         "기록 닫고 게임 삭제",
-        "백업 복구"
+        "백업 복구",
+        "새 GUI Beholder modal에서 추천 액션/결과/위험 신호가 사용자 언어로 보임"
       ]
     },
     {

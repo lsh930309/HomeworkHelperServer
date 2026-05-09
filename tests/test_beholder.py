@@ -363,3 +363,27 @@ def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatc
     db.expire_all()
     unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
     assert unchanged.stamina_at_end == 10
+
+
+def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    crud.get_settings(db)
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_height_ratio": 0.5},
+            actor="new_gui_settings",
+            allowed_fields={"theme"},
+        )
+        assert False, "new GUI settings patch must not mutate sidebar detail fields"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+
+    assert "risk_labels" in payload
+    assert "현재 화면에서 바꿀 수 없는 항목 포함" in payload["risk_labels"]
+    deny = next(action for action in payload["available_actions"] if action["id"] == "deny")
+    assert deny["recommended"] is True
+    assert deny["outcome"]
+    assert deny["recommended_reason"]

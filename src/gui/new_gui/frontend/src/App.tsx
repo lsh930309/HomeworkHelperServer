@@ -121,6 +121,8 @@ type BeholderAction = {
   id: string;
   label: string;
   description?: string;
+  outcome?: string;
+  recommended_reason?: string;
   recommended?: boolean;
   danger?: boolean;
 };
@@ -137,6 +139,7 @@ type BeholderIncident = {
   proposed_change_summary?: string | null;
   risk_score: number;
   risk_factors: string[];
+  risk_labels?: string[];
   safe_recommendation?: string | null;
   user_title?: string | null;
   user_summary?: string | null;
@@ -586,20 +589,55 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
       setBusy(null);
     }
   };
+  const actions = incident.available_actions || [
+    { id: 'deny', label: '차단 유지', outcome: '아무 데이터도 바꾸지 않고 현재 상태를 유지합니다.', recommended: true },
+    { id: 'quarantine', label: '나중에 검토', outcome: '데이터는 바꾸지 않고 사건만 보류합니다.' },
+    { id: 'allow_once', label: '이번 한 번 허용', outcome: '정말 의도한 변경일 때만 한 번 허용합니다.', danger: true },
+  ];
+  const recommended = actions.find((action) => action.recommended || action.id === incident.recommended_action);
   return (
     <Modal title="Beholder 데이터 보호 경고" onClose={onClose}>
       <div className="beholder-panel">
-        <strong>{incident.user_title || '데이터 변경 확인이 필요합니다'}</strong>
-        <p>{incident.user_summary || 'Beholder가 저장 전에 변경 내용을 확인했습니다.'}</p>
-        <dl>
-          <dt>사용자 영향</dt><dd>{incident.user_impact || '-'}</dd>
-          <dt>권장 조치</dt><dd>{incident.safe_recommendation || '차단을 유지하세요.'}</dd>
-          <dt>심각도 / 위험도</dt><dd>{incident.severity} · {incident.risk_score}/100</dd>
-          <dt>동작</dt><dd>{incident.operation_kind} / {incident.actor}</dd>
-          <dt>현재 DB 상태</dt><dd>{incident.current_state_summary || '-'}</dd>
-          <dt>저장하려던 변경</dt><dd>{incident.proposed_change_summary || '-'}</dd>
-          <dt>위험 신호</dt><dd>{(incident.risk_factors || []).join(', ') || '-'}</dd>
-        </dl>
+        <div className={`beholder-hero ${incident.severity}`}>
+          <span className="beholder-icon" aria-hidden="true">🛡️</span>
+          <div>
+            <strong>{incident.user_title || '데이터 변경 확인이 필요합니다'}</strong>
+            <p>{incident.user_summary || 'Beholder가 저장 전에 변경 내용을 확인했습니다.'}</p>
+          </div>
+        </div>
+        {recommended && (
+          <div className="recommendation-card">
+            <span>추천</span>
+            <strong>{recommended.label}</strong>
+            <p>{recommended.recommended_reason || incident.safe_recommendation || '현재 증거 기준으로 가장 안전한 선택입니다.'}</p>
+            {recommended.outcome && <small>{recommended.outcome}</small>}
+          </div>
+        )}
+        <div className="impact-grid">
+          <section>
+            <span>사용자 영향</span>
+            <strong>{incident.user_impact || '기존 데이터는 아직 변경되지 않았습니다.'}</strong>
+          </section>
+          <section>
+            <span>위험도</span>
+            <strong>{incident.severity} · {incident.risk_score}/100</strong>
+          </section>
+        </div>
+        {(incident.risk_labels || incident.risk_factors || []).length > 0 && (
+          <div className="risk-chip-list" aria-label="위험 신호">
+            {(incident.risk_labels || incident.risk_factors || []).map((risk) => <span key={risk}>{risk}</span>)}
+          </div>
+        )}
+        <details className="beholder-details">
+          <summary>상세 변경 내용 보기</summary>
+          <dl>
+            <dt>권장 조치</dt><dd>{incident.safe_recommendation || '차단을 유지하세요.'}</dd>
+            <dt>동작</dt><dd>{incident.operation_kind} / {incident.actor}</dd>
+            <dt>현재 DB 상태</dt><dd>{incident.current_state_summary || '-'}</dd>
+            <dt>저장하려던 변경</dt><dd>{incident.proposed_change_summary || '-'}</dd>
+            <dt>원인 추정</dt><dd>{incident.suspected_cause || '-'}</dd>
+          </dl>
+        </details>
         {backups.length > 0 && (
           <div className="backup-list">
             {backups.map((backup) => (
@@ -617,15 +655,11 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
         {message && <div className="notice compact">{message}</div>}
         {error && <div className="error compact">{error}</div>}
         <div className="modal-actions">
-          {(incident.available_actions || [
-            { id: 'deny', label: '차단 유지' },
-            { id: 'quarantine', label: '격리' },
-            { id: 'allow_once', label: '이번 한 번 허용', danger: true },
-          ]).map((action) => (
+          {actions.map((action) => (
             <button
               key={action.id}
               className={action.danger ? 'danger' : action.recommended ? 'primary' : 'ghost'}
-              title={action.description || ''}
+              title={[action.description, action.outcome].filter(Boolean).join(' · ')}
               disabled={Boolean(busy)}
               onClick={() => resolve(action.id)}
             >
