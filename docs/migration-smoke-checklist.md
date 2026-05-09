@@ -68,3 +68,133 @@
 - [ ] 로컬 `HomeworkHelper.zip`이 있는 상태에서 `python tools/verify_project.py --require-real-data`가 통과한다.
 - [ ] `python tools/verify_project.py --full --require-real-data`가 새 GUI와 dashboard frontend를 모두 빌드한다.
 - [ ] 신규 GUI 미리보기에서 실제 DB 복제본의 게임/웹/아이콘/설정이 표시된다.
+
+## Feature matrix manual smoke trace
+
+아래 목록은 `tests/migration/feature_matrix.json`의 `manual_smoke` 항목을 사람이 실행하는 체크리스트 문서 안에서 빠짐없이 추적하기 위한 원문 trace다. 문구를 바꾸거나 항목을 추가/삭제하면 feature matrix와 이 섹션을 함께 갱신해야 한다.
+
+### APP-001 PyQt 기본 메인 창과 새 GUI 미리보기 패키징
+
+- [ ] APP-001: 설치 후 기본 HomeworkHelper는 PyQt로 실행
+- [ ] APP-001: HomeworkHelper 새 GUI 미리보기 바로가기 실행
+- [ ] APP-001: 새 GUI GitHub favicon 버튼 외부 브라우저 열기
+- [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 색상/인디케이터로 상태 표시
+
+### APP-002 단일 인스턴스, 트레이 최소화/복원/종료
+
+- [ ] APP-002: 새 GUI 두 번째 실행 시 기존 창 활성화
+- [ ] APP-002: 새 GUI 닫기 버튼이 트레이 숨김으로 동작
+- [ ] APP-002: 새 GUI 트레이 메뉴 열기/숨기기/종료가 정상 동작
+- [ ] APP-002: PyQt 기본 앱 단일 인스턴스/트레이 동작 유지
+
+### GAME-001 게임 등록/편집/삭제와 실행 방식 선호 저장
+
+- [ ] GAME-001: PyQt에서 게임 추가/편집/삭제
+- [ ] GAME-001: 새 GUI에서 게임 추가/편집/삭제
+- [ ] GAME-001: 실행 방식 우클릭 변경
+- [ ] GAME-001: 새 GUI 게임 추가/편집 popup 창
+- [ ] GAME-001: 새 GUI 메인 progress 자원 아이콘 표시
+
+### GAME-002 게임 실행과 관리자/런처/바로가기 경로 처리
+
+- [ ] GAME-002: 바로가기 실행
+- [ ] GAME-002: 직접 exe 실행
+- [ ] GAME-002: 런처 우선 실행
+- [ ] GAME-002: 관리자 권한 설정 상태에서 실행
+
+### WEB-001 웹 바로가기 등록/편집/삭제/열기와 일일 초기화 상태
+
+- [ ] WEB-001: 웹 버튼 클릭 시 브라우저 열림
+- [ ] WEB-001: 우클릭 편집/삭제
+- [ ] WEB-001: 초기화 시각 이후 due/done 표시
+- [ ] WEB-001: 새 GUI 웹 바로가기 추가/편집 popup 창
+
+### SETTINGS-001 전역 설정 저장, 테마, 항상 위, 게임 시 숨김, 시작프로그램, 관리자 권한
+
+- [ ] SETTINGS-001: PyQt 전역 설정 저장
+- [ ] SETTINGS-001: 새 GUI 설정 저장
+- [ ] SETTINGS-001: 권한 재시작 적용
+- [ ] SETTINGS-001: 새 GUI 설정 패널별 별도 popup과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음
+
+### SIDEBAR-001 사이드바 표시, 자동 숨김, 위치/높이/투명도/효과, 시계/플레이타임/볼륨 섹션
+
+- [ ] SIDEBAR-001: 게임 실행 시 사이드바 활성화
+- [ ] SIDEBAR-001: 엣지 트리거/자동 숨김
+- [ ] SIDEBAR-001: 볼륨 패널 조작
+- [ ] SIDEBAR-001: 시계/플레이타임 표시
+- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정
+
+### SESSION-001 프로세스 실행 세션 시작/종료, 중복 open session 복구, 기록 보존
+
+- [ ] SESSION-001: 게임 실행 후 세션 시작
+- [ ] SESSION-001: 게임 종료 후 세션 종료
+- [ ] SESSION-001: 앱만 재시작 후 실행 중 게임은 이전 세션 이어가기
+- [ ] SESSION-001: PC 재부팅/게임 미실행 후 마지막 앱 heartbeat 시각으로 세션 닫기
+
+### SCHEDULER-001 필수 접속 시각, 사용자 주기, 수면 보정, 일일 리셋, 스태미나 알림
+
+- [ ] SCHEDULER-001: 필수 접속 알림
+- [ ] SCHEDULER-001: 주기 마감 알림
+- [ ] SCHEDULER-001: 수면 보정 알림
+- [ ] SCHEDULER-001: 일일 리셋 알림
+- [ ] SCHEDULER-001: 스태미나 임계치 알림
+
+### DASHBOARD-001 대시보드 analytics, timeline, summary, calendar, icon API
+
+- [ ] DASHBOARD-001: 대시보드 열기
+- [ ] DASHBOARD-001: 날짜 범위 변경
+- [ ] DASHBOARD-001: 게임 필터
+- [ ] DASHBOARD-001: 아이콘 표시
+- [ ] DASHBOARD-001: 신규 GUI v6 톤앤매너와 버튼/card token 일관성
+- [ ] DASHBOARD-001: dashboard와 새 GUI의 --hh-* 버튼/card 색상 token 값이 자동 테스트로 동일하게 고정됨
+
+### HOYOLAB-001 HoYoLab 쿠키 저장/추출, 스태미나 조회/보정/종료 후 재동기화
+
+- [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 Chrome/Edge/Firefox 쿠키 추출
+- [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 수동 쿠키 저장/삭제
+- [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 스태미나 테스트 조회
+- [ ] HOYOLAB-001: 새 GUI 게임 행 우클릭 스태미나 새로고침이 managed_processes.stamina_*에 반영
+- [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화
+
+### SCREENSHOT-001 게임패드/키 트리거 스크린샷, 저장 폴더, capture mode, Game Bar 비활성화
+
+- [ ] SCREENSHOT-001: 새 GUI 키 입력 캡처로 트리거 키 변경 후 저장
+- [ ] SCREENSHOT-001: 게임 중 스크린샷 저장
+- [ ] SCREENSHOT-001: 저장 폴더 변경
+- [ ] SCREENSHOT-001: 전체화면/window capture mode
+
+### RECORDING-001 OBS 연결, 자동 실행, 장누름 녹화 시작/중지, 출력 폴더 감지
+
+- [ ] RECORDING-001: 새 GUI OBS 설정 불러오기 후 저장
+- [ ] RECORDING-001: OBS 자동 실행
+- [ ] RECORDING-001: 녹화 시작/중지
+- [ ] RECORDING-001: 사이드바 녹화 상태 표시
+
+### BEHOLDER-001 DB write 감시, incident 표시/해결, 백업 복구, 스마트 액션
+
+- [ ] BEHOLDER-001: PyQt incident dialog
+- [ ] BEHOLDER-001: 새 GUI Beholder modal
+- [ ] BEHOLDER-001: 이전 세션 이어가기
+- [ ] BEHOLDER-001: 마지막 앱 heartbeat 시각으로 세션 닫기
+- [ ] BEHOLDER-001: 복구 불가 legacy open session 정리
+- [ ] BEHOLDER-001: 기록 닫고 게임 삭제
+- [ ] BEHOLDER-001: 백업 복구
+- [ ] BEHOLDER-001: 새 GUI Beholder modal에서 추천 액션/결과/위험 신호가 사용자 언어로 보임
+- [ ] BEHOLDER-001: 새 GUI Beholder modal의 위험 신호에 runtime_state_ambiguous/sidebar_trigger_y_start 같은 내부 코드명이 노출되지 않음
+
+### BACKUP-001 앱 시작 DB rolling backup, 설정/중요 row snapshot, Beholder restore
+
+- [ ] BACKUP-001: 앱 재시작 후 app_data.backup.1.db 생성
+- [ ] BACKUP-001: Beholder 백업 목록 표시
+- [ ] BACKUP-001: 복구 전 preview 확인
+
+### BUILD-001 PyInstaller, Tauri shell, Inno installer, static asset packaging
+
+- [ ] BUILD-001: python build.py 전체 실행
+- [ ] BUILD-001: installer 설치/업데이트
+- [ ] BUILD-001: 기본 바로가기 PyQt 확인
+- [ ] BUILD-001: 새 GUI 미리보기 바로가기 확인
+
+### CLIPBOARD-001 스크린샷/파일 클립보드 payload 생성
+
+- [ ] CLIPBOARD-001: 새 GUI/API에서 스크린샷 파일 클립보드 복사 후 탐색기/채팅창 붙여넣기

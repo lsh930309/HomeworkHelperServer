@@ -59,6 +59,8 @@ def test_feature_matrix_references_existing_tests_and_docs():
         assert feature_id in inventory
         if feature["manual_smoke"]:
             assert feature_id in smoke
+        for smoke_item in feature["manual_smoke"]:
+            assert f"{feature_id}: {smoke_item}" in smoke, f"{feature_id} smoke item is not traced: {smoke_item}"
         for test_name in feature["automated_tests"]:
             assert test_name in known_tests, f"{feature_id} references missing test {test_name}"
 
