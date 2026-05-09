@@ -326,7 +326,7 @@
       "category": "recording",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "src/recording/*, SidebarSettingsDialog, sidebar callbacks",
+      "api_or_boundary": "src/recording/*, /api/gui/recording/obs-config, SidebarSettingsDialog, sidebar callbacks",
       "data_owned": [
         "global_settings.recording_*",
         "global_settings.obs_*"
@@ -335,10 +335,12 @@
       "data_risk": "high",
       "automated_tests": [
         "test_global_settings_contract_covers_model_schema_runtime_and_migrations",
-        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields"
+        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
+        "test_gui_recording_obs_config_import_wraps_existing_reader",
+        "test_new_gui_recording_settings_can_import_obs_config"
       ],
       "manual_smoke": [
-        "OBS 설정 가져오기",
+        "새 GUI OBS 설정 불러오기 후 저장",
         "OBS 자동 실행",
         "녹화 시작/중지",
         "사이드바 녹화 상태 표시"

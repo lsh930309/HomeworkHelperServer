@@ -136,6 +136,13 @@ class HoYoLabStaminaRequest(BaseModel):
         extra = "forbid"
 
 
+class ObsConfigPayload(BaseModel):
+    port: int
+    password: str
+    output_dir: str
+    exe_path: str
+
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _HOYOLAB_GAME_IDS = {"honkai_starrail", "zenless_zone_zero"}
 _HOYOLAB_BROWSERS = {"chrome", "edge", "firefox"}
@@ -741,6 +748,20 @@ def get_hoyolab_stamina(request: HoYoLabStaminaRequest, db: Session = Depends(ge
         )
         body["process"] = _process_to_gui_row(updated, _visual_status(updated, crud.get_settings(db), dt.datetime.now(), _running_process_ids([updated])), dt.datetime.now())
     return body
+
+
+@router.get("/recording/obs-config")
+def read_recording_obs_config() -> dict[str, Any]:
+    from src.recording.obs_config_reader import read_obs_config
+
+    cfg = read_obs_config()
+    payload = ObsConfigPayload(
+        port=int(cfg.get("port") or 4455),
+        password=str(cfg.get("password") or ""),
+        output_dir=str(cfg.get("output_dir") or ""),
+        exe_path=str(cfg.get("exe_path") or ""),
+    )
+    return _dump_model(payload)
 
 
 def _resolve_launch_target(process: models.Process) -> str | None:

@@ -124,6 +124,13 @@ def test_main_gui_dev_server_proxies_api_for_browser_visual_checks():
     assert "'/api': 'http://127.0.0.1:8000'" in vite_config
 
 
+def test_new_gui_recording_settings_can_import_obs_config():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "OBS 설정 불러오기" in app_source
+    assert "/api/gui/recording/obs-config" in app_source
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec

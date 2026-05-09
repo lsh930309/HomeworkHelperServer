@@ -780,6 +780,27 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
     }
   };
 
+  const importObsConfig = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const cfg = await fetchJson<{ port: number; password: string; output_dir: string; exe_path: string }>('/api/gui/recording/obs-config');
+      setForm((prev) => ({
+        ...prev,
+        obs_port: cfg.port,
+        obs_password: cfg.password,
+        obs_exe_path: cfg.exe_path || prev.obs_exe_path,
+        obs_recording_output_dir: cfg.output_dir || prev.obs_recording_output_dir,
+      }));
+      setMessage('OBS 설정을 불러왔습니다. 적용하려면 저장을 누르세요.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const tabs: Array<{ id: typeof activeTab; label: string }> = [
     { id: 'general', label: '일반' },
     { id: 'notify', label: '알림' },
@@ -909,7 +930,10 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
             <label>OBS 실행 파일<input value={form.obs_exe_path || ''} onChange={(e) => update('obs_exe_path', e.target.value)} placeholder="obs64.exe 경로" /></label>
             <label>녹화 출력 폴더<input value={form.obs_recording_output_dir || ''} onChange={(e) => update('obs_recording_output_dir', e.target.value)} placeholder="비우면 OBS 설정 감지" /></label>
             <label>홀드 임계값(ms)<input type="number" min="100" max="2000" step="100" value={form.recording_hold_threshold_ms} onChange={(e) => updateNumber('recording_hold_threshold_ms', e.target.value)} /></label>
-            <p className="hint">OBS 설정 자동 불러오기는 Windows 네이티브 후속 작업입니다. 저장 데이터는 기존 PyQt와 같은 DB 필드를 사용합니다.</p>
+            <div className="field-row">
+              <button type="button" className="ghost" disabled={saving} onClick={importObsConfig}>OBS 설정 불러오기</button>
+            </div>
+            <p className="hint">로컬 OBS WebSocket/프로필 설정을 읽어 포트, 비밀번호, 실행 파일, 출력 폴더를 채웁니다. 적용하려면 저장을 누르세요.</p>
           </section>
         )}
 

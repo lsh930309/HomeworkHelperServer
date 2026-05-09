@@ -572,3 +572,26 @@ def test_gui_hoyolab_stamina_refresh_can_persist_through_guarded_process_update(
     db.close()
     snapshots = list((tmp_path / "backups" / "mutations" / "managed_processes").glob("*.json"))
     assert snapshots, "new GUI HoYoLab runtime refresh should leave a guarded pre-mutation snapshot"
+
+
+def test_gui_recording_obs_config_import_wraps_existing_reader(monkeypatch):
+    monkeypatch.setattr(
+        "src.recording.obs_config_reader.read_obs_config",
+        lambda: {
+            "port": 4456,
+            "password": "obs-secret",
+            "output_dir": "C:/Recordings",
+            "exe_path": "C:/OBS/bin/64bit/obs64.exe",
+        },
+    )
+    client = _client_with_seed(monkeypatch)
+
+    response = client.get("/api/gui/recording/obs-config")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "port": 4456,
+        "password": "obs-secret",
+        "output_dir": "C:/Recordings",
+        "exe_path": "C:/OBS/bin/64bit/obs64.exe",
+    }
