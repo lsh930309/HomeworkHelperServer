@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -287,7 +288,7 @@ def _progress(process: models.Process, now_dt: dt.datetime) -> dict[str, Any]:
         if stamina:
             current, max_stamina = stamina
             percent = (current / max_stamina) * 100 if max_stamina > 0 else 0
-            return {
+            payload = {
                 "kind": "stamina",
                 "percent": round(percent, 2),
                 "label": f"{current}/{max_stamina}",
@@ -295,6 +296,9 @@ def _progress(process: models.Process, now_dt: dt.datetime) -> dict[str, Any]:
                 "max": max_stamina,
                 "hoyolab_game_id": process.hoyolab_game_id,
             }
+            if _resource_icon_path(process):
+                payload["resource_icon_url"] = f"/api/gui/processes/{process.id}/resource-icon"
+            return payload
 
     if not process.last_played_timestamp or not process.user_cycle_hours:
         return {"kind": "time", "percent": 0.0, "label": "기록 없음"}
@@ -313,7 +317,10 @@ def _progress(process: models.Process, now_dt: dt.datetime) -> dict[str, Any]:
             label = f"{int(remaining_hours)}시간"
         else:
             label = f"{int(remaining_hours * 60)}분"
-        return {"kind": "time", "percent": round(percent, 2), "label": label}
+        payload = {"kind": "time", "percent": round(percent, 2), "label": label}
+        if _resource_icon_path(process):
+            payload["resource_icon_url"] = f"/api/gui/processes/{process.id}/resource-icon"
+        return payload
     except Exception:
         return {"kind": "time", "percent": 0.0, "label": "계산 오류"}
 
@@ -429,6 +436,24 @@ def _process_to_gui_row(process: models.Process, status: str, now_dt: dt.datetim
     }
 
 
+def _resource_icon_path(process: models.Process) -> str | None:
+    if not process.user_preset_id:
+        return None
+    preset = GamePresetManager().get_preset_by_id(process.user_preset_id)
+    if not preset:
+        return None
+    icon_path = preset.get("icon_path")
+    icon_type = preset.get("icon_type")
+    if not icon_path:
+        return None
+    try:
+        from src.utils.icon_helper import resolve_preset_icon_path
+
+        return resolve_preset_icon_path(icon_path, icon_type)
+    except Exception:
+        return None
+
+
 def _shortcut_state(shortcut: models.WebShortcut, now_dt: dt.datetime) -> str:
     refresh_time = _parse_time(shortcut.refresh_time_str)
     if not refresh_time:
@@ -527,6 +552,17 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             "appdata_path_owned_by_backend": True,
         },
     }
+
+
+@router.get("/processes/{process_id}/resource-icon")
+def get_process_resource_icon(process_id: str, db: Session = Depends(get_db)):
+    process = crud.get_process_by_id(db, process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="게임을 찾을 수 없습니다.")
+    path = _resource_icon_path(process)
+    if not path or not os.path.exists(path):
+        return Response(status_code=204)
+    return FileResponse(path, media_type="image/png")
 
 
 @router.post("/processes", status_code=201)

@@ -10,10 +10,27 @@
     "settings-sidebar",
     "settings-screenshot",
     "settings-recording",
-    "settings-hoyolab"
+    "settings-hoyolab",
+    "process-editor",
+    "shortcut-editor"
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-current-monitor",
+    "core:window:allow-get-all-windows",
+    "core:window:allow-hide",
+    "core:window:allow-outer-position",
+    "core:window:allow-outer-size",
+    "core:window:allow-primary-monitor",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-position",
+    "core:window:allow-set-resizable",
+    "core:window:allow-set-size",
+    "core:window:allow-set-skip-taskbar",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
     "shell:default"
   ]
 }

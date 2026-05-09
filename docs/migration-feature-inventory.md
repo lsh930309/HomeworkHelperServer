@@ -15,9 +15,9 @@
 | --- | --- | --- | --- | --- | --- |
 | APP-001 | 기본 앱 shell + 새 GUI 패키징 | complete | partial | low | 새 GUI는 미리보기 shell 유지 |
 | APP-002 | 단일 인스턴스/트레이 | complete | partial | medium | 새 GUI shell hook 구현, Windows tray smoke 필요 |
-| GAME-001 | 게임 CRUD/실행 방식 | complete | partial | high | CRUD/API/Beholder 테스트 필수 |
+| GAME-001 | 게임 CRUD/실행 방식 | complete | partial | high | CRUD/API/Beholder 테스트 필수, 새 GUI 편집은 별도 popup |
 | GAME-002 | 게임 실행 | complete | partial | medium | Windows smoke 필요 |
-| WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지 |
+| WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지, 새 GUI 편집은 별도 popup |
 | SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 및 개인화 기본값 회귀 차단, 설정 패널은 별도 자동 크기 popup |
 | SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
 | SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 새 GUI preview 스마트 서랍 shell 구현, runtime API/Windows smoke 필요 |

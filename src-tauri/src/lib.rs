@@ -164,6 +164,8 @@ pub fn run() {
                 "settings-screenshot",
                 "settings-recording",
                 "settings-hoyolab",
+                "process-editor",
+                "shortcut-editor",
             ] {
                 if let Some(window) = app.get_webview_window(label) {
                     let _ = window.set_resizable(false);

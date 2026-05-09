@@ -10,6 +10,7 @@ type Progress = {
   current?: number;
   max?: number;
   hoyolab_game_id?: string;
+  resource_icon_url?: string;
 };
 
 type ProcessRow = {
@@ -215,6 +216,10 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; windowLabel: string
   { id: 'recording', label: 'OBS 녹화', windowLabel: 'settings-recording' },
   { id: 'hoyolab', label: 'HoYoLab', windowLabel: 'settings-hoyolab' },
 ];
+const EDITOR_STATE_KEYS = {
+  process: 'hh-main-gui-process-editor-v1',
+  shortcut: 'hh-main-gui-shortcut-editor-v1',
+} as const;
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -393,14 +398,19 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function ProgressBar({ progress }: { progress: Progress }) {
+  const bucket = progress.percent >= 100 ? 'full' : progress.percent >= 80 ? 'warn' : progress.percent >= 50 ? 'mid' : 'ok';
   return (
-    <div className="progress" aria-label={progress.label}>
+    <div className={`progress ${bucket}`} aria-label={progress.label}>
       <div className="progress-meta">
-        <span>{progress.kind === 'stamina' ? '스태미나' : '남은 시간'}</span>
-        <strong>{progress.label}</strong>
+        <span className="progress-kind">
+          {progress.resource_icon_url && <img className="resource-icon" src={`${API_BASE}${progress.resource_icon_url}`} alt="" />}
+          {progress.kind === 'stamina' ? '스태미나' : '남은 시간'}
+        </span>
+        <strong>{progress.kind === 'stamina' && progress.current != null && progress.max != null ? `${progress.current} / ${progress.max}` : progress.label}</strong>
       </div>
       <div className="track">
         <div className="fill" style={{ width: `${clamp(progress.percent, 0, 100)}%` }} />
+        <span className="track-label">{progress.kind === 'time' ? `${Math.round(progress.percent)}%` : progress.label}</span>
       </div>
     </div>
   );
@@ -620,7 +630,7 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   );
 }
 
-function ProcessModal({ process, onClose, onSaved }: { process?: ProcessRow; onClose: () => void; onSaved: () => void }) {
+function ProcessModal({ process, onClose, onSaved, standalone = false }: { process?: ProcessRow; onClose: () => void; onSaved: () => void; standalone?: boolean }) {
   const [form, setForm] = React.useState<ProcessForm>(() => processToForm(process));
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -650,8 +660,7 @@ function ProcessModal({ process, onClose, onSaved }: { process?: ProcessRow; onC
     }
   };
 
-  return (
-    <Modal title={form.id ? '게임 편집' : '게임 추가'} onClose={onClose}>
+  const content = (
       <form className="form-grid" onSubmit={submit}>
         <label>이름<input value={form.name} onChange={(e) => update('name', e.target.value)} /></label>
         <label>모니터링 경로<input value={form.monitoring_path} onChange={(e) => update('monitoring_path', e.target.value)} placeholder="C:\\Games\\Game.exe" /></label>
@@ -687,11 +696,12 @@ function ProcessModal({ process, onClose, onSaved }: { process?: ProcessRow; onC
           <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
         </div>
       </form>
-    </Modal>
   );
+  if (standalone) return <PopupFrame title={form.id ? '게임 편집' : '게임 추가'} className="editor-popup">{content}</PopupFrame>;
+  return <Modal title={form.id ? '게임 편집' : '게임 추가'} onClose={onClose}>{content}</Modal>;
 }
 
-function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut; onClose: () => void; onSaved: () => void }) {
+function ShortcutModal({ shortcut, onClose, onSaved, standalone = false }: { shortcut?: WebShortcut; onClose: () => void; onSaved: () => void; standalone?: boolean }) {
   const [form, setForm] = React.useState<ShortcutForm>(() => shortcutToForm(shortcut));
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -720,8 +730,7 @@ function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut;
     }
   };
 
-  return (
-    <Modal title={form.id ? '웹 바로가기 편집' : '웹 바로가기 추가'} onClose={onClose}>
+  const content = (
       <form className="form-grid" onSubmit={submit}>
         <label>버튼 이름<input value={form.name} onChange={(e) => update('name', e.target.value)} /></label>
         <label>URL<input value={form.url} onChange={(e) => update('url', e.target.value)} /></label>
@@ -732,8 +741,9 @@ function ShortcutModal({ shortcut, onClose, onSaved }: { shortcut?: WebShortcut;
           <button type="submit" disabled={saving}>{saving ? '저장 중…' : '저장'}</button>
         </div>
       </form>
-    </Modal>
   );
+  if (standalone) return <PopupFrame title={form.id ? '웹 바로가기 편집' : '웹 바로가기 추가'} className="editor-popup">{content}</PopupFrame>;
+  return <Modal title={form.id ? '웹 바로가기 편집' : '웹 바로가기 추가'} onClose={onClose}>{content}</Modal>;
 }
 
 function SettingsModal({
@@ -1370,6 +1380,61 @@ function SettingsWindowApp() {
   );
 }
 
+function EditorWindowApp({ kind }: { kind: 'process' | 'shortcut' }) {
+  const [state, setState] = React.useState<MainState | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [nonce, setNonce] = React.useState(0);
+
+  const load = React.useCallback(() => {
+    fetchJson<MainState>('/api/gui/main-state')
+      .then((body) => {
+        setState(body);
+        setError(null);
+      })
+      .catch((e: any) => setError(e.message || String(e)));
+  }, []);
+
+  React.useEffect(() => {
+    load();
+    const onStorage = () => setNonce((value) => value + 1);
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onStorage);
+    };
+  }, [load]);
+
+  const close = () => {
+    if (isTauriRuntime()) getCurrentWindow().hide().catch(() => undefined);
+    else window.close();
+  };
+
+  const raw = localStorage.getItem(kind === 'process' ? EDITOR_STATE_KEYS.process : EDITOR_STATE_KEYS.shortcut);
+  let target: { mode?: 'new' | 'edit'; id?: string } = {};
+  try {
+    target = raw ? JSON.parse(raw) : {};
+  } catch {
+    target = {};
+  }
+
+  if (!state) {
+    return (
+      <PopupFrame title={kind === 'process' ? '게임 편집' : '웹 바로가기 편집'} className="editor-popup">
+        <p className="notice compact">{error || '편집 데이터를 불러오는 중…'}</p>
+      </PopupFrame>
+    );
+  }
+
+  if (kind === 'process') {
+    const process = target.mode === 'edit' ? state.processes.find((item) => item.id === target.id) : undefined;
+    return <ProcessModal key={`${target.mode}-${target.id || 'new'}-${nonce}`} process={process} standalone onClose={close} onSaved={load} />;
+  }
+
+  const shortcut = target.mode === 'edit' ? state.web_shortcuts.find((item) => item.id === target.id) : undefined;
+  return <ShortcutModal key={`${target.mode}-${target.id || 'new'}-${nonce}`} shortcut={shortcut} standalone onClose={close} onSaved={load} />;
+}
+
 function MainApp() {
   const rootRef = React.useRef<HTMLElement | null>(null);
   const appInstanceIdRef = React.useRef<string>(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
@@ -1455,6 +1520,32 @@ function MainApp() {
     setContextMenu({ x: event.clientX, y: event.clientY, items });
   };
 
+  const openProcessEditor = async (process?: ProcessRow) => {
+    if (!isTauri) {
+      setEditingProcess(process || 'new');
+      return;
+    }
+    localStorage.setItem(EDITOR_STATE_KEYS.process, JSON.stringify({ mode: process ? 'edit' : 'new', id: process?.id || null, updated_at: Date.now() }));
+    try {
+      await showPopupWindow('process-editor');
+    } catch (e: any) {
+      handleError(e);
+    }
+  };
+
+  const openShortcutEditor = async (shortcut?: WebShortcut) => {
+    if (!isTauri) {
+      setEditingShortcut(shortcut || 'new');
+      return;
+    }
+    localStorage.setItem(EDITOR_STATE_KEYS.shortcut, JSON.stringify({ mode: shortcut ? 'edit' : 'new', id: shortcut?.id || null, updated_at: Date.now() }));
+    try {
+      await showPopupWindow('shortcut-editor');
+    } catch (e: any) {
+      handleError(e);
+    }
+  };
+
   const deleteProcess = async (process: ProcessRow) => {
     if (!window.confirm(`'${process.name}' 게임을 삭제할까요?`)) return;
     try {
@@ -1503,7 +1594,7 @@ function MainApp() {
 
   const processMenuItems = (process: ProcessRow): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
-      { label: '편집', action: () => setEditingProcess(process) },
+      { label: '편집', action: () => openProcessEditor(process) },
     ];
     if (process.stamina_tracking_enabled && process.hoyolab_game_id) {
       items.push({
@@ -1523,7 +1614,7 @@ function MainApp() {
   ];
 
   const shortcutMenuItems = (shortcut: WebShortcut): ContextMenuItem[] => [
-    { label: '편집', action: () => setEditingShortcut(shortcut) },
+    { label: '편집', action: () => openShortcutEditor(shortcut) },
     { label: '삭제', kind: 'danger', action: () => deleteShortcut(shortcut) },
   ];
 
@@ -1572,6 +1663,23 @@ function MainApp() {
     }
   };
 
+  const toggleAlwaysOnTop = async () => {
+    if (!state) return;
+    const next = !state.settings.always_on_top;
+    try {
+      const saved = await fetchJson<GuiSettings>('/api/gui/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ always_on_top: next }),
+      });
+      setState((prev) => prev ? { ...prev, settings: { ...prev.settings, always_on_top: saved.always_on_top } } : prev);
+      if (isTauri) getCurrentWindow().setAlwaysOnTop(saved.always_on_top).catch(() => undefined);
+    } catch (e: any) {
+      handleError(e);
+    }
+  };
+
+  const design = new URLSearchParams(window.location.search).get('design') || 'table';
+
   if (!state) {
     return (
       <main className="shell loading" ref={rootRef}>
@@ -1589,9 +1697,13 @@ function MainApp() {
           <h1>숙제 관리자</h1>
         </div>
         <div className="actions">
-          <button onClick={() => setEditingProcess('new')}>+ 게임</button>
-          <button onClick={() => setEditingShortcut('new')}>+ 웹</button>
+          <button onClick={() => openProcessEditor()}>+ 게임</button>
+          <button onClick={() => openShortcutEditor()}>+ 웹</button>
+          <button className={state.settings.always_on_top ? 'primary' : 'ghost'} onClick={toggleAlwaysOnTop} title="항상 위 즉시 전환">
+            {state.settings.always_on_top ? '📌 항상 위' : '📍 일반'}
+          </button>
           <button onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
+          <button className="ghost" onClick={() => openUrl('https://github.com/lsh930309/HomeworkHelperServer')} title="GitHub 저장소 방문">GH</button>
           <button className="ghost" onClick={openSettings}>설정</button>
         </div>
       </header>
@@ -1612,40 +1724,76 @@ function MainApp() {
         </section>
       )}
 
-      <section className="table-card">
-        <div className="table-head">
-          <span>게임</span>
-          <span>진행률</span>
-          <span>실행</span>
-          <span>상태</span>
-        </div>
-        {state.processes.length === 0 ? (
-          <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
-        ) : (
-          state.processes.map((process) => (
-            <article className="row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
-              <div className="game">
-                <img src={`${API_BASE}${process.icon_url}`} alt="" />
-                <div>
-                  <strong>{process.name}</strong>
-                  <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
+      {design === 'card' ? (
+        <section className="design-card-list">
+          {state.processes.map((process) => (
+            <article className="game-card" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
+              <div className="game-card-head">
+                <div className="game">
+                  <img src={`${API_BASE}${process.icon_url}`} alt="" />
+                  <div><strong>{process.name}</strong><span>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span></div>
                 </div>
+                <StatusBadge status={process.status} />
               </div>
               <ProgressBar progress={process.progress} />
-              <button
-                className="launch"
-                disabled={busyId === process.id}
-                onClick={() => launch(process)}
-                onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
-                title="우클릭: 실행 방식 선택"
-              >
+              <button className="launch wide" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}>
                 {busyId === process.id ? '실행 중…' : '실행'}
               </button>
-              <StatusBadge status={process.status} />
             </article>
-          ))
-        )}
-      </section>
+          ))}
+        </section>
+      ) : design === 'command' ? (
+        <section className="command-center">
+          <div className="command-summary">
+            <strong>{state.processes.filter((p) => p.status !== '완료됨').length}</strong>
+            <span>주의가 필요한 항목</span>
+          </div>
+          <div className="command-list">
+            {state.processes.map((process) => (
+              <article className="command-row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
+                <div className="game"><img src={`${API_BASE}${process.icon_url}`} alt="" /><strong>{process.name}</strong></div>
+                <ProgressBar progress={process.progress} />
+                <button className="launch" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}>실행</button>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="table-card">
+          <div className="table-head">
+            <span>게임</span>
+            <span>진행률</span>
+            <span>실행</span>
+            <span>상태</span>
+          </div>
+          {state.processes.length === 0 ? (
+            <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
+          ) : (
+            state.processes.map((process) => (
+              <article className="row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
+                <div className="game">
+                  <img src={`${API_BASE}${process.icon_url}`} alt="" />
+                  <div>
+                    <strong>{process.name}</strong>
+                    <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
+                  </div>
+                </div>
+                <ProgressBar progress={process.progress} />
+                <button
+                  className="launch"
+                  disabled={busyId === process.id}
+                  onClick={() => launch(process)}
+                  onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
+                  title="우클릭: 실행 방식 선택"
+                >
+                  {busyId === process.id ? '실행 중…' : '실행'}
+                </button>
+                <StatusBadge status={process.status} />
+              </article>
+            ))
+          )}
+        </section>
+      )}
 
       <footer>
         <span>마지막 갱신 {new Date(state.generated_at).toLocaleTimeString()}</span>
@@ -1680,5 +1828,7 @@ export default function App() {
   const label = queryWindow || (isTauriRuntime() ? getCurrentWindow().label : 'main');
   if (label === 'sidebar') return <SidebarApp />;
   if (label.startsWith('settings-')) return <SettingsWindowApp />;
+  if (label === 'process-editor') return <EditorWindowApp kind="process" />;
+  if (label === 'shortcut-editor') return <EditorWindowApp kind="shortcut" />;
   return <MainApp />;
 }

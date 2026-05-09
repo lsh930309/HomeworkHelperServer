@@ -98,6 +98,11 @@ button.tiny { border-radius: 8px; padding: 4px 6px; font-size: 10px; }
   grid-template-columns: minmax(0, 1fr);
 }
 
+.editor-popup .form-grid {
+  width: 620px;
+  min-width: 620px;
+}
+
 .loading {
   display: grid;
   place-content: center;
@@ -257,7 +262,43 @@ footer { color: #94a3b8; font-size: 11px; }
   background: linear-gradient(90deg, #22d3ee, #60a5fa, #a78bfa);
 }
 
+.progress.ok .fill { background: linear-gradient(90deg, #22c55e, #86efac); }
+.progress.mid .fill { background: linear-gradient(90deg, #eab308, #fde047); }
+.progress.warn .fill { background: linear-gradient(90deg, #f97316, #fb923c); }
+.progress.full .fill { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+.progress-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.resource-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.track {
+  position: relative;
+}
+
+.track-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 10px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
 .launch { padding: 6px 0; }
+.launch.wide { width: 100%; margin-top: 8px; }
 
 .status {
   display: inline-flex;
@@ -275,6 +316,68 @@ footer { color: #94a3b8; font-size: 11px; }
   padding: 24px;
   color: #94a3b8;
   text-align: center;
+}
+
+.design-card-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 9px;
+  margin-top: 10px;
+  min-width: 560px;
+}
+
+.game-card {
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+.game-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.command-center {
+  display: grid;
+  grid-template-columns: 160px minmax(430px, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+  min-width: 620px;
+}
+
+.command-summary {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  min-height: 150px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(37, 99, 235, 0.24), rgba(15, 23, 42, 0.74));
+  text-align: center;
+}
+
+.command-summary strong { font-size: 42px; }
+.command-summary span { color: #93c5fd; font-size: 12px; }
+
+.command-list {
+  display: grid;
+  gap: 7px;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(190px, 1.1fr) 54px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.64);
 }
 
 footer { margin-top: 8px; }

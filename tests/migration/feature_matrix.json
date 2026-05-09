@@ -23,7 +23,8 @@
       ],
       "manual_smoke": [
         "설치 후 기본 HomeworkHelper는 PyQt로 실행",
-        "HomeworkHelper 새 GUI 미리보기 바로가기 실행"
+        "HomeworkHelper 새 GUI 미리보기 바로가기 실행",
+        "새 GUI GitHub 버튼 외부 브라우저 열기"
       ]
     },
     {
@@ -52,7 +53,7 @@
       "category": "game_management",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "/processes, /api/gui/processes",
+      "api_or_boundary": "/processes, /api/gui/processes, src/gui/new_gui/frontend process-editor popup",
       "data_owned": [
         "managed_processes.*"
       ],
@@ -66,7 +67,9 @@
       "manual_smoke": [
         "PyQt에서 게임 추가/편집/삭제",
         "새 GUI에서 게임 추가/편집/삭제",
-        "실행 방식 우클릭 변경"
+        "실행 방식 우클릭 변경",
+        "새 GUI 게임 추가/편집 popup 창",
+        "새 GUI 메인 progress 자원 아이콘 표시"
       ]
     },
     {
@@ -98,7 +101,7 @@
       "category": "web_shortcuts",
       "pyqt_status": "complete",
       "new_gui_status": "complete",
-      "api_or_boundary": "/shortcuts, /api/gui/web-shortcuts",
+      "api_or_boundary": "/web-shortcuts, /api/gui/web-shortcuts, src/gui/new_gui/frontend shortcut-editor popup",
       "data_owned": [
         "web_shortcuts.*"
       ],
@@ -111,7 +114,8 @@
       "manual_smoke": [
         "웹 버튼 클릭 시 브라우저 열림",
         "우클릭 편집/삭제",
-        "초기화 시각 이후 due/done 표시"
+        "초기화 시각 이후 due/done 표시",
+        "새 GUI 웹 바로가기 추가/편집 popup 창"
       ]
     },
     {
