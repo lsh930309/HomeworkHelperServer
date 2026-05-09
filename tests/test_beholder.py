@@ -1,4 +1,5 @@
 import datetime as dt
+import sqlite3
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -9,6 +10,22 @@ from sqlalchemy.pool import StaticPool
 
 from src.api.beholder_routes import router as beholder_router
 from src.data import beholder, crud, models, schemas
+
+
+def _write_minimal_app_db(path):
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE managed_processes (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE web_shortcuts (id TEXT PRIMARY KEY, name TEXT)")
+        conn.execute("CREATE TABLE process_sessions (id INTEGER PRIMARY KEY, process_id TEXT)")
+        conn.execute("CREATE TABLE global_settings (id INTEGER PRIMARY KEY)")
+        conn.executemany("INSERT INTO managed_processes (id, name) VALUES (?, ?)", [("game-a", "Game A"), ("game-b", "Game B")])
+        conn.execute("INSERT INTO web_shortcuts (id, name) VALUES ('web-a', 'Web A')")
+        conn.executemany("INSERT INTO process_sessions (id, process_id) VALUES (?, ?)", [(1, "game-a"), (2, "game-a"), (3, "game-b")])
+        conn.execute("INSERT INTO global_settings (id) VALUES (1)")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _session_factory(monkeypatch):
@@ -117,6 +134,45 @@ def test_beholder_active_incidents_api_and_resolve(monkeypatch):
     assert resolved.status_code == 200
     assert resolved.json()["incident"]["status"] == "denied"
     assert client.get("/api/beholder/incidents/active").json()["incidents"] == []
+
+
+def test_beholder_backup_preview_includes_user_safe_db_summary(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.api.beholder_routes as routes
+
+    data_dir = tmp_path / "homework_helper_data"
+    backup_dir = tmp_path / "backups"
+    data_dir.mkdir()
+    backup_dir.mkdir()
+    current_db = data_dir / "app_data.db"
+    backup_db = backup_dir / "app_data.backup.1.db"
+    _write_minimal_app_db(current_db)
+    _write_minimal_app_db(backup_db)
+
+    monkeypatch.setattr(routes, "base_dir", str(tmp_path))
+    monkeypatch.setattr(routes, "data_dir", str(data_dir))
+    monkeypatch.setattr(routes, "db_path", str(current_db))
+    monkeypatch.setattr(routes, "SessionLocal", SessionLocal)
+
+    app = FastAPI()
+    app.include_router(beholder_router)
+    client = TestClient(app)
+
+    listed = client.get("/api/beholder/backups")
+    assert listed.status_code == 200
+    backup = listed.json()["backups"][0]
+    assert backup["summary"]["table_counts"]["managed_processes"] == 2
+    assert backup["summary"]["table_counts"]["process_sessions"] == 3
+    assert "게임 2개" in backup["user_summary"]
+    assert backup["integrity"] == "ok"
+
+    preview = client.post("/api/beholder/backups/restore-preview", json={"slot": 1})
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["current"]["table_counts"]["web_shortcuts"] == 1
+    assert body["backup"]["summary"]["table_counts"]["global_settings"] == 1
+    assert body["impact"]["will_replace_current_db"] is True
+    assert "snapshot" in body["impact"]["summary"]
 
 
 def test_duplicate_open_session_incident_offers_continue_action(monkeypatch):

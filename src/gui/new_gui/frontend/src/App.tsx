@@ -582,8 +582,10 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   const [busy, setBusy] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [backups, setBackups] = React.useState<Array<{ slot: number; modified_at: number; size: number }>>([]);
-  const [restorePreview, setRestorePreview] = React.useState<{ backup: { slot: number; modified_at: number; size: number }; current: { path: string; size: number } } | null>(null);
+  type DbSummary = { path: string; size: number; modified_at?: number | null; table_counts?: Record<string, number>; integrity?: string; user_summary?: string };
+  type BackupInfo = { slot: number; modified_at: number; size: number; user_summary?: string; integrity?: string; summary?: DbSummary };
+  const [backups, setBackups] = React.useState<BackupInfo[]>([]);
+  const [restorePreview, setRestorePreview] = React.useState<{ backup: BackupInfo; current: DbSummary; impact?: { summary?: string } } | null>(null);
   const resolve = async (action: string) => {
     setBusy(action);
     setError(null);
@@ -609,7 +611,7 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
     setError(null);
     setRestorePreview(null);
     try {
-      const body = await fetchJson<{ backups: Array<{ slot: number; modified_at: number; size: number }> }>('/api/beholder/backups');
+      const body = await fetchJson<{ backups: BackupInfo[] }>('/api/beholder/backups');
       setBackups(body.backups || []);
     } catch (e: any) {
       setError(e.message);
@@ -620,12 +622,21 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
     setMessage(null);
     setBusy(`restore-${slot}`);
     try {
-      const preview = await fetchJson<{ backup: { slot: number; modified_at: number; size: number }; current: { path: string; size: number } }>('/api/beholder/backups/restore-preview', {
+      const preview = await fetchJson<{ backup: BackupInfo; current: DbSummary; impact?: { summary?: string } }>('/api/beholder/backups/restore-preview', {
         method: 'POST',
         body: JSON.stringify({ slot }),
       });
       setRestorePreview(preview);
-      if (!window.confirm(`backup.${slot}로 DB를 복구할까요?\n\n현재 DB: ${preview.current.size} bytes\n복구 백업: ${preview.backup.size} bytes\n\n현재 DB는 복구 직전 snapshot으로 보존됩니다.`)) return;
+      const currentCounts = preview.current.table_counts || {};
+      const backupCounts = preview.backup.summary?.table_counts || {};
+      if (!window.confirm(
+        `backup.${slot}로 DB를 복구할까요?\n\n` +
+        `현재: ${preview.current.user_summary || `${preview.current.size} bytes`}\n` +
+        `백업: ${preview.backup.user_summary || `${preview.backup.size} bytes`}\n\n` +
+        `게임 ${currentCounts.managed_processes ?? '-'} → ${backupCounts.managed_processes ?? '-'} / ` +
+        `기록 ${currentCounts.process_sessions ?? '-'} → ${backupCounts.process_sessions ?? '-'}\n\n` +
+        '현재 DB는 복구 직전 snapshot으로 보존됩니다.'
+      )) return;
       await fetchJson('/api/beholder/backups/restore', { method: 'POST', body: JSON.stringify({ slot }) });
       setMessage('백업 복구가 완료되었습니다. 앱을 재시작해 주세요.');
     } catch (e: any) {
@@ -687,14 +698,17 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
           <div className="backup-list">
             {backups.map((backup) => (
               <button className="ghost" key={backup.slot} onClick={() => restore(backup.slot)}>
-                backup.{backup.slot} · {new Date(backup.modified_at * 1000).toLocaleString()} · {backup.size} bytes
+                <strong>backup.{backup.slot}</strong>
+                <span>{new Date(backup.modified_at * 1000).toLocaleString()} · {backup.size} bytes</span>
+                <small>{backup.user_summary || `무결성: ${backup.integrity || 'unknown'}`}</small>
               </button>
             ))}
           </div>
         )}
         {restorePreview && (
           <div className="notice compact">
-            복구 미리보기: 현재 DB {restorePreview.current.size} bytes → backup.{restorePreview.backup.slot} {restorePreview.backup.size} bytes
+            복구 미리보기: {restorePreview.current.user_summary || `${restorePreview.current.size} bytes`} → backup.{restorePreview.backup.slot} {restorePreview.backup.user_summary || `${restorePreview.backup.size} bytes`}
+            {restorePreview.impact?.summary && <><br />{restorePreview.impact.summary}</>}
           </div>
         )}
         {message && <div className="notice compact">{message}</div>}

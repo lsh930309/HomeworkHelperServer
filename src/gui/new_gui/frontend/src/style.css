@@ -1064,3 +1064,14 @@ select:focus {
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
 }
+.backup-list button {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  text-align: left;
+}
+.backup-list button span,
+.backup-list button small {
+  color: #94a3b8;
+  font-size: 11px;
+}

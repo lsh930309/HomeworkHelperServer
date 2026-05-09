@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,14 @@ from src.data import beholder, crud, models
 from src.data.database import SessionLocal, base_dir, data_dir, db_path
 
 router = APIRouter(prefix="/api/beholder", tags=["beholder"])
+
+BACKUP_SUMMARY_TABLES = {
+    "managed_processes": "게임",
+    "web_shortcuts": "웹 바로가기",
+    "process_sessions": "플레이 기록",
+    "global_settings": "설정",
+    "beholder_incidents": "비홀더 사건",
+}
 
 
 def get_db():
@@ -93,6 +102,50 @@ def reconcile_open_sessions(payload: OpenSessionReconcileRequest, db: Session = 
     return {"incidents": [beholder.incident_to_dict(i) for i in incidents]}
 
 
+def _db_summary(path: str | Path) -> dict[str, Any]:
+    db_file = Path(path)
+    exists = db_file.exists()
+    summary: dict[str, Any] = {
+        "path": str(db_file),
+        "exists": exists,
+        "size": db_file.stat().st_size if exists else 0,
+        "modified_at": db_file.stat().st_mtime if exists else None,
+        "table_counts": {},
+        "integrity": "missing" if not exists else "unknown",
+        "user_summary": "DB 파일이 없습니다." if not exists else "백업 내용을 확인 중입니다.",
+    }
+    if not exists:
+        return summary
+
+    try:
+        conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            summary["integrity"] = integrity[0] if integrity else "unknown"
+            existing_tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            for table in BACKUP_SUMMARY_TABLES:
+                if table in existing_tables:
+                    count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    summary["table_counts"][table] = int(count)
+        finally:
+            conn.close()
+        counts = summary["table_counts"]
+        game_count = counts.get("managed_processes", 0)
+        session_count = counts.get("process_sessions", 0)
+        shortcut_count = counts.get("web_shortcuts", 0)
+        summary["user_summary"] = (
+            f"게임 {game_count}개, 웹 바로가기 {shortcut_count}개, 플레이 기록 {session_count}건이 들어 있습니다."
+        )
+    except Exception as exc:
+        summary["integrity"] = "unreadable"
+        summary["error"] = str(exc)
+        summary["user_summary"] = "백업 DB를 읽어 요약할 수 없습니다. 파일 손상 또는 잠금 가능성이 있습니다."
+    return summary
+
+
 def _backup_files() -> list[dict[str, Any]]:
     backup_dir = Path(base_dir) / "backups"
     files = []
@@ -100,13 +153,22 @@ def _backup_files() -> list[dict[str, Any]]:
         path = backup_dir / f"app_data.backup.{i}.db"
         if path.exists():
             stat = path.stat()
-            files.append({"slot": i, "path": str(path), "modified_at": stat.st_mtime, "size": stat.st_size})
+            summary = _db_summary(path)
+            files.append({
+                "slot": i,
+                "path": str(path),
+                "modified_at": stat.st_mtime,
+                "size": stat.st_size,
+                "summary": summary,
+                "user_summary": summary["user_summary"],
+                "integrity": summary["integrity"],
+            })
     return files
 
 
 @router.get("/backups")
 def list_backups() -> dict[str, Any]:
-    return {"backups": _backup_files(), "current_db_path": db_path}
+    return {"backups": _backup_files(), "current_db_path": db_path, "current": _db_summary(db_path)}
 
 
 class RestoreRequest(BaseModel):
@@ -118,8 +180,20 @@ def restore_preview(payload: RestoreRequest) -> dict[str, Any]:
     files = {item["slot"]: item for item in _backup_files()}
     if payload.slot not in files:
         raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
-    current_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
-    return {"backup": files[payload.slot], "current": {"path": db_path, "size": current_size}}
+    current = _db_summary(db_path)
+    backup = files[payload.slot]
+    return {
+        "backup": backup,
+        "current": current,
+        "impact": {
+            "will_replace_current_db": True,
+            "previous_snapshot_will_be_created": os.path.exists(db_path),
+            "summary": (
+                f"현재 DB를 backup.{payload.slot}의 내용으로 교체합니다. "
+                "복구 직전 현재 DB는 별도 snapshot으로 보존됩니다."
+            ),
+        },
+    }
 
 
 @router.post("/backups/restore")
