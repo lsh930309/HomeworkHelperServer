@@ -557,13 +557,27 @@ def end_session(
     """프로세스 세션 종료 기록"""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
+        changed_fields = ["end_timestamp", "session_duration", "session_status", "close_reason", "heartbeat_timestamp"]
+        proposed_values = {"end_timestamp": end_timestamp}
+        if stamina_at_end is not None:
+            changed_fields.append("stamina_at_end")
+            proposed_values["stamina_at_end"] = stamina_at_end
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.PROCESS_SESSIONS_TABLE, beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: beholder.SESSION_FIELDS},
+            evidence={
+                "changed_fields": changed_fields,
+                "context": {"session_id": session_id, "process_id": db_session.process_id, "process_name": db_session.process_name},
+                "proposed_values": proposed_values,
+            },
             override_token=override_token,
         )
         beholder.guard_session_end(db, db_session, end_timestamp, operation)
+        if stamina_at_end is not None:
+            beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
         db_session.session_status = "closed"

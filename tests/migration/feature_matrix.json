@@ -224,7 +224,8 @@
         "test_open_session_recovery_closes_at_last_app_heartbeat",
         "test_continue_existing_session_resolution_reuses_open_session",
         "test_negative_session_stamina_is_blocked_without_mutating_session",
-        "test_real_appdata_beholder_detects_legacy_open_sessions"
+        "test_real_appdata_beholder_detects_legacy_open_sessions",
+        "test_end_session_blocks_negative_stamina_and_keeps_session_open"
       ],
       "manual_smoke": [
         "게임 실행 후 세션 시작",
@@ -405,7 +406,8 @@
         "test_process_runtime_stamina_guard_blocks_impossible_range",
         "test_beholder_backup_preview_includes_user_safe_db_summary",
         "test_beholder_payload_localizes_invalid_value_risks",
-        "test_beholder_payload_localizes_session_end_risks"
+        "test_beholder_payload_localizes_session_end_risks",
+        "test_end_session_blocks_negative_stamina_and_keeps_session_open"
       ],
       "manual_smoke": [
         "PyQt incident dialog",

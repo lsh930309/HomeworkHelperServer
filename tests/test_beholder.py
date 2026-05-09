@@ -455,6 +455,47 @@ def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatc
     assert unchanged.stamina_at_end == 10
 
 
+def test_end_session_blocks_negative_stamina_and_keeps_session_open(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 12, 0).timestamp()
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=start,
+        end_timestamp=None,
+        stamina_at_end=10,
+        session_status="open",
+        session_owner="process_monitor",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(
+            db,
+            session.id,
+            start + 120,
+            stamina_at_end=-1,
+            actor="process_monitor",
+            operation_kind="runtime_stop",
+        )
+        assert False, "end_session should not bypass stamina_at_end guard"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+        assert "invalid_negative_stamina" in payload["risk_factors"]
+        assert "음수 스태미나 기록" in payload["risk_labels"]
+
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.end_timestamp is None
+    assert unchanged.session_status == "open"
+    assert unchanged.stamina_at_end == 10
+
+
 def test_process_editor_cannot_mutate_runtime_fields(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
