@@ -423,6 +423,68 @@ def _server_day_bounds(now_dt: dt.datetime, reset_time: dt.time) -> tuple[dt.dat
     return start, end
 
 
+def _scheduler_event_label(kind: str) -> str:
+    return {
+        "mandatory_time": "고정 접속",
+        "cycle_deadline": "주기 마감",
+        "sleep_correction": "수면 보정",
+        "daily_reset": "일일 리셋",
+        "stamina": "스태미나",
+        "status_incomplete": "미완료",
+    }.get(kind, "알림")
+
+
+def _scheduler_severity_label(severity: str) -> str:
+    return {
+        "due": "지금 확인 필요",
+        "soon": "곧 확인 필요",
+        "info": "참고",
+    }.get(severity, severity)
+
+
+def _scheduler_due_label(due_at: dt.datetime, now_dt: dt.datetime) -> str:
+    delta = due_at - now_dt
+    seconds = int(delta.total_seconds())
+    clock = due_at.strftime("%H:%M")
+    if abs(seconds) < 60:
+        return f"지금 · {clock}"
+    if seconds > 0:
+        minutes = max(1, seconds // 60)
+        if minutes < 60:
+            return f"{minutes}분 후 · {clock}"
+        hours = minutes // 60
+        rest = minutes % 60
+        return f"{hours}시간 {rest}분 후 · {clock}" if rest else f"{hours}시간 후 · {clock}"
+    minutes = max(1, abs(seconds) // 60)
+    if minutes < 60:
+        return f"{minutes}분 지남 · {clock}"
+    hours = minutes // 60
+    rest = minutes % 60
+    return f"{hours}시간 {rest}분 지남 · {clock}" if rest else f"{hours}시간 지남 · {clock}"
+
+
+def _scheduler_event(
+    *,
+    kind: str,
+    process: models.Process,
+    due_at: dt.datetime,
+    severity: str,
+    message: str,
+    now_dt: dt.datetime,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "kind_label": _scheduler_event_label(kind),
+        "process_id": process.id,
+        "process_name": process.name,
+        "due_at": due_at.isoformat(),
+        "due_label": _scheduler_due_label(due_at, now_dt),
+        "severity": severity,
+        "severity_label": _scheduler_severity_label(severity),
+        "message": message,
+    }
+
+
 def _scheduler_preview_for_process(
     process: models.Process,
     settings: models.GlobalSettings,
@@ -439,40 +501,40 @@ def _scheduler_preview_for_process(
                 continue
             due_at = now_dt.replace(hour=mandatory_time.hour, minute=mandatory_time.minute, second=0, microsecond=0)
             if now_dt >= due_at and (last_played_dt is None or last_played_dt < due_at):
-                events.append({
-                    "kind": "mandatory_time",
-                    "process_id": process.id,
-                    "process_name": process.name,
-                    "due_at": due_at.isoformat(),
-                    "severity": "due",
-                    "message": f"{process.name}의 고정 접속 시각({mandatory})이 지났습니다.",
-                })
+                events.append(_scheduler_event(
+                    kind="mandatory_time",
+                    process=process,
+                    due_at=due_at,
+                    severity="due",
+                    message=f"{process.name}의 고정 접속 시각({mandatory})이 지났습니다.",
+                    now_dt=now_dt,
+                ))
 
     if process.user_cycle_hours and last_played_dt:
         deadline = last_played_dt + dt.timedelta(hours=float(process.user_cycle_hours))
         notify_at = deadline - dt.timedelta(hours=float(settings.cycle_deadline_advance_notify_hours or 0))
         if settings.notify_on_cycle_deadline and notify_at <= now_dt < deadline:
-            events.append({
-                "kind": "cycle_deadline",
-                "process_id": process.id,
-                "process_name": process.name,
-                "due_at": deadline.isoformat(),
-                "severity": "soon",
-                "message": f"{process.name}의 사용자 주기 마감이 다가옵니다.",
-            })
+            events.append(_scheduler_event(
+                kind="cycle_deadline",
+                process=process,
+                due_at=deadline,
+                severity="soon",
+                message=f"{process.name}의 사용자 주기 마감이 다가옵니다.",
+                now_dt=now_dt,
+            ))
         sleep_period = _next_sleep_period(now_dt, settings)
         if settings.notify_on_sleep_correction and sleep_period:
             sleep_start, sleep_end = sleep_period
             trigger = sleep_start - dt.timedelta(hours=float(settings.sleep_correction_advance_notify_hours or 0))
             if sleep_start <= deadline < sleep_end and trigger <= now_dt < sleep_start:
-                events.append({
-                    "kind": "sleep_correction",
-                    "process_id": process.id,
-                    "process_name": process.name,
-                    "due_at": deadline.isoformat(),
-                    "severity": "soon",
-                    "message": f"{process.name}의 마감이 수면 시간과 겹쳐 미리 접속하는 것이 좋습니다.",
-                })
+                events.append(_scheduler_event(
+                    kind="sleep_correction",
+                    process=process,
+                    due_at=deadline,
+                    severity="soon",
+                    message=f"{process.name}의 마감이 수면 시간과 겹쳐 미리 접속하는 것이 좋습니다.",
+                    now_dt=now_dt,
+                ))
 
     reset_time = _parse_time(process.server_reset_time_str)
     if settings.notify_on_daily_reset and reset_time:
@@ -480,14 +542,14 @@ def _scheduler_preview_for_process(
         played_today = bool(last_played_dt and start <= last_played_dt <= end)
         reminder_at = end - dt.timedelta(hours=1)
         if not played_today and reminder_at <= now_dt < end:
-            events.append({
-                "kind": "daily_reset",
-                "process_id": process.id,
-                "process_name": process.name,
-                "due_at": end.isoformat(),
-                "severity": "soon",
-                "message": f"{process.name}의 서버 하루 마감이 다가오지만 오늘 플레이 기록이 없습니다.",
-            })
+            events.append(_scheduler_event(
+                kind="daily_reset",
+                process=process,
+                due_at=end,
+                severity="soon",
+                message=f"{process.name}의 서버 하루 마감이 다가오지만 오늘 플레이 기록이 없습니다.",
+                now_dt=now_dt,
+            ))
 
     if settings.stamina_notify_enabled and process.stamina_tracking_enabled:
         stamina = _predicted_stamina(process)
@@ -495,24 +557,24 @@ def _scheduler_preview_for_process(
             current, maximum = stamina
             threshold = int(settings.stamina_notify_threshold or 0)
             if maximum > 0 and current >= maximum - threshold:
-                events.append({
-                    "kind": "stamina",
-                    "process_id": process.id,
-                    "process_name": process.name,
-                    "due_at": now_dt.isoformat(),
-                    "severity": "soon" if current < maximum else "due",
-                    "message": f"{process.name}의 스태미나가 곧 가득 찹니다. ({current}/{maximum})",
-                })
+                events.append(_scheduler_event(
+                    kind="stamina",
+                    process=process,
+                    due_at=now_dt,
+                    severity="soon" if current < maximum else "due",
+                    message=f"{process.name}의 스태미나가 곧 가득 찹니다. ({current}/{maximum})",
+                    now_dt=now_dt,
+                ))
 
     if status == "미완료" and not events:
-        events.append({
-            "kind": "status_incomplete",
-            "process_id": process.id,
-            "process_name": process.name,
-            "due_at": now_dt.isoformat(),
-            "severity": "due",
-            "message": f"{process.name}은 현재 미완료 상태입니다.",
-        })
+        events.append(_scheduler_event(
+            kind="status_incomplete",
+            process=process,
+            due_at=now_dt,
+            severity="due",
+            message=f"{process.name}은 현재 미완료 상태입니다.",
+            now_dt=now_dt,
+        ))
     return events
 
 
@@ -629,6 +691,17 @@ def _stamina_to_payload(info: Any) -> dict[str, Any]:
     }
 
 
+def _notification_toggles(settings: models.GlobalSettings) -> list[dict[str, Any]]:
+    toggles = [
+        ("notify_on_mandatory_time", "고정 접속", settings.notify_on_mandatory_time),
+        ("notify_on_cycle_deadline", "주기 마감", settings.notify_on_cycle_deadline),
+        ("notify_on_sleep_correction", "수면 보정", settings.notify_on_sleep_correction),
+        ("notify_on_daily_reset", "일일 리셋", settings.notify_on_daily_reset),
+        ("stamina_notify_enabled", "스태미나", settings.stamina_notify_enabled),
+    ]
+    return [{"key": key, "label": label, "enabled": bool(enabled)} for key, label, enabled in toggles]
+
+
 @router.get("/main-state")
 def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Return a DB-safe snapshot for the Tauri/React main window."""
@@ -683,6 +756,9 @@ def get_scheduler_preview(now: str | None = None, db: Session = Depends(get_db))
             "event_count": len(process_events),
             "events": process_events,
         })
+    notification_toggles = _notification_toggles(settings)
+    enabled_notifications = [item["label"] for item in notification_toggles if item["enabled"]]
+    disabled_notifications = [item["label"] for item in notification_toggles if not item["enabled"]]
     return {
         "generated_at": now_dt.isoformat(),
         "settings": {
@@ -696,6 +772,10 @@ def get_scheduler_preview(now: str | None = None, db: Session = Depends(get_db))
         "status_counts": counts,
         "events": events,
         "processes": rows,
+        "notification_toggles": notification_toggles,
+        "enabled_notifications": enabled_notifications,
+        "disabled_notifications": disabled_notifications,
+        "coverage_summary": f"켜짐 {len(enabled_notifications)}개 · 꺼짐 {len(disabled_notifications)}개",
         "user_summary": f"미완료 {counts.get('미완료', 0)}개, 예정/필요 알림 {len(events)}건",
     }
 

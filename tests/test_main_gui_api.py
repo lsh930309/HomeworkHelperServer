@@ -426,6 +426,13 @@ def test_gui_scheduler_preview_explains_status_and_notification_events(monkeypat
     events = body["events"]
     assert any(event["kind"] == "mandatory_time" and event["process_id"] == "mandatory-game" for event in events)
     assert any(event["kind"] == "stamina" and event["process_id"] == "stamina-game" for event in events)
+    mandatory = next(event for event in events if event["kind"] == "mandatory_time")
+    assert mandatory["kind_label"] == "고정 접속"
+    assert mandatory["severity_label"] == "지금 확인 필요"
+    assert "지남" in mandatory["due_label"]
+    assert body["coverage_summary"].startswith("켜짐")
+    assert "고정 접속" in body["enabled_notifications"]
+    assert all({"key", "label", "enabled"} <= set(item) for item in body["notification_toggles"])
     assert any(row["process_id"] == "mandatory-game" and row["events"] for row in body["processes"])
     assert client.get("/api/gui/scheduler/preview?now=not-a-date").status_code == 422
 

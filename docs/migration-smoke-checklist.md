@@ -48,6 +48,7 @@
 - [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이가 우측 edge에 표시되고 hover/click으로 열리며, Pin 고정/Escape 닫기/자동 숨김/high-DPI 위치 보정이 동작한다.
 - [ ] SCHEDULER-001: 필수 접속/주기/수면 보정/일일 리셋/스태미나 알림이 동작한다.
 - [ ] SCHEDULER-001: 새 GUI 알림 설정 popup에서 현재 미완료 수와 예정 알림 preview가 실제 상태와 일치한다.
+- [ ] SCHEDULER-001: 새 GUI 알림 preview가 알림 종류/남은 시간/심각도/켜짐·꺼짐 상태를 사용자 언어로 표시한다.
 - [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 `stamina_at_end` 기록 및 시작/종료 재동기화가 동작한다.
 - [ ] SCREENSHOT-001: 새 GUI 키 입력 캡처로 트리거 키 변경 후 게임패드 스크린샷, 저장 폴더, capture mode가 동작한다.
 - [ ] RECORDING-001: 새 GUI OBS 설정 불러오기 후 저장, 자동 실행, 녹화 시작/중지, 사이드바 상태 표시가 동작한다.

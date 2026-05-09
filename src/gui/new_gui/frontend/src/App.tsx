@@ -212,8 +212,22 @@ type LaunchResult = {
 
 type SchedulerPreview = {
   user_summary: string;
+  coverage_summary: string;
   status_counts: Record<string, number>;
-  events: Array<{ kind: string; process_id: string; process_name: string; due_at: string; severity: string; message: string }>;
+  enabled_notifications: string[];
+  disabled_notifications: string[];
+  notification_toggles: Array<{ key: string; label: string; enabled: boolean }>;
+  events: Array<{
+    kind: string;
+    kind_label: string;
+    process_id: string;
+    process_name: string;
+    due_at: string;
+    due_label: string;
+    severity: string;
+    severity_label: string;
+    message: string;
+  }>;
 };
 
 type ProcessForm = {
@@ -1132,10 +1146,22 @@ function SettingsModal({
             {schedulerPreview && (
               <div className="preview-card">
                 <strong>{schedulerPreview.user_summary}</strong>
-                <span>실행중 {schedulerPreview.status_counts['실행중'] || 0} · 완료 {schedulerPreview.status_counts['완료됨'] || 0}</span>
-                {schedulerPreview.events.slice(0, 4).map((event) => (
-                  <small key={`${event.kind}-${event.process_id}-${event.due_at}`}>{event.message}</small>
-                ))}
+                <span>실행중 {schedulerPreview.status_counts['실행중'] || 0} · 완료 {schedulerPreview.status_counts['완료됨'] || 0} · {schedulerPreview.coverage_summary}</span>
+                <div className="toggle-chip-list" aria-label="알림 사용 상태">
+                  {schedulerPreview.notification_toggles.map((item) => (
+                    <span className={item.enabled ? 'on' : 'off'} key={item.key}>{item.label}</span>
+                  ))}
+                </div>
+                <div className="preview-event-list">
+                  {schedulerPreview.events.slice(0, 4).map((event) => (
+                    <div className={`preview-event ${event.severity}`} key={`${event.kind}-${event.process_id}-${event.due_at}`}>
+                      <b>{event.kind_label}</b>
+                      <span>{event.due_label} · {event.severity_label}</span>
+                      <small>{event.message}</small>
+                    </div>
+                  ))}
+                  {schedulerPreview.events.length === 0 && <small>현재 설정 기준으로 곧 표시될 알림은 없습니다.</small>}
+                </div>
               </div>
             )}
           </section>
