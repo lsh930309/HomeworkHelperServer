@@ -18,16 +18,16 @@
 | GAME-001 | 게임 CRUD/실행 방식 | complete | partial | high | CRUD/API/Beholder 테스트 필수 |
 | GAME-002 | 게임 실행 | complete | partial | medium | Windows smoke 필요 |
 | WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지 |
-| SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 완료 |
+| SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 및 개인화 기본값 회귀 차단 |
 | SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
 | SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 설정 편집 가능, runtime 구현 필요 |
-| SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder 테스트 필수 |
+| SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder heartbeat 기반 정전/앱재시작/legacy open 대응 |
 | SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 유지 |
 | HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회/즉시 새로고침 가능, 종료 후 재동기화 runtime smoke 필요 |
 | SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집/키 캡처 보조 가능, capture runtime smoke 필요 |
 | RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집/OBS 설정 불러오기 가능, OBS runtime 필요 |
-| BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 새 GUI incident UX/백업 preview 유지, Windows 복구 smoke 필요 |
+| BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 새 GUI incident UX/백업 preview/스마트 세션 복구 유지, Windows 복구 smoke 필요 |
 | BACKUP-001 | DB/설정/row 백업 | complete | partial | high | 새 GUI 복구 preview 제공, 실제 복구 smoke 필요 |
 | BUILD-001 | 패키징 | complete | complete | medium | 기본 빌드에 새 GUI 포함 |
 | CLIPBOARD-001 | 클립보드 payload | complete | partial | low | 새 GUI API payload 확인/Windows 네이티브 복사 경계 제공, gallery runtime smoke 필요 |

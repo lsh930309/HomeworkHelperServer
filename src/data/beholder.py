@@ -6,8 +6,10 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any
+import psutil
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
 from src.data import models
 
@@ -23,6 +25,7 @@ STATUS_RESOLVED = "resolved"
 
 MAX_UNEVIDENCED_SESSION_SECONDS = 7 * 24 * 60 * 60
 MAX_HEARTBEAT_GAP_SECONDS = 10 * 60
+LEGACY_OPEN_SESSION_SECONDS = 24 * 60 * 60
 GLOBAL_SETTINGS_TABLE = "global_settings"
 MANAGED_PROCESSES_TABLE = "managed_processes"
 WEB_SHORTCUTS_TABLE = "web_shortcuts"
@@ -56,6 +59,15 @@ GLOBAL_DIALOG_FIELDS = {
     "stamina_notify_threshold", "theme", "hide_on_game",
 }
 NEW_GUI_SETTINGS_FIELDS = RUNTIME_SETTINGS_FIELDS | SIDEBAR_SETTINGS_FIELDS | GLOBAL_DIALOG_FIELDS
+PERSONALIZED_SETTINGS_FIELDS = {
+    "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
+    "sidebar_effect", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
+    "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
+    "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
+    "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
+    "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
+    "recording_hold_threshold_ms",
+}
 
 
 def _schema_fields() -> set[str]:
@@ -237,7 +249,15 @@ def session_status_for(session: models.ProcessSession) -> str:
         return session.session_status
     if session.end_timestamp is not None:
         return "closed"
-    return "legacy_unknown"
+    return "open"
+
+
+def _is_open_session(session: models.ProcessSession) -> bool:
+    return session.end_timestamp is None and session_status_for(session) not in {"closed", "abandoned", "quarantined"}
+
+
+def _is_legacy_open_session(session: models.ProcessSession) -> bool:
+    return session.end_timestamp is None and not getattr(session, "session_status", None)
 
 
 def _table_label(table: str) -> str:
@@ -251,6 +271,40 @@ def _table_label(table: str) -> str:
 
 def _operation_context(operation: BeholderOperation) -> dict[str, Any]:
     return dict(operation.evidence.get("context") or {})
+
+
+def _latest_runtime_heartbeat(db: Session) -> models.AppRuntimeHeartbeat | None:
+    try:
+        return db.query(models.AppRuntimeHeartbeat).filter(models.AppRuntimeHeartbeat.id == 1).first()
+    except OperationalError:
+        db.rollback()
+        return None
+
+
+def _has_active_incident(db: Session, operation_kind: str, target_summary: str) -> bool:
+    return db.query(models.BeholderIncident).filter(
+        models.BeholderIncident.status == STATUS_PENDING,
+        models.BeholderIncident.operation_kind == operation_kind,
+        models.BeholderIncident.target_summary == target_summary,
+    ).first() is not None
+
+
+def _close_timestamp_from_heartbeat(db: Session, sessions: list[models.ProcessSession]) -> float | None:
+    heartbeat = _latest_runtime_heartbeat(db)
+    ts = getattr(heartbeat, "last_heartbeat_at", None) if heartbeat else None
+    if ts is None:
+        return None
+    earliest_start = min(float(s.start_timestamp) for s in sessions)
+    if float(ts) < earliest_start:
+        return None
+    return float(ts)
+
+
+def _current_boot_id() -> str | None:
+    try:
+        return str(int(psutil.boot_time()))
+    except Exception:
+        return None
 
 
 def guard_table_write(db: Session, operation: BeholderOperation, table: str, columns: set[str] | None = None) -> None:
@@ -395,23 +449,94 @@ def guard_settings_update(db: Session, current_settings: models.GlobalSettings, 
         )
         raise BeholderBlocked(incident)
 
+    personalized_defaulted = []
+    for field in sorted(changed_fields & PERSONALIZED_SETTINGS_FIELDS):
+        if field not in defaults:
+            continue
+        current = getattr(current_settings, field, None)
+        proposed = update_data.get(field)
+        default = defaults[field]
+        if current != default and proposed == default:
+            personalized_defaulted.append(field)
+    if personalized_defaulted:
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="개인화 설정 일부가 기본값으로 되돌아가려 했습니다.",
+            current_state_summary=f"보존해야 할 개인화 설정: {personalized_defaulted}",
+            proposed_change_summary=f"기본값 회귀 필드: {personalized_defaulted}",
+            risk_score=90,
+            risk_factors=["personalized_settings_default_regression", *personalized_defaulted],
+            safe_recommendation="저장을 차단했습니다. 의도한 초기화라면 Beholder에서 이번 한 번 허용을 선택하세요.",
+            user_title="개인 설정이 초기화될 수 있어 저장하지 않았습니다",
+            user_summary="사이드바/스크린샷/OBS 같은 개인화 설정 일부가 기본값으로 돌아가려고 했습니다.",
+            user_impact="저장했다면 직접 지정한 경로, 캡처 방식, 사이드바 표시 방식 등이 사라질 수 있었습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 한 번만 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
+
 
 def guard_session_start(db: Session, session_data: Any, operation: BeholderOperation) -> None:
     if consume_override_token(db, operation.override_token, operation.kind):
         return
+    guard_table_write(db, operation, PROCESS_SESSIONS_TABLE, {"process_id", "process_name", "start_timestamp"})
     active = db.query(models.ProcessSession).filter(
         models.ProcessSession.process_id == session_data.process_id,
         models.ProcessSession.end_timestamp.is_(None),
     ).all()
-    live_open = [s for s in active if session_status_for(s) == "open"]
+    live_open = [s for s in active if _is_open_session(s)]
     if live_open:
+        now = time.time()
+        legacy_open = [s for s in live_open if _is_legacy_open_session(s)]
+        old_legacy = [s for s in legacy_open if now - float(s.start_timestamp) > LEGACY_OPEN_SESSION_SECONDS]
+        context = dict(_operation_context(operation))
+        current_process_running = bool(context.get("current_process_running", True))
+        close_at = _close_timestamp_from_heartbeat(db, live_open)
+        recommended_action = "continue_existing_session"
+        available_actions = [
+            {"id": "continue_existing_session", "label": "이전 세션 이어가기", "description": "직전 기록을 현재 실행 중인 게임 기록으로 계속 사용합니다.", "recommended": True},
+            {"id": "close_previous_and_start_new", "label": "이전 세션 닫고 새로 시작", "description": "이전 기록을 지금 시점에 종료하고 새 기록을 만듭니다."},
+            {"id": "deny", "label": "차단 유지", "description": "새 세션을 만들지 않습니다."},
+            {"id": "allow_once", "label": "이번 한 번 허용", "description": "중복 세션 생성을 한 번만 허용합니다.", "danger": True},
+        ]
+        user_summary = "앱이 재시작되면서 같은 게임의 새 플레이 기록을 만들려 했지만, 직전 기록이 아직 종료되지 않았습니다."
+        safe_recommendation = "기존 세션을 이어가거나, 기존 세션을 닫고 새 세션을 시작할지 선택하세요."
+        risk_factors = ["duplicate_open_session", "runtime_state_ambiguous"]
+        if not current_process_running and close_at is not None:
+            recommended_action = "close_at_last_app_heartbeat"
+            available_actions = [
+                {"id": "close_at_last_app_heartbeat", "label": "마지막 앱 실행 시각에 종료", "description": "마지막으로 앱이 살아있던 시각에 게임도 종료된 것으로 기록합니다.", "recommended": True},
+                {"id": "abandon_open_sessions", "label": "복구 불가 기록 버리기", "description": "열린 기록을 0초 abandoned 기록으로 정리합니다."},
+                {"id": "deny", "label": "차단 유지", "description": "아무 기록도 바꾸지 않습니다."},
+            ]
+            user_summary = "현재 게임은 실행 중이 아니며, 앱의 마지막 생존 시각 이후 기록이 닫히지 않았습니다."
+            safe_recommendation = "마지막 앱 생존 시각에 플레이가 끝난 것으로 닫는 것이 가장 안전합니다."
+            risk_factors = ["open_session_after_app_restart", "game_not_running", "last_heartbeat_available"]
+        elif old_legacy and len(old_legacy) == len(live_open):
+            recommended_action = "abandon_legacy_and_start_new"
+            available_actions = [
+                {"id": "abandon_legacy_and_start_new", "label": "복구 불가 기록 버리고 새로 시작", "description": "오래된 열린 기록은 abandoned로 정리하고 현재 실행 기록을 새로 만듭니다.", "recommended": True},
+                {"id": "continue_existing_session", "label": "가장 최근 기록 이어가기", "description": "오래된 기록 중 가장 최근 기록을 현재 세션으로 사용합니다."},
+                {"id": "deny", "label": "차단 유지", "description": "새 세션을 만들지 않습니다."},
+            ]
+            user_summary = "오래전에 닫히지 않은 기록만 남아 있어 현재 실행과 이어 붙이면 플레이 시간이 왜곡될 수 있습니다."
+            safe_recommendation = "복구 불가능한 오래된 열린 기록을 버리고 현재 실행을 새 기록으로 시작하세요."
+            risk_factors = ["duplicate_legacy_open_session", "legacy_open_session_stale"]
         context = {
+            **context,
             "process_id": session_data.process_id,
             "process_name": session_data.process_name,
             "requested_start_timestamp": session_data.start_timestamp,
             "requested_user_preset_id": getattr(session_data, "user_preset_id", None),
             "actor": operation.actor,
             "open_session_ids": [s.id for s in live_open],
+            "close_timestamp": close_at,
         }
         incident = create_incident(
             db,
@@ -422,18 +547,13 @@ def guard_session_start(db: Session, session_data: Any, operation: BeholderOpera
             current_state_summary=f"열린 세션 {len(live_open)}건이 존재합니다: {[s.id for s in live_open]}",
             proposed_change_summary="동일 게임에 새 open session 1건 추가",
             risk_score=65,
-            risk_factors=["duplicate_open_session", "runtime_state_ambiguous"],
-            safe_recommendation="기존 세션을 이어가거나, 기존 세션을 닫고 새 세션을 시작할지 선택하세요.",
+            risk_factors=risk_factors,
+            safe_recommendation=safe_recommendation,
             user_title="이전 플레이 기록이 아직 열려 있습니다",
-            user_summary="앱이 재시작되면서 같은 게임의 새 플레이 기록을 만들려 했지만, 직전 기록이 아직 종료되지 않았습니다.",
+            user_summary=user_summary,
             user_impact="그대로 새 기록을 만들면 플레이 시간이 둘로 갈라지거나 중복 집계될 수 있습니다.",
-            recommended_action="continue_existing_session",
-            available_actions=[
-                {"id": "continue_existing_session", "label": "이전 세션 이어가기", "description": "직전 기록을 현재 실행 중인 게임 기록으로 계속 사용합니다.", "recommended": True},
-                {"id": "close_previous_and_start_new", "label": "이전 세션 닫고 새로 시작", "description": "이전 기록을 지금 시점에 종료하고 새 기록을 만듭니다."},
-                {"id": "deny", "label": "차단 유지", "description": "새 세션을 만들지 않습니다."},
-                {"id": "allow_once", "label": "이번 한 번 허용", "description": "중복 세션 생성을 한 번만 허용합니다.", "danger": True},
-            ],
+            recommended_action=recommended_action,
+            available_actions=available_actions,
             resolution_metadata={"action_context": context},
         )
         raise BeholderBlocked(incident)
@@ -497,6 +617,87 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
         raise BeholderBlocked(incident)
 
 
+def create_open_session_recovery_incidents(db: Session, *, running_process_ids: set[str]) -> list[models.BeholderIncident]:
+    """Create user-actionable incidents for open sessions after app restart.
+
+    This is intentionally non-mutating except for incident creation: the user's
+    chosen Beholder action performs any session close/abandon/merge.
+    """
+
+    open_sessions = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).all()
+    grouped: dict[str, list[models.ProcessSession]] = {}
+    for session in open_sessions:
+        if not _is_open_session(session):
+            continue
+        grouped.setdefault(session.process_id, []).append(session)
+
+    incidents: list[models.BeholderIncident] = []
+    for process_id, sessions in grouped.items():
+        if process_id in running_process_ids:
+            continue
+        target = f"process_id={process_id}"
+        if _has_active_incident(db, "runtime_recovery", target):
+            continue
+        sessions = sorted(sessions, key=lambda item: float(item.start_timestamp), reverse=True)
+        close_at = _close_timestamp_from_heartbeat(db, sessions)
+        heartbeat = _latest_runtime_heartbeat(db)
+        boot_changed = bool(heartbeat and heartbeat.boot_id and _current_boot_id() and heartbeat.boot_id != _current_boot_id())
+        context = {
+            "process_id": process_id,
+            "process_name": sessions[0].process_name,
+            "open_session_ids": [s.id for s in sessions],
+            "actor": "runtime_recovery",
+            "close_timestamp": close_at,
+            "previous_boot_id": getattr(heartbeat, "boot_id", None) if heartbeat else None,
+            "current_boot_id": _current_boot_id(),
+        }
+        legacy = [s for s in sessions if _is_legacy_open_session(s)]
+        if close_at is not None:
+            recommended_action = "close_at_last_app_heartbeat"
+            actions = [
+                {"id": "close_at_last_app_heartbeat", "label": "마지막 앱 실행 시각에 종료", "description": "마지막으로 앱이 살아있던 시각에 게임도 종료된 것으로 기록합니다.", "recommended": True},
+                {"id": "abandon_open_sessions", "label": "복구 불가 기록 버리기", "description": "열린 기록을 0초 abandoned 기록으로 정리합니다."},
+                {"id": "deny", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않습니다."},
+            ]
+            summary = "현재 게임은 실행 중이 아니며, 앱이 꺼질 때 닫히지 않은 플레이 기록이 남아 있습니다."
+            recommendation = "마지막 앱 생존 시각에 플레이가 끝난 것으로 닫는 것이 가장 안전합니다."
+            risk_factors = ["open_session_after_restart", "game_not_running", "last_heartbeat_available"]
+            if boot_changed:
+                risk_factors.append("pc_reboot_detected")
+        else:
+            recommended_action = "abandon_open_sessions"
+            actions = [
+                {"id": "abandon_open_sessions", "label": "복구 불가 기록 버리기", "description": "마지막 앱 생존 시각을 알 수 없는 열린 기록을 abandoned로 정리합니다.", "recommended": True},
+                {"id": "deny", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않습니다."},
+            ]
+            summary = "마지막 앱 생존 시각을 알 수 없는 오래된 열린 플레이 기록이 남아 있습니다."
+            recommendation = "정확한 종료 시각을 복구할 수 없으므로 기록을 abandoned로 정리하는 것이 안전합니다."
+            risk_factors = ["legacy_open_session_without_heartbeat"]
+            if legacy:
+                risk_factors.append("legacy_session_metadata_missing")
+
+        incident = create_incident(
+            db,
+            severity=SEVERITY_WARNING,
+            operation=BeholderOperation(kind="runtime_recovery", actor="runtime_recovery"),
+            target_summary=target,
+            suspected_cause="앱 재시작 후 현재 실행 중이 아닌 게임에 열린 세션이 남아 있습니다.",
+            current_state_summary=f"열린 세션 {len(sessions)}건: {[s.id for s in sessions]}",
+            proposed_change_summary="사용자 선택에 따라 열린 세션을 닫거나 복구 불가 기록으로 정리",
+            risk_score=70,
+            risk_factors=risk_factors,
+            safe_recommendation=recommendation,
+            user_title="닫히지 않은 플레이 기록을 정리해야 합니다",
+            user_summary=summary,
+            user_impact="정리하지 않으면 다음 실행 때 플레이 시간이 중복되거나 충돌 안내가 반복될 수 있습니다.",
+            recommended_action=recommended_action,
+            available_actions=actions,
+            resolution_metadata={"action_context": context},
+        )
+        incidents.append(incident)
+    return incidents
+
+
 def mark_incident(db: Session, incident_id: int, status: str, resolution_metadata: dict[str, Any] | None = None) -> models.BeholderIncident | None:
     incident = db.query(models.BeholderIncident).filter(models.BeholderIncident.id == incident_id).first()
     if not incident:
@@ -527,6 +728,12 @@ def resolve_incident_action(db: Session, incident: models.BeholderIncident, acti
         return _close_previous_and_start_new(db, incident)
     if action == "close_sessions_and_delete_process":
         return _close_sessions_and_delete_process(db, incident)
+    if action == "close_at_last_app_heartbeat":
+        return _close_at_last_app_heartbeat(db, incident)
+    if action == "abandon_open_sessions":
+        return _abandon_open_sessions(db, incident)
+    if action == "abandon_legacy_and_start_new":
+        return _abandon_legacy_and_start_new(db, incident)
     raise ValueError("지원하지 않는 Beholder 결정입니다.")
 
 
@@ -596,6 +803,106 @@ def _close_previous_and_start_new(db: Session, incident: models.BeholderIncident
     db.commit()
     db.refresh(new_session)
     return {"incident": incident_to_dict(updated), "session_id": new_session.id, "action": "close_previous_and_start_new"}
+
+
+def _close_at_last_app_heartbeat(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    context = _context_for(incident)
+    open_sessions = _open_sessions_for_context(db, context)
+    close_ts = context.get("close_timestamp") or _close_timestamp_from_heartbeat(db, open_sessions)
+    if close_ts is None:
+        raise ValueError("마지막 앱 생존 시각을 찾지 못했습니다.")
+    closed_ids: list[int] = []
+    for session in open_sessions:
+        end_ts = max(float(session.start_timestamp), float(close_ts))
+        session.end_timestamp = end_ts
+        session.session_duration = max(0.0, end_ts - float(session.start_timestamp))
+        session.session_status = "closed"
+        session.close_reason = "beholder_power_loss_close_at_last_heartbeat"
+        session.heartbeat_timestamp = end_ts
+        db.add(session)
+        closed_ids.append(session.id)
+    updated = mark_incident(
+        db,
+        incident.id,
+        STATUS_RESOLVED,
+        {"selected_action": "close_at_last_app_heartbeat", "closed_session_ids": closed_ids, "close_timestamp": close_ts},
+    )
+    db.commit()
+    return {"incident": incident_to_dict(updated), "closed_session_ids": closed_ids, "action": "close_at_last_app_heartbeat"}
+
+
+def _abandon_sessions(db: Session, sessions: list[models.ProcessSession], *, reason: str, incident_id: int) -> list[int]:
+    abandoned_ids: list[int] = []
+    now = time.time()
+    for session in sessions:
+        end_ts = float(session.start_timestamp)
+        session.end_timestamp = end_ts
+        session.session_duration = 0.0
+        session.session_status = "abandoned"
+        session.close_reason = reason
+        session.heartbeat_timestamp = now
+        flags = session.guard_flags or {}
+        if not isinstance(flags, dict):
+            flags = {"legacy_guard_flags": flags}
+        flags.update({"abandoned_by_beholder": True, "abandoned_incident_id": incident_id, "abandoned_at": now})
+        session.guard_flags = flags
+        db.add(session)
+        abandoned_ids.append(session.id)
+    return abandoned_ids
+
+
+def _abandon_open_sessions(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    open_sessions = _open_sessions_for_context(db, _context_for(incident))
+    if not open_sessions:
+        raise ValueError("정리할 열린 세션을 찾지 못했습니다.")
+    abandoned_ids = _abandon_sessions(
+        db,
+        open_sessions,
+        reason="beholder_abandoned_legacy_open_session",
+        incident_id=incident.id,
+    )
+    updated = mark_incident(db, incident.id, STATUS_RESOLVED, {"selected_action": "abandon_open_sessions", "abandoned_session_ids": abandoned_ids})
+    db.commit()
+    return {"incident": incident_to_dict(updated), "abandoned_session_ids": abandoned_ids, "action": "abandon_open_sessions"}
+
+
+def _abandon_legacy_and_start_new(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
+    context = _context_for(incident)
+    open_sessions = _open_sessions_for_context(db, context)
+    abandoned_ids = _abandon_sessions(
+        db,
+        open_sessions,
+        reason="beholder_abandoned_legacy_before_new_session",
+        incident_id=incident.id,
+    )
+    now = time.time()
+    new_session = models.ProcessSession(
+        process_id=context.get("process_id"),
+        process_name=context.get("process_name") or context.get("process_id") or "Unknown",
+        start_timestamp=context.get("requested_start_timestamp") or now,
+        user_preset_id=context.get("requested_user_preset_id"),
+        session_owner=context.get("actor") or incident.actor,
+        session_status="open",
+        heartbeat_timestamp=now,
+        lease_token=secrets.token_urlsafe(16),
+        guard_flags={"created_by_beholder_resolution": True, "incident_id": incident.id, "abandoned_session_ids": abandoned_ids},
+    )
+    db.add(new_session)
+    db.flush()
+    updated = mark_incident(
+        db,
+        incident.id,
+        STATUS_RESOLVED,
+        {"selected_action": "abandon_legacy_and_start_new", "new_session_id": new_session.id, "abandoned_session_ids": abandoned_ids},
+    )
+    db.commit()
+    db.refresh(new_session)
+    return {
+        "incident": incident_to_dict(updated),
+        "session_id": new_session.id,
+        "abandoned_session_ids": abandoned_ids,
+        "action": "abandon_legacy_and_start_new",
+    }
 
 
 def _close_sessions_and_delete_process(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:

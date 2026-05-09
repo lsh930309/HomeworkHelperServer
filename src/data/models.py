@@ -156,3 +156,16 @@ class BeholderIncident(Base):
     resolved_at = Column(Float, nullable=True)
     override_token = Column(String, nullable=True, index=True)
     override_used_at = Column(Float, nullable=True)
+
+
+class AppRuntimeHeartbeat(Base):
+    """Last known application/runtime heartbeat used for Beholder recovery decisions."""
+    __tablename__ = "app_runtime_heartbeats"
+
+    id = Column(Integer, primary_key=True, default=1)
+    app_instance_id = Column(String, nullable=True)
+    runtime_kind = Column(String, nullable=True)
+    boot_id = Column(String, nullable=True)
+    started_at = Column(Float, nullable=True)
+    last_heartbeat_at = Column(Float, nullable=True)
+    last_shutdown_at = Column(Float, nullable=True)

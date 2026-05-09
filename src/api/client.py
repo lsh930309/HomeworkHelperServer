@@ -3,6 +3,7 @@
 import requests
 from typing import Any, List, Optional
 import os
+import uuid
 from src.data.data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
 
 
@@ -25,6 +26,7 @@ class ApiClient:
         if dyn_port:
             base_url = f"http://127.0.0.1:{dyn_port}"
         self.base_url = base_url
+        self.app_instance_id = str(uuid.uuid4())
         self.latest_beholder_incident: dict[str, Any] | None = None
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
@@ -70,6 +72,32 @@ class ApiClient:
         except requests.RequestException as e:
             print(f"Beholder incident 결정 저장 실패: {e}")
             return None
+
+    def send_runtime_heartbeat(self, *, shutdown: bool = False, runtime_kind: str = "pyqt") -> dict[str, Any] | None:
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/beholder/runtime/heartbeat",
+                json={"app_instance_id": self.app_instance_id, "runtime_kind": runtime_kind, "shutdown": shutdown},
+                timeout=5,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"런타임 heartbeat 저장 실패: {e}")
+            return None
+
+    def reconcile_open_sessions(self, running_process_ids: list[str]) -> list[dict[str, Any]]:
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/beholder/open-sessions/reconcile",
+                json={"running_process_ids": running_process_ids},
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            return response.json().get("incidents", [])
+        except requests.RequestException as e:
+            print(f"열린 세션 복구 점검 실패: {e}")
+            return []
 
 
     def get_beholder_backups(self) -> list[dict[str, Any]]:
@@ -154,6 +182,26 @@ class ApiClient:
             return True
         except requests.RequestException as e:
             print(f"프로세스 업데이트에 실패했습니다: {e}")
+            return False
+
+    def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool:
+        """Persist only runtime-owned process fields after monitor stop/calibration."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/processes/{updated_process.id}/runtime-state",
+                json={
+                    "last_played_timestamp": updated_process.last_played_timestamp,
+                    "stamina_current": updated_process.stamina_current,
+                    "stamina_max": updated_process.stamina_max,
+                    "stamina_updated_at": updated_process.stamina_updated_at,
+                },
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException as e:
+            print(f"프로세스 런타임 상태 저장에 실패했습니다: {e}")
             return False
 
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
@@ -270,7 +318,11 @@ class ApiClient:
             data = {
                 "process_id": process_id,
                 "process_name": process_name,
-                "start_timestamp": start_timestamp
+                "start_timestamp": start_timestamp,
+                "runtime_evidence": {
+                    "current_process_running": True,
+                    "app_instance_id": self.app_instance_id,
+                },
             }
             response = requests.post(
                 f"{self.base_url}/sessions",

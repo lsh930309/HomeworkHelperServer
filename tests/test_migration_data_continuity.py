@@ -114,6 +114,16 @@ def test_global_settings_contract_covers_model_schema_runtime_and_migrations():
         assert field in legacy_migration_source, f"legacy schema check missing {field}"
 
 
+def test_runtime_heartbeat_table_is_migrated_for_beholder_recovery():
+    database_source = (ROOT / "src" / "data" / "database.py").read_text(encoding="utf-8")
+    legacy_migration_source = (ROOT / "homework_helper.pyw").read_text(encoding="utf-8")
+    model_columns = {column.name for column in models.AppRuntimeHeartbeat.__table__.columns}
+
+    assert {"app_instance_id", "runtime_kind", "boot_id", "started_at", "last_heartbeat_at", "last_shutdown_at"} <= model_columns
+    assert "app_runtime_heartbeats" in database_source
+    assert "app_runtime_heartbeats" in legacy_migration_source
+
+
 def test_pyqt_full_settings_update_preserves_custom_global_settings(monkeypatch, tmp_path):
     import src.data.crud as crud_mod
 

@@ -9,6 +9,8 @@ import json
 import uuid
 import time
 import logging
+import os
+import psutil
 
 from src.data.database import base_dir
 
@@ -159,6 +161,48 @@ def update_process_stamina(
             actor=actor,
             operation_kind=operation_kind,
             allowed_fields={"stamina_current", "stamina_max", "stamina_updated_at"},
+            context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+            override_token=override_token,
+        )
+        if changed:
+            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        for key, value in update_data.items():
+            setattr(db_process, key, value)
+        db.commit()
+        db.refresh(db_process)
+    return db_process
+
+
+@db_retry_on_lock
+def update_process_runtime_state(
+    db: Session,
+    process_id: str,
+    *,
+    last_played_timestamp: float | None = None,
+    stamina_current: int | None = None,
+    stamina_max: int | None = None,
+    stamina_updated_at: float | None = None,
+    actor: str = "process_monitor",
+    operation_kind: str = "process_runtime_state_update",
+    override_token: str | None = None,
+):
+    db_process = get_process_by_id(db, process_id)
+    if db_process:
+        update_data = {
+            "last_played_timestamp": last_played_timestamp,
+            "stamina_current": stamina_current,
+            "stamina_max": stamina_max,
+            "stamina_updated_at": stamina_updated_at,
+        }
+        update_data = {key: value for key, value in update_data.items() if value is not None}
+        changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
+        _guard_write(
+            db,
+            table=beholder.MANAGED_PROCESSES_TABLE,
+            columns=changed,
+            actor=actor,
+            operation_kind=operation_kind,
+            allowed_fields={"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"},
             context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
             override_token=override_token,
         )
@@ -338,6 +382,46 @@ def backup_settings_snapshot(settings: models.GlobalSettings, *, reason: str = "
         return None
 
 
+def current_boot_id() -> str:
+    """Return a stable-enough boot identifier for crash/power-loss recovery decisions."""
+    try:
+        return str(int(psutil.boot_time()))
+    except Exception:
+        return f"pid-start:{os.getpid()}"
+
+
+@db_retry_on_lock
+def upsert_app_runtime_heartbeat(
+    db: Session,
+    *,
+    app_instance_id: str,
+    runtime_kind: str,
+    timestamp: float | None = None,
+    boot_id: str | None = None,
+    shutdown: bool = False,
+) -> models.AppRuntimeHeartbeat:
+    now = float(timestamp or time.time())
+    row = db.query(models.AppRuntimeHeartbeat).filter(models.AppRuntimeHeartbeat.id == 1).first()
+    if row is None:
+        row = models.AppRuntimeHeartbeat(id=1, started_at=now)
+    if row.app_instance_id != app_instance_id:
+        row.started_at = now
+    row.app_instance_id = app_instance_id
+    row.runtime_kind = runtime_kind
+    row.boot_id = boot_id or current_boot_id()
+    row.last_heartbeat_at = now
+    if shutdown:
+        row.last_shutdown_at = now
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_app_runtime_heartbeat(db: Session) -> models.AppRuntimeHeartbeat | None:
+    return db.query(models.AppRuntimeHeartbeat).filter(models.AppRuntimeHeartbeat.id == 1).first()
+
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):
@@ -434,14 +518,21 @@ def create_session(
     override_token: str | None = None,
 ):
     """새로운 프로세스 세션 시작 기록"""
+    runtime_evidence = getattr(session, "runtime_evidence", None) or {}
     operation = beholder.BeholderOperation(
         kind=operation_kind,
         actor=actor,
         allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+        allowed_columns={beholder.PROCESS_SESSIONS_TABLE: beholder.SESSION_FIELDS},
+        evidence={
+            "changed_fields": ["process_id", "process_name", "start_timestamp"],
+            "context": runtime_evidence,
+        },
         override_token=override_token,
     )
     beholder.guard_session_start(db, session, operation)
     session_data = session.dict()
+    session_data.pop("runtime_evidence", None)
     session_data.setdefault("session_owner", actor)
     if not session_data.get("session_owner"):
         session_data["session_owner"] = actor

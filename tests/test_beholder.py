@@ -146,6 +146,80 @@ def test_duplicate_open_session_incident_offers_continue_action(monkeypatch):
     assert payload["user_title"]
 
 
+def test_legacy_open_session_duplicate_recommends_abandon_and_start_new(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    original = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 1, 10, 0).timestamp(),
+        end_timestamp=None,
+        session_status=None,
+    )
+    db.add(original)
+    db.commit()
+    db.refresh(original)
+
+    try:
+        crud.create_session(db, schemas.ProcessSessionCreate(
+            process_id="game-a",
+            process_name="Game A",
+            start_timestamp=dt.datetime(2026, 5, 8, 10, 0).timestamp(),
+            runtime_evidence={"current_process_running": True},
+        ))
+        assert False, "legacy open session should block duplicate session creation"
+    except beholder.BeholderBlocked as exc:
+        incident = exc.incident
+        payload = beholder.incident_to_dict(incident)
+
+    assert payload["recommended_action"] == "abandon_legacy_and_start_new"
+    assert "duplicate_legacy_open_session" in payload["risk_factors"]
+
+    result = beholder.resolve_incident_action(db, incident, "abandon_legacy_and_start_new")
+    assert result["action"] == "abandon_legacy_and_start_new"
+    db.refresh(original)
+    assert original.session_status == "abandoned"
+    assert original.session_duration == 0
+    assert db.query(models.ProcessSession).filter_by(process_id="game-a", end_timestamp=None).count() == 1
+
+
+def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    heartbeat = dt.datetime(2026, 5, 8, 10, 30).timestamp()
+    crud.upsert_app_runtime_heartbeat(
+        db,
+        app_instance_id="app-a",
+        runtime_kind="pyqt",
+        timestamp=heartbeat,
+        boot_id="boot-a",
+    )
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=start,
+        session_status="open",
+        heartbeat_timestamp=heartbeat,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    incidents = beholder.create_open_session_recovery_incidents(db, running_process_ids=set())
+
+    assert len(incidents) == 1
+    payload = beholder.incident_to_dict(incidents[0])
+    assert payload["recommended_action"] == "close_at_last_app_heartbeat"
+
+    result = beholder.resolve_incident_action(db, incidents[0], "close_at_last_app_heartbeat")
+    assert result["action"] == "close_at_last_app_heartbeat"
+    db.refresh(session)
+    assert session.end_timestamp == heartbeat
+    assert session.session_duration == heartbeat - start
+    assert session.close_reason == "beholder_power_loss_close_at_last_heartbeat"
+
+
 def test_continue_existing_session_resolution_reuses_open_session(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -198,6 +272,33 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
 
     settings = crud.get_settings(db)
     assert settings.sidebar_height_ratio == 1.0
+
+
+def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    crud.patch_settings(
+        db,
+        {"screenshot_save_dir": "C:/Shots"},
+        actor="new_gui_settings",
+        allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+    )
+
+    try:
+        crud.patch_settings(
+            db,
+            {"screenshot_save_dir": ""},
+            actor="new_gui_settings",
+            allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+        )
+        assert False, "personalized path reset should be blocked"
+    except beholder.BeholderBlocked as exc:
+        assert "personalized_settings_default_regression" in exc.incident.risk_factors
+        assert "screenshot_save_dir" in exc.incident.risk_factors
+
+    assert crud.get_settings(db).screenshot_save_dir == "C:/Shots"
 
 
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):

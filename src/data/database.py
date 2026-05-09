@@ -155,6 +155,18 @@ def auto_migrate_database():
         inspector = inspect(engine)
         
         with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS app_runtime_heartbeats ("
+                "id INTEGER PRIMARY KEY, "
+                "app_instance_id TEXT, "
+                "runtime_kind TEXT, "
+                "boot_id TEXT, "
+                "started_at REAL, "
+                "last_heartbeat_at REAL, "
+                "last_shutdown_at REAL"
+                ")"
+            ))
+            conn.commit()
             for table_name, column_name, column_type, default_value in migrations:
                 # 테이블 존재 여부 확인
                 if table_name not in inspector.get_table_names():

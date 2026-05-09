@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.data import beholder, models
+from src.data import beholder, crud, models
 from src.data.database import SessionLocal, base_dir, data_dir, db_path
 
 router = APIRouter(prefix="/api/beholder", tags=["beholder"])
@@ -28,6 +28,16 @@ def get_db():
 
 class ResolveRequest(BaseModel):
     action: str
+
+
+class RuntimeHeartbeatRequest(BaseModel):
+    app_instance_id: str
+    runtime_kind: str = "pyqt"
+    shutdown: bool = False
+
+
+class OpenSessionReconcileRequest(BaseModel):
+    running_process_ids: list[str] = []
 
 
 @router.get("/incidents/active")
@@ -53,6 +63,34 @@ def resolve_incident(incident_id: int, payload: ResolveRequest, db: Session = De
         return beholder.resolve_incident_action(db, incident, payload.action)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/runtime/heartbeat")
+def update_runtime_heartbeat(payload: RuntimeHeartbeatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    row = crud.upsert_app_runtime_heartbeat(
+        db,
+        app_instance_id=payload.app_instance_id,
+        runtime_kind=payload.runtime_kind,
+        shutdown=payload.shutdown,
+    )
+    return {
+        "ok": True,
+        "app_instance_id": row.app_instance_id,
+        "runtime_kind": row.runtime_kind,
+        "boot_id": row.boot_id,
+        "started_at": row.started_at,
+        "last_heartbeat_at": row.last_heartbeat_at,
+        "last_shutdown_at": row.last_shutdown_at,
+    }
+
+
+@router.post("/open-sessions/reconcile")
+def reconcile_open_sessions(payload: OpenSessionReconcileRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    incidents = beholder.create_open_session_recovery_incidents(
+        db,
+        running_process_ids=set(payload.running_process_ids),
+    )
+    return {"incidents": [beholder.incident_to_dict(i) for i in incidents]}
 
 
 def _backup_files() -> list[dict[str, Any]]:

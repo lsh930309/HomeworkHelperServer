@@ -322,7 +322,12 @@ class MainWindow(QMainWindow):
         self.beholder_timer = QTimer(self)
         self.beholder_timer.timeout.connect(self._poll_beholder_incidents)
         self.beholder_timer.start(1500)
+        self.runtime_heartbeat_timer = QTimer(self)
+        self.runtime_heartbeat_timer.timeout.connect(self._send_runtime_heartbeat)
+        self.runtime_heartbeat_timer.start(30000)
+        self._send_runtime_heartbeat()
         QTimer.singleShot(500, self._poll_beholder_incidents)
+        QTimer.singleShot(1200, self._reconcile_open_sessions_after_startup)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -356,6 +361,8 @@ class MainWindow(QMainWindow):
                 self._handle_beholder_restore_request()
             elif incident_id is not None:
                 result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
+                if hasattr(self, "process_monitor"):
+                    self.process_monitor.apply_beholder_resolution(result)
                 if dialog.action == "allow_once" and result and result.get("override_token"):
                     QMessageBox.information(
                         self,
@@ -363,6 +370,18 @@ class MainWindow(QMainWindow):
                         "이번 요청을 1회 허용하는 토큰을 발급했습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.",
                     )
             break
+
+    def _send_runtime_heartbeat(self):
+        if hasattr(self.data_manager, "send_runtime_heartbeat"):
+            self.data_manager.send_runtime_heartbeat(runtime_kind="pyqt")
+
+    def _reconcile_open_sessions_after_startup(self):
+        if not hasattr(self.data_manager, "reconcile_open_sessions"):
+            return
+        running_ids = list(self.process_monitor.detect_running_process_ids())
+        incidents = self.data_manager.reconcile_open_sessions(running_ids)
+        if incidents:
+            self._poll_beholder_incidents()
 
     def _handle_beholder_restore_request(self):
         backups = self.data_manager.get_beholder_backups()
@@ -1707,6 +1726,10 @@ class MainWindow(QMainWindow):
             self.scheduler_timer.stop()
         if hasattr(self, 'ui_refresh_timer') and self.ui_refresh_timer.isActive():
             self.ui_refresh_timer.stop()
+        if hasattr(self, 'runtime_heartbeat_timer') and self.runtime_heartbeat_timer.isActive():
+            self.runtime_heartbeat_timer.stop()
+        if hasattr(self.data_manager, "send_runtime_heartbeat"):
+            self.data_manager.send_runtime_heartbeat(shutdown=True, runtime_kind="pyqt")
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:

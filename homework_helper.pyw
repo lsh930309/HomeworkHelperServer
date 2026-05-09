@@ -339,6 +339,7 @@ def run_server_main():
     # --- main.py의 내용을 여기로 통합 ---
     from fastapi import FastAPI, Depends, HTTPException, Header
     from fastapi.responses import JSONResponse
+    from pydantic import BaseModel
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas, beholder
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
@@ -440,6 +441,12 @@ def run_server_main():
 
     app = FastAPI()
 
+    class ProcessRuntimeStatePatch(BaseModel):
+        last_played_timestamp: float | None = None
+        stamina_current: int | None = None
+        stamina_max: int | None = None
+        stamina_updated_at: float | None = None
+
     @app.exception_handler(beholder.BeholderBlocked)
     async def beholder_blocked_handler(request, exc):
         return JSONResponse(
@@ -491,6 +498,22 @@ def run_server_main():
     @app.put("/processes/{process_id}", response_model=schemas.ProcessSchema)
     def update_existing_process(process_id: str, process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
         updated_process = crud.update_process(db = db, process_id = process_id, process = process_data)
+        if updated_process is None:
+            raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        return updated_process
+
+    @app.patch("/processes/{process_id}/runtime-state", response_model=schemas.ProcessSchema)
+    def update_process_runtime_state(process_id: str, patch: ProcessRuntimeStatePatch, db: Session = Depends(get_db)):
+        updated_process = crud.update_process_runtime_state(
+            db=db,
+            process_id=process_id,
+            last_played_timestamp=patch.last_played_timestamp,
+            stamina_current=patch.stamina_current,
+            stamina_max=patch.stamina_max,
+            stamina_updated_at=patch.stamina_updated_at,
+            actor="process_monitor",
+            operation_kind="process_runtime_state_update",
+        )
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
@@ -775,6 +798,18 @@ def ensure_process_table_schema():
                     if col not in incident_cols:
                         conn.execute(text(f"ALTER TABLE beholder_incidents ADD COLUMN {col} TEXT"))
                         print(f"[Migration] beholder_incidents.{col} 컬럼 추가됨")
+
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS app_runtime_heartbeats ("
+                "id INTEGER PRIMARY KEY, "
+                "app_instance_id TEXT, "
+                "runtime_kind TEXT, "
+                "boot_id TEXT, "
+                "started_at REAL, "
+                "last_heartbeat_at REAL, "
+                "last_shutdown_at REAL"
+                ")"
+            ))
 
             conn.commit()
     except Exception as e:

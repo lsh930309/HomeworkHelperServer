@@ -126,6 +126,7 @@ class ProcessSessionCreate(BaseModel):
     user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
     session_owner: Optional[str] = None
     lease_token: Optional[str] = None
+    runtime_evidence: Optional[dict] = None
 
 
 class ProcessSessionUpdate(BaseModel):

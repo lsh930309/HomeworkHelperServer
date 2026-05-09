@@ -137,6 +137,7 @@
         "test_gui_settings_get_returns_full_global_settings_contract",
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
         "test_gui_settings_patch_rejects_unknown_and_invalid_values",
+        "test_settings_guard_blocks_small_personalized_default_regression",
         "test_real_appdata_main_gui_state_and_icon_cache_use_clone"
       ],
       "manual_smoke": [
@@ -204,13 +205,17 @@
       "automated_tests": [
         "test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open",
         "test_duplicate_open_session_incident_offers_continue_action",
+        "test_legacy_open_session_duplicate_recommends_abandon_and_start_new",
+        "test_open_session_recovery_closes_at_last_app_heartbeat",
         "test_continue_existing_session_resolution_reuses_open_session",
-        "test_negative_session_stamina_is_blocked_without_mutating_session"
+        "test_negative_session_stamina_is_blocked_without_mutating_session",
+        "test_real_appdata_beholder_detects_legacy_open_sessions"
       ],
       "manual_smoke": [
         "게임 실행 후 세션 시작",
         "게임 종료 후 세션 종료",
-        "앱 재시작 후 이전 세션 이어가기"
+        "앱만 재시작 후 실행 중 게임은 이전 세션 이어가기",
+        "PC 재부팅/게임 미실행 후 마지막 앱 heartbeat 시각으로 세션 닫기"
       ]
     },
     {
@@ -366,6 +371,10 @@
       "automated_tests": [
         "test_beholder_active_incidents_api_and_resolve",
         "test_settings_guard_blocks_columns_outside_actor_scope",
+        "test_settings_guard_blocks_small_personalized_default_regression",
+        "test_legacy_open_session_duplicate_recommends_abandon_and_start_new",
+        "test_open_session_recovery_closes_at_last_app_heartbeat",
+        "test_real_appdata_beholder_detects_legacy_open_sessions",
         "test_delete_process_with_open_session_offers_safe_cleanup_action",
         "test_new_gui_beholder_restore_uses_preview_before_restore"
       ],
@@ -373,6 +382,8 @@
         "PyQt incident dialog",
         "새 GUI Beholder modal",
         "이전 세션 이어가기",
+        "마지막 앱 heartbeat 시각으로 세션 닫기",
+        "복구 불가 legacy open session 정리",
         "기록 닫고 게임 삭제",
         "백업 복구"
       ]

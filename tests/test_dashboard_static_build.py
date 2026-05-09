@@ -147,6 +147,13 @@ def test_new_gui_beholder_restore_uses_preview_before_restore():
     assert "/api/beholder/backups/restore" in app_source
 
 
+def test_new_gui_sends_beholder_runtime_heartbeat():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "/api/beholder/runtime/heartbeat" in app_source
+    assert "tauri-preview" in app_source
+
+
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec

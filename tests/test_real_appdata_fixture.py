@@ -112,3 +112,30 @@ def test_real_appdata_main_gui_state_and_icon_cache_use_clone(real_appdata, monk
             assert icon_response.content.startswith(b"\x89PNG\r\n\x1a\n")
             png_hits += 1
     assert png_hits >= 1
+
+
+def test_real_appdata_beholder_detects_legacy_open_sessions(real_appdata, monkeypatch, tmp_path):
+    db_source = real_appdata / "homework_helper_data" / "app_data.db"
+    db_clone = tmp_path / "app_data.beholder.clone.db"
+    shutil.copy2(db_source, db_clone)
+
+    engine = create_engine(
+        f"sqlite:///{db_clone.as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    from src.data import beholder, models
+
+    db = TestingSession()
+    try:
+        open_count = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).count()
+        assert open_count >= 1
+
+        incidents = beholder.create_open_session_recovery_incidents(db, running_process_ids=set())
+
+        assert incidents
+        payloads = [beholder.incident_to_dict(item) for item in incidents]
+        assert any(payload["recommended_action"] in {"abandon_open_sessions", "close_at_last_app_heartbeat"} for payload in payloads)
+    finally:
+        db.close()

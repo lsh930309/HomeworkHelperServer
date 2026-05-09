@@ -26,6 +26,7 @@ def _debug_log(message: str):
 class ProcessesDataPort(Protocol):
     managed_processes: list[ManagedProcess]
     def update_process(self, updated_process: ManagedProcess) -> bool: ...
+    def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool: ...
     def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Any: ...
     def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Any: ...
     def get_last_session(self, process_id: str) -> Any: ...
@@ -62,6 +63,22 @@ class ProcessMonitor:
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
 
+    def apply_beholder_resolution(self, result: dict[str, Any] | None) -> None:
+        """Bind active runtime cache to a session selected/created by Beholder."""
+        if not result:
+            return
+        session_id = result.get("session_id")
+        incident = result.get("incident") or {}
+        context = (incident.get("resolution_metadata") or {}).get("action_context") or {}
+        process_id = context.get("process_id")
+        if not process_id or not session_id:
+            return
+        entry = self.active_monitored_processes.get(process_id)
+        if entry is None:
+            entry = {"pid": context.get("pid"), "exe": context.get("exe"), "start_time_approx": context.get("requested_start_timestamp")}
+            self.active_monitored_processes[process_id] = entry
+        entry["session_id"] = session_id
+
     def _get_hoyolab_service(self):
         """reset 이후에도 최신 전역 HoYoLab 서비스 인스턴스를 반환합니다."""
         try:
@@ -79,6 +96,23 @@ class ProcessMonitor:
             return os.path.normcase(os.path.abspath(path))
         except Exception: 
             return path 
+
+    def detect_running_process_ids(self) -> set[str]:
+        """Return managed process IDs currently visible in the OS process table."""
+        running_exes: set[str] = set()
+        for proc in psutil.process_iter(['exe']):
+            try:
+                exe_path = self._normalize_path(proc.info['exe'])
+                if exe_path:
+                    running_exes.add(exe_path)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+        running_ids: set[str] = set()
+        for managed_proc in self.data_manager.managed_processes:
+            normalized_monitoring_path = self._normalize_path(managed_proc.monitoring_path)
+            if normalized_monitoring_path and normalized_monitoring_path in running_exes:
+                running_ids.add(managed_proc.id)
+        return running_ids
 
     def check_and_update_statuses(self) -> ProcessMonitorTickResult:
         """시스템 프로세스 스냅샷과 내부 캐시를 비교해 시작/종료 이벤트를 기록합니다."""
@@ -191,7 +225,11 @@ class ProcessMonitor:
                         )
                     )
                     changed_occurred = True
-                    if not self.data_manager.update_process(managed_proc):
+                    if hasattr(self.data_manager, "update_process_runtime_state"):
+                        saved = self.data_manager.update_process_runtime_state(managed_proc)
+                    else:
+                        saved = self.data_manager.update_process(managed_proc)
+                    if not saved:
                         logger.warning(
                             "Process STOPPED 상태 저장 실패: process_id=%s",
                             managed_proc.id,

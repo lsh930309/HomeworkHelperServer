@@ -1037,6 +1037,7 @@ function SettingsModal({ settings, onClose, onSaved }: { settings: GuiSettings; 
 
 export default function App() {
   const rootRef = React.useRef<HTMLElement | null>(null);
+  const appInstanceIdRef = React.useRef<string>(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
   const [state, setState] = React.useState<MainState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
@@ -1075,6 +1076,14 @@ export default function App() {
   React.useEffect(() => {
     load();
     const id = window.setInterval(load, 1000);
+    const sendHeartbeat = (shutdown = false) => {
+      fetchJson('/api/beholder/runtime/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({ app_instance_id: appInstanceIdRef.current, runtime_kind: 'tauri-preview', shutdown }),
+      }).catch(() => undefined);
+    };
+    sendHeartbeat();
+    const heartbeatId = window.setInterval(() => sendHeartbeat(), 30000);
     const incidentId = window.setInterval(() => {
       fetchJson<{ incidents: BeholderIncident[] }>('/api/beholder/incidents/active')
         .then((body) => {
@@ -1083,7 +1092,9 @@ export default function App() {
         .catch(() => undefined);
     }, 2000);
     return () => {
+      sendHeartbeat(true);
       window.clearInterval(id);
+      window.clearInterval(heartbeatId);
       window.clearInterval(incidentId);
     };
   }, [load]);
