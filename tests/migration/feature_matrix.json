@@ -24,7 +24,7 @@
       "manual_smoke": [
         "설치 후 기본 HomeworkHelper는 PyQt로 실행",
         "HomeworkHelper 새 GUI 미리보기 바로가기 실행",
-        "새 GUI GitHub 버튼 외부 브라우저 열기"
+        "새 GUI GitHub favicon 버튼 외부 브라우저 열기"
       ]
     },
     {

@@ -392,9 +392,18 @@ function useSidebarDrawerWindow(settings: GuiSettings | null, open: boolean, ena
   }, [settings, open, enabled]);
 }
 
+function statusKind(status: string) {
+  if (status === '실행중') return 'running';
+  if (status === '미완료') return 'incomplete';
+  return 'done';
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const kind = status === '실행중' ? 'running' : status === '미완료' ? 'incomplete' : 'done';
-  return <span className={`status ${kind}`}>{status}</span>;
+  return <span className={`status ${statusKind(status)}`}>{status}</span>;
+}
+
+function LaunchIcon({ busy }: { busy: boolean }) {
+  return <span aria-hidden="true" className="play-icon">{busy ? '…' : '▶'}</span>;
 }
 
 function ProgressBar({ progress }: { progress: Progress }) {
@@ -410,7 +419,7 @@ function ProgressBar({ progress }: { progress: Progress }) {
       </div>
       <div className="track">
         <div className="fill" style={{ width: `${clamp(progress.percent, 0, 100)}%` }} />
-        <span className="track-label">{progress.kind === 'time' ? `${Math.round(progress.percent)}%` : progress.label}</span>
+        <span className="track-label">{`${Math.round(progress.percent)}%`}</span>
       </div>
     </div>
   );
@@ -1663,21 +1672,6 @@ function MainApp() {
     }
   };
 
-  const toggleAlwaysOnTop = async () => {
-    if (!state) return;
-    const next = !state.settings.always_on_top;
-    try {
-      const saved = await fetchJson<GuiSettings>('/api/gui/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ always_on_top: next }),
-      });
-      setState((prev) => prev ? { ...prev, settings: { ...prev.settings, always_on_top: saved.always_on_top } } : prev);
-      if (isTauri) getCurrentWindow().setAlwaysOnTop(saved.always_on_top).catch(() => undefined);
-    } catch (e: any) {
-      handleError(e);
-    }
-  };
-
   const design = new URLSearchParams(window.location.search).get('design') || 'table';
 
   if (!state) {
@@ -1692,19 +1686,15 @@ function MainApp() {
   return (
     <main className="shell" ref={rootRef} data-theme={state.settings.theme}>
       <header className="topbar">
-        <div>
-          <div className="eyebrow">HomeworkHelper 새 GUI 미리보기</div>
-          <h1>숙제 관리자</h1>
-        </div>
+        <h1>숙제 관리자</h1>
         <div className="actions">
-          <button onClick={() => openProcessEditor()}>+ 게임</button>
-          <button onClick={() => openShortcutEditor()}>+ 웹</button>
-          <button className={state.settings.always_on_top ? 'primary' : 'ghost'} onClick={toggleAlwaysOnTop} title="항상 위 즉시 전환">
-            {state.settings.always_on_top ? '📌 항상 위' : '📍 일반'}
+          <button className="primary-soft" onClick={() => openProcessEditor()}>+ 게임</button>
+          <button className="primary-soft" onClick={() => openShortcutEditor()}>+ 웹</button>
+          <button className="toolbar-button" onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
+          <button className="icon-button github-button" onClick={() => openUrl('https://github.com/lsh930309/HomeworkHelperServer')} title="GitHub 저장소 방문" aria-label="GitHub 저장소 방문">
+            <img src="https://github.githubassets.com/favicons/favicon.svg" alt="" />
           </button>
-          <button onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
-          <button className="ghost" onClick={() => openUrl('https://github.com/lsh930309/HomeworkHelperServer')} title="GitHub 저장소 방문">GH</button>
-          <button className="ghost" onClick={openSettings}>설정</button>
+          <button className="icon-button" onClick={openSettings} title="설정" aria-label="설정">⚙</button>
         </div>
       </header>
 
@@ -1737,7 +1727,7 @@ function MainApp() {
               </div>
               <ProgressBar progress={process.progress} />
               <button className="launch wide" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}>
-                {busyId === process.id ? '실행 중…' : '실행'}
+                <LaunchIcon busy={busyId === process.id} />
               </button>
             </article>
           ))}
@@ -1753,28 +1743,28 @@ function MainApp() {
               <article className="command-row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
                 <div className="game"><img src={`${API_BASE}${process.icon_url}`} alt="" /><strong>{process.name}</strong></div>
                 <ProgressBar progress={process.progress} />
-                <button className="launch" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}>실행</button>
+                <button className="launch" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}><LaunchIcon busy={busyId === process.id} /></button>
               </article>
             ))}
           </div>
         </section>
       ) : (
         <section className="table-card">
-          <div className="table-head">
-            <span>게임</span>
-            <span>진행률</span>
-            <span>실행</span>
-            <span>상태</span>
-          </div>
           {state.processes.length === 0 ? (
             <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
           ) : (
             state.processes.map((process) => (
-              <article className="row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
+              <article
+                className={`row ${statusKind(process.status)}`}
+                key={process.id}
+                title={`상태: ${process.status} · 우클릭: 편집/삭제`}
+                aria-label={`${process.name} ${process.status}`}
+                onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}
+              >
                 <div className="game">
                   <img src={`${API_BASE}${process.icon_url}`} alt="" />
                   <div>
-                    <strong>{process.name}</strong>
+                    <strong><span className="state-dot" aria-hidden="true" /><span className="game-title">{process.name}</span></strong>
                     <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
                   </div>
                 </div>
@@ -1785,10 +1775,10 @@ function MainApp() {
                   onClick={() => launch(process)}
                   onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
                   title="우클릭: 실행 방식 선택"
+                  aria-label={busyId === process.id ? `${process.name} 실행 중` : `${process.name} 실행`}
                 >
-                  {busyId === process.id ? '실행 중…' : '실행'}
+                  <LaunchIcon busy={busyId === process.id} />
                 </button>
-                <StatusBadge status={process.status} />
               </article>
             ))
           )}
@@ -1797,7 +1787,7 @@ function MainApp() {
 
       <footer>
         <span>마지막 갱신 {new Date(state.generated_at).toLocaleTimeString()}</span>
-        <span>{state.settings.always_on_top ? '항상 위' : '일반 창'} · {state.settings.hide_on_game ? '게임 시 숨김' : '항상 표시'}</span>
+        <span>{state.settings.hide_on_game ? '게임 시 숨김' : '항상 표시'}</span>
       </footer>
 
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}
