@@ -63,6 +63,27 @@ def test_feature_matrix_references_existing_tests_and_docs():
             assert test_name in known_tests, f"{feature_id} references missing test {test_name}"
 
 
+def test_inventory_summary_table_matches_feature_matrix():
+    matrix_features = {feature["id"]: feature for feature in _matrix()["features"]}
+    inventory = INVENTORY_PATH.read_text(encoding="utf-8")
+    rows: dict[str, dict[str, str]] = {}
+    for line in inventory.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 6 or not re.match(r"^[A-Z]+-\d{3}$", cells[0]):
+            continue
+        rows[cells[0]] = {
+            "new_gui_status": cells[3],
+            "data_risk": cells[4],
+        }
+
+    assert set(rows) == set(matrix_features)
+    for feature_id, feature in matrix_features.items():
+        assert rows[feature_id]["new_gui_status"] == feature["new_gui_status"]
+        assert rows[feature_id]["data_risk"] == feature["data_risk"]
+
+
 def test_new_gui_has_no_missing_high_risk_features_before_runtime_smoke_gate():
     matrix = _matrix()
     blockers = [
