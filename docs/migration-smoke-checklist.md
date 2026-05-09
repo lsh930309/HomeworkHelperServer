@@ -25,6 +25,7 @@
 - [ ] BEHOLDER-001: PyQt와 새 GUI 모두 incident를 표시하고 선택 액션을 수행한다.
 - [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 쿠키 자동 추출/수동 저장/삭제/스태미나 테스트 조회가 동작한다.
+- [ ] HOYOLAB-001: 새 GUI 게임 행 우클릭 “스태미나 새로고침”이 현재 스태미나를 DB/진행률에 반영한다.
 
 ## PyQt fallback 유지 기능
 

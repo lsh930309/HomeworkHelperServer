@@ -290,6 +290,7 @@
         "새 GUI 설정 HoYoLab 탭에서 Chrome/Edge/Firefox 쿠키 추출",
         "새 GUI 설정 HoYoLab 탭에서 수동 쿠키 저장/삭제",
         "새 GUI 설정 HoYoLab 탭에서 스태미나 테스트 조회",
+        "새 GUI 게임 행 우클릭 스태미나 새로고침이 managed_processes.stamina_*에 반영",
         "PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화"
       ]
     },

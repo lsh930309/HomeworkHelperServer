@@ -1063,10 +1063,41 @@ export default function App() {
     }
   };
 
-  const processMenuItems = (process: ProcessRow): ContextMenuItem[] => [
-    { label: '편집', action: () => setEditingProcess(process) },
-    { label: '삭제', kind: 'danger', action: () => deleteProcess(process) },
-  ];
+  const refreshStamina = async (process: ProcessRow) => {
+    if (!process.hoyolab_game_id) return;
+    setBusyId(process.id);
+    try {
+      await fetchJson<{ game_name: string; current: number; max: number }>('/api/gui/hoyolab/stamina', {
+        method: 'POST',
+        body: JSON.stringify({
+          game_id: process.hoyolab_game_id,
+          process_id: process.id,
+          persist_to_process: true,
+        }),
+      });
+      setError(null);
+      load();
+    } catch (e: any) {
+      handleError(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const processMenuItems = (process: ProcessRow): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [
+      { label: '편집', action: () => setEditingProcess(process) },
+    ];
+    if (process.stamina_tracking_enabled && process.hoyolab_game_id) {
+      items.push({
+        label: '스태미나 새로고침',
+        disabled: busyId === process.id,
+        action: () => refreshStamina(process),
+      });
+    }
+    items.push({ label: '삭제', kind: 'danger', action: () => deleteProcess(process) });
+    return items;
+  };
 
   const launchPreferenceItems = (process: ProcessRow): ContextMenuItem[] => [
     { label: '바로가기 선호', disabled: process.preferred_launch_type === 'shortcut', action: () => setLaunchPreference(process, 'shortcut') },

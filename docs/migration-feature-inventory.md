@@ -24,7 +24,7 @@
 | SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder 테스트 필수 |
 | SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 유지 |
-| HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회 가능, 종료 후 재동기화 runtime smoke 필요 |
+| HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회/즉시 새로고침 가능, 종료 후 재동기화 runtime smoke 필요 |
 | SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집 가능, capture runtime 필요 |
 | RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집 가능, OBS runtime 필요 |
 | BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 양쪽 UI incident UX 유지 |
