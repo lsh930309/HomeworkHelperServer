@@ -150,6 +150,13 @@ class ScreenshotKeyCaptureRequest(BaseModel):
         extra = "forbid"
 
 
+class ClipboardFileRequest(BaseModel):
+    path: str
+
+    class Config:
+        extra = "forbid"
+
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _HOYOLAB_GAME_IDS = {"honkai_starrail", "zenless_zone_zero"}
 _HOYOLAB_BROWSERS = {"chrome", "edge", "firefox"}
@@ -769,6 +776,33 @@ def read_recording_obs_config() -> dict[str, Any]:
         exe_path=str(cfg.get("exe_path") or ""),
     )
     return _dump_model(payload)
+
+
+@router.post("/clipboard/file-payload")
+def describe_clipboard_file_payload(request: ClipboardFileRequest) -> dict[str, Any]:
+    from pathlib import Path
+
+    from src.utils.clipboard import describe_file_clipboard_payload
+
+    path = Path(request.path).expanduser()
+    return dict(describe_file_clipboard_payload(path))
+
+
+@router.post("/clipboard/copy-file")
+def copy_clipboard_file(request: ClipboardFileRequest) -> dict[str, Any]:
+    from pathlib import Path
+
+    from src.utils.clipboard import copy_file_to_clipboard, describe_file_clipboard_payload, is_native_file_clipboard_supported
+
+    path = Path(request.path).expanduser()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="복사할 파일을 찾을 수 없습니다.")
+    if not is_native_file_clipboard_supported():
+        raise HTTPException(status_code=503, detail="이 환경에서는 파일 클립보드 복사를 사용할 수 없습니다.")
+    copy_file_to_clipboard(path)
+    payload = dict(describe_file_clipboard_payload(path))
+    payload["copied"] = True
+    return payload
 
 
 @router.get("/screenshot/vk/{vk}")

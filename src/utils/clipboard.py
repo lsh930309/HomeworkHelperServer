@@ -6,6 +6,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import logging
 import os
+import sys
 import struct
 import time
 from pathlib import Path
@@ -19,6 +20,32 @@ logger = logging.getLogger(__name__)
 _GMEM_MOVEABLE = 0x0002
 _CF_HDROP = 15
 _CF_DIB = 8
+
+
+def is_native_file_clipboard_supported() -> bool:
+    """현재 프로세스에서 파일 클립보드 payload를 네이티브로 쓸 수 있는지 반환합니다.
+
+    새 Tauri GUI의 Python sidecar는 Qt event loop를 소유하지 않으므로, API 경로에서는
+    Windows 네이티브 클립보드만 지원 대상으로 삼습니다. PyQt GUI는 기존처럼 Qt fallback을
+    사용할 수 있습니다.
+    """
+
+    return sys.platform == "win32" and hasattr(ctypes, "windll")
+
+
+def describe_file_clipboard_payload(path: str | Path) -> dict[str, object]:
+    """파일 클립보드 payload의 구성 요소를 side-effect 없이 설명합니다."""
+
+    file_path = Path(path)
+    mime = build_file_clipboard_mime_data(file_path)
+    return {
+        "path": str(file_path),
+        "exists": file_path.exists(),
+        "file_url": QUrl.fromLocalFile(str(file_path)).toString(),
+        "has_image": mime.hasImage(),
+        "has_png": len(bytes(mime.data("image/png"))) > 0,
+        "native_copy_supported": is_native_file_clipboard_supported(),
+    }
 
 
 def build_file_clipboard_mime_data(path: str | Path) -> QMimeData:

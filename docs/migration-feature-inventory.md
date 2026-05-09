@@ -30,7 +30,7 @@
 | BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 양쪽 UI incident UX 유지 |
 | BACKUP-001 | DB/설정/row 백업 | complete | partial | high | 복구 smoke 필요 |
 | BUILD-001 | 패키징 | complete | complete | medium | 기본 빌드에 새 GUI 포함 |
-| CLIPBOARD-001 | 클립보드 payload | complete | missing | low | PyQt 기능 유지 |
+| CLIPBOARD-001 | 클립보드 payload | complete | partial | low | 새 GUI API payload 확인/Windows 네이티브 복사 경계 제공, gallery runtime smoke 필요 |
 
 ## 실사용 데이터 복제 검증
 

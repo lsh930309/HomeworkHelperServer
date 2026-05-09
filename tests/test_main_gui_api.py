@@ -597,6 +597,34 @@ def test_gui_recording_obs_config_import_wraps_existing_reader(monkeypatch):
     }
 
 
+def test_gui_clipboard_file_payload_describes_existing_utility(monkeypatch, tmp_path):
+    client = _client_with_seed(monkeypatch)
+    note = tmp_path / "note.txt"
+    note.write_text("hello", encoding="utf-8")
+
+    response = client.post("/api/gui/clipboard/file-payload", json={"path": str(note)})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["path"] == str(note)
+    assert body["exists"] is True
+    assert body["file_url"].startswith("file:")
+    assert body["has_image"] is False
+    assert body["has_png"] is False
+    assert isinstance(body["native_copy_supported"], bool)
+
+
+def test_gui_clipboard_copy_file_rejects_unsupported_environment(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.utils.clipboard.is_native_file_clipboard_supported", lambda: False)
+    client = _client_with_seed(monkeypatch)
+    note = tmp_path / "note.txt"
+    note.write_text("hello", encoding="utf-8")
+
+    response = client.post("/api/gui/clipboard/copy-file", json={"path": str(note)})
+
+    assert response.status_code == 503
+
+
 def test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability(monkeypatch):
     client = _client_with_seed(monkeypatch)
 

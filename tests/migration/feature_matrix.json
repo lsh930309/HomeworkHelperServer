@@ -429,18 +429,20 @@
       "name": "스크린샷/파일 클립보드 payload 생성",
       "category": "clipboard",
       "pyqt_status": "complete",
-      "new_gui_status": "missing",
-      "api_or_boundary": "src/utils/clipboard.py",
+      "new_gui_status": "partial",
+      "api_or_boundary": "src/utils/clipboard.py, /api/gui/clipboard/*",
       "data_owned": [],
       "beholder_guarded": false,
       "data_risk": "low",
       "automated_tests": [
         "test_build_file_clipboard_mime_data_keeps_file_url",
         "test_build_file_clipboard_mime_data_adds_image_payload_for_images",
-        "test_build_hdrop_payload_uses_double_null_terminated_utf16_path"
+        "test_build_hdrop_payload_uses_double_null_terminated_utf16_path",
+        "test_gui_clipboard_file_payload_describes_existing_utility",
+        "test_gui_clipboard_copy_file_rejects_unsupported_environment"
       ],
       "manual_smoke": [
-        "스크린샷 후 클립보드 붙여넣기"
+        "새 GUI/API에서 스크린샷 파일 클립보드 복사 후 탐색기/채팅창 붙여넣기"
       ]
     }
   ]
