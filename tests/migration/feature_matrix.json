@@ -238,7 +238,7 @@
       "category": "scheduler_notifications",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "src/core/scheduler.py, src/core/notifier.py",
+      "api_or_boundary": "src/core/scheduler.py, src/core/notifier.py, /api/gui/scheduler/preview",
       "data_owned": [
         "managed_processes.mandatory_times_str",
         "managed_processes.user_cycle_hours",
@@ -248,7 +248,8 @@
       "beholder_guarded": true,
       "data_risk": "medium",
       "automated_tests": [
-        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields"
+        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
+        "test_gui_scheduler_preview_explains_status_and_notification_events"
       ],
       "manual_smoke": [
         "필수 접속 알림",

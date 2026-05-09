@@ -210,6 +210,12 @@ type LaunchResult = {
   user_message: string;
 };
 
+type SchedulerPreview = {
+  user_summary: string;
+  status_counts: Record<string, number>;
+  events: Array<{ kind: string; process_id: string; process_name: string; due_at: string; severity: string; message: string }>;
+};
+
 type ProcessForm = {
   id?: string;
   name: string;
@@ -864,6 +870,7 @@ function SettingsModal({
   const [form, setForm] = React.useState(settings);
   const [activeTab, setActiveTab] = React.useState<SettingsTab>(initialTab);
   const [hoyolabStatus, setHoyolabStatus] = React.useState<HoYoLabStatus | null>(null);
+  const [schedulerPreview, setSchedulerPreview] = React.useState<SchedulerPreview | null>(null);
   const [screenshotKeyInfo, setScreenshotKeyInfo] = React.useState<{ display_name: string; hex: string; capture_supported: boolean } | null>(null);
   const [hoyolabForm, setHoyolabForm] = React.useState<HoYoLabCredentialForm>({
     ltuid: '',
@@ -892,6 +899,14 @@ function SettingsModal({
       loadHoYoLabStatus().catch((e: any) => setError(e.message));
     }
   }, [activeTab, loadHoYoLabStatus]);
+
+  React.useEffect(() => {
+    if (activeTab === 'notify') {
+      fetchJson<SchedulerPreview>('/api/gui/scheduler/preview')
+        .then(setSchedulerPreview)
+        .catch(() => setSchedulerPreview(null));
+    }
+  }, [activeTab]);
 
   React.useEffect(() => {
     if (activeTab === 'screenshot') {
@@ -1117,6 +1132,15 @@ function SettingsModal({
               <label className="check"><input type="checkbox" checked={form.stamina_notify_enabled} onChange={(e) => update('stamina_notify_enabled', e.target.checked)} /> 스태미나 가득 참 알림</label>
             </div>
             <label>스태미나 알림 시점<input type="number" min="1" max="100" value={form.stamina_notify_threshold} onChange={(e) => updateNumber('stamina_notify_threshold', e.target.value)} /></label>
+            {schedulerPreview && (
+              <div className="preview-card">
+                <strong>{schedulerPreview.user_summary}</strong>
+                <span>실행중 {schedulerPreview.status_counts['실행중'] || 0} · 완료 {schedulerPreview.status_counts['완료됨'] || 0}</span>
+                {schedulerPreview.events.slice(0, 4).map((event) => (
+                  <small key={`${event.kind}-${event.process_id}-${event.due_at}`}>{event.message}</small>
+                ))}
+              </div>
+            )}
           </section>
         )}
 

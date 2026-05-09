@@ -389,6 +389,47 @@ def test_gui_settings_get_returns_full_global_settings_contract(monkeypatch):
     assert schema_fields <= set(response.json())
 
 
+def test_gui_scheduler_preview_explains_status_and_notification_events(monkeypatch):
+    now = dt.datetime(2026, 5, 9, 12, 0)
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="mandatory-game",
+                name="Mandatory Game",
+                monitoring_path="run.exe",
+                launch_path="run.lnk",
+                last_played_timestamp=dt.datetime(2026, 5, 9, 8, 0).timestamp(),
+                is_mandatory_time_enabled=True,
+                mandatory_times_str=["11:00"],
+                user_cycle_hours=24,
+            ),
+            models.Process(
+                id="stamina-game",
+                name="Stamina Game",
+                monitoring_path="stamina.exe",
+                launch_path="stamina.lnk",
+                stamina_tracking_enabled=True,
+                stamina_current=95,
+                stamina_max=100,
+                stamina_updated_at=now.timestamp(),
+            ),
+        ],
+    )
+
+    response = client.get(f"/api/gui/scheduler/preview?now={now.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status_counts"]["미완료"] >= 1
+    assert "알림" in body["user_summary"]
+    events = body["events"]
+    assert any(event["kind"] == "mandatory_time" and event["process_id"] == "mandatory-game" for event in events)
+    assert any(event["kind"] == "stamina" and event["process_id"] == "stamina-game" for event in events)
+    assert any(row["process_id"] == "mandatory-game" and row["events"] for row in body["processes"])
+    assert client.get("/api/gui/scheduler/preview?now=not-a-date").status_code == 422
+
+
 def test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields(monkeypatch):
     import src.api.gui.routes as gui_routes
 

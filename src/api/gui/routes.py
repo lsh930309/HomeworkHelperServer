@@ -412,6 +412,110 @@ def _visual_status(
     return "미완료" if incomplete else "완료됨"
 
 
+def _server_day_bounds(now_dt: dt.datetime, reset_time: dt.time) -> tuple[dt.datetime, dt.datetime]:
+    reset_today = now_dt.replace(hour=reset_time.hour, minute=reset_time.minute, second=0, microsecond=0)
+    if now_dt.time() < reset_time:
+        start = reset_today - dt.timedelta(days=1)
+        end = reset_today - dt.timedelta(microseconds=1)
+    else:
+        start = reset_today
+        end = reset_today + dt.timedelta(days=1) - dt.timedelta(microseconds=1)
+    return start, end
+
+
+def _scheduler_preview_for_process(
+    process: models.Process,
+    settings: models.GlobalSettings,
+    now_dt: dt.datetime,
+    status: str,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    last_played_dt = dt.datetime.fromtimestamp(float(process.last_played_timestamp)) if process.last_played_timestamp else None
+
+    if settings.notify_on_mandatory_time and process.is_mandatory_time_enabled and process.mandatory_times_str:
+        for mandatory in process.mandatory_times_str:
+            mandatory_time = _parse_time(mandatory)
+            if not mandatory_time:
+                continue
+            due_at = now_dt.replace(hour=mandatory_time.hour, minute=mandatory_time.minute, second=0, microsecond=0)
+            if now_dt >= due_at and (last_played_dt is None or last_played_dt < due_at):
+                events.append({
+                    "kind": "mandatory_time",
+                    "process_id": process.id,
+                    "process_name": process.name,
+                    "due_at": due_at.isoformat(),
+                    "severity": "due",
+                    "message": f"{process.name}의 고정 접속 시각({mandatory})이 지났습니다.",
+                })
+
+    if process.user_cycle_hours and last_played_dt:
+        deadline = last_played_dt + dt.timedelta(hours=float(process.user_cycle_hours))
+        notify_at = deadline - dt.timedelta(hours=float(settings.cycle_deadline_advance_notify_hours or 0))
+        if settings.notify_on_cycle_deadline and notify_at <= now_dt < deadline:
+            events.append({
+                "kind": "cycle_deadline",
+                "process_id": process.id,
+                "process_name": process.name,
+                "due_at": deadline.isoformat(),
+                "severity": "soon",
+                "message": f"{process.name}의 사용자 주기 마감이 다가옵니다.",
+            })
+        sleep_period = _next_sleep_period(now_dt, settings)
+        if settings.notify_on_sleep_correction and sleep_period:
+            sleep_start, sleep_end = sleep_period
+            trigger = sleep_start - dt.timedelta(hours=float(settings.sleep_correction_advance_notify_hours or 0))
+            if sleep_start <= deadline < sleep_end and trigger <= now_dt < sleep_start:
+                events.append({
+                    "kind": "sleep_correction",
+                    "process_id": process.id,
+                    "process_name": process.name,
+                    "due_at": deadline.isoformat(),
+                    "severity": "soon",
+                    "message": f"{process.name}의 마감이 수면 시간과 겹쳐 미리 접속하는 것이 좋습니다.",
+                })
+
+    reset_time = _parse_time(process.server_reset_time_str)
+    if settings.notify_on_daily_reset and reset_time:
+        start, end = _server_day_bounds(now_dt, reset_time)
+        played_today = bool(last_played_dt and start <= last_played_dt <= end)
+        reminder_at = end - dt.timedelta(hours=1)
+        if not played_today and reminder_at <= now_dt < end:
+            events.append({
+                "kind": "daily_reset",
+                "process_id": process.id,
+                "process_name": process.name,
+                "due_at": end.isoformat(),
+                "severity": "soon",
+                "message": f"{process.name}의 서버 하루 마감이 다가오지만 오늘 플레이 기록이 없습니다.",
+            })
+
+    if settings.stamina_notify_enabled and process.stamina_tracking_enabled:
+        stamina = _predicted_stamina(process)
+        if stamina:
+            current, maximum = stamina
+            threshold = int(settings.stamina_notify_threshold or 0)
+            if maximum > 0 and current >= maximum - threshold:
+                events.append({
+                    "kind": "stamina",
+                    "process_id": process.id,
+                    "process_name": process.name,
+                    "due_at": now_dt.isoformat(),
+                    "severity": "soon" if current < maximum else "due",
+                    "message": f"{process.name}의 스태미나가 곧 가득 찹니다. ({current}/{maximum})",
+                })
+
+    if status == "미완료" and not events:
+        events.append({
+            "kind": "status_incomplete",
+            "process_id": process.id,
+            "process_name": process.name,
+            "due_at": now_dt.isoformat(),
+            "severity": "due",
+            "message": f"{process.name}은 현재 미완료 상태입니다.",
+        })
+    return events
+
+
 def _process_to_gui_row(process: models.Process, status: str, now_dt: dt.datetime) -> dict[str, Any]:
     return {
         "id": process.id,
@@ -551,6 +655,48 @@ def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
             "direct_sqlite_access": False,
             "appdata_path_owned_by_backend": True,
         },
+    }
+
+
+@router.get("/scheduler/preview")
+def get_scheduler_preview(now: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Preview scheduler/notifier decisions using the same DB-backed settings."""
+    settings = crud.get_settings(db)
+    processes = crud.get_processes(db)
+    try:
+        now_dt = dt.datetime.fromisoformat(now) if now else dt.datetime.now()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="now는 ISO datetime 형식이어야 합니다.") from exc
+    active_ids = _running_process_ids(processes)
+    rows = []
+    events: list[dict[str, Any]] = []
+    counts = {"실행중": 0, "미완료": 0, "완료됨": 0}
+    for process in sorted(processes, key=lambda item: (item.name or "").casefold()):
+        status = _visual_status(process, settings, now_dt, active_ids)
+        counts[status] = counts.get(status, 0) + 1
+        process_events = _scheduler_preview_for_process(process, settings, now_dt, status)
+        events.extend(process_events)
+        rows.append({
+            "process_id": process.id,
+            "process_name": process.name,
+            "status": status,
+            "event_count": len(process_events),
+            "events": process_events,
+        })
+    return {
+        "generated_at": now_dt.isoformat(),
+        "settings": {
+            "notify_on_mandatory_time": settings.notify_on_mandatory_time,
+            "notify_on_cycle_deadline": settings.notify_on_cycle_deadline,
+            "notify_on_sleep_correction": settings.notify_on_sleep_correction,
+            "notify_on_daily_reset": settings.notify_on_daily_reset,
+            "stamina_notify_enabled": settings.stamina_notify_enabled,
+            "stamina_notify_threshold": settings.stamina_notify_threshold,
+        },
+        "status_counts": counts,
+        "events": events,
+        "processes": rows,
+        "user_summary": f"미완료 {counts.get('미완료', 0)}개, 예정/필요 알림 {len(events)}건",
     }
 
 

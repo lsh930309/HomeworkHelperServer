@@ -22,7 +22,7 @@
 | SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
 | SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 새 GUI preview 스마트 서랍/최근 스크린샷·녹화물 shell 구현, runtime API/Windows smoke 필요 |
 | SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder heartbeat 기반 정전/앱재시작/legacy open 대응 |
-| SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
+| SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 및 새 GUI preview 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 및 신규 GUI v6 디자인 token 유지 |
 | HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회/즉시 새로고침 가능, 스태미나 범위 guard 유지, 종료 후 재동기화 runtime smoke 필요 |
 | SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집/키 캡처/최근 갤러리 보조 가능, capture runtime smoke 필요 |
