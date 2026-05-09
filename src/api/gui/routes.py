@@ -812,6 +812,74 @@ def read_recording_obs_config() -> dict[str, Any]:
     return _dump_model(payload)
 
 
+def _recording_gallery_dir(settings: models.GlobalSettings):
+    from pathlib import Path
+
+    configured = getattr(settings, "obs_recording_output_dir", "") or ""
+    if configured:
+        return Path(configured).expanduser()
+    try:
+        from src.recording.obs_config_reader import read_obs_config
+
+        detected = str(read_obs_config().get("output_dir") or "")
+        if detected:
+            return Path(detected).expanduser()
+    except Exception:
+        pass
+    return Path("")
+
+
+@router.get("/recording/gallery")
+def list_recording_gallery(limit: int = 5, db: Session = Depends(get_db)) -> dict[str, Any]:
+    settings = crud.get_settings(db)
+    gallery_dir = _recording_gallery_dir(settings)
+    limit = max(1, min(int(limit or 5), 24))
+    suffixes = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
+    files: list[Any] = []
+    if str(gallery_dir) and gallery_dir.exists() and gallery_dir.is_dir():
+        files = sorted(
+            [path for path in gallery_dir.iterdir() if path.is_file() and path.suffix.lower() in suffixes],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    items = []
+    for path in files[:limit]:
+        stat = path.stat()
+        items.append({
+            "name": path.name,
+            "path": str(path),
+            "size": stat.st_size,
+            "modified_at": stat.st_mtime,
+            "file_url": f"/api/gui/recording/gallery/{path.name}",
+        })
+    return {
+        "enabled": bool(getattr(settings, "recording_enabled", False)),
+        "directory": str(gallery_dir),
+        "exists": bool(str(gallery_dir) and gallery_dir.exists() and gallery_dir.is_dir()),
+        "total": len(files),
+        "items": items,
+    }
+
+
+@router.get("/recording/gallery/{filename}")
+def get_recording_gallery_file(filename: str, db: Session = Depends(get_db)):
+    settings = crud.get_settings(db)
+    gallery_dir = _recording_gallery_dir(settings)
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name or not str(gallery_dir):
+        raise HTTPException(status_code=404, detail="녹화 파일을 찾을 수 없습니다.")
+    path = gallery_dir / safe_name
+    suffixes = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
+    if not path.exists() or not path.is_file() or path.suffix.lower() not in suffixes:
+        raise HTTPException(status_code=404, detail="녹화 파일을 찾을 수 없습니다.")
+    media_type = {
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type)
+
+
 @router.post("/clipboard/file-payload")
 def describe_clipboard_file_payload(request: ClipboardFileRequest) -> dict[str, Any]:
     from pathlib import Path

@@ -598,6 +598,43 @@ def test_gui_recording_obs_config_import_wraps_existing_reader(monkeypatch):
     }
 
 
+def test_gui_recording_gallery_lists_recent_video_files_and_serves_safe_files(monkeypatch, tmp_path):
+    client = _client_with_seed(monkeypatch)
+    recording_dir = tmp_path / "recordings"
+    recording_dir.mkdir()
+    older = recording_dir / "old.mp4"
+    newer = recording_dir / "new.mp4"
+    ignored = recording_dir / "note.txt"
+    older.write_bytes(b"old-video")
+    newer.write_bytes(b"new-video")
+    ignored.write_text("not video", encoding="utf-8")
+    os.utime(older, (_ts("2026-05-08 10:00"), _ts("2026-05-08 10:00")))
+    os.utime(newer, (_ts("2026-05-08 11:00"), _ts("2026-05-08 11:00")))
+
+    patched = client.patch(
+        "/api/gui/settings",
+        json={"recording_enabled": True, "obs_recording_output_dir": str(recording_dir)},
+    )
+    assert patched.status_code == 200
+
+    gallery = client.get("/api/gui/recording/gallery?limit=1")
+
+    assert gallery.status_code == 200
+    body = gallery.json()
+    assert body["enabled"] is True
+    assert body["exists"] is True
+    assert body["total"] == 2
+    assert body["items"][0]["name"] == "new.mp4"
+    assert body["items"][0]["path"] == str(newer)
+    assert body["items"][0]["file_url"] == "/api/gui/recording/gallery/new.mp4"
+
+    video = client.get("/api/gui/recording/gallery/new.mp4")
+    assert video.status_code == 200
+    assert video.content == b"new-video"
+    assert client.get("/api/gui/recording/gallery/../new.mp4").status_code == 404
+    assert client.get("/api/gui/recording/gallery/note.txt").status_code == 404
+
+
 def test_gui_clipboard_file_payload_describes_existing_utility(monkeypatch, tmp_path):
     client = _client_with_seed(monkeypatch)
     note = tmp_path / "note.txt"

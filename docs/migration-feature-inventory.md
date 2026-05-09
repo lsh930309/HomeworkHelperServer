@@ -20,13 +20,13 @@
 | WEB-001 | 웹 바로가기 | complete | complete | high | 자동 테스트 유지, 새 GUI 편집은 별도 popup, 완료 시각은 런타임만 변경 |
 | SETTINGS-001 | 전역 설정 | complete | complete | high | 신규 GUI 설정 저장 parity 및 개인화 기본값/범위 오류 회귀 차단, 설정 패널은 별도 자동 크기 popup |
 | SETTINGS-002 | 설정 계약 동기화 | complete | complete | high | model/schema/runtime/migration 동기화 유지 |
-| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 새 GUI preview 스마트 서랍/최근 스크린샷 shell 구현, runtime API/Windows smoke 필요 |
+| SIDEBAR-001 | 사이드바/볼륨/오버레이 | complete | partial | high | 새 GUI preview 스마트 서랍/최근 스크린샷·녹화물 shell 구현, runtime API/Windows smoke 필요 |
 | SESSION-001 | 세션 기록/충돌 복구 | complete | partial | high | Beholder heartbeat 기반 정전/앱재시작/legacy open 대응 |
 | SCHEDULER-001 | 스케줄러/알림 | complete | partial | medium | 알림 설정 편집 가능, runtime smoke 필요 |
 | DASHBOARD-001 | 대시보드 analytics | complete | complete | medium | API 테스트 및 신규 GUI v6 디자인 token 유지 |
 | HOYOLAB-001 | HoYoLab 스태미나 | complete | partial | high | 새 GUI 쿠키/테스트 조회/즉시 새로고침 가능, 스태미나 범위 guard 유지, 종료 후 재동기화 runtime smoke 필요 |
 | SCREENSHOT-001 | 스크린샷 | complete | partial | high | 설정 편집/키 캡처/최근 갤러리 보조 가능, capture runtime smoke 필요 |
-| RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집/OBS 설정 불러오기 가능, OBS runtime 필요 |
+| RECORDING-001 | OBS 녹화 | complete | partial | high | 설정 편집/OBS 설정 불러오기/최근 녹화물 보조 가능, OBS runtime 필요 |
 | BEHOLDER-001 | 데이터 안전 감시 | complete | partial | high | 사용자 친화 incident UX/백업 preview/스마트 세션 복구/actor별 필드·값 범위 guard 유지, Windows 복구 smoke 필요 |
 | BACKUP-001 | DB/설정/row 백업 | complete | partial | high | 새 GUI 복구 preview 제공, 실제 복구 smoke 필요 |
 | BUILD-001 | 패키징 | complete | complete | medium | 기본 빌드에 새 GUI 포함 |

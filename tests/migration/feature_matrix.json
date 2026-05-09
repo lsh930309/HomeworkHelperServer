@@ -191,7 +191,8 @@
         "test_gui_settings_patch_preserves_sidebar_detail_fields",
         "test_pyqt_full_settings_update_preserves_custom_global_settings",
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
-        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images"
+        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images",
+        "test_gui_recording_gallery_lists_recent_video_files_and_serves_safe_files"
       ],
       "manual_smoke": [
         "게임 실행 시 사이드바 활성화",
@@ -360,7 +361,8 @@
         "test_global_settings_contract_covers_model_schema_runtime_and_migrations",
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
         "test_gui_recording_obs_config_import_wraps_existing_reader",
-        "test_new_gui_recording_settings_can_import_obs_config"
+        "test_new_gui_recording_settings_can_import_obs_config",
+        "test_gui_recording_gallery_lists_recent_video_files_and_serves_safe_files"
       ],
       "manual_smoke": [
         "새 GUI OBS 설정 불러오기 후 저장",

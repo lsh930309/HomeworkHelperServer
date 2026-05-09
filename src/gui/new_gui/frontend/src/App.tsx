@@ -182,6 +182,22 @@ type ScreenshotGallery = {
   native_copy_supported: boolean;
 };
 
+type RecordingGalleryItem = {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: number;
+  file_url: string;
+};
+
+type RecordingGallery = {
+  enabled: boolean;
+  directory: string;
+  exists: boolean;
+  total: number;
+  items: RecordingGalleryItem[];
+};
+
 type ProcessForm = {
   id?: string;
   name: string;
@@ -1220,6 +1236,7 @@ function formatPlaytime(timestamp?: number | null) {
 function SidebarApp() {
   const [state, setState] = React.useState<MainState | null>(null);
   const [gallery, setGallery] = React.useState<ScreenshotGallery | null>(null);
+  const [recordingGallery, setRecordingGallery] = React.useState<RecordingGallery | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState(false);
   const [pinned, setPinned] = React.useState(false);
@@ -1260,6 +1277,16 @@ function SidebarApp() {
       .catch(() => setGallery(null));
   }, [screenshotEnabled]);
 
+  const loadRecordingGallery = React.useCallback(() => {
+    if (!recordingEnabled) {
+      setRecordingGallery(null);
+      return;
+    }
+    fetchJson<RecordingGallery>('/api/gui/recording/gallery?limit=4')
+      .then(setRecordingGallery)
+      .catch(() => setRecordingGallery(null));
+  }, [recordingEnabled]);
+
   React.useEffect(() => {
     load();
     const id = window.setInterval(load, 1000);
@@ -1279,6 +1306,16 @@ function SidebarApp() {
     const id = window.setInterval(loadGallery, 5000);
     return () => window.clearInterval(id);
   }, [loadGallery, open, pinned, screenshotEnabled]);
+
+  React.useEffect(() => {
+    if (!recordingEnabled || !(open || pinned)) {
+      setRecordingGallery(null);
+      return;
+    }
+    loadRecordingGallery();
+    const id = window.setInterval(loadRecordingGallery, 5000);
+    return () => window.clearInterval(id);
+  }, [loadRecordingGallery, open, pinned, recordingEnabled]);
 
   React.useEffect(() => {
     if (!sidebarEnabled) return;
@@ -1443,6 +1480,28 @@ function SidebarApp() {
               </div>
             )}
             <small className="gallery-path">{gallery?.directory || '스크린샷 저장 폴더를 확인 중입니다.'}</small>
+          </div>
+        )}
+
+        {recordingEnabled && (
+          <div className="drawer-card gallery-card recording-gallery">
+            <div className="drawer-row">
+              <span>최근 녹화</span>
+              <strong>{recordingGallery ? `${recordingGallery.items.length}/${recordingGallery.total}` : '...'}</strong>
+            </div>
+            {!recordingGallery?.exists && <small>녹화 출력 폴더가 아직 없거나 비어 있습니다.</small>}
+            {recordingGallery?.exists && recordingGallery.items.length === 0 && <small>최근 녹화 파일이 없습니다.</small>}
+            {recordingGallery && recordingGallery.items.length > 0 && (
+              <div className="recording-list">
+                {recordingGallery.items.map((item) => (
+                  <a className="recording-item" key={item.path} href={`${API_BASE}${item.file_url}`} target="_blank" rel="noreferrer" title={item.path}>
+                    <span>{item.name}</span>
+                    <small>{new Date(item.modified_at * 1000).toLocaleString()}</small>
+                  </a>
+                ))}
+              </div>
+            )}
+            <small className="gallery-path">{recordingGallery?.directory || '녹화 출력 폴더를 확인 중입니다.'}</small>
           </div>
         )}
 
