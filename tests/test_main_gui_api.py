@@ -251,6 +251,81 @@ def test_gui_process_crud_reuses_backend_models(monkeypatch):
     assert deleted.status_code == 200
 
 
+def test_gui_launch_plan_and_launch_use_preferred_target_without_direct_db_access(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    launched: list[tuple[bool, str]] = []
+
+    class FakeLauncher:
+        def __init__(self, run_as_admin=False):
+            self.run_as_admin = run_as_admin
+
+        def launch_process(self, target):
+            launched.append((self.run_as_admin, target))
+            return True
+
+    monkeypatch.setattr(gui_routes, "Launcher", FakeLauncher)
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="launch-game",
+                name="Launch Game",
+                monitoring_path="C:/Games/Game.exe",
+                launch_path="C:/Games/Game.lnk",
+                preferred_launch_type="direct",
+            )
+        ],
+    )
+    assert client.patch("/api/gui/settings", json={"run_as_admin": True, "hide_on_game": False}).status_code == 200
+
+    plan = client.get("/api/gui/processes/launch-game/launch-plan")
+    assert plan.status_code == 200
+    assert plan.json()["launch_target"] == "C:/Games/Game.exe"
+    assert plan.json()["launch_type_label"] == "프로세스 직접 실행"
+    assert plan.json()["run_as_admin"] is True
+    assert plan.json()["fallback_chain"] == ["monitoring_path", "launch_path"]
+
+    launched_response = client.post("/api/gui/processes/launch-game/launch")
+    assert launched_response.status_code == 200
+    assert launched_response.json()["launch_target"] == "C:/Games/Game.exe"
+    assert launched == [(True, "C:/Games/Game.exe")]
+
+
+def test_gui_launcher_preference_uses_preset_launcher_before_shortcut(monkeypatch):
+    import src.api.gui.routes as gui_routes
+
+    class FakePresetManager:
+        def get_preset_by_id(self, preset_id):
+            assert preset_id == "preset-a"
+            return {"launcher_patterns": ["Launcher.exe"]}
+
+    monkeypatch.setattr(gui_routes, "GamePresetManager", lambda: FakePresetManager())
+    monkeypatch.setattr(gui_routes.os.path, "exists", lambda path: path.endswith("Launcher.exe"))
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[
+            models.Process(
+                id="launcher-game",
+                name="Launcher Game",
+                monitoring_path="C:/Games/Game.exe",
+                launch_path="C:/Games/Game.lnk",
+                preferred_launch_type="launcher",
+                user_preset_id="preset-a",
+            )
+        ],
+    )
+
+    response = client.get("/api/gui/processes/launcher-game/launch-plan")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preferred_launch_type"] == "launcher"
+    assert body["launch_target"].endswith("Launcher.exe")
+    assert body["launcher_path"].endswith("Launcher.exe")
+    assert body["fallback_chain"][0] == "preset_launcher_pattern"
+
+
 def test_gui_web_shortcut_crud_and_open_refresh_state(monkeypatch):
     client = _client_with_seed(monkeypatch)
 

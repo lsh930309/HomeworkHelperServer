@@ -1015,13 +1015,30 @@ def capture_screenshot_trigger_key(request: ScreenshotKeyCaptureRequest) -> dict
 
 
 def _resolve_launch_target(process: models.Process) -> str | None:
+    return _build_launch_plan(process)["launch_target"]
+
+
+def _launch_type_label(launch_type: str) -> str:
+    return {
+        "direct": "프로세스 직접 실행",
+        "shortcut": "바로가기 실행",
+        "launcher": "런처 우선 실행",
+    }.get(launch_type, "기본 실행")
+
+
+def _build_launch_plan(process: models.Process, settings: models.GlobalSettings | None = None) -> dict[str, Any]:
     launch_type = process.preferred_launch_type or "shortcut"
+    fallback_chain: list[str] = []
+    launcher_path = None
+
     if launch_type == "direct":
-        return process.monitoring_path or process.launch_path
-    if launch_type == "shortcut":
-        return process.launch_path or process.monitoring_path
-    if launch_type == "launcher":
-        launcher_path = None
+        fallback_chain = ["monitoring_path", "launch_path"]
+        target = process.monitoring_path or process.launch_path
+    elif launch_type == "shortcut":
+        fallback_chain = ["launch_path", "monitoring_path"]
+        target = process.launch_path or process.monitoring_path
+    elif launch_type == "launcher":
+        fallback_chain = ["preset_launcher_pattern", "launch_path", "monitoring_path"]
         if process.user_preset_id:
             preset = GamePresetManager().get_preset_by_id(process.user_preset_id)
             if preset and preset.get("launcher_patterns"):
@@ -1031,8 +1048,35 @@ def _resolve_launch_target(process: models.Process) -> str | None:
                     if os.path.exists(candidate):
                         launcher_path = candidate
                         break
-        return launcher_path or process.launch_path or process.monitoring_path
-    return process.launch_path or process.monitoring_path
+        target = launcher_path or process.launch_path or process.monitoring_path
+    else:
+        fallback_chain = ["launch_path", "monitoring_path"]
+        target = process.launch_path or process.monitoring_path
+
+    return {
+        "process_id": process.id,
+        "process_name": process.name,
+        "preferred_launch_type": launch_type,
+        "launch_type_label": _launch_type_label(launch_type),
+        "launch_target": target,
+        "launcher_path": launcher_path,
+        "fallback_chain": fallback_chain,
+        "run_as_admin": bool(getattr(settings, "run_as_admin", False)) if settings is not None else None,
+        "hide_on_game": bool(getattr(settings, "hide_on_game", False)) if settings is not None else None,
+        "user_message": (
+            f"{_launch_type_label(launch_type)}으로 '{process.name}'을(를) 실행합니다."
+            if target else f"'{process.name}'의 실행 경로가 비어 있어 실행할 수 없습니다."
+        ),
+    }
+
+
+@router.get("/processes/{process_id}/launch-plan")
+def get_launch_plan(process_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return the launch target chosen for the current preference without starting it."""
+    process = crud.get_process_by_id(db, process_id)
+    if process is None:
+        raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+    return _build_launch_plan(process, crud.get_settings(db))
 
 
 @router.post("/processes/{process_id}/launch")
@@ -1041,11 +1085,12 @@ def launch_process(process_id: str, db: Session = Depends(get_db)) -> dict[str, 
     process = crud.get_process_by_id(db, process_id)
     if process is None:
         raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
-    target = _resolve_launch_target(process)
+    settings = crud.get_settings(db)
+    plan = _build_launch_plan(process, settings)
+    target = plan["launch_target"]
     if not target:
         raise HTTPException(status_code=400, detail="실행 경로가 없습니다.")
-    settings = crud.get_settings(db)
     success = Launcher(run_as_admin=bool(settings.run_as_admin)).launch_process(target)
     if not success:
-        raise HTTPException(status_code=500, detail="프로세스 실행에 실패했습니다.")
-    return {"ok": True, "process_id": process.id, "launch_target": target}
+        raise HTTPException(status_code=500, detail=f"{plan['launch_type_label']} 실패: {target}")
+    return {"ok": True, **plan}

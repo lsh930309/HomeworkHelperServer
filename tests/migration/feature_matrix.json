@@ -79,7 +79,7 @@
       "category": "game_runtime",
       "pyqt_status": "complete",
       "new_gui_status": "partial",
-      "api_or_boundary": "src/core/launcher.py, /api/gui/processes/{id}/launch",
+      "api_or_boundary": "src/core/launcher.py, /api/gui/processes/{id}/launch-plan, /api/gui/processes/{id}/launch",
       "data_owned": [
         "managed_processes.preferred_launch_type",
         "managed_processes.last_played_timestamp"
@@ -87,7 +87,9 @@
       "beholder_guarded": true,
       "data_risk": "medium",
       "automated_tests": [
-        "test_main_state_preserves_db_boundary_and_returns_compact_rows"
+        "test_main_state_preserves_db_boundary_and_returns_compact_rows",
+        "test_gui_launch_plan_and_launch_use_preferred_target_without_direct_db_access",
+        "test_gui_launcher_preference_uses_preset_launcher_before_shortcut"
       ],
       "manual_smoke": [
         "바로가기 실행",

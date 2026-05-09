@@ -198,6 +198,18 @@ type RecordingGallery = {
   items: RecordingGalleryItem[];
 };
 
+type LaunchResult = {
+  ok: boolean;
+  process_id: string;
+  process_name: string;
+  preferred_launch_type: ProcessRow['preferred_launch_type'];
+  launch_type_label: string;
+  launch_target: string;
+  run_as_admin: boolean | null;
+  hide_on_game: boolean | null;
+  user_message: string;
+};
+
 type ProcessForm = {
   id?: string;
   name: string;
@@ -1627,6 +1639,7 @@ function MainApp() {
   const appInstanceIdRef = React.useRef<string>(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
   const [state, setState] = React.useState<MainState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [editingProcess, setEditingProcess] = React.useState<ProcessRow | 'new' | null>(null);
   const [editingShortcut, setEditingShortcut] = React.useState<WebShortcut | 'new' | null>(null);
@@ -1636,6 +1649,7 @@ function MainApp() {
   const isTauri = isTauriRuntime();
 
   const handleError = React.useCallback((e: any) => {
+    setMessage(null);
     if (e instanceof BeholderIncidentError) {
       setBeholderIncident(e.incident);
       if (isTauri) getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => undefined);
@@ -1689,7 +1703,8 @@ function MainApp() {
   const launch = async (process: ProcessRow) => {
     setBusyId(process.id);
     try {
-      await fetchJson(`/api/gui/processes/${process.id}/launch`, { method: 'POST' });
+      const result = await fetchJson<LaunchResult>(`/api/gui/processes/${process.id}/launch`, { method: 'POST' });
+      setMessage(`${result.user_message} 대상: ${result.launch_target}${result.run_as_admin ? ' · 관리자 권한' : ''}`);
       if (isTauri && state?.settings.hide_on_game) {
         getCurrentWindow().hide().catch(() => undefined);
       }
@@ -1877,6 +1892,7 @@ function MainApp() {
       </header>
 
       {error && <div className="error">API 오류: {error}</div>}
+      {message && <div className="notice">{message}</div>}
 
       {state.web_shortcuts.length > 0 && (
         <section className="shortcut-card" aria-label="웹 바로가기">
