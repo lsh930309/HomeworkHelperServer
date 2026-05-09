@@ -103,6 +103,17 @@ certs/.thumbprint
 node_modules/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+.npm-cache/
+
+# Test/coverage/tool caches
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+playwright-report/
+test-results/
 
 # Tauri generated files
 src-tauri/gen/
