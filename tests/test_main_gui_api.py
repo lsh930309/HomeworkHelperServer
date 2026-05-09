@@ -272,6 +272,7 @@ def test_gui_web_shortcut_crud_and_open_refresh_state(monkeypatch):
     )
     assert updated.status_code == 200
     assert updated.json()["state"] == "default"
+    assert updated.json()["last_reset_timestamp"] == opened.json()["last_reset_timestamp"]
 
     deleted = client.delete(f"/api/gui/web-shortcuts/{shortcut_id}")
     assert deleted.status_code == 200

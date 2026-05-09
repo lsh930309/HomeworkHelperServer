@@ -62,7 +62,8 @@
       "automated_tests": [
         "test_gui_process_crud_reuses_backend_models",
         "test_delete_process_with_open_session_offers_safe_cleanup_action",
-        "test_process_crud_writes_snapshot_and_preserves_data_contract"
+        "test_process_crud_writes_snapshot_and_preserves_data_contract",
+        "test_process_editor_cannot_mutate_runtime_fields"
       ],
       "manual_smoke": [
         "PyQt에서 게임 추가/편집/삭제",
@@ -109,7 +110,8 @@
       "data_risk": "high",
       "automated_tests": [
         "test_gui_web_shortcut_crud_and_open_refresh_state",
-        "test_web_shortcut_open_uses_guarded_crud_path"
+        "test_web_shortcut_open_uses_guarded_crud_path",
+        "test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp"
       ],
       "manual_smoke": [
         "웹 버튼 클릭 시 브라우저 열림",
@@ -385,7 +387,9 @@
         "test_real_appdata_beholder_detects_legacy_open_sessions",
         "test_delete_process_with_open_session_offers_safe_cleanup_action",
         "test_new_gui_beholder_restore_uses_preview_before_restore",
-        "test_beholder_payload_explains_risks_and_action_outcomes"
+        "test_beholder_payload_explains_risks_and_action_outcomes",
+        "test_process_editor_cannot_mutate_runtime_fields",
+        "test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp"
       ],
       "manual_smoke": [
         "PyQt incident dialog",

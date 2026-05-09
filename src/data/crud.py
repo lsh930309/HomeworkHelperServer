@@ -60,13 +60,14 @@ def create_process(
     process_data = _dump_schema(process)
     provided_id = process_data.pop('id', None)
     process_id = provided_id if provided_id else str(uuid.uuid4())
+    guard_columns = {key for key, value in process_data.items() if key in beholder.PROCESS_EDITOR_FIELDS or value is not None} | {"id"}
     _guard_write(
         db,
         table=beholder.MANAGED_PROCESSES_TABLE,
-        columns=set(process_data) | {"id"},
+        columns=guard_columns,
         actor=actor,
         operation_kind=operation_kind,
-        allowed_fields=beholder.PROCESS_FIELDS,
+        allowed_fields=beholder.PROCESS_EDITOR_FIELDS,
         context={"process_id": process_id, "process_name": process_data.get("name")},
         override_token=override_token,
     )
@@ -122,7 +123,7 @@ def update_process(
             columns=changed,
             actor=actor,
             operation_kind=operation_kind,
-            allowed_fields=beholder.PROCESS_FIELDS - {"id"},
+            allowed_fields=beholder.PROCESS_EDITOR_FIELDS - {"id"},
             context={"process_id": process_id, "process_name": getattr(db_process, "name", None)},
             override_token=override_token,
         )
@@ -236,10 +237,10 @@ def create_shortcut(
     _guard_write(
         db,
         table=beholder.WEB_SHORTCUTS_TABLE,
-        columns=set(shortcut_data) | {"id"},
+        columns={key for key, value in shortcut_data.items() if key in beholder.WEB_SHORTCUT_EDITOR_FIELDS or value is not None} | {"id"},
         actor=actor,
         operation_kind=operation_kind,
-        allowed_fields=beholder.WEB_SHORTCUT_FIELDS,
+        allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS,
         context={"shortcut_id": shortcut_id, "shortcut_name": shortcut_data.get("name")},
         override_token=override_token,
     )
@@ -270,7 +271,7 @@ def update_shortcut(
             columns=changed,
             actor=actor,
             operation_kind=operation_kind,
-            allowed_fields=beholder.WEB_SHORTCUT_FIELDS - {"id"},
+            allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS - {"id"},
             context={"shortcut_id": shortcut_id, "shortcut_name": getattr(db_shortcut, "name", None)},
             override_token=override_token,
         )
@@ -299,7 +300,7 @@ def delete_shortcut(
             columns={"id"},
             actor=actor,
             operation_kind=operation_kind,
-            allowed_fields=beholder.WEB_SHORTCUT_FIELDS,
+            allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS,
             context={"shortcut_id": shortcut_id, "shortcut_name": db_shortcut.name},
             override_token=override_token,
         )

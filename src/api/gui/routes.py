@@ -619,8 +619,6 @@ def update_web_shortcut(
 ) -> dict[str, Any]:
     _validate_url(shortcut_data.url)
     shortcut_data.refresh_time_str = _validate_time_or_none(shortcut_data.refresh_time_str, "refresh_time_str")
-    if not shortcut_data.refresh_time_str:
-        shortcut_data.last_reset_timestamp = None
     shortcut = crud.update_shortcut(db, shortcut_id, shortcut_data)
     if shortcut is None:
         raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")

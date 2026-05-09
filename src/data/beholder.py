@@ -34,6 +34,10 @@ PROCESS_SESSIONS_TABLE = "process_sessions"
 PROCESS_FIELDS = {column.name for column in models.Process.__table__.columns}
 WEB_SHORTCUT_FIELDS = {column.name for column in models.WebShortcut.__table__.columns}
 SESSION_FIELDS = {column.name for column in models.ProcessSession.__table__.columns}
+PROCESS_RUNTIME_FIELDS = {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}
+PROCESS_EDITOR_FIELDS = PROCESS_FIELDS - PROCESS_RUNTIME_FIELDS
+WEB_SHORTCUT_RUNTIME_FIELDS = {"last_reset_timestamp"}
+WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
 
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
@@ -160,6 +164,11 @@ def _user_friendly_risk_label(factor: str) -> str:
     return {
         "unauthorized_table_write": "정상 화면 밖 데이터 변경",
         "unauthorized_column_write": "현재 화면에서 바꿀 수 없는 항목 포함",
+        "last_played_timestamp": "마지막 플레이 시각 변경",
+        "stamina_current": "현재 스태미나 변경",
+        "stamina_max": "최대 스태미나 변경",
+        "stamina_updated_at": "스태미나 갱신 시각 변경",
+        "last_reset_timestamp": "웹 바로가기 완료 시각 변경",
         "bulk_settings_default_regression": "대량 설정 초기화 의심",
         "personalized_settings_default_regression": "개인화 설정 초기화 의심",
         "duplicate_open_session": "열린 플레이 기록 중복",

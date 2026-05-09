@@ -365,6 +365,79 @@ def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatc
     assert unchanged.stamina_at_end == 10
 
 
+def test_process_editor_cannot_mutate_runtime_fields(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="game-runtime",
+        name="Runtime Game",
+        monitoring_path="C:/Games/Runtime.exe",
+        launch_path="C:/Games/Runtime.lnk",
+    ))
+    crud.update_process_runtime_state(
+        db,
+        process.id,
+        last_played_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+    )
+
+    try:
+        crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+            name="Runtime Game",
+            monitoring_path="C:/Games/Runtime.exe",
+            launch_path="C:/Games/Runtime.lnk",
+            last_played_timestamp=dt.datetime(2026, 5, 9, 12, 0).timestamp(),
+        ))
+        assert False, "editor updates must not mutate runtime-owned process fields"
+    except beholder.BeholderBlocked as exc:
+        assert "unauthorized_column_write" in exc.incident.risk_factors
+        assert "last_played_timestamp" in exc.incident.risk_factors
+
+    db.expire_all()
+    unchanged = db.query(models.Process).filter_by(id=process.id).one()
+    assert unchanged.last_played_timestamp == dt.datetime(2026, 5, 8, 12, 0).timestamp()
+
+
+def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    shortcut = crud.create_shortcut(db, schemas.WebShortcutCreate(
+        id="daily-check",
+        name="Daily Check",
+        url="https://example.test",
+        refresh_time_str="05:00",
+    ))
+    opened_at = dt.datetime(2026, 5, 8, 12, 0).timestamp()
+    crud.mark_shortcut_opened(db, shortcut.id, opened_at)
+
+    edited = crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
+        name="Daily Check 2",
+        url="https://example.test/2",
+        refresh_time_str=None,
+    ))
+    assert edited.refresh_time_str is None
+    assert edited.last_reset_timestamp == opened_at
+
+    try:
+        crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
+            name="Daily Check 2",
+            url="https://example.test/2",
+            refresh_time_str=None,
+            last_reset_timestamp=None,
+        ))
+        assert False, "editor updates must not mutate runtime-owned shortcut fields"
+    except beholder.BeholderBlocked as exc:
+        assert "unauthorized_column_write" in exc.incident.risk_factors
+        assert "last_reset_timestamp" in exc.incident.risk_factors
+
+    db.expire_all()
+    unchanged = db.query(models.WebShortcut).filter_by(id=shortcut.id).one()
+    assert unchanged.last_reset_timestamp == opened_at
+
+
 def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()

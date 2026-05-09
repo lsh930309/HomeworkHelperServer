@@ -32,6 +32,7 @@
 - [ ] SESSION-001: PC 재부팅/게임 미실행 상황의 open session incident에서 “마지막 앱 실행 시각에 종료”가 동작한다.
 - [ ] SESSION-001: 오래된 legacy open session incident에서 “복구 불가 기록 버리기”가 동작한다.
 - [ ] BEHOLDER-001: PyQt와 새 GUI 모두 incident를 표시하고, 새 GUI에서는 추천 액션/결과/위험 신호가 사용자 언어로 보이며 선택 액션을 수행한다.
+- [ ] BEHOLDER-001: 게임/웹 편집 화면 저장 시 런타임 전용 필드(마지막 플레이, 스태미나, 웹 완료 시각)가 임의로 초기화되지 않는다.
 - [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 쿠키 자동 추출/수동 저장/삭제/스태미나 테스트 조회가 동작한다.
 - [ ] HOYOLAB-001: 새 GUI 게임 행 우클릭 “스태미나 새로고침”이 현재 스태미나를 DB/진행률에 반영한다.
