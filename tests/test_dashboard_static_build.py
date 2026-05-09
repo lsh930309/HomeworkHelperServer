@@ -12,6 +12,17 @@ import build
 from src.api.dashboard.static_files import dashboard_static_dir
 
 
+def _css_vars(style: str) -> dict[str, str]:
+    values = {}
+    for line in style.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("--") or ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        values[key] = value.rstrip(";").strip()
+    return values
+
+
 class DummyGui:
     def __init__(self):
         self.messages = []
@@ -157,12 +168,29 @@ def test_new_gui_sends_beholder_runtime_heartbeat():
 
 
 def test_dashboard_style_reuses_new_gui_visual_tokens():
-    style = Path("src/api/dashboard/frontend/src/style.css").read_text(encoding="utf-8")
+    dashboard_style = Path("src/api/dashboard/frontend/src/style.css").read_text(encoding="utf-8")
+    main_gui_style = Path("src/gui/new_gui/frontend/src/style.css").read_text(encoding="utf-8")
+    dashboard_vars = _css_vars(dashboard_style)
+    main_gui_vars = _css_vars(main_gui_style)
 
-    assert "--button-primary" in style
-    assert "NEXON Lv1 Gothic" in style
-    assert "rgba(15, 23, 42, 0.74)" in style
-    assert "border-radius: 18px" in style
+    shared_tokens = [
+        "--hh-bg",
+        "--hh-panel",
+        "--hh-line",
+        "--hh-text",
+        "--hh-muted",
+        "--hh-accent",
+        "--hh-accent-2",
+        "--hh-button-bg",
+        "--hh-button-primary",
+        "--hh-button-border",
+        "--hh-button-radius",
+        "--hh-card-radius",
+    ]
+    for token in shared_tokens:
+        assert dashboard_vars[token] == main_gui_vars[token]
+    assert "NEXON Lv1 Gothic" in dashboard_style
+    assert "var(--hh-card-radius)" in dashboard_style
 
 
 def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
