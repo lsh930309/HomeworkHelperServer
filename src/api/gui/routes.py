@@ -839,6 +839,68 @@ def copy_clipboard_file(request: ClipboardFileRequest) -> dict[str, Any]:
     return payload
 
 
+def _screenshot_gallery_dir(settings: models.GlobalSettings):
+    from pathlib import Path
+
+    configured = getattr(settings, "screenshot_save_dir", "") or ""
+    if configured:
+        return Path(configured).expanduser()
+    from src.screenshot.capture import _DEFAULT_SAVE_DIR
+
+    return Path(_DEFAULT_SAVE_DIR).expanduser()
+
+
+@router.get("/screenshot/gallery")
+def list_screenshot_gallery(limit: int = 6, db: Session = Depends(get_db)) -> dict[str, Any]:
+    from src.utils.clipboard import is_native_file_clipboard_supported
+
+    settings = crud.get_settings(db)
+    gallery_dir = _screenshot_gallery_dir(settings)
+    limit = max(1, min(int(limit or 6), 24))
+    suffixes = {".png", ".jpg", ".jpeg", ".bmp"}
+    files: list[Any] = []
+    if gallery_dir.exists() and gallery_dir.is_dir():
+        files = sorted(
+            [path for path in gallery_dir.iterdir() if path.is_file() and path.suffix.lower() in suffixes],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    items = []
+    for path in files[:limit]:
+        stat = path.stat()
+        items.append({
+            "name": path.name,
+            "path": str(path),
+            "size": stat.st_size,
+            "modified_at": stat.st_mtime,
+            "image_url": f"/api/gui/screenshot/gallery/{path.name}",
+        })
+    return {
+        "enabled": bool(getattr(settings, "screenshot_enabled", True)),
+        "directory": str(gallery_dir),
+        "exists": gallery_dir.exists() and gallery_dir.is_dir(),
+        "total": len(files),
+        "items": items,
+        "native_copy_supported": is_native_file_clipboard_supported(),
+    }
+
+
+@router.get("/screenshot/gallery/{filename}")
+def get_screenshot_gallery_file(filename: str, db: Session = Depends(get_db)):
+    settings = crud.get_settings(db)
+    gallery_dir = _screenshot_gallery_dir(settings)
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name:
+        raise HTTPException(status_code=404, detail="스크린샷 파일을 찾을 수 없습니다.")
+    path = gallery_dir / safe_name
+    if not path.exists() or not path.is_file() or path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp"}:
+        raise HTTPException(status_code=404, detail="스크린샷 파일을 찾을 수 없습니다.")
+    media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    if path.suffix.lower() == ".bmp":
+        media_type = "image/bmp"
+    return FileResponse(path, media_type=media_type)
+
+
 @router.get("/screenshot/vk/{vk}")
 def get_screenshot_vk_name(vk: int) -> dict[str, Any]:
     from src.screenshot.key_capture import is_key_capture_supported, vk_to_display_name

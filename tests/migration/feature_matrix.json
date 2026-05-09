@@ -190,7 +190,8 @@
       "automated_tests": [
         "test_gui_settings_patch_preserves_sidebar_detail_fields",
         "test_pyqt_full_settings_update_preserves_custom_global_settings",
-        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields"
+        "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
+        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images"
       ],
       "manual_smoke": [
         "게임 실행 시 사이드바 활성화",
@@ -332,7 +333,8 @@
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
         "test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability",
         "test_gui_screenshot_capture_key_rejects_unsupported_environment",
-        "test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key"
+        "test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key",
+        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images"
       ],
       "manual_smoke": [
         "새 GUI 키 입력 캡처로 트리거 키 변경 후 저장",
@@ -471,7 +473,8 @@
         "test_build_file_clipboard_mime_data_adds_image_payload_for_images",
         "test_build_hdrop_payload_uses_double_null_terminated_utf16_path",
         "test_gui_clipboard_file_payload_describes_existing_utility",
-        "test_gui_clipboard_copy_file_rejects_unsupported_environment"
+        "test_gui_clipboard_copy_file_rejects_unsupported_environment",
+        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images"
       ],
       "manual_smoke": [
         "새 GUI/API에서 스크린샷 파일 클립보드 복사 후 탐색기/채팅창 붙여넣기"

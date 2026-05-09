@@ -670,6 +670,56 @@ footer { margin-top: 8px; }
   background: rgba(127, 29, 29, 0.24);
 }
 
+.gallery-card {
+  display: grid;
+  gap: 8px;
+}
+
+.screenshot-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.screenshot-thumb {
+  position: relative;
+  min-height: 50px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.5);
+}
+
+.screenshot-thumb img {
+  display: block;
+  width: 100%;
+  height: 58px;
+  object-fit: cover;
+}
+
+.thumb-copy {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 3px 5px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #dbeafe;
+  font-size: 10px;
+}
+
+.thumb-copy:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.gallery-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .drawer-foot {
   margin-top: 12px;
   align-items: flex-start;

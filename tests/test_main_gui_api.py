@@ -626,6 +626,36 @@ def test_gui_clipboard_copy_file_rejects_unsupported_environment(monkeypatch, tm
     assert response.status_code == 503
 
 
+def test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images(monkeypatch, tmp_path):
+    client = _client_with_seed(monkeypatch)
+    shot_dir = tmp_path / "shots"
+    shot_dir.mkdir()
+    older = shot_dir / "old.png"
+    newer = shot_dir / "new.png"
+    older.write_bytes(b"\x89PNG\r\n\x1a\nold")
+    newer.write_bytes(b"\x89PNG\r\n\x1a\nnew")
+    os.utime(older, (_ts("2026-05-08 10:00"), _ts("2026-05-08 10:00")))
+    os.utime(newer, (_ts("2026-05-08 11:00"), _ts("2026-05-08 11:00")))
+
+    patched = client.patch("/api/gui/settings", json={"screenshot_save_dir": str(shot_dir)})
+    assert patched.status_code == 200
+
+    gallery = client.get("/api/gui/screenshot/gallery?limit=1")
+
+    assert gallery.status_code == 200
+    body = gallery.json()
+    assert body["exists"] is True
+    assert body["total"] == 2
+    assert body["items"][0]["name"] == "new.png"
+    assert body["items"][0]["path"] == str(newer)
+    assert body["items"][0]["image_url"] == "/api/gui/screenshot/gallery/new.png"
+
+    image = client.get("/api/gui/screenshot/gallery/new.png")
+    assert image.status_code == 200
+    assert image.content.startswith(b"\x89PNG")
+    assert client.get("/api/gui/screenshot/gallery/../new.png").status_code == 404
+
+
 def test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability(monkeypatch):
     client = _client_with_seed(monkeypatch)
 

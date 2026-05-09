@@ -165,6 +165,23 @@ type MainState = {
   dashboard_url: string;
 };
 
+type ScreenshotGalleryItem = {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: number;
+  image_url: string;
+};
+
+type ScreenshotGallery = {
+  enabled: boolean;
+  directory: string;
+  exists: boolean;
+  total: number;
+  items: ScreenshotGalleryItem[];
+  native_copy_supported: boolean;
+};
+
 type ProcessForm = {
   id?: string;
   name: string;
@@ -1202,10 +1219,12 @@ function formatPlaytime(timestamp?: number | null) {
 
 function SidebarApp() {
   const [state, setState] = React.useState<MainState | null>(null);
+  const [gallery, setGallery] = React.useState<ScreenshotGallery | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState(false);
   const [pinned, setPinned] = React.useState(false);
   const [hoveringControls, setHoveringControls] = React.useState(false);
+  const [copyingPath, setCopyingPath] = React.useState<string | null>(null);
   const [clock, setClock] = React.useState(() => new Date());
   const hideTimerRef = React.useRef<number | null>(null);
   const isTauri = isTauriRuntime();
@@ -1231,6 +1250,16 @@ function SidebarApp() {
       .catch((e: any) => setError(e.message || String(e)));
   }, []);
 
+  const loadGallery = React.useCallback(() => {
+    if (!screenshotEnabled) {
+      setGallery(null);
+      return;
+    }
+    fetchJson<ScreenshotGallery>('/api/gui/screenshot/gallery?limit=5')
+      .then(setGallery)
+      .catch(() => setGallery(null));
+  }, [screenshotEnabled]);
+
   React.useEffect(() => {
     load();
     const id = window.setInterval(load, 1000);
@@ -1240,6 +1269,16 @@ function SidebarApp() {
       window.clearInterval(clockId);
     };
   }, [load]);
+
+  React.useEffect(() => {
+    if (!screenshotEnabled || !(open || pinned)) {
+      setGallery(null);
+      return;
+    }
+    loadGallery();
+    const id = window.setInterval(loadGallery, 5000);
+    return () => window.clearInterval(id);
+  }, [loadGallery, open, pinned, screenshotEnabled]);
 
   React.useEffect(() => {
     if (!sidebarEnabled) return;
@@ -1284,6 +1323,20 @@ function SidebarApp() {
       setOpen(next || open);
       return next;
     });
+  };
+  const copyScreenshot = async (item: ScreenshotGalleryItem) => {
+    setCopyingPath(item.path);
+    try {
+      await fetchJson('/api/gui/clipboard/copy-file', {
+        method: 'POST',
+        body: JSON.stringify({ path: item.path }),
+      });
+      setError(null);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setCopyingPath(null);
+    }
   };
 
   if (!sidebarEnabled) {
@@ -1360,6 +1413,38 @@ function SidebarApp() {
             <strong>{recordingEnabled ? 'READY' : 'OFF'}</strong>
           </div>
         </div>
+
+        {screenshotEnabled && (
+          <div className="drawer-card gallery-card">
+            <div className="drawer-row">
+              <span>최근 스크린샷</span>
+              <strong>{gallery ? `${gallery.items.length}/${gallery.total}` : '...'}</strong>
+            </div>
+            {!gallery?.exists && <small>스크린샷 폴더가 아직 없거나 비어 있습니다.</small>}
+            {gallery?.exists && gallery.items.length === 0 && <small>최근 스크린샷이 없습니다.</small>}
+            {gallery && gallery.items.length > 0 && (
+              <div className="screenshot-strip">
+                {gallery.items.map((item) => (
+                  <div className="screenshot-thumb" key={item.path} title={item.name}>
+                    <a href={`${API_BASE}${item.image_url}`} target="_blank" rel="noreferrer">
+                      <img src={`${API_BASE}${item.image_url}`} alt={item.name} />
+                    </a>
+                    <button
+                      type="button"
+                      className="thumb-copy"
+                      disabled={!gallery.native_copy_supported || copyingPath === item.path}
+                      onClick={() => copyScreenshot(item)}
+                      title={gallery.native_copy_supported ? '클립보드에 복사' : '현재 환경에서는 네이티브 복사를 사용할 수 없습니다'}
+                    >
+                      {copyingPath === item.path ? '...' : '복사'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <small className="gallery-path">{gallery?.directory || '스크린샷 저장 폴더를 확인 중입니다.'}</small>
+          </div>
+        )}
 
         <footer className="drawer-foot">
           <span>hover/click으로 열기 · Esc로 닫기</span>
