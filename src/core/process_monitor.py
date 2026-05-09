@@ -321,7 +321,7 @@ class ProcessMonitor:
                 process.stamina_current = actual_current
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = stamina.updated_at.timestamp()
-                self.data_manager.update_process(process)
+                self.data_manager.update_process_runtime_state(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
                 return
@@ -370,7 +370,7 @@ class ProcessMonitor:
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
             process.stamina_updated_at = stamina.updated_at.timestamp()
-            self.data_manager.update_process(process)
+            self.data_manager.update_process_runtime_state(process)
             _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 
         except Exception as e:

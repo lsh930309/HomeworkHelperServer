@@ -416,6 +416,7 @@ class ApiClient:
             response = requests.patch(
                 f"{self.base_url}/sessions/{session_id}/stamina",
                 params={"stamina_at_end": stamina_at_end},
+                headers={"X-HH-Beholder-Actor": "hoyolab_slow_followup", "X-HH-Beholder-Operation": "hoyolab_session_stamina_rewrite"},
                 timeout=10
             )
             self._raise_for_status(response)

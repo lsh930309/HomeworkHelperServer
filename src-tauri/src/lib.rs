@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -70,7 +71,20 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 fn backend_is_ready() -> bool {
-    TcpStream::connect((BACKEND_HOST, BACKEND_PORT)).is_ok()
+    let Ok(mut stream) = TcpStream::connect((BACKEND_HOST, BACKEND_PORT)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
+    let request = b"GET /api/gui/main-state HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.starts_with("HTTP/1.1 200") && response.contains("\"settings\"") && response.contains("\"processes\"")
 }
 
 fn wait_for_backend(timeout: Duration) -> bool {
@@ -109,9 +123,15 @@ fn spawn_packaged_backend_if_needed() -> Option<Child> {
     command.creation_flags(CREATE_NO_WINDOW);
 
     match command.spawn() {
-        Ok(child) => {
-            let _ = wait_for_backend(Duration::from_secs(10));
-            Some(child)
+        Ok(mut child) => {
+            if wait_for_backend(Duration::from_secs(10)) {
+                Some(child)
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("packaged HomeworkHelper backend did not become ready within 10 seconds");
+                None
+            }
         }
         Err(error) => {
             eprintln!("failed to spawn packaged HomeworkHelper backend: {error}");

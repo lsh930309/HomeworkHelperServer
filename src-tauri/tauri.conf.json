@@ -22,7 +22,7 @@
         "fullscreen": false,
         "center": true,
         "visible": true,
-        "decorations": true,
+        "decorations": false,
         "alwaysOnTop": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
@@ -55,7 +55,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -69,7 +69,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -83,7 +83,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -97,7 +97,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -111,7 +111,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -125,7 +125,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -139,7 +139,7 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       },
@@ -153,13 +153,13 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "decorations": true,
+        "decorations": false,
         "backgroundColor": "#0b1120",
         "zoomHotkeysEnabled": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8000; img-src 'self' asset: http://asset.localhost blob: data: https://github.githubassets.com; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' asset: http://asset.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

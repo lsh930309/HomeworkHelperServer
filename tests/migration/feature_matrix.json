@@ -130,7 +130,7 @@
       "category": "settings",
       "pyqt_status": "complete",
       "new_gui_status": "complete",
-      "api_or_boundary": "src/api/gui/routes.py, DataManager.save_global_settings, src/gui/new_gui/frontend settings popup windows",
+      "api_or_boundary": "src/api/gui/routes.py, DataManager.save_global_settings, src/gui/new_gui/frontend single settings popup",
       "data_owned": [
         "global_settings.theme",
         "global_settings.always_on_top",
@@ -156,7 +156,7 @@
         "PyQt 전역 설정 저장",
         "새 GUI 설정 저장",
         "권한 재시작 적용",
-        "새 GUI 설정 패널별 별도 popup과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음"
+        "새 GUI 설정 단일 popup 안에서 탭 전환 시 창 재생성 없이 콘텐츠/창 크기만 갱신되고 가로/세로 스크롤바 없음"
       ]
     },
     {
@@ -204,7 +204,11 @@
         "엣지 트리거/자동 숨김",
         "볼륨 패널 조작",
         "시계/플레이타임 표시",
-        "새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정"
+        "새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정",
+        "새 GUI preview 스마트 서랍 손잡이가 닫힘 상태에서 얇고 비침 상태이며 hover/click 시 열림",
+        "새 GUI preview 볼륨 섹션이 등록 앱별 기본 음량 목록을 표시",
+        "새 GUI preview 스크린샷/녹화 갤러리가 동일한 썸네일 grid 구조와 우클릭 보조 동작을 제공",
+        "새 GUI preview 녹화 갤러리가 video metadata 썸네일을 표시"
       ]
     },
     {
@@ -324,7 +328,8 @@
         "새 GUI 설정 HoYoLab 탭에서 수동 쿠키 저장/삭제",
         "새 GUI 설정 HoYoLab 탭에서 스태미나 테스트 조회",
         "새 GUI 게임 행 우클릭 스태미나 새로고침이 managed_processes.stamina_*에 반영",
-        "PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화"
+        "PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화",
+        "HoYoLab 지연 반영 재확인/수동 새로고침은 Beholder가 정상 actor로 인식"
       ]
     },
     {
@@ -351,7 +356,7 @@
         "새 GUI 키 입력 캡처로 트리거 키 변경 후 저장",
         "게임 중 스크린샷 저장",
         "저장 폴더 변경",
-        "전체화면/window capture mode"
+        "전체화면/포커스된 게임 창 capture mode"
       ]
     },
     {
@@ -378,7 +383,8 @@
         "새 GUI OBS 설정 불러오기 후 저장",
         "OBS 자동 실행",
         "녹화 시작/중지",
-        "사이드바 녹화 상태 표시"
+        "사이드바 녹화 상태 표시",
+        "새 GUI OBS 설정 불러오기는 비밀번호 존재 여부만 표시하고 평문 비밀번호를 다시 노출하지 않음"
       ]
     },
     {
@@ -413,7 +419,9 @@
         "test_beholder_payload_localizes_invalid_value_risks",
         "test_beholder_payload_localizes_session_end_risks",
         "test_end_session_blocks_negative_stamina_and_keeps_session_open",
-        "test_ui_and_api_routes_do_not_commit_database_directly"
+        "test_ui_and_api_routes_do_not_commit_database_directly",
+        "test_beholder_rejects_resolving_non_pending_incidents",
+        "test_hoyolab_followup_session_stamina_rewrite_is_allowed"
       ],
       "manual_smoke": [
         "PyQt incident dialog",
@@ -469,13 +477,15 @@
         "test_build_main_gui_frontend_writes_only_ignored_build_dirs",
         "test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir",
         "test_build_and_stage_new_gui_shell_by_default",
-        "test_verify_project_builds_all_frontend_migration_surfaces"
+        "test_verify_project_builds_all_frontend_migration_surfaces",
+        "test_build_gui_mode_controls_user_entrypoint_and_shell_steps"
       ],
       "manual_smoke": [
         "python build.py 전체 실행",
         "installer 설치/업데이트",
-        "기본 바로가기 PyQt 확인",
-        "새 GUI 미리보기 바로가기 확인"
+        "build.py 시작 시 GUI 모드 선택이 버전 선택보다 먼저 표시됨",
+        "legacy GUI 모드 패키지는 PyQt 진입점만 노출",
+        "new GUI 모드 패키지는 Tauri/React 진입점만 노출"
       ]
     },
     {

@@ -1,12 +1,18 @@
+import atexit
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-_TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
+_TEST_HOME = os.environ.get("HOMEWORKHELPER_TEST_HOME")
+if not _TEST_HOME:
+    _TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
+    os.environ["HOMEWORKHELPER_TEST_HOME"] = _TEST_HOME
+    atexit.register(lambda: shutil.rmtree(_TEST_HOME, ignore_errors=True))
 os.environ["HOME"] = _TEST_HOME
-os.environ.setdefault("APPDATA", str(Path(_TEST_HOME) / "AppData" / "Roaming"))
+os.environ["APPDATA"] = str(Path(_TEST_HOME) / "AppData" / "Roaming")
 
 import build
 from src.api.dashboard.static_files import dashboard_static_dir
@@ -213,16 +219,22 @@ def test_build_and_stage_new_gui_shell_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(build, "APP_FOLDER", app_folder)
     monkeypatch.setattr(build.shutil, "which", lambda name: "/usr/bin/npm")
 
+    seen_cmds = []
+
     def fake_run(cmd, cwd, **kwargs):
         assert cwd == project_root
-        assert cmd[-2:] == ["--", "--no-bundle"]
-        shell_source.parent.mkdir(parents=True)
-        shell_source.write_bytes(b"tauri shell")
+        seen_cmds.append(cmd)
+        if cmd[:2] == ["/usr/bin/npm", "run"]:
+            assert cmd[-2:] == ["--", "--no-bundle"]
+            shell_source.parent.mkdir(parents=True)
+            shell_source.write_bytes(b"tauri shell")
         return subprocess.CompletedProcess(cmd, 0, stdout="ok")
 
     monkeypatch.setattr(build.subprocess, "run", fake_run)
 
     assert build.build_new_gui_shell(DummyGui()) is True
+    assert seen_cmds[0][:2] in (["/usr/bin/npm", "ci"], ["/usr/bin/npm", "install"])
+    assert seen_cmds[-1][:3] == ["/usr/bin/npm", "run", "tauri:build"]
     assert build.stage_new_gui_shell(DummyGui()) is True
     assert (app_folder / build.TAURI_SHELL_DIST_NAME).read_bytes() == b"tauri shell"
     assert app_folder / build.TAURI_SHELL_DIST_NAME in build.code_sign_targets()
@@ -236,7 +248,8 @@ def test_pyinstaller_spec_excludes_new_gui_frontend_source_tree():
 def test_installer_has_new_gui_preview_shortcut_and_shutdown_guard():
     installer = Path("installer.iss").read_text(encoding="utf-8")
     assert "#define HasNewGuiShell FileExists" in installer
-    assert "{#MyAppName} 새 GUI 미리보기" in installer
+    assert '#define BuildGuiMode' in installer
+    assert "{#MyNewGuiExeName}" in installer
     assert "taskkill', '/F /IM homework_helper_gui.exe" in installer
 
 
@@ -257,3 +270,36 @@ def test_packaged_server_allows_tauri_http_origin_for_preview_shell():
     entrypoint = Path("homework_helper.pyw").read_text(encoding="utf-8")
     assert '"http://tauri.localhost"' in entrypoint
     assert '"tauri://localhost"' in entrypoint
+
+
+def test_build_gui_mode_controls_user_entrypoint_and_shell_steps(monkeypatch, tmp_path):
+    calls = []
+    class Gui(DummyGui):
+        def show_complete(self, *args, **kwargs):
+            self.messages.append(("complete", args, kwargs))
+
+    gui = Gui()
+    monkeypatch.setattr(build, "archive_old_files", lambda *args: calls.append("archive") or True)
+    monkeypatch.setattr(build, "clean_build_artifacts", lambda *args: calls.append("clean") or True)
+    monkeypatch.setattr(build, "build_dashboard_frontend", lambda *args: calls.append("dashboard") or True)
+    monkeypatch.setattr(build, "build_main_gui_frontend", lambda *args: calls.append("main_gui") or True)
+    monkeypatch.setattr(build, "build_new_gui_shell", lambda *args: calls.append("tauri") or True)
+    monkeypatch.setattr(build, "build_with_pyinstaller", lambda *args: calls.append("pyinstaller") or True)
+    monkeypatch.setattr(build, "stage_new_gui_shell", lambda *args: calls.append("stage_tauri") or True)
+    monkeypatch.setattr(build, "sign_build_artifacts", lambda *args, **kwargs: calls.append(("sign", kwargs.get("target_files"))) or True)
+    monkeypatch.setattr(build, "create_zip_distribution", lambda *args: calls.append("zip") or True)
+    monkeypatch.setattr(build, "create_installer", lambda *args: calls.append(("installer", args[-1] if len(args) > 2 else None)) or True)
+    monkeypatch.setattr(build, "print_summary", lambda *args: calls.append("summary"))
+    monkeypatch.setattr(build.subprocess, "Popen", lambda *args, **kwargs: calls.append("explorer"))
+
+    build.run_build_process(gui, {"string": "v1.2.3.1"}, gui_mode="legacy")
+    import time
+    for _ in range(50):
+        if "summary" in calls:
+            break
+        time.sleep(0.02)
+
+    assert "main_gui" not in calls
+    assert "tauri" not in calls
+    assert "stage_tauri" not in calls
+    assert ("installer", "legacy") in calls

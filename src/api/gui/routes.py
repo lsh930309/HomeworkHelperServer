@@ -10,7 +10,10 @@ from __future__ import annotations
 import datetime as dt
 import os
 import re
+import sys
+import threading
 import time
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -139,9 +142,10 @@ class HoYoLabStaminaRequest(BaseModel):
 
 class ObsConfigPayload(BaseModel):
     port: int
-    password: str
+    password: str = ""
     output_dir: str
     exe_path: str
+    has_password: bool = False
 
 
 class ScreenshotKeyCaptureRequest(BaseModel):
@@ -196,7 +200,7 @@ def _normalize_settings_patch(data: dict[str, Any]) -> dict[str, Any]:
             data[field] = _validate_time_or_none(data[field], field) or "00:00"
     if "theme" in data and data["theme"] not in {"system", "light", "dark"}:
         raise HTTPException(status_code=422, detail="theme 값이 올바르지 않습니다.")
-    if "screenshot_capture_mode" in data and data["screenshot_capture_mode"] not in {"fullscreen", "game_window", "window"}:
+    if "screenshot_capture_mode" in data and data["screenshot_capture_mode"] not in {"fullscreen", "game_window"}:
         raise HTTPException(status_code=422, detail="screenshot_capture_mode 값이 올바르지 않습니다.")
 
     _validate_number_range(data, "sleep_correction_advance_notify_hours", 0, 5)
@@ -596,6 +600,8 @@ def _process_to_gui_row(process: models.Process, status: str, now_dt: dt.datetim
         "stamina_current": process.stamina_current,
         "stamina_max": process.stamina_max,
         "stamina_updated_at": process.stamina_updated_at,
+        "default_volume": process.default_volume,
+        "default_muted": bool(process.default_muted),
         "status": status,
         "progress": _progress(process, now_dt),
         "icon_url": f"/api/dashboard/icons/{process.id}?size=128",
@@ -896,13 +902,39 @@ def patch_settings(settings_patch: SettingsPatch, db: Session = Depends(get_db))
     return body
 
 
+
+
+def _restart_packaged_preview_shell(want_admin: bool) -> bool | None:
+    if os.name != "nt" or "--run-server" not in sys.argv:
+        return None
+    from pathlib import Path
+
+    gui_exe = Path(sys.executable).with_name("homework_helper_gui.exe")
+    if not gui_exe.exists():
+        return None
+    try:
+        import ctypes
+
+        operation = "runas" if want_admin else "open"
+        result = ctypes.windll.shell32.ShellExecuteW(None, operation, str(gui_exe), None, str(gui_exe.parent), 1)
+        if int(result) <= 32:
+            return False
+        threading.Timer(0.8, lambda: os._exit(0)).start()
+        return True
+    except Exception:
+        return False
+
 @router.post("/settings/apply-privilege")
 def apply_privilege_setting(db: Session = Depends(get_db)) -> dict[str, Any]:
     settings = crud.get_settings(db)
     want_admin = bool(settings.run_as_admin)
     currently_admin = bool(is_admin())
 
-    if want_admin and not currently_admin:
+    preview_restart = _restart_packaged_preview_shell(want_admin)
+    if preview_restart is not None:
+        requested = bool(preview_restart)
+        action = "restart_new_gui_preview"
+    elif want_admin and not currently_admin:
         requested = bool(run_as_admin())
         action = "run_as_admin"
     elif not want_admin and currently_admin:
@@ -1011,6 +1043,8 @@ def get_hoyolab_stamina(request: HoYoLabStaminaRequest, db: Session = Depends(ge
         process = crud.get_process_by_id(db, request.process_id)
         if process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        if process.hoyolab_game_id != request.game_id:
+            raise HTTPException(status_code=422, detail="선택한 게임의 HoYoLab 설정과 조회 대상이 일치하지 않습니다.")
         updated = crud.update_process_stamina(
             db,
             process.id,
@@ -1031,16 +1065,15 @@ def read_recording_obs_config() -> dict[str, Any]:
     cfg = read_obs_config()
     payload = ObsConfigPayload(
         port=int(cfg.get("port") or 4455),
-        password=str(cfg.get("password") or ""),
+        password="",
         output_dir=str(cfg.get("output_dir") or ""),
         exe_path=str(cfg.get("exe_path") or ""),
+        has_password=bool(cfg.get("password")),
     )
     return _dump_model(payload)
 
 
-def _recording_gallery_dir(settings: models.GlobalSettings):
-    from pathlib import Path
-
+def _recording_gallery_dir(settings: models.GlobalSettings) -> Path | None:
     configured = getattr(settings, "obs_recording_output_dir", "") or ""
     if configured:
         return Path(configured).expanduser()
@@ -1052,7 +1085,23 @@ def _recording_gallery_dir(settings: models.GlobalSettings):
             return Path(detected).expanduser()
     except Exception:
         pass
-    return Path("")
+    return None
+
+
+def _validate_gallery_file(filename: str, gallery_dir: Path | None, suffixes: set[str], missing_detail: str) -> Path:
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name or gallery_dir is None:
+        raise HTTPException(status_code=404, detail=missing_detail)
+    try:
+        root = gallery_dir.resolve(strict=True)
+        path = (gallery_dir / safe_name).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file() or path.suffix.lower() not in suffixes:
+            raise HTTPException(status_code=404, detail=missing_detail)
+        return path
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=missing_detail) from exc
 
 
 @router.get("/recording/gallery")
@@ -1062,7 +1111,7 @@ def list_recording_gallery(limit: int = 5, db: Session = Depends(get_db)) -> dic
     limit = max(1, min(int(limit or 5), 24))
     suffixes = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
     files: list[Any] = []
-    if str(gallery_dir) and gallery_dir.exists() and gallery_dir.is_dir():
+    if gallery_dir and gallery_dir.exists() and gallery_dir.is_dir():
         files = sorted(
             [path for path in gallery_dir.iterdir() if path.is_file() and path.suffix.lower() in suffixes],
             key=lambda path: path.stat().st_mtime,
@@ -1080,8 +1129,8 @@ def list_recording_gallery(limit: int = 5, db: Session = Depends(get_db)) -> dic
         })
     return {
         "enabled": bool(getattr(settings, "recording_enabled", False)),
-        "directory": str(gallery_dir),
-        "exists": bool(str(gallery_dir) and gallery_dir.exists() and gallery_dir.is_dir()),
+        "directory": str(gallery_dir) if gallery_dir else "",
+        "exists": bool(gallery_dir and gallery_dir.exists() and gallery_dir.is_dir()),
         "total": len(files),
         "items": items,
     }
@@ -1091,13 +1140,8 @@ def list_recording_gallery(limit: int = 5, db: Session = Depends(get_db)) -> dic
 def get_recording_gallery_file(filename: str, db: Session = Depends(get_db)):
     settings = crud.get_settings(db)
     gallery_dir = _recording_gallery_dir(settings)
-    safe_name = os.path.basename(filename)
-    if safe_name != filename or not safe_name or not str(gallery_dir):
-        raise HTTPException(status_code=404, detail="녹화 파일을 찾을 수 없습니다.")
-    path = gallery_dir / safe_name
     suffixes = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in suffixes:
-        raise HTTPException(status_code=404, detail="녹화 파일을 찾을 수 없습니다.")
+    path = _validate_gallery_file(filename, gallery_dir, suffixes, "녹화 파일을 찾을 수 없습니다.")
     media_type = {
         ".mp4": "video/mp4",
         ".webm": "video/webm",
@@ -1183,12 +1227,7 @@ def list_screenshot_gallery(limit: int = 6, db: Session = Depends(get_db)) -> di
 def get_screenshot_gallery_file(filename: str, db: Session = Depends(get_db)):
     settings = crud.get_settings(db)
     gallery_dir = _screenshot_gallery_dir(settings)
-    safe_name = os.path.basename(filename)
-    if safe_name != filename or not safe_name:
-        raise HTTPException(status_code=404, detail="스크린샷 파일을 찾을 수 없습니다.")
-    path = gallery_dir / safe_name
-    if not path.exists() or not path.is_file() or path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp"}:
-        raise HTTPException(status_code=404, detail="스크린샷 파일을 찾을 수 없습니다.")
+    path = _validate_gallery_file(filename, gallery_dir, {".png", ".jpg", ".jpeg", ".bmp"}, "스크린샷 파일을 찾을 수 없습니다.")
     media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
     if path.suffix.lower() == ".bmp":
         media_type = "image/bmp"

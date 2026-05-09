@@ -1146,23 +1146,26 @@ class GlobalSettingsDialog(QDialog):
         self.stamina_threshold_spinbox.setValue(self.current_settings.stamina_notify_threshold)
 
     def get_updated_settings(self) -> GlobalSettings:
-        return GlobalSettings(
-            sleep_start_time_str=self.sleep_start_edit.time().toString("HH:mm"),
-            sleep_end_time_str=self.sleep_end_edit.time().toString("HH:mm"),
-            sleep_correction_advance_notify_hours=self.sleep_correction_hours_spinbox.value(),
-            cycle_deadline_advance_notify_hours=self.cycle_advance_hours_spinbox.value(),
-            run_on_startup=self.run_on_startup_checkbox.isChecked(),
-            always_on_top=self.current_settings.always_on_top,  # 메뉴바 체크박스로 관리
-            run_as_admin=self.run_as_admin_checkbox.isChecked(),
-            notify_on_mandatory_time=self.notify_on_mandatory_time_checkbox.isChecked(),
-            notify_on_cycle_deadline=self.notify_on_cycle_deadline_checkbox.isChecked(),
-            notify_on_sleep_correction=self.notify_on_sleep_correction_checkbox.isChecked(),
-            notify_on_daily_reset=self.notify_on_daily_reset_checkbox.isChecked(),
-            stamina_notify_enabled=self.stamina_notify_checkbox.isChecked(),
-            stamina_notify_threshold=self.stamina_threshold_spinbox.value(),
-            theme='light' if self.theme_light_rb.isChecked() else 'dark' if self.theme_dark_rb.isChecked() else 'system',
-            hide_on_game=self.hide_on_game_checkbox.isChecked(),
-        )
+        # Start from the latest full settings object so fields managed by other
+        # dialogs (sidebar, screenshots, OBS) are preserved when the primary
+        # PyQt settings dialog saves only its visible fields.
+        updated = GlobalSettings.from_dict(self.current_settings.to_dict())
+        updated.sleep_start_time_str = self.sleep_start_edit.time().toString("HH:mm")
+        updated.sleep_end_time_str = self.sleep_end_edit.time().toString("HH:mm")
+        updated.sleep_correction_advance_notify_hours = self.sleep_correction_hours_spinbox.value()
+        updated.cycle_deadline_advance_notify_hours = self.cycle_advance_hours_spinbox.value()
+        updated.run_on_startup = self.run_on_startup_checkbox.isChecked()
+        updated.always_on_top = self.current_settings.always_on_top  # 메뉴바 체크박스로 관리
+        updated.run_as_admin = self.run_as_admin_checkbox.isChecked()
+        updated.notify_on_mandatory_time = self.notify_on_mandatory_time_checkbox.isChecked()
+        updated.notify_on_cycle_deadline = self.notify_on_cycle_deadline_checkbox.isChecked()
+        updated.notify_on_sleep_correction = self.notify_on_sleep_correction_checkbox.isChecked()
+        updated.notify_on_daily_reset = self.notify_on_daily_reset_checkbox.isChecked()
+        updated.stamina_notify_enabled = self.stamina_notify_checkbox.isChecked()
+        updated.stamina_notify_threshold = self.stamina_threshold_spinbox.value()
+        updated.theme = 'light' if self.theme_light_rb.isChecked() else 'dark' if self.theme_dark_rb.isChecked() else 'system'
+        updated.hide_on_game = self.hide_on_game_checkbox.isChecked()
+        return updated
 
 class WebShortcutDialog(QDialog):
     """ 웹 바로 가기 버튼 추가 또는 편집을 위한 다이얼로그 """

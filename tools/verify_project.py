@@ -91,7 +91,7 @@ def main() -> None:
         print("skipped: HomeworkHelper.zip not found (use --require-real-data to fail on absence)")
     run(
         "compile Python sources",
-        [py, "-m", "compileall", "-q", "tests", "src/data", "src/api", "src/gui", "homework_helper.pyw", "build.py"],
+        [py, "-m", "compileall", "-q", "tests", "src", "tools", "homework_helper.pyw", "build.py"],
     )
     run("main GUI frontend build", ["npm", "run", "build:main-gui"])
     run("dashboard frontend build", ["npm", "run", "build:dashboard"])

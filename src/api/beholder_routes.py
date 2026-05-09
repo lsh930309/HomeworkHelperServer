@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,30 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.data import beholder, crud, models
-from src.data.database import SessionLocal, base_dir, data_dir, db_path
+from src.data.database import SessionLocal, base_dir, data_dir, db_path, engine
 
 router = APIRouter(prefix="/api/beholder", tags=["beholder"])
+
+
+_RESTORE_LOCK = threading.Lock()
+
+
+def _require_valid_sqlite_backup(path: str | Path) -> None:
+    try:
+        with sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True) as conn:
+            result = conn.execute("PRAGMA integrity_check").fetchone()
+            if not result or str(result[0]).lower() != "ok":
+                raise HTTPException(status_code=422, detail="선택한 백업 DB integrity check가 실패했습니다.")
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
+    except HTTPException:
+        raise
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=422, detail=f"백업 DB를 안전하게 열 수 없습니다: {exc}") from exc
+
+
+def _copy_sqlite_database(source: str | Path, target: str | Path) -> None:
+    with sqlite3.connect(f"file:{Path(source)}?mode=ro", uri=True) as src, sqlite3.connect(target) as dst:
+        src.backup(dst)
 
 BACKUP_SUMMARY_TABLES = {
     "managed_processes": "게임",
@@ -202,12 +224,22 @@ def restore_backup(payload: RestoreRequest) -> dict[str, Any]:
     if payload.slot not in files:
         raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
     source = files[payload.slot]["path"]
-    before_path = os.path.join(data_dir, f"app_data.before_beholder_restore.{int(time.time())}.db")
-    if os.path.exists(db_path):
-        shutil.copy2(db_path, before_path)
-    for suffix in ("-wal", "-shm"):
-        sidecar = db_path + suffix
-        if os.path.exists(sidecar):
-            os.remove(sidecar)
-    shutil.copy2(source, db_path)
+    _require_valid_sqlite_backup(source)
+
+    with _RESTORE_LOCK:
+        before_path = os.path.join(data_dir, f"app_data.before_beholder_restore.{int(time.time())}.db")
+        if os.path.exists(db_path):
+            _copy_sqlite_database(db_path, before_path)
+
+        # Close pooled SQLite handles before replacing the live DB; otherwise Windows
+        # file locks or stale pooled connections can make restore appear successful
+        # while the app continues to serve the old database.
+        engine.dispose()
+        for suffix in ("-wal", "-shm"):
+            sidecar = db_path + suffix
+            if os.path.exists(sidecar):
+                os.remove(sidecar)
+        _copy_sqlite_database(source, db_path)
+        engine.dispose()
+
     return {"ok": True, "restored_from": source, "previous_snapshot": before_path}

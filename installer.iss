@@ -8,6 +8,7 @@
 #define MyAppExeName "homework_helper.exe"
 #define MyNewGuiExeName "homework_helper_gui.exe"
 #define HasNewGuiShell FileExists("dist\homework_helper\homework_helper_gui.exe")
+#define BuildGuiMode "new_gui"
 
 [Setup]
 ; 기본 정보
@@ -60,19 +61,28 @@ Source: "dist\homework_helper\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 ; NOTE: recursesubdirs 플래그로 _internal 폴더 및 모든 하위 폴더 포함
 
 [Icons]
-; 시작 메뉴
+; 시작 메뉴: build.py가 선택한 단일 GUI 진입점만 노출
+#if BuildGuiMode == "new_gui" && HasNewGuiShell
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyNewGuiExeName}"
+#else
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-#if HasNewGuiShell
-Name: "{group}\{#MyAppName} 새 GUI 미리보기"; Filename: "{app}\{#MyNewGuiExeName}"
 #endif
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 ; 바탕화면 바로가기 (사용자 선택 시)
+#if BuildGuiMode == "new_gui" && HasNewGuiShell
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyNewGuiExeName}"; Tasks: desktopicon
+#else
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+#endif
 
 [Run]
 ; 설치 완료 후 프로그램 실행 옵션
+#if BuildGuiMode == "new_gui" && HasNewGuiShell
+Filename: "{app}\{#MyNewGuiExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+#else
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+#endif
 
 [UninstallDelete]
 ; 앱이 생성한 데이터는 사용자 AppData에 있으므로 여기서는 삭제하지 않음

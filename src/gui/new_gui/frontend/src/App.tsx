@@ -30,6 +30,8 @@ type ProcessRow = {
   stamina_current?: number | null;
   stamina_max?: number | null;
   stamina_updated_at?: number | null;
+  default_volume?: number | null;
+  default_muted?: boolean;
   status: string;
   progress: Progress;
   icon_url: string;
@@ -77,7 +79,7 @@ type GuiSettings = {
   screenshot_save_dir: string;
   screenshot_gamepad_trigger: boolean;
   screenshot_disable_gamebar: boolean;
-  screenshot_capture_mode: 'fullscreen' | 'game_window' | 'window';
+  screenshot_capture_mode: 'fullscreen' | 'game_window';
   screenshot_gamepad_button_index: number;
   screenshot_trigger_vk: number;
   recording_enabled: boolean;
@@ -269,9 +271,10 @@ type ContextMenuState = {
 type SettingsTab = 'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab';
 
 const API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
+const BEHOLDER_OVERRIDE_STORAGE_KEY = 'hh-beholder-override-token';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const SIDEBAR_PANEL_WIDTH = 320;
-const SIDEBAR_HANDLE_WIDTH = 28;
+const SIDEBAR_HANDLE_WIDTH = 12;
 const SIDEBAR_TOTAL_WIDTH = SIDEBAR_PANEL_WIDTH + SIDEBAR_HANDLE_WIDTH;
 const SIDEBAR_MIN_HEIGHT = 360;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -290,10 +293,17 @@ const EDITOR_STATE_KEYS = {
 } as const;
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || 'GET').toUpperCase();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...((init?.headers as Record<string, string> | undefined) || {}) };
+  const overrideToken = method !== 'GET' ? window.sessionStorage.getItem(BEHOLDER_OVERRIDE_STORAGE_KEY) : null;
+  if (overrideToken && !headers['X-HH-Beholder-Override']) {
+    headers['X-HH-Beholder-Override'] = overrideToken;
+  }
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,
+    headers,
   });
+  if (overrideToken) window.sessionStorage.removeItem(BEHOLDER_OVERRIDE_STORAGE_KEY);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 409 && body.beholder_incident) throw new BeholderIncidentError(body.beholder_incident);
@@ -393,6 +403,23 @@ async function showPopupWindow(label: string) {
   await win.setFocus();
 }
 
+
+function WindowControls({ closeMode = 'hide' }: { closeMode?: 'hide' | 'close' }) {
+  if (!isTauriRuntime()) return null;
+  const minimize = () => getCurrentWindow().minimize().catch(() => undefined);
+  const close = () => {
+    const win = getCurrentWindow();
+    if (closeMode === 'close') win.close().catch(() => undefined);
+    else win.hide().catch(() => undefined);
+  };
+  return (
+    <div className="window-controls" data-tauri-drag-region="false">
+      <button type="button" className="window-control" onClick={minimize} aria-label="최소화">—</button>
+      <button type="button" className="window-control close" onClick={close} aria-label="닫기">×</button>
+    </div>
+  );
+}
+
 function PopupFrame({ title, children, className = '' }: React.PropsWithChildren<{ title: string; className?: string }>) {
   const ref = React.useRef<HTMLElement | null>(null);
   const isTauri = isTauriRuntime();
@@ -403,12 +430,15 @@ function PopupFrame({ title, children, className = '' }: React.PropsWithChildren
   };
   return (
     <main className={`popup-shell ${className}`} ref={ref}>
-      <header className="popup-head">
+      <header className="popup-head" data-tauri-drag-region>
         <div>
           <div className="eyebrow">HomeworkHelper 새 GUI</div>
           <h1>{title}</h1>
         </div>
-        <button className="ghost" onClick={close}>닫기</button>
+        <div className="popup-actions">
+          <button className="ghost" onClick={close}>닫기</button>
+          <WindowControls />
+        </div>
       </header>
       {children}
     </main>
@@ -613,7 +643,8 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
         body: JSON.stringify({ action }),
       });
       if (action === 'allow_once' && result.override_token) {
-        setMessage('1회 허용 토큰이 발급되었습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.');
+        window.sessionStorage.setItem(BEHOLDER_OVERRIDE_STORAGE_KEY, result.override_token);
+        setMessage('1회 허용 토큰이 저장되었습니다. 방금 차단된 저장/삭제 작업을 다시 시도하면 한 번만 허용됩니다.');
       } else {
         onResolved();
         onClose();
@@ -892,8 +923,12 @@ function SettingsModal({
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [dirtyFields, setDirtyFields] = React.useState<Set<keyof GuiSettings>>(() => new Set());
 
-  const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => {
+    setDirtyFields((prev) => new Set(prev).add(key));
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
   const updateHoYoLab = <K extends keyof HoYoLabCredentialForm>(key: K, value: HoYoLabCredentialForm[K]) => setHoyolabForm((prev) => ({ ...prev, [key]: value }));
   const updateNumber = <K extends keyof GuiSettings>(key: K, value: string) => {
     const parsed = Number(value);
@@ -949,15 +984,18 @@ function SettingsModal({
     setError(null);
     setMessage(null);
     try {
+      const patch = Object.fromEntries(Array.from(dirtyFields).map((key) => [key, form[key]]));
       const saved = await fetchJson<GuiSettings & { startup_applied?: boolean | null; admin_restart_required?: boolean }>('/api/gui/settings', {
         method: 'PATCH',
-        body: JSON.stringify(form),
+        body: JSON.stringify(patch),
       });
       if (isTauriRuntime()) {
         getCurrentWindow().setAlwaysOnTop(saved.always_on_top).catch(() => undefined);
       }
+      const { startup_applied: _startupApplied, admin_restart_required: _adminRestartRequired, ...cleanSaved } = saved;
       setMessage(saved.admin_restart_required ? '관리자 권한 변경은 다음 실행/재시작 후 완전히 반영됩니다.' : '설정을 저장했습니다.');
-      setForm(saved);
+      setForm(cleanSaved);
+      setDirtyFields(new Set());
       onSaved();
     } catch (e: any) {
       setError(e.message);
@@ -1047,7 +1085,7 @@ function SettingsModal({
     setError(null);
     setMessage(null);
     try {
-      const cfg = await fetchJson<{ port: number; password: string; output_dir: string; exe_path: string }>('/api/gui/recording/obs-config');
+      const cfg = await fetchJson<{ port: number; password: string; output_dir: string; exe_path: string; has_password?: boolean }>('/api/gui/recording/obs-config');
       setForm((prev) => ({
         ...prev,
         obs_port: cfg.port,
@@ -1085,11 +1123,6 @@ function SettingsModal({
 
   const switchSettingsPanel = async (tab: SettingsTab) => {
     setActiveTab(tab);
-    if (!standalone || !isTauriRuntime()) return;
-    const target = SETTINGS_TABS.find((item) => item.id === tab);
-    if (!target) return;
-    await showPopupWindow(target.windowLabel).catch((e) => setError(e.message));
-    getCurrentWindow().hide().catch(() => undefined);
   };
 
   const content = (
@@ -1205,7 +1238,6 @@ function SettingsModal({
               <select value={form.screenshot_capture_mode} onChange={(e) => update('screenshot_capture_mode', e.target.value as GuiSettings['screenshot_capture_mode'])}>
                 <option value="fullscreen">전체 화면</option>
                 <option value="game_window">포커스된 게임 창</option>
-                <option value="window">창</option>
               </select>
             </label>
             <div className="field-row">
@@ -1505,11 +1537,19 @@ function SidebarApp() {
             onMouseLeave={() => setHoveringControls(false)}
           >
             <div className="drawer-row">
-              <span>앱 볼륨</span>
-              <strong>{activeProcess ? '준비됨' : '대기'}</strong>
+              <span>앱별 볼륨</span>
+              <strong>{state?.processes.length || 0}개</strong>
             </div>
-            <input className="drawer-slider" type="range" min="0" max="100" defaultValue="100" disabled={!activeProcess} />
-            <small>실제 볼륨 제어는 runtime API 연결 후 Beholder 경계를 통해 처리됩니다.</small>
+            <div className="volume-list">
+              {state?.processes.slice(0, 4).map((process) => (
+                <label className="volume-row" key={process.id}>
+                  <span title={process.name}>{process.name}</span>
+                  <input className="drawer-slider" type="range" min="0" max="100" defaultValue={process.default_volume ?? 100} disabled />
+                  <small>{process.default_muted ? '음소거' : `${process.default_volume ?? 100}%`}</small>
+                </label>
+              ))}
+            </div>
+            <small>기존 GUI처럼 등록된 앱별 기본 음량을 함께 보여줍니다. 실제 제어는 Windows runtime smoke에서 검증합니다.</small>
           </div>
         )}
 
@@ -1533,22 +1573,23 @@ function SidebarApp() {
             {!gallery?.exists && <small>스크린샷 폴더가 아직 없거나 비어 있습니다.</small>}
             {gallery?.exists && gallery.items.length === 0 && <small>최근 스크린샷이 없습니다.</small>}
             {gallery && gallery.items.length > 0 && (
-              <div className="screenshot-strip">
+              <div className="media-grid">
                 {gallery.items.map((item) => (
-                  <div className="screenshot-thumb" key={item.path} title={item.name}>
-                    <a href={`${API_BASE}${item.image_url}`} target="_blank" rel="noreferrer">
-                      <img src={`${API_BASE}${item.image_url}`} alt={item.name} />
-                    </a>
-                    <button
-                      type="button"
-                      className="thumb-copy"
-                      disabled={!gallery.native_copy_supported || copyingPath === item.path}
-                      onClick={() => copyScreenshot(item)}
-                      title={gallery.native_copy_supported ? '클립보드에 복사' : '현재 환경에서는 네이티브 복사를 사용할 수 없습니다'}
-                    >
-                      {copyingPath === item.path ? '...' : '복사'}
-                    </button>
-                  </div>
+                  <a
+                    className="media-thumb screenshot-thumb"
+                    key={item.path}
+                    href={`${API_BASE}${item.image_url}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`${item.name} · 우클릭: 클립보드 복사`}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      if (gallery.native_copy_supported) copyScreenshot(item);
+                    }}
+                  >
+                    <img src={`${API_BASE}${item.image_url}`} alt={item.name} />
+                    <span>{copyingPath === item.path ? '복사 중…' : item.name}</span>
+                  </a>
                 ))}
               </div>
             )}
@@ -1565,9 +1606,10 @@ function SidebarApp() {
             {!recordingGallery?.exists && <small>녹화 출력 폴더가 아직 없거나 비어 있습니다.</small>}
             {recordingGallery?.exists && recordingGallery.items.length === 0 && <small>최근 녹화 파일이 없습니다.</small>}
             {recordingGallery && recordingGallery.items.length > 0 && (
-              <div className="recording-list">
+              <div className="media-grid recording-list">
                 {recordingGallery.items.map((item) => (
-                  <a className="recording-item" key={item.path} href={`${API_BASE}${item.file_url}`} target="_blank" rel="noreferrer" title={item.path}>
+                  <a className="media-thumb recording-item" key={item.path} href={`${API_BASE}${item.file_url}`} target="_blank" rel="noreferrer" title={`${item.path} · 우클릭: 파일 열기`}>
+                    <video src={`${API_BASE}${item.file_url}#t=0.1`} muted preload="metadata" />
                     <span>{item.name}</span>
                     <small>{new Date(item.modified_at * 1000).toLocaleString()}</small>
                   </a>
@@ -1938,7 +1980,7 @@ function MainApp() {
 
   return (
     <main className="shell" ref={rootRef} data-theme={state.settings.theme}>
-      <header className="topbar">
+      <header className="topbar" data-tauri-drag-region>
         <h1>숙제 관리자</h1>
         <div className="actions">
           <button className="primary-soft" onClick={() => openProcessEditor()}>+ 게임</button>
@@ -1948,6 +1990,7 @@ function MainApp() {
             <img src="https://github.githubassets.com/favicons/favicon.svg" alt="" />
           </button>
           <button className="icon-button" onClick={openSettings} title="설정" aria-label="설정">⚙</button>
+          <WindowControls />
         </div>
       </header>
 

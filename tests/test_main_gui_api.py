@@ -1,9 +1,17 @@
+import atexit
 import datetime as dt
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
-os.environ["HOME"] = "/tmp/homeworkhelper-tests"
-Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
+_TEST_HOME = os.environ.get("HOMEWORKHELPER_TEST_HOME")
+if not _TEST_HOME:
+    _TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
+    os.environ["HOMEWORKHELPER_TEST_HOME"] = _TEST_HOME
+    atexit.register(lambda: shutil.rmtree(_TEST_HOME, ignore_errors=True))
+os.environ["HOME"] = _TEST_HOME
+os.environ["APPDATA"] = str(Path(_TEST_HOME) / "AppData" / "Roaming")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -715,7 +723,8 @@ def test_gui_recording_obs_config_import_wraps_existing_reader(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "port": 4456,
-        "password": "obs-secret",
+        "password": "",
+        "has_password": True,
         "output_dir": "C:/Recordings",
         "exe_path": "C:/OBS/bin/64bit/obs64.exe",
     }

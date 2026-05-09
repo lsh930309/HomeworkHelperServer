@@ -13,6 +13,11 @@ from sqlalchemy.orm import sessionmaker
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _sqlite_backup_copy(source: Path, target: Path) -> None:
+    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as src, sqlite3.connect(target) as dst:
+        src.backup(dst)
+
+
 def _fixture_zip() -> Path:
     return Path(os.environ.get("HOMEWORKHELPER_REAL_DATA_ZIP", ROOT / "HomeworkHelper.zip"))
 
@@ -73,7 +78,7 @@ def test_real_appdata_zip_structure_and_db_integrity(real_appdata):
 def test_real_appdata_main_gui_state_and_icon_cache_use_clone(real_appdata, monkeypatch, tmp_path):
     db_source = real_appdata / "homework_helper_data" / "app_data.db"
     db_clone = tmp_path / "app_data.clone.db"
-    shutil.copy2(db_source, db_clone)
+    _sqlite_backup_copy(db_source, db_clone)
 
     engine = create_engine(
         f"sqlite:///{db_clone.as_posix()}",
@@ -117,7 +122,7 @@ def test_real_appdata_main_gui_state_and_icon_cache_use_clone(real_appdata, monk
 def test_real_appdata_beholder_detects_legacy_open_sessions(real_appdata, monkeypatch, tmp_path):
     db_source = real_appdata / "homework_helper_data" / "app_data.db"
     db_clone = tmp_path / "app_data.beholder.clone.db"
-    shutil.copy2(db_source, db_clone)
+    _sqlite_backup_copy(db_source, db_clone)
 
     engine = create_engine(
         f"sqlite:///{db_clone.as_posix()}",

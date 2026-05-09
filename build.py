@@ -152,6 +152,57 @@ def get_latest_version():
     return None
 
 
+class GuiModeSelectorGUI:
+    """패키징에 사용할 단일 GUI 모드를 버전 선택 전에 고릅니다."""
+
+    def __init__(self, theme, font_family="맑은 고딕"):
+        self.theme = theme
+        self.font_family = font_family
+        self.result = None
+        self.root = tk.Tk()
+        self.root.title("HomeworkHelper - GUI 모드 선택")
+        self.root.geometry("460x260")
+        self.root.resizable(False, False)
+        self.root.configure(bg=theme.bg)
+        self.root.attributes('-topmost', True)
+        self._create_widgets()
+
+    def _create_widgets(self):
+        title = tk.Label(self.root, text="빌드할 GUI 모드 선택", font=(self.font_family, 16), bg=self.theme.bg, fg=self.theme.fg)
+        title.pack(pady=(22, 8))
+        desc = tk.Label(
+            self.root,
+            text="선택한 GUI만 사용자 실행 진입점으로 패키징합니다.\n신규 GUI 모드는 backend sidecar 용도로만 PyInstaller 실행 파일을 포함합니다.",
+            font=(self.font_family, 9),
+            bg=self.theme.bg,
+            fg=self.theme.fg,
+            justify=tk.CENTER,
+        )
+        desc.pack(pady=(0, 18))
+
+        btn_frame = tk.Frame(self.root, bg=self.theme.bg)
+        btn_frame.pack(pady=8)
+        legacy_btn = tk.Button(btn_frame, text="레거시 GUI (Qt6)", width=18, command=lambda: self._select("legacy"))
+        legacy_btn.pack(side=tk.LEFT, padx=8)
+        new_btn = tk.Button(btn_frame, text="신규 GUI (Tauri/React)", width=20, command=lambda: self._select("new_gui"))
+        new_btn.pack(side=tk.LEFT, padx=8)
+
+        hint = tk.Label(self.root, text="ESC: 취소", font=(self.font_family, 9), bg=self.theme.bg, fg=self.theme.fg)
+        hint.pack(pady=(18, 0))
+        self.root.bind('<Escape>', lambda _event: self.root.destroy())
+        self.root.bind('1', lambda _event: self._select("legacy"))
+        self.root.bind('2', lambda _event: self._select("new_gui"))
+
+    def _select(self, mode):
+        self.result = mode
+        self.root.destroy()
+
+    def show(self):
+        self.root.focus_force()
+        self.root.mainloop()
+        return self.result
+
+
 class VersionSelectorGUI:
     """버전 선택 GUI"""
 
@@ -638,9 +689,15 @@ def build_new_gui_shell(gui):
         return False
 
     gui.log_section("Tauri 새 GUI shell 빌드")
+    gui.set_status("Tauri CLI 의존성 확인 중...")
+    gui.set_progress(22)
+
+    install_cmd = [npm_cmd, "ci"] if (PROJECT_ROOT / "package-lock.json").exists() else [npm_cmd, "install"]
+    if not _run_logged_command(gui, install_cmd, PROJECT_ROOT, "루트 Tauri CLI 의존성 설치"):
+        return False
+
     gui.set_status("Tauri 새 GUI shell 빌드 중...")
     gui.set_progress(24)
-
     if not _run_logged_command(gui, [npm_cmd, "run", "tauri:build", "--", "--no-bundle"], PROJECT_ROOT, "Tauri shell 빌드"):
         return False
 
@@ -665,8 +722,11 @@ def stage_new_gui_shell(gui):
     return True
 
 
-def code_sign_targets():
-    return [APP_FOLDER / "homework_helper.exe", APP_FOLDER / TAURI_SHELL_DIST_NAME]
+def code_sign_targets(gui_mode="new_gui"):
+    targets = [APP_FOLDER / "homework_helper.exe"]
+    if gui_mode == "new_gui":
+        targets.append(APP_FOLDER / TAURI_SHELL_DIST_NAME)
+    return targets
 
 
 
@@ -1040,7 +1100,7 @@ def create_zip_distribution(gui, version_info):
         return False
 
 
-def update_installer_script_version(version_info):
+def update_installer_script_version(version_info, gui_mode="new_gui"):
     """installer.iss 파일의 버전 정보 업데이트"""
     if not INSTALLER_SCRIPT.exists():
         return False
@@ -1055,6 +1115,11 @@ def update_installer_script_version(version_info):
             rf'\g<1>{version_string}\g<2>',
             content
         )
+        content = re.sub(
+            r'(#define BuildGuiMode\s+")[^"]+(")',
+            rf'\g<1>{gui_mode}\g<2>',
+            content
+        )
 
         with open(INSTALLER_SCRIPT, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -1064,7 +1129,7 @@ def update_installer_script_version(version_info):
         return False
 
 
-def create_installer(gui, version_info):
+def create_installer(gui, version_info, gui_mode="new_gui"):
     """Inno Setup으로 인스톨러 생성"""
     gui.log_section("Inno Setup 인스톨러 생성")
     gui.set_status("인스톨러 생성 중...")
@@ -1085,7 +1150,7 @@ def create_installer(gui, version_info):
         gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
-    update_installer_script_version(version_info)
+    update_installer_script_version(version_info, gui_mode)
 
     cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
     gui.log(f"인스톨러 명령: {' '.join(cmd)}\n")
@@ -1203,7 +1268,7 @@ def print_summary(gui, version_info):
     gui.log("  2. Portable 버전: *.zip 압축 해제 후 실행")
 
 
-def run_build_process(gui, version_info):
+def run_build_process(gui, version_info, gui_mode="new_gui"):
     """빌드 프로세스 실행 (별도 스레드)"""
     def build():
         try:
@@ -1218,29 +1283,33 @@ def run_build_process(gui, version_info):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 3-1. Tauri 메인 GUI 프론트엔드 빌드
-            if not build_main_gui_frontend(gui):
-                gui.show_complete(False, auto_close_delay=0)
-                return
+            if gui_mode == "new_gui":
+                # 3-1. Tauri 메인 GUI 프론트엔드 빌드
+                if not build_main_gui_frontend(gui):
+                    gui.show_complete(False, auto_close_delay=0)
+                    return
 
-            # 3-2. Tauri 새 GUI shell 빌드 (기본 실행 파일은 PyQt 유지)
-            if not build_new_gui_shell(gui):
-                gui.show_complete(False, auto_close_delay=0)
-                return
+                # 3-2. Tauri 새 GUI shell 빌드
+                if not build_new_gui_shell(gui):
+                    gui.show_complete(False, auto_close_delay=0)
+                    return
+            else:
+                gui.log("\n[레거시 GUI 모드] 신규 GUI 프론트엔드/Tauri shell 빌드를 건너뜁니다.")
 
             # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 4-1. Tauri 새 GUI shell을 PyInstaller 배포 폴더에 포함
-            if not stage_new_gui_shell(gui):
-                gui.show_complete(False, auto_close_delay=0)
-                return
+            if gui_mode == "new_gui":
+                # 4-1. Tauri 새 GUI shell을 PyInstaller 배포 폴더에 포함
+                if not stage_new_gui_shell(gui):
+                    gui.show_complete(False, auto_close_delay=0)
+                    return
 
             # 4-2. exe 코드 서명
             gui.set_progress(62)
-            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets()):
+            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets(gui_mode)):
                 gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
                 gui.show_complete(False, auto_close_delay=0)
                 return
@@ -1252,7 +1321,7 @@ def run_build_process(gui, version_info):
                 success_count += 1
 
             # 6. 인스톨러 생성
-            if create_installer(gui, version_info):
+            if create_installer(gui, version_info, gui_mode):
                 success_count += 1
 
                 # 7. 인스톨러 exe 코드 서명
@@ -1311,10 +1380,17 @@ def main():
         print(f"[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
         return 1
 
-    # 1. 최신 버전 확인
+    # 1. GUI 모드 선택 (버전 선택보다 먼저 수행)
+    gui_mode_selector = GuiModeSelectorGUI(theme, font_family)
+    gui_mode = gui_mode_selector.show()
+    if gui_mode is None:
+        print("[취소] 빌드를 중단합니다.")
+        return 1
+
+    # 2. 최신 버전 확인
     latest_version = get_latest_version()
 
-    # 2. 버전 선택 GUI
+    # 3. 버전 선택 GUI
     version_selector = VersionSelectorGUI(latest_version, theme, font_family)
     version_info = version_selector.show()
 
@@ -1326,7 +1402,7 @@ def main():
     build_gui = BuildProgressGUI(version_info, theme, font_family)
 
     # 4. 빌드 프로세스 시작
-    run_build_process(build_gui, version_info)
+    run_build_process(build_gui, version_info, gui_mode)
 
     # GUI 실행
     build_gui.root.mainloop()

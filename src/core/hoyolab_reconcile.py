@@ -158,7 +158,7 @@ class _StaminaPersistTask(QRunnable):
                 if self._should_abort():
                     result["aborted"] = True
                     return
-                process_persist_succeeded = self._data_manager.update_process(updated_process)
+                process_persist_succeeded = self._data_manager.update_process_runtime_state(updated_process)
                 if process_persist_succeeded:
                     logger.info(
                         "[HoYoLab] 재동기화 반영: '%s' %s/%s",

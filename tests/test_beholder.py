@@ -689,3 +689,60 @@ def test_beholder_payload_localizes_session_end_risks(monkeypatch):
     assert "이미 닫힌 기록을 다시 종료하려는 요청" in payload["risk_labels"]
     assert "런타임 담당자가 아닌 요청" in payload["risk_labels"]
     assert all("invalid_current_status" not in label for label in payload["risk_labels"])
+
+
+def test_beholder_rejects_resolving_non_pending_incidents(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="runtime_start", actor="process_monitor"),
+        target_summary="process_id=game-a",
+        suspected_cause="duplicate",
+        current_state_summary="open session exists",
+        proposed_change_summary="start new session",
+        risk_score=65,
+        risk_factors=["duplicate_open_session"],
+        safe_recommendation="refresh",
+    )
+    beholder.mark_incident(db, incident.id, beholder.STATUS_RESOLVED)
+    db.refresh(incident)
+
+    try:
+        beholder.resolve_incident_action(db, incident, "close_previous_and_start_new")
+        assert False, "already resolved incident should not execute side effects"
+    except ValueError as exc:
+        assert "이미 처리된" in str(exc)
+
+
+def test_hoyolab_followup_session_stamina_rewrite_is_allowed(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        stamina_at_end=100,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    assert crud.update_session_stamina(
+        db,
+        session.id,
+        92,
+        actor="hoyolab_slow_followup",
+        operation_kind="hoyolab_session_stamina_rewrite",
+    ) is True
+
+    db.expire_all()
+    updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert updated.stamina_at_end == 92
+    assert beholder.active_incidents(db) == []

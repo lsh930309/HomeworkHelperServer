@@ -503,7 +503,12 @@ def run_server_main():
         return updated_process
 
     @app.patch("/processes/{process_id}/runtime-state", response_model=schemas.ProcessSchema)
-    def update_process_runtime_state(process_id: str, patch: ProcessRuntimeStatePatch, db: Session = Depends(get_db)):
+    def update_process_runtime_state(
+        process_id: str,
+        patch: ProcessRuntimeStatePatch,
+        db: Session = Depends(get_db),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         updated_process = crud.update_process_runtime_state(
             db=db,
             process_id=process_id,
@@ -513,6 +518,7 @@ def run_server_main():
             stamina_updated_at=patch.stamina_updated_at,
             actor="process_monitor",
             operation_kind="process_runtime_state_update",
+            override_token=x_hh_beholder_override,
         )
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
@@ -643,9 +649,23 @@ def run_server_main():
         return session
 
     @app.patch("/sessions/{session_id}/stamina", response_model=schemas.ProcessSessionSchema)
-    def update_session_stamina(session_id: int, stamina_at_end: int, db: Session = Depends(get_db)):
+    def update_session_stamina(
+        session_id: int,
+        stamina_at_end: int,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """세션의 종료 스태미나 값을 업데이트"""
-        success = crud.update_session_stamina(db=db, session_id=session_id, stamina_at_end=stamina_at_end)
+        success = crud.update_session_stamina(
+            db=db,
+            session_id=session_id,
+            stamina_at_end=stamina_at_end,
+            actor=x_hh_beholder_actor or "hoyolab_slow_followup",
+            operation_kind=x_hh_beholder_operation or "hoyolab_session_stamina_rewrite",
+            override_token=x_hh_beholder_override,
+        )
         if not success:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
         # 업데이트된 세션 반환

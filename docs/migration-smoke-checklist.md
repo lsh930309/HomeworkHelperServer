@@ -10,7 +10,7 @@
 - [ ] APP-002: 새 GUI 닫기 버튼이 트레이 숨김으로 동작한다.
 - [ ] APP-002: 새 GUI 트레이 메뉴 열기/숨기기/종료가 정상 동작한다.
 - [ ] APP-002: PyQt 기본 앱의 기존 단일 인스턴스/트레이 동작이 유지된다.
-- [ ] BUILD-001: `python build.py`만으로 새 GUI shell이 installer에 포함된다.
+- [ ] BUILD-001: `python build.py` 실행 시 버전 선택 전에 legacy GUI / 신규 GUI 모드 선택 창이 먼저 표시된다.
 
 ## 게임/웹/설정
 
@@ -25,7 +25,7 @@
 - [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 바/점 인디케이터와 진행률 색상만으로 실행중/완료/미완료 상태를 구분한다.
 - [ ] SETTINGS-001: 전역 설정 저장 후 재시작해도 값이 보존된다.
 - [ ] SETTINGS-001: 관리자 권한 전환 및 시작프로그램 설정이 동작한다.
-- [ ] SETTINGS-001: 새 GUI의 일반/알림/사이드바/스크린샷/녹화/HoYoLab 설정 패널이 각각 별도 popup 창으로 열리고, 창 크기가 콘텐츠에 맞춰져 가로/세로 스크롤바가 생기지 않는다.
+- [ ] SETTINGS-001: 새 GUI의 일반/알림/사이드바/스크린샷/녹화/HoYoLab 설정 탭이 하나의 popup 안에서 창 재생성 없이 전환되고, 창 크기가 콘텐츠에 맞춰져 가로/세로 스크롤바가 생기지 않는다.
 
 ## 런타임/데이터 안전
 
@@ -47,13 +47,13 @@
 ## PyQt fallback 유지 기능
 
 - [ ] SIDEBAR-001: 게임 실행 시 사이드바 표시/자동 숨김/볼륨/시계/플레이타임이 동작한다.
-- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이가 우측 edge에 표시되고 hover/click으로 열리며, Pin 고정/Escape 닫기/자동 숨김/high-DPI 위치 보정이 동작한다.
+- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이가 우측 edge에서 얇고 비침 상태로 대기하다 hover/click으로 열리며, Pin 고정/Escape 닫기/자동 숨김/high-DPI 위치 보정이 동작한다.
 - [ ] SCHEDULER-001: 필수 접속/주기/수면 보정/일일 리셋/스태미나 알림이 동작한다.
 - [ ] SCHEDULER-001: 새 GUI 알림 설정 popup에서 현재 미완료 수와 예정 알림 preview가 실제 상태와 일치한다.
 - [ ] SCHEDULER-001: 새 GUI 알림 preview가 알림 종류/남은 시간/심각도/켜짐·꺼짐 상태를 사용자 언어로 표시한다.
-- [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 `stamina_at_end` 기록 및 시작/종료 재동기화가 동작한다.
+- [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 `stamina_at_end` 기록 및 시작/종료 재동기화가 동작하고 HoYoLab 지연 재확인/수동 새로고침을 Beholder가 위험 incident로 오인하지 않는다.
 - [ ] SCREENSHOT-001: 새 GUI 키 입력 캡처로 트리거 키 변경 후 게임패드 스크린샷, 저장 폴더, capture mode가 동작한다.
-- [ ] RECORDING-001: 새 GUI OBS 설정 불러오기 후 저장, 자동 실행, 녹화 시작/중지, 사이드바 상태 표시가 동작한다.
+- [ ] RECORDING-001: 새 GUI OBS 설정 불러오기 후 저장, 자동 실행, 녹화 시작/중지, 사이드바 상태 표시가 동작하고 OBS 비밀번호 평문은 응답/화면에 재노출되지 않는다.
 - [ ] RECORDING-001: 새 GUI 사이드바 서랍에서 최근 녹화 파일 목록이 표시되고 파일 열기가 동작한다.
 - [ ] SCREENSHOT-001: 새 GUI 사이드바 서랍에서 최근 스크린샷 썸네일이 표시되고 클릭/복사 버튼이 동작한다.
 - [ ] CLIPBOARD-001: 새 GUI/API에서 스크린샷 파일 복사 후 탐색기/채팅창 파일·이미지 붙여넣기가 동작한다.
@@ -69,7 +69,22 @@
 - [ ] `python tools/verify_project.py --full --require-real-data`가 새 GUI와 dashboard frontend를 모두 빌드한다.
 - [ ] 신규 GUI 미리보기에서 실제 DB 복제본의 게임/웹/아이콘/설정이 표시된다.
 
+## 이번 변경 추가 smoke trace
+
+- [ ] SETTINGS-001: 새 GUI 설정 단일 popup 안에서 탭 전환 시 창 재생성 없이 콘텐츠/창 크기만 갱신되고 가로/세로 스크롤바 없음
+- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정
+- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이가 닫힘 상태에서 얇고 비침 상태이며 hover/click 시 열림
+- [ ] SIDEBAR-001: 새 GUI preview 볼륨 섹션이 등록 앱별 기본 음량 목록을 표시
+- [ ] HOYOLAB-001: HoYoLab 지연 반영 재확인/수동 새로고침은 Beholder가 정상 actor로 인식
+- [ ] SCREENSHOT-001: 전체화면/포커스된 게임 창 capture mode
+- [ ] RECORDING-001: 새 GUI OBS 설정 불러오기는 비밀번호 존재 여부만 표시하고 평문 비밀번호를 다시 노출하지 않음
+- [ ] BUILD-001: build.py 시작 시 GUI 모드 선택이 버전 선택보다 먼저 표시됨
+- [ ] BUILD-001: legacy GUI 모드 패키지는 PyQt 진입점만 노출
+- [ ] BUILD-001: new GUI 모드 패키지는 Tauri/React 진입점만 노출
+
 ## Feature matrix manual smoke trace
+- [ ] SIDEBAR-001: 새 GUI preview 스크린샷/녹화 갤러리가 동일한 썸네일 grid 구조와 우클릭 보조 동작을 제공
+- [ ] SIDEBAR-001: 새 GUI preview 녹화 갤러리가 video metadata 썸네일을 표시
 
 아래 목록은 `tests/migration/feature_matrix.json`의 `manual_smoke` 항목을 사람이 실행하는 체크리스트 문서 안에서 빠짐없이 추적하기 위한 원문 trace다. 문구를 바꾸거나 항목을 추가/삭제하면 feature matrix와 이 섹션을 함께 갱신해야 한다.
 
@@ -114,7 +129,7 @@
 - [ ] SETTINGS-001: PyQt 전역 설정 저장
 - [ ] SETTINGS-001: 새 GUI 설정 저장
 - [ ] SETTINGS-001: 권한 재시작 적용
-- [ ] SETTINGS-001: 새 GUI 설정 패널별 별도 popup과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음
+- [ ] SETTINGS-001: 새 GUI 설정 단일 popup 탭 전환과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음
 
 ### SIDEBAR-001 사이드바 표시, 자동 숨김, 위치/높이/투명도/효과, 시계/플레이타임/볼륨 섹션
 
@@ -122,7 +137,7 @@
 - [ ] SIDEBAR-001: 엣지 트리거/자동 숨김
 - [ ] SIDEBAR-001: 볼륨 패널 조작
 - [ ] SIDEBAR-001: 시계/플레이타임 표시
-- [ ] SIDEBAR-001: 새 GUI preview 스마트 서랍 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정
+- [ ] SIDEBAR-001: 새 GUI preview 얇은 비침 손잡이 hover/click, Pin, Escape, 자동 숨김, high-DPI 위치 보정
 
 ### SESSION-001 프로세스 실행 세션 시작/종료, 중복 open session 복구, 기록 보존
 

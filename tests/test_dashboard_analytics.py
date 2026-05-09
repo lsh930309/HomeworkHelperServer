@@ -1,9 +1,17 @@
+import atexit
 import datetime as dt
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
-os.environ["HOME"] = "/tmp/homeworkhelper-tests"
-Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
+_TEST_HOME = os.environ.get("HOMEWORKHELPER_TEST_HOME")
+if not _TEST_HOME:
+    _TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
+    os.environ["HOMEWORKHELPER_TEST_HOME"] = _TEST_HOME
+    atexit.register(lambda: shutil.rmtree(_TEST_HOME, ignore_errors=True))
+os.environ["HOME"] = _TEST_HOME
+os.environ["APPDATA"] = str(Path(_TEST_HOME) / "AppData" / "Roaming")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

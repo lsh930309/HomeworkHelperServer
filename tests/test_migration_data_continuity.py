@@ -62,7 +62,7 @@ def _custom_settings() -> schemas.GlobalSettingsSchema:
         screenshot_save_dir="C:/Shots",
         screenshot_gamepad_trigger=False,
         screenshot_disable_gamebar=True,
-        screenshot_capture_mode="window",
+        screenshot_capture_mode="game_window",
         screenshot_gamepad_button_index=4,
         screenshot_trigger_vk=179,
         recording_enabled=True,

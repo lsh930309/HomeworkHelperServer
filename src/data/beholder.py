@@ -90,7 +90,7 @@ SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
 }
 SETTINGS_ENUM_RULES: dict[str, tuple[set[str], str]] = {
     "theme": ({"system", "light", "dark"}, "테마"),
-    "screenshot_capture_mode": ({"fullscreen", "game_window", "window"}, "스크린샷 캡처 방식"),
+    "screenshot_capture_mode": ({"fullscreen", "game_window"}, "스크린샷 캡처 방식"),
 }
 
 FIELD_LABELS: dict[str, str] = {
@@ -186,10 +186,50 @@ class BeholderBlocked(Exception):
         super().__init__(incident.safe_recommendation or incident.suspected_cause or "Beholder blocked mutation")
 
 
+def _actor_label(actor: str | None) -> str:
+    return {
+        "process_monitor": "게임 실행 감지기",
+        "legacy_process_monitor": "기존 GUI 실행 감지기",
+        "new_gui_runtime": "신규 GUI 실행 상태 동기화",
+        "new_gui_settings": "신규 GUI 설정 창",
+        "main_gui_settings": "신규 GUI 설정 창",
+        "global_settings_dialog": "기존 GUI 전역 설정 창",
+        "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
+        "new_gui_hoyolab_runtime": "신규 GUI HoYoLab 수동 새로고침",
+        "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
+        "runtime_stamina_tracker": "스태미나 런타임 보정",
+    }.get(actor or "", actor or "알 수 없는 경로")
+
+
+def _operation_label(kind: str | None) -> str:
+    return {
+        "hoyolab_session_stamina_rewrite": "게임 종료 후 HoYoLab 서버 반영 지연을 재확인해 직전 세션의 종료 스태미나를 보정",
+        "process_stamina_refresh": "HoYoLab에서 현재 스태미나를 즉시 조회해 게임 카드의 잔여 스태미나를 갱신",
+        "process_runtime_state_update": "게임 실행/종료 감지 결과에 따라 마지막 플레이 시각과 런타임 스태미나를 갱신",
+        "runtime_start": "게임 시작 기록 생성",
+        "runtime_stop": "게임 종료 기록 저장",
+        "settings_update": "설정 저장",
+    }.get(kind or "", kind or "데이터 변경")
+
+
+def _compose_user_summary(incident: models.BeholderIncident) -> str:
+    actor = _actor_label(getattr(incident, "actor", None))
+    operation = _operation_label(getattr(incident, "operation_kind", None))
+    target = getattr(incident, "target_summary", None) or "대상 데이터"
+    current = getattr(incident, "current_state_summary", None) or "현재 상태 정보 없음"
+    proposed = getattr(incident, "proposed_change_summary", None) or "변경 내용 정보 없음"
+    cause = getattr(incident, "suspected_cause", None) or "안전 근거가 부족합니다."
+    return (
+        f"{actor}가 {target}에 대해 '{operation}' 작업을 수행하려 했습니다. "
+        f"현재 상태는 {current}이며, 요청된 변경은 {proposed}입니다. "
+        f"비홀더는 {cause} 때문에 사용자 확인이 필요하다고 판단했습니다."
+    )
+
+
 def incident_to_dict(incident: models.BeholderIncident) -> dict[str, Any]:
     user_title = getattr(incident, "user_title", None) or _default_user_title(incident)
-    user_summary = getattr(incident, "user_summary", None) or incident.suspected_cause
-    user_impact = getattr(incident, "user_impact", None) or incident.proposed_change_summary
+    user_summary = getattr(incident, "user_summary", None) or _compose_user_summary(incident)
+    user_impact = getattr(incident, "user_impact", None) or (incident.safe_recommendation or incident.proposed_change_summary)
     return {
         "id": incident.id,
         "severity": incident.severity,
@@ -1015,6 +1055,8 @@ def mark_incident(db: Session, incident_id: int, status: str, resolution_metadat
 
 
 def resolve_incident_action(db: Session, incident: models.BeholderIncident, action: str) -> dict[str, Any]:
+    if incident.status != STATUS_PENDING:
+        raise ValueError("이미 처리된 Beholder 안내입니다. 최신 상태를 새로고침해 주세요.")
     if action == "allow_once":
         token = issue_override_token(db, incident)
         return {"incident": incident_to_dict(incident), "override_token": token}
