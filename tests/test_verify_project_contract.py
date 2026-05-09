@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 from pathlib import Path
 
 
@@ -25,3 +26,17 @@ def test_verify_project_builds_all_frontend_migration_surfaces():
 
     assert ["npm", "run", "build:main-gui"] in commands
     assert ["npm", "run", "build:dashboard"] in commands
+
+
+def test_verify_project_reports_migration_feature_audit(capsys):
+    spec = importlib.util.spec_from_file_location("verify_project", "tools/verify_project.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module.audit_migration_matrix()
+    output = capsys.readouterr().out
+
+    assert "migration feature audit" in output
+    assert "high-risk-missing=0" in output
+    assert "partial=" in output

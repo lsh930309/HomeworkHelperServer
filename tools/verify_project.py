@@ -8,6 +8,7 @@ Windows-only manual smoke items remain in docs/migration-smoke-checklist.md.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -38,6 +39,24 @@ def run_with_env(label: str, command: list[str], env: dict[str, str]) -> None:
     completed = subprocess.run(command, cwd=ROOT, env={**os.environ, **env})
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
+
+
+def audit_migration_matrix() -> None:
+    matrix_path = ROOT / "tests" / "migration" / "feature_matrix.json"
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    features = matrix["features"]
+    missing_high = [feature for feature in features if feature["data_risk"] == "high" and feature["new_gui_status"] == "missing"]
+    partial = [feature for feature in features if feature["new_gui_status"] == "partial"]
+
+    print("\n==> migration feature audit")
+    print(f"features={len(features)} partial={len(partial)} high-risk-missing={len(missing_high)}")
+    for feature in partial:
+        smoke_note = "manual smoke required" if feature["manual_smoke"] else "automated only"
+        print(f"- {feature['id']} {feature['data_risk']} partial: {feature['name']} ({smoke_note})")
+    if missing_high:
+        for feature in missing_high:
+            print(f"! {feature['id']} high-risk missing: {feature['name']}")
+        raise SystemExit("High-risk missing migration features remain.")
 
 
 def main() -> None:
@@ -79,6 +98,7 @@ def main() -> None:
     run("Tauri Rust check", ["cargo", "check", "--manifest-path", "src-tauri/Cargo.toml"])
     if args.full:
         run("Tauri shell release build", ["npm", "run", "tauri:build", "--", "--no-bundle"])
+    audit_migration_matrix()
 
     print("\nVerification complete. For Windows-only behavior, run docs/migration-smoke-checklist.md.")
 
