@@ -452,9 +452,6 @@ function statusKind(status: string) {
   return 'done';
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return <span className={`status ${statusKind(status)}`}>{status}</span>;
-}
 
 function LaunchIcon({ busy }: { busy: boolean }) {
   return <span aria-hidden="true" className="play-icon">{busy ? '…' : '▶'}</span>;
@@ -463,7 +460,7 @@ function LaunchIcon({ busy }: { busy: boolean }) {
 function ProgressBar({ progress }: { progress: Progress }) {
   const bucket = progress.percent >= 100 ? 'full' : progress.percent >= 80 ? 'warn' : progress.percent >= 50 ? 'mid' : 'ok';
   return (
-    <div className={`progress ${bucket}`} aria-label={progress.label}>
+    <div className={`progress ${progress.kind} ${bucket}`} aria-label={progress.label}>
       <div className="progress-meta">
         <span className="progress-kind">
           {progress.resource_icon_url && <img className="resource-icon" src={`${API_BASE}${progress.resource_icon_url}`} alt="" />}
@@ -1903,7 +1900,6 @@ function MainApp() {
     }
   };
 
-  const design = new URLSearchParams(window.location.search).get('design') || 'table';
 
   if (!state) {
     return (
@@ -1946,80 +1942,42 @@ function MainApp() {
         </section>
       )}
 
-      {design === 'card' ? (
-        <section className="design-card-list">
-          {state.processes.map((process) => (
-            <article className="game-card" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
-              <div className="game-card-head">
-                <div className="game">
-                  <img src={`${API_BASE}${process.icon_url}`} alt="" />
-                  <div><strong>{process.name}</strong><span>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span></div>
-                </div>
-                <StatusBadge status={process.status} />
+      <section className="table-card">
+        {state.processes.length === 0 ? (
+          <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
+        ) : (
+          state.processes.map((process) => (
+            <article
+              className={`row ${statusKind(process.status)}`}
+              key={process.id}
+              title={`상태: ${process.status} · 우클릭: 편집/삭제`}
+              aria-label={`${process.name} ${process.status}`}
+              onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}
+            >
+              <img className="game-icon" src={`${API_BASE}${process.icon_url}`} alt="" />
+              <div className="game-name">
+                <strong><span className="state-dot" aria-hidden="true" /><span className="game-title">{process.name}</span></strong>
+                <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
               </div>
               <ProgressBar progress={process.progress} />
-              <button className="launch wide" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}>
+              <button
+                className="launch"
+                disabled={busyId === process.id}
+                onClick={() => launch(process)}
+                onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
+                title="우클릭: 실행 방식 선택"
+                aria-label={busyId === process.id ? `${process.name} 실행 중` : `${process.name} 실행`}
+              >
                 <LaunchIcon busy={busyId === process.id} />
               </button>
             </article>
-          ))}
-        </section>
-      ) : design === 'command' ? (
-        <section className="command-center">
-          <div className="command-summary">
-            <strong>{state.processes.filter((p) => p.status !== '완료됨').length}</strong>
-            <span>주의가 필요한 항목</span>
-          </div>
-          <div className="command-list">
-            {state.processes.map((process) => (
-              <article className="command-row" key={process.id} onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}>
-                <div className="game"><img src={`${API_BASE}${process.icon_url}`} alt="" /><strong>{process.name}</strong></div>
-                <ProgressBar progress={process.progress} />
-                <button className="launch" disabled={busyId === process.id} onClick={() => launch(process)} onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}><LaunchIcon busy={busyId === process.id} /></button>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : (
-        <section className="table-card">
-          {state.processes.length === 0 ? (
-            <div className="empty">등록된 게임이 없습니다. + 게임으로 기존 PyQt와 같은 DB에 추가할 수 있습니다.</div>
-          ) : (
-            state.processes.map((process) => (
-              <article
-                className={`row ${statusKind(process.status)}`}
-                key={process.id}
-                title={`상태: ${process.status} · 우클릭: 편집/삭제`}
-                aria-label={`${process.name} ${process.status}`}
-                onContextMenu={(event) => openContextMenu(event, processMenuItems(process))}
-              >
-                <div className="game">
-                  <img src={`${API_BASE}${process.icon_url}`} alt="" />
-                  <div>
-                    <strong><span className="state-dot" aria-hidden="true" /><span className="game-title">{process.name}</span></strong>
-                    <span title={process.preferred_launch_type === 'direct' ? '프로세스 선호' : process.preferred_launch_type === 'launcher' ? '런처 우선' : '바로가기 선호'}>{process.preferred_launch_type === 'direct' ? '프로세스' : process.preferred_launch_type === 'launcher' ? '런처' : '바로가기'}</span>
-                  </div>
-                </div>
-                <ProgressBar progress={process.progress} />
-                <button
-                  className="launch"
-                  disabled={busyId === process.id}
-                  onClick={() => launch(process)}
-                  onContextMenu={(event) => openContextMenu(event, launchPreferenceItems(process))}
-                  title="우클릭: 실행 방식 선택"
-                  aria-label={busyId === process.id ? `${process.name} 실행 중` : `${process.name} 실행`}
-                >
-                  <LaunchIcon busy={busyId === process.id} />
-                </button>
-              </article>
-            ))
-          )}
-        </section>
-      )}
+          ))
+        )}
+      </section>
 
       <footer>
         <span>마지막 갱신 {new Date(state.generated_at).toLocaleTimeString()}</span>
-        <span>{state.settings.hide_on_game ? '게임 시 숨김' : '항상 표시'}</span>
+        <span>상태는 행 색상/인디케이터로 표시</span>
       </footer>
 
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}

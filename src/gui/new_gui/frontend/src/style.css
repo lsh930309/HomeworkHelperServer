@@ -74,13 +74,16 @@ button.tiny { min-height: 24px; border-radius: 8px; padding: 0 6px; font-size: 1
   position: relative;
   display: inline-block;
   width: max-content;
-  min-width: 500px;
+  min-width: 570px;
   min-height: 260px;
   overflow: hidden;
   padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 20px;
   background:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 32%),
-    linear-gradient(160deg, #111827 0%, #0f172a 100%);
+    radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.28), transparent 35%),
+    linear-gradient(145deg, #10192b 0%, #0b1220 100%);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
 }
 
 .popup-shell {
@@ -146,6 +149,8 @@ footer {
   gap: 10px;
 }
 
+.topbar { margin-bottom: 10px; }
+
 h1, h2 { margin: 0; }
 h1 {
   display: flex;
@@ -159,9 +164,9 @@ h2 { font-size: 17px; }
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 360px;
 }
 
 .actions button {
@@ -206,11 +211,11 @@ h2 { font-size: 17px; }
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-bottom: 10px;
   padding: 9px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.46);
+  background: rgba(15, 23, 42, 0.42);
 }
 
 .shortcut {
@@ -238,18 +243,17 @@ h2 { font-size: 17px; }
 .table-card {
   display: grid;
   gap: 8px;
-  margin-top: 10px;
   min-width: 540px;
 }
 
 .row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(210px, 1.25fr) minmax(210px, 1fr) 58px;
+  grid-template-columns: 42px minmax(150px, 1.1fr) 215px 62px;
   align-items: center;
   gap: 10px;
-  min-height: 68px;
-  padding: 10px 12px 10px 18px;
+  min-height: 70px;
+  padding: 10px 10px 10px 18px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 16px;
@@ -290,31 +294,29 @@ h2 { font-size: 17px; }
 .row.done::after { background: linear-gradient(90deg, rgba(56, 210, 125, 0.13), transparent); }
 .row.incomplete::after { background: linear-gradient(90deg, rgba(251, 146, 60, 0.14), transparent); }
 
-.game {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 10px;
-}
-
-.game img {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  object-fit: contain;
+.game-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  object-fit: cover;
   background: rgba(255, 255, 255, 0.08);
   image-rendering: auto;
 }
 
-.game strong,
-.game span {
+.game-name {
+  min-width: 0;
+}
+
+.game-name strong,
+.game-name span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.game strong {
+.game-name strong {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -329,14 +331,14 @@ h2 { font-size: 17px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.game span,
+.game-name span,
 footer { color: #94a3b8; font-size: 11px; }
 
 .state-dot {
   position: relative;
   width: 10px;
   height: 10px;
-  margin-left: 2px;
+  margin-left: 3px;
   flex: 0 0 auto;
   border-radius: 999px;
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05), 0 0 8px 2px currentColor, 0 0 18px 4px color-mix(in srgb, currentColor 42%, transparent);
@@ -372,13 +374,13 @@ footer { color: #94a3b8; font-size: 11px; }
 .fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #22d3ee, #60a5fa, #a78bfa);
+  min-width: 10px;
+  background: linear-gradient(90deg, #fb923c, #f97316);
 }
 
-.progress.ok .fill { background: linear-gradient(90deg, #22c55e, #86efac); }
-.progress.mid .fill { background: linear-gradient(90deg, #eab308, #fde047); }
-.progress.warn .fill { background: linear-gradient(90deg, #f97316, #fb923c); }
-.progress.full .fill { background: linear-gradient(90deg, #ef4444, #f87171); }
+.progress.time .fill { background: linear-gradient(90deg, #fb923c, #f97316); }
+.progress.stamina .fill { background: linear-gradient(90deg, #facc15, #eab308); }
+.progress.full .fill { background: linear-gradient(90deg, #fb7185, #ef4444); }
 
 .progress-kind {
   display: inline-flex;
@@ -424,84 +426,10 @@ footer { color: #94a3b8; font-size: 11px; }
 .launch.wide { width: 100%; margin-top: 8px; }
 .play-icon { transform: translateX(1px); }
 
-.status {
-  display: inline-flex;
-  justify-content: center;
-  border-radius: 999px;
-  padding: 5px 7px;
-  font-size: 11px;
-}
-
-.status.running { background: rgba(250, 204, 21, 0.18); color: #fde68a; }
-.status.incomplete { background: rgba(248, 113, 113, 0.18); color: #fecaca; }
-.status.done { background: rgba(34, 197, 94, 0.16); color: #bbf7d0; }
-
 .empty {
   padding: 24px;
   color: #94a3b8;
   text-align: center;
-}
-
-.design-card-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(260px, 1fr));
-  gap: 9px;
-  margin-top: 10px;
-  min-width: 560px;
-}
-
-.game-card {
-  padding: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.72);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
-}
-
-.game-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 9px;
-}
-
-.command-center {
-  display: grid;
-  grid-template-columns: 160px minmax(430px, 1fr);
-  gap: 10px;
-  margin-top: 10px;
-  min-width: 620px;
-}
-
-.command-summary {
-  display: grid;
-  place-content: center;
-  gap: 4px;
-  min-height: 150px;
-  border: 1px solid rgba(96, 165, 250, 0.28);
-  border-radius: 18px;
-  background: linear-gradient(145deg, rgba(37, 99, 235, 0.24), rgba(15, 23, 42, 0.74));
-  text-align: center;
-}
-
-.command-summary strong { font-size: 42px; }
-.command-summary span { color: #93c5fd; font-size: 12px; }
-
-.command-list {
-  display: grid;
-  gap: 7px;
-}
-
-.command-row {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(190px, 1.1fr) 54px;
-  align-items: center;
-  gap: 9px;
-  padding: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px;
-  background: rgba(15, 23, 42, 0.64);
 }
 
 footer { margin-top: 8px; }

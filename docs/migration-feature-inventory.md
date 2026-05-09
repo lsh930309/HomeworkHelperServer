@@ -13,7 +13,7 @@
 
 | ID | 기능군 | 현재 PyQt | 새 GUI | 데이터 위험 | 전환 판단 |
 | --- | --- | --- | --- | --- | --- |
-| APP-001 | 기본 앱 shell + 새 GUI 패키징 | complete | partial | low | 새 GUI는 미리보기 shell 유지 |
+| APP-001 | 기본 앱 shell + 새 GUI 패키징 | complete | partial | low | 새 GUI는 미리보기 shell 유지, 메인 목록 v6 상태 인디케이터 톤 유지 |
 | APP-002 | 단일 인스턴스/트레이 | complete | partial | medium | 새 GUI shell hook 구현, Windows tray smoke 필요 |
 | GAME-001 | 게임 CRUD/실행 방식 | complete | partial | high | CRUD/API/Beholder 테스트 필수, 새 GUI 편집은 별도 popup, 런타임 필드 편집 차단 |
 | GAME-002 | 게임 실행 | complete | partial | medium | 실행 대상 계획 API/자동 테스트 유지, Windows smoke 필요 |
