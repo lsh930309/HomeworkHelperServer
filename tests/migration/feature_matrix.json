@@ -366,7 +366,8 @@
       "automated_tests": [
         "test_beholder_active_incidents_api_and_resolve",
         "test_settings_guard_blocks_columns_outside_actor_scope",
-        "test_delete_process_with_open_session_offers_safe_cleanup_action"
+        "test_delete_process_with_open_session_offers_safe_cleanup_action",
+        "test_new_gui_beholder_restore_uses_preview_before_restore"
       ],
       "manual_smoke": [
         "PyQt incident dialog",
@@ -393,7 +394,8 @@
       "automated_tests": [
         "test_web_shortcut_open_uses_guarded_crud_path",
         "test_process_crud_writes_snapshot_and_preserves_data_contract",
-        "test_real_appdata_zip_structure_and_db_integrity"
+        "test_real_appdata_zip_structure_and_db_integrity",
+        "test_new_gui_beholder_restore_uses_preview_before_restore"
       ],
       "manual_smoke": [
         "앱 재시작 후 app_data.backup.1.db 생성",

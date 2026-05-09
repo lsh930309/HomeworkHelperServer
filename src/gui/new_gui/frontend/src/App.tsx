@@ -427,6 +427,7 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [backups, setBackups] = React.useState<Array<{ slot: number; modified_at: number; size: number }>>([]);
+  const [restorePreview, setRestorePreview] = React.useState<{ backup: { slot: number; modified_at: number; size: number }; current: { path: string; size: number } } | null>(null);
   const resolve = async (action: string) => {
     setBusy(action);
     setError(null);
@@ -450,6 +451,7 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
   };
   const loadBackups = async () => {
     setError(null);
+    setRestorePreview(null);
     try {
       const body = await fetchJson<{ backups: Array<{ slot: number; modified_at: number; size: number }> }>('/api/beholder/backups');
       setBackups(body.backups || []);
@@ -458,9 +460,16 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
     }
   };
   const restore = async (slot: number) => {
-    if (!window.confirm(`backup.${slot}로 DB를 복구할까요? 현재 DB는 복구 직전 snapshot으로 보존됩니다.`)) return;
+    setError(null);
+    setMessage(null);
     setBusy(`restore-${slot}`);
     try {
+      const preview = await fetchJson<{ backup: { slot: number; modified_at: number; size: number }; current: { path: string; size: number } }>('/api/beholder/backups/restore-preview', {
+        method: 'POST',
+        body: JSON.stringify({ slot }),
+      });
+      setRestorePreview(preview);
+      if (!window.confirm(`backup.${slot}로 DB를 복구할까요?\n\n현재 DB: ${preview.current.size} bytes\n복구 백업: ${preview.backup.size} bytes\n\n현재 DB는 복구 직전 snapshot으로 보존됩니다.`)) return;
       await fetchJson('/api/beholder/backups/restore', { method: 'POST', body: JSON.stringify({ slot }) });
       setMessage('백업 복구가 완료되었습니다. 앱을 재시작해 주세요.');
     } catch (e: any) {
@@ -490,6 +499,11 @@ function BeholderModal({ incident, onClose, onResolved }: { incident: BeholderIn
                 backup.{backup.slot} · {new Date(backup.modified_at * 1000).toLocaleString()} · {backup.size} bytes
               </button>
             ))}
+          </div>
+        )}
+        {restorePreview && (
+          <div className="notice compact">
+            복구 미리보기: 현재 DB {restorePreview.current.size} bytes → backup.{restorePreview.backup.slot} {restorePreview.backup.size} bytes
           </div>
         )}
         {message && <div className="notice compact">{message}</div>}
