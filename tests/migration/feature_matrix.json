@@ -285,7 +285,8 @@
         "test_dashboard_entrypoint_uses_stable_packaged_assets",
         "test_games_api_groups_normalized_names_and_returns_icon_candidate",
         "test_real_appdata_main_gui_state_and_icon_cache_use_clone",
-        "test_dashboard_style_reuses_new_gui_visual_tokens"
+        "test_dashboard_style_reuses_new_gui_visual_tokens",
+        "test_verify_project_builds_all_frontend_migration_surfaces"
       ],
       "manual_smoke": [
         "대시보드 열기",
@@ -467,7 +468,8 @@
         "test_build_dashboard_frontend_writes_only_ignored_build_dirs",
         "test_build_main_gui_frontend_writes_only_ignored_build_dirs",
         "test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir",
-        "test_build_and_stage_new_gui_shell_by_default"
+        "test_build_and_stage_new_gui_shell_by_default",
+        "test_verify_project_builds_all_frontend_migration_surfaces"
       ],
       "manual_smoke": [
         "python build.py 전체 실행",

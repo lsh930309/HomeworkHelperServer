@@ -36,7 +36,7 @@
 
 - 로컬에 `HomeworkHelper.zip`이 있으면 `tools/verify_project.py`는 ZIP에서 새 임시 AppData 복제본을 만들어 real-data fixture 검증을 함께 실행한다.
 - 원본 ZIP과 추출물은 Git 추적 대상이 아니며, 테스트는 복제 DB/리소스만 읽거나 수정한다.
-- `python tools/verify_project.py --require-real-data`는 ZIP 부재를 실패로 처리해 마이그레이션 작업자가 실사용 데이터 검증을 의무화할 때 사용한다.
+- `python tools/verify_project.py --require-real-data`는 ZIP 부재를 실패로 처리해 마이그레이션 작업자가 실사용 데이터 검증을 의무화할 때 사용한다. 이 gate는 새 GUI와 dashboard frontend를 모두 빌드한다.
 
 ## 운영 방식
 

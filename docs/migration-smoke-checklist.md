@@ -66,4 +66,5 @@
 ## 실사용 데이터 복제 검증
 
 - [ ] 로컬 `HomeworkHelper.zip`이 있는 상태에서 `python tools/verify_project.py --require-real-data`가 통과한다.
+- [ ] `python tools/verify_project.py --full --require-real-data`가 새 GUI와 dashboard frontend를 모두 빌드한다.
 - [ ] 신규 GUI 미리보기에서 실제 DB 복제본의 게임/웹/아이콘/설정이 표시된다.

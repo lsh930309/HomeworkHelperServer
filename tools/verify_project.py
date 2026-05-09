@@ -75,6 +75,7 @@ def main() -> None:
         [py, "-m", "compileall", "-q", "tests", "src/data", "src/api", "src/gui", "homework_helper.pyw", "build.py"],
     )
     run("main GUI frontend build", ["npm", "run", "build:main-gui"])
+    run("dashboard frontend build", ["npm", "run", "build:dashboard"])
     run("Tauri Rust check", ["cargo", "check", "--manifest-path", "src-tauri/Cargo.toml"])
     if args.full:
         run("Tauri shell release build", ["npm", "run", "tauri:build", "--", "--no-bundle"])
