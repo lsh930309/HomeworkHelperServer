@@ -140,6 +140,15 @@ class EdgeTriggerWindow(QWidget):
         trigger_x = geo.right() - self._trigger_width_px + 1
         return QRect(trigger_x, geo.top(), self._trigger_width_px, geo.height())
 
+    def _trigger_zone_geometry(self, screen: QScreen) -> QRect:
+        """현재 스크린 좌표 기준의 실제 edge hover 감지 영역을 반환합니다."""
+        geo: QRect = screen.geometry()
+        zone_top = geo.top() + int(geo.height() * self._trigger_y_start)
+        zone_bottom = geo.top() + int(geo.height() * self._trigger_y_end)
+        zone_height = max(1, zone_bottom - zone_top)
+        trigger_x = geo.right() - self._trigger_width_px + 1
+        return QRect(trigger_x, zone_top, self._trigger_width_px, zone_height)
+
     def _handle_geometry(self, screen: QScreen) -> QRect:
         geo: QRect = screen.geometry()
         zone_top = geo.top() + int(geo.height() * self._trigger_y_start)
@@ -203,6 +212,13 @@ class EdgeTriggerWindow(QWidget):
         if self._poll_timer.isActive():
             self.show()
 
+    def _screen_for_cursor(self, cursor_pos) -> Optional[QScreen]:
+        """커서가 놓인 스크린을 반환합니다. 없으면 현재 배치 스크린을 사용합니다."""
+        for screen in QApplication.screens():
+            if screen.geometry().contains(cursor_pos):
+                return screen
+        return self._screen
+
     def _poll_cursor(self) -> None:
         """현재 커서 위치를 확인하고 트리거 영역 진입 여부를 판단합니다."""
         if self._in_cooldown:
@@ -218,19 +234,18 @@ class EdgeTriggerWindow(QWidget):
                 self._handle_hide_timer.start(_HANDLE_HIDE_DELAY_MS)
             return
 
-        # 트리거 창 자체의 geometry 기준으로 판정 (멀티모니터 오탐 방지)
-        my_geo: QRect = self.geometry()
-
-        # 우측 가장자리 X 범위 내에 있는지 확인 (오른쪽 보조 모니터 오탐 방지)
-        if cursor_pos.x() < my_geo.left() or cursor_pos.x() > my_geo.right():
+        # 숨김 edge overlay는 WindowTransparentForInput/top-level flag 전환을
+        # 거치므로 플랫폼별로 실제 QWidget geometry가 흔들릴 수 있습니다.
+        # hover 판정은 widget geometry가 아니라 현재 커서가 위치한 QScreen의
+        # 우측 edge strip을 직접 계산해 수행합니다.
+        screen = self._screen_for_cursor(cursor_pos)
+        if screen is None:
             self._cursor_was_in_zone = False
             return
-
-        # Y 비율 계산 (트리거 창은 화면 전체 높이와 동일)
-        if my_geo.height() == 0:
-            return
-        y_ratio = (cursor_pos.y() - my_geo.top()) / my_geo.height()
-        in_zone = self._trigger_y_start <= y_ratio <= self._trigger_y_end
+        if screen != self._screen:
+            self._screen = screen
+            self._reposition(screen)
+        in_zone = self._trigger_zone_geometry(screen).contains(cursor_pos)
 
         if in_zone and not self._cursor_was_in_zone:
             # 새로 진입한 경우 서랍 손잡이만 표시합니다. 실제 사이드바는 클릭으로 엽니다.

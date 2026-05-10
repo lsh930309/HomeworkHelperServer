@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-05-10",
-  "notes": "This change updates the current installed PyQt GUI. Tauri/React preview parity remains explicitly not assessed here. Windows-only manual smoke is tracked but excluded from this macOS goal completion gate.",
+  "notes": "This change updates the current installed PyQt GUI. Tauri/React preview parity remains explicitly not assessed here. Launch foreground focus was removed to keep sidebar edge handling deterministic.",
   "features": [
     {
       "id": "GUI-TABLE-001",
@@ -35,22 +35,6 @@
         "tests/test_gui_layout.py::test_sidebar_frame_css_remains_borderless"
       ],
       "manual_smoke": "docs/migration-smoke-checklist.md#sidebar-drawer-handle",
-      "windows_only_manual_gate": "deferred-off-device"
-    },
-    {
-      "id": "LAUNCH-FOCUS-001",
-      "name": "Best-effort focus to launched game window",
-      "area": "launcher-runtime",
-      "data_contract": "Launch remains through Launcher; focus helper has no DB writes",
-      "risk": "medium",
-      "legacy_gui_status": "implemented",
-      "pyqt_status": "updated",
-      "new_gui_status": "tauri-preview-not-assessed",
-      "automated_tests": [
-        "tests/test_gui_layout.py::test_focus_helper_noops_off_windows",
-        "tests/test_gui_layout.py::test_window_focus_declares_user32_signatures"
-      ],
-      "manual_smoke": "docs/migration-smoke-checklist.md#launch-focus",
       "windows_only_manual_gate": "deferred-off-device"
     }
   ]

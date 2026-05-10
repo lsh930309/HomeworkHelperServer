@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import QApplication, QLabel
 from src.data.data_models import GlobalSettings, ManagedProcess, WebShortcut
 from src.core.process_monitor import ProcessMonitorTickResult
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
-from src.utils.window_focus import focus_process_window
 
 
 class _Noop:
@@ -411,17 +410,11 @@ def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monk
     assert sidebar_events == ["slide_out"]
 
 
-def test_focus_helper_noops_off_windows(monkeypatch):
-    import src.utils.window_focus as window_focus
+def test_main_window_no_longer_schedules_foreground_focus():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
-    monkeypatch.setattr(window_focus.sys, "platform", "darwin")
-    monkeypatch.setattr(
-        window_focus,
-        "find_process_ids_by_executable",
-        lambda _path: (_ for _ in ()).throw(AssertionError("should return before process scan")),
-    )
-
-    assert focus_process_window(pid=1234, executable_path="/Applications/Game.app") is False
+    assert "focus_process_window" not in source
+    assert "_schedule_focus_after_launch" not in source
 
 
 def test_edge_trigger_exposes_borderless_click_handle():
@@ -516,27 +509,36 @@ def test_edge_trigger_polls_only_inside_the_edge_strip(monkeypatch):
         app.processEvents()
 
 
+def test_edge_trigger_poll_uses_screen_edge_even_if_hidden_widget_geometry_stale(monkeypatch):
+    import src.gui.sidebar.edge_trigger_window as edge_module
+
+    app = _qapp()
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    try:
+        edge._hide_handle()
+        screen_geo = edge._screen.geometry()
+        edge.setGeometry(0, 0, 1, 1)
+        monkeypatch.setattr(
+            edge_module,
+            "QCursor",
+            type("FakeCursor", (), {"pos": staticmethod(lambda: QPoint(screen_geo.right(), screen_geo.center().y()))}),
+        )
+
+        edge._poll_cursor()
+
+        assert edge._handle_visible is True
+        assert edge.geometry() == edge._handle_geometry(edge._screen)
+    finally:
+        edge.stop()
+        edge.deleteLater()
+        app.processEvents()
+
+
 def test_sidebar_frame_css_remains_borderless():
     source = Path("src/gui/sidebar/sidebar_widget.py").read_text(encoding="utf-8")
 
     assert "border-left:" not in source
     assert "border: none;" in source
-
-
-def test_window_focus_declares_user32_signatures():
-    source = Path("src/utils/window_focus.py").read_text(encoding="utf-8")
-
-    for api_name in [
-        "EnumWindows",
-        "IsWindowVisible",
-        "GetWindowThreadProcessId",
-        "AllowSetForegroundWindow",
-        "ShowWindow",
-        "BringWindowToTop",
-        "SetForegroundWindow",
-    ]:
-        assert f"user32.{api_name}.argtypes" in source
-        assert f"user32.{api_name}.restype" in source
 
 
 def test_process_icon_prefers_process_id_cache_without_existing_exe(monkeypatch, tmp_path):

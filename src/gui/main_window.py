@@ -34,7 +34,6 @@ import requests
 from src.api.client import ApiClient
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
-from src.utils.window_focus import focus_process_window
 from src.utils.windows import (
     apply_windows_title_bar_color,
     set_startup_shortcut,
@@ -103,8 +102,6 @@ class MainWindow(QMainWindow):
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
-    _FOCUS_ATTEMPT_INTERVAL_MS = 750
-    _FOCUS_ATTEMPT_COUNT = 12
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
     _SCREEN_SIZE_RATIO = 0.92
@@ -159,7 +156,6 @@ class MainWindow(QMainWindow):
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
-        self._focus_attempt_tokens: dict[str, int] = {}
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -1325,7 +1321,6 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 시도.", 3000)
-            self._schedule_focus_after_launch(p_launch, launch_target)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
@@ -1348,7 +1343,6 @@ class MainWindow(QMainWindow):
             if status_bar:
                 path_type = "바로가기" if use_shortcut else "직접 실행"
                 status_bar.showMessage(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
-            self._schedule_focus_after_launch(p_launch, launch_target)
             self.update_process_statuses_only()
         else:
             status_bar = self.statusBar()
@@ -1385,31 +1379,6 @@ class MainWindow(QMainWindow):
                 )
         else:
             QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
-
-    def _schedule_focus_after_launch(self, process: ManagedProcess, launch_target: str | None = None) -> None:
-        """게임 창이 늦게 생기는 경우를 고려해 foreground focus를 재시도합니다."""
-        self._focus_attempt_tokens[process.id] = self._focus_attempt_tokens.get(process.id, 0) + 1
-        token = self._focus_attempt_tokens[process.id]
-        executable_path = process.monitoring_path or launch_target or process.launch_path
-
-        def _attempt(remaining: int) -> None:
-            if self._focus_attempt_tokens.get(process.id) != token:
-                return
-            entry = self.process_monitor.active_monitored_processes.get(process.id, {})
-            pid = entry.get("pid")
-            if focus_process_window(pid=pid, executable_path=executable_path):
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"'{process.name}' 창으로 포커스를 이동했습니다.", 2000)
-                return
-            if remaining <= 0:
-                return
-            QTimer.singleShot(
-                self._FOCUS_ATTEMPT_INTERVAL_MS,
-                functools.partial(_attempt, remaining - 1),
-            )
-
-        QTimer.singleShot(0, functools.partial(_attempt, self._FOCUS_ATTEMPT_COUNT))
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
