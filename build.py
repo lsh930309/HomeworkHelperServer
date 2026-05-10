@@ -18,6 +18,7 @@ import queue
 import traceback
 from pathlib import Path
 from datetime import datetime
+from src.gui.mode import GUI_MODE_FILE_NAME, GUI_MODE_V1, GUI_MODE_V2
 try:
     import tkinter as tk
     from tkinter import ttk, scrolledtext
@@ -43,6 +44,7 @@ MAIN_GUI_CACHE_DIR = BUILD_DIR / "main-gui-cache"
 TAURI_DIR = PROJECT_ROOT / "src-tauri"
 TAURI_SHELL_DIST_NAME = "homework_helper_gui.exe"
 TAURI_SHELL_SOURCE = TAURI_DIR / "target" / "release" / "homework-helper-shell.exe"
+GUI_MODE_PROTOTYPE = "prototype"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -153,26 +155,26 @@ def get_latest_version():
 
 
 class GuiModeSelectorGUI:
-    """패키징에 사용할 단일 GUI 모드를 버전 선택 전에 고릅니다."""
+    """패키징에 사용할 단일 main GUI 모드를 버전 선택 전에 고릅니다."""
 
     def __init__(self, theme, font_family="맑은 고딕"):
         self.theme = theme
         self.font_family = font_family
         self.result = None
         self.root = tk.Tk()
-        self.root.title("HomeworkHelper - GUI 모드 선택")
-        self.root.geometry("460x260")
+        self.root.title("HomeworkHelper - main GUI 선택")
+        self.root.geometry("520x280")
         self.root.resizable(False, False)
         self.root.configure(bg=theme.bg)
         self.root.attributes('-topmost', True)
         self._create_widgets()
 
     def _create_widgets(self):
-        title = tk.Label(self.root, text="빌드할 GUI 모드 선택", font=(self.font_family, 16), bg=self.theme.bg, fg=self.theme.fg)
+        title = tk.Label(self.root, text="빌드할 단일 main GUI 선택", font=(self.font_family, 16), bg=self.theme.bg, fg=self.theme.fg)
         title.pack(pady=(22, 8))
         desc = tk.Label(
             self.root,
-            text="선택한 GUI만 사용자 실행 진입점으로 패키징합니다.\n신규 GUI 모드는 backend sidecar 용도로만 PyInstaller 실행 파일을 포함합니다.",
+            text="v1은 기존 Qt6 GUI, v2는 prototype 디자인 철학을 PyQt 안정성 위에 이식한 GUI입니다.\n선택한 형태만 사용자 실행 진입점으로 패키징합니다.",
             font=(self.font_family, 9),
             bg=self.theme.bg,
             fg=self.theme.fg,
@@ -182,16 +184,16 @@ class GuiModeSelectorGUI:
 
         btn_frame = tk.Frame(self.root, bg=self.theme.bg)
         btn_frame.pack(pady=8)
-        legacy_btn = tk.Button(btn_frame, text="레거시 GUI (Qt6)", width=18, command=lambda: self._select("legacy"))
+        legacy_btn = tk.Button(btn_frame, text="v1 · 기존 Qt6", width=18, command=lambda: self._select(GUI_MODE_V1))
         legacy_btn.pack(side=tk.LEFT, padx=8)
-        new_btn = tk.Button(btn_frame, text="신규 GUI (Tauri/React)", width=20, command=lambda: self._select("new_gui"))
+        new_btn = tk.Button(btn_frame, text="v2 · PyQt 디자인 이식", width=22, command=lambda: self._select(GUI_MODE_V2))
         new_btn.pack(side=tk.LEFT, padx=8)
 
         hint = tk.Label(self.root, text="ESC: 취소", font=(self.font_family, 9), bg=self.theme.bg, fg=self.theme.fg)
         hint.pack(pady=(18, 0))
         self.root.bind('<Escape>', lambda _event: self.root.destroy())
-        self.root.bind('1', lambda _event: self._select("legacy"))
-        self.root.bind('2', lambda _event: self._select("new_gui"))
+        self.root.bind('1', lambda _event: self._select(GUI_MODE_V1))
+        self.root.bind('2', lambda _event: self._select(GUI_MODE_V2))
 
     def _select(self, mode):
         self.result = mode
@@ -722,11 +724,34 @@ def stage_new_gui_shell(gui):
     return True
 
 
-def code_sign_targets(gui_mode="new_gui"):
+def normalize_build_gui_mode(gui_mode: str | None) -> str:
+    value = (gui_mode or GUI_MODE_V2).strip().lower().replace("-", "_")
+    if value in {"v1", "legacy", "qt6"}:
+        return GUI_MODE_V1
+    if value in {"v2", "pyqt_v2", "main_gui_v2"}:
+        return GUI_MODE_V2
+    if value in {"prototype", "new_gui", "tauri", "react"}:
+        return GUI_MODE_PROTOTYPE
+    return GUI_MODE_V2
+
+
+def code_sign_targets(gui_mode=GUI_MODE_V2):
+    gui_mode = normalize_build_gui_mode(gui_mode)
     targets = [APP_FOLDER / "homework_helper.exe"]
-    if gui_mode == "new_gui":
+    if gui_mode == GUI_MODE_PROTOTYPE:
         targets.append(APP_FOLDER / TAURI_SHELL_DIST_NAME)
     return targets
+
+
+def stage_gui_mode_file(gui, gui_mode=GUI_MODE_V2):
+    """Write the packaged single-entry PyQt GUI mode marker."""
+    gui_mode = normalize_build_gui_mode(gui_mode)
+    runtime_mode = GUI_MODE_V2 if gui_mode == GUI_MODE_V2 else GUI_MODE_V1
+    APP_FOLDER.mkdir(parents=True, exist_ok=True)
+    target = APP_FOLDER / GUI_MODE_FILE_NAME
+    target.write_text(runtime_mode + "\n", encoding="utf-8")
+    gui.log(f"  ✓ main GUI 모드 기록: {target.relative_to(PROJECT_ROOT)} = {runtime_mode}", 'success')
+    return True
 
 
 
@@ -1100,7 +1125,7 @@ def create_zip_distribution(gui, version_info):
         return False
 
 
-def update_installer_script_version(version_info, gui_mode="new_gui"):
+def update_installer_script_version(version_info, gui_mode=GUI_MODE_V2):
     """installer.iss 파일의 버전 정보 업데이트"""
     if not INSTALLER_SCRIPT.exists():
         return False
@@ -1115,6 +1140,7 @@ def update_installer_script_version(version_info, gui_mode="new_gui"):
             rf'\g<1>{version_string}\g<2>',
             content
         )
+        gui_mode = normalize_build_gui_mode(gui_mode)
         content = re.sub(
             r'(#define BuildGuiMode\s+")[^"]+(")',
             rf'\g<1>{gui_mode}\g<2>',
@@ -1129,7 +1155,7 @@ def update_installer_script_version(version_info, gui_mode="new_gui"):
         return False
 
 
-def create_installer(gui, version_info, gui_mode="new_gui"):
+def create_installer(gui, version_info, gui_mode=GUI_MODE_V2):
     """Inno Setup으로 인스톨러 생성"""
     gui.log_section("Inno Setup 인스톨러 생성")
     gui.set_status("인스톨러 생성 중...")
@@ -1150,6 +1176,7 @@ def create_installer(gui, version_info, gui_mode="new_gui"):
         gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
+    gui_mode = normalize_build_gui_mode(gui_mode)
     update_installer_script_version(version_info, gui_mode)
 
     cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
@@ -1268,10 +1295,11 @@ def print_summary(gui, version_info):
     gui.log("  2. Portable 버전: *.zip 압축 해제 후 실행")
 
 
-def run_build_process(gui, version_info, gui_mode="new_gui"):
+def run_build_process(gui, version_info, gui_mode=GUI_MODE_V2):
     """빌드 프로세스 실행 (별도 스레드)"""
     def build():
         try:
+            normalized_gui_mode = normalize_build_gui_mode(gui_mode)
             # 1. 아카이빙
             archive_old_files(gui, version_info)
 
@@ -1283,7 +1311,7 @@ def run_build_process(gui, version_info, gui_mode="new_gui"):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            if gui_mode == "new_gui":
+            if normalized_gui_mode == GUI_MODE_PROTOTYPE:
                 # 3-1. Tauri 메인 GUI 프론트엔드 빌드
                 if not build_main_gui_frontend(gui):
                     gui.show_complete(False, auto_close_delay=0)
@@ -1294,14 +1322,18 @@ def run_build_process(gui, version_info, gui_mode="new_gui"):
                     gui.show_complete(False, auto_close_delay=0)
                     return
             else:
-                gui.log("\n[레거시 GUI 모드] 신규 GUI 프론트엔드/Tauri shell 빌드를 건너뜁니다.")
+                gui.log(f"\n[{normalized_gui_mode} main GUI 모드] prototype 프론트엔드/Tauri shell 빌드를 건너뜁니다.")
 
             # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            if gui_mode == "new_gui":
+            if not stage_gui_mode_file(gui, normalized_gui_mode):
+                gui.show_complete(False, auto_close_delay=0)
+                return
+
+            if normalized_gui_mode == GUI_MODE_PROTOTYPE:
                 # 4-1. Tauri 새 GUI shell을 PyInstaller 배포 폴더에 포함
                 if not stage_new_gui_shell(gui):
                     gui.show_complete(False, auto_close_delay=0)
@@ -1309,7 +1341,7 @@ def run_build_process(gui, version_info, gui_mode="new_gui"):
 
             # 4-2. exe 코드 서명
             gui.set_progress(62)
-            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets(gui_mode)):
+            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets(normalized_gui_mode)):
                 gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
                 gui.show_complete(False, auto_close_delay=0)
                 return
@@ -1321,7 +1353,7 @@ def run_build_process(gui, version_info, gui_mode="new_gui"):
                 success_count += 1
 
             # 6. 인스톨러 생성
-            if create_installer(gui, version_info, gui_mode):
+            if create_installer(gui, version_info, normalized_gui_mode):
                 success_count += 1
 
                 # 7. 인스톨러 exe 코드 서명

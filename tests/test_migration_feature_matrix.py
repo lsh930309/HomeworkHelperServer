@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MATRIX_PATH = ROOT / "tests" / "migration" / "feature_matrix.json"
 INVENTORY_PATH = ROOT / "docs" / "migration-feature-inventory.md"
 SMOKE_PATH = ROOT / "docs" / "migration-smoke-checklist.md"
+V2_PARITY_PATH = ROOT / "docs" / "v2-gui-feature-parity.md"
+V2_COMPLETION_AUDIT_PATH = ROOT / "docs" / "v2-gui-completion-audit.md"
+V2_WINDOWS_LOGIC_REVIEW_PATH = ROOT / "docs" / "v2-gui-windows-logic-review.md"
 
 
 def _matrix() -> dict:
@@ -95,3 +98,73 @@ def test_new_gui_has_no_missing_high_risk_features_before_runtime_smoke_gate():
     ]
 
     assert sorted(blockers) == []
+
+
+def test_v2_parity_audit_tracks_every_feature_id_and_smoke_gate():
+    matrix_ids = {feature["id"] for feature in _matrix()["features"]}
+    parity_doc = V2_PARITY_PATH.read_text(encoding="utf-8")
+    parity_rows: dict[str, str] = {}
+
+    for line in parity_doc.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 6 or not re.match(r"^[A-Z]+-\d{3}$", cells[0]):
+            continue
+        parity_rows[cells[0]] = " | ".join(cells)
+
+    assert set(parity_rows) == matrix_ids
+    assert "src/gui/v2/main_window.py" in parity_doc
+    assert "src/gui/v2/settings_dialog.py" in parity_doc
+    assert "Windows-only smoke" in parity_doc
+    assert "v1/v2 feature parity 1:1 완전 완료" in parity_doc
+
+    for feature in _matrix()["features"]:
+        row = parity_rows[feature["id"]]
+        assert "자동" not in row or "test_" in row or "feature matrix" in row or "tests in feature matrix" in row
+        if feature["manual_smoke"]:
+            assert row.split(" | ")[-1].strip()
+
+
+def test_v2_completion_audit_covers_objective_requirements_and_stop_condition():
+    audit = V2_COMPLETION_AUDIT_PATH.read_text(encoding="utf-8")
+
+    for requirement_number in range(1, 6):
+        assert f"Requirement {requirement_number}" in audit
+
+    for required_reference in [
+        "Current-device status: **Achieved**",
+        "current-device goal acceptance",
+        "new-gui-design-philosophy-pyqt-portability-report.md",
+        "docs/v2-gui-feature-parity.md",
+        "docs/v2-gui-windows-logic-review.md",
+        "tests/migration/feature_matrix.json",
+        "docs/migration-smoke-checklist.md",
+        "migration parity declaration",
+        "python tools/verify_project.py --full",
+        "update_goal(status=\"complete\")",
+        "Not achieved yet",
+    ]:
+        assert required_reference in audit
+
+
+def test_v2_windows_logic_review_tracks_manual_smoke_feature_ids():
+    matrix = _matrix()
+    review_doc = V2_WINDOWS_LOGIC_REVIEW_PATH.read_text(encoding="utf-8")
+    smoke_feature_ids = {
+        feature["id"]
+        for feature in matrix["features"]
+        if feature["manual_smoke"]
+    }
+    review_rows: set[str] = set()
+
+    for line in review_doc.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and re.match(r"^[A-Z]+-\d{3}$", cells[0]):
+            review_rows.add(cells[0])
+
+    assert smoke_feature_ids <= review_rows
+    assert "current-device goal acceptance" in review_doc
+    assert "release/parity declaration" in review_doc

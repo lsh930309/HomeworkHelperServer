@@ -192,7 +192,7 @@ def _actor_label(actor: str | None) -> str:
         "legacy_process_monitor": "기존 GUI 실행 감지기",
         "new_gui_runtime": "신규 GUI 실행 상태 동기화",
         "new_gui_settings": "신규 GUI 설정 창",
-        "main_gui_settings": "신규 GUI 설정 창",
+        "main_gui_settings": "v2 main GUI 설정 허브",
         "global_settings_dialog": "기존 GUI 전역 설정 창",
         "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
         "new_gui_hoyolab_runtime": "신규 GUI HoYoLab 수동 새로고침",

@@ -6,11 +6,16 @@
 
 - [ ] APP-001: 설치 후 기본 `HomeworkHelper` 바로가기는 PyQt 앱을 실행한다.
 - [ ] APP-001: `HomeworkHelper 새 GUI 미리보기` 바로가기는 `homework_helper_gui.exe`를 실행한다.
+- [ ] APP-001: v2 main GUI는 OS 기본 제목 표시줄을 유지하고 prototype 톤의 card/topbar/message banner를 표시
+- [ ] APP-001: v2 main GUI에서 게임/웹/설정/대시보드/트레이/사이드바 기능이 v1과 1:1로 동작
 - [ ] APP-002: 새 GUI 두 번째 실행 시 새 인스턴스가 뜨지 않고 기존 창이 활성화된다.
 - [ ] APP-002: 새 GUI 닫기 버튼이 트레이 숨김으로 동작한다.
 - [ ] APP-002: 새 GUI 트레이 메뉴 열기/숨기기/종료가 정상 동작한다.
 - [ ] APP-002: PyQt 기본 앱의 기존 단일 인스턴스/트레이 동작이 유지된다.
-- [ ] BUILD-001: `python build.py` 실행 시 버전 선택 전에 legacy GUI / 신규 GUI 모드 선택 창이 먼저 표시된다.
+- [ ] BUILD-001: `python build.py` 실행 시 버전 선택 전에 v1 GUI / v2 GUI 모드 선택 창이 먼저 표시된다.
+- [ ] BUILD-001: v1 GUI 모드 패키지는 기존 Qt6 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: v2 GUI 모드 패키지는 PyQt v2 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: prototype shell은 main GUI 선택지가 아니라 별도 미리보기/검증 대상으로 유지
 
 ## 게임/웹/설정
 
@@ -21,9 +26,10 @@
 - [ ] WEB-001: 웹 바로가기 클릭/우클릭 편집/삭제/일일 초기화 상태가 동작한다.
 - [ ] WEB-001: 새 GUI에서 웹 바로가기 추가/편집이 별도 popup 창으로 열리고, 저장 후 메인 목록이 갱신된다.
 - [ ] SETTINGS-001: 새 GUI 설정 popup의 항상 위 옵션이 즉시 반영되고 재시작 후에도 보존된다.
+- [ ] SETTINGS-001: v2 설정 허브에서 일반/알림/사이드바/스크린샷/녹화/HoYoLab 탭이 하나의 popup 안에서 전환됨
 - [ ] APP-001: 새 GUI 메인 창의 GitHub favicon 버튼이 외부 브라우저로 저장소를 연다.
 - [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 바/점 인디케이터와 진행률 색상만으로 실행중/완료/미완료 상태를 구분한다.
-- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창은 header drag로 위치 이동이 가능하고 버튼/input/select는 drag로 오작동하지 않는다.
+- [ ] APP-001: prototype preview frameless 메인/설정/편집 창은 header drag로 위치 이동이 가능하고 버튼/input/select는 drag로 오작동하지 않는다.
 - [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 창 폭/높이를 과도하게 늘리지 않고 “자세히”에서 전체 내용을 확인할 수 있다.
 - [ ] SETTINGS-001: 전역 설정 저장 후 재시작해도 값이 보존된다.
 - [ ] SETTINGS-001: 관리자 권한 전환 및 시작프로그램 설정이 동작한다.
@@ -44,6 +50,7 @@
 - [ ] BACKUP-001: 앱 시작 DB rolling backup과 Beholder 백업 목록/복구 preview가 보인다.
 - [ ] BACKUP-001: 복구 preview에 현재 DB/백업의 게임·웹·플레이 기록 수와 복구 영향 안내가 표시된다.
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 쿠키 자동 추출/수동 저장/삭제/스태미나 테스트 조회가 동작한다.
+- [ ] HOYOLAB-001: v2 설정 허브 HoYoLab 탭에서 인증 정보 저장 후 허브/탭이 닫히지 않고 저장 상태가 갱신된다.
 - [ ] HOYOLAB-001: 새 GUI 게임 행 우클릭 “스태미나 새로고침”이 현재 스태미나를 DB/진행률에 반영한다.
 
 ## PyQt fallback 유지 기능
@@ -84,12 +91,13 @@
 - [ ] APP-001: 새 GUI packaged preview에서 API 게임/자원 아이콘이 CSP에 막히지 않고 표시됨
 - [ ] SCREENSHOT-001: 새 GUI packaged preview에서 API 스크린샷 썸네일이 CSP에 막히지 않고 표시됨
 - [ ] RECORDING-001: 새 GUI packaged preview에서 API 녹화 썸네일이 CSP에 막히지 않고 표시됨
-- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창을 header drag로 이동
+- [ ] APP-001: prototype preview frameless 메인/설정/편집 창을 header drag로 이동
 - [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 자동 맞춤 창을 과도하게 늘리지 않고 자세히에서 전체 내용을 표시
 - [ ] RECORDING-001: OBS 설정 불러오기 후 저장해도 기존 비밀번호가 평문 빈 값으로 덮이지 않음
 - [ ] BUILD-001: build.py 시작 시 GUI 모드 선택이 버전 선택보다 먼저 표시됨
-- [ ] BUILD-001: legacy GUI 모드 패키지는 PyQt 진입점만 노출
-- [ ] BUILD-001: new GUI 모드 패키지는 Tauri/React 진입점만 노출
+- [ ] BUILD-001: v1 GUI 모드 패키지는 기존 Qt6 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: v2 GUI 모드 패키지는 PyQt v2 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: prototype shell은 main GUI 선택지가 아니라 별도 미리보기/검증 대상으로 유지
 
 ## Feature matrix manual smoke trace
 - [ ] SIDEBAR-001: 새 GUI preview 스크린샷/녹화 갤러리가 동일한 썸네일 grid 구조와 우클릭 보조 동작을 제공
@@ -103,9 +111,11 @@
 - [ ] APP-001: HomeworkHelper 새 GUI 미리보기 바로가기 실행
 - [ ] APP-001: 새 GUI GitHub favicon 버튼 외부 브라우저 열기
 - [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 색상/인디케이터로 상태 표시
-- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창을 header drag로 이동
+- [ ] APP-001: prototype preview frameless 메인/설정/편집 창을 header drag로 이동
 - [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 자동 맞춤 창을 과도하게 늘리지 않고 자세히에서 전체 내용을 표시
 - [ ] APP-001: 새 GUI packaged preview에서 API 게임/자원 아이콘이 CSP에 막히지 않고 표시됨
+- [ ] APP-001: v2 main GUI는 OS 기본 제목 표시줄을 유지하고 prototype 톤의 card/topbar/message banner를 표시
+- [ ] APP-001: v2 main GUI에서 게임/웹/설정/대시보드/트레이/사이드바 기능이 v1과 1:1로 동작
 
 ### APP-002 단일 인스턴스, 트레이 최소화/복원/종료
 
@@ -142,6 +152,7 @@
 - [ ] SETTINGS-001: 새 GUI 설정 저장
 - [ ] SETTINGS-001: 권한 재시작 적용
 - [ ] SETTINGS-001: 새 GUI 설정 단일 popup 탭 전환과 콘텐츠 맞춤 창 크기, 가로/세로 스크롤바 없음
+- [ ] SETTINGS-001: v2 설정 허브에서 일반/알림/사이드바/스크린샷/녹화/HoYoLab 탭이 하나의 popup 안에서 전환됨
 
 ### SIDEBAR-001 사이드바 표시, 자동 숨김, 위치/높이/투명도/효과, 시계/플레이타임/볼륨 섹션
 
@@ -179,6 +190,7 @@
 
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 Chrome/Edge/Firefox 쿠키 추출
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 수동 쿠키 저장/삭제
+- [ ] HOYOLAB-001: v2 설정 허브 HoYoLab 탭에서 인증 정보 저장 후 허브/탭이 닫히지 않고 저장 상태가 갱신된다.
 - [ ] HOYOLAB-001: 새 GUI 설정 HoYoLab 탭에서 스태미나 테스트 조회
 - [ ] HOYOLAB-001: 새 GUI 게임 행 우클릭 스태미나 새로고침이 managed_processes.stamina_*에 반영
 - [ ] HOYOLAB-001: PyQt 런타임에서 게임 종료 후 stamina_at_end 기록 및 재동기화
@@ -219,8 +231,10 @@
 
 - [ ] BUILD-001: python build.py 전체 실행
 - [ ] BUILD-001: installer 설치/업데이트
-- [ ] BUILD-001: 기본 바로가기 PyQt 확인
-- [ ] BUILD-001: 새 GUI 미리보기 바로가기 확인
+- [ ] BUILD-001: build.py 시작 시 GUI 모드 선택이 버전 선택보다 먼저 표시됨
+- [ ] BUILD-001: v1 GUI 모드 패키지는 기존 Qt6 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: v2 GUI 모드 패키지는 PyQt v2 main GUI를 단일 진입점으로 실행
+- [ ] BUILD-001: prototype shell은 main GUI 선택지가 아니라 별도 미리보기/검증 대상으로 유지
 
 ### CLIPBOARD-001 스크린샷/파일 클립보드 payload 생성
 

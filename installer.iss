@@ -6,9 +6,9 @@
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
-#define MyNewGuiExeName "homework_helper_gui.exe"
-#define HasNewGuiShell FileExists("dist\homework_helper\homework_helper_gui.exe")
-#define BuildGuiMode "new_gui"
+#define MyPrototypeGuiExeName "homework_helper_gui.exe"
+#define HasPrototypeShell FileExists("dist\homework_helper\homework_helper_gui.exe")
+#define BuildGuiMode "v2"
 
 [Setup]
 ; 기본 정보
@@ -62,24 +62,24 @@ Source: "dist\homework_helper\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 
 [Icons]
 ; 시작 메뉴: build.py가 선택한 단일 GUI 진입점만 노출
-#if BuildGuiMode == "new_gui" && HasNewGuiShell
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyNewGuiExeName}"
+#if BuildGuiMode == "prototype" && HasPrototypeShell
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyPrototypeGuiExeName}"
 #else
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 #endif
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 ; 바탕화면 바로가기 (사용자 선택 시)
-#if BuildGuiMode == "new_gui" && HasNewGuiShell
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyNewGuiExeName}"; Tasks: desktopicon
+#if BuildGuiMode == "prototype" && HasPrototypeShell
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyPrototypeGuiExeName}"; Tasks: desktopicon
 #else
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 #endif
 
 [Run]
 ; 설치 완료 후 프로그램 실행 옵션
-#if BuildGuiMode == "new_gui" && HasNewGuiShell
-Filename: "{app}\{#MyNewGuiExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+#if BuildGuiMode == "prototype" && HasPrototypeShell
+Filename: "{app}\{#MyPrototypeGuiExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 #else
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 #endif
@@ -175,8 +175,8 @@ begin
   // 기존 PyQt GUI/백엔드 프로세스 종료
   Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-#if HasNewGuiShell
-  // Tauri 새 GUI shell 종료
+#if HasPrototypeShell
+  // Tauri prototype shell 종료
   Exec('taskkill', '/F /IM homework_helper_gui.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 #endif
   
@@ -191,7 +191,7 @@ end;
 function IsAppRunning(): Boolean;
 begin
   Result := IsProcessRunning('homework_helper.exe');
-#if HasNewGuiShell
+#if HasPrototypeShell
   if not Result then
     Result := IsProcessRunning('homework_helper_gui.exe');
 #endif

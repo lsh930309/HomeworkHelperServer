@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,84 @@ def audit_migration_matrix() -> None:
         raise SystemExit("High-risk missing migration features remain.")
 
 
+def audit_v2_completion_documents() -> None:
+    """Verify that v2 completion/parity audit artifacts still trace the matrix."""
+
+    matrix_path = ROOT / "tests" / "migration" / "feature_matrix.json"
+    parity_path = ROOT / "docs" / "v2-gui-feature-parity.md"
+    completion_path = ROOT / "docs" / "v2-gui-completion-audit.md"
+    windows_logic_path = ROOT / "docs" / "v2-gui-windows-logic-review.md"
+
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    parity_doc = parity_path.read_text(encoding="utf-8")
+    completion_doc = completion_path.read_text(encoding="utf-8")
+    windows_logic_doc = windows_logic_path.read_text(encoding="utf-8")
+    parity_rows = set()
+    for line in parity_doc.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and re.match(r"^[A-Z]+-\d{3}$", cells[0]):
+            parity_rows.add(cells[0])
+
+    missing_feature_ids = [
+        feature["id"]
+        for feature in matrix["features"]
+        if feature["id"] not in parity_rows
+    ]
+    missing_requirements = [
+        f"Requirement {number}"
+        for number in range(1, 6)
+        if f"Requirement {number}" not in completion_doc
+    ]
+    required_references = [
+        "Current-device status: **Achieved**",
+        "Not achieved yet",
+        "Windows-only smoke",
+        "new-gui-design-philosophy-pyqt-portability-report.md",
+        "docs/v2-gui-feature-parity.md",
+        "docs/v2-gui-windows-logic-review.md",
+        "tests/migration/feature_matrix.json",
+        "docs/migration-smoke-checklist.md",
+        "python tools/verify_project.py --full",
+        "update_goal(status=\"complete\")",
+    ]
+    missing_references = [
+        reference
+        for reference in required_references
+        if reference not in completion_doc
+    ]
+    windows_logic_rows = set()
+    for line in windows_logic_doc.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and re.match(r"^[A-Z]+-\d{3}$", cells[0]):
+            windows_logic_rows.add(cells[0])
+    smoke_feature_ids = {
+        feature["id"]
+        for feature in matrix["features"]
+        if feature["manual_smoke"]
+    }
+    missing_windows_logic_ids = sorted(smoke_feature_ids - windows_logic_rows)
+
+    print("\n==> v2 completion audit trace")
+    print(
+        "feature_ids_traced="
+        f"{len(matrix['features']) - len(missing_feature_ids)}/{len(matrix['features'])} "
+        f"objective_requirements_traced={5 - len(missing_requirements)}/5 "
+        f"windows_logic_ids_traced={len(smoke_feature_ids) - len(missing_windows_logic_ids)}/{len(smoke_feature_ids)}"
+    )
+    print("current_device_completion=achieved")
+    print("completion_status=not-achieved windows-smoke-required")
+
+    problems = missing_feature_ids + missing_requirements + missing_references + missing_windows_logic_ids
+    if problems:
+        for problem in problems:
+            print(f"! missing completion trace: {problem}")
+        raise SystemExit("v2 completion audit trace is incomplete.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run HomeworkHelper migration-safe verification checks.")
     parser.add_argument(
@@ -99,6 +178,7 @@ def main() -> None:
     if args.full:
         run("Tauri shell release build", ["npm", "run", "tauri:build", "--", "--no-bundle"])
     audit_migration_matrix()
+    audit_v2_completion_documents()
 
     print("\nVerification complete. For Windows-only behavior, run docs/migration-smoke-checklist.md.")
 

@@ -859,7 +859,9 @@ def start_main_application(instance_manager):
     from PyQt6.QtWidgets import QApplication
 
     from src.api.client import ApiClient
+    from src.gui.mode import resolve_gui_mode, GUI_MODE_V2
     from src.gui.main_window import MainWindow
+    from src.gui.v2 import V2MainWindow
     from src.utils.common import get_bundle_resource_path
 
     # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
@@ -900,7 +902,12 @@ def start_main_application(instance_manager):
     
 
     # 메인 윈도우 생성 (인스턴스 매니저 전달)
-    main_window = MainWindow(api_client_instance, instance_manager=instance_manager)
+    # v1/v2 모두 같은 AppData/API/CRUD/Beholder 경계를 사용하고, 빌드 단계에서
+    # 선택한 모드는 gui_mode.txt 또는 개발용 CLI/env override로 결정됩니다.
+    gui_mode = resolve_gui_mode(sys.argv, executable_path=sys.executable)
+    main_window_cls = V2MainWindow if gui_mode == GUI_MODE_V2 else MainWindow
+    print(f"[GUI] main GUI mode: {gui_mode} ({main_window_cls.__name__})")
+    main_window = main_window_cls(api_client_instance, instance_manager=instance_manager)
 
     # === Graceful Shutdown: signal 및 atexit 핸들러 등록 ===
     def gui_signal_handler(signum, frame):

@@ -276,7 +276,7 @@ def test_build_and_stage_new_gui_shell_by_default(monkeypatch, tmp_path):
     assert seen_cmds[-1][:3] == ["/usr/bin/npm", "run", "tauri:build"]
     assert build.stage_new_gui_shell(DummyGui()) is True
     assert (app_folder / build.TAURI_SHELL_DIST_NAME).read_bytes() == b"tauri shell"
-    assert app_folder / build.TAURI_SHELL_DIST_NAME in build.code_sign_targets()
+    assert app_folder / build.TAURI_SHELL_DIST_NAME in build.code_sign_targets("prototype")
 
 
 def test_pyinstaller_spec_excludes_new_gui_frontend_source_tree():
@@ -286,10 +286,40 @@ def test_pyinstaller_spec_excludes_new_gui_frontend_source_tree():
 
 def test_installer_has_new_gui_preview_shortcut_and_shutdown_guard():
     installer = Path("installer.iss").read_text(encoding="utf-8")
-    assert "#define HasNewGuiShell FileExists" in installer
+    assert "#define HasPrototypeShell FileExists" in installer
     assert '#define BuildGuiMode' in installer
-    assert "{#MyNewGuiExeName}" in installer
+    assert "{#MyPrototypeGuiExeName}" in installer
+    assert 'BuildGuiMode == "prototype"' in installer
     assert "taskkill', '/F /IM homework_helper_gui.exe" in installer
+
+
+def test_update_installer_script_version_persists_selected_gui_mode(monkeypatch, tmp_path):
+    script = tmp_path / "installer.iss"
+    script.write_text(
+        '\n'.join(
+            [
+                '#define MyAppVersion "0.0.0"',
+                '#define BuildGuiMode "v2"',
+                'Name: "{group}\\HomeworkHelper"; Filename: "{app}\\homework_helper.exe"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build, "INSTALLER_SCRIPT", script)
+    version_info = {"major": 2, "minor": 3, "patch": 4}
+
+    assert build.update_installer_script_version(version_info, gui_mode="v1")
+    updated = script.read_text(encoding="utf-8")
+    assert '#define MyAppVersion "2.3.4"' in updated
+    assert '#define BuildGuiMode "v1"' in updated
+
+    assert build.update_installer_script_version(version_info, gui_mode="prototype")
+    updated = script.read_text(encoding="utf-8")
+    assert '#define BuildGuiMode "prototype"' in updated
+
+    assert build.update_installer_script_version(version_info, gui_mode="broken")
+    updated = script.read_text(encoding="utf-8")
+    assert '#define BuildGuiMode "v2"' in updated
 
 
 def test_tauri_preview_shell_has_single_instance_and_tray_runtime_hooks():
@@ -311,7 +341,7 @@ def test_packaged_server_allows_tauri_http_origin_for_preview_shell():
     assert '"tauri://localhost"' in entrypoint
 
 
-def test_build_gui_mode_controls_user_entrypoint_and_shell_steps(monkeypatch, tmp_path):
+def test_build_gui_mode_controls_v1_v2_single_pyqt_entrypoint_and_shell_steps(monkeypatch, tmp_path):
     calls = []
     class Gui(DummyGui):
         def show_complete(self, *args, **kwargs):
@@ -325,13 +355,14 @@ def test_build_gui_mode_controls_user_entrypoint_and_shell_steps(monkeypatch, tm
     monkeypatch.setattr(build, "build_new_gui_shell", lambda *args: calls.append("tauri") or True)
     monkeypatch.setattr(build, "build_with_pyinstaller", lambda *args: calls.append("pyinstaller") or True)
     monkeypatch.setattr(build, "stage_new_gui_shell", lambda *args: calls.append("stage_tauri") or True)
+    monkeypatch.setattr(build, "stage_gui_mode_file", lambda *args: calls.append(("stage_gui_mode", args[-1])) or True)
     monkeypatch.setattr(build, "sign_build_artifacts", lambda *args, **kwargs: calls.append(("sign", kwargs.get("target_files"))) or True)
     monkeypatch.setattr(build, "create_zip_distribution", lambda *args: calls.append("zip") or True)
     monkeypatch.setattr(build, "create_installer", lambda *args: calls.append(("installer", args[-1] if len(args) > 2 else None)) or True)
     monkeypatch.setattr(build, "print_summary", lambda *args: calls.append("summary"))
     monkeypatch.setattr(build.subprocess, "Popen", lambda *args, **kwargs: calls.append("explorer"))
 
-    build.run_build_process(gui, {"string": "v1.2.3.1"}, gui_mode="legacy")
+    build.run_build_process(gui, {"string": "v1.2.3.1"}, gui_mode="v2")
     import time
     for _ in range(50):
         if "summary" in calls:
@@ -341,4 +372,96 @@ def test_build_gui_mode_controls_user_entrypoint_and_shell_steps(monkeypatch, tm
     assert "main_gui" not in calls
     assert "tauri" not in calls
     assert "stage_tauri" not in calls
-    assert ("installer", "legacy") in calls
+    assert ("stage_gui_mode", "v2") in calls
+    assert ("installer", "v2") in calls
+
+
+def test_v1_build_mode_keeps_single_pyqt_entrypoint_without_prototype_shell(monkeypatch):
+    calls = []
+
+    class Gui(DummyGui):
+        def show_complete(self, *args, **kwargs):
+            self.messages.append(("complete", args, kwargs))
+
+    gui = Gui()
+    monkeypatch.setattr(build, "archive_old_files", lambda *args: calls.append("archive") or True)
+    monkeypatch.setattr(build, "clean_build_artifacts", lambda *args: calls.append("clean") or True)
+    monkeypatch.setattr(build, "build_dashboard_frontend", lambda *args: calls.append("dashboard") or True)
+    monkeypatch.setattr(build, "build_main_gui_frontend", lambda *args: calls.append("main_gui") or True)
+    monkeypatch.setattr(build, "build_new_gui_shell", lambda *args: calls.append("tauri") or True)
+    monkeypatch.setattr(build, "build_with_pyinstaller", lambda *args: calls.append("pyinstaller") or True)
+    monkeypatch.setattr(build, "stage_new_gui_shell", lambda *args: calls.append("stage_tauri") or True)
+    monkeypatch.setattr(build, "stage_gui_mode_file", lambda *args: calls.append(("stage_gui_mode", args[-1])) or True)
+    monkeypatch.setattr(build, "sign_build_artifacts", lambda *args, **kwargs: calls.append(("sign", kwargs.get("target_files"))) or True)
+    monkeypatch.setattr(build, "create_zip_distribution", lambda *args: calls.append("zip") or True)
+    monkeypatch.setattr(build, "create_installer", lambda *args: calls.append(("installer", args[-1] if len(args) > 2 else None)) or True)
+    monkeypatch.setattr(build, "print_summary", lambda *args: calls.append("summary"))
+    monkeypatch.setattr(build.subprocess, "Popen", lambda *args, **kwargs: calls.append("explorer"))
+
+    build.run_build_process(gui, {"string": "v1.2.3.1"}, gui_mode="v1")
+    import time
+    for _ in range(50):
+        if "summary" in calls:
+            break
+        time.sleep(0.02)
+
+    assert "main_gui" not in calls
+    assert "tauri" not in calls
+    assert "stage_tauri" not in calls
+    assert ("stage_gui_mode", "v1") in calls
+    assert ("installer", "v1") in calls
+
+
+def test_prototype_build_mode_keeps_preview_shell_separate_from_v2(monkeypatch):
+    calls = []
+
+    class Gui(DummyGui):
+        def show_complete(self, *args, **kwargs):
+            self.messages.append(("complete", args, kwargs))
+
+    gui = Gui()
+    monkeypatch.setattr(build, "archive_old_files", lambda *args: calls.append("archive") or True)
+    monkeypatch.setattr(build, "clean_build_artifacts", lambda *args: calls.append("clean") or True)
+    monkeypatch.setattr(build, "build_dashboard_frontend", lambda *args: calls.append("dashboard") or True)
+    monkeypatch.setattr(build, "build_main_gui_frontend", lambda *args: calls.append("main_gui") or True)
+    monkeypatch.setattr(build, "build_new_gui_shell", lambda *args: calls.append("tauri") or True)
+    monkeypatch.setattr(build, "build_with_pyinstaller", lambda *args: calls.append("pyinstaller") or True)
+    monkeypatch.setattr(build, "stage_new_gui_shell", lambda *args: calls.append("stage_tauri") or True)
+    monkeypatch.setattr(build, "stage_gui_mode_file", lambda *args: calls.append(("stage_gui_mode", args[-1])) or True)
+    monkeypatch.setattr(build, "sign_build_artifacts", lambda *args, **kwargs: calls.append(("sign", kwargs.get("target_files"))) or True)
+    monkeypatch.setattr(build, "create_zip_distribution", lambda *args: calls.append("zip") or True)
+    monkeypatch.setattr(build, "create_installer", lambda *args: calls.append(("installer", args[-1] if len(args) > 2 else None)) or True)
+    monkeypatch.setattr(build, "print_summary", lambda *args: calls.append("summary"))
+    monkeypatch.setattr(build.subprocess, "Popen", lambda *args, **kwargs: calls.append("explorer"))
+
+    build.run_build_process(gui, {"string": "v1.2.3.1"}, gui_mode="prototype")
+    import time
+    for _ in range(50):
+        if "summary" in calls:
+            break
+        time.sleep(0.02)
+
+    assert "main_gui" in calls
+    assert "tauri" in calls
+    assert "stage_tauri" in calls
+    assert ("stage_gui_mode", "prototype") in calls
+    assert ("installer", "prototype") in calls
+    sign_calls = [item[1] for item in calls if isinstance(item, tuple) and item[0] == "sign"]
+    first_sign_targets = {target.name for target in sign_calls[0]}
+    assert first_sign_targets == {"homework_helper.exe", build.TAURI_SHELL_DIST_NAME}
+
+
+def test_build_can_stage_v1_v2_runtime_gui_mode_marker(monkeypatch, tmp_path):
+    project_root = tmp_path
+    app_folder = project_root / "dist" / "homework_helper"
+    monkeypatch.setattr(build, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(build, "APP_FOLDER", app_folder)
+
+    assert build.stage_gui_mode_file(DummyGui(), "v2") is True
+    assert (app_folder / "gui_mode.txt").read_text(encoding="utf-8").strip() == "v2"
+
+    assert build.stage_gui_mode_file(DummyGui(), "legacy") is True
+    assert (app_folder / "gui_mode.txt").read_text(encoding="utf-8").strip() == "v1"
+
+    assert build.stage_gui_mode_file(DummyGui(), "prototype") is True
+    assert (app_folder / "gui_mode.txt").read_text(encoding="utf-8").strip() == "v1"

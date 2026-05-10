@@ -332,6 +332,28 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
     assert settings.sidebar_height_ratio == 1.0
 
 
+def test_main_gui_settings_actor_is_labeled_as_v2_settings_hub(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    crud.get_settings(db)
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_height_ratio": 0.5},
+            actor="main_gui_settings",
+            allowed_fields={"theme"},
+        )
+        assert False, "v2 settings hub writes outside its field scope should be guarded"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+
+    assert payload["actor"] == "main_gui_settings"
+    assert beholder._actor_label(payload["actor"]) == "v2 main GUI 설정 허브"
+
+
 def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod

@@ -40,3 +40,20 @@ def test_verify_project_reports_migration_feature_audit(capsys):
     assert "migration feature audit" in output
     assert "high-risk-missing=0" in output
     assert "partial=" in output
+
+
+def test_verify_project_reports_v2_completion_audit_trace(capsys):
+    spec = importlib.util.spec_from_file_location("verify_project", "tools/verify_project.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module.audit_v2_completion_documents()
+    output = capsys.readouterr().out
+
+    assert "v2 completion audit trace" in output
+    assert "feature_ids_traced=18/18" in output
+    assert "objective_requirements_traced=5/5" in output
+    assert "windows_logic_ids_traced=17/17" in output
+    assert "current_device_completion=achieved" in output
+    assert "completion_status=not-achieved windows-smoke-required" in output
