@@ -708,6 +708,17 @@ def _notification_toggles(settings: models.GlobalSettings) -> list[dict[str, Any
     return [{"key": key, "label": label, "enabled": bool(enabled)} for key, label, enabled in toggles]
 
 
+@router.get("/health")
+def get_gui_health() -> dict[str, Any]:
+    """Lightweight readiness endpoint for the packaged Tauri preview shell."""
+    return {
+        "ok": True,
+        "app": "HomeworkHelper",
+        "pid": os.getpid(),
+        "schema_ready": True,
+    }
+
+
 @router.get("/main-state")
 def get_main_state(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Return a DB-safe snapshot for the Tauri/React main window."""

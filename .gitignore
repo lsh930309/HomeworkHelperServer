@@ -114,6 +114,7 @@ htmlcov/
 .pyright/
 playwright-report/
 test-results/
+tools/run_new_gui_real_data_smoke.py
 
 # Tauri generated files
 src-tauri/gen/

@@ -88,6 +88,19 @@ def test_main_state_preserves_db_boundary_and_returns_compact_rows(monkeypatch):
     assert body["web_shortcuts"][0]["id"] == "web-a"
 
 
+def test_gui_health_is_lightweight_readiness_endpoint(monkeypatch):
+    client = _client_with_seed(monkeypatch)
+
+    response = client.get("/api/gui/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["app"] == "HomeworkHelper"
+    assert isinstance(body["pid"], int)
+    assert body["schema_ready"] is True
+
+
 def test_main_state_does_not_treat_stale_open_session_as_running(monkeypatch):
     client = _client_with_seed(
         monkeypatch,

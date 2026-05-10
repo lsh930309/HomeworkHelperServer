@@ -163,6 +163,26 @@ footer {
 }
 
 .topbar { margin-bottom: 10px; }
+.topbar,
+.popup-head,
+.modal-head {
+  cursor: grab;
+}
+
+.topbar:active,
+.popup-head:active,
+.modal-head:active {
+  cursor: grabbing;
+}
+
+.actions,
+.popup-actions,
+.modal-actions,
+.window-controls,
+input,
+select {
+  cursor: default;
+}
 
 h1, h2 { margin: 0; }
 h1 {
@@ -219,6 +239,37 @@ h2 { font-size: 17px; }
 }
 
 .compact { margin-top: 0; }
+
+.message-banner {
+  max-width: 548px;
+  max-height: 74px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.message-banner > span {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.message-banner details {
+  margin-top: 5px;
+  color: inherit;
+}
+
+.message-banner summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.message-banner p {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+}
 
 .shortcut-card {
   display: flex;

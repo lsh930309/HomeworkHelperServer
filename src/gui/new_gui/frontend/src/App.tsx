@@ -212,6 +212,12 @@ type LaunchResult = {
   user_message: string;
 };
 
+type AppMessage = {
+  summary: string;
+  detail?: string;
+  tone?: 'info' | 'success' | 'error';
+};
+
 type SchedulerPreview = {
   user_summary: string;
   coverage_summary: string;
@@ -270,7 +276,8 @@ type ContextMenuState = {
 
 type SettingsTab = 'general' | 'notify' | 'sidebar' | 'screenshot' | 'recording' | 'hoyolab';
 
-const API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
+const FALLBACK_API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000';
+const API_BASE = FALLBACK_API_BASE;
 const BEHOLDER_OVERRIDE_STORAGE_KEY = 'hh-beholder-override-token';
 const WINDOW_POS_KEY = 'hh-main-gui-window-position-v1';
 const SIDEBAR_PANEL_WIDTH = 320;
@@ -292,6 +299,28 @@ const EDITOR_STATE_KEYS = {
   shortcut: 'hh-main-gui-shortcut-editor-v1',
 } as const;
 
+let cachedApiBase: string | null = null;
+
+async function resolveApiBase(): Promise<string> {
+  if (cachedApiBase !== null) return cachedApiBase;
+  if (!isTauriRuntime()) {
+    cachedApiBase = FALLBACK_API_BASE;
+    return cachedApiBase;
+  }
+  try {
+    cachedApiBase = await invoke<string>('backend_base_url');
+  } catch {
+    cachedApiBase = FALLBACK_API_BASE;
+  }
+  return cachedApiBase;
+}
+
+function normalizeFetchError(error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error || '');
+  const message = detail ? `백엔드 API에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요. (${detail})` : '백엔드 API에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.';
+  return new Error(message);
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method || 'GET').toUpperCase();
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...((init?.headers as Record<string, string> | undefined) || {}) };
@@ -299,17 +328,35 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (overrideToken && !headers['X-HH-Beholder-Override']) {
     headers['X-HH-Beholder-Override'] = overrideToken;
   }
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-  });
-  if (overrideToken) window.sessionStorage.removeItem(BEHOLDER_OVERRIDE_STORAGE_KEY);
+  let response: Response;
+  try {
+    const apiBase = await resolveApiBase();
+    response = await fetch(`${apiBase}${path}`, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw normalizeFetchError(error);
+  } finally {
+    if (overrideToken) window.sessionStorage.removeItem(BEHOLDER_OVERRIDE_STORAGE_KEY);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 409 && body.beholder_incident) throw new BeholderIncidentError(body.beholder_incident);
     throw new Error(body.detail || `요청 실패 (${response.status})`);
   }
   return body as T;
+}
+
+function MessageBanner({ message, tone = 'success' }: { message: string | AppMessage; tone?: AppMessage['tone'] }) {
+  const payload: AppMessage = typeof message === 'string' ? { summary: message, tone } : message;
+  const className = payload.tone === 'error' ? 'error message-banner' : 'notice message-banner';
+  return (
+    <div className={className}>
+      <span>{payload.summary}</span>
+      {payload.detail && <details><summary>자세히</summary><p>{payload.detail}</p></details>}
+    </div>
+  );
 }
 
 function useContentSizedWindow(ref: React.RefObject<HTMLElement | null>, enabled: boolean) {
@@ -435,7 +482,7 @@ function PopupFrame({ title, children, className = '' }: React.PropsWithChildren
           <div className="eyebrow">HomeworkHelper 새 GUI</div>
           <h1>{title}</h1>
         </div>
-        <div className="popup-actions">
+        <div className="popup-actions" data-tauri-drag-region="false">
           <button className="ghost" onClick={close}>닫기</button>
           <WindowControls />
         </div>
@@ -614,9 +661,9 @@ function Modal({ title, children, onClose }: React.PropsWithChildren<{ title: st
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
-        <header className="modal-head">
+        <header className="modal-head" data-tauri-drag-region>
           <h2>{title}</h2>
-          <button className="ghost" onClick={onClose}>닫기</button>
+          <button className="ghost" data-tauri-drag-region="false" onClick={onClose}>닫기</button>
         </header>
         {children}
       </section>
@@ -925,6 +972,14 @@ function SettingsModal({
   const [saving, setSaving] = React.useState(false);
   const [dirtyFields, setDirtyFields] = React.useState<Set<keyof GuiSettings>>(() => new Set());
 
+  const markDirty = (...keys: Array<keyof GuiSettings>) => {
+    setDirtyFields((prev) => {
+      const next = new Set(prev);
+      keys.forEach((key) => next.add(key));
+      return next;
+    });
+  };
+
   const update = <K extends keyof GuiSettings>(key: K, value: GuiSettings[K]) => {
     setDirtyFields((prev) => new Set(prev).add(key));
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -1089,11 +1144,13 @@ function SettingsModal({
       setForm((prev) => ({
         ...prev,
         obs_port: cfg.port,
-        obs_password: cfg.password,
         obs_exe_path: cfg.exe_path || prev.obs_exe_path,
         obs_recording_output_dir: cfg.output_dir || prev.obs_recording_output_dir,
       }));
-      setMessage('OBS 설정을 불러왔습니다. 적용하려면 저장을 누르세요.');
+      markDirty('obs_port', 'obs_exe_path', 'obs_recording_output_dir');
+      setMessage(cfg.has_password
+        ? 'OBS 설정을 불러왔습니다. 비밀번호는 보안상 다시 표시하지 않으며 기존 값을 유지합니다. 적용하려면 저장을 누르세요.'
+        : 'OBS 설정을 불러왔습니다. 적용하려면 저장을 누르세요.');
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1656,6 +1713,8 @@ function SettingsWindowApp() {
 
   React.useEffect(() => {
     load();
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
   }, [load]);
 
   const close = () => {
@@ -1698,7 +1757,10 @@ function EditorWindowApp({ kind }: { kind: 'process' | 'shortcut' }) {
 
   React.useEffect(() => {
     load();
-    const onStorage = () => setNonce((value) => value + 1);
+    const onStorage = () => {
+      load();
+      setNonce((value) => value + 1);
+    };
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', onStorage);
     return () => {
@@ -1730,10 +1792,24 @@ function EditorWindowApp({ kind }: { kind: 'process' | 'shortcut' }) {
 
   if (kind === 'process') {
     const process = target.mode === 'edit' ? state.processes.find((item) => item.id === target.id) : undefined;
+    if (target.mode === 'edit' && !process) {
+      return (
+        <PopupFrame title="게임 편집" className="editor-popup">
+          <div className="error compact">편집할 게임을 찾을 수 없습니다. 메인 창에서 다시 열어 주세요.</div>
+        </PopupFrame>
+      );
+    }
     return <ProcessModal key={`${target.mode}-${target.id || 'new'}-${nonce}`} process={process} standalone onClose={close} onSaved={load} />;
   }
 
   const shortcut = target.mode === 'edit' ? state.web_shortcuts.find((item) => item.id === target.id) : undefined;
+  if (target.mode === 'edit' && !shortcut) {
+    return (
+      <PopupFrame title="웹 바로가기 편집" className="editor-popup">
+        <div className="error compact">편집할 웹 바로가기를 찾을 수 없습니다. 메인 창에서 다시 열어 주세요.</div>
+      </PopupFrame>
+    );
+  }
   return <ShortcutModal key={`${target.mode}-${target.id || 'new'}-${nonce}`} shortcut={shortcut} standalone onClose={close} onSaved={load} />;
 }
 
@@ -1742,7 +1818,7 @@ function MainApp() {
   const appInstanceIdRef = React.useRef<string>(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`);
   const [state, setState] = React.useState<MainState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [message, setMessage] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<AppMessage | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [editingProcess, setEditingProcess] = React.useState<ProcessRow | 'new' | null>(null);
   const [editingShortcut, setEditingShortcut] = React.useState<WebShortcut | 'new' | null>(null);
@@ -1807,7 +1883,11 @@ function MainApp() {
     setBusyId(process.id);
     try {
       const result = await fetchJson<LaunchResult>(`/api/gui/processes/${process.id}/launch`, { method: 'POST' });
-      setMessage(`${result.user_message} 대상: ${result.launch_target}${result.run_as_admin ? ' · 관리자 권한' : ''}`);
+      setMessage({
+        summary: `${result.process_name} 실행 요청 완료${result.run_as_admin ? ' · 관리자 권한' : ''}`,
+        detail: `${result.user_message}\n대상: ${result.launch_target}`,
+        tone: 'success',
+      });
       if (isTauri && state?.settings.hide_on_game) {
         getCurrentWindow().hide().catch(() => undefined);
       }
@@ -1982,7 +2062,7 @@ function MainApp() {
     <main className="shell" ref={rootRef} data-theme={state.settings.theme}>
       <header className="topbar" data-tauri-drag-region>
         <h1>숙제 관리자</h1>
-        <div className="actions">
+        <div className="actions" data-tauri-drag-region="false">
           <button className="primary-soft" onClick={() => openProcessEditor()}>+ 게임</button>
           <button className="primary-soft" onClick={() => openShortcutEditor()}>+ 웹</button>
           <button className="toolbar-button" onClick={() => openUrl(state.dashboard_url)}>📊 대시보드</button>
@@ -1994,8 +2074,8 @@ function MainApp() {
         </div>
       </header>
 
-      {error && <div className="error">API 오류: {error}</div>}
-      {message && <div className="notice">{message}</div>}
+      {error && <MessageBanner tone="error" message={{ summary: 'API 오류가 발생했습니다.', detail: error, tone: 'error' }} />}
+      {message && <MessageBanner message={message} />}
 
       {state.web_shortcuts.length > 0 && (
         <section className="shortcut-card" aria-label="웹 바로가기">

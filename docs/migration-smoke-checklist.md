@@ -23,6 +23,8 @@
 - [ ] SETTINGS-001: 새 GUI 설정 popup의 항상 위 옵션이 즉시 반영되고 재시작 후에도 보존된다.
 - [ ] APP-001: 새 GUI 메인 창의 GitHub favicon 버튼이 외부 브라우저로 저장소를 연다.
 - [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 바/점 인디케이터와 진행률 색상만으로 실행중/완료/미완료 상태를 구분한다.
+- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창은 header drag로 위치 이동이 가능하고 버튼/input/select는 drag로 오작동하지 않는다.
+- [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 창 폭/높이를 과도하게 늘리지 않고 “자세히”에서 전체 내용을 확인할 수 있다.
 - [ ] SETTINGS-001: 전역 설정 저장 후 재시작해도 값이 보존된다.
 - [ ] SETTINGS-001: 관리자 권한 전환 및 시작프로그램 설정이 동작한다.
 - [ ] SETTINGS-001: 새 GUI의 일반/알림/사이드바/스크린샷/녹화/HoYoLab 설정 탭이 하나의 popup 안에서 창 재생성 없이 전환되고, 창 크기가 콘텐츠에 맞춰져 가로/세로 스크롤바가 생기지 않는다.
@@ -78,6 +80,13 @@
 - [ ] HOYOLAB-001: HoYoLab 지연 반영 재확인/수동 새로고침은 Beholder가 정상 actor로 인식
 - [ ] SCREENSHOT-001: 전체화면/포커스된 게임 창 capture mode
 - [ ] RECORDING-001: 새 GUI OBS 설정 불러오기는 비밀번호 존재 여부만 표시하고 평문 비밀번호를 다시 노출하지 않음
+- [ ] RECORDING-001: 새 GUI OBS 설정 불러오기 후 저장해도 기존 비밀번호가 평문 빈 값으로 덮이지 않음
+- [ ] APP-001: 새 GUI packaged preview에서 API 게임/자원 아이콘이 CSP에 막히지 않고 표시됨
+- [ ] SCREENSHOT-001: 새 GUI packaged preview에서 API 스크린샷 썸네일이 CSP에 막히지 않고 표시됨
+- [ ] RECORDING-001: 새 GUI packaged preview에서 API 녹화 썸네일이 CSP에 막히지 않고 표시됨
+- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창을 header drag로 이동
+- [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 자동 맞춤 창을 과도하게 늘리지 않고 자세히에서 전체 내용을 표시
+- [ ] RECORDING-001: OBS 설정 불러오기 후 저장해도 기존 비밀번호가 평문 빈 값으로 덮이지 않음
 - [ ] BUILD-001: build.py 시작 시 GUI 모드 선택이 버전 선택보다 먼저 표시됨
 - [ ] BUILD-001: legacy GUI 모드 패키지는 PyQt 진입점만 노출
 - [ ] BUILD-001: new GUI 모드 패키지는 Tauri/React 진입점만 노출
@@ -94,6 +103,9 @@
 - [ ] APP-001: HomeworkHelper 새 GUI 미리보기 바로가기 실행
 - [ ] APP-001: 새 GUI GitHub favicon 버튼 외부 브라우저 열기
 - [ ] APP-001: 새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 색상/인디케이터로 상태 표시
+- [ ] APP-001: 새 GUI frameless 메인/설정/편집 창을 header drag로 이동
+- [ ] APP-001: 새 GUI 긴 실행/오류 메시지는 자동 맞춤 창을 과도하게 늘리지 않고 자세히에서 전체 내용을 표시
+- [ ] APP-001: 새 GUI packaged preview에서 API 게임/자원 아이콘이 CSP에 막히지 않고 표시됨
 
 ### APP-002 단일 인스턴스, 트레이 최소화/복원/종료
 

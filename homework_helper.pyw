@@ -65,12 +65,6 @@ _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로
 
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
-from src.gui.main_window import MainWindow
-from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtGui import QFontDatabase, QFont
-from src.utils.common import get_bundle_resource_path
-from src.api.client import ApiClient
 
 # Windows 전용 모듈 임포트 (선택적)
 if os.name == 'nt':
@@ -255,7 +249,12 @@ def start_api_server() -> bool:
 
     except Exception as e:
         print(f"API 서버 시작 실패: {e}")
-        QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
+        except Exception:
+            pass
         return False
 
 def run_server_main():
@@ -839,6 +838,9 @@ def ensure_process_table_schema():
 def run_schema_migration_check():
     """앱 업데이트 시 필요한 DB 스키마 마이그레이션을 한 번 수행합니다."""
     try:
+        import importlib.util
+        if importlib.util.find_spec("src.migration") is None:
+            return
         from src.migration import SchemaMigrator
         print("\n=== 스키마 버전 체크 ===")
         migrator = SchemaMigrator()
@@ -851,8 +853,15 @@ def run_schema_migration_check():
         # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
 
 
-def start_main_application(instance_manager: SingleInstanceApplication):
+def start_main_application(instance_manager):
     """메인 애플리케이션을 설정하고 실행합니다."""
+    from PyQt6.QtGui import QFont, QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+
+    from src.api.client import ApiClient
+    from src.gui.main_window import MainWindow
+    from src.utils.common import get_bundle_resource_path
+
     # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
     
     app = QApplication(sys.argv)
@@ -966,6 +975,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
+    from src.core.instance_manager import run_with_single_instance_check
+
     run_with_single_instance_check(
         application_name="숙제 관리자",
         main_app_start_callback=start_main_application

@@ -159,7 +159,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8000; img-src 'self' asset: http://asset.localhost blob: data: https://github.githubassets.com; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' asset: http://asset.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8000; img-src 'self' asset: http://asset.localhost blob: data: https://github.githubassets.com http://127.0.0.1:8000; media-src 'self' http://127.0.0.1:8000; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' asset: http://asset.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

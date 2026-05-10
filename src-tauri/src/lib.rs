@@ -76,7 +76,7 @@ fn backend_is_ready() -> bool {
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
-    let request = b"GET /api/gui/main-state HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n";
+    let request = b"GET /api/gui/health HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n";
     if stream.write_all(request).is_err() {
         return false;
     }
@@ -84,7 +84,7 @@ fn backend_is_ready() -> bool {
     if stream.read_to_string(&mut response).is_err() {
         return false;
     }
-    response.starts_with("HTTP/1.1 200") && response.contains("\"settings\"") && response.contains("\"processes\"")
+    response.starts_with("HTTP/1.1 200") && response.contains("\"ok\":true") && response.contains("\"app\":\"HomeworkHelper\"")
 }
 
 fn wait_for_backend(timeout: Duration) -> bool {

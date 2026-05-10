@@ -19,13 +19,19 @@
       "data_risk": "low",
       "automated_tests": [
         "test_build_and_stage_new_gui_shell_by_default",
-        "test_installer_has_new_gui_preview_shortcut_and_shutdown_guard"
+        "test_installer_has_new_gui_preview_shortcut_and_shutdown_guard",
+        "test_new_gui_csp_allows_packaged_api_images_and_media",
+        "test_new_gui_frameless_windows_have_drag_regions_and_safe_controls",
+        "test_new_gui_main_messages_are_summarized_without_expanding_shell"
       ],
       "manual_smoke": [
         "설치 후 기본 HomeworkHelper는 PyQt로 실행",
         "HomeworkHelper 새 GUI 미리보기 바로가기 실행",
         "새 GUI GitHub favicon 버튼 외부 브라우저 열기",
-        "새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 색상/인디케이터로 상태 표시"
+        "새 GUI 메인 목록은 상태 텍스트 열 없이 좌측 행 색상/인디케이터로 상태 표시",
+        "새 GUI frameless 메인/설정/편집 창을 header drag로 이동",
+        "새 GUI 긴 실행/오류 메시지는 자동 맞춤 창을 과도하게 늘리지 않고 자세히에서 전체 내용을 표시",
+        "새 GUI packaged preview에서 API 게임/자원 아이콘이 CSP에 막히지 않고 표시됨"
       ]
     },
     {
@@ -350,13 +356,15 @@
         "test_gui_screenshot_vk_name_is_cross_platform_and_capture_reports_availability",
         "test_gui_screenshot_capture_key_rejects_unsupported_environment",
         "test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key",
-        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images"
+        "test_gui_screenshot_gallery_lists_recent_files_and_serves_safe_images",
+        "test_new_gui_csp_allows_packaged_api_images_and_media"
       ],
       "manual_smoke": [
         "새 GUI 키 입력 캡처로 트리거 키 변경 후 저장",
         "게임 중 스크린샷 저장",
         "저장 폴더 변경",
-        "전체화면/포커스된 게임 창 capture mode"
+        "전체화면/포커스된 게임 창 capture mode",
+        "새 GUI packaged preview에서 API 스크린샷 썸네일이 CSP에 막히지 않고 표시"
       ]
     },
     {
@@ -377,14 +385,17 @@
         "test_gui_settings_patch_updates_sidebar_screenshot_recording_and_notification_fields",
         "test_gui_recording_obs_config_import_wraps_existing_reader",
         "test_new_gui_recording_settings_can_import_obs_config",
-        "test_gui_recording_gallery_lists_recent_video_files_and_serves_safe_files"
+        "test_gui_recording_gallery_lists_recent_video_files_and_serves_safe_files",
+        "test_new_gui_csp_allows_packaged_api_images_and_media"
       ],
       "manual_smoke": [
         "새 GUI OBS 설정 불러오기 후 저장",
         "OBS 자동 실행",
         "녹화 시작/중지",
         "사이드바 녹화 상태 표시",
-        "새 GUI OBS 설정 불러오기는 비밀번호 존재 여부만 표시하고 평문 비밀번호를 다시 노출하지 않음"
+        "새 GUI OBS 설정 불러오기는 비밀번호 존재 여부만 표시하고 평문 비밀번호를 다시 노출하지 않음",
+        "새 GUI packaged preview에서 API 녹화 썸네일이 CSP에 막히지 않고 표시",
+        "OBS 설정 불러오기 후 저장해도 기존 비밀번호가 평문 빈 값으로 덮이지 않음"
       ]
     },
     {

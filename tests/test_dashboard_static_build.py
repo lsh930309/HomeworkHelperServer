@@ -137,7 +137,8 @@ def test_main_gui_dev_server_proxies_api_for_browser_visual_checks():
     app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
     vite_config = Path("src/gui/new_gui/frontend/vite.config.ts").read_text(encoding="utf-8")
 
-    assert "import.meta.env.DEV ? '' : 'http://127.0.0.1:8000'" in app_source
+    assert "const FALLBACK_API_BASE = import.meta.env.DEV ? '' : 'http://127.0.0.1:8000'" in app_source
+    assert "backend_base_url" in app_source
     assert "'/api': 'http://127.0.0.1:8000'" in vite_config
 
 
@@ -146,6 +147,9 @@ def test_new_gui_recording_settings_can_import_obs_config():
 
     assert "OBS 설정 불러오기" in app_source
     assert "/api/gui/recording/obs-config" in app_source
+    assert "markDirty('obs_port', 'obs_exe_path', 'obs_recording_output_dir')" in app_source
+    import_block = app_source.split("const importObsConfig = async () => {", 1)[1].split("const captureScreenshotKey", 1)[0]
+    assert "obs_password: cfg.password" not in import_block
 
 
 def test_new_gui_screenshot_settings_can_resolve_and_capture_trigger_key():
@@ -170,6 +174,41 @@ def test_new_gui_sends_beholder_runtime_heartbeat():
     assert "/api/beholder/runtime/heartbeat" in app_source
     assert "tauri-preview" in app_source
 
+
+def test_new_gui_csp_allows_packaged_api_images_and_media():
+    tauri_config = Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    shell_source = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+    assert "img-src" in tauri_config
+    assert "media-src" in tauri_config
+    assert "https://github.githubassets.com http://127.0.0.1:8000" in tauri_config
+    assert "media-src 'self' http://127.0.0.1:8000" in tauri_config
+    assert "GET /api/gui/health HTTP/1.1" in shell_source
+
+
+def test_new_gui_frameless_windows_have_drag_regions_and_safe_controls():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+    style_source = Path("src/gui/new_gui/frontend/src/style.css").read_text(encoding="utf-8")
+
+    assert '<header className="topbar" data-tauri-drag-region>' in app_source
+    assert '<header className="popup-head" data-tauri-drag-region>' in app_source
+    assert '<header className="modal-head" data-tauri-drag-region>' in app_source
+    assert 'className="actions" data-tauri-drag-region="false"' in app_source
+    assert 'className="popup-actions" data-tauri-drag-region="false"' in app_source
+    assert ".topbar,\n.popup-head,\n.modal-head" in style_source
+    assert "cursor: grab" in style_source
+
+
+def test_new_gui_main_messages_are_summarized_without_expanding_shell():
+    app_source = Path("src/gui/new_gui/frontend/src/App.tsx").read_text(encoding="utf-8")
+    style_source = Path("src/gui/new_gui/frontend/src/style.css").read_text(encoding="utf-8")
+
+    assert "function MessageBanner" in app_source
+    assert "실행 요청 완료" in app_source
+    assert "detail: `${result.user_message}\\n대상: ${result.launch_target}`" in app_source
+    assert "message-banner" in style_source
+    assert "max-height: 74px" in style_source
+    assert "overflow-wrap: anywhere" in style_source
 
 
 
