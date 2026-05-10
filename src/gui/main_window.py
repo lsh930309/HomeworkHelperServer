@@ -34,6 +34,7 @@ import requests
 from src.api.client import ApiClient
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
+from src.utils.window_focus import focus_process_window
 from src.utils.windows import set_startup_shortcut, get_startup_shortcut_status
 from src.core.launcher import Launcher
 from src.core.notifier import Notifier
@@ -98,6 +99,11 @@ class MainWindow(QMainWindow):
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
+    _FOCUS_ATTEMPT_INTERVAL_MS = 750
+    _FOCUS_ATTEMPT_COUNT = 12
+    _MIN_WINDOW_WIDTH = 320
+    _MIN_WINDOW_HEIGHT = 120
+    _SCREEN_SIZE_RATIO = 0.92
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -137,16 +143,16 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
-        # 창 너비 설정: 고정 너비 (절전 복귀 시 안정성 확보)
-        self.setMinimumWidth(470)
-        self.setFixedWidth(470)  # 고정 너비 설정
-        self.setGeometry(100, 100, 470, 300) # 창 초기 위치 및 크기 설정
+        # 창 크기: 테이블/버튼 실제 sizeHint를 기반으로 동적으로 최적화합니다.
+        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
+        self.resize(470, 300) # 최초 표시 전 임시 크기
 
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
+        self._focus_attempt_tokens: dict[str, int] = {}
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -547,8 +553,8 @@ class MainWindow(QMainWindow):
         # 2. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
         #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
         w, h = self.width(), self.height()
-        self.setFixedSize(w + 1, h + 1)  # 고정 크기 모드에서는 setFixedSize 사용
-        self.setFixedSize(w, h)
+        self.resize(w + 1, h + 1)
+        self.resize(w, h)
 
         # 3. 저장된 geometry가 있으면 위치도 복원
         if self._saved_geometry:
@@ -589,12 +595,23 @@ class MainWindow(QMainWindow):
     def _configure_table_header(self):
         h = self.process_table.horizontalHeader()
         if h:
-            h.setSectionResizeMode(self.COL_ICON, QHeaderView.ResizeMode.ResizeToContents) # 아이콘 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_NAME, QHeaderView.ResizeMode.Stretch) # 이름 컬럼: 남은 공간 채우기
-            h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.Fixed) # 진행률 컬럼: 고정 폭
-            h.resizeSection(self.COL_LAST_PLAYED, 120)  # 진행률 컬럼 폭 120px로 고정
-            h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
+            h.hide()
+            h.setSectionsClickable(False)
+            h.setHighlightSections(False)
+            for col in range(self.TOTAL_COLUMNS):
+                h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+
+        vh = self.process_table.verticalHeader()
+        if vh:
+            vh.hide()
+            vh.setHidden(True)
+            vh.setVisible(False)
+            vh.setMinimumWidth(0)
+            vh.setMaximumWidth(0)
+            vh.setFixedWidth(0)
+            vh.setSectionsClickable(False)
+            vh.setHighlightSections(False)
+        self.process_table.setCornerButtonEnabled(False)
 
     def _create_menu_bar(self):
         mb = self.menuBar()
@@ -1040,8 +1057,11 @@ class MainWindow(QMainWindow):
 
     def populate_process_list(self):
         """관리 대상 프로세스 목록을 테이블에 채웁니다."""
-        self.process_table.setSortingEnabled(False) # 정렬 기능 임시 비활성화
-        processes = self.data_manager.managed_processes # 관리 대상 프로세스 목록 가져오기
+        self.process_table.setSortingEnabled(False) # 사용자가 바꿀 수 없는 고정 정렬
+        processes = sorted(
+            self.data_manager.managed_processes,
+            key=lambda process: ((process.name or "").casefold(), process.id or ""),
+        )
         self.process_table.setRowCount(len(processes)) # 행 개수 설정
 
         now_dt = datetime.datetime.now() # 현재 시각
@@ -1100,9 +1120,8 @@ class MainWindow(QMainWindow):
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
 
-        self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
-        self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
         self.scheduler.invalidate_visual_status_snapshot()
+        QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
@@ -1217,6 +1236,7 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 status_bar.showMessage(f"'{p_launch.name}' 실행 시도.", 3000)
+            self._schedule_focus_after_launch(p_launch, launch_target)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
@@ -1239,6 +1259,7 @@ class MainWindow(QMainWindow):
             if status_bar:
                 path_type = "바로가기" if use_shortcut else "직접 실행"
                 status_bar.showMessage(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
+            self._schedule_focus_after_launch(p_launch, launch_target)
             self.update_process_statuses_only()
         else:
             status_bar = self.statusBar()
@@ -1275,6 +1296,31 @@ class MainWindow(QMainWindow):
                 )
         else:
             QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
+
+    def _schedule_focus_after_launch(self, process: ManagedProcess, launch_target: str | None = None) -> None:
+        """게임 창이 늦게 생기는 경우를 고려해 foreground focus를 재시도합니다."""
+        self._focus_attempt_tokens[process.id] = self._focus_attempt_tokens.get(process.id, 0) + 1
+        token = self._focus_attempt_tokens[process.id]
+        executable_path = process.monitoring_path or launch_target or process.launch_path
+
+        def _attempt(remaining: int) -> None:
+            if self._focus_attempt_tokens.get(process.id) != token:
+                return
+            entry = self.process_monitor.active_monitored_processes.get(process.id, {})
+            pid = entry.get("pid")
+            if focus_process_window(pid=pid, executable_path=executable_path):
+                status_bar = self.statusBar()
+                if status_bar:
+                    status_bar.showMessage(f"'{process.name}' 창으로 포커스를 이동했습니다.", 2000)
+                return
+            if remaining <= 0:
+                return
+            QTimer.singleShot(
+                self._FOCUS_ATTEMPT_INTERVAL_MS,
+                functools.partial(_attempt, remaining - 1),
+            )
+
+        QTimer.singleShot(0, functools.partial(_attempt, self._FOCUS_ATTEMPT_COUNT))
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
@@ -1762,176 +1808,158 @@ class MainWindow(QMainWindow):
         if app_instance:
             app_instance.quit()
 
+    def _visible_table_columns(self) -> list[int]:
+        return [
+            column
+            for column in range(self.process_table.columnCount())
+            if not self.process_table.isColumnHidden(column)
+        ]
+
+    def _cell_content_width(self, row: int, column: int) -> int:
+        """아이템/셀 위젯의 실제 sizeHint를 함께 반영한 컬럼 최소 폭."""
+        style = self.process_table.style() or self.style()
+        focus_margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) if style else 2
+        metrics = self.process_table.fontMetrics()
+        padding = max(metrics.horizontalAdvance("  "), focus_margin * 2 + self.process_table.frameWidth() * 2)
+
+        widget = self.process_table.cellWidget(row, column)
+        widget_width = widget.sizeHint().width() if widget is not None else 0
+
+        item = self.process_table.item(row, column)
+        item_width = 0
+        if item is not None:
+            item_width = max(
+                item.sizeHint().width(),
+                metrics.horizontalAdvance(f" {item.text()} ") + padding,
+            )
+            if not item.icon().isNull():
+                item_width += self.process_table.iconSize().width() + padding
+
+        if column == self.COL_ICON:
+            return max(widget_width, item_width, self.process_table.iconSize().width() + padding)
+        return max(widget_width, item_width)
+
+    def _resize_table_to_contents(self, max_table_size: Optional[QSize] = None) -> QSize:
+        """헤더 없이도 각 셀 내용에 맞는 테이블 고정 크기를 계산합니다."""
+        table = self.process_table
+        self._configure_table_header()
+        table.resizeRowsToContents()
+
+        default_row_height = table.verticalHeader().defaultSectionSize()
+        for row in range(table.rowCount()):
+            table.setRowHeight(row, max(default_row_height, table.rowHeight(row)))
+
+        visible_columns = self._visible_table_columns()
+        style = table.style() or self.style()
+        column_gap = style.pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing) if style else 6
+        column_gap = max(4, column_gap)
+
+        for column in visible_columns:
+            max_width = 0
+            for row in range(table.rowCount()):
+                max_width = max(max_width, self._cell_content_width(row, column))
+            if table.rowCount() == 0:
+                max_width = max(max_width, table.fontMetrics().horizontalAdvance("빈 목록") + column_gap * 2)
+            table.setColumnWidth(column, max_width + column_gap)
+
+        frame = table.frameWidth() * 2
+        content_width = sum(table.columnWidth(column) for column in visible_columns) + frame
+        content_height = frame
+        if table.rowCount() > 0:
+            content_height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+        else:
+            content_height += max(default_row_height, table.fontMetrics().height() + column_gap * 2)
+
+        max_width = max_table_size.width() if max_table_size and max_table_size.width() > 0 else None
+        max_height = max_table_size.height() if max_table_size and max_table_size.height() > 0 else None
+
+        horizontal_overflow = max_width is not None and content_width > max_width
+        vertical_overflow = max_height is not None and content_height > max_height
+        table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if horizontal_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if vertical_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+        target_width = content_width
+        target_height = content_height
+        if vertical_overflow and not horizontal_overflow:
+            target_width += table.verticalScrollBar().sizeHint().width()
+        if horizontal_overflow:
+            target_height += table.horizontalScrollBar().sizeHint().height()
+
+        if max_width is not None:
+            target_width = min(target_width, max_width)
+        if max_height is not None:
+            target_height = min(target_height, max_height)
+
+        target = QSize(max(target_width, 1), max(target_height, 1))
+        table.setFixedSize(target)
+        table.updateGeometry()
+        return target
+
     def _adjust_window_size_to_content(self):
-        """테이블 내용에 맞춰 메인 윈도우의 높이를 자동으로 조절합니다. 너비는 고정합니다."""
-        # 테이블 행 높이를 내용에 맞게 조절
-        if self.process_table.rowCount() > 0:
-            self.process_table.resizeRowsToContents()
+        """현재 테이블/웹 버튼/상태바 sizeHint에 맞춰 창 크기를 동적으로 최적화합니다."""
+        table_size = self._resize_table_to_contents()
 
-        # 테이블 내용 높이 계산
-        table_content_height = 0
+        central_widget = self.centralWidget()
+        if central_widget and central_widget.layout():
+            central_widget.layout().invalidate()
+            central_widget.layout().activate()
 
-        # 1. 수평 헤더 높이 추가
-        header = self.process_table.horizontalHeader()
-        if header and not header.isHidden():
-            table_content_height += header.height()
+        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
+        target = self.sizeHint().expandedTo(self.minimumSizeHint())
 
-        # 2. 모든 행의 높이 합산
-        if self.process_table.rowCount() > 0:
-            for i in range(self.process_table.rowCount()):
-                table_content_height += self.process_table.rowHeight(i)
-            table_content_height += self.process_table.frameWidth() * 2  # 테이블 테두리 두께 고려
-        else:
-            # 행이 없을 경우, 기본 높이 추정치 사용
-            default_row_height_approx = self.fontMetrics().height() + 12
-            table_content_height += default_row_height_approx
-            table_content_height += self.process_table.frameWidth() * 2
+        screen = self.screen() or QApplication.primaryScreen()
+        max_width: Optional[int] = None
+        max_height: Optional[int] = None
+        if screen is not None:
+            available = screen.availableGeometry()
+            max_width = max(self._MIN_WINDOW_WIDTH, int(available.width() * self._SCREEN_SIZE_RATIO))
+            max_height = max(self._MIN_WINDOW_HEIGHT, int(available.height() * self._SCREEN_SIZE_RATIO))
 
-        # 테이블의 고정 높이 설정
-        self.process_table.setFixedHeight(table_content_height)
+        if (
+            (max_width is not None and target.width() > max_width)
+            or (max_height is not None and target.height() > max_height)
+        ):
+            extra_width = max(0, target.width() - table_size.width())
+            extra_height = max(0, target.height() - table_size.height())
+            capped_table_size = QSize(
+                max(1, (max_width or target.width()) - extra_width),
+                max(1, (max_height or target.height()) - extra_height),
+            )
+            self._resize_table_to_contents(capped_table_size)
+            if central_widget and central_widget.layout():
+                central_widget.layout().invalidate()
+                central_widget.layout().activate()
+            target = self.sizeHint().expandedTo(self.minimumSizeHint())
 
-        # 웹 버튼이 있을 때만 창 너비 조절
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
+        target.setWidth(max(target.width(), self.minimumSizeHint().width(), self._MIN_WINDOW_WIDTH))
+        target.setHeight(max(target.height(), self.minimumSizeHint().height(), self._MIN_WINDOW_HEIGHT))
+        if max_width is not None:
+            target.setWidth(min(target.width(), max_width))
+        if max_height is not None:
+            target.setHeight(min(target.height(), max_height))
 
-        # 창 너비 결정 (고정 너비 + 웹 버튼)
-        if web_button_count > 0:
-            target_width = 400
-        else:
-            target_width = 470
+        self.resize(target)
+        self.updateGeometry()
+        self.update()
 
-        # 너비 제약 업데이트 (setFixedWidth 으로 min/max 동시 설정)
-        self.setFixedWidth(target_width)
-
-        # 창 높이 계산
-        # - 상단 버튼 영역 높이: 약 35px
-        # - 테이블 높이 (계산된 값)
-        # - 레이아웃 여백: 약 15px
-        # - 메뉴바, 상태바 높이
-        menu_bar = self.menuBar()
-        status_bar = self.statusBar()
-        menu_height = menu_bar.height() if menu_bar else 0
-        status_height = status_bar.height() if status_bar else 0
-
-        top_button_height = 35
-        layout_margin = 15
-
-        total_height = menu_height + top_button_height + table_content_height + status_height + layout_margin
-
-        # 창 크기 설정 (너비는 고정, 높이만 조절)
-        self.resize(target_width, total_height)
-        self.show()
-
-        # print(f"윈도우 크기 조절됨. 새 크기: {self.width()}x{self.height()}, 테이블 높이: {table_content_height}, 웹 버튼 개수: {web_button_count}")
+        self._saved_size = self.size()
+        self._saved_geometry = self.geometry()
 
     def _adjust_window_height_to_table(self):
         """기존 메서드명 호환성을 위한 별칭"""
         self._adjust_window_size_to_content()
 
     def _adjust_window_width_for_web_buttons(self):
-        """웹 바로가기 버튼 추가/삭제 시에만 창 너비를 조절합니다."""
-        # 웹 버튼 개수 확인
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
-
-        # 창 너비 결정 (최초 창 너비보다 작은 값으로는 축소되지 않음)
-        if web_button_count > 0:
-            target_width = 400  # 웹 버튼이 있을 때의 고정 너비
-        else:
-            target_width = 470  # 웹 버튼이 없을 때의 고정 너비
-
-        # 현재 너비가 목표 너비와 다르면 조절
-        current_width = self.width()
-        if current_width != target_width:
-            # 창 최소 너비 제거 후 너비 설정
-            current_min_width = self.minimumWidth()
-            self.setMinimumWidth(0)  # 최소 너비 제거
-            self.resize(target_width, self.height())
-            self.setMinimumWidth(current_min_width)  # 원래 최소 너비 복원
-            # print(f"웹 버튼에 따른 창 너비 조절: {current_width} -> {target_width}")
+        """웹 바로가기 변경 후 전체 content 기반 크기 계산을 다시 수행합니다."""
+        self._adjust_window_size_to_content()
 
     def _adjust_window_height_for_table_rows(self):
-        """테이블 내용에 맞게 창 높이를 조절합니다.
-
-        명시적으로 크기를 계산하고 setFixedHeight로 설정하여 절전 복귀 시 안정성 확보.
-        """
-        # 1. 테이블 높이 계산
-        current_row_count = self.process_table.rowCount()
-        table_height = 0
-
-        # 헤더 높이 추가
-        header = self.process_table.horizontalHeader()
-        if header and not header.isHidden():
-            table_height += header.height()
-
-        # 행 높이 계산
-        if current_row_count > 0:
-            for i in range(current_row_count):
-                table_height += self.process_table.rowHeight(i)
-        else:
-            # 행이 없을 경우 기본 행 높이 추가
-            table_height += self.fontMetrics().height() + 12
-
-        # 테이블 테두리 두께 고려
-        table_height += self.process_table.frameWidth() * 2
-
-        # 2. 테이블 고정 높이 설정
-        self.process_table.setFixedHeight(table_height)
-
-        # 3. 레이아웃 재계산 요청
-        central_widget = self.centralWidget()
-        if central_widget and central_widget.layout():
-            central_widget.layout().invalidate()
-            central_widget.layout().activate()
-
-        # 4. 테이블 geometry 업데이트 요청
-        self.process_table.updateGeometry()
-
-        # 5. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
-        total_height = 0
-
-        # 메뉴바 높이
-        menu_bar = self.menuBar()
-        if menu_bar and not menu_bar.isHidden():
-            total_height += menu_bar.sizeHint().height()
-
-        # 상단 버튼 영역 높이
-        if hasattr(self, 'top_button_area_layout'):
-            total_height += self.top_button_area_layout.sizeHint().height()
-            total_height += 10  # 레이아웃 여백
-
-        # 테이블 높이
-        total_height += table_height
-
-        # 상태바 높이
-        status_bar = self.statusBar()
-        if status_bar and not status_bar.isHidden():
-            total_height += status_bar.sizeHint().height()
-
-        # 창 프레임 및 레이아웃 여백 추가
-        total_height += 20  # 여유 공간
-
-        # 6. 창 높이를 고정 (너비는 이미 고정되어 있음)
-        self.setFixedHeight(total_height)
-
-        # 7. 화면 업데이트
-        self.update()
-
-        # 8. 정상 상태의 창 크기/위치 저장 (절전 복귀 시 복원에 사용)
-        self._saved_size = self.size()
-        self._saved_geometry = self.geometry()
+        """기존 호출부 호환: 전체 content 기반 크기 계산을 수행합니다."""
+        self._adjust_window_size_to_content()
 
     # ───────── 볼륨 패널 ─────────
 
@@ -2203,6 +2231,8 @@ class MainWindow(QMainWindow):
 
     def _recover_gamebar_setting_if_needed(self) -> None:
         """이전 비정상 종료로 남은 Game Bar 설정이 있으면 앱 시작 시 복원합니다."""
+        if sys.platform != "win32":
+            return
         if self._gamebar_original_value is not None:
             return
         persisted_value = self._load_persisted_gamebar_original_value()
@@ -2214,6 +2244,8 @@ class MainWindow(QMainWindow):
 
     def _set_gamebar_capture(self, enabled: bool) -> None:
         """Game Bar 스크린샷 캡처 활성화 여부를 레지스트리로 제어합니다."""
+        if sys.platform != "win32":
+            return
         try:
             import winreg
             key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
@@ -2235,6 +2267,8 @@ class MainWindow(QMainWindow):
 
     def _restore_gamebar_setting(self) -> None:
         """Game Bar 설정을 원래 값으로 복원합니다."""
+        if sys.platform != "win32":
+            return
         if self._gamebar_original_value is None:
             self._gamebar_original_value = self._load_persisted_gamebar_original_value()
             if self._gamebar_original_value is None:

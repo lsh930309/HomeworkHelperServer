@@ -16,6 +16,10 @@ from PyQt6.QtWidgets import QApplication, QWidget
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 100   # 커서 감지 폴링 간격 (ms)
+_HANDLE_WIDTH = 18
+_HANDLE_MIN_HEIGHT = 96
+_HANDLE_MAX_HEIGHT = 160
+_HANDLE_HIDE_DELAY_MS = 1200
 
 
 class EdgeTriggerWindow(QWidget):
@@ -49,8 +53,7 @@ class EdgeTriggerWindow(QWidget):
             parent,
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowTransparentForInput,
+            | Qt.WindowType.WindowStaysOnTopHint,
         )
         self._trigger_callback = trigger_callback
         _s = max(0.0, min(1.0, trigger_y_start))
@@ -60,10 +63,13 @@ class EdgeTriggerWindow(QWidget):
         self._trigger_width_px = max(1, trigger_width_px)
         self._in_cooldown = False
         self._cursor_was_in_zone = False
+        self._handle_visible = False
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setWindowOpacity(0.0)  # 완전 투명
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._apply_hidden_handle_style()
 
         # 배치할 화면 결정
         self._screen = screen or QApplication.primaryScreen()
@@ -73,6 +79,9 @@ class EdgeTriggerWindow(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_cursor)
+        self._handle_hide_timer = QTimer(self)
+        self._handle_hide_timer.setSingleShot(True)
+        self._handle_hide_timer.timeout.connect(self._hide_handle)
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -80,6 +89,7 @@ class EdgeTriggerWindow(QWidget):
 
     def start(self) -> None:
         """커서 감지 폴링을 시작하고 트리거 창을 표시합니다."""
+        self._hide_handle()
         self.show()
         self._poll_timer.start()
         logger.debug("EdgeTriggerWindow 시작됨")
@@ -87,9 +97,11 @@ class EdgeTriggerWindow(QWidget):
     def stop(self) -> None:
         """커서 감지 폴링을 중지하고 창을 숨깁니다."""
         self._poll_timer.stop()
+        self._handle_hide_timer.stop()
         self.hide()
         self._in_cooldown = False
         self._cursor_was_in_zone = False
+        self._handle_visible = False
         logger.debug("EdgeTriggerWindow 중지됨")
 
     def update_settings(
@@ -121,9 +133,71 @@ class EdgeTriggerWindow(QWidget):
         """창을 지정된 화면의 우측 끝에 배치합니다."""
         if screen is None:
             return
+        self.setGeometry(self._handle_geometry(screen) if self._handle_visible else self._trigger_geometry(screen))
+
+    def _trigger_geometry(self, screen: QScreen) -> QRect:
         geo: QRect = screen.geometry()
         trigger_x = geo.right() - self._trigger_width_px + 1
-        self.setGeometry(trigger_x, geo.top(), self._trigger_width_px, geo.height())
+        return QRect(trigger_x, geo.top(), self._trigger_width_px, geo.height())
+
+    def _handle_geometry(self, screen: QScreen) -> QRect:
+        geo: QRect = screen.geometry()
+        zone_top = geo.top() + int(geo.height() * self._trigger_y_start)
+        zone_bottom = geo.top() + int(geo.height() * self._trigger_y_end)
+        zone_height = max(1, zone_bottom - zone_top)
+        handle_height = max(_HANDLE_MIN_HEIGHT, min(_HANDLE_MAX_HEIGHT, zone_height))
+        handle_y = zone_top + max(0, (zone_height - handle_height) // 2)
+        handle_x = geo.right() - _HANDLE_WIDTH + 1
+        return QRect(handle_x, handle_y, _HANDLE_WIDTH, handle_height)
+
+    def _set_transparent_for_input(self, enabled: bool) -> None:
+        flag = Qt.WindowType.WindowTransparentForInput
+        if bool(self.windowFlags() & flag) == enabled:
+            return
+        was_visible = self.isVisible()
+        self.setWindowFlag(flag, enabled)
+        if was_visible:
+            self.show()
+
+    def _apply_hidden_handle_style(self) -> None:
+        self._set_transparent_for_input(True)
+        self.setWindowOpacity(0.0)
+        self.setStyleSheet("QWidget { background: transparent; border: none; }")
+
+    def _apply_visible_handle_style(self) -> None:
+        self._set_transparent_for_input(False)
+        self.setWindowOpacity(0.86)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: rgba(70, 95, 135, 190);
+                border: none;
+                border-top-left-radius: 9px;
+                border-bottom-left-radius: 9px;
+            }
+            QWidget:hover {
+                background-color: rgba(95, 125, 175, 220);
+            }
+        """)
+        self.setToolTip("사이드바 열기")
+
+    def _show_handle(self) -> None:
+        if self._screen is None:
+            return
+        self._handle_hide_timer.stop()
+        self._handle_visible = True
+        self.setGeometry(self._handle_geometry(self._screen))
+        self._apply_visible_handle_style()
+        self.show()
+        self.raise_()
+
+    def _hide_handle(self) -> None:
+        self._handle_hide_timer.stop()
+        self._handle_visible = False
+        self._apply_hidden_handle_style()
+        if self._screen is not None:
+            self.setGeometry(self._trigger_geometry(self._screen))
+        if self._poll_timer.isActive():
+            self.show()
 
     def _poll_cursor(self) -> None:
         """현재 커서 위치를 확인하고 트리거 영역 진입 여부를 판단합니다."""
@@ -132,11 +206,19 @@ class EdgeTriggerWindow(QWidget):
 
         cursor_pos = QCursor.pos()
 
+        if self._handle_visible:
+            if self.geometry().adjusted(-4, -12, 8, 12).contains(cursor_pos):
+                self._handle_hide_timer.stop()
+                return
+            if not self._handle_hide_timer.isActive():
+                self._handle_hide_timer.start(_HANDLE_HIDE_DELAY_MS)
+            return
+
         # 트리거 창 자체의 geometry 기준으로 판정 (멀티모니터 오탐 방지)
         my_geo: QRect = self.geometry()
 
-        # 우측 가장자리 X 범위 내에 있는지 확인
-        if cursor_pos.x() < my_geo.left():
+        # 우측 가장자리 X 범위 내에 있는지 확인 (오른쪽 보조 모니터 오탐 방지)
+        if cursor_pos.x() < my_geo.left() or cursor_pos.x() > my_geo.right():
             self._cursor_was_in_zone = False
             return
 
@@ -147,9 +229,9 @@ class EdgeTriggerWindow(QWidget):
         in_zone = self._trigger_y_start <= y_ratio <= self._trigger_y_end
 
         if in_zone and not self._cursor_was_in_zone:
-            # 새로 진입한 경우 트리거
+            # 새로 진입한 경우 서랍 손잡이만 표시합니다. 실제 사이드바는 클릭으로 엽니다.
             self._cursor_was_in_zone = True
-            self._fire_trigger()
+            self._show_handle()
         elif not in_zone:
             self._cursor_was_in_zone = False
 
@@ -166,3 +248,21 @@ class EdgeTriggerWindow(QWidget):
         """쿨다운을 해제합니다."""
         self._in_cooldown = False
         self._cursor_was_in_zone = False
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        if self._handle_visible:
+            self._handle_hide_timer.stop()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        if self._handle_visible and not self._handle_hide_timer.isActive():
+            self._handle_hide_timer.start(_HANDLE_HIDE_DELAY_MS)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._handle_visible:
+            self._hide_handle()
+            self._fire_trigger()
+            event.accept()
+            return
+        super().mousePressEvent(event)

@@ -387,13 +387,13 @@ class SidebarWidget(QWidget):
 
         self._screen = screen or QApplication.primaryScreen()
 
-        # 내부 프레임 (반투명 배경 + 테두리)
+        # 내부 프레임 (반투명 배경 + 무테두리 서랍)
         self._frame = QFrame(self)
         self._frame.setObjectName("SidebarFrame")
         self._frame.setStyleSheet("""
             QFrame#SidebarFrame {
                 background-color: rgba(12, 12, 16, 240);
-                border-left: 1px solid rgba(180, 200, 255, 18);
+                border: none;
                 border-radius: 0px;
             }
         """)

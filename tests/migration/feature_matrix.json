@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "updated": "2026-05-10",
+  "notes": "This change updates the current installed PyQt GUI. Tauri/React preview parity remains explicitly not assessed here. Windows-only manual smoke is tracked but excluded from this macOS goal completion gate.",
+  "features": [
+    {
+      "id": "GUI-TABLE-001",
+      "name": "Main PyQt game table headers, fixed sort, and dynamic sizing",
+      "area": "gui",
+      "data_contract": "%APPDATA%/HomeworkHelper/homework_helper_data/app_data.db read through ApiClient/data models",
+      "risk": "medium",
+      "legacy_gui_status": "implemented",
+      "pyqt_status": "updated",
+      "new_gui_status": "tauri-preview-not-assessed",
+      "automated_tests": [
+        "tests/test_gui_layout.py::test_main_table_hides_headers_and_uses_fixed_name_sort",
+        "tests/test_gui_layout.py::test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen",
+        "tests/test_gui_layout.py::test_restore_window_state_does_not_leave_fixed_size"
+      ],
+      "real_data_check": "HomeworkHelper.zip clone rendered to ignored screenshot artifact",
+      "manual_smoke": "docs/migration-smoke-checklist.md#main-gui-table-sizing-with-real-data"
+    },
+    {
+      "id": "SIDEBAR-001",
+      "name": "Borderless sidebar drawer with click handle",
+      "area": "sidebar",
+      "data_contract": "GlobalSettings sidebar fields read through data manager/API boundary",
+      "risk": "medium",
+      "legacy_gui_status": "implemented",
+      "pyqt_status": "updated",
+      "new_gui_status": "tauri-preview-not-assessed",
+      "automated_tests": [
+        "tests/test_gui_layout.py::test_edge_trigger_exposes_borderless_click_handle",
+        "tests/test_gui_layout.py::test_edge_trigger_polls_only_inside_the_edge_strip",
+        "tests/test_gui_layout.py::test_sidebar_frame_css_remains_borderless"
+      ],
+      "manual_smoke": "docs/migration-smoke-checklist.md#sidebar-drawer-handle",
+      "windows_only_manual_gate": "deferred-off-device"
+    },
+    {
+      "id": "LAUNCH-FOCUS-001",
+      "name": "Best-effort focus to launched game window",
+      "area": "launcher-runtime",
+      "data_contract": "Launch remains through Launcher; focus helper has no DB writes",
+      "risk": "medium",
+      "legacy_gui_status": "implemented",
+      "pyqt_status": "updated",
+      "new_gui_status": "tauri-preview-not-assessed",
+      "automated_tests": [
+        "tests/test_gui_layout.py::test_focus_helper_noops_off_windows",
+        "tests/test_gui_layout.py::test_window_focus_declares_user32_signatures"
+      ],
+      "manual_smoke": "docs/migration-smoke-checklist.md#launch-focus",
+      "windows_only_manual_gate": "deferred-off-device"
+    }
+  ]
+}
