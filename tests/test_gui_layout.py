@@ -3,7 +3,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
@@ -16,6 +16,7 @@ from src.data.data_models import (
     SIDEBAR_MODE_GAME,
 )
 from src.core.process_monitor import ProcessMonitorTickResult
+import src.gui.sidebar.edge_trigger_window as edge_trigger_module
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 
 
@@ -100,6 +101,16 @@ def test_global_settings_derives_sidebar_mode_from_legacy_bool():
     restored = GlobalSettings.from_dict({"sidebar_enabled": True, "sidebar_mode": SIDEBAR_MODE_ALWAYS})
     assert restored.sidebar_mode == SIDEBAR_MODE_ALWAYS
     assert restored.sidebar_enabled is True
+    assert restored.sidebar_handle_auto_hide is True
+
+    ranged = GlobalSettings.from_dict({
+        "sidebar_trigger_y_start": 0.8,
+        "sidebar_trigger_y_end": 0.2,
+        "sidebar_handle_auto_hide": False,
+    })
+    assert ranged.sidebar_trigger_y_start == 0.2
+    assert ranged.sidebar_trigger_y_end == 0.8
+    assert ranged.sidebar_handle_auto_hide is False
 
 
 def _stop_window(window, app):
@@ -306,7 +317,11 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     import src.gui.sidebar.sidebar_controller as controller_module
 
     process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
-    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_DISABLED, hide_on_game=False)
+    settings = GlobalSettings(
+        sidebar_mode=SIDEBAR_MODE_DISABLED,
+        hide_on_game=False,
+        sidebar_handle_auto_hide=False,
+    )
     data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
     trigger_events = []
     process_updates = []
@@ -314,7 +329,11 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     class _TriggerProbe:
         def __init__(self, *args, **kwargs):
             self.update_calls = []
-            trigger_events.append(("created", kwargs.get("trigger_width_px")))
+            trigger_events.append((
+                "created",
+                kwargs.get("trigger_width_px"),
+                kwargs.get("handle_auto_hide"),
+            ))
 
         def start(self):
             trigger_events.append(("start", None))
@@ -322,8 +341,8 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
         def stop(self):
             trigger_events.append(("stop", None))
 
-        def update_settings(self, trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px=2):
-            self.update_calls.append((trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px))
+        def update_settings(self, trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px=2, handle_auto_hide=True):
+            self.update_calls.append((trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px, handle_auto_hide))
             trigger_events.append(("update", trigger_width_px))
 
     class _SidebarProbe:
@@ -364,7 +383,7 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     settings.sidebar_enabled = True
     controller.apply_settings(settings)
 
-    assert ("created", settings.sidebar_edge_width_px) in trigger_events
+    assert ("created", settings.sidebar_edge_width_px, False) in trigger_events
     assert ("start", None) in trigger_events
     assert ("game", 4321, 100.0) in process_updates
 
@@ -380,7 +399,11 @@ def test_sidebar_controller_always_mode_starts_trigger_without_game(monkeypatch)
 
     class _TriggerProbe:
         def __init__(self, *args, **kwargs):
-            trigger_events.append(("created", kwargs.get("trigger_width_px")))
+            trigger_events.append((
+                "created",
+                kwargs.get("trigger_width_px"),
+                kwargs.get("handle_auto_hide"),
+            ))
 
         def start(self):
             trigger_events.append(("start", None))
@@ -423,7 +446,7 @@ def test_sidebar_controller_always_mode_starts_trigger_without_game(monkeypatch)
     controller.apply_settings(settings)
     controller.deactivate()
 
-    assert ("created", settings.sidebar_edge_width_px) in trigger_events
+    assert ("created", settings.sidebar_edge_width_px, True) in trigger_events
     assert trigger_events.count(("start", None)) == 2
     assert ("stop", None) not in trigger_events
     assert ("refresh", None) in sidebar_events
@@ -445,13 +468,20 @@ def test_sidebar_settings_dialog_persists_three_state_sidebar_mode(monkeypatch):
     dialog = SidebarSettingsDialog(settings)
     try:
         assert dialog._mode_combo.currentData() == SIDEBAR_MODE_ALWAYS
+        assert dialog._handle_auto_hide_cb.isChecked() is True
 
         disabled_index = dialog._mode_combo.findData(SIDEBAR_MODE_DISABLED)
         dialog._mode_combo.setCurrentIndex(disabled_index)
+        dialog._handle_auto_hide_cb.setChecked(False)
+        dialog._trigger_y_start_spin.setValue(0.85)
+        dialog._trigger_y_end_spin.setValue(0.15)
         updated = dialog.get_updated_settings()
 
         assert updated.sidebar_mode == SIDEBAR_MODE_DISABLED
         assert updated.sidebar_enabled is False
+        assert updated.sidebar_handle_auto_hide is False
+        assert updated.sidebar_trigger_y_start == 0.15
+        assert updated.sidebar_trigger_y_end == 0.85
     finally:
         dialog.deleteLater()
         app.processEvents()
@@ -689,9 +719,62 @@ def test_edge_trigger_visible_handle_uses_direct_paint_path():
     assert "_HANDLE_GRIP_COLOR" in source
 
 
+def test_edge_trigger_auto_hide_reveals_from_configured_edge_zone(monkeypatch):
+    app = _qapp()
+    cursor = {"pos": QPoint(0, 0)}
+
+    class _CursorProbe:
+        @staticmethod
+        def pos():
+            return cursor["pos"]
+
+    monkeypatch.setattr(edge_trigger_module, "QCursor", _CursorProbe)
+
+    edge = EdgeTriggerWindow(
+        trigger_callback=lambda: None,
+        trigger_y_start=0.25,
+        trigger_y_end=0.5,
+        trigger_width_px=12,
+    )
+    try:
+        trigger_geometry = edge._trigger_geometry(edge._screen)
+        assert trigger_geometry.height() < edge._screen.geometry().height()
+        assert trigger_geometry.width() == 12
+
+        edge.start()
+        app.processEvents()
+
+        assert edge._handle_visible is False
+        assert edge._poll_timer.isActive()
+        assert edge.geometry() == trigger_geometry
+        assert edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+
+        cursor["pos"] = trigger_geometry.center()
+        edge._poll_cursor()
+        app.processEvents()
+
+        assert edge._handle_visible is True
+        assert edge.geometry() == edge._handle_geometry(edge._screen)
+        assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+
+        cursor["pos"] = edge._screen.geometry().center() - QPoint(100, 0)
+        edge._poll_cursor()
+        assert edge._handle_hide_timer.isActive()
+
+        edge._handle_hide_timer.timeout.emit()
+        app.processEvents()
+
+        assert edge._handle_visible is False
+        assert edge.geometry() == trigger_geometry
+    finally:
+        edge.stop()
+        edge.deleteLater()
+        app.processEvents()
+
+
 def test_edge_trigger_starts_with_always_visible_borderless_click_handle():
     app = _qapp()
-    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2, handle_auto_hide=False)
     try:
         assert edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
 
@@ -724,7 +807,11 @@ def test_edge_trigger_starts_with_always_visible_borderless_click_handle():
 def test_edge_trigger_click_invokes_callback_without_hiding_handle():
     app = _qapp()
     triggered = []
-    edge = EdgeTriggerWindow(trigger_callback=lambda: triggered.append(True), trigger_width_px=2)
+    edge = EdgeTriggerWindow(
+        trigger_callback=lambda: triggered.append(True),
+        trigger_width_px=2,
+        handle_auto_hide=False,
+    )
     try:
         edge.start()
         app.processEvents()
@@ -780,7 +867,7 @@ def test_edge_trigger_applies_handle_geometry_after_input_flag_change(monkeypatc
 
 def test_edge_trigger_poll_restores_always_visible_handle_without_cursor_gate():
     app = _qapp()
-    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2, handle_auto_hide=False)
     try:
         edge.start()
         app.processEvents()
@@ -799,7 +886,7 @@ def test_edge_trigger_poll_restores_always_visible_handle_without_cursor_gate():
 
 def test_edge_trigger_poll_restores_window_if_native_hide_keeps_handle_state():
     app = _qapp()
-    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2, handle_auto_hide=False)
     try:
         edge.start()
         app.processEvents()
@@ -819,7 +906,7 @@ def test_edge_trigger_poll_restores_window_if_native_hide_keeps_handle_state():
 
 def test_edge_trigger_start_uses_screen_handle_even_if_hidden_geometry_stale():
     app = _qapp()
-    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2, handle_auto_hide=False)
     try:
         edge._hide_handle()
         edge.setGeometry(0, 0, 1, 1)

@@ -1,19 +1,20 @@
 """화면 우측 가장자리 사이드바 손잡이 창.
 
-활성 게임이 감지되면 화면 우측 끝에 클릭 가능한 손잡이를 항상 표시합니다.
-손잡이를 클릭했을 때만 콜백을 호출하며, 쿨다운(cooldown_sec) 동안은
-재트리거를 방지합니다.
+활성 게임 또는 always 모드가 감지되면 화면 우측 끝 감지 영역을 폴링합니다.
+설정에 따라 손잡이는 평소 숨겨졌다가 커서가 감지 영역에 들어오면 표시되며,
+손잡이를 클릭했을 때만 콜백을 호출합니다.
 """
 import logging
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
-from PyQt6.QtGui import QColor, QPainter, QPen, QScreen
+from PyQt6.QtGui import QColor, QCursor, QPainter, QPen, QScreen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 100   # 손잡이 유지 폴링 간격 (ms)
+_HANDLE_AUTO_HIDE_DELAY_MS = 220
 _HANDLE_WIDTH = 14
 _HANDLE_MIN_HEIGHT = 84
 _HANDLE_MAX_HEIGHT = 132
@@ -38,6 +39,7 @@ class EdgeTriggerWindow(QWidget):
         trigger_y_end: float = 0.9,
         cooldown_sec: float = 1.0,
         trigger_width_px: int = 2,
+        handle_auto_hide: bool = True,
         screen: Optional[QScreen] = None,
         parent: Optional[QWidget] = None,
     ):
@@ -49,6 +51,7 @@ class EdgeTriggerWindow(QWidget):
             trigger_y_end: 손잡이 배치 영역 종료 Y 비율 (0.0 ~ 1.0).
             cooldown_sec: 트리거 후 재발동 방지 시간 (초).
             trigger_width_px: 비활성 상태의 edge overlay 너비 (px).
+            handle_auto_hide: True면 커서가 감지 영역에 들어올 때만 손잡이를 표시합니다.
             screen: 배치할 화면. None이면 주 화면을 사용합니다.
             parent: 부모 위젯.
         """
@@ -64,6 +67,7 @@ class EdgeTriggerWindow(QWidget):
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
         self._trigger_width_px = max(1, trigger_width_px)
+        self._handle_auto_hide = bool(handle_auto_hide)
         self._in_cooldown = False
         self._handle_visible = False
         self._hovered = False
@@ -91,10 +95,15 @@ class EdgeTriggerWindow(QWidget):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """항상 보이는 손잡이를 표시하고 유지 폴링을 시작합니다."""
+        """손잡이 감지 폴링을 시작합니다."""
         self._in_cooldown = False
-        self._show_handle()
         self._poll_timer.start()
+        if self._handle_auto_hide:
+            self._hide_handle()
+            self.show()
+            self._poll_cursor()
+        else:
+            self._show_handle()
         logger.debug("EdgeTriggerWindow 시작됨")
 
     def stop(self) -> None:
@@ -113,6 +122,7 @@ class EdgeTriggerWindow(QWidget):
         trigger_y_end: float,
         cooldown_sec: float,
         trigger_width_px: int = 2,
+        handle_auto_hide: Optional[bool] = None,
     ) -> None:
         """손잡이 설정을 런타임에 갱신합니다."""
         _s = max(0.0, min(1.0, trigger_y_start))
@@ -120,7 +130,11 @@ class EdgeTriggerWindow(QWidget):
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
         self._cooldown_ms = int(cooldown_sec * 1000)
         self._trigger_width_px = max(1, trigger_width_px)
+        if handle_auto_hide is not None:
+            self._handle_auto_hide = bool(handle_auto_hide)
         self._reposition(self._screen if hasattr(self, '_screen') else None)
+        if self._poll_timer.isActive():
+            self._poll_cursor()
 
     def reposition(self, screen: Optional[QScreen]) -> None:
         """화면 변경 시 손잡이 창을 새 화면의 우측 끝으로 재배치합니다."""
@@ -141,7 +155,9 @@ class EdgeTriggerWindow(QWidget):
     def _trigger_geometry(self, screen: QScreen) -> QRect:
         geo: QRect = screen.geometry()
         trigger_x = geo.right() - self._trigger_width_px + 1
-        return QRect(trigger_x, geo.top(), self._trigger_width_px, geo.height())
+        zone_top = geo.top() + int(geo.height() * self._trigger_y_start)
+        zone_bottom = geo.top() + int(geo.height() * self._trigger_y_end)
+        return QRect(trigger_x, zone_top, self._trigger_width_px, max(1, zone_bottom - zone_top))
 
     def _handle_geometry(self, screen: QScreen) -> QRect:
         geo: QRect = screen.geometry()
@@ -202,16 +218,39 @@ class EdgeTriggerWindow(QWidget):
             self.show()
 
     def _poll_cursor(self) -> None:
-        """상시 노출 손잡이가 외부 요인으로 숨거나 밀렸을 때 다시 표시합니다."""
+        """설정에 따라 손잡이를 자동 노출/숨김 또는 상시 노출로 유지합니다."""
         if self._screen is None:
             return
-        expected_geometry = self._handle_geometry(self._screen)
-        if (
-            not self._handle_visible
-            or not self.isVisible()
-            or self.geometry() != expected_geometry
-        ):
-            self._show_handle()
+        if not self._handle_auto_hide:
+            expected_geometry = self._handle_geometry(self._screen)
+            if (
+                not self._handle_visible
+                or not self.isVisible()
+                or self.geometry() != expected_geometry
+            ):
+                self._show_handle()
+            return
+
+        cursor_pos = QCursor.pos()
+        in_trigger_zone = self._trigger_geometry(self._screen).contains(cursor_pos)
+        over_handle = self._handle_visible and self._handle_geometry(self._screen).contains(cursor_pos)
+        if in_trigger_zone or over_handle:
+            self._handle_hide_timer.stop()
+            expected_geometry = self._handle_geometry(self._screen)
+            if (
+                not self._handle_visible
+                or not self.isVisible()
+                or self.geometry() != expected_geometry
+            ):
+                self._show_handle()
+            return
+
+        if self._handle_visible and not self._handle_hide_timer.isActive():
+            self._handle_hide_timer.start(_HANDLE_AUTO_HIDE_DELAY_MS)
+        elif not self._handle_visible:
+            expected_geometry = self._trigger_geometry(self._screen)
+            if not self.isVisible() or self.geometry() != expected_geometry:
+                self._hide_handle()
 
     def _fire_trigger(self) -> None:
         """트리거 콜백을 호출하고 쿨다운을 시작합니다."""

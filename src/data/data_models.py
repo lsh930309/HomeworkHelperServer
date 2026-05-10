@@ -174,6 +174,7 @@ class GlobalSettings:
                  sidebar_mode: Optional[str] = None,
                  sidebar_trigger_y_start: float = 0.1,
                  sidebar_trigger_y_end: float = 0.9,
+                 sidebar_handle_auto_hide: bool = True,
                  sidebar_auto_hide_ms: int = 3000,
                  sidebar_edge_width_px: int = 2,
                  sidebar_effect: str = "acrylic",
@@ -227,6 +228,7 @@ class GlobalSettings:
         self.sidebar_enabled = self.sidebar_mode != SIDEBAR_MODE_DISABLED
         self.sidebar_trigger_y_start = sidebar_trigger_y_start
         self.sidebar_trigger_y_end = sidebar_trigger_y_end
+        self.sidebar_handle_auto_hide = sidebar_handle_auto_hide
         self.sidebar_auto_hide_ms = sidebar_auto_hide_ms
         self.sidebar_edge_width_px = sidebar_edge_width_px
         self.sidebar_effect = sidebar_effect
@@ -306,6 +308,7 @@ class GlobalSettings:
         _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
         data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
         data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
+        data['sidebar_handle_auto_hide'] = bool(data.get('sidebar_handle_auto_hide', True))
         # sidebar_auto_hide_ms 하위 호환성 (구버전: sidebar_auto_hide_sec)
         if 'sidebar_auto_hide_ms' not in data and 'sidebar_auto_hide_sec' in data:
             data['sidebar_auto_hide_ms'] = max(0, int(data['sidebar_auto_hide_sec'])) * 1000

@@ -41,10 +41,12 @@ WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
 
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
-    "sidebar_enabled", "sidebar_mode", "screenshot_enabled", "recording_enabled",
+    "sidebar_enabled", "sidebar_mode", "sidebar_handle_auto_hide",
+    "screenshot_enabled", "recording_enabled",
 }
 SIDEBAR_SETTINGS_FIELDS = {
-    "sidebar_enabled", "sidebar_mode", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
+    "sidebar_enabled", "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
+    "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
     "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_enabled",
     "sidebar_clock_format", "sidebar_playtime_enabled", "sidebar_playtime_prefix",
     "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
@@ -62,7 +64,8 @@ GLOBAL_DIALOG_FIELDS = {
     "stamina_notify_threshold", "theme", "hide_on_game",
 }
 PERSONALIZED_SETTINGS_FIELDS = {
-    "sidebar_mode", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
+    "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
+    "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
     "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
@@ -74,6 +77,8 @@ SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
     "sleep_correction_advance_notify_hours": (0, 5, "수면 보정 사전 알림 시간"),
     "cycle_deadline_advance_notify_hours": (0, 12, "주기 마감 사전 알림 시간"),
     "stamina_notify_threshold": (1, 100, "스태미나 알림 기준"),
+    "sidebar_trigger_y_start": (0.0, 1.0, "사이드바 손잡이 감지 시작 위치"),
+    "sidebar_trigger_y_end": (0.0, 1.0, "사이드바 손잡이 감지 종료 위치"),
     "sidebar_auto_hide_ms": (0, 60000, "사이드바 자동 숨김 시간"),
     "sidebar_edge_width_px": (1, 50, "사이드바 엣지 감지 폭"),
     "sidebar_height_ratio": (0.3, 1.0, "사이드바 높이 비율"),
@@ -109,6 +114,7 @@ FIELD_LABELS: dict[str, str] = {
     "stamina_notify_enabled": "스태미나 알림",
     "sidebar_enabled": "사이드바 사용",
     "sidebar_mode": "사이드바 사용 방식",
+    "sidebar_handle_auto_hide": "사이드바 손잡이 자동 숨김",
     "sidebar_clock_enabled": "사이드바 시계 표시",
     "sidebar_playtime_enabled": "사이드바 플레이타임 표시",
     "sidebar_volume_section_enabled": "사이드바 볼륨 영역",
@@ -509,6 +515,12 @@ def _invalid_settings_values(
     changed_fields: set[str],
 ) -> list[str]:
     invalid: list[str] = []
+
+    def proposed(field: str) -> Any:
+        if field in update_data:
+            return update_data[field]
+        return getattr(current_settings, field, None)
+
     for field, (minimum, maximum, _label) in SETTINGS_RANGE_RULES.items():
         if field not in changed_fields:
             continue
@@ -521,6 +533,11 @@ def _invalid_settings_values(
     for field in ("sleep_start_time_str", "sleep_end_time_str"):
         if field in changed_fields and not _is_hhmm(update_data.get(field)):
             invalid.append(field)
+    if changed_fields & {"sidebar_trigger_y_start", "sidebar_trigger_y_end"}:
+        y_start = proposed("sidebar_trigger_y_start")
+        y_end = proposed("sidebar_trigger_y_end")
+        if _is_number(y_start) and _is_number(y_end) and float(y_start) > float(y_end):
+            invalid.append("sidebar_trigger_y_start>sidebar_trigger_y_end")
 
     return invalid
 

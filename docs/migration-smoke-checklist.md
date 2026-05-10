@@ -17,11 +17,14 @@ Windows-only manual smoke cannot be completed on the current macOS device and is
 
 - [x] Confirm sidebar settings expose `항상 사용`, `게임 중에만 사용`, and `사용 안함`.
 - [x] Confirm `sidebar_mode` is persisted through API/data models/DB migration and guarded by Beholder enum validation.
-- [x] Confirm `항상 사용` starts the sidebar handle without an active game.
-- [x] Confirm the active sidebar trigger starts with the handle always visible and not transparent-for-input.
+- [x] Confirm sidebar settings expose handle auto-hide/reveal and trigger range controls.
+- [x] Confirm `sidebar_handle_auto_hide` and trigger Y range are persisted through API/data models/DB migration and guarded by Beholder validation.
+- [x] Confirm `항상 사용` starts the sidebar trigger without an active game.
+- [x] Confirm the active sidebar trigger defaults to hidden and reveals the handle from the configured right-edge detection zone.
+- [x] Confirm disabling handle auto-hide keeps the handle always visible while the sidebar is closed.
 - [x] Confirm handle CSS uses `border: none` and the sidebar frame is borderless.
-- [x] Confirm clicking the handle invokes the sidebar controller's `slide_in()` path without hiding the handle.
+- [x] Confirm clicking the handle invokes the sidebar controller's `slide_in()` path and hides the handle until the sidebar closes.
 - [x] Confirm polling can restore the handle without depending on cursor hover position.
-- [ ] Windows: set sidebar to `항상 사용` and confirm the handle appears before launching any game.
-- [ ] Windows: with sidebar enabled and a game running, confirm the handle is already visible at the configured screen edge.
+- [ ] Windows: set sidebar to `항상 사용` and confirm the hidden handle appears only after moving the cursor into the configured right-edge zone.
+- [ ] Windows: with sidebar enabled and a game running, confirm the hidden handle appears from the configured edge zone.
 - [ ] Windows: click the handle and confirm the sidebar opens; let it auto-hide after the configured delay.

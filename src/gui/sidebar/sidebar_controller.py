@@ -231,7 +231,14 @@ class SidebarController:
             trigger_y_start = getattr(settings, 'sidebar_trigger_y_start', 0.1)
             trigger_y_end = getattr(settings, 'sidebar_trigger_y_end', 0.9)
             edge_width_px = getattr(settings, 'sidebar_edge_width_px', 2)
-            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
+            handle_auto_hide = getattr(settings, 'sidebar_handle_auto_hide', True)
+            self._trigger.update_settings(
+                trigger_y_start,
+                trigger_y_end,
+                1.0,
+                edge_width_px,
+                handle_auto_hide,
+            )
 
         # always 모드에서는 활성 게임이 없어도 트리거를 시작합니다. game 모드에서는
         # 저장해 둔 활성 게임 상태가 있을 때만 트리거를 즉시 기동합니다.
@@ -291,6 +298,7 @@ class SidebarController:
         trigger_y_end = getattr(gs, 'sidebar_trigger_y_end', 0.9) if gs else 0.9
         auto_hide_ms = int(getattr(gs, 'sidebar_auto_hide_ms', 3000) if gs else 3000)
         edge_width_px = int(getattr(gs, 'sidebar_edge_width_px', 2) if gs else 2)
+        handle_auto_hide = bool(getattr(gs, 'sidebar_handle_auto_hide', True) if gs else True)
 
         if self._sidebar is None:
             self._sidebar = SidebarWidget(
@@ -317,10 +325,11 @@ class SidebarController:
                 trigger_y_end=trigger_y_end,
                 cooldown_sec=1.0,
                 trigger_width_px=edge_width_px,
+                handle_auto_hide=handle_auto_hide,
                 screen=screen,
             )
         else:
-            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
+            self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px, handle_auto_hide)
 
     def _on_edge_triggered(self) -> None:
         """EdgeTriggerWindow 가 커서 진입을 감지했을 때 호출됩니다."""

@@ -474,7 +474,12 @@ def test_sidebar_mode_is_guarded_and_normalizes_legacy_bool(monkeypatch, tmp_pat
 
     crud.patch_settings(
         db,
-        {"sidebar_mode": "always"},
+        {
+            "sidebar_mode": "always",
+            "sidebar_handle_auto_hide": False,
+            "sidebar_trigger_y_start": 0.2,
+            "sidebar_trigger_y_end": 0.8,
+        },
         actor="sidebar_settings_dialog",
         allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
     )
@@ -482,6 +487,9 @@ def test_sidebar_mode_is_guarded_and_normalizes_legacy_bool(monkeypatch, tmp_pat
     settings = crud.get_settings(db)
     assert settings.sidebar_mode == "always"
     assert settings.sidebar_enabled is True
+    assert settings.sidebar_handle_auto_hide is False
+    assert settings.sidebar_trigger_y_start == 0.2
+    assert settings.sidebar_trigger_y_end == 0.8
 
     crud.patch_settings(
         db,
@@ -513,6 +521,27 @@ def test_settings_guard_blocks_invalid_sidebar_mode(monkeypatch, tmp_path):
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_setting_value" in payload["risk_factors"]
         assert "sidebar_mode" in payload["risk_factors"]
+
+
+def test_settings_guard_blocks_invalid_sidebar_trigger_range(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_trigger_y_start": 0.9, "sidebar_trigger_y_end": 0.1},
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+        )
+        assert False, "invalid sidebar trigger ranges should be blocked centrally"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+        assert "invalid_setting_value" in payload["risk_factors"]
+        assert "invalid_setting_relation" in payload["risk_factors"]
+        assert "sidebar_trigger_y_start>sidebar_trigger_y_end" in payload["risk_factors"]
 
 
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):

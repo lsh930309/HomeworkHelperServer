@@ -76,6 +76,9 @@ class GlobalSettings(Base):
     # 사이드바
     sidebar_enabled = Column(Boolean, default=True)
     sidebar_mode = Column(String, default="game")  # "always" | "game" | "disabled"
+    sidebar_trigger_y_start = Column(Float, default=0.1)
+    sidebar_trigger_y_end = Column(Float, default=0.9)
+    sidebar_handle_auto_hide = Column(Boolean, default=True)
     sidebar_auto_hide_ms = Column(Integer, default=3000)
     sidebar_edge_width_px = Column(Integer, default=2)
     sidebar_height_ratio = Column(Float, default=1.0)

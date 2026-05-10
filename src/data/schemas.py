@@ -86,6 +86,9 @@ class GlobalSettingsSchema(BaseModel):
     # 사이드바
     sidebar_enabled: bool = True
     sidebar_mode: str = "game"
+    sidebar_trigger_y_start: float = 0.1
+    sidebar_trigger_y_end: float = 0.9
+    sidebar_handle_auto_hide: bool = True
     sidebar_auto_hide_ms: int = 3000
     sidebar_edge_width_px: int = 2
     sidebar_height_ratio: float = 1.0
