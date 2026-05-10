@@ -3,7 +3,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
@@ -410,6 +410,70 @@ def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monk
     assert sidebar_events == ["slide_out"]
 
 
+def test_sidebar_controller_edge_trigger_callback_slides_sidebar_in(monkeypatch):
+    _qapp()
+    import src.gui.sidebar.sidebar_controller as controller_module
+
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    settings = GlobalSettings(sidebar_enabled=True, hide_on_game=False)
+    data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
+    triggers = []
+    sidebar_events = []
+
+    class _TriggerProbe:
+        def __init__(self, *args, **kwargs):
+            self.trigger_callback = kwargs["trigger_callback"]
+            triggers.append(self)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def update_settings(self, *args, **kwargs):
+            pass
+
+    class _SidebarProbe:
+        _is_shown = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update_process(self, *args, **kwargs):
+            pass
+
+        def update_auto_hide_ms(self, *args, **kwargs):
+            pass
+
+        def apply_visual_settings(self):
+            pass
+
+        def refresh_content(self):
+            pass
+
+        def slide_out(self):
+            sidebar_events.append("slide_out")
+
+        def slide_in(self):
+            sidebar_events.append("slide_in")
+
+        def set_on_start_recording(self, _callback):
+            pass
+
+    monkeypatch.setattr(controller_module, "EdgeTriggerWindow", _TriggerProbe)
+    monkeypatch.setattr(controller_module, "SidebarWidget", _SidebarProbe)
+
+    controller = controller_module.SidebarController(data_manager)
+    controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
+
+    assert len(triggers) == 1
+
+    triggers[0].trigger_callback()
+
+    assert sidebar_events == ["slide_in"]
+
+
 def test_main_window_no_longer_schedules_foreground_focus():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
@@ -417,20 +481,34 @@ def test_main_window_no_longer_schedules_foreground_focus():
     assert "_schedule_focus_after_launch" not in source
 
 
-def test_edge_trigger_exposes_borderless_click_handle():
+def test_edge_trigger_starts_with_always_visible_borderless_click_handle():
+    app = _qapp()
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    try:
+        assert edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+
+        edge.start()
+        app.processEvents()
+
+        assert edge._handle_visible is True
+        assert edge._poll_timer.isActive()
+        assert edge.geometry() == edge._handle_geometry(edge._screen)
+        assert edge.geometry().width() > 2
+        assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+        assert "border: none" in edge.styleSheet()
+    finally:
+        edge.stop()
+        edge.deleteLater()
+        app.processEvents()
+
+
+def test_edge_trigger_click_invokes_callback_without_hiding_handle():
     app = _qapp()
     triggered = []
     edge = EdgeTriggerWindow(trigger_callback=lambda: triggered.append(True), trigger_width_px=2)
     try:
-        assert edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
-
-        edge._show_handle()
+        edge.start()
         app.processEvents()
-
-        assert edge._handle_visible is True
-        assert edge.geometry().width() > 2
-        assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
-        assert "border: none" in edge.styleSheet()
 
         class _Click:
             def button(self):
@@ -440,9 +518,10 @@ def test_edge_trigger_exposes_borderless_click_handle():
                 pass
 
         edge.mousePressEvent(_Click())
+        edge.mousePressEvent(_Click())
         assert triggered == [True]
-        assert edge._handle_visible is False
-        assert edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+        assert edge._handle_visible is True
+        assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
     finally:
         edge.stop()
         edge.deleteLater()
@@ -480,51 +559,34 @@ def test_edge_trigger_applies_handle_geometry_after_input_flag_change(monkeypatc
         app.processEvents()
 
 
-def test_edge_trigger_polls_only_inside_the_edge_strip(monkeypatch):
-    import src.gui.sidebar.edge_trigger_window as edge_module
-
+def test_edge_trigger_poll_restores_always_visible_handle_without_cursor_gate():
     app = _qapp()
     edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
     try:
+        edge.start()
+        app.processEvents()
         edge._hide_handle()
-        geo = edge.geometry()
-        monkeypatch.setattr(
-            edge_module,
-            "QCursor",
-            type("FakeCursor", (), {"pos": staticmethod(lambda: QPoint(geo.right() + 100, geo.center().y()))}),
-        )
-        edge._poll_cursor()
         assert edge._handle_visible is False
 
-        monkeypatch.setattr(
-            edge_module,
-            "QCursor",
-            type("FakeCursor", (), {"pos": staticmethod(lambda: QPoint(geo.center().x(), geo.center().y()))}),
-        )
         edge._poll_cursor()
+
         assert edge._handle_visible is True
+        assert edge.geometry() == edge._handle_geometry(edge._screen)
     finally:
         edge.stop()
         edge.deleteLater()
         app.processEvents()
 
 
-def test_edge_trigger_poll_uses_screen_edge_even_if_hidden_widget_geometry_stale(monkeypatch):
-    import src.gui.sidebar.edge_trigger_window as edge_module
-
+def test_edge_trigger_start_uses_screen_handle_even_if_hidden_geometry_stale():
     app = _qapp()
     edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
     try:
         edge._hide_handle()
-        screen_geo = edge._screen.geometry()
         edge.setGeometry(0, 0, 1, 1)
-        monkeypatch.setattr(
-            edge_module,
-            "QCursor",
-            type("FakeCursor", (), {"pos": staticmethod(lambda: QPoint(screen_geo.right(), screen_geo.center().y()))}),
-        )
 
-        edge._poll_cursor()
+        edge.start()
+        app.processEvents()
 
         assert edge._handle_visible is True
         assert edge.geometry() == edge._handle_geometry(edge._screen)

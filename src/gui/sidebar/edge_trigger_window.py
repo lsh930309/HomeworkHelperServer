@@ -1,31 +1,28 @@
-"""화면 우측 가장자리 커서 감지 투명 창.
+"""화면 우측 가장자리 사이드바 손잡이 창.
 
-화면 우측 끝에 1px 너비의 투명 창을 배치하고,
-100ms 폴링으로 커서가 트리거 영역(trigger_y_start ~ trigger_y_end 비율)에
-들어왔을 때 콜백을 호출합니다.
-
-쿨다운(cooldown_sec) 동안은 재트리거를 방지합니다.
+활성 게임이 감지되면 화면 우측 끝에 클릭 가능한 손잡이를 항상 표시합니다.
+손잡이를 클릭했을 때만 콜백을 호출하며, 쿨다운(cooldown_sec) 동안은
+재트리거를 방지합니다.
 """
 import logging
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, QTimer, QRect
-from PyQt6.QtGui import QCursor, QScreen
+from PyQt6.QtGui import QScreen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL_MS = 100   # 커서 감지 폴링 간격 (ms)
+_POLL_INTERVAL_MS = 100   # 손잡이 유지 폴링 간격 (ms)
 _HANDLE_WIDTH = 18
 _HANDLE_MIN_HEIGHT = 96
 _HANDLE_MAX_HEIGHT = 160
-_HANDLE_HIDE_DELAY_MS = 1200
 
 
 class EdgeTriggerWindow(QWidget):
-    """화면 우측 가장자리에 붙어있는 투명 트리거 창.
+    """화면 우측 가장자리에 붙어있는 클릭 손잡이 창.
 
-    게임이 전체화면으로 실행 중일 때도 WS_EX_TOPMOST 로 커서를 감지합니다.
+    게임이 전체화면으로 실행 중일 때도 WS_EX_TOPMOST 로 손잡이를 표시합니다.
     """
 
     def __init__(
@@ -41,11 +38,11 @@ class EdgeTriggerWindow(QWidget):
         """EdgeTriggerWindow 를 초기화합니다.
 
         Args:
-            trigger_callback: 커서가 트리거 영역 진입 시 호출할 함수.
-            trigger_y_start: 트리거 영역 시작 Y 비율 (0.0 ~ 1.0).
-            trigger_y_end: 트리거 영역 종료 Y 비율 (0.0 ~ 1.0).
+            trigger_callback: 손잡이를 클릭했을 때 호출할 함수.
+            trigger_y_start: 손잡이 배치 영역 시작 Y 비율 (0.0 ~ 1.0).
+            trigger_y_end: 손잡이 배치 영역 종료 Y 비율 (0.0 ~ 1.0).
             cooldown_sec: 트리거 후 재발동 방지 시간 (초).
-            trigger_width_px: 트리거 영역 너비 (px). 클수록 민감도 높음.
+            trigger_width_px: 비활성 상태의 edge overlay 너비 (px).
             screen: 배치할 화면. None이면 주 화면을 사용합니다.
             parent: 부모 위젯.
         """
@@ -62,7 +59,6 @@ class EdgeTriggerWindow(QWidget):
         self._cooldown_ms = int(cooldown_sec * 1000)
         self._trigger_width_px = max(1, trigger_width_px)
         self._in_cooldown = False
-        self._cursor_was_in_zone = False
         self._handle_visible = False
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -75,7 +71,7 @@ class EdgeTriggerWindow(QWidget):
         self._screen = screen or QApplication.primaryScreen()
         self._reposition(self._screen)
 
-        # 폴링 타이머
+        # 손잡이 유지 폴링 타이머
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_cursor)
@@ -88,20 +84,20 @@ class EdgeTriggerWindow(QWidget):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """커서 감지 폴링을 시작하고 트리거 창을 표시합니다."""
-        self._hide_handle()
-        self.show()
+        """항상 보이는 손잡이를 표시하고 유지 폴링을 시작합니다."""
+        self._in_cooldown = False
+        self._show_handle()
         self._poll_timer.start()
         logger.debug("EdgeTriggerWindow 시작됨")
 
     def stop(self) -> None:
-        """커서 감지 폴링을 중지하고 창을 숨깁니다."""
+        """손잡이 유지 폴링을 중지하고 창을 숨깁니다."""
         self._poll_timer.stop()
         self._handle_hide_timer.stop()
         self.hide()
         self._in_cooldown = False
-        self._cursor_was_in_zone = False
         self._handle_visible = False
+        self._apply_hidden_handle_style()
         logger.debug("EdgeTriggerWindow 중지됨")
 
     def update_settings(
@@ -111,7 +107,7 @@ class EdgeTriggerWindow(QWidget):
         cooldown_sec: float,
         trigger_width_px: int = 2,
     ) -> None:
-        """트리거 설정을 런타임에 갱신합니다."""
+        """손잡이 설정을 런타임에 갱신합니다."""
         _s = max(0.0, min(1.0, trigger_y_start))
         _e = max(0.0, min(1.0, trigger_y_end))
         self._trigger_y_start, self._trigger_y_end = min(_s, _e), max(_s, _e)
@@ -120,7 +116,7 @@ class EdgeTriggerWindow(QWidget):
         self._reposition(self._screen if hasattr(self, '_screen') else None)
 
     def reposition(self, screen: Optional[QScreen]) -> None:
-        """화면 변경 시 트리거 창을 새 화면의 우측 끝으로 재배치합니다."""
+        """화면 변경 시 손잡이 창을 새 화면의 우측 끝으로 재배치합니다."""
         self._screen = screen
         self._reposition(screen)
         logger.debug("EdgeTriggerWindow 재배치: %s", screen.name() if screen else "None")
@@ -139,15 +135,6 @@ class EdgeTriggerWindow(QWidget):
         geo: QRect = screen.geometry()
         trigger_x = geo.right() - self._trigger_width_px + 1
         return QRect(trigger_x, geo.top(), self._trigger_width_px, geo.height())
-
-    def _trigger_zone_geometry(self, screen: QScreen) -> QRect:
-        """현재 스크린 좌표 기준의 실제 edge hover 감지 영역을 반환합니다."""
-        geo: QRect = screen.geometry()
-        zone_top = geo.top() + int(geo.height() * self._trigger_y_start)
-        zone_bottom = geo.top() + int(geo.height() * self._trigger_y_end)
-        zone_height = max(1, zone_bottom - zone_top)
-        trigger_x = geo.right() - self._trigger_width_px + 1
-        return QRect(trigger_x, zone_top, self._trigger_width_px, zone_height)
 
     def _handle_geometry(self, screen: QScreen) -> QRect:
         geo: QRect = screen.geometry()
@@ -212,47 +199,11 @@ class EdgeTriggerWindow(QWidget):
         if self._poll_timer.isActive():
             self.show()
 
-    def _screen_for_cursor(self, cursor_pos) -> Optional[QScreen]:
-        """커서가 놓인 스크린을 반환합니다. 없으면 현재 배치 스크린을 사용합니다."""
-        for screen in QApplication.screens():
-            if screen.geometry().contains(cursor_pos):
-                return screen
-        return self._screen
-
     def _poll_cursor(self) -> None:
-        """현재 커서 위치를 확인하고 트리거 영역 진입 여부를 판단합니다."""
-        if self._in_cooldown:
+        """상시 노출 손잡이가 외부 요인으로 숨겨졌을 때 다시 표시합니다."""
+        if self._handle_visible or self._screen is None:
             return
-
-        cursor_pos = QCursor.pos()
-
-        if self._handle_visible:
-            if self.geometry().adjusted(-4, -12, 8, 12).contains(cursor_pos):
-                self._handle_hide_timer.stop()
-                return
-            if not self._handle_hide_timer.isActive():
-                self._handle_hide_timer.start(_HANDLE_HIDE_DELAY_MS)
-            return
-
-        # 숨김 edge overlay는 WindowTransparentForInput/top-level flag 전환을
-        # 거치므로 플랫폼별로 실제 QWidget geometry가 흔들릴 수 있습니다.
-        # hover 판정은 widget geometry가 아니라 현재 커서가 위치한 QScreen의
-        # 우측 edge strip을 직접 계산해 수행합니다.
-        screen = self._screen_for_cursor(cursor_pos)
-        if screen is None:
-            self._cursor_was_in_zone = False
-            return
-        if screen != self._screen:
-            self._screen = screen
-            self._reposition(screen)
-        in_zone = self._trigger_zone_geometry(screen).contains(cursor_pos)
-
-        if in_zone and not self._cursor_was_in_zone:
-            # 새로 진입한 경우 서랍 손잡이만 표시합니다. 실제 사이드바는 클릭으로 엽니다.
-            self._cursor_was_in_zone = True
-            self._show_handle()
-        elif not in_zone:
-            self._cursor_was_in_zone = False
+        self._show_handle()
 
     def _fire_trigger(self) -> None:
         """트리거 콜백을 호출하고 쿨다운을 시작합니다."""
@@ -266,7 +217,6 @@ class EdgeTriggerWindow(QWidget):
     def _reset_cooldown(self) -> None:
         """쿨다운을 해제합니다."""
         self._in_cooldown = False
-        self._cursor_was_in_zone = False
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
@@ -275,13 +225,13 @@ class EdgeTriggerWindow(QWidget):
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
-        if self._handle_visible and not self._handle_hide_timer.isActive():
-            self._handle_hide_timer.start(_HANDLE_HIDE_DELAY_MS)
+        if self._handle_visible:
+            self._handle_hide_timer.stop()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._handle_visible:
-            self._hide_handle()
-            self._fire_trigger()
+            if not self._in_cooldown:
+                self._fire_trigger()
             event.accept()
             return
         super().mousePressEvent(event)

@@ -15,8 +15,9 @@ Windows-only manual smoke cannot be completed on the current macOS device and is
 
 ## Sidebar drawer handle
 
-- [x] Confirm hidden edge trigger is transparent-for-input, and the visible handle is not transparent-for-input.
+- [x] Confirm the active sidebar trigger starts with the handle always visible and not transparent-for-input.
 - [x] Confirm handle CSS uses `border: none` and the sidebar frame is borderless.
-- [x] Confirm cursor polling ignores positions outside the actual edge strip to avoid right-side multi-monitor false triggers.
-- [ ] Windows: with sidebar enabled, move cursor to the configured screen edge and confirm only the handle appears.
+- [x] Confirm clicking the handle invokes the sidebar controller's `slide_in()` path without hiding the handle.
+- [x] Confirm polling can restore the handle without depending on cursor hover position.
+- [ ] Windows: with sidebar enabled and a game running, confirm the handle is already visible at the configured screen edge.
 - [ ] Windows: click the handle and confirm the sidebar opens; let it auto-hide after the configured delay.
