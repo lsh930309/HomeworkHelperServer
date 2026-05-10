@@ -967,20 +967,32 @@ class MainWindow(QMainWindow):
                 status_bar.showMessage("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only() # 상태 컬럼만 업데이트
 
-            # 게임 모드 체크 (최적화: 상태 변경이 있을 때만 확인)
-            self._check_and_toggle_game_mode()
+        # 사이드바/게임 모드는 ProcessMonitor의 시작·종료 이벤트 외에도
+        # Beholder 복구, startup reconcile, 외부 캐시 재결합처럼 이미 실행 중인
+        # 상태가 캐시에 들어온 뒤 steady-state tick만 발생하는 경로가 있습니다.
+        # changed=True에만 묶으면 앱 기동 후 서랍 손잡이 트리거가 시작되지 않을 수
+        # 있으므로 매 tick 실제 active cache와 UI 모드를 재동기화합니다.
+        self._check_and_toggle_game_mode()
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
         # 게임 감지 시 창 숨기기 기능이 비활성화된 경우 게임 모드 플래그만 갱신
         hide_enabled = getattr(self.data_manager.global_settings, 'hide_on_game', True)
 
-        # 현재 모니터링 중인 프로세스 중 '실행중' 상태인 것이 있는지 확인
-        any_game_running = False
+        # 현재 모니터링 중인 프로세스 중 ProcessMonitor가 실제 실행 중으로
+        # 보유한 항목을 직접 확인합니다. Scheduler의 시각 상태도 이 캐시를
+        # 0순위로 보지만, 여기서는 사이드바를 열 대상 process/pid까지 같은
+        # 스냅샷에서 얻어야 하므로 active cache를 기준으로 삼습니다.
+        running_process = None
+        running_pid = None
         for p in self.data_manager.managed_processes:
-            if self.scheduler.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings) == PROC_STATE_RUNNING:
-                any_game_running = True
+            entry = self.process_monitor.active_monitored_processes.get(p.id)
+            if entry is not None:
+                running_process = p
+                running_pid = entry.get('pid')
                 break
+
+        any_game_running = running_process is not None
 
         if any_game_running and not self._is_game_mode_active:
             # 게임이 실행되었고, 아직 게임 모드가 활성화되지 않았다면
@@ -990,15 +1002,6 @@ class MainWindow(QMainWindow):
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
-            # 사이드바 활성화: 실행 중인 프로세스 탐색
-            running_process = None
-            running_pid = None
-            for proc in self.data_manager.managed_processes:
-                entry = self.process_monitor.active_monitored_processes.get(proc.id)
-                if entry is not None:
-                    running_process = proc
-                    running_pid = entry.get('pid')
-                    break
             if hasattr(self, '_sidebar_controller') and running_process is not None:
                 self._sidebar_controller.activate_for_game(
                     running_process,

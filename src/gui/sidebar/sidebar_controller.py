@@ -85,14 +85,18 @@ class SidebarController:
             pid: 실행 중인 프로세스 PID (볼륨 제어용).
             game_start_timestamp: 게임 시작 Unix 타임스탬프 (플레이 시간용).
         """
-        if not self._is_sidebar_enabled():
-            logger.debug("사이드바 비활성화 설정 — activate_for_game 무시")
-            return
-
         import time
         self._active_process = process
         self._active_pid = pid
         self._game_start_timestamp = game_start_timestamp or time.time()
+
+        if not self._is_sidebar_enabled():
+            if self._trigger is not None:
+                self._trigger.stop()
+            if self._sidebar is not None:
+                self._sidebar.slide_out()
+            logger.debug("사이드바 비활성화 설정 — 활성 게임 상태만 기록하고 트리거 시작 생략")
+            return
 
         self._ensure_widgets_created()
 
@@ -192,19 +196,38 @@ class SidebarController:
 
     def apply_settings(self, settings) -> None:
         """사이드바 설정을 런타임에 반영합니다."""
+        enabled = getattr(settings, 'sidebar_enabled', True)
+        if not enabled:
+            if self._trigger is not None:
+                self._trigger.stop()
+            if self._sidebar is not None and self._sidebar._is_shown:
+                self._sidebar.slide_out()
+            return
+
         if self._sidebar is not None:
             auto_hide_ms = getattr(settings, 'sidebar_auto_hide_ms', 3000)
             self._sidebar.update_auto_hide_ms(auto_hide_ms)
             self._sidebar.apply_visual_settings()
             self._sidebar.refresh_content()
-            # sidebar_enabled=False 로 변경 시 즉시 숨김
-            if not getattr(settings, 'sidebar_enabled', True) and self._sidebar._is_shown:
-                self._sidebar.slide_out()
         if self._trigger is not None:
             trigger_y_start = getattr(settings, 'sidebar_trigger_y_start', 0.1)
             trigger_y_end = getattr(settings, 'sidebar_trigger_y_end', 0.9)
             edge_width_px = getattr(settings, 'sidebar_edge_width_px', 2)
             self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
+
+        # 게임 실행 중 사이드바를 다시 켠 경우에는, 이전 activate_for_game 호출이
+        # 비활성 설정 때문에 위젯 생성을 생략했을 수 있습니다. 저장해 둔 활성 게임
+        # 상태를 사용해 즉시 트리거를 기동해야 서랍 손잡이가 다시 나타납니다.
+        if self._active_process is not None:
+            self._ensure_widgets_created()
+            if self._sidebar is not None:
+                self._sidebar.update_process(
+                    self._active_process,
+                    self._active_pid,
+                    self._game_start_timestamp,
+                )
+            if self._trigger is not None:
+                self._trigger.start()
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""

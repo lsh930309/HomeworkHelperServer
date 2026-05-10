@@ -8,6 +8,7 @@ from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication
 
 from src.data.data_models import GlobalSettings, ManagedProcess, WebShortcut
+from src.core.process_monitor import ProcessMonitorTickResult
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 from src.utils.window_focus import focus_process_window
 
@@ -216,6 +217,172 @@ def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
         assert marked == [shortcut.id]
     finally:
         _stop_window(window, app)
+
+
+def test_sidebar_activates_when_running_cache_already_exists_without_monitor_change(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    data_manager = _FakeApiClient([process])
+    data_manager.global_settings.sidebar_enabled = True
+    data_manager.global_settings.hide_on_game = False
+    window = main_window.MainWindow(data_manager)
+    activated = []
+
+    class _SidebarProbe:
+        def activate_for_game(self, process_arg, pid=None, game_start_timestamp=None):
+            activated.append((process_arg.id, pid, game_start_timestamp))
+
+        def dispatch_recording_state(self, _state):
+            pass
+
+        def deactivate(self):
+            raise AssertionError("steady-state running cache should not deactivate")
+
+    try:
+        window._sidebar_controller = _SidebarProbe()
+        window._is_game_mode_active = False
+        window.process_monitor.active_monitored_processes[process.id] = {
+            "pid": 4321,
+            "exe": process.monitoring_path,
+            "start_time_approx": 100.0,
+            "session_id": 1,
+        }
+        window.process_monitor.check_and_update_statuses = lambda: ProcessMonitorTickResult(changed=False)
+
+        window.run_process_monitor_check()
+
+        assert activated == [("game", 4321, None)]
+        assert window._is_game_mode_active is True
+    finally:
+        _stop_window(window, app)
+
+
+def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_disabled(monkeypatch):
+    _qapp()
+    import src.gui.sidebar.sidebar_controller as controller_module
+
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    settings = GlobalSettings(sidebar_enabled=False, hide_on_game=False)
+    data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
+    trigger_events = []
+    process_updates = []
+
+    class _TriggerProbe:
+        def __init__(self, *args, **kwargs):
+            self.update_calls = []
+            trigger_events.append(("created", kwargs.get("trigger_width_px")))
+
+        def start(self):
+            trigger_events.append(("start", None))
+
+        def stop(self):
+            trigger_events.append(("stop", None))
+
+        def update_settings(self, trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px=2):
+            self.update_calls.append((trigger_y_start, trigger_y_end, cooldown_sec, trigger_width_px))
+            trigger_events.append(("update", trigger_width_px))
+
+    class _SidebarProbe:
+        _is_shown = False
+
+        def __init__(self, *args, **kwargs):
+            process_updates.append(("created", kwargs.get("auto_hide_ms")))
+
+        def update_process(self, process_arg, pid=None, game_start_timestamp=None):
+            process_updates.append((process_arg.id, pid, game_start_timestamp))
+
+        def update_auto_hide_ms(self, value):
+            process_updates.append(("auto_hide", value))
+
+        def apply_visual_settings(self):
+            process_updates.append(("visual", None))
+
+        def refresh_content(self):
+            process_updates.append(("refresh", None))
+
+        def slide_out(self):
+            process_updates.append(("slide_out", None))
+
+        def set_on_start_recording(self, _callback):
+            pass
+
+    monkeypatch.setattr(controller_module, "EdgeTriggerWindow", _TriggerProbe)
+    monkeypatch.setattr(controller_module, "SidebarWidget", _SidebarProbe)
+
+    controller = controller_module.SidebarController(data_manager)
+
+    controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
+
+    assert controller._active_process is process
+    assert trigger_events == []
+
+    settings.sidebar_enabled = True
+    controller.apply_settings(settings)
+
+    assert ("created", settings.sidebar_edge_width_px) in trigger_events
+    assert ("start", None) in trigger_events
+    assert ("game", 4321, 100.0) in process_updates
+
+
+def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monkeypatch):
+    _qapp()
+    import src.gui.sidebar.sidebar_controller as controller_module
+
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    settings = GlobalSettings(sidebar_enabled=True, hide_on_game=False)
+    data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
+    trigger_events = []
+    sidebar_events = []
+
+    class _TriggerProbe:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            trigger_events.append("start")
+
+        def stop(self):
+            trigger_events.append("stop")
+
+        def update_settings(self, *args, **kwargs):
+            pass
+
+    class _SidebarProbe:
+        _is_shown = True
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update_process(self, *args, **kwargs):
+            pass
+
+        def update_auto_hide_ms(self, *args, **kwargs):
+            pass
+
+        def apply_visual_settings(self):
+            pass
+
+        def refresh_content(self):
+            pass
+
+        def slide_out(self):
+            sidebar_events.append("slide_out")
+
+        def set_on_start_recording(self, _callback):
+            pass
+
+    monkeypatch.setattr(controller_module, "EdgeTriggerWindow", _TriggerProbe)
+    monkeypatch.setattr(controller_module, "SidebarWidget", _SidebarProbe)
+
+    controller = controller_module.SidebarController(data_manager)
+    controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
+
+    settings.sidebar_enabled = False
+    controller.apply_settings(settings)
+
+    assert trigger_events == ["start", "stop"]
+    assert sidebar_events == ["slide_out"]
 
 
 def test_focus_helper_noops_off_windows(monkeypatch):
