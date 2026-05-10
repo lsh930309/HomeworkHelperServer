@@ -456,6 +456,37 @@ def test_edge_trigger_exposes_borderless_click_handle():
         app.processEvents()
 
 
+def test_edge_trigger_applies_handle_geometry_after_input_flag_change(monkeypatch):
+    app = _qapp()
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    original_set_transparent = edge._set_transparent_for_input
+    flag_calls = []
+    try:
+        expected_handle_geometry = edge._handle_geometry(edge._screen)
+
+        def _resetting_flag_change(enabled):
+            flag_calls.append(enabled)
+            original_set_transparent(enabled)
+            if enabled is False:
+                # QWidget.setWindowFlag() may hide/recreate a top-level widget;
+                # simulate a platform resetting geometry during that transition.
+                edge.setGeometry(0, 0, 1, 1)
+
+        monkeypatch.setattr(edge, "_set_transparent_for_input", _resetting_flag_change)
+
+        edge._show_handle()
+        app.processEvents()
+
+        assert flag_calls == [False]
+        assert edge.geometry() == expected_handle_geometry
+        assert edge._handle_visible is True
+        assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    finally:
+        edge.stop()
+        edge.deleteLater()
+        app.processEvents()
+
+
 def test_edge_trigger_polls_only_inside_the_edge_strip(monkeypatch):
     import src.gui.sidebar.edge_trigger_window as edge_module
 

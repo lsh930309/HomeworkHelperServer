@@ -185,8 +185,12 @@ class EdgeTriggerWindow(QWidget):
             return
         self._handle_hide_timer.stop()
         self._handle_visible = True
-        self.setGeometry(self._handle_geometry(self._screen))
         self._apply_visible_handle_style()
+        # setWindowFlag(WindowTransparentForInput, False)는 top-level QWidget을
+        # 숨겼다가 다시 show하는 경로를 타며 일부 플랫폼에서 위치를 되돌릴 수
+        # 있습니다. 입력 플래그를 먼저 바꾼 뒤 최종 handle geometry를 적용해야
+        # 화면 우측 가장자리에서 손잡이가 안정적으로 나타납니다.
+        self.setGeometry(self._handle_geometry(self._screen))
         self.show()
         self.raise_()
 
