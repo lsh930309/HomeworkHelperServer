@@ -472,6 +472,10 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
         QTimer.singleShot(0, self._sync_windows_title_bar_color)
+        # 트레이/복원/플랫폼별 native show 타이밍 이후에도 사이드바 모드를
+        # 한 번 더 반영해, always 모드 손잡이가 시작 시점 경합으로 누락되는
+        # 경로를 줄입니다.
+        QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
     def _on_monitor_timer_tick(self):
         """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""

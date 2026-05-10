@@ -8,7 +8,7 @@ import logging
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, QTimer, QRect
-from PyQt6.QtGui import QScreen
+from PyQt6.QtGui import QColor, QPainter, QScreen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,8 @@ _POLL_INTERVAL_MS = 100   # 손잡이 유지 폴링 간격 (ms)
 _HANDLE_WIDTH = 18
 _HANDLE_MIN_HEIGHT = 96
 _HANDLE_MAX_HEIGHT = 160
+_HANDLE_COLOR = QColor(70, 95, 135, 230)
+_HANDLE_HOVER_COLOR = QColor(95, 125, 175, 245)
 
 
 class EdgeTriggerWindow(QWidget):
@@ -60,6 +62,7 @@ class EdgeTriggerWindow(QWidget):
         self._trigger_width_px = max(1, trigger_width_px)
         self._in_cooldown = False
         self._handle_visible = False
+        self._hovered = False
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -159,22 +162,17 @@ class EdgeTriggerWindow(QWidget):
         self._set_transparent_for_input(True)
         self.setWindowOpacity(0.0)
         self.setStyleSheet("QWidget { background: transparent; border: none; }")
+        self.update()
 
     def _apply_visible_handle_style(self) -> None:
         self._set_transparent_for_input(False)
-        self.setWindowOpacity(0.86)
-        self.setStyleSheet("""
-            QWidget {
-                background-color: rgba(70, 95, 135, 190);
-                border: none;
-                border-top-left-radius: 9px;
-                border-bottom-left-radius: 9px;
-            }
-            QWidget:hover {
-                background-color: rgba(95, 125, 175, 220);
-            }
-        """)
+        self.setWindowOpacity(1.0)
+        # 실제 손잡이는 paintEvent에서 직접 그립니다. 스타일시트 배경은
+        # top-level translucent QWidget에서 플랫폼별로 누락될 수 있어
+        # borderless 계약 확인용으로만 유지합니다.
+        self.setStyleSheet("QWidget { background: transparent; border: none; }")
         self.setToolTip("사이드바 열기")
+        self.update()
 
     def _show_handle(self) -> None:
         if self._screen is None:
@@ -200,10 +198,16 @@ class EdgeTriggerWindow(QWidget):
             self.show()
 
     def _poll_cursor(self) -> None:
-        """상시 노출 손잡이가 외부 요인으로 숨겨졌을 때 다시 표시합니다."""
-        if self._handle_visible or self._screen is None:
+        """상시 노출 손잡이가 외부 요인으로 숨거나 밀렸을 때 다시 표시합니다."""
+        if self._screen is None:
             return
-        self._show_handle()
+        expected_geometry = self._handle_geometry(self._screen)
+        if (
+            not self._handle_visible
+            or not self.isVisible()
+            or self.geometry() != expected_geometry
+        ):
+            self._show_handle()
 
     def _fire_trigger(self) -> None:
         """트리거 콜백을 호출하고 쿨다운을 시작합니다."""
@@ -220,13 +224,29 @@ class EdgeTriggerWindow(QWidget):
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
+        self._hovered = True
         if self._handle_visible:
             self._handle_hide_timer.stop()
+            self.update()
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
+        self._hovered = False
         if self._handle_visible:
             self._handle_hide_timer.stop()
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        """손잡이 픽셀을 직접 그려 투명 top-level 스타일 누락을 피합니다."""
+        super().paintEvent(event)
+        if not self._handle_visible:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_HANDLE_HOVER_COLOR if self._hovered else _HANDLE_COLOR)
+        # 우측 화면 가장자리에 붙는 형태라 왼쪽 모서리만 둥글게 보이면 됩니다.
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, 1, 0), 9, 9)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._handle_visible:

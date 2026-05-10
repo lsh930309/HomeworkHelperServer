@@ -4,7 +4,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QIcon, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
 from src.data.data_models import (
@@ -589,6 +589,21 @@ def test_main_window_no_longer_schedules_foreground_focus():
     assert "_schedule_focus_after_launch" not in source
 
 
+def test_main_window_reapplies_sidebar_startup_mode_after_native_show():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+    show_event_source = source[source.index("    def showEvent"):source.index("    def _on_monitor_timer_tick")]
+
+    assert "_apply_sidebar_startup_mode" in show_event_source
+
+
+def test_edge_trigger_visible_handle_uses_direct_paint_path():
+    source = Path("src/gui/sidebar/edge_trigger_window.py").read_text(encoding="utf-8")
+
+    assert "def paintEvent" in source
+    assert "QPainter(self)" in source
+    assert "_HANDLE_COLOR" in source
+
+
 def test_edge_trigger_starts_with_always_visible_borderless_click_handle():
     app = _qapp()
     edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
@@ -603,7 +618,18 @@ def test_edge_trigger_starts_with_always_visible_borderless_click_handle():
         assert edge.geometry() == edge._handle_geometry(edge._screen)
         assert edge.geometry().width() > 2
         assert not edge.windowFlags() & Qt.WindowType.WindowTransparentForInput
+        assert edge.windowOpacity() == 1.0
+        assert "background: transparent" in edge.styleSheet()
         assert "border: none" in edge.styleSheet()
+
+        rendered = QImage(edge.width(), edge.height(), QImage.Format.Format_ARGB32)
+        rendered.fill(Qt.GlobalColor.transparent)
+        edge.render(rendered)
+        assert any(
+            rendered.pixelColor(x, y).alpha() > 0
+            for x in range(rendered.width())
+            for y in range(rendered.height())
+        )
     finally:
         edge.stop()
         edge.deleteLater()
@@ -679,6 +705,26 @@ def test_edge_trigger_poll_restores_always_visible_handle_without_cursor_gate():
         edge._poll_cursor()
 
         assert edge._handle_visible is True
+        assert edge.geometry() == edge._handle_geometry(edge._screen)
+    finally:
+        edge.stop()
+        edge.deleteLater()
+        app.processEvents()
+
+
+def test_edge_trigger_poll_restores_window_if_native_hide_keeps_handle_state():
+    app = _qapp()
+    edge = EdgeTriggerWindow(trigger_callback=lambda: None, trigger_width_px=2)
+    try:
+        edge.start()
+        app.processEvents()
+        edge.hide()
+        assert edge._handle_visible is True
+
+        edge._poll_cursor()
+        app.processEvents()
+
+        assert edge.isVisible()
         assert edge.geometry() == edge._handle_geometry(edge._screen)
     finally:
         edge.stop()
