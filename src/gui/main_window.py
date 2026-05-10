@@ -108,9 +108,9 @@ class MainWindow(QMainWindow):
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
     _SCREEN_SIZE_RATIO = 0.92
-    _TABLE_ROW_HEIGHT = 40
-    _TABLE_ICON_LOGICAL_SIZE = 32
-    _TABLE_ICON_COLUMN_PADDING = 10
+    _TABLE_ROW_HEIGHT = 30
+    _TABLE_ICON_LOGICAL_SIZE = 24
+    _TABLE_ICON_COLUMN_PADDING = 4
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
             vh.setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
             vh.setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
 
-        # 아이콘 크기: 32px 캐시 변형을 직접 활용하고 40px 행 안에 균형 있게 배치합니다.
+        # 아이콘 크기: Image #1에 가까운 압축 비율을 유지하면서도 캐시 아이콘을 선명하게 배치합니다.
         # DPI 배율은 get_qicon_for_file 내부에서 적용합니다.
         self._table_icon_logical_size = self._TABLE_ICON_LOGICAL_SIZE
         self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
@@ -1110,6 +1110,36 @@ class MainWindow(QMainWindow):
             if status_bar:
                 status_bar.showMessage("프로세스 상태 업데이트됨.", 2000)
 
+    def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
+        """앱 아이콘을 아이콘 전용 셀 중앙에 배치하는 라벨을 생성합니다."""
+        icon_size = getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE)
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setContentsMargins(0, 0, 0, 0)
+        label.setMinimumSize(icon_size, icon_size)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label.setStyleSheet("QLabel { background: transparent; border: none; }")
+        if icon and not icon.isNull():
+            label.setPixmap(icon.pixmap(QSize(icon_size, icon_size)))
+        return label
+
+    def _create_centered_resource_icon_label(self, icon_path: Optional[str], *, size: int = 18, pixmap_size: int = 16) -> QLabel:
+        """진행률/자원 아이콘을 고정 공간 중앙에 배치하는 라벨을 생성합니다."""
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setContentsMargins(0, 0, 0, 0)
+        icon_label.setFixedSize(size, size)
+        if icon_path and os.path.exists(icon_path):
+            icon_label.setPixmap(
+                QPixmap(icon_path).scaled(
+                    pixmap_size,
+                    pixmap_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        return icon_label
+
     def populate_process_list(self):
         """관리 대상 프로세스 목록을 테이블에 채웁니다."""
         self.process_table.setSortingEnabled(False) # 사용자가 바꿀 수 없는 고정 정렬
@@ -1131,9 +1161,9 @@ class MainWindow(QMainWindow):
                 icon_size=getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE),
                 process_id=p.id,
             )
-            if qi and not qi.isNull(): icon_item.setIcon(qi)
             icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
+            self.process_table.setCellWidget(r, self.COL_ICON, self._create_centered_app_icon_cell(qi))
 
             # 이름 컬럼 (UserRole에 ID 저장)
             name_item = QTableWidgetItem(p.name)
@@ -1925,7 +1955,10 @@ class MainWindow(QMainWindow):
                 max_width = max(max_width, self._cell_content_width(row, column))
             if table.rowCount() == 0:
                 max_width = max(max_width, table.fontMetrics().horizontalAdvance("빈 목록") + column_gap * 2)
-            table.setColumnWidth(column, max_width + column_gap)
+            if column == self.COL_ICON:
+                table.setColumnWidth(column, max_width)
+            else:
+                table.setColumnWidth(column, max_width + column_gap)
 
         frame = table.frameWidth() * 2
         content_width = sum(table.columnWidth(column) for column in visible_columns) + frame
@@ -2423,16 +2456,7 @@ class MainWindow(QMainWindow):
             layout.setSpacing(4)
 
             # 프리셋 아이콘 표시
-            icon_label = QLabel()
-            icon_path = self._get_stamina_icon_path(process)
-
-            if icon_path and os.path.exists(icon_path):
-                pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                icon_label.setPixmap(pixmap)
-                icon_label.setFixedSize(18, 18)
-            else:
-                # 아이콘이 없으면 공간 확보
-                icon_label.setFixedSize(18, 18)
+            icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
             layout.addWidget(icon_label)
 
             # 텍스트 라벨
@@ -2457,16 +2481,7 @@ class MainWindow(QMainWindow):
                     layout.setSpacing(4)
 
                     # 아이콘 라벨
-                    icon_label = QLabel()
-                    icon_path = self._get_stamina_icon_path(process)
-
-                    if icon_path and os.path.exists(icon_path):
-                        pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        icon_label.setPixmap(pixmap)
-                        icon_label.setFixedSize(18, 18)
-                    else:
-                        # 아이콘이 없어도 공간 확보
-                        icon_label.setFixedSize(18, 18)
+                    icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
                     layout.addWidget(icon_label)
 
                     # Progress Bar
@@ -2484,16 +2499,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
 
         # 프리셋 아이콘 표시
-        icon_label = QLabel()
-        icon_path = self._get_stamina_icon_path(process)
-
-        if icon_path and os.path.exists(icon_path):
-            pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            icon_label.setPixmap(pixmap)
-            icon_label.setFixedSize(18, 18)
-        else:
-            # 아이콘이 없으면 공간 확보
-            icon_label.setFixedSize(18, 18)
+        icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
         layout.addWidget(icon_label)
 
         # Progress Bar

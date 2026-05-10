@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 
 from src.data.data_models import GlobalSettings, ManagedProcess, WebShortcut
 from src.core.process_monitor import ProcessMonitorTickResult
@@ -135,10 +135,14 @@ def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path
         assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
         assert window.process_table.iconSize().width() == window._TABLE_ICON_LOGICAL_SIZE
         assert window.process_table.columnWidth(window.COL_ICON) <= (
-            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING + 8
+            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
         )
+        icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
+        assert isinstance(icon_cell, QLabel)
+        assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
+        assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
         assert all(
-            window.process_table.rowHeight(row) >= window._TABLE_ROW_HEIGHT
+            window._TABLE_ROW_HEIGHT <= window.process_table.rowHeight(row) <= window._TABLE_ROW_HEIGHT + 4
             for row in range(window.process_table.rowCount())
         )
     finally:
@@ -215,6 +219,28 @@ def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
 
         assert opened == [shortcut.url]
         assert marked == [shortcut.id]
+    finally:
+        _stop_window(window, app)
+
+
+def test_resource_icon_label_centers_pixmap_in_fixed_space(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    icon_path = tmp_path / "resource.png"
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor("#5cc8ff"))
+    assert pixmap.save(str(icon_path))
+    try:
+        label = window._create_centered_resource_icon_label(str(icon_path))
+
+        assert label.width() == 18
+        assert label.height() == 18
+        assert label.alignment() & Qt.AlignmentFlag.AlignHCenter
+        assert label.alignment() & Qt.AlignmentFlag.AlignVCenter
+        assert label.pixmap() is not None
+        assert label.pixmap().width() <= 16
+        assert label.pixmap().height() <= 16
     finally:
         _stop_window(window, app)
 
