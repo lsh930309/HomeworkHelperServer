@@ -412,6 +412,12 @@ def consume_override_token(db: Session, token: str | None, operation_kind: str) 
     return True
 
 
+def _available_action_ids(incident: models.BeholderIncident) -> set[str]:
+    """Incident가 현재 제공하는 action id 집합을 반환합니다."""
+    actions = getattr(incident, "available_actions", None) or _default_actions(incident)
+    return {str(action.get("id")) for action in actions if action.get("id")}
+
+
 def active_incidents(db: Session) -> list[models.BeholderIncident]:
     return db.query(models.BeholderIncident).filter(
         models.BeholderIncident.status == STATUS_PENDING
@@ -914,7 +920,7 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
         risk_score += 35
     if operation.actor not in {"process_monitor", "legacy_process_monitor"}:
         risk_factors.append("actor_not_runtime_owner")
-        risk_score += 50
+        risk_score += 80
 
     if risk_score >= 80:
         incident = create_incident(
@@ -1041,6 +1047,8 @@ def mark_incident(db: Session, incident_id: int, status: str, resolution_metadat
 def resolve_incident_action(db: Session, incident: models.BeholderIncident, action: str) -> dict[str, Any]:
     if incident.status != STATUS_PENDING:
         raise ValueError("이미 처리된 Beholder 안내입니다. 최신 상태를 새로고침해 주세요.")
+    if action not in _available_action_ids(incident):
+        raise ValueError("이 Beholder 안내에서 제공하지 않은 결정입니다. 최신 안내를 새로고침해 주세요.")
     if action == "allow_once":
         token = issue_override_token(db, incident)
         return {"incident": incident_to_dict(incident), "override_token": token}
@@ -1070,11 +1078,14 @@ def _context_for(incident: models.BeholderIncident) -> dict[str, Any]:
 
 def _open_sessions_for_context(db: Session, context: dict[str, Any]) -> list[models.ProcessSession]:
     ids = context.get("open_session_ids") or []
+    process_id = context.get("process_id")
+    if not ids and not process_id:
+        return []
     query = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None))
     if ids:
         query = query.filter(models.ProcessSession.id.in_(ids))
-    elif context.get("process_id"):
-        query = query.filter(models.ProcessSession.process_id == context["process_id"])
+    elif process_id:
+        query = query.filter(models.ProcessSession.process_id == process_id)
     return query.order_by(models.ProcessSession.start_timestamp.desc()).all()
 
 

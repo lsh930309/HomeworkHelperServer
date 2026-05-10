@@ -11,7 +11,7 @@ class BeholderIncidentDialog(QDialog):
     def __init__(self, incident: dict[str, Any], parent=None):
         super().__init__(parent)
         self.incident = incident
-        self.action: str = "deny"
+        self.action: str | None = None
         self.setWindowTitle("Beholder 데이터 보호 안내")
         self.setMinimumWidth(560)
 

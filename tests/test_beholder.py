@@ -104,6 +104,61 @@ def test_beholder_allows_long_session_with_override_token(monkeypatch):
     assert db.query(models.BeholderIncident).one().override_used_at is not None
 
 
+def test_session_end_override_token_covers_later_stamina_guard(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    end = dt.datetime(2026, 5, 8, 11, 0).timestamp()
+    try:
+        crud.end_session(db, session.id, end, stamina_at_end=-1, actor="process_monitor")
+        assert False, "negative stamina should be blocked by the later session-stamina guard"
+    except beholder.BeholderBlocked as exc:
+        token = beholder.issue_override_token(db, exc.incident)
+
+    closed = crud.end_session(
+        db,
+        session.id,
+        end,
+        stamina_at_end=-1,
+        actor="process_monitor",
+        override_token=token,
+    )
+
+    assert closed.end_timestamp == end
+    assert closed.stamina_at_end == -1
+    assert db.query(models.BeholderIncident).one().override_used_at is not None
+
+
+def test_session_end_blocks_non_runtime_actor(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(
+            db,
+            session.id,
+            dt.datetime(2026, 5, 8, 10, 5).timestamp(),
+            actor="manual_debug_tool",
+        )
+        assert False, "non-runtime actors must not close sessions directly"
+    except beholder.BeholderBlocked as exc:
+        assert "actor_not_runtime_owner" in exc.incident.risk_factors
+
+    db.expire_all()
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+
+
 def test_beholder_active_incidents_api_and_resolve(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -735,6 +790,68 @@ def test_beholder_rejects_resolving_non_pending_incidents(monkeypatch):
         assert "이미 처리된" in str(exc)
 
 
+def test_beholder_rejects_unoffered_incident_actions(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=1.0)
+    db.add(session)
+    db.commit()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="settings_update", actor="global_settings_dialog"),
+        target_summary="global_settings",
+        suspected_cause="test",
+        current_state_summary="settings",
+        proposed_change_summary="settings update",
+        risk_score=70,
+        risk_factors=["test"],
+        safe_recommendation="deny",
+        available_actions=[{"id": "deny", "label": "차단 유지"}],
+    )
+
+    try:
+        beholder.resolve_incident_action(db, incident, "abandon_open_sessions")
+        assert False, "actions absent from available_actions must be rejected"
+    except ValueError as exc:
+        assert "제공하지 않은" in str(exc)
+
+    db.expire_all()
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+
+
+def test_open_sessions_context_without_target_matches_nothing(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    for process_id in ("game-a", "game-b"):
+        db.add(models.ProcessSession(process_id=process_id, process_name=process_id, start_timestamp=1.0))
+    db.commit()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="runtime_recovery", actor="runtime_recovery"),
+        target_summary="runtime_recovery",
+        suspected_cause="test",
+        current_state_summary="open sessions",
+        proposed_change_summary="abandon",
+        risk_score=70,
+        risk_factors=["test"],
+        safe_recommendation="deny",
+        available_actions=[{"id": "abandon_open_sessions", "label": "버리기"}],
+        resolution_metadata={"action_context": {}},
+    )
+
+    try:
+        beholder.resolve_incident_action(db, incident, "abandon_open_sessions")
+        assert False, "empty action context must not select every open session"
+    except ValueError as exc:
+        assert "열린 세션" in str(exc)
+
+    db.expire_all()
+    assert db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).count() == 2
+
+
 def test_hoyolab_followup_session_stamina_rewrite_is_allowed(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
@@ -765,3 +882,47 @@ def test_hoyolab_followup_session_stamina_rewrite_is_allowed(monkeypatch, tmp_pa
     updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
     assert updated.stamina_at_end == 92
     assert beholder.active_incidents(db) == []
+
+
+def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+    import src.core.process_monitor as process_monitor_module
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+    )
+
+    class FakeDataManager:
+        managed_processes = [process]
+        runtime_state_saved = False
+
+        def end_session(self, session_id, end_timestamp, stamina_at_end=None):
+            return None
+
+        def update_process_runtime_state(self, updated_process):
+            self.runtime_state_saved = True
+            return True
+
+    monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
+
+    data_manager = FakeDataManager()
+    monitor = ProcessMonitor(data_manager)
+    monitor.active_monitored_processes["game-a"] = {
+        "pid": 100,
+        "exe": "/games/a.exe",
+        "start_time_approx": 1.0,
+        "session_id": 7,
+    }
+
+    result = monitor.check_and_update_statuses()
+
+    assert result.changed is False
+    assert result.stopped == []
+    assert data_manager.runtime_state_saved is False
+    assert process.last_played_timestamp == 123.0
+    assert "game-a" in monitor.active_monitored_processes

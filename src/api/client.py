@@ -270,6 +270,18 @@ class ApiClient:
             print(f"웹 바로 가기 업데이트에 실패했습니다: {e}")
             return False
 
+    def mark_web_shortcut_opened(self, shortcut_id: str) -> bool:
+        """웹 바로가기 클릭 완료 시각을 런타임 경로로 저장합니다."""
+        try:
+            response = requests.post(f"{self.base_url}/shortcuts/{shortcut_id}/opened", timeout=10)
+            self._raise_for_status(response)
+
+            self.web_shortcuts = self._fetch_all_web_shortcuts()
+            return True
+        except requests.RequestException as e:
+            print(f"웹 바로 가기 완료 시각 저장에 실패했습니다: {e}")
+            return False
+
     def get_web_shortcut_by_id(self, shortcut_id: str) -> Optional[WebShortcut]:
         """ID로 단일 웹 바로 가기를 찾습니다 (내부 메모리에서)."""
         for sc in self.web_shortcuts:

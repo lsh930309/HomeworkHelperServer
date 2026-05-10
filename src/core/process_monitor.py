@@ -189,6 +189,7 @@ class ProcessMonitor:
             else:
                 if was_previously_active:
                     termination_time = time.time()
+                    previous_last_played = managed_proc.last_played_timestamp
                     managed_proc.last_played_timestamp = termination_time
 
                     # 호요버스 게임인 경우 스태미나 조회를 세션 종료 전에 먼저 수행
@@ -199,7 +200,7 @@ class ProcessMonitor:
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
 
                     # 세션 종료 기록 (스태미나 값 포함)
-                    cached_info = self.active_monitored_processes.pop(managed_proc.id)
+                    cached_info = self.active_monitored_processes.get(managed_proc.id, {})
                     session_id = cached_info.get('session_id')
                     _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:
@@ -209,9 +210,12 @@ class ProcessMonitor:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info})")
                         else:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
+                            managed_proc.last_played_timestamp = previous_last_played
+                            continue
                     else:
                         logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
 
+                    self.active_monitored_processes.pop(managed_proc.id, None)
                     stopped_events.append(
                         ProcessLifecycleEvent(
                             process_id=managed_proc.id,

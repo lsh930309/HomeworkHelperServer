@@ -574,9 +574,11 @@ def end_session(
             },
             override_token=override_token,
         )
-        beholder.guard_session_end(db, db_session, end_timestamp, operation)
-        if stamina_at_end is not None:
-            beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        override_bypassed = beholder.consume_override_token(db, override_token, operation_kind)
+        if not override_bypassed:
+            beholder.guard_session_end(db, db_session, end_timestamp, operation)
+            if stamina_at_end is not None:
+                beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
         backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp

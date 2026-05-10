@@ -365,18 +365,20 @@ class MainWindow(QMainWindow):
             incident_id = item.get("id")
             if incident_id in self._beholder_seen_incidents:
                 continue
-            if incident_id is not None:
-                self._beholder_seen_incidents.add(incident_id)
             self.showNormal()
             self.raise_()
             self.activateWindow()
             dialog = BeholderIncidentDialog(item, self)
-            dialog.exec()
+            if not dialog.exec() or not dialog.action:
+                break
             if dialog.action == "restore_backup":
-                self._handle_beholder_restore_request()
+                if self._handle_beholder_restore_request() and incident_id is not None:
+                    self._beholder_seen_incidents.add(incident_id)
             elif incident_id is not None:
                 result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
-                if hasattr(self, "process_monitor"):
+                if result:
+                    self._beholder_seen_incidents.add(incident_id)
+                if result and hasattr(self, "process_monitor"):
                     self.process_monitor.apply_beholder_resolution(result)
                 if dialog.action == "allow_once" and result and result.get("override_token"):
                     QMessageBox.information(
@@ -398,11 +400,11 @@ class MainWindow(QMainWindow):
         if incidents:
             self._poll_beholder_incidents()
 
-    def _handle_beholder_restore_request(self):
+    def _handle_beholder_restore_request(self) -> bool:
         backups = self.data_manager.get_beholder_backups()
         if not backups:
             QMessageBox.warning(self, "Beholder 백업 복구", "사용 가능한 DB 백업을 찾지 못했습니다.")
-            return
+            return False
         labels = [
             f"backup.{item.get('slot')} · {datetime.datetime.fromtimestamp(item.get('modified_at', 0)).strftime('%Y-%m-%d %H:%M:%S')} · {item.get('size', 0)} bytes"
             for item in backups
@@ -416,7 +418,7 @@ class MainWindow(QMainWindow):
             False,
         )
         if not ok or not choice:
-            return
+            return False
         slot = backups[labels.index(choice)].get("slot")
         confirm = QMessageBox.question(
             self,
@@ -426,12 +428,14 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
-            return
+            return False
         result = self.data_manager.restore_beholder_backup(int(slot))
         if result and result.get("ok"):
             QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
+            return True
         else:
             QMessageBox.warning(self, "Beholder 백업 복구", "복구에 실패했습니다.")
+            return False
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -710,7 +714,10 @@ class MainWindow(QMainWindow):
         dlg = SidebarSettingsDialog(gs, self)
         if dlg.exec():
             updated = dlg.get_updated_settings()
-            self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog")
+            if not self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog"):
+                QMessageBox.warning(self, "사이드바 설정", "설정을 저장하지 못해 실행 중 설정도 변경하지 않았습니다.")
+                self._poll_beholder_incidents()
+                return
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
             self._apply_screenshot_settings()
@@ -1605,8 +1612,12 @@ class MainWindow(QMainWindow):
 
         # 초기화 시간이 설정된 바로가기인 경우, 마지막 초기화 타임스탬프 업데이트
         if shortcut.refresh_time_str:
-            shortcut.last_reset_timestamp = datetime.datetime.now().timestamp() # 현재 시각으로 업데이트
-            if self.data_manager.update_web_shortcut(shortcut): # 데이터 매니저 통해 정보 업데이트
+            if hasattr(self.data_manager, "mark_web_shortcut_opened"):
+                saved = self.data_manager.mark_web_shortcut_opened(shortcut.id)
+            else:
+                shortcut.last_reset_timestamp = datetime.datetime.now().timestamp() # 현재 시각으로 업데이트
+                saved = self.data_manager.update_web_shortcut(shortcut) # legacy 데이터 매니저 폴백
+            if saved:
                 self._refresh_web_button_states() # 버튼 상태 즉시 새로고침
 
     def _open_add_web_shortcut_dialog(self):

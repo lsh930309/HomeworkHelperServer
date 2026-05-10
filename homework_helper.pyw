@@ -542,6 +542,22 @@ def run_server_main():
             raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
         return updated_shortcut
 
+    @app.post("/shortcuts/{shortcut_id}/opened", response_model=schemas.WebShortcutSchema)
+    def mark_shortcut_opened(
+        shortcut_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_shortcut = crud.mark_shortcut_opened(
+            db=db,
+            shortcut_id=shortcut_id,
+            opened_at=datetime.datetime.now().timestamp(),
+            override_token=x_hh_beholder_override,
+        )
+        if updated_shortcut is None:
+            raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
+        return updated_shortcut
+
     @app.delete("/shortcuts/{shortcut_id}")
     def delete_existing_shortcut(shortcut_id: str, db: Session = Depends(get_db)):
         deleted_shortcut = crud.delete_shortcut(db = db, shortcut_id = shortcut_id)

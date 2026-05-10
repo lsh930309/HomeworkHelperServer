@@ -7,7 +7,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication
 
-from src.data.data_models import GlobalSettings, ManagedProcess
+from src.data.data_models import GlobalSettings, ManagedProcess, WebShortcut
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 from src.utils.window_focus import focus_process_window
 
@@ -39,8 +39,8 @@ class _FakeApiClient:
     def get_process_by_id(self, process_id):
         return next((p for p in self.managed_processes if p.id == process_id), None)
 
-    def get_web_shortcut_by_id(self, _shortcut_id):
-        return None
+    def get_web_shortcut_by_id(self, shortcut_id):
+        return next((s for s in self.web_shortcuts if s.id == shortcut_id), None)
 
     def pop_latest_beholder_incident(self):
         return None
@@ -183,6 +183,37 @@ def test_restore_window_state_does_not_leave_fixed_size(monkeypatch, tmp_path):
 
         assert window.maximumWidth() > window.width()
         assert window.maximumHeight() > window.height()
+    finally:
+        _stop_window(window, app)
+
+
+def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    shortcut = WebShortcut(
+        id="daily",
+        name="Daily",
+        url="https://example.test",
+        refresh_time_str="05:00",
+    )
+    data_manager = _FakeApiClient([])
+    data_manager.web_shortcuts = [shortcut]
+    marked = []
+
+    def mark_opened(shortcut_id):
+        marked.append(shortcut_id)
+        shortcut.last_reset_timestamp = 1778410000.0
+        return True
+
+    data_manager.mark_web_shortcut_opened = mark_opened
+    window = main_window.MainWindow(data_manager)
+    opened = []
+    window.open_webpage = lambda url: opened.append(url)
+    try:
+        window._handle_web_button_clicked(shortcut.id, shortcut.url)
+
+        assert opened == [shortcut.url]
+        assert marked == [shortcut.id]
     finally:
         _stop_window(window, app)
 
