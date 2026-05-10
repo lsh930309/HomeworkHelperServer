@@ -15,7 +15,6 @@ def _calls_commit(tree: ast.AST) -> bool:
 def test_ui_and_api_routes_do_not_commit_database_directly():
     """UI/API entrypoints must delegate writes to CRUD/Beholder boundaries."""
     guarded_paths = [
-        Path("src/api/gui/routes.py"),
         Path("src/api/dashboard/routes.py"),
         Path("src/api/beholder_routes.py"),
         *Path("src/gui").glob("*.py"),

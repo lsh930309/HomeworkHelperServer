@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from sqlalchemy import func, or_
+from sqlalchemy import func
 
 from src.data import models
 from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size
@@ -30,7 +30,6 @@ SECONDS_PER_DAY = 86_400
 DATE_FORMAT = "%Y-%m-%d"
 EPOCH_DATE = dt.date(1970, 1, 1)
 MAX_OPEN_SESSION_SECONDS = 24 * 60 * 60
-MAX_COMPLETED_SESSION_SECONDS = 7 * SECONDS_PER_DAY
 MIN_SMART_SESSION_SECONDS = 60
 MIN_LONG_SESSION_SECONDS = 3 * 60 * 60
 
@@ -262,8 +261,6 @@ def _completed_session_filter(start_ts: float | None = None, end_ts: float | Non
     clauses = [
         models.ProcessSession.end_timestamp.isnot(None),
         models.ProcessSession.end_timestamp > models.ProcessSession.start_timestamp,
-        models.ProcessSession.end_timestamp <= models.ProcessSession.start_timestamp + MAX_COMPLETED_SESSION_SECONDS,
-        or_(models.ProcessSession.session_status.is_(None), models.ProcessSession.session_status == "closed"),
     ]
     if end_ts is not None:
         clauses.append(models.ProcessSession.start_timestamp < end_ts)

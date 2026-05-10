@@ -87,9 +87,6 @@ class GlobalSettingsSchema(BaseModel):
     sidebar_enabled: bool = True
     sidebar_auto_hide_ms: int = 3000
     sidebar_edge_width_px: int = 2
-    sidebar_trigger_y_start: float = 0.1
-    sidebar_trigger_y_end: float = 0.9
-    sidebar_effect: str = "acrylic"
     sidebar_height_ratio: float = 1.0
     sidebar_opacity: float = 0.85
     sidebar_clock_enabled: bool = True

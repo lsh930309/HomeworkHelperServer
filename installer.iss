@@ -6,9 +6,6 @@
 #define MyAppPublisher "lsh930309"
 #define MyAppURL "https://github.com/lsh930309/HomeworkHelper"
 #define MyAppExeName "homework_helper.exe"
-#define MyPrototypeGuiExeName "homework_helper_gui.exe"
-#define HasPrototypeShell FileExists("dist\homework_helper\homework_helper_gui.exe")
-#define BuildGuiMode "v2"
 
 [Setup]
 ; 기본 정보
@@ -61,28 +58,16 @@ Source: "dist\homework_helper\*"; DestDir: "{app}"; Flags: ignoreversion recurse
 ; NOTE: recursesubdirs 플래그로 _internal 폴더 및 모든 하위 폴더 포함
 
 [Icons]
-; 시작 메뉴: build.py가 선택한 단일 GUI 진입점만 노출
-#if BuildGuiMode == "prototype" && HasPrototypeShell
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyPrototypeGuiExeName}"
-#else
+; 시작 메뉴
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-#endif
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 ; 바탕화면 바로가기 (사용자 선택 시)
-#if BuildGuiMode == "prototype" && HasPrototypeShell
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyPrototypeGuiExeName}"; Tasks: desktopicon
-#else
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-#endif
 
 [Run]
 ; 설치 완료 후 프로그램 실행 옵션
-#if BuildGuiMode == "prototype" && HasPrototypeShell
-Filename: "{app}\{#MyPrototypeGuiExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-#else
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-#endif
 
 [UninstallDelete]
 ; 앱이 생성한 데이터는 사용자 AppData에 있으므로 여기서는 삭제하지 않음
@@ -172,13 +157,8 @@ procedure KillAllAppProcesses();
 var
   ResultCode: Integer;
 begin
-  // 기존 PyQt GUI/백엔드 프로세스 종료
+  // 메인 GUI 프로세스 종료
   Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-#if HasPrototypeShell
-  // Tauri prototype shell 종료
-  Exec('taskkill', '/F /IM homework_helper_gui.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-#endif
   
   // 잠시 대기 (프로세스 종료 완료 대기)
   Sleep(500);
@@ -191,10 +171,6 @@ end;
 function IsAppRunning(): Boolean;
 begin
   Result := IsProcessRunning('homework_helper.exe');
-#if HasPrototypeShell
-  if not Result then
-    Result := IsProcessRunning('homework_helper_gui.exe');
-#endif
 end;
 
 // 설치 전 실행 중인 프로세스 종료

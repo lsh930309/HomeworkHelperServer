@@ -1,30 +1,5 @@
 # notifier.py
-try:
-    from windows_toasts import InteractableWindowsToaster, Toast, ToastButton, ToastActivatedEventArgs
-except Exception:  # pragma: no cover - exercised by platform/dependency fallback tests
-    class ToastActivatedEventArgs:
-        def __init__(self, arguments: str = ""):
-            self.arguments = arguments
-
-    class Toast:
-        def __init__(self):
-            self.text_fields = []
-            self.on_activated = None
-            self.launch_args = ""
-            self.actions = []
-
-        def AddAction(self, button):
-            self.actions.append(button)
-
-    class ToastButton:
-        def __init__(self, content: str, arguments: str):
-            self.content = content
-            self.arguments = arguments
-
-    class InteractableWindowsToaster:
-        def __init__(self, _application_name: str):
-            raise RuntimeError("windows_toasts is unavailable on this platform")
-
+from windows_toasts import InteractableWindowsToaster, Toast, ToastButton, ToastActivatedEventArgs
 from typing import Optional, Callable, Dict
 import urllib.parse
 from PyQt6.QtCore import QObject, pyqtSignal

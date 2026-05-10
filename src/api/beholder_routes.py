@@ -1,4 +1,4 @@
-"""Beholder incident API shared by PyQt and the new Tauri GUI."""
+"""Beholder incident API shared by the PyQt GUI and internal runtime checks."""
 
 from __future__ import annotations
 

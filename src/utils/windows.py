@@ -1,17 +1,9 @@
 # windows_utils.py
+import winreg
 import sys
 import os
+import winshell
 from typing import Optional
-
-try:
-    import winreg
-except ModuleNotFoundError:  # non-Windows development/test environment
-    winreg = None
-
-try:
-    import winshell
-except ModuleNotFoundError:  # non-Windows development/test environment
-    winshell = None
 
 APP_REGISTRY_NAME = "GameCycleHelper" # 레지스트리에 등록될 프로그램 이름
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -42,7 +34,7 @@ def get_script_and_interpreter_path() -> tuple[Optional[str], Optional[str]]:
 
 def set_startup_registry(enable: bool) -> bool:
     """ Windows 시작 시 자동 실행을 위해 레지스트리를 설정/해제합니다. """
-    if not is_windows() or winreg is None:
+    if not is_windows():
         print("Windows 환경이 아니므로 시작 프로그램 등록을 건너뜁니다.")
         return False
 
@@ -73,7 +65,7 @@ def set_startup_registry(enable: bool) -> bool:
 
 def get_startup_registry_status() -> bool:
     """ 현재 자동 실행 레지스트리 등록 상태를 확인합니다. """
-    if not is_windows() or winreg is None:
+    if not is_windows():
         return False
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ)
@@ -92,8 +84,6 @@ def get_startup_folder_path() -> Optional[str]:
         return None
     try:
         # shell:startup 명령어로 열리는 폴더 경로
-        if winshell is None:
-            raise RuntimeError("winshell is unavailable")
         startup_path = winshell.startup()
         print(f"시작 프로그램 폴더 경로: {startup_path}")
         return startup_path

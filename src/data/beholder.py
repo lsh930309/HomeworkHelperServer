@@ -45,7 +45,6 @@ RUNTIME_SETTINGS_FIELDS = {
 }
 SIDEBAR_SETTINGS_FIELDS = {
     "sidebar_enabled", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
-    "sidebar_trigger_y_start", "sidebar_trigger_y_end", "sidebar_effect",
     "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_enabled",
     "sidebar_clock_format", "sidebar_playtime_enabled", "sidebar_playtime_prefix",
     "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
@@ -62,10 +61,8 @@ GLOBAL_DIALOG_FIELDS = {
     "notify_on_sleep_correction", "notify_on_daily_reset", "stamina_notify_enabled",
     "stamina_notify_threshold", "theme", "hide_on_game",
 }
-NEW_GUI_SETTINGS_FIELDS = RUNTIME_SETTINGS_FIELDS | SIDEBAR_SETTINGS_FIELDS | GLOBAL_DIALOG_FIELDS
 PERSONALIZED_SETTINGS_FIELDS = {
-    "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
-    "sidebar_effect", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
+    "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
     "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
@@ -79,8 +76,6 @@ SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
     "stamina_notify_threshold": (1, 100, "스태미나 알림 기준"),
     "sidebar_auto_hide_ms": (0, 60000, "사이드바 자동 숨김 시간"),
     "sidebar_edge_width_px": (1, 50, "사이드바 엣지 감지 폭"),
-    "sidebar_trigger_y_start": (0, 1, "사이드바 트리거 시작 위치"),
-    "sidebar_trigger_y_end": (0, 1, "사이드바 트리거 종료 위치"),
     "sidebar_height_ratio": (0.3, 1.0, "사이드바 높이 비율"),
     "sidebar_opacity": (0.1, 1.0, "사이드바 투명도"),
     "screenshot_gamepad_button_index": (-1, 32, "게임패드 버튼 번호"),
@@ -157,8 +152,6 @@ def _schema_defaults() -> dict[str, Any]:
 def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
     actor = actor or "settings_full_update"
     all_fields = _schema_fields()
-    if actor in {"new_gui_settings", "main_gui_settings"}:
-        return set(NEW_GUI_SETTINGS_FIELDS)
     if actor == "sidebar_settings_dialog":
         return set(SIDEBAR_SETTINGS_FIELDS)
     if actor == "global_settings_dialog":
@@ -190,12 +183,8 @@ def _actor_label(actor: str | None) -> str:
     return {
         "process_monitor": "게임 실행 감지기",
         "legacy_process_monitor": "기존 GUI 실행 감지기",
-        "new_gui_runtime": "신규 GUI 실행 상태 동기화",
-        "new_gui_settings": "신규 GUI 설정 창",
-        "main_gui_settings": "v2 main GUI 설정 허브",
         "global_settings_dialog": "기존 GUI 전역 설정 창",
         "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
-        "new_gui_hoyolab_runtime": "신규 GUI HoYoLab 수동 새로고침",
         "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
         "runtime_stamina_tracker": "스태미나 런타임 보정",
     }.get(actor or "", actor or "알 수 없는 경로")
@@ -525,11 +514,6 @@ def _invalid_settings_values(
         if field in changed_fields and not _is_hhmm(update_data.get(field)):
             invalid.append(field)
 
-    if {"sidebar_trigger_y_start", "sidebar_trigger_y_end"} & changed_fields:
-        y_start = update_data.get("sidebar_trigger_y_start", getattr(current_settings, "sidebar_trigger_y_start", None))
-        y_end = update_data.get("sidebar_trigger_y_end", getattr(current_settings, "sidebar_trigger_y_end", None))
-        if _is_number(y_start) and _is_number(y_end) and float(y_start) > float(y_end):
-            invalid.append("sidebar_trigger_y_start>sidebar_trigger_y_end")
     return invalid
 
 
@@ -928,7 +912,7 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
     if heartbeat_gap is not None and heartbeat_gap > MAX_HEARTBEAT_GAP_SECONDS and duration > 24 * 60 * 60:
         risk_factors.append("stale_heartbeat")
         risk_score += 35
-    if operation.actor not in {"process_monitor", "legacy_process_monitor", "new_gui_runtime"}:
+    if operation.actor not in {"process_monitor", "legacy_process_monitor"}:
         risk_factors.append("actor_not_runtime_owner")
         risk_score += 50
 

@@ -65,6 +65,12 @@ _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로
 
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
+from src.gui.main_window import MainWindow
+from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtGui import QFontDatabase, QFont
+from src.utils.common import get_bundle_resource_path
+from src.api.client import ApiClient
 
 # Windows 전용 모듈 임포트 (선택적)
 if os.name == 'nt':
@@ -249,12 +255,7 @@ def start_api_server() -> bool:
 
     except Exception as e:
         print(f"API 서버 시작 실패: {e}")
-        try:
-            from PyQt6.QtWidgets import QMessageBox
-
-            QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
-        except Exception:
-            pass
+        QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
         return False
 
 def run_server_main():
@@ -455,19 +456,6 @@ def run_server_main():
                 "beholder_incident": beholder.incident_to_dict(exc.incident),
             },
         )
-    from fastapi.middleware.cors import CORSMiddleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://127.0.0.1:1430",
-            "http://localhost:1430",
-            "tauri://localhost",
-            "http://tauri.localhost",
-            "https://tauri.localhost",
-        ],
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
 
     # Dependency
     def get_db():
@@ -679,7 +667,6 @@ def run_server_main():
     # === 대시보드 라우터 및 정적 파일 등록 ===
     from fastapi.staticfiles import StaticFiles
     from src.api.dashboard import router as dashboard_router
-    from src.api.gui import router as main_gui_router
     from src.api.beholder_routes import router as beholder_router
     from src.api.dashboard.static_files import dashboard_static_dir
     
@@ -692,10 +679,8 @@ def run_server_main():
         logger.warning(f"대시보드 정적 파일 없음: {dashboard_static_path}")
     
     app.include_router(dashboard_router)
-    app.include_router(main_gui_router)
     app.include_router(beholder_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
-    logger.info("메인 GUI 라우터 등록 완료 (/api/gui/*)")
 
 
     import uvicorn
@@ -768,21 +753,6 @@ def ensure_process_table_schema():
                 if 'sidebar_auto_hide_sec' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_sec INTEGER DEFAULT 3"))
                     print("[Migration] global_settings.sidebar_auto_hide_sec 컬럼 추가됨")
-                if 'sidebar_auto_hide_ms' not in gs_existing_cols:
-                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_ms INTEGER DEFAULT 3000"))
-                    print("[Migration] global_settings.sidebar_auto_hide_ms 컬럼 추가됨")
-                if 'sidebar_edge_width_px' not in gs_existing_cols:
-                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_edge_width_px INTEGER DEFAULT 2"))
-                    print("[Migration] global_settings.sidebar_edge_width_px 컬럼 추가됨")
-                if 'sidebar_trigger_y_start' not in gs_existing_cols:
-                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_trigger_y_start REAL DEFAULT 0.1"))
-                    print("[Migration] global_settings.sidebar_trigger_y_start 컬럼 추가됨")
-                if 'sidebar_trigger_y_end' not in gs_existing_cols:
-                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_trigger_y_end REAL DEFAULT 0.9"))
-                    print("[Migration] global_settings.sidebar_trigger_y_end 컬럼 추가됨")
-                if 'sidebar_effect' not in gs_existing_cols:
-                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_effect TEXT DEFAULT 'acrylic'"))
-                    print("[Migration] global_settings.sidebar_effect 컬럼 추가됨")
                 if 'sidebar_height_ratio' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_height_ratio REAL DEFAULT 1.0"))
                     print("[Migration] global_settings.sidebar_height_ratio 컬럼 추가됨")
@@ -835,35 +805,8 @@ def ensure_process_table_schema():
         print(f"테이블 스키마 확인/수정 중 오류: {e}")
 
 
-def run_schema_migration_check():
-    """앱 업데이트 시 필요한 DB 스키마 마이그레이션을 한 번 수행합니다."""
-    try:
-        import importlib.util
-        if importlib.util.find_spec("src.migration") is None:
-            return
-        from src.migration import SchemaMigrator
-        print("\n=== 스키마 버전 체크 ===")
-        migrator = SchemaMigrator()
-        if not migrator.check_and_migrate():
-            print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
-        else:
-            print("=== 스키마 체크 완료 ===\n")
-    except Exception as e:
-        print(f"스키마 마이그레이션 체크 중 오류: {e}")
-        # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
-
-
-def start_main_application(instance_manager):
+def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
-    from PyQt6.QtGui import QFont, QFontDatabase
-    from PyQt6.QtWidgets import QApplication
-
-    from src.api.client import ApiClient
-    from src.gui.mode import resolve_gui_mode, GUI_MODE_V2
-    from src.gui.main_window import MainWindow
-    from src.gui.v2 import V2MainWindow
-    from src.utils.common import get_bundle_resource_path
-
     # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
     
     app = QApplication(sys.argv)
@@ -902,12 +845,7 @@ def start_main_application(instance_manager):
     
 
     # 메인 윈도우 생성 (인스턴스 매니저 전달)
-    # v1/v2 모두 같은 AppData/API/CRUD/Beholder 경계를 사용하고, 빌드 단계에서
-    # 선택한 모드는 gui_mode.txt 또는 개발용 CLI/env override로 결정됩니다.
-    gui_mode = resolve_gui_mode(sys.argv, executable_path=sys.executable)
-    main_window_cls = V2MainWindow if gui_mode == GUI_MODE_V2 else MainWindow
-    print(f"[GUI] main GUI mode: {gui_mode} ({main_window_cls.__name__})")
-    main_window = main_window_cls(api_client_instance, instance_manager=instance_manager)
+    main_window = MainWindow(api_client_instance, instance_manager=instance_manager)
 
     # === Graceful Shutdown: signal 및 atexit 핸들러 등록 ===
     def gui_signal_handler(signum, frame):
@@ -965,13 +903,17 @@ if __name__ == "__main__":
     # === 스키마 자동 마이그레이션 ===
     # 앱 업데이트 시 스키마 구조가 변경된 경우 자동으로 마이그레이션합니다.
     # 사용자에게는 보이지 않으며, 실패 시에만 경고를 표시합니다.
-    run_schema_migration_check()
-
-    # Tauri shell이 패키지 내 sidecar 백엔드로 실행할 수 있는 서버 전용 모드입니다.
-    # 기존 PyQt 기본 실행 경로는 그대로 유지합니다.
-    if "--run-server" in sys.argv:
-        run_server_main()
-        sys.exit(0)
+    try:
+        from src.migration import SchemaMigrator
+        print("\n=== 스키마 버전 체크 ===")
+        migrator = SchemaMigrator()
+        if not migrator.check_and_migrate():
+            print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
+        else:
+            print("=== 스키마 체크 완료 ===\n")
+    except Exception as e:
+        print(f"스키마 마이그레이션 체크 중 오류: {e}")
+        # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
 
     # GUI 애플리케이션 실행
     check_admin_requirement()
@@ -982,8 +924,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
-    from src.core.instance_manager import run_with_single_instance_check
-
     run_with_single_instance_check(
         application_name="숙제 관리자",
         main_app_start_callback=start_main_application

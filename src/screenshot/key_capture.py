@@ -15,7 +15,6 @@ VK 코드를 한 번만 캡처합니다. 진단 도구와 동일한 WH_KEYBOARD_
 """
 import ctypes
 import ctypes.wintypes as wintypes
-import sys
 import threading
 import time
 from typing import Callable, Optional
@@ -76,11 +75,6 @@ def vk_to_display_name(vk: int) -> str:
     return f"VK 0x{vk:02X}"
 
 
-def is_key_capture_supported() -> bool:
-    """현재 환경에서 WH_KEYBOARD_LL 기반 단발성 키 캡처가 가능한지 반환합니다."""
-    return sys.platform == "win32" and hasattr(ctypes, "windll") and HOOKPROC is not None
-
-
 # ── WH_KEYBOARD_LL 타입 정의 ─────────────────────────────────────────────────
 
 WH_KEYBOARD_LL = 13
@@ -91,7 +85,7 @@ PM_REMOVE      = 0x0001
 
 HOOKPROC = ctypes.WINFUNCTYPE(
     ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
-) if sys.platform == "win32" else None
+)
 
 
 class _KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -137,11 +131,6 @@ def _capture_thread(
     on_captured: Optional[Callable[[int], None]],
     on_timeout:  Optional[Callable[[], None]],
 ) -> None:
-    if not is_key_capture_supported():
-        if on_timeout:
-            on_timeout()
-        return
-
     thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
     captured_vk: list = []   # [vk] 또는 []
 

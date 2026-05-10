@@ -1,17 +1,9 @@
-import atexit
 import datetime as dt
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
-_TEST_HOME = os.environ.get("HOMEWORKHELPER_TEST_HOME")
-if not _TEST_HOME:
-    _TEST_HOME = tempfile.mkdtemp(prefix="homeworkhelper-test-home-")
-    os.environ["HOMEWORKHELPER_TEST_HOME"] = _TEST_HOME
-    atexit.register(lambda: shutil.rmtree(_TEST_HOME, ignore_errors=True))
-os.environ["HOME"] = _TEST_HOME
-os.environ["APPDATA"] = str(Path(_TEST_HOME) / "AppData" / "Roaming")
+os.environ["HOME"] = "/tmp/homeworkhelper-tests"
+Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -135,35 +127,6 @@ def test_open_session_without_next_completed_is_excluded(monkeypatch):
     assert body["metrics"]["longest_session"] is None
 
 
-def test_impossibly_long_completed_session_is_excluded(monkeypatch):
-    client = _client_with_seed(
-        monkeypatch,
-        sessions=[
-            models.ProcessSession(
-                process_id="game-a",
-                process_name="Game A",
-                start_timestamp=_ts("2026-01-01 00:00"),
-                end_timestamp=_ts("2026-01-20 00:00"),
-                session_duration=19 * 24 * 3600,
-            ),
-            models.ProcessSession(
-                process_id="game-a",
-                process_name="Game A",
-                start_timestamp=_ts("2026-01-21 10:00"),
-                end_timestamp=_ts("2026-01-21 12:00"),
-                session_duration=7200,
-            ),
-        ],
-    )
-
-    response = client.get("/api/analytics/summary?start=2026-01-01&end=2026-01-31")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["metrics"]["total_seconds"] == 7200
-    assert body["metrics"]["session_count"] == 1
-
-
 def test_all_time_range_is_clamped_to_actual_session_start_dates(monkeypatch):
     client = _client_with_seed(
         monkeypatch,
@@ -213,12 +176,6 @@ def test_dashboard_entrypoint_uses_stable_packaged_assets(monkeypatch):
     assert '/static/dashboard/dashboard.js' in html
     assert '/static/dashboard/vite/' not in html
 
-
-def test_icon_cache_uses_same_appdata_root_as_database():
-    from src.api.dashboard import icons
-
-    assert Path(icons.ICON_CACHE_DIR).parent == Path(database.get_app_data_dir())
-    assert Path(icons.ICON_CACHE_DIR).name == "icon_cache"
 
 
 def test_games_api_groups_normalized_names_and_returns_icon_candidate(monkeypatch):

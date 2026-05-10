@@ -62,7 +62,7 @@ def test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open(mon
             db,
             session.id,
             dt.datetime(2026, 5, 8, 0, 0).timestamp(),
-            actor="new_gui_runtime",
+            actor="process_monitor",
             operation_kind="runtime_stop",
         )
         assert False, "Beholder should block extreme stale session close"
@@ -88,7 +88,7 @@ def test_beholder_allows_long_session_with_override_token(monkeypatch):
     db.refresh(session)
 
     try:
-        crud.end_session(db, session.id, dt.datetime(2026, 5, 8, 0, 0).timestamp(), actor="new_gui_runtime")
+        crud.end_session(db, session.id, dt.datetime(2026, 5, 8, 0, 0).timestamp(), actor="process_monitor")
     except beholder.BeholderBlocked as exc:
         token = beholder.issue_override_token(db, exc.incident)
 
@@ -96,7 +96,7 @@ def test_beholder_allows_long_session_with_override_token(monkeypatch):
         db,
         session.id,
         dt.datetime(2026, 5, 8, 0, 0).timestamp(),
-        actor="new_gui_runtime",
+        actor="process_monitor",
         override_token=token,
     )
     assert closed.end_timestamp is not None
@@ -107,7 +107,7 @@ def test_beholder_allows_long_session_with_override_token(monkeypatch):
 def test_beholder_active_incidents_api_and_resolve(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
-    op = beholder.BeholderOperation(kind="runtime_stop", actor="new_gui_runtime")
+    op = beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor")
     incident = beholder.create_incident(
         db,
         severity="critical",
@@ -321,10 +321,10 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
         crud.patch_settings(
             db,
             {"sidebar_height_ratio": 0.5},
-            actor="new_gui_settings",
+            actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "new GUI settings patch must not mutate sidebar detail fields"
+        assert False, "sidebar settings patch must not mutate disallowed fields"
     except beholder.BeholderBlocked as exc:
         assert "unauthorized_column_write" in exc.incident.risk_factors
 
@@ -332,7 +332,7 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
     assert settings.sidebar_height_ratio == 1.0
 
 
-def test_main_gui_settings_actor_is_labeled_as_v2_settings_hub(monkeypatch, tmp_path):
+def test_sidebar_settings_actor_is_labeled_as_pyqt_sidebar_dialog(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -343,15 +343,15 @@ def test_main_gui_settings_actor_is_labeled_as_v2_settings_hub(monkeypatch, tmp_
         crud.patch_settings(
             db,
             {"sidebar_height_ratio": 0.5},
-            actor="main_gui_settings",
+            actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "v2 settings hub writes outside its field scope should be guarded"
+        assert False, "sidebar settings dialog writes outside its field scope should be guarded"
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
-    assert payload["actor"] == "main_gui_settings"
-    assert beholder._actor_label(payload["actor"]) == "v2 main GUI 설정 허브"
+    assert payload["actor"] == "sidebar_settings_dialog"
+    assert beholder._actor_label(payload["actor"]) == "기존 GUI 사이드바 설정 창"
 
 
 def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch, tmp_path):
@@ -362,16 +362,16 @@ def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch
     crud.patch_settings(
         db,
         {"screenshot_save_dir": "C:/Shots"},
-        actor="new_gui_settings",
-        allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
     )
 
     try:
         crud.patch_settings(
             db,
             {"screenshot_save_dir": ""},
-            actor="new_gui_settings",
-            allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
         assert False, "personalized path reset should be blocked"
     except beholder.BeholderBlocked as exc:
@@ -388,29 +388,27 @@ def test_settings_guard_blocks_invalid_value_ranges(monkeypatch, tmp_path):
     db = SessionLocal()
     crud.patch_settings(
         db,
-        {"sidebar_trigger_y_start": 0.2, "sidebar_trigger_y_end": 0.8},
-        actor="new_gui_settings",
-        allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+        {"sidebar_height_ratio": 0.8},
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
     )
 
     try:
         crud.patch_settings(
             db,
-            {"sidebar_trigger_y_start": 0.95, "sidebar_trigger_y_end": 0.1},
-            actor="new_gui_settings",
-            allowed_fields=beholder.NEW_GUI_SETTINGS_FIELDS,
+            {"sidebar_height_ratio": 2.0},
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
-        assert False, "invalid setting relations should be blocked centrally"
+        assert False, "invalid setting ranges should be blocked centrally"
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_setting_value" in payload["risk_factors"]
-        assert "invalid_setting_relation" in payload["risk_factors"]
         assert payload["recommended_action"] == "deny"
         assert "설정" in payload["user_title"]
 
     settings = crud.get_settings(db)
-    assert settings.sidebar_trigger_y_start == 0.2
-    assert settings.sidebar_trigger_y_end == 0.8
+    assert settings.sidebar_height_ratio == 0.8
 
 
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
@@ -641,10 +639,10 @@ def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
         crud.patch_settings(
             db,
             {"sidebar_height_ratio": 0.5},
-            actor="new_gui_settings",
+            actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "new GUI settings patch must not mutate sidebar detail fields"
+        assert False, "sidebar settings patch must not mutate disallowed fields"
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -664,18 +662,17 @@ def test_beholder_payload_localizes_invalid_value_risks(monkeypatch):
     try:
         crud.patch_settings(
             db,
-            {"sidebar_trigger_y_start": 0.9, "sidebar_trigger_y_end": 0.1},
-            actor="new_gui_settings",
-            allowed_fields={"sidebar_trigger_y_start", "sidebar_trigger_y_end"},
+            {"sidebar_height_ratio": 2.0},
+            actor="sidebar_settings_dialog",
+            allowed_fields={"sidebar_height_ratio"},
         )
-        assert False, "invalid sidebar trigger range should be blocked"
+        assert False, "invalid sidebar height range should be blocked"
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
     assert "설정 값 범위 오류" in payload["risk_labels"]
-    assert "설정 조합 오류" in payload["risk_labels"]
-    assert "사이드바 트리거 시작 위치 값이 사이드바 트리거 종료 위치보다 큼" in payload["risk_labels"]
-    assert all("sidebar_trigger" not in label for label in payload["risk_labels"])
+    assert "사이드바 높이 비율 변경" in payload["risk_labels"]
+    assert all("sidebar_height_ratio" not in label for label in payload["risk_labels"])
 
 
 def test_beholder_payload_localizes_session_end_risks(monkeypatch):

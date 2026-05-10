@@ -29,7 +29,6 @@ a = Analysis(
         *collect_tree('src', 'src', excludes=(
             'api/dashboard/frontend',
             'api/dashboard/static',
-            'gui/new_gui/frontend',
             '**/__pycache__',
             '**/*.pyc',
             '**/tsconfig.tsbuildinfo',

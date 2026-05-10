@@ -18,7 +18,6 @@ import queue
 import traceback
 from pathlib import Path
 from datetime import datetime
-from src.gui.mode import GUI_MODE_FILE_NAME, GUI_MODE_V1, GUI_MODE_V2
 try:
     import tkinter as tk
     from tkinter import ttk, scrolledtext
@@ -38,13 +37,6 @@ DIST_DIR = PROJECT_ROOT / "dist"
 DASHBOARD_FRONTEND_DIR = PROJECT_ROOT / "src" / "api" / "dashboard" / "frontend"
 DASHBOARD_STATIC_BUILD_DIR = BUILD_DIR / "dashboard-static"
 DASHBOARD_CACHE_DIR = BUILD_DIR / "dashboard-cache"
-MAIN_GUI_FRONTEND_DIR = PROJECT_ROOT / "src" / "gui" / "new_gui" / "frontend"
-MAIN_GUI_STATIC_BUILD_DIR = BUILD_DIR / "main-gui-static"
-MAIN_GUI_CACHE_DIR = BUILD_DIR / "main-gui-cache"
-TAURI_DIR = PROJECT_ROOT / "src-tauri"
-TAURI_SHELL_DIST_NAME = "homework_helper_gui.exe"
-TAURI_SHELL_SOURCE = TAURI_DIR / "target" / "release" / "homework-helper-shell.exe"
-GUI_MODE_PROTOTYPE = "prototype"
 
 SPEC_FILE = PROJECT_ROOT / "homework_helper.spec"
 APP_NAME = "homework_helper"
@@ -152,57 +144,6 @@ def get_latest_version():
             'string': f"v{major}.{minor}.{patch}.{timestamp}"
         }
     return None
-
-
-class GuiModeSelectorGUI:
-    """패키징에 사용할 단일 main GUI 모드를 버전 선택 전에 고릅니다."""
-
-    def __init__(self, theme, font_family="맑은 고딕"):
-        self.theme = theme
-        self.font_family = font_family
-        self.result = None
-        self.root = tk.Tk()
-        self.root.title("HomeworkHelper - main GUI 선택")
-        self.root.geometry("520x280")
-        self.root.resizable(False, False)
-        self.root.configure(bg=theme.bg)
-        self.root.attributes('-topmost', True)
-        self._create_widgets()
-
-    def _create_widgets(self):
-        title = tk.Label(self.root, text="빌드할 단일 main GUI 선택", font=(self.font_family, 16), bg=self.theme.bg, fg=self.theme.fg)
-        title.pack(pady=(22, 8))
-        desc = tk.Label(
-            self.root,
-            text="v1은 기존 Qt6 GUI, v2는 prototype 디자인 철학을 PyQt 안정성 위에 이식한 GUI입니다.\n선택한 형태만 사용자 실행 진입점으로 패키징합니다.",
-            font=(self.font_family, 9),
-            bg=self.theme.bg,
-            fg=self.theme.fg,
-            justify=tk.CENTER,
-        )
-        desc.pack(pady=(0, 18))
-
-        btn_frame = tk.Frame(self.root, bg=self.theme.bg)
-        btn_frame.pack(pady=8)
-        legacy_btn = tk.Button(btn_frame, text="v1 · 기존 Qt6", width=18, command=lambda: self._select(GUI_MODE_V1))
-        legacy_btn.pack(side=tk.LEFT, padx=8)
-        new_btn = tk.Button(btn_frame, text="v2 · PyQt 디자인 이식", width=22, command=lambda: self._select(GUI_MODE_V2))
-        new_btn.pack(side=tk.LEFT, padx=8)
-
-        hint = tk.Label(self.root, text="ESC: 취소", font=(self.font_family, 9), bg=self.theme.bg, fg=self.theme.fg)
-        hint.pack(pady=(18, 0))
-        self.root.bind('<Escape>', lambda _event: self.root.destroy())
-        self.root.bind('1', lambda _event: self._select(GUI_MODE_V1))
-        self.root.bind('2', lambda _event: self._select(GUI_MODE_V2))
-
-    def _select(self, mode):
-        self.result = mode
-        self.root.destroy()
-
-    def show(self):
-        self.root.focus_force()
-        self.root.mainloop()
-        return self.result
 
 
 class VersionSelectorGUI:
@@ -653,108 +594,6 @@ def ensure_release_dir(gui):
 
 
 
-def _run_logged_command(gui, cmd, cwd, failure_label):
-    gui.log(f"실행: {' '.join(map(str, cmd))}")
-    try:
-        process = subprocess.run(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            check=False,
-        )
-    except Exception as e:
-        gui.log(f"✗ {failure_label} 명령 실행 실패: {e}", 'error')
-        return False
-    if process.stdout:
-        for line in process.stdout.splitlines():
-            if line.strip():
-                gui.log(f"  {line}")
-    if process.returncode != 0:
-        gui.log(f"✗ {failure_label} 실패 (exit={process.returncode})", 'error')
-        return False
-    return True
-
-
-def build_new_gui_shell(gui):
-    """Tauri 새 GUI shell 실행 파일을 항상 빌드합니다.
-
-    기본 실행 파일은 여전히 PyQt 기반 ``homework_helper.exe``입니다. 이 단계는
-    설치 패키지에 새 GUI 미리보기 shell을 항상 함께 포함하기 위한 것입니다.
-    """
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        gui.log("  ✗ npm을 찾을 수 없어 Tauri shell을 빌드할 수 없습니다.", 'error')
-        return False
-
-    gui.log_section("Tauri 새 GUI shell 빌드")
-    gui.set_status("Tauri CLI 의존성 확인 중...")
-    gui.set_progress(22)
-
-    install_cmd = [npm_cmd, "ci"] if (PROJECT_ROOT / "package-lock.json").exists() else [npm_cmd, "install"]
-    if not _run_logged_command(gui, install_cmd, PROJECT_ROOT, "루트 Tauri CLI 의존성 설치"):
-        return False
-
-    gui.set_status("Tauri 새 GUI shell 빌드 중...")
-    gui.set_progress(24)
-    if not _run_logged_command(gui, [npm_cmd, "run", "tauri:build", "--", "--no-bundle"], PROJECT_ROOT, "Tauri shell 빌드"):
-        return False
-
-    if not TAURI_SHELL_SOURCE.exists():
-        gui.log(f"✗ Tauri shell 산출물이 없습니다: {TAURI_SHELL_SOURCE}", 'error')
-        return False
-
-    gui.log(f"✓ Tauri 새 GUI shell 빌드 완료: {TAURI_SHELL_SOURCE.relative_to(PROJECT_ROOT)}", 'success')
-    return True
-
-
-def stage_new_gui_shell(gui):
-    """Tauri 새 GUI shell을 PyInstaller 배포 폴더에 항상 복사합니다."""
-    if not TAURI_SHELL_SOURCE.exists():
-        gui.log(f"✗ Tauri shell 산출물이 없어 패키지에 포함할 수 없습니다: {TAURI_SHELL_SOURCE}", 'error')
-        return False
-
-    APP_FOLDER.mkdir(parents=True, exist_ok=True)
-    target = APP_FOLDER / TAURI_SHELL_DIST_NAME
-    shutil.copy2(TAURI_SHELL_SOURCE, target)
-    gui.log(f"  ✓ 새 GUI shell 포함: {target.relative_to(PROJECT_ROOT)}", 'success')
-    return True
-
-
-def normalize_build_gui_mode(gui_mode: str | None) -> str:
-    value = (gui_mode or GUI_MODE_V2).strip().lower().replace("-", "_")
-    if value in {"v1", "legacy", "qt6"}:
-        return GUI_MODE_V1
-    if value in {"v2", "pyqt_v2", "main_gui_v2"}:
-        return GUI_MODE_V2
-    if value in {"prototype", "new_gui", "tauri", "react"}:
-        return GUI_MODE_PROTOTYPE
-    return GUI_MODE_V2
-
-
-def code_sign_targets(gui_mode=GUI_MODE_V2):
-    gui_mode = normalize_build_gui_mode(gui_mode)
-    targets = [APP_FOLDER / "homework_helper.exe"]
-    if gui_mode == GUI_MODE_PROTOTYPE:
-        targets.append(APP_FOLDER / TAURI_SHELL_DIST_NAME)
-    return targets
-
-
-def stage_gui_mode_file(gui, gui_mode=GUI_MODE_V2):
-    """Write the packaged single-entry PyQt GUI mode marker."""
-    gui_mode = normalize_build_gui_mode(gui_mode)
-    runtime_mode = GUI_MODE_V2 if gui_mode == GUI_MODE_V2 else GUI_MODE_V1
-    APP_FOLDER.mkdir(parents=True, exist_ok=True)
-    target = APP_FOLDER / GUI_MODE_FILE_NAME
-    target.write_text(runtime_mode + "\n", encoding="utf-8")
-    gui.log(f"  ✓ main GUI 모드 기록: {target.relative_to(PROJECT_ROOT)} = {runtime_mode}", 'success')
-    return True
-
-
-
 def build_dashboard_frontend(gui):
     """대시보드 프론트엔드 번들을 ignored build 디렉터리에 생성."""
     frontend_dir = DASHBOARD_FRONTEND_DIR
@@ -821,69 +660,6 @@ def build_dashboard_frontend(gui):
                 gui.log(f"  ⚠ 생성 파일 정리 실패 ({stale.name}): {e}", 'warning')
 
     gui.log(f"✓ 대시보드 프론트엔드 빌드 완료: {DASHBOARD_STATIC_BUILD_DIR.relative_to(PROJECT_ROOT)}", 'success')
-    return True
-
-
-def build_main_gui_frontend(gui):
-    """Tauri 메인 GUI 프론트엔드 번들을 ignored build 디렉터리에 생성."""
-    frontend_dir = MAIN_GUI_FRONTEND_DIR
-    package_json = frontend_dir / "package.json"
-    if not package_json.exists():
-        gui.log("  (메인 GUI 프론트엔드 package.json 없음 - 건너뜀)")
-        return True
-
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        gui.log("  ✗ npm을 찾을 수 없어 메인 GUI 번들을 생성할 수 없습니다.", 'error')
-        return False
-
-    gui.log_section("메인 GUI 프론트엔드 빌드")
-    gui.set_status("메인 GUI 프론트엔드 빌드 중...")
-    gui.set_progress(23)
-
-    install_cmd = [npm_cmd, "ci"] if (frontend_dir / "package-lock.json").exists() else [npm_cmd, "install"]
-    for cmd in (install_cmd, [npm_cmd, "run", "build"]):
-        gui.log(f"실행: {' '.join(cmd)}")
-        try:
-            process = subprocess.run(
-                cmd,
-                cwd=frontend_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                check=False,
-            )
-        except Exception as e:
-            gui.log(f"✗ 메인 GUI 빌드 명령 실행 실패: {e}", 'error')
-            return False
-        if process.stdout:
-            for line in process.stdout.splitlines():
-                if line.strip():
-                    gui.log(f"  {line}")
-        if process.returncode != 0:
-            gui.log(f"✗ 메인 GUI 빌드 실패 (exit={process.returncode})", 'error')
-            return False
-
-    expected = (
-        MAIN_GUI_STATIC_BUILD_DIR / "main-gui.js",
-        MAIN_GUI_STATIC_BUILD_DIR / "main-gui.css",
-    )
-    missing = [path for path in expected if not path.exists()]
-    if missing:
-        gui.log("✗ 메인 GUI 빌드 산출물이 없습니다: " + ", ".join(str(path) for path in missing), 'error')
-        return False
-
-    stale = frontend_dir / "tsconfig.tsbuildinfo"
-    if stale.exists():
-        try:
-            stale.unlink()
-            gui.log(f"  ✓ 소스 트리 산출물 제거: {stale.relative_to(PROJECT_ROOT)}")
-        except Exception as e:
-            gui.log(f"  ⚠ 생성 파일 정리 실패 ({stale.name}): {e}", 'warning')
-
-    gui.log(f"✓ 메인 GUI 프론트엔드 빌드 완료: {MAIN_GUI_STATIC_BUILD_DIR.relative_to(PROJECT_ROOT)}", 'success')
     return True
 
 def build_with_pyinstaller(gui):
@@ -1125,7 +901,7 @@ def create_zip_distribution(gui, version_info):
         return False
 
 
-def update_installer_script_version(version_info, gui_mode=GUI_MODE_V2):
+def update_installer_script_version(version_info):
     """installer.iss 파일의 버전 정보 업데이트"""
     if not INSTALLER_SCRIPT.exists():
         return False
@@ -1140,12 +916,6 @@ def update_installer_script_version(version_info, gui_mode=GUI_MODE_V2):
             rf'\g<1>{version_string}\g<2>',
             content
         )
-        gui_mode = normalize_build_gui_mode(gui_mode)
-        content = re.sub(
-            r'(#define BuildGuiMode\s+")[^"]+(")',
-            rf'\g<1>{gui_mode}\g<2>',
-            content
-        )
 
         with open(INSTALLER_SCRIPT, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -1155,7 +925,7 @@ def update_installer_script_version(version_info, gui_mode=GUI_MODE_V2):
         return False
 
 
-def create_installer(gui, version_info, gui_mode=GUI_MODE_V2):
+def create_installer(gui, version_info):
     """Inno Setup으로 인스톨러 생성"""
     gui.log_section("Inno Setup 인스톨러 생성")
     gui.set_status("인스톨러 생성 중...")
@@ -1176,8 +946,7 @@ def create_installer(gui, version_info, gui_mode=GUI_MODE_V2):
         gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
-    gui_mode = normalize_build_gui_mode(gui_mode)
-    update_installer_script_version(version_info, gui_mode)
+    update_installer_script_version(version_info)
 
     cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
     gui.log(f"인스톨러 명령: {' '.join(cmd)}\n")
@@ -1295,11 +1064,10 @@ def print_summary(gui, version_info):
     gui.log("  2. Portable 버전: *.zip 압축 해제 후 실행")
 
 
-def run_build_process(gui, version_info, gui_mode=GUI_MODE_V2):
+def run_build_process(gui, version_info):
     """빌드 프로세스 실행 (별도 스레드)"""
     def build():
         try:
-            normalized_gui_mode = normalize_build_gui_mode(gui_mode)
             # 1. 아카이빙
             archive_old_files(gui, version_info)
 
@@ -1311,37 +1079,14 @@ def run_build_process(gui, version_info, gui_mode=GUI_MODE_V2):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            if normalized_gui_mode == GUI_MODE_PROTOTYPE:
-                # 3-1. Tauri 메인 GUI 프론트엔드 빌드
-                if not build_main_gui_frontend(gui):
-                    gui.show_complete(False, auto_close_delay=0)
-                    return
-
-                # 3-2. Tauri 새 GUI shell 빌드
-                if not build_new_gui_shell(gui):
-                    gui.show_complete(False, auto_close_delay=0)
-                    return
-            else:
-                gui.log(f"\n[{normalized_gui_mode} main GUI 모드] prototype 프론트엔드/Tauri shell 빌드를 건너뜁니다.")
-
             # 4. PyInstaller 빌드
             if not build_with_pyinstaller(gui):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            if not stage_gui_mode_file(gui, normalized_gui_mode):
-                gui.show_complete(False, auto_close_delay=0)
-                return
-
-            if normalized_gui_mode == GUI_MODE_PROTOTYPE:
-                # 4-1. Tauri 새 GUI shell을 PyInstaller 배포 폴더에 포함
-                if not stage_new_gui_shell(gui):
-                    gui.show_complete(False, auto_close_delay=0)
-                    return
-
-            # 4-2. exe 코드 서명
+            # 4. 메인 exe 코드 서명
             gui.set_progress(62)
-            if not sign_build_artifacts(gui, version_info, target_files=code_sign_targets(normalized_gui_mode)):
+            if not sign_build_artifacts(gui, version_info):
                 gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
                 gui.show_complete(False, auto_close_delay=0)
                 return
@@ -1353,7 +1098,7 @@ def run_build_process(gui, version_info, gui_mode=GUI_MODE_V2):
                 success_count += 1
 
             # 6. 인스톨러 생성
-            if create_installer(gui, version_info, normalized_gui_mode):
+            if create_installer(gui, version_info):
                 success_count += 1
 
                 # 7. 인스톨러 exe 코드 서명
@@ -1412,17 +1157,10 @@ def main():
         print(f"[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
         return 1
 
-    # 1. GUI 모드 선택 (버전 선택보다 먼저 수행)
-    gui_mode_selector = GuiModeSelectorGUI(theme, font_family)
-    gui_mode = gui_mode_selector.show()
-    if gui_mode is None:
-        print("[취소] 빌드를 중단합니다.")
-        return 1
-
-    # 2. 최신 버전 확인
+    # 1. 최신 버전 확인
     latest_version = get_latest_version()
 
-    # 3. 버전 선택 GUI
+    # 2. 버전 선택 GUI
     version_selector = VersionSelectorGUI(latest_version, theme, font_family)
     version_info = version_selector.show()
 
@@ -1434,7 +1172,7 @@ def main():
     build_gui = BuildProgressGUI(version_info, theme, font_family)
 
     # 4. 빌드 프로세스 시작
-    run_build_process(build_gui, version_info, gui_mode)
+    run_build_process(build_gui, version_info)
 
     # GUI 실행
     build_gui.root.mainloop()

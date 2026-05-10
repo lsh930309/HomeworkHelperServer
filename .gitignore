@@ -56,8 +56,6 @@ android/.cxx/
 *.db
 *.sqlite
 *.sqlite3
-HomeworkHelper.zip
-local-artifacts/
 
 # ===========================
 # 스크린샷 로컬 설정
@@ -103,19 +101,3 @@ certs/.thumbprint
 node_modules/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
-.npm-cache/
-
-# Test/coverage/tool caches
-.coverage
-coverage.xml
-htmlcov/
-.ruff_cache/
-.mypy_cache/
-.pyright/
-playwright-report/
-test-results/
-tools/run_new_gui_real_data_smoke.py
-
-# Tauri generated files
-src-tauri/gen/
-src-tauri/target/
