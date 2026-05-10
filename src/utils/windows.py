@@ -5,14 +5,23 @@ except ImportError:  # Non-Windows development/test hosts
     winreg = None
 import sys
 import os
+import logging
 try:
     import winshell
 except ImportError:  # Non-Windows development/test hosts
     winshell = None
 from typing import Optional
+import ctypes
+import ctypes.wintypes
+
+logger = logging.getLogger(__name__)
 
 APP_REGISTRY_NAME = "GameCycleHelper" # 레지스트리에 등록될 프로그램 이름
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+_DWMWA_CAPTION_COLOR = 35
+_DWMWA_TEXT_COLOR = 36
 
 def is_windows() -> bool:
     return os.name == 'nt'
@@ -175,3 +184,67 @@ def get_startup_shortcut_status() -> bool:
     shortcut_path = os.path.join(startup_folder, shortcut_name)
     
     return os.path.exists(shortcut_path)
+
+
+def _to_colorref(rgb: tuple[int, int, int]) -> int:
+    """(R, G, B)를 Windows COLORREF(0x00bbggrr) 정수로 변환합니다."""
+    red, green, blue = (max(0, min(255, int(channel))) for channel in rgb)
+    return red | (green << 8) | (blue << 16)
+
+
+def apply_windows_title_bar_color(
+    hwnd: int,
+    *,
+    caption_color: tuple[int, int, int],
+    text_color: tuple[int, int, int],
+    dark_mode: bool,
+) -> bool:
+    """표준 Windows 제목 표시줄 색상을 앱 팔레트와 맞춥니다.
+
+    Windows 11의 DWM non-client 색상 API를 직접 사용하는 best-effort 기능입니다.
+    지원되지 않는 Windows 버전/환경에서는 커스텀 타이틀바 같은 우회 구현 없이 즉시 실패합니다.
+
+    Args:
+        hwnd: 대상 최상위 창 핸들.
+        caption_color: 제목 표시줄 배경 RGB.
+        text_color: 제목 표시줄 텍스트 RGB.
+        dark_mode: 어두운 제목 표시줄 모드 사용 여부.
+
+    Returns:
+        캡션 색상 지정 성공 여부.
+    """
+    if not is_windows() or not hwnd:
+        return False
+
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+
+        dark_value = ctypes.c_int(1 if dark_mode else 0)
+        # 이 속성은 Windows 11에서 공식 지원되며, 구버전에서는 실패할 수 있습니다.
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.wintypes.HWND(hwnd),
+            ctypes.c_uint(_DWMWA_USE_IMMERSIVE_DARK_MODE),
+            ctypes.byref(dark_value),
+            ctypes.sizeof(dark_value),
+        )
+
+        caption_value = ctypes.c_uint(_to_colorref(caption_color))
+        caption_result = dwmapi.DwmSetWindowAttribute(
+            ctypes.wintypes.HWND(hwnd),
+            ctypes.c_uint(_DWMWA_CAPTION_COLOR),
+            ctypes.byref(caption_value),
+            ctypes.sizeof(caption_value),
+        )
+
+        text_value = ctypes.c_uint(_to_colorref(text_color))
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.wintypes.HWND(hwnd),
+            ctypes.c_uint(_DWMWA_TEXT_COLOR),
+            ctypes.byref(text_value),
+            ctypes.sizeof(text_value),
+        )
+
+        return caption_result == 0
+    except Exception as e:
+        logger.debug("Windows 제목 표시줄 색상 적용 실패: %s", e)
+        return False

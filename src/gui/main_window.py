@@ -35,7 +35,11 @@ from src.api.client import ApiClient
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.window_focus import focus_process_window
-from src.utils.windows import set_startup_shortcut, get_startup_shortcut_status
+from src.utils.windows import (
+    apply_windows_title_bar_color,
+    set_startup_shortcut,
+    get_startup_shortcut_status,
+)
 from src.core.launcher import Launcher
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -104,6 +108,9 @@ class MainWindow(QMainWindow):
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
     _SCREEN_SIZE_RATIO = 0.92
+    _TABLE_ROW_HEIGHT = 40
+    _TABLE_ICON_LOGICAL_SIZE = 32
+    _TABLE_ICON_COLUMN_PADDING = 10
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -296,10 +303,12 @@ class MainWindow(QMainWindow):
         # 테이블 행 높이 및 아이콘 크기 설정
         vh = self.process_table.verticalHeader()
         if vh:
-            vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
+            vh.setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
+            vh.setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
 
-        # 아이콘 크기: 행 높이(36px)에서 여백을 뺀 28px로 설정 (DPI 배율은 get_qicon_for_file 내부에서 적용)
-        self._table_icon_logical_size = 28
+        # 아이콘 크기: 32px 캐시 변형을 직접 활용하고 40px 행 안에 균형 있게 배치합니다.
+        # DPI 배율은 get_qicon_for_file 내부에서 적용합니다.
+        self._table_icon_logical_size = self._TABLE_ICON_LOGICAL_SIZE
         self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
 
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
@@ -455,6 +464,7 @@ class MainWindow(QMainWindow):
         """창이 표시될 때 호출됩니다."""
         super().showEvent(event)
         # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
+        QTimer.singleShot(0, self._sync_windows_title_bar_color)
 
     def _on_monitor_timer_tick(self):
         """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
@@ -729,6 +739,7 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme: str = "system"):
         """테마를 적용합니다. theme: 'system' | 'light' | 'dark'"""
+        self._current_theme = theme
         app = QApplication.instance()
         if app is None:
             return
@@ -787,6 +798,41 @@ class MainWindow(QMainWindow):
             app.setPalette(QPalette())
         # 스타일 변경 후 폰트 복원
         app.setFont(saved_font)
+        self._sync_windows_title_bar_color()
+
+    def _is_effective_dark_theme(self) -> bool:
+        """현재 팔레트가 실질적으로 다크 테마인지 반환합니다."""
+        current_theme = getattr(self, "_current_theme", "system")
+        if current_theme == "dark":
+            return True
+        if current_theme == "light":
+            return False
+        palette = self.palette()
+        return palette.color(QPalette.ColorRole.WindowText).lightness() > palette.color(QPalette.ColorRole.Window).lightness()
+
+    def _sync_windows_title_bar_color(self) -> bool:
+        """가능한 Windows 환경에서 표준 제목 표시줄 색상을 앱 GUI 팔레트와 맞춥니다."""
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        text = palette.color(QPalette.ColorRole.WindowText)
+        return apply_windows_title_bar_color(
+            int(self.winId()),
+            caption_color=(window.red(), window.green(), window.blue()),
+            text_color=(text.red(), text.green(), text.blue()),
+            dark_mode=self._is_effective_dark_theme(),
+        )
+
+    def _table_default_colors(self) -> tuple[QColor, QColor]:
+        """테이블 기본 배경/전경색을 반환합니다.
+
+        일부 플랫폼 스타일은 앱 팔레트가 다크여도 QTableWidgetItem에 저장한
+        palette(base) 브러시를 밝은 기본색으로 해석할 수 있어, 다크 테마에서는
+        명시 색상을 사용해 셀 배경이 창 배경과 어긋나지 않게 합니다.
+        """
+        if self._is_effective_dark_theme():
+            return QColor(42, 42, 42), QColor(220, 220, 220)
+        palette = self.process_table.palette()
+        return palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Text)
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
@@ -1002,8 +1048,7 @@ class MainWindow(QMainWindow):
         }
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
-        palette = self.process_table.palette()
-        df_bg, df_fg = palette.base(), palette.text()
+        df_bg, df_fg = self._table_default_colors()
 
         # 현재 테이블의 행 수와 프로세스 수가 다르면 전체 새로고침 필요
         if self.process_table.rowCount() != len(processes_by_id):
@@ -1066,14 +1111,18 @@ class MainWindow(QMainWindow):
 
         now_dt = datetime.datetime.now() # 현재 시각
         gs = self.data_manager.global_settings # 전역 설정
-        palette = self.process_table.palette() # 테이블 팔레트
-        df_bg, df_fg = palette.base(), palette.text() # 기본 배경색 및 글자색
+        df_bg, df_fg = self._table_default_colors() # 기본 배경색 및 글자색
 
         for r, p in enumerate(processes): # 각 프로세스에 대해 반복
             # 아이콘 컬럼
             icon_item = QTableWidgetItem()
-            qi = get_qicon_for_file(p.monitoring_path, icon_size=getattr(self, '_table_icon_logical_size', 28))
+            qi = get_qicon_for_file(
+                p.monitoring_path,
+                icon_size=getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE),
+                process_id=p.id,
+            )
             if qi and not qi.isNull(): icon_item.setIcon(qi)
+            icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
 
             # 이름 컬럼 (UserRole에 ID 저장)
@@ -1485,8 +1534,7 @@ class MainWindow(QMainWindow):
                 status_changes += 1
 
                 # 상태에 따른 배경색 설정
-                palette = self.process_table.palette()
-                df_bg, df_fg = palette.base(), palette.text()
+                df_bg, df_fg = self._table_default_colors()
 
                 status_item.setBackground(df_bg)  # 기본 배경색으로 초기화
                 status_item.setForeground(df_fg)  # 기본 글자색으로 초기화
@@ -1817,6 +1865,11 @@ class MainWindow(QMainWindow):
 
     def _cell_content_width(self, row: int, column: int) -> int:
         """아이템/셀 위젯의 실제 sizeHint를 함께 반영한 컬럼 최소 폭."""
+        if column == self.COL_ICON:
+            # 아이콘 전용 컬럼은 QTableWidgetItem.sizeHint()의 플랫폼별 기본 여백을
+            # 신뢰하지 않고, 표시 아이콘 + 최소 여백만으로 고정해 불필요한 빈 폭을 막습니다.
+            return self.process_table.iconSize().width() + self._TABLE_ICON_COLUMN_PADDING
+
         style = self.process_table.style() or self.style()
         focus_margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) if style else 2
         metrics = self.process_table.fontMetrics()
@@ -1835,8 +1888,6 @@ class MainWindow(QMainWindow):
             if not item.icon().isNull():
                 item_width += self.process_table.iconSize().width() + padding
 
-        if column == self.COL_ICON:
-            return max(widget_width, item_width, self.process_table.iconSize().width() + padding)
         return max(widget_width, item_width)
 
     def _resize_table_to_contents(self, max_table_size: Optional[QSize] = None) -> QSize:
@@ -1845,7 +1896,7 @@ class MainWindow(QMainWindow):
         self._configure_table_header()
         table.resizeRowsToContents()
 
-        default_row_height = table.verticalHeader().defaultSectionSize()
+        default_row_height = max(self._TABLE_ROW_HEIGHT, table.verticalHeader().defaultSectionSize())
         for row in range(table.rowCount()):
             table.setRowHeight(row, max(default_row_height, table.rowHeight(row)))
 

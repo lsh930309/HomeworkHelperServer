@@ -4,6 +4,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication
 
 from src.data.data_models import GlobalSettings, ManagedProcess
@@ -103,6 +104,12 @@ def _stop_window(window, app):
 def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    icon_requests = []
+    monkeypatch.setattr(
+        main_window,
+        "get_qicon_for_file",
+        lambda path, *, icon_size=24, process_id=None: icon_requests.append((path, icon_size, process_id)) or QIcon(),
+    )
     processes = [
         ManagedProcess(id="z", name="Zeta", monitoring_path="z.exe", launch_path="z.exe"),
         ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe"),
@@ -123,6 +130,16 @@ def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path
             window.process_table.item(row, window.COL_NAME).text()
             for row in range(window.process_table.rowCount())
         ] == ["Alpha", "Beta", "Zeta"]
+        assert [request[2] for request in icon_requests] == ["a", "b", "z"]
+        assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
+        assert window.process_table.iconSize().width() == window._TABLE_ICON_LOGICAL_SIZE
+        assert window.process_table.columnWidth(window.COL_ICON) <= (
+            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING + 8
+        )
+        assert all(
+            window.process_table.rowHeight(row) >= window._TABLE_ROW_HEIGHT
+            for row in range(window.process_table.rowCount())
+        )
     finally:
         _stop_window(window, app)
 
@@ -265,3 +282,43 @@ def test_window_focus_declares_user32_signatures():
     ]:
         assert f"user32.{api_name}.argtypes" in source
         assert f"user32.{api_name}.restype" in source
+
+
+def test_process_icon_prefers_process_id_cache_without_existing_exe(monkeypatch, tmp_path):
+    app = _qapp()
+    cached_png = tmp_path / "cached-icon.png"
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(QColor("#2a82da"))
+    assert pixmap.save(str(cached_png))
+
+    import src.api.dashboard.icons as icon_cache
+    from src.utils.process import get_qicon_for_file
+
+    monkeypatch.setattr(
+        icon_cache,
+        "get_icon_for_size",
+        lambda process_id, requested_size: cached_png if process_id == "game-id" else None,
+    )
+    monkeypatch.setattr(
+        icon_cache,
+        "extract_icon_from_exe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cache hit should not extract")),
+    )
+
+    icon = get_qicon_for_file(str(tmp_path / "missing.exe"), icon_size=32, process_id="game-id")
+
+    assert not icon.isNull()
+    app.processEvents()
+
+
+def test_windows_title_bar_color_noops_off_windows(monkeypatch):
+    import src.utils.windows as windows
+
+    monkeypatch.setattr(windows.os, "name", "posix")
+
+    assert windows.apply_windows_title_bar_color(
+        1234,
+        caption_color=(53, 53, 53),
+        text_color=(220, 220, 220),
+        dark_mode=True,
+    ) is False

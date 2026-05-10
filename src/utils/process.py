@@ -42,7 +42,11 @@ def get_user_scale_factor() -> float:
 
     return 1.0  # 기본값 100%
 
-def get_qicon_for_file(file_path: Optional[str], icon_size: int = 24) -> Optional[Any]: # 반환 타입을 Any로 (QIcon)
+def get_qicon_for_file(
+    file_path: Optional[str],
+    icon_size: int = 24,
+    process_id: Optional[str] = None,
+) -> Optional[Any]: # 반환 타입을 Any로 (QIcon)
     """
     주어진 파일 경로에 대한 고화질 QIcon 객체를 반환합니다. 실패 시 None.
 
@@ -56,19 +60,10 @@ def get_qicon_for_file(file_path: Optional[str], icon_size: int = 24) -> Optiona
     Returns:
         QIcon 객체 또는 None
     """
-    if not file_path or not os.path.exists(file_path): # 파일이 존재해야 아이콘을 가져올 수 있음
-        return None
-
     try:
         from PyQt6.QtCore import Qt
         # 고해상도 아이콘 추출 시도 (대시보드 로직 활용)
         from src.api.dashboard.icons import extract_icon_from_exe, get_icon_for_size
-
-        # 파일 경로 기반 고유 ID 생성
-        process_id = hashlib.md5(os.path.normcase(os.path.abspath(file_path)).encode()).hexdigest()
-
-        # 아이콘 추출 (캐시가 있으면 캐시 사용)
-        extract_icon_from_exe(file_path, process_id)
 
         # 사용자 지정 UI 배율 가져오기 (homework_helper.pyw와 동일한 로직)
         scale_factor = get_user_scale_factor()
@@ -77,26 +72,49 @@ def get_qicon_for_file(file_path: Optional[str], icon_size: int = 24) -> Optiona
         # 예: 24px * 1.5 (150%) = 36px
         physical_size = int(icon_size * scale_factor)
 
-        # 요청 크기에 맞는 아이콘 경로 가져오기 (물리적 크기 사용)
-        icon_path = get_icon_for_size(process_id, physical_size)
+        def _icon_from_cache(cache_key: str) -> Optional[QIcon]:
+            """캐시된 고해상도 PNG를 QIcon으로 변환합니다."""
+            icon_path = get_icon_for_size(cache_key, physical_size)
+            if not icon_path or not icon_path.exists():
+                return None
 
-        if icon_path and icon_path.exists():
-            # 고해상도 아이콘을 QPixmap으로 로드
             pixmap = QPixmap(str(icon_path))
+            if pixmap.isNull():
+                return None
 
-            if not pixmap.isNull():
-                # 배율이 적용된 크기로 스케일링 (SmoothTransformation으로 고품질 유지)
-                # get_icon_for_size가 이미 적절한 크기를 반환하지만, 정확한 크기 보장을 위해 스케일링
-                if pixmap.width() != physical_size or pixmap.height() != physical_size:
-                    scaled_pixmap = pixmap.scaled(
-                        physical_size,
-                        physical_size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    return QIcon(scaled_pixmap)
+            # 배율이 적용된 크기로 스케일링 (SmoothTransformation으로 고품질 유지)
+            # get_icon_for_size가 이미 적절한 크기를 반환하지만, 정확한 크기 보장을 위해 스케일링
+            if pixmap.width() != physical_size or pixmap.height() != physical_size:
+                pixmap = pixmap.scaled(
+                    physical_size,
+                    physical_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            return QIcon(pixmap)
 
-                return QIcon(pixmap)
+        # 메인 GUI는 관리 프로세스 ID 기준 캐시를 우선 사용합니다.
+        # 실사용 DB/캐시 복원 환경이나 비-Windows 검증 환경에서는 원본 exe 경로가 없어도
+        # process_id 기반 캐시가 존재할 수 있으므로, 파일 존재 여부보다 먼저 확인합니다.
+        if process_id:
+            cached_icon = _icon_from_cache(process_id)
+            if cached_icon is not None:
+                return cached_icon
+
+        if not file_path or not os.path.exists(file_path): # 파일이 존재해야 새 아이콘을 가져올 수 있음
+            return None
+
+        # 캐시 키: process_id가 있으면 앱 전체에서 안정적인 ID 캐시를 공유하고,
+        # 없으면 기존 동작처럼 파일 경로 기반 고유 ID를 사용합니다.
+        cache_key = process_id or hashlib.md5(os.path.normcase(os.path.abspath(file_path)).encode()).hexdigest()
+
+        # 아이콘 추출 (캐시가 있으면 캐시 사용)
+        extract_icon_from_exe(file_path, cache_key)
+
+        # 요청 크기에 맞는 아이콘 경로 가져오기 (물리적 크기 사용)
+        cached_icon = _icon_from_cache(cache_key)
+        if cached_icon is not None:
+            return cached_icon
 
         # 고해상도 추출 실패 시 기존 시스템 아이콘 사용 (폴백)
         provider = QFileIconProvider()
