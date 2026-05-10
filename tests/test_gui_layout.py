@@ -7,7 +7,14 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
-from src.data.data_models import GlobalSettings, ManagedProcess, WebShortcut
+from src.data.data_models import (
+    GlobalSettings,
+    ManagedProcess,
+    WebShortcut,
+    SIDEBAR_MODE_ALWAYS,
+    SIDEBAR_MODE_DISABLED,
+    SIDEBAR_MODE_GAME,
+)
 from src.core.process_monitor import ProcessMonitorTickResult
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 
@@ -83,6 +90,16 @@ def _patch_main_window_deps(monkeypatch, tmp_path):
         tmp_path / "HomeworkHelper" / "game_presets_user.json",
     )
     return main_window
+
+
+def test_global_settings_derives_sidebar_mode_from_legacy_bool():
+    disabled = GlobalSettings(sidebar_enabled=False)
+    assert disabled.sidebar_mode == SIDEBAR_MODE_DISABLED
+    assert disabled.sidebar_enabled is False
+
+    restored = GlobalSettings.from_dict({"sidebar_enabled": True, "sidebar_mode": SIDEBAR_MODE_ALWAYS})
+    assert restored.sidebar_mode == SIDEBAR_MODE_ALWAYS
+    assert restored.sidebar_enabled is True
 
 
 def _stop_window(window, app):
@@ -250,6 +267,7 @@ def test_sidebar_activates_when_running_cache_already_exists_without_monitor_cha
     process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
     data_manager = _FakeApiClient([process])
     data_manager.global_settings.sidebar_enabled = True
+    data_manager.global_settings.sidebar_mode = SIDEBAR_MODE_GAME
     data_manager.global_settings.hide_on_game = False
     window = main_window.MainWindow(data_manager)
     activated = []
@@ -288,7 +306,7 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     import src.gui.sidebar.sidebar_controller as controller_module
 
     process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
-    settings = GlobalSettings(sidebar_enabled=False, hide_on_game=False)
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_DISABLED, hide_on_game=False)
     data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
     trigger_events = []
     process_updates = []
@@ -342,6 +360,7 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     assert controller._active_process is process
     assert trigger_events == []
 
+    settings.sidebar_mode = SIDEBAR_MODE_GAME
     settings.sidebar_enabled = True
     controller.apply_settings(settings)
 
@@ -350,12 +369,100 @@ def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_d
     assert ("game", 4321, 100.0) in process_updates
 
 
+def test_sidebar_controller_always_mode_starts_trigger_without_game(monkeypatch):
+    _qapp()
+    import src.gui.sidebar.sidebar_controller as controller_module
+
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_ALWAYS, hide_on_game=False)
+    data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
+    trigger_events = []
+    sidebar_events = []
+
+    class _TriggerProbe:
+        def __init__(self, *args, **kwargs):
+            trigger_events.append(("created", kwargs.get("trigger_width_px")))
+
+        def start(self):
+            trigger_events.append(("start", None))
+
+        def stop(self):
+            trigger_events.append(("stop", None))
+
+        def update_settings(self, *args, **kwargs):
+            trigger_events.append(("update", kwargs.get("trigger_width_px")))
+
+    class _SidebarProbe:
+        _is_shown = False
+
+        def __init__(self, *args, **kwargs):
+            sidebar_events.append(("created", kwargs.get("auto_hide_ms")))
+
+        def update_process(self, *args, **kwargs):
+            sidebar_events.append(("update_process", None))
+
+        def update_auto_hide_ms(self, value):
+            sidebar_events.append(("auto_hide", value))
+
+        def apply_visual_settings(self):
+            sidebar_events.append(("visual", None))
+
+        def refresh_content(self):
+            sidebar_events.append(("refresh", None))
+
+        def slide_out(self):
+            sidebar_events.append(("slide_out", None))
+
+        def set_on_start_recording(self, _callback):
+            pass
+
+    monkeypatch.setattr(controller_module, "EdgeTriggerWindow", _TriggerProbe)
+    monkeypatch.setattr(controller_module, "SidebarWidget", _SidebarProbe)
+
+    controller = controller_module.SidebarController(data_manager)
+
+    controller.apply_settings(settings)
+    controller.deactivate()
+
+    assert ("created", settings.sidebar_edge_width_px) in trigger_events
+    assert trigger_events.count(("start", None)) == 2
+    assert ("stop", None) not in trigger_events
+    assert ("refresh", None) in sidebar_events
+
+
+def test_sidebar_settings_dialog_persists_three_state_sidebar_mode(monkeypatch):
+    import sys
+    import types
+
+    app = _qapp()
+    monkeypatch.setitem(
+        sys.modules,
+        "src.screenshot.key_capture",
+        types.SimpleNamespace(vk_to_display_name=lambda vk: f"VK 0x{vk:02X}"),
+    )
+    from src.gui.sidebar_settings_dialog import SidebarSettingsDialog
+
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_ALWAYS, hide_on_game=False)
+    dialog = SidebarSettingsDialog(settings)
+    try:
+        assert dialog._mode_combo.currentData() == SIDEBAR_MODE_ALWAYS
+
+        disabled_index = dialog._mode_combo.findData(SIDEBAR_MODE_DISABLED)
+        dialog._mode_combo.setCurrentIndex(disabled_index)
+        updated = dialog.get_updated_settings()
+
+        assert updated.sidebar_mode == SIDEBAR_MODE_DISABLED
+        assert updated.sidebar_enabled is False
+    finally:
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monkeypatch):
     _qapp()
     import src.gui.sidebar.sidebar_controller as controller_module
 
     process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
-    settings = GlobalSettings(sidebar_enabled=True, hide_on_game=False)
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_GAME, hide_on_game=False)
     data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
     trigger_events = []
     sidebar_events = []
@@ -403,6 +510,7 @@ def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monk
     controller = controller_module.SidebarController(data_manager)
     controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
 
+    settings.sidebar_mode = SIDEBAR_MODE_DISABLED
     settings.sidebar_enabled = False
     controller.apply_settings(settings)
 
@@ -415,7 +523,7 @@ def test_sidebar_controller_edge_trigger_callback_slides_sidebar_in(monkeypatch)
     import src.gui.sidebar.sidebar_controller as controller_module
 
     process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
-    settings = GlobalSettings(sidebar_enabled=True, hide_on_game=False)
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_GAME, hide_on_game=False)
     data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
     triggers = []
     sidebar_events = []

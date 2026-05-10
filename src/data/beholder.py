@@ -41,10 +41,10 @@ WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
 
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
-    "sidebar_enabled", "screenshot_enabled", "recording_enabled",
+    "sidebar_enabled", "sidebar_mode", "screenshot_enabled", "recording_enabled",
 }
 SIDEBAR_SETTINGS_FIELDS = {
-    "sidebar_enabled", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
+    "sidebar_enabled", "sidebar_mode", "sidebar_auto_hide_ms", "sidebar_edge_width_px",
     "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_enabled",
     "sidebar_clock_format", "sidebar_playtime_enabled", "sidebar_playtime_prefix",
     "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
@@ -62,7 +62,7 @@ GLOBAL_DIALOG_FIELDS = {
     "stamina_notify_threshold", "theme", "hide_on_game",
 }
 PERSONALIZED_SETTINGS_FIELDS = {
-    "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
+    "sidebar_mode", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
     "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
@@ -85,6 +85,7 @@ SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
 }
 SETTINGS_ENUM_RULES: dict[str, tuple[set[str], str]] = {
     "theme": ({"system", "light", "dark"}, "테마"),
+    "sidebar_mode": ({"always", "game", "disabled"}, "사이드바 사용 방식"),
     "screenshot_capture_mode": ({"fullscreen", "game_window"}, "스크린샷 캡처 방식"),
 }
 
@@ -107,6 +108,7 @@ FIELD_LABELS: dict[str, str] = {
     "notify_on_daily_reset": "일일 초기화 알림",
     "stamina_notify_enabled": "스태미나 알림",
     "sidebar_enabled": "사이드바 사용",
+    "sidebar_mode": "사이드바 사용 방식",
     "sidebar_clock_enabled": "사이드바 시계 표시",
     "sidebar_playtime_enabled": "사이드바 플레이타임 표시",
     "sidebar_volume_section_enabled": "사이드바 볼륨 영역",

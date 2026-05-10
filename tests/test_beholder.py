@@ -466,6 +466,55 @@ def test_settings_guard_blocks_invalid_value_ranges(monkeypatch, tmp_path):
     assert settings.sidebar_height_ratio == 0.8
 
 
+def test_sidebar_mode_is_guarded_and_normalizes_legacy_bool(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+
+    crud.patch_settings(
+        db,
+        {"sidebar_mode": "always"},
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+    )
+
+    settings = crud.get_settings(db)
+    assert settings.sidebar_mode == "always"
+    assert settings.sidebar_enabled is True
+
+    crud.patch_settings(
+        db,
+        {"sidebar_enabled": False},
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+    )
+
+    settings = crud.get_settings(db)
+    assert settings.sidebar_mode == "disabled"
+    assert settings.sidebar_enabled is False
+
+
+def test_settings_guard_blocks_invalid_sidebar_mode(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+
+    try:
+        crud.patch_settings(
+            db,
+            {"sidebar_mode": "sometimes"},
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+        )
+        assert False, "invalid sidebar modes should be blocked centrally"
+    except beholder.BeholderBlocked as exc:
+        payload = beholder.incident_to_dict(exc.incident)
+        assert "invalid_setting_value" in payload["risk_factors"]
+        assert "sidebar_mode" in payload["risk_factors"]
+
+
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod

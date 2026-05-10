@@ -766,6 +766,23 @@ def ensure_process_table_schema():
                 if 'sidebar_enabled' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_enabled INTEGER DEFAULT 1"))
                     print("[Migration] global_settings.sidebar_enabled 컬럼 추가됨")
+                sidebar_mode_added = False
+                if 'sidebar_mode' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_mode TEXT DEFAULT 'game'"))
+                    print("[Migration] global_settings.sidebar_mode 컬럼 추가됨")
+                    gs_existing_cols.add('sidebar_mode')
+                    sidebar_mode_added = True
+                if 'sidebar_mode' in gs_existing_cols and 'sidebar_enabled' in gs_existing_cols:
+                    mode_where = (
+                        "1 = 1"
+                        if sidebar_mode_added
+                        else "sidebar_mode IS NULL OR sidebar_mode = '' OR sidebar_mode NOT IN ('always', 'game', 'disabled')"
+                    )
+                    conn.execute(text(
+                        "UPDATE global_settings "
+                        "SET sidebar_mode = CASE WHEN COALESCE(sidebar_enabled, 1) = 0 THEN 'disabled' ELSE 'game' END "
+                        f"WHERE {mode_where}"
+                    ))
                 if 'sidebar_auto_hide_sec' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_sec INTEGER DEFAULT 3"))
                     print("[Migration] global_settings.sidebar_auto_hide_sec 컬럼 추가됨")

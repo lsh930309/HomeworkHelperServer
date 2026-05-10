@@ -338,6 +338,7 @@ class MainWindow(QMainWindow):
         self.runtime_heartbeat_timer.start(30000)
         self._send_runtime_heartbeat()
         QTimer.singleShot(500, self._poll_beholder_incidents)
+        QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1200, self._reconcile_open_sessions_after_startup)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
@@ -383,6 +384,12 @@ class MainWindow(QMainWindow):
                         "이번 요청을 1회 허용하는 토큰을 발급했습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.",
                     )
             break
+
+    def _apply_sidebar_startup_mode(self) -> None:
+        """앱 시작 시 always/game/disabled 사이드바 사용 모드를 반영합니다."""
+        controller = getattr(self, '_sidebar_controller', None)
+        if controller is not None and hasattr(controller, 'apply_settings'):
+            controller.apply_settings(self.data_manager.global_settings)
 
     def _send_runtime_heartbeat(self):
         if hasattr(self.data_manager, "send_runtime_heartbeat"):

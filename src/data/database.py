@@ -111,6 +111,7 @@ def auto_migrate_database():
         ("global_settings", "theme", "TEXT", "'system'"),
         ("global_settings", "hide_on_game", "INTEGER", "1"),
         ("global_settings", "sidebar_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_mode", "TEXT", "'game'"),
         ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
         ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
         ("global_settings", "sidebar_height_ratio", "REAL", "1.0"),
@@ -150,6 +151,7 @@ def auto_migrate_database():
     
     try:
         inspector = inspect(engine)
+        added_columns: set[tuple[str, str]] = set()
         
         with engine.connect() as conn:
             conn.execute(text(
@@ -182,6 +184,7 @@ def auto_migrate_database():
                 
                 conn.execute(text(sql))
                 conn.commit()
+                added_columns.add((table_name, column_name))
                 print(f"[Migration] {table_name}.{column_name} 컬럼 추가됨")
 
         # 데이터 마이그레이션: game_schema_id → user_preset_id 복사
@@ -212,11 +215,24 @@ def auto_migrate_database():
 
         # sidebar_auto_hide_sec → sidebar_auto_hide_ms 데이터 마이그레이션
         with engine.connect() as conn:
-            existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
+            existing_columns = [row[1] for row in conn.execute(text("PRAGMA table_info(global_settings)"))]
             if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
                 conn.execute(text(
                     "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
                     "WHERE sidebar_auto_hide_ms = 3000"
+                ))
+                conn.commit()
+
+            if "sidebar_mode" in existing_columns and "sidebar_enabled" in existing_columns:
+                mode_where = (
+                    "1 = 1"
+                    if ("global_settings", "sidebar_mode") in added_columns
+                    else "sidebar_mode IS NULL OR sidebar_mode = '' OR sidebar_mode NOT IN ('always', 'game', 'disabled')"
+                )
+                conn.execute(text(
+                    "UPDATE global_settings "
+                    "SET sidebar_mode = CASE WHEN COALESCE(sidebar_enabled, 1) = 0 THEN 'disabled' ELSE 'game' END "
+                    f"WHERE {mode_where}"
                 ))
                 conn.commit()
 

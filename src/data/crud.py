@@ -3,6 +3,7 @@ from sqlalchemy.exc import OperationalError, IntegrityError
 from src.data import models
 from src.data import schemas
 from src.data import beholder
+from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
 from typing import Any, Optional
 from pathlib import Path
 import json
@@ -359,6 +360,24 @@ def _changed_fields(settings: models.GlobalSettings, update_data: dict[str, Any]
     return {key for key, value in update_data.items() if hasattr(settings, key) and getattr(settings, key) != value}
 
 
+def _normalize_sidebar_settings_update(current_settings: models.GlobalSettings, update_data: dict[str, Any]) -> None:
+    """sidebar_mode와 legacy sidebar_enabled bool을 일관되게 동기화합니다."""
+    if "sidebar_mode" not in update_data and "sidebar_enabled" not in update_data:
+        return
+    legacy_enabled = update_data.get(
+        "sidebar_enabled",
+        getattr(current_settings, "sidebar_enabled", True),
+    )
+    raw_mode = update_data.get("sidebar_mode")
+    if raw_mode is not None and str(raw_mode).strip().lower() not in SIDEBAR_MODE_VALUES:
+        update_data["sidebar_mode"] = str(raw_mode).strip().lower()
+        update_data["sidebar_enabled"] = bool(legacy_enabled)
+        return
+    mode = normalize_sidebar_mode(update_data.get("sidebar_mode"), bool(legacy_enabled))
+    update_data["sidebar_mode"] = mode
+    update_data["sidebar_enabled"] = mode != SIDEBAR_MODE_DISABLED
+
+
 def backup_settings_snapshot(settings: models.GlobalSettings, *, reason: str = "settings_update", max_backups: int = 20) -> str | None:
     try:
         backup_dir = Path(base_dir) / "backups" / "settings"
@@ -451,6 +470,7 @@ def update_settings(
     db_settings = get_settings(db)
     if db_settings:
         update_data = _dump_schema(settings)
+        _normalize_sidebar_settings_update(db_settings, update_data)
         allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
         changed = _changed_fields(db_settings, update_data)
         operation = beholder.BeholderOperation(
@@ -484,6 +504,7 @@ def patch_settings(
 ):
     db_settings = get_settings(db)
     update_data = {key: value for key, value in updates.items() if value is not None and hasattr(db_settings, key)}
+    _normalize_sidebar_settings_update(db_settings, update_data)
     allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
     changed = _changed_fields(db_settings, update_data)
     operation = beholder.BeholderOperation(

@@ -22,7 +22,7 @@
     },
     {
       "id": "SIDEBAR-001",
-      "name": "Always-visible borderless sidebar drawer handle",
+      "name": "Three-state sidebar drawer mode with always-visible handle",
       "area": "sidebar",
       "data_contract": "GlobalSettings sidebar fields read through data manager/API boundary",
       "risk": "medium",
@@ -30,9 +30,14 @@
       "pyqt_status": "updated",
       "new_gui_status": "tauri-preview-not-assessed",
       "automated_tests": [
+        "tests/test_gui_layout.py::test_global_settings_derives_sidebar_mode_from_legacy_bool",
+        "tests/test_gui_layout.py::test_sidebar_settings_dialog_persists_three_state_sidebar_mode",
+        "tests/test_gui_layout.py::test_sidebar_controller_always_mode_starts_trigger_without_game",
         "tests/test_gui_layout.py::test_edge_trigger_starts_with_always_visible_borderless_click_handle",
         "tests/test_gui_layout.py::test_edge_trigger_click_invokes_callback_without_hiding_handle",
         "tests/test_gui_layout.py::test_sidebar_controller_edge_trigger_callback_slides_sidebar_in",
+        "tests/test_beholder.py::test_sidebar_mode_is_guarded_and_normalizes_legacy_bool",
+        "tests/test_beholder.py::test_settings_guard_blocks_invalid_sidebar_mode",
         "tests/test_gui_layout.py::test_sidebar_frame_css_remains_borderless"
       ],
       "manual_smoke": "docs/migration-smoke-checklist.md#sidebar-drawer-handle",

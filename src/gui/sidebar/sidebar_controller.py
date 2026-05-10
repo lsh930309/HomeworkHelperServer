@@ -10,7 +10,13 @@ from typing import Callable, Optional
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QScreen
 
-from src.data.data_models import ManagedProcess
+from src.data.data_models import (
+    ManagedProcess,
+    SIDEBAR_MODE_ALWAYS,
+    SIDEBAR_MODE_DISABLED,
+    SIDEBAR_MODE_GAME,
+    normalize_sidebar_mode,
+)
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 from src.gui.sidebar.sidebar_widget import SidebarWidget
 
@@ -90,7 +96,8 @@ class SidebarController:
         self._active_pid = pid
         self._game_start_timestamp = game_start_timestamp or time.time()
 
-        if not self._is_sidebar_enabled():
+        mode = self._sidebar_mode()
+        if mode == SIDEBAR_MODE_DISABLED:
             if self._trigger is not None:
                 self._trigger.stop()
             if self._sidebar is not None:
@@ -112,13 +119,22 @@ class SidebarController:
         if self._trigger is not None:
             self._trigger.start()
 
-        logger.debug("SidebarController 활성화: %s (pid=%s)", process.name, pid)
+        logger.debug("SidebarController 활성화: %s (pid=%s, mode=%s)", process.name, pid, mode)
 
     def deactivate(self) -> None:
         """게임 종료 시 사이드바와 트리거를 비활성화합니다."""
         self._active_process = None
         self._active_pid = None
         self._game_start_timestamp = None
+
+        if self._sidebar_mode() == SIDEBAR_MODE_ALWAYS:
+            self._ensure_widgets_created()
+            if self._sidebar is not None:
+                self._sidebar.refresh_content()
+            if self._trigger is not None:
+                self._trigger.start()
+            logger.debug("SidebarController 게임 상태 해제 — always 모드로 트리거 유지")
+            return
 
         if self._trigger is not None:
             self._trigger.stop()
@@ -196,8 +212,8 @@ class SidebarController:
 
     def apply_settings(self, settings) -> None:
         """사이드바 설정을 런타임에 반영합니다."""
-        enabled = getattr(settings, 'sidebar_enabled', True)
-        if not enabled:
+        mode = self._sidebar_mode(settings)
+        if mode == SIDEBAR_MODE_DISABLED:
             if self._trigger is not None:
                 self._trigger.stop()
             if self._sidebar is not None and self._sidebar._is_shown:
@@ -215,28 +231,41 @@ class SidebarController:
             edge_width_px = getattr(settings, 'sidebar_edge_width_px', 2)
             self._trigger.update_settings(trigger_y_start, trigger_y_end, 1.0, edge_width_px)
 
-        # 게임 실행 중 사이드바를 다시 켠 경우에는, 이전 activate_for_game 호출이
-        # 비활성 설정 때문에 위젯 생성을 생략했을 수 있습니다. 저장해 둔 활성 게임
-        # 상태를 사용해 즉시 트리거를 기동해야 서랍 손잡이가 다시 나타납니다.
-        if self._active_process is not None:
+        # always 모드에서는 활성 게임이 없어도 트리거를 시작합니다. game 모드에서는
+        # 저장해 둔 활성 게임 상태가 있을 때만 트리거를 즉시 기동합니다.
+        if mode == SIDEBAR_MODE_ALWAYS or self._active_process is not None:
             self._ensure_widgets_created()
             if self._sidebar is not None:
-                self._sidebar.update_process(
-                    self._active_process,
-                    self._active_pid,
-                    self._game_start_timestamp,
-                )
+                if self._active_process is not None:
+                    self._sidebar.update_process(
+                        self._active_process,
+                        self._active_pid,
+                        self._game_start_timestamp,
+                    )
+                else:
+                    self._sidebar.refresh_content()
             if self._trigger is not None:
                 self._trigger.start()
+            return
+
+        if self._trigger is not None:
+            self._trigger.stop()
+        if self._sidebar is not None and self._sidebar._is_shown:
+            self._sidebar.slide_out()
+
+    def _sidebar_mode(self, settings=None) -> str:
+        """GlobalSettings의 3-state 사이드바 사용 모드를 반환합니다."""
+        gs = settings if settings is not None else self._get_settings()
+        if gs is None:
+            return SIDEBAR_MODE_GAME
+        return normalize_sidebar_mode(
+            getattr(gs, 'sidebar_mode', None),
+            getattr(gs, 'sidebar_enabled', True),
+        )
 
     def _is_sidebar_enabled(self) -> bool:
         """GlobalSettings.sidebar_enabled 를 확인합니다."""
-        if self._data_manager is None:
-            return True
-        gs = getattr(self._data_manager, 'global_settings', None)
-        if gs is None:
-            return True
-        return getattr(gs, 'sidebar_enabled', True)
+        return self._sidebar_mode() != SIDEBAR_MODE_DISABLED
 
     def _get_screen(self) -> Optional[QScreen]:
         """메인 윈도우 또는 기본 스크린을 반환합니다."""
