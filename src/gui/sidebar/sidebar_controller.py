@@ -117,7 +117,10 @@ class SidebarController:
 
         # 트리거 시작
         if self._trigger is not None:
-            self._trigger.start()
+            if self._is_sidebar_shown():
+                self._trigger.stop()
+            else:
+                self._trigger.start()
 
         logger.debug("SidebarController 활성화: %s (pid=%s, mode=%s)", process.name, pid, mode)
 
@@ -131,8 +134,7 @@ class SidebarController:
             self._ensure_widgets_created()
             if self._sidebar is not None:
                 self._sidebar.refresh_content()
-            if self._trigger is not None:
-                self._trigger.start()
+            self._sync_trigger_visibility()
             logger.debug("SidebarController 게임 상태 해제 — always 모드로 트리거 유지")
             return
 
@@ -244,8 +246,7 @@ class SidebarController:
                     )
                 else:
                     self._sidebar.refresh_content()
-            if self._trigger is not None:
-                self._trigger.start()
+            self._sync_trigger_visibility()
             return
 
         if self._trigger is not None:
@@ -300,6 +301,7 @@ class SidebarController:
                 reconnect_recording=self._on_reconnect_recording,
                 get_recording_error=self._get_recording_error,
                 get_recording_elapsed=self._get_recording_elapsed_sec,
+                on_hidden=self._on_sidebar_hidden,
             )
             self._sidebar.set_on_start_recording(self._on_start_recording)
             if self._get_recording_output_dir:
@@ -324,8 +326,31 @@ class SidebarController:
         """EdgeTriggerWindow 가 커서 진입을 감지했을 때 호출됩니다."""
         if self._sidebar is None:
             return
+        if self._trigger is not None:
+            self._trigger.stop()
         self._sidebar.slide_in()
         logger.debug("엣지 트리거 → 사이드바 슬라이드인")
+
+    def _on_sidebar_hidden(self) -> None:
+        """사이드바가 완전히 숨겨진 뒤 손잡이를 다시 노출합니다."""
+        self._sync_trigger_visibility()
+
+    def _should_trigger_run(self) -> bool:
+        mode = self._sidebar_mode()
+        return mode != SIDEBAR_MODE_DISABLED and (
+            mode == SIDEBAR_MODE_ALWAYS or self._active_process is not None
+        )
+
+    def _is_sidebar_shown(self) -> bool:
+        return bool(self._sidebar is not None and getattr(self._sidebar, '_is_shown', False))
+
+    def _sync_trigger_visibility(self) -> None:
+        if self._trigger is None:
+            return
+        if self._should_trigger_run() and not self._is_sidebar_shown():
+            self._trigger.start()
+        else:
+            self._trigger.stop()
 
     def _on_primary_screen_changed(self, screen: "QScreen") -> None:
         """주 화면이 변경되었을 때 위젯을 재배치합니다."""

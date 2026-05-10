@@ -481,10 +481,10 @@ def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monk
             pass
 
     class _SidebarProbe:
-        _is_shown = True
+        _is_shown = False
 
         def __init__(self, *args, **kwargs):
-            pass
+            self._is_shown = False
 
         def update_process(self, *args, **kwargs):
             pass
@@ -509,6 +509,7 @@ def test_sidebar_controller_stops_trigger_immediately_when_sidebar_disabled(monk
 
     controller = controller_module.SidebarController(data_manager)
     controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
+    controller._sidebar._is_shown = True
 
     settings.sidebar_mode = SIDEBAR_MODE_DISABLED
     settings.sidebar_enabled = False
@@ -582,6 +583,89 @@ def test_sidebar_controller_edge_trigger_callback_slides_sidebar_in(monkeypatch)
     assert sidebar_events == ["slide_in"]
 
 
+def test_sidebar_controller_hides_handle_until_sidebar_finishes_hiding(monkeypatch):
+    _qapp()
+    import src.gui.sidebar.sidebar_controller as controller_module
+
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    settings = GlobalSettings(sidebar_mode=SIDEBAR_MODE_GAME, hide_on_game=False)
+    data_manager = type("DataManagerProbe", (), {"global_settings": settings})()
+    events = []
+    triggers = []
+    sidebars = []
+
+    class _TriggerProbe:
+        def __init__(self, *args, **kwargs):
+            self.trigger_callback = kwargs["trigger_callback"]
+            triggers.append(self)
+
+        def start(self):
+            events.append("trigger:start")
+
+        def stop(self):
+            events.append("trigger:stop")
+
+        def update_settings(self, *args, **kwargs):
+            pass
+
+    class _SidebarProbe:
+        _is_shown = False
+
+        def __init__(self, *args, **kwargs):
+            self._is_shown = False
+            self._on_hidden = kwargs.get("on_hidden")
+            sidebars.append(self)
+
+        def update_process(self, *args, **kwargs):
+            pass
+
+        def update_auto_hide_ms(self, *args, **kwargs):
+            pass
+
+        def apply_visual_settings(self):
+            pass
+
+        def refresh_content(self):
+            pass
+
+        def slide_out(self):
+            events.append("sidebar:slide_out")
+            self._is_shown = False
+            if self._on_hidden is not None:
+                self._on_hidden()
+
+        def slide_in(self):
+            events.append("sidebar:slide_in")
+            self._is_shown = True
+
+        def set_on_start_recording(self, _callback):
+            pass
+
+    monkeypatch.setattr(controller_module, "EdgeTriggerWindow", _TriggerProbe)
+    monkeypatch.setattr(controller_module, "SidebarWidget", _SidebarProbe)
+
+    controller = controller_module.SidebarController(data_manager)
+    controller.activate_for_game(process, pid=4321, game_start_timestamp=100.0)
+
+    assert events == ["trigger:start"]
+    assert len(triggers) == 1
+
+    triggers[0].trigger_callback()
+
+    assert events == ["trigger:start", "trigger:stop", "sidebar:slide_in"]
+    assert sidebars[0]._is_shown is True
+
+    sidebars[0].slide_out()
+
+    assert events == [
+        "trigger:start",
+        "trigger:stop",
+        "sidebar:slide_in",
+        "sidebar:slide_out",
+        "trigger:start",
+    ]
+
+
 def test_main_window_no_longer_schedules_foreground_focus():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
@@ -602,6 +686,7 @@ def test_edge_trigger_visible_handle_uses_direct_paint_path():
     assert "def paintEvent" in source
     assert "QPainter(self)" in source
     assert "_HANDLE_COLOR" in source
+    assert "_HANDLE_GRIP_COLOR" in source
 
 
 def test_edge_trigger_starts_with_always_visible_borderless_click_handle():

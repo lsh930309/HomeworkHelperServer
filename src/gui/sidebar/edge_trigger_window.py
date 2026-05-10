@@ -7,18 +7,22 @@
 import logging
 from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt, QTimer, QRect
-from PyQt6.QtGui import QColor, QPainter, QScreen
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPen, QScreen
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 100   # 손잡이 유지 폴링 간격 (ms)
-_HANDLE_WIDTH = 18
-_HANDLE_MIN_HEIGHT = 96
-_HANDLE_MAX_HEIGHT = 160
-_HANDLE_COLOR = QColor(70, 95, 135, 230)
-_HANDLE_HOVER_COLOR = QColor(95, 125, 175, 245)
+_HANDLE_WIDTH = 14
+_HANDLE_MIN_HEIGHT = 84
+_HANDLE_MAX_HEIGHT = 132
+_HANDLE_COLOR = QColor(24, 30, 44, 218)
+_HANDLE_HOVER_COLOR = QColor(38, 48, 70, 235)
+_HANDLE_BORDER_COLOR = QColor(145, 180, 235, 120)
+_HANDLE_BORDER_HOVER_COLOR = QColor(170, 205, 255, 165)
+_HANDLE_GRIP_COLOR = QColor(188, 216, 255, 200)
+_HANDLE_GRIP_HOVER_COLOR = QColor(220, 238, 255, 235)
 
 
 class EdgeTriggerWindow(QWidget):
@@ -243,10 +247,26 @@ class EdgeTriggerWindow(QWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
+        tab_rect = QRectF(self.rect()).adjusted(3.0, 10.0, 1.0, -10.0)
+        painter.setPen(QPen(_HANDLE_BORDER_HOVER_COLOR if self._hovered else _HANDLE_BORDER_COLOR, 1))
         painter.setBrush(_HANDLE_HOVER_COLOR if self._hovered else _HANDLE_COLOR)
-        # 우측 화면 가장자리에 붙는 형태라 왼쪽 모서리만 둥글게 보이면 됩니다.
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, 1, 0), 9, 9)
+        painter.drawRoundedRect(tab_rect, 5.0, 5.0)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_HANDLE_GRIP_HOVER_COLOR if self._hovered else _HANDLE_GRIP_COLOR)
+        dot_radius = 1.25
+        dot_spacing = 7.0
+        center = tab_rect.center()
+        start_y = center.y() - dot_spacing
+        for index in range(3):
+            painter.drawEllipse(
+                QRectF(
+                    center.x() - dot_radius,
+                    start_y + (index * dot_spacing) - dot_radius,
+                    dot_radius * 2,
+                    dot_radius * 2,
+                )
+            )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._handle_visible:
