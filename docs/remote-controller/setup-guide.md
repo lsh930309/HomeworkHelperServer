@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Controller 구동 환경 가이드
 
-작성일: 2026-05-11
+작성일: 2026-05-12
 현재 작업 브랜치: `dev-remote`
 main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한다`
 작업 브랜치 이력: remote-controller 변경분은 `dev-remote`에 유지하고 `main`은 기준점으로 복구 완료
@@ -156,7 +156,7 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 - macOS 앱에서 PC process ID와 Android package를 입력해 mapping 생성
 - Android 앱에서 PC process ID와 Android package를 입력해 mapping 생성하고 등록 package를 로컬 launcher Intent로 실행
 - Android-PC mapping 기반 모바일 세션 수동 start/end API 및 UI 계약
-- Usage Access 설정 화면 연결, `PACKAGE_USAGE_STATS` 권한 선언, 최근 전면 앱 조회 smoke
+- Usage Access 설정 화면 연결, `PACKAGE_USAGE_STATS` 권한 선언, 최근 전면 앱 조회와 game-link 기반 `usage_stats` 자동 세션 sync
 
 빌드 가능 환경에서는 Gradle wrapper를 사용한다.
 
@@ -177,10 +177,14 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 통합 검증:
 
 ```bash
-./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker
+./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker \
+  --require-branch dev-remote \
+  --expect-main-hash 4052da3
 ```
 
 `--allow-android-license-blocker`는 Android SDK License 수락 전의 알려진 blocker만 허용한다. License 수락 및 SDK package 설치가 끝난 뒤에는 이 flag 없이 실행해 Android APK assemble까지 green인지 확인한다.
+
+`--require-branch dev-remote`와 `--expect-main-hash 4052da3`는 remote-controller 작업이 `dev-remote`에서만 진행되고 `main`/`origin/main`이 기준점에서 drift하지 않았는지 확인하는 보호 gate다. Android SDK License 승인 전 커밋 검증에서는 이 두 flag를 함께 유지한다.
 
 Remote Agent를 TestClient가 아닌 실제 loopback server process로 띄워 pairing/token 경계를 확인하려면 다음 smoke를 단독 실행한다.
 

@@ -227,5 +227,10 @@ def test_android_docs_pin_current_sdk_license_blocker():
     assert 'build-tools;35.0.0' in readme
     assert 'platforms;android-36' in readme
     assert "Android Keystore" in guide
+    assert "--require-branch dev-remote" in guide
+    assert "--expect-main-hash 4052da3" in guide
+    assert "usage_stats` 자동 세션 sync" in guide
+    assert "game-link package Intent 실행 및 UsageStats 자동 세션 전환 smoke test" in readme
+    assert "PC 게임과 Android package/deeplink 매칭 데이터 모델 추가" not in readme
     assert "Android SDK License 수락 후 SDK platform/build-tools 설치" in todo
     assert "Android token 저장소를 Keystore 암호화 저장으로 교체" in todo

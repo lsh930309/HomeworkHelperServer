@@ -39,7 +39,7 @@
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
 | Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
-| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch/mobile session card, `Usage 동기화` 자동 start/end 로직 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
+| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch/mobile session card, `Usage 동기화` 자동 start/end 로직, Android README/구동 가이드가 stale game-link TODO 대신 실기기 smoke gap을 안내 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
 | Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
@@ -69,7 +69,7 @@ git status --short --branch && git branch --show-current && git rev-parse --shor
 
 - verifier branch discipline gate → `dev-remote`와 `main`/`origin/main` 기준점 확인 passed
 - `tests/test_remote_routes.py` → 20 passed
-- `tests/test_remote_android_client_static.py` → 8 passed
+- `tests/test_remote_android_client_static.py` → 8 passed, Android README/setup guide stale TODO 및 branch verifier 문서 assertion 포함
 - `tests/test_remote_macos_client_static.py` → 5 passed, Android-PC 연결 stale 안내문 방지 assertion 포함
 - `tools/smoke_remote_controller_runtime.py` → passed
 - `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics summary/Beholder incident decode 포함 passed

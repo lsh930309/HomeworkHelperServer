@@ -18,6 +18,42 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — Android/검증 문서가 브랜치 gate와 game-link 현실을 따른다
+
+### 작업 범위
+
+- 구동 환경 가이드의 통합 verifier 예시를 `--require-branch dev-remote --expect-main-hash 4052da3` 보호 gate 포함 명령으로 갱신했다.
+- Android README의 다음 단계에서 이미 구현된 game-link 데이터 모델 추가 항목을 제거하고, 실제 기기에서 package Intent와 UsageStats 자동 세션 전환을 smoke하는 항목으로 바꿨다.
+- Android 정적 계약 테스트가 setup guide의 branch gate 문서화와 README의 stale TODO 제거를 확인하도록 확장했다.
+
+### 자체 코드 리뷰 메모
+
+- 코드 동작은 변경하지 않고, 승인 대기 상태에서도 혼동을 만들 수 있는 문서 drift를 제거했다.
+- `main` 기준점은 문서와 verifier gate에만 고정하고 브랜치 이동/merge/reset은 수행하지 않았다.
+- Android SDK License blocker는 그대로 유지한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_android_client_static.py` → 8 passed
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest` → branch discipline passed, targeted Remote/macOS/Android static/runtime smoke passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android 검증 문서가 브랜치 gate와 game-link 현실을 따른다
+
+Constraint: Android APK는 License 승인 전이라 빌드할 수 없지만 문서는 dev-remote 보호 gate와 구현된 game-link 상태를 정확히 안내해야 함
+Rejected: stale README 다음 단계 유지 | 이미 구현된 데이터 모델을 미구현으로 안내해 남은 blocker와 실제 후속 smoke 범위를 흐림
+Confidence: high
+Scope-risk: narrow
+Directive: verifier flag나 Android 구현 범위가 바뀌면 setup guide, Android README, 정적 문서 assertion을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest; git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats/game-link smoke
+```
+
+---
+
 ## 2026-05-12 — macOS Android-PC 안내문이 세션 sync 구현 상태와 맞물린다
 
 ### 작업 범위

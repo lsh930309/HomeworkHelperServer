@@ -63,6 +63,6 @@ curl -X POST http://127.0.0.1:8000/remote/pair/start
 ## 다음 단계
 
 - 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test
-- PC 게임과 Android package/deeplink 매칭 데이터 모델 추가
+- 실제 기기에서 game-link package Intent 실행 및 UsageStats 자동 세션 전환 smoke test
 - 실제 기기에서 UsageStats 자동 세션 sync 장시간 전환 smoke 및 edge case 보강
 - Gradle wrapper 고정 및 CI/실기기 `assembleDebug` + smoke 검증
