@@ -69,6 +69,7 @@ fun RemoteApp() {
     var usageAccessGranted by remember { mutableStateOf(androidIntegration.hasUsageAccess()) }
     var recentUsage by remember { mutableStateOf<AndroidUsageSnapshot?>(null) }
     var status by remember { mutableStateOf<RemoteStatus?>(null) }
+    var dashboardSummary by remember { mutableStateOf<RemoteDashboardSummary?>(null) }
     var processes by remember { mutableStateOf(emptyList<RemoteProcess>()) }
     var shortcuts by remember { mutableStateOf(emptyList<RemoteShortcut>()) }
     var devices by remember { mutableStateOf(emptyList<RemoteDevice>()) }
@@ -90,13 +91,15 @@ fun RemoteApp() {
                 withContext(Dispatchers.IO) {
                     val api = client()
                     val nextStatus = api.status()
+                    val nextSummary = api.dashboardSummary()
                     val nextProcesses = api.processes()
                     val nextShortcuts = api.shortcuts()
                     val nextDevices = if (includeDevices) api.devices() else emptyList()
-                    Quadruple(nextStatus, nextProcesses, nextShortcuts, nextDevices)
+                    RemoteSnapshot(nextStatus, nextSummary, nextProcesses, nextShortcuts, nextDevices)
                 }
-            }.onSuccess { (nextStatus, nextProcesses, nextShortcuts, nextDevices) ->
+            }.onSuccess { (nextStatus, nextSummary, nextProcesses, nextShortcuts, nextDevices) ->
                 status = nextStatus
+                dashboardSummary = nextSummary
                 processes = nextProcesses
                 shortcuts = nextShortcuts
                 devices = nextDevices
@@ -217,6 +220,7 @@ fun RemoteApp() {
                             Text("Remote Agent", style = MaterialTheme.typography.titleMedium)
                             Text("API ${current.apiVersion}")
                             Text("게임 ${current.processCount}개 / 숏컷 ${current.shortcutCount}개 / 활성 세션 ${current.activeSessionCount}개")
+                            Text("대시보드 요약: ${if (current.dashboardSummary) "사용 가능" else "미지원"}")
                             Text("전원 제어: ${if (current.powerControl) "설정됨" else "미설정"}")
                             current.power?.let { power ->
                                 Text("전원 상태: ${power.status}")
@@ -269,6 +273,21 @@ fun RemoteApp() {
                         recentUsage?.let { usage ->
                             Text("최근 전면 앱: ${usage.packageName}")
                             if (usage.className.isNotBlank()) Text(usage.className)
+                        }
+                    }
+                }
+            }
+            dashboardSummary?.let { summary ->
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("플레이 요약", style = MaterialTheme.typography.titleMedium)
+                            Text("${summary.rangeStart} ~ ${summary.rangeEnd}")
+                            Text("총 플레이 ${formatDuration(summary.totalSeconds)} / 일평균 ${formatDuration(summary.dailyAverageSeconds)}")
+                            Text("세션 ${summary.sessionCount}개 / 플레이 일수 ${summary.playedDays}일")
+                            if (summary.topGameName.isNotBlank()) {
+                                Text("Top: ${summary.topGameName} · ${formatDuration(summary.topGameSeconds)}")
+                            }
                         }
                     }
                 }
@@ -332,9 +351,18 @@ fun RemoteApp() {
     }
 }
 
-private data class Quadruple<A, B, C, D>(
-    val first: A,
-    val second: B,
-    val third: C,
-    val fourth: D,
+private data class RemoteSnapshot(
+    val status: RemoteStatus,
+    val dashboardSummary: RemoteDashboardSummary,
+    val processes: List<RemoteProcess>,
+    val shortcuts: List<RemoteShortcut>,
+    val devices: List<RemoteDevice>,
 )
+
+private fun formatDuration(seconds: Double): String {
+    val minutes = (seconds / 60).toInt()
+    if (minutes < 60) return "${minutes}분"
+    val hours = minutes / 60
+    val remainder = minutes % 60
+    return if (remainder == 0) "${hours}시간" else "${hours}시간 ${remainder}분"
+}

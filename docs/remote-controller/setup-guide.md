@@ -20,6 +20,17 @@
 
 macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 
+주요 Remote API:
+
+- `GET /remote/status`
+- `GET /remote/processes`
+- `POST /remote/processes/{id}/launch`
+- `GET /remote/shortcuts`
+- `POST /remote/shortcuts/{id}/open`
+- `GET /remote/dashboard/summary`
+- `GET /remote/power/status`
+- `POST /remote/power/{wake|sleep|restart|shutdown}`
+
 ## 2. 페어링 절차
 
 1. PC/서버 로컬에서 pairing code 발급:
@@ -125,6 +136,7 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 - Remote Agent URL/device name 저장 및 device token Android Keystore 암호화 저장
 - pairing code confirm으로 device token 발급
 - status/process/shortcut/device 조회
+- dashboard summary 조회 및 플레이 요약 카드 표시
 - PC 게임 실행, 웹 숏컷 열기, 전원 명령 호출
 - 등록 device token revoke
 - Android package name 수동 입력 기반 launcher Intent 실행

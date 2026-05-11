@@ -47,6 +47,7 @@ def test_android_api_client_tracks_remote_agent_contract():
 
     for endpoint in [
         "remote/status",
+        "remote/dashboard/summary",
         "remote/processes",
         "remote/shortcuts",
         "remote/power/$action",
@@ -60,12 +61,17 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'setRequestProperty("Authorization", "Bearer $bearerToken")' in api_client
     assert 'optString("name", item.optString("device_name"))' in api_client
     assert "data class RemoteStatus" in models
+    assert "data class RemoteDashboardSummary" in models
     assert "data class RemotePowerStatus" in models
     assert "fun isPowerActionEnabled(action: String): Boolean" in models
     assert "val supportedActions: Set<String>" in models
     assert "data class PairingResult" in models
     assert "data class RemoteDevice" in models
     assert 'optJSONObject("power")' in api_client
+    assert 'capabilities.optBoolean("dashboard_summary")' in api_client
+    assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
+    assert 'metrics.optDouble("daily_average_seconds")' in api_client
+    assert 'metrics.optJSONObject("top_game")' in api_client
     assert 'optJSONArray("supported_actions")?.toStringSet().orEmpty()' in api_client
     assert 'targetHost = it.optString("target_host")' in api_client
 
@@ -124,6 +130,9 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert 'enabled = isPowerActionEnabled("shutdown")' in main_activity
     assert "지원 명령" in main_activity
     assert "전원 상태" in main_activity
+    assert "플레이 요약" in main_activity
+    assert "dashboardSummary" in main_activity
+    assert "formatDuration" in main_activity
 
 
 def test_android_usage_stats_ui_can_query_recent_foreground_app():

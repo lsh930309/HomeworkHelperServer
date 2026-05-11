@@ -5,6 +5,7 @@ data class RemoteStatus(
     val processCount: Int,
     val shortcutCount: Int,
     val activeSessionCount: Int,
+    val dashboardSummary: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,
@@ -36,6 +37,17 @@ data class RemoteShortcut(
     val id: String,
     val name: String,
     val url: String,
+)
+
+data class RemoteDashboardSummary(
+    val rangeStart: String,
+    val rangeEnd: String,
+    val totalSeconds: Double,
+    val dailyAverageSeconds: Double,
+    val playedDays: Int,
+    val sessionCount: Int,
+    val topGameName: String,
+    val topGameSeconds: Double,
 )
 
 data class RemoteCommandResult(

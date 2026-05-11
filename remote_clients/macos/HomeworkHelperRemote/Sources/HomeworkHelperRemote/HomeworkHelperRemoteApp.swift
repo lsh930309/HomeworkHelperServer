@@ -26,6 +26,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var pairingCode = ""
     @Published var deviceName = Host.current().localizedName ?? "Mac"
     @Published var status: RemoteStatus?
+    @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var processes: [RemoteProcess] = []
     @Published var shortcuts: [RemoteShortcut] = []
     @Published var devices: [RemoteDevice] = []
@@ -52,9 +53,11 @@ final class RemoteDashboardViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             async let fetchedStatus = client.status()
+            async let fetchedSummary = client.dashboardSummary()
             async let fetchedProcesses = client.processes()
             async let fetchedShortcuts = client.shortcuts()
             status = try await fetchedStatus
+            dashboardSummary = try await fetchedSummary
             processes = try await fetchedProcesses
             shortcuts = try await fetchedShortcuts
             if !tokenText.isEmpty {
@@ -191,6 +194,7 @@ struct RemoteDashboardView: View {
                         LabeledContent("API", value: status.remoteAPIVersion)
                         LabeledContent("게임", value: "\(status.counts.processes)")
                         LabeledContent("숏컷", value: "\(status.counts.shortcuts)")
+                        LabeledContent("대시보드 요약", value: status.capabilities.dashboardSummary ? "사용 가능" : "미지원")
                         LabeledContent("전원 제어", value: status.capabilities.powerControl ? "설정됨" : "미설정")
                         if let power = status.power {
                             LabeledContent("전원 상태", value: power.status ?? "unknown")
@@ -266,6 +270,28 @@ struct RemoteDashboardView: View {
                     .frame(minHeight: 220)
                 }
 
+                if let summary = viewModel.dashboardSummary {
+                    GroupBox("플레이 요약") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(summary.range.start) ~ \(summary.range.end)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                SummaryMetric(label: "총 플레이", value: formatDuration(summary.metrics.totalSeconds))
+                                SummaryMetric(label: "일평균", value: formatDuration(summary.metrics.dailyAverageSeconds))
+                                SummaryMetric(label: "세션", value: "\(summary.metrics.sessionCount)")
+                                SummaryMetric(label: "플레이 일수", value: "\(summary.metrics.playedDays)")
+                            }
+                            if let topGame = summary.metrics.topGame {
+                                Text("Top: \(topGame.displayName) · \(formatDuration(topGame.totalSeconds)) · \(topGame.sessionCount)회")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
                 GroupBox("웹 숏컷") {
                     List(viewModel.shortcuts) { shortcut in
                         HStack {
@@ -285,6 +311,32 @@ struct RemoteDashboardView: View {
             .padding()
         }
         .task { await viewModel.refresh() }
+    }
+}
+
+private func formatDuration(_ seconds: Double) -> String {
+    let minutes = Int(seconds / 60)
+    if minutes < 60 {
+        return "\(minutes)분"
+    }
+    let hours = minutes / 60
+    let remainder = minutes % 60
+    return remainder == 0 ? "\(hours)시간" : "\(hours)시간 \(remainder)분"
+}
+
+struct SummaryMetric: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

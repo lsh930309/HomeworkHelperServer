@@ -21,6 +21,10 @@ struct RemoteAPIClient {
         try await get("remote/shortcuts")
     }
 
+    func dashboardSummary() async throws -> RemoteDashboardSummary {
+        try await get("remote/dashboard/summary")
+    }
+
     func launchProcess(id: String, mode: String? = nil) async throws -> RemoteCommandResult {
         var body = Data("{}".utf8)
         if let mode {

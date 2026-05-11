@@ -101,11 +101,15 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
                     if status.capabilities.authRequired != true {{
                         fatalError("authRequired should be true after pairing")
                     }}
+                    let summary = try await authedClient.dashboardSummary()
+                    if summary.metrics.sessionCount < 0 {{
+                        fatalError("dashboard summary decoded an invalid session count")
+                    }}
                     let devices = try await authedClient.devices()
                     if !devices.contains(where: {{ $0.id == pair.id }}) {{
                         fatalError("paired device missing from device list")
                     }}
-                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count)")
+                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count), dashboard_sessions=\\(summary.metrics.sessionCount)")
                 }} catch {{
                     fputs("macOS RemoteAPIClient smoke failed: \\(error)\\n", stderr)
                     Foundation.exit(1)

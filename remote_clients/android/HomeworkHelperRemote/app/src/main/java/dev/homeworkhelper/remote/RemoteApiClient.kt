@@ -19,6 +19,7 @@ class RemoteApiClient(
             processCount = counts.optInt("processes"),
             shortcutCount = counts.optInt("shortcuts"),
             activeSessionCount = counts.optInt("active_sessions"),
+            dashboardSummary = capabilities.optBoolean("dashboard_summary"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -30,6 +31,23 @@ class RemoteApiClient(
                     targetHost = it.optString("target_host"),
                 )
             },
+        )
+    }
+
+    fun dashboardSummary(): RemoteDashboardSummary {
+        val json = JSONObject(get("remote/dashboard/summary"))
+        val range = json.getJSONObject("range")
+        val metrics = json.getJSONObject("metrics")
+        val topGame = metrics.optJSONObject("top_game")
+        return RemoteDashboardSummary(
+            rangeStart = range.optString("start"),
+            rangeEnd = range.optString("end"),
+            totalSeconds = metrics.optDouble("total_seconds"),
+            dailyAverageSeconds = metrics.optDouble("daily_average_seconds"),
+            playedDays = metrics.optInt("played_days"),
+            sessionCount = metrics.optInt("session_count"),
+            topGameName = topGame?.optString("display_name").orEmpty(),
+            topGameSeconds = topGame?.optDouble("total_seconds") ?: 0.0,
         )
     }
 

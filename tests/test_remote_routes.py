@@ -39,6 +39,7 @@ def _client_with_seed(
     *,
     processes=None,
     shortcuts=None,
+    sessions=None,
     auth_token=None,
     device_registry=None,
     power_controller=None,
@@ -59,6 +60,8 @@ def _client_with_seed(
             db.add(process)
         for shortcut in shortcuts or []:
             db.add(shortcut)
+        for session in sessions or []:
+            db.add(session)
         db.commit()
     finally:
         db.close()
@@ -104,7 +107,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.0"
+    assert body["remote_api_version"] == "0.1.1"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -142,6 +145,33 @@ def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boun
     assert launcher.targets == ["/Users/me/Desktop/Game.url"]
     assert auditor.events[-1]["command"] == "process.launch.shortcut"
     assert auditor.events[-1]["accepted"] is True
+
+
+def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_boundary():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="game-a", name="Game A", monitoring_path="/game.exe", launch_path="/game.url")],
+        sessions=[
+            models.ProcessSession(
+                process_id="game-a",
+                process_name="Game A",
+                start_timestamp=1778457600.0,
+                end_timestamp=1778461200.0,
+                session_duration=3600.0,
+            )
+        ],
+    )
+
+    status_response = client.get("/remote/status")
+    summary_response = client.get("/remote/dashboard/summary?start=2026-05-11&end=2026-05-11")
+
+    assert status_response.status_code == 200
+    assert status_response.json()["capabilities"]["dashboard_summary"] is True
+    assert summary_response.status_code == 200
+    body = summary_response.json()
+    assert body["range"] == {"start": "2026-05-11", "end": "2026-05-11"}
+    assert body["metrics"]["total_seconds"] == 3600.0
+    assert body["metrics"]["session_count"] == 1
+    assert body["metrics"]["top_game"]["display_name"] == "Game A"
 
 
 def test_remote_launch_can_request_direct_mode_without_mutating_process_preference():

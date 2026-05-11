@@ -33,11 +33,14 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "PairingConfirmResponse",
         "RemoteDevice",
         "RemoteDevicesResponse",
+        "RemoteDashboardSummary",
         "RevokeDeviceResponse",
     ]:
         assert f"struct {model_name}" in models
 
     assert "struct Power: Decodable" in models
+    assert "struct Metrics: Decodable" in models
+    assert "struct Game: Decodable" in models
     assert "let power: Power?" in models
     assert "var supportedPowerActions: Set<String>" in models
 
@@ -45,6 +48,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'activeSessions = "active_sessions"',
         'processLaunch = "process_launch"',
         'shortcutOpen = "shortcut_open"',
+        'dashboardSummary = "dashboard_summary"',
         'powerControl = "power_control"',
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
@@ -60,6 +64,10 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'lastSeenAt = "last_seen_at"',
         'revokedAt = "revoked_at"',
         'deviceID = "device_id"',
+        'dailyAverageSeconds = "daily_average_seconds"',
+        'totalSeconds = "total_seconds"',
+        'topGame = "top_game"',
+        'displayName = "display_name"',
     ]:
         assert coding_key in models
 
@@ -69,6 +77,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
 
     for endpoint in [
         'remote/status',
+        'remote/dashboard/summary',
         'remote/processes',
         'remote/shortcuts',
         'remote/power/\\(action)',
@@ -110,3 +119,6 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 제어 adapter가 설정되지" in app
     assert "지원 명령" in app
     assert "전원 상태" in app
+    assert "플레이 요약" in app
+    assert "dashboardSummary" in app
+    assert "formatDuration" in app

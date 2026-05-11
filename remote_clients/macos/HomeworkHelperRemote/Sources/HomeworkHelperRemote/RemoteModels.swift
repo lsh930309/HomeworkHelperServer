@@ -16,6 +16,7 @@ struct RemoteStatus: Decodable {
     struct Capabilities: Decodable {
         let processLaunch: Bool
         let shortcutOpen: Bool
+        let dashboardSummary: Bool
         let powerControl: Bool
         let beholder: Bool
         let authRequired: Bool
@@ -24,6 +25,7 @@ struct RemoteStatus: Decodable {
         enum CodingKeys: String, CodingKey {
             case processLaunch = "process_launch"
             case shortcutOpen = "shortcut_open"
+            case dashboardSummary = "dashboard_summary"
             case powerControl = "power_control"
             case authRequired = "auth_required"
             case beholder
@@ -153,6 +155,44 @@ struct RemoteDevice: Decodable, Identifiable {
 
 struct RemoteDevicesResponse: Decodable {
     let devices: [RemoteDevice]
+}
+
+struct RemoteDashboardSummary: Decodable {
+    struct Range: Decodable {
+        let start: String
+        let end: String
+    }
+
+    struct Game: Decodable {
+        let displayName: String
+        let totalSeconds: Double
+        let sessionCount: Int
+
+        enum CodingKeys: String, CodingKey {
+            case displayName = "display_name"
+            case totalSeconds = "total_seconds"
+            case sessionCount = "session_count"
+        }
+    }
+
+    struct Metrics: Decodable {
+        let totalSeconds: Double
+        let dailyAverageSeconds: Double
+        let playedDays: Int
+        let sessionCount: Int
+        let topGame: Game?
+
+        enum CodingKeys: String, CodingKey {
+            case totalSeconds = "total_seconds"
+            case dailyAverageSeconds = "daily_average_seconds"
+            case playedDays = "played_days"
+            case sessionCount = "session_count"
+            case topGame = "top_game"
+        }
+    }
+
+    let range: Range
+    let metrics: Metrics
 }
 
 struct RevokeDeviceResponse: Decodable {

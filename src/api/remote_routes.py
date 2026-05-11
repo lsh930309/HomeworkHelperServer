@@ -17,7 +17,7 @@ from src.core.remote_power import ConfigurablePowerController, PowerAction
 from src.data import crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.0"
+REMOTE_API_VERSION = "0.1.1"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -211,12 +211,55 @@ def create_remote_router(
             "capabilities": {
                 "process_launch": True,
                 "shortcut_open": True,
+                "dashboard_summary": True,
                 "power_control": bool(power_status.get("configured")),
                 "beholder": True,
                 "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
                 "pairing": True,
             },
             "power": power_status,
+        }
+
+    @router.get("/dashboard/summary")
+    def remote_dashboard_summary(
+        start: str | None = None,
+        end: str | None = None,
+        game_id: str = "all",
+        show_unregistered: bool = False,
+        db: Session = Depends(get_db_dependency),
+    ):
+        """Expose the dashboard's read-only playtime summary through /remote.
+
+        Native clients should not call the general dashboard API surface
+        directly.  This endpoint keeps analytics read-only and under the same
+        Remote API auth/pairing boundary used for commands.
+        """
+
+        from src.api.dashboard.routes import (
+            _aggregate_summary,
+            _build_game_groups,
+            _resolve_range,
+            _sessions_for_range,
+        )
+
+        try:
+            start_date, end_date, start_dt, end_dt = _resolve_range(start, end)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
+            db,
+            start_date,
+            end_date,
+            start_dt,
+            end_dt,
+            game_id,
+            show_unregistered,
+        )
+        groups = _build_game_groups(db, sessions, show_unregistered)
+        return {
+            "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+            "metrics": _aggregate_summary(sessions, start_dt, end_dt, groups),
         }
 
     @router.get("/processes")

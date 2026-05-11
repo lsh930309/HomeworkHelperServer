@@ -17,6 +17,45 @@
 
 ---
 
+## 2026-05-11 — Remote dashboard summary를 네이티브 앱에 전파
+
+### 작업 범위
+
+- Remote API에 read-only `GET /remote/dashboard/summary` endpoint를 추가했다.
+- 기존 dashboard analytics 집계 함수를 재사용하되 `/remote/*` 인증/페어링 경계 안에서만 summary를 노출하도록 했다.
+- macOS `RemoteAPIClient`/DTO/SwiftUI에 `RemoteDashboardSummary`와 `플레이 요약` 카드를 추가했다.
+- Android `RemoteApiClient`/DTO/Compose UI에 동일한 summary 모델과 `플레이 요약` 카드를 전파했다.
+- macOS API client smoke가 실제 Remote Agent와 통신해 dashboard summary DTO를 decode하도록 확장했다.
+- TODO, setup guide, Android README, completion audit에 dashboard summary 범위와 evidence를 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 일반 dashboard API를 네이티브 앱이 직접 호출하지 않도록 Remote API 안전 레이어에 좁은 read-only summary만 추가했다.
+- endpoint는 명령을 실행하지 않고 세션/게임 집계만 반환하므로 사용자 승인이나 외부 장비가 필요 없는 로컬 보강 범위다.
+- Android는 APK compile 전이므로 정적 계약/DTO/UI 전파까지 검증하고, 실제 Compose runtime은 SDK License 승인 후 APK smoke로 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 30 passed, 4 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.1, devices=1, dashboard_sessions=0`
+- `swift build` → Build complete (1.12s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 11 passed, full pytest 139 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote dashboard summary를 네이티브 앱의 read-only 카드로 노출한다
+
+Constraint: 네이티브 앱은 일반 dashboard API가 아니라 /remote 인증 경계 안의 좁은 read-only summary만 소비해야 함
+Rejected: 기존 /api/analytics/summary를 앱에서 직접 호출 | Remote API의 device token/auth boundary와 capability contract를 우회하게 됨
+Confidence: high
+Scope-risk: moderate
+Directive: Beholder/analytics 화면을 추가할 때도 먼저 /remote read-only 또는 allowlist 명령 경계를 만들고 macOS smoke와 Android 정적 계약을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (30 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (139 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator Compose summary 카드 smoke, SwiftUI 실제 창 클릭 자동화
+```
+
 ## 2026-05-11 — Android UsageStats 허용 gate 추가
 
 ### 작업 범위
