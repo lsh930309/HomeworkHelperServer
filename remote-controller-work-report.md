@@ -21,15 +21,15 @@
 
 ### 작업 범위
 
-- `remote-controller-completion-audit.md`의 최신 확인 commit을 실제 `origin/main` HEAD인 `b055b98`로 갱신했다.
-- completion audit의 Korean Lore evidence 목록에 squash merge commit `a386423`과 이후 후속 검증 commit들을 빠짐없이 반영했다.
+- `remote-controller-completion-audit.md`의 최신 기능/검증 확인 commit을 `b055b98`로 갱신하고, 후속 문서-only 보정 commit은 `git log`로 확인하도록 분리했다.
+- completion audit의 Korean Lore evidence 목록에 squash merge commit `a386423`, 이후 후속 검증 commit, 문서-only 보정 commit 범주를 반영했다.
 - 완료 판정 자체는 변경하지 않고 Android SDK License, APK assemble/install, 실기기 UsageStats, 외부망, 실제 전원 장비 blocker를 유지했다.
 
 ### 자체 코드 리뷰 메모
 
 - 문서 최신성만 보정하는 좁은 변경이며 제품 코드/검증 스크립트 동작에는 영향을 주지 않는다.
 - active goal 완료 여부는 proxy signal이 아니라 audit의 실제 blocker 목록으로 계속 판단한다.
-- 최신 commit 포인터가 낡으면 다음 검증자가 이미 반영된 UsageStats smoke option 감사 상태를 재작업할 수 있어 즉시 보정했다.
+- 최신 기능/검증 commit과 문서-only 보정 commit을 분리해 문서 보정 commit이 다시 최신 포인터를 낡게 만드는 self-stale 루프를 피했다.
 
 ### 테스트/검증 결과
 
@@ -39,13 +39,13 @@
 ### 커밋 예정 Korean Lore 메시지
 
 ```text
-완료 감사가 실제 main 최신 commit을 가리키게 한다
+완료 감사가 기능 검증 commit과 문서 보정 commit을 구분한다
 
-Constraint: main은 이미 b055b98까지 push되었지만 completion audit의 최신 확인 commit이 c8ed3f5에 머물러 있었음
-Rejected: stale audit 유지 | 목표 완료 여부와 남은 Android blocker 판단이 최신 main 상태와 어긋날 수 있음
+Constraint: 문서-only 보정 commit은 새 기능 검증 evidence가 아니므로 최신 기능/검증 commit 포인터와 분리해야 함
+Rejected: HEAD hash를 매 문서 보정마다 직접 고정 | 문서-only commit이 다시 audit 포인터를 낡게 만드는 self-stale 루프가 생김
 Confidence: high
 Scope-risk: narrow
-Directive: 후속 검증 commit을 추가할 때 completion audit의 최신 확인 commit과 evidence 목록을 함께 갱신할 것
+Directive: 후속 기능/검증 commit을 추가할 때만 최신 기능/검증 확인 commit을 갱신하고, 문서-only 보정은 git log 범주로 남길 것
 Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py (6 passed); git diff --check
 Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats smoke
 ```
