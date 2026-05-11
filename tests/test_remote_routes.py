@@ -110,6 +110,13 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["process_launch"] is True
     assert body["capabilities"]["shortcut_open"] is True
     assert body["capabilities"]["power_control"] is False
+    assert body["capabilities"]["auth_required"] is False
+    assert body["capabilities"]["pairing"] is True
+    assert body["power"]["configured"] is False
+    assert body["power"]["state"] == "unknown"
+    assert body["power"]["status"] == "unknown"
+    assert body["power"]["supported_actions"] == []
+    assert body["power"]["target_host"] == ""
 
 
 def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boundary():
@@ -270,16 +277,27 @@ def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands
     )
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=controller)
 
+    remote_status_response = client.get("/remote/status")
     status_response = client.get("/remote/power/status")
     wake_response = client.post("/remote/power/wake")
     shutdown_response = client.post("/remote/power/shutdown")
     sleep_response = client.post("/remote/power/sleep")
     restart_response = client.post("/remote/power/restart")
 
+    assert remote_status_response.status_code == 200
+    remote_status_body = remote_status_response.json()
+    assert remote_status_body["capabilities"]["power_control"] is True
+    assert remote_status_body["power"]["configured"] is True
+    assert remote_status_body["power"]["state"] == "on"
+    assert remote_status_body["power"]["status"] == "on"
+    assert remote_status_body["power"]["target_host"] == "pc.example.test"
+    assert set(remote_status_body["power"]["supported_actions"]) == {"wake", "shutdown", "sleep", "restart"}
     assert status_response.status_code == 200
     status_body = status_response.json()
     assert status_body["configured"] is True
     assert status_body["state"] == "on"
+    assert status_body["status"] == "on"
+    assert status_body["target_host"] == "pc.example.test"
     assert set(status_body["supported_actions"]) == {"wake", "shutdown", "sleep", "restart"}
     assert wake_response.json()["accepted"] is True
     assert shutdown_response.json()["accepted"] is True

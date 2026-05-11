@@ -53,6 +53,12 @@ android/.cxx/
 # ===========================
 **/homework_helper_data/
 HomeworkHelper/
+!remote_clients/android/HomeworkHelperRemote/
+!remote_clients/android/HomeworkHelperRemote/**
+remote_clients/android/HomeworkHelperRemote/.gradle/
+remote_clients/android/HomeworkHelperRemote/build/
+remote_clients/android/HomeworkHelperRemote/app/build/
+remote_clients/android/HomeworkHelperRemote/local.properties
 HomeworkHelper.zip
 *.log
 *.db

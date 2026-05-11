@@ -40,9 +40,11 @@ class UnsupportedPowerController:
         return {
             "configured": False,
             "state": "unknown",
+            "status": "unknown",
             "adapter": self.__class__.__name__,
             "host_platform": platform.system() or "unknown",
             "supported_actions": [],
+            "target_host": "",
             "message": "원격 전원 제어 adapter가 아직 설정되지 않았습니다.",
         }
 
@@ -147,9 +149,11 @@ class ConfigurablePowerController:
         return {
             "configured": self.config.configured,
             "state": state,
+            "status": state,
             "adapter": self.__class__.__name__,
             "host_platform": platform.system() or "unknown",
             "supported_actions": supported_actions,
+            "target_host": self.config.ssh_host if self.config.ssh_configured else "",
             "ssh_host_configured": bool(self.config.ssh_host),
             "smartthings_configured": self.config.wake_configured,
             "message": "전원 제어 adapter가 설정되었습니다." if self.config.configured else "원격 전원 제어 adapter가 아직 설정되지 않았습니다.",

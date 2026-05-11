@@ -95,7 +95,36 @@ HH_REMOTE_STATUS_TIMEOUT_SECONDS=4
 - Remote API는 action enum만 받고 임의 shell 명령을 받지 않는다.
 - 전원 명령 결과는 `remote_command_audit.jsonl`에 기록된다.
 
-## 5. 현재 검증 명령
+
+## 5. Android 클라이언트 초안
+
+Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`에 둔다. 현재 개발 환경에는 Java Runtime/Android SDK/Gradle이 없어 APK 산출은 검증하지 못했지만, macOS 앱에서 검증한 Remote Agent API 계약을 Kotlin + Jetpack Compose UI로 전파했다.
+
+현재 Android 범위:
+
+- Remote Agent URL/device name 저장 및 device token Android Keystore 암호화 저장
+- pairing code confirm으로 device token 발급
+- status/process/shortcut/device 조회
+- PC 게임 실행, 웹 숏컷 열기, 전원 명령 호출
+- 등록 device token revoke
+- Android package name 수동 입력 기반 launcher Intent 실행
+- Usage Access 설정 화면 연결, `PACKAGE_USAGE_STATS` 권한 선언, 최근 전면 앱 조회 smoke
+
+빌드 가능 환경에서는 Gradle wrapper를 사용한다.
+
+```bash
+cd remote_clients/android/HomeworkHelperRemote
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
+./gradlew :app:assembleDebug
+```
+
+이번 macOS 검증에서 OpenJDK 17/Gradle/Android command line tools 설치와 Gradle wrapper 생성까지 완료했다. 다만 Android SDK package 설치는 Google Android SDK License 수락이 필요해 중단되었고, `assembleDebug`는 `build-tools;35.0.0`, `platforms;android-36` license 미수락으로 실패했다. 사용자 승인 후 `sdkmanager --licenses`와 `sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"`를 실행한 뒤 APK 빌드를 재시도한다.
+
+주의: Android token은 Android Keystore AES/GCM key로 암호화해 저장한다. 기존 초안의 평문 `SharedPreferences` token은 최초 실행 시 암호화 저장소로 마이그레이션하고 제거한다.
+
+## 6. 현재 검증 명령
 
 커밋 전 최소 검증:
 

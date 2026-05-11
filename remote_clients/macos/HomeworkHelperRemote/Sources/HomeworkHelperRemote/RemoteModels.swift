@@ -18,12 +18,30 @@ struct RemoteStatus: Decodable {
         let shortcutOpen: Bool
         let powerControl: Bool
         let beholder: Bool
+        let authRequired: Bool
+        let pairing: Bool
 
         enum CodingKeys: String, CodingKey {
             case processLaunch = "process_launch"
             case shortcutOpen = "shortcut_open"
             case powerControl = "power_control"
+            case authRequired = "auth_required"
             case beholder
+            case pairing
+        }
+    }
+
+    struct Power: Decodable {
+        let configured: Bool
+        let status: String?
+        let supportedActions: [String]
+        let targetHost: String?
+
+        enum CodingKeys: String, CodingKey {
+            case configured
+            case status
+            case supportedActions = "supported_actions"
+            case targetHost = "target_host"
         }
     }
 
@@ -32,6 +50,11 @@ struct RemoteStatus: Decodable {
     let serverTime: Double
     let counts: Counts
     let capabilities: Capabilities
+    let power: Power?
+
+    var supportedPowerActions: Set<String> {
+        Set(power?.supportedActions ?? [])
+    }
 
     enum CodingKeys: String, CodingKey {
         case app
@@ -39,6 +62,7 @@ struct RemoteStatus: Decodable {
         case serverTime = "server_time"
         case counts
         case capabilities
+        case power
     }
 }
 

@@ -26,10 +26,13 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] `/remote/processes`, `/remote/processes/{id}/launch` 추가
 - [x] `/remote/shortcuts`, `/remote/shortcuts/{id}/open` 추가
 - [x] 안전 기본 전원 adapter 추가: 미설정 상태에서는 명령 차단
+- [x] Remote API power status가 클라이언트 gating 필드를 제공하도록 테스트 고정
 - [x] Remote API 단위 테스트 추가
 - [x] macOS SwiftUI 네이티브 클라이언트 골격 생성
 - [x] macOS 앱 전원 제어 버튼 연결
+- [x] macOS 전원 capability 기반 버튼 비활성화 구현
 - [x] macOS SwiftUI 클라이언트 빌드 검증
+- [x] macOS 클라이언트 정적 계약 pytest 추가
 - [x] Python Remote API 테스트 검증
 - [x] 자체 코드 리뷰 후 1차 커밋 준비 완료
 - [x] `dev-remote` 원격 푸시
@@ -46,11 +49,25 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [ ] remote_power_config.json 설정 UI 구현
 - [x] Tailscale/ZeroTier 연결 가이드와 Agent bind 설정 추가
 - [x] macOS 앱 Keychain 저장소 도입
-- [ ] Android Kotlin/Compose 프로젝트 생성
-- [ ] Android package visibility / Intent / UsageStats 권한 모델 구현
+- [x] Android Kotlin/Compose 프로젝트 생성
+- [x] Android package visibility / Intent / UsageStats 권한 모델 구현
+- [x] Android UsageStatsManager 최근 전면 앱 조회 기반 추가
+- [x] Android 전원 capability 기반 버튼 비활성화 구현
+- [x] Android Gradle wrapper 생성
+- [x] Android token 저장소를 Keystore 암호화 저장으로 교체
+- [x] Android 클라이언트 정적 계약 pytest 추가
+- [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
 
 ## 사용자 의사결정 필요 예정 항목
 
 1. 1차 실사용 연결 방식을 Tailscale로 고정할지, ZeroTier도 동등 지원할지.
 2. SmartThings 전원 제어를 macOS 앱 직접 실행으로 둘지, PC/LAN helper 또는 릴레이 경유로 추상화할지.
 3. Remote Agent 인증을 로컬 pairing code만으로 시작할지, 처음부터 device registry + token revoke UI까지 포함할지.
+
+## Android 후속 검증 항목
+
+- [ ] Android SDK License 수락 후 `./gradlew :app:assembleDebug` 실행
+- [ ] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
+- [ ] 실제 Android package name 실행 Intent smoke test
+- [ ] Usage Access 허용 후 UsageStatsManager 기반 세션 기록/Remote Agent sync 구현
+- [ ] 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test

@@ -86,7 +86,18 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    func isPowerActionEnabled(_ action: String) -> Bool {
+        guard let status else { return false }
+        guard status.capabilities.powerControl, status.power?.configured == true else { return false }
+        let supported = status.supportedPowerActions
+        return supported.isEmpty || supported.contains(action)
+    }
+
     func power(_ action: String) async {
+        guard isPowerActionEnabled(action) else {
+            message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다."
+            return
+        }
         guard let client else { return }
         do {
             let result = try await client.power(action: action)
@@ -181,9 +192,21 @@ struct RemoteDashboardView: View {
                         LabeledContent("게임", value: "\(status.counts.processes)")
                         LabeledContent("숏컷", value: "\(status.counts.shortcuts)")
                         LabeledContent("전원 제어", value: status.capabilities.powerControl ? "설정됨" : "미설정")
+                        if let power = status.power {
+                            LabeledContent("전원 상태", value: power.status ?? "unknown")
+                            LabeledContent("지원 명령", value: power.supportedActions.isEmpty ? "없음" : power.supportedActions.joined(separator: ", "))
+                            if let targetHost = power.targetHost, !targetHost.isEmpty {
+                                LabeledContent("대상", value: targetHost)
+                            }
+                        }
                     }
 
                     Section("PC 전원") {
+                        if !status.capabilities.powerControl || status.power?.configured != true {
+                            Text("Remote Agent의 전원 제어 adapter가 설정되지 않아 전원 버튼을 비활성화했습니다.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         PowerButtonRow(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
                         PowerButtonRow(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
                         PowerButtonRow(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
@@ -277,6 +300,6 @@ struct PowerButtonRow: View {
         } label: {
             Label(label, systemImage: systemImage)
         }
-        .disabled(viewModel.isLoading)
+        .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
     }
 }
