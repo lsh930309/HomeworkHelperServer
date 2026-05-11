@@ -66,6 +66,8 @@ fun RemoteApp() {
     var deviceName by remember { mutableStateOf(preferences.deviceName()) }
     var pairingCode by remember { mutableStateOf("") }
     var androidPackageName by remember { mutableStateOf("") }
+    var gameLinkProcessId by remember { mutableStateOf("") }
+    var gameLinkPackageName by remember { mutableStateOf("") }
     var usageAccessGranted by remember { mutableStateOf(androidIntegration.hasUsageAccess()) }
     var recentUsage by remember { mutableStateOf<AndroidUsageSnapshot?>(null) }
     var status by remember { mutableStateOf<RemoteStatus?>(null) }
@@ -158,6 +160,24 @@ fun RemoteApp() {
                     refresh(includeDevices = true)
                 }
                 .onFailure { message = it.message ?: "토큰 폐기 실패" }
+        }
+    }
+
+    fun createGameLink() {
+        val processId = gameLinkProcessId.trim()
+        val packageName = gameLinkPackageName.trim()
+        if (processId.isBlank() || packageName.isBlank()) {
+            message = "PC process ID와 Android package name을 입력하세요."
+            return
+        }
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { client().createGameLink(processId, packageName) } }
+                .onSuccess { link ->
+                    message = "${link.pcDisplayName.ifBlank { link.pcProcessId }}와 ${link.androidPackageName} 연결을 저장했습니다."
+                    gameLinkPackageName = ""
+                    refresh(includeDevices = token.isNotBlank())
+                }
+                .onFailure { message = it.message ?: "Android-PC 연결 저장 실패" }
         }
     }
 

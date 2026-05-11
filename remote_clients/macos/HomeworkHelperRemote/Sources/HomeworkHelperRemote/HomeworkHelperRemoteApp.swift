@@ -25,6 +25,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var pairingCode = ""
     @Published var deviceName = Host.current().localizedName ?? "Mac"
+    @Published var gameLinkProcessID = ""
+    @Published var gameLinkAndroidPackage = ""
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -70,6 +72,24 @@ final class RemoteDashboardViewModel: ObservableObject {
                 devices = try await client.devices()
             }
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 숏컷 \(shortcuts.count)개"
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func createGameLink() async {
+        guard let client else { return }
+        let processID = gameLinkProcessID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let packageName = gameLinkAndroidPackage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !processID.isEmpty, !packageName.isEmpty else {
+            message = "PC process ID와 Android package name을 입력하세요."
+            return
+        }
+        do {
+            let link = try await client.createGameLink(processID: processID, androidPackageName: packageName)
+            gameLinks = try await client.gameLinks()
+            gameLinkAndroidPackage = ""
+            message = "'\(link.pcDisplayName ?? link.pcProcessID)'와 \(link.androidPackageName) 연결을 저장했습니다."
         } catch {
             message = error.localizedDescription
         }
@@ -352,8 +372,26 @@ struct RemoteDashboardView: View {
                 }
 
 
-                if !viewModel.gameLinks.isEmpty {
-                    GroupBox("Android-PC 연결") {
+                GroupBox("Android-PC 연결") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PC process ID와 Android package name을 매칭합니다. 모바일 세션 sync는 후속 단계에서 연결합니다.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            TextField("PC process ID", text: $viewModel.gameLinkProcessID)
+                                .textFieldStyle(.roundedBorder)
+                            TextField("Android package", text: $viewModel.gameLinkAndroidPackage)
+                                .textFieldStyle(.roundedBorder)
+                            Button("연결 저장") {
+                                Task { await viewModel.createGameLink() }
+                            }
+                            .disabled(viewModel.gameLinkProcessID.isEmpty || viewModel.gameLinkAndroidPackage.isEmpty)
+                        }
+                        if viewModel.gameLinks.isEmpty {
+                            Text("등록된 Android-PC 연결이 없습니다.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         List(viewModel.gameLinks) { link in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(link.pcDisplayName ?? link.pcProcessID)
@@ -368,6 +406,7 @@ struct RemoteDashboardView: View {
                         }
                         .frame(minHeight: 140)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 GroupBox("웹 숏컷") {

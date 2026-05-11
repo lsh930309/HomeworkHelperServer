@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote Android-PC game links를 원격 매칭 계약으로 추가한다` commit 참조
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote game-links 생성 흐름을 네이티브 smoke와 UI까지 닫는다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -33,13 +33,13 @@
 | 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 `remote_power_config.json`, SmartThings CLI, SSH key 설정 누락 blocker |
 | macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote` | 충족 | 실제 SwiftUI 버튼 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
-| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/dashboard/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
+| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/dashboard/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | macOS dashboard/Beholder read-only 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`Beholder 알림` 카드, macOS API smoke DTO decode | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
-| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, Compose `플레이 요약`/`Beholder 알림`/`Android-PC 연결` 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
+| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, Compose `플레이 요약`/`Beholder 알림`/`Android-PC 연결` 생성·실행 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
-| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link package launch card | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
+| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch card | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
 | Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
@@ -66,7 +66,7 @@
 - `tests/test_remote_android_client_static.py` → 8 passed
 - `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
-- `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/dashboard summary/Beholder incident/game-links decode 포함 passed
+- `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/game-link 생성·조회/dashboard summary/Beholder incident decode 포함 passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_remote_controller_connectivity.py --help` 및 verifier contract test → connectivity smoke 진입점 확인
 - `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
@@ -86,7 +86,7 @@
 
 1. Android APK assemble이 Google Android SDK License 수락 전이라 완료되지 않았다.
 2. 실제 Android device/emulator install smoke가 없다.
-3. Android Keystore, UsageStats provider, game-link package Intent 실행은 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
+3. Android Keystore, UsageStats provider, game-link 생성 UI와 package Intent 실행은 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
 4. 기술 검토서의 Tailscale/ZeroTier 외부망 실접속은 smoke 스크립트와 가이드까지 준비되었지만 LTE/tailnet 실제 URL/token evidence는 아직 없다.
 5. 실제 SmartThings/SSH 전원 동작은 readiness까지만 확인되었고 장비 side effect가 있어 별도 승인된 환경이 필요하다.
 

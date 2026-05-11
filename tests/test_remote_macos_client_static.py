@@ -151,5 +151,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "beholderIncidents" in app
     assert "Android-PC 연결" in app
     assert "gameLinks" in app
+    assert "func createGameLink() async" in app
+    assert "연결 저장" in app
+    assert "gameLinkAndroidPackage" in app
     assert "func refreshToken() async" in app
     assert "현재 토큰 갱신" in app

@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-05-11 — Remote game-links 생성 흐름을 네이티브 smoke와 UI까지 닫음
+
+### 작업 범위
+
+- macOS SwiftUI에 PC process ID와 Android package name을 입력해 `/remote/game-links` mapping을 생성하는 `Android-PC 연결` form을 추가했다.
+- Android Compose에도 같은 수동 mapping 생성 form을 추가하고, 생성 후 목록을 refresh해 등록 package 실행 카드와 이어지도록 했다.
+- macOS `RemoteAPIClient` 실제 smoke가 임시 process를 seed한 뒤 Swift production client로 game-link를 생성하고, 다시 목록에서 생성된 mapping을 확인하도록 확장했다.
+- macOS/Android 정적 계약 테스트와 verifier contract를 생성 UI 및 smoke create marker까지 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- game-link 생성은 process ID와 package name만 받는 좁은 MVP로 유지하고, 계정 힌트/스토어 URL 편집 UI와 모바일 세션 sync는 후속으로 분리했다.
+- 실제 Remote Agent smoke에서 game-link create→list round trip을 확인해 macOS-first 검증 원칙을 강화했다.
+- Android는 APK compile 전이므로 생성 UI/DTO/API 계약까지만 고정하고, 실제 package launch와 UsageStats sync는 License 승인 후 device smoke로 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 19 passed
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.5, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=1`
+- `swift build` → Build complete (1.34s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 16 passed, full pytest 144 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote game-links 생성 흐름을 네이티브 smoke와 UI까지 닫는다
+
+Constraint: macOS-first 원칙상 Android package mapping도 서버 정적 계약만으로 두지 않고 macOS production client smoke에서 create/list round trip을 검증해야 함
+Rejected: game-links를 read-only 카드로만 유지 | mapping 입력 경계가 검증되지 않아 Android-PC 매칭 후속 작업의 UX/API drift를 놓칠 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: game-link 편집/삭제나 mobile-sessions sync를 추가할 때도 macOS smoke round trip과 Android 정적 UI 계약을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (35 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (144 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator game-link 생성/실행 smoke
+```
+
 ## 2026-05-11 — Remote Android-PC game links를 원격 매칭 계약으로 추가
 
 ### 작업 범위

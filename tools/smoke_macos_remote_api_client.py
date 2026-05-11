@@ -76,7 +76,7 @@ def _wait_for_status(base_url: str, *, timeout_seconds: float) -> None:
     raise RuntimeError(f"server did not become ready within {timeout_seconds}s: {last_error}")
 
 
-def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
+def _swift_smoke_source(base_url: str, pairing_code: str, process_id: str) -> str:
     return textwrap.dedent(
         f"""
         import Foundation
@@ -113,12 +113,19 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
                         fatalError("token refresh did not rotate the bearer token")
                     }}
                     let refreshedClient = RemoteAPIClient(baseURL: baseURL, bearerToken: refreshed.token)
+                    let createdGameLink = try await refreshedClient.createGameLink(processID: "{process_id}", androidPackageName: "dev.homeworkhelper.remote.smoke")
+                    if createdGameLink.pcProcessID != "{process_id}" || createdGameLink.androidPackageName != "dev.homeworkhelper.remote.smoke" {{
+                        fatalError("game-link create response did not preserve the mapping")
+                    }}
                     let summary = try await refreshedClient.dashboardSummary()
                     if summary.metrics.sessionCount < 0 {{
                         fatalError("dashboard summary decoded an invalid session count")
                     }}
                     let incidents = try await refreshedClient.beholderIncidents()
                     let gameLinks = try await refreshedClient.gameLinks()
+                    if !gameLinks.contains(where: {{ $0.id == createdGameLink.id }}) {{
+                        fatalError("created game-link missing from list response")
+                    }}
                     let devices = try await refreshedClient.devices()
                     if !devices.contains(where: {{ $0.id == pair.id }}) {{
                         fatalError("paired device missing from device list")
@@ -134,10 +141,10 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
     )
 
 
-def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, work_dir: Path) -> None:
+def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, process_id: str, work_dir: Path) -> None:
     smoke_source = work_dir / "MacOSRemoteAPIClientSmoke.swift"
     binary = work_dir / "macos-remote-api-client-smoke"
-    smoke_source.write_text(_swift_smoke_source(base_url, pairing_code), encoding="utf-8")
+    smoke_source.write_text(_swift_smoke_source(base_url, pairing_code, process_id), encoding="utf-8")
     compile_cmd = [
         "swiftc",
         "-parse-as-library",
@@ -190,13 +197,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         try:
             _wait_for_status(base_url, timeout_seconds=args.timeout)
+            seed_status, seed_body = _json_request(
+                "POST",
+                f"{base_url}/processes",
+                body={
+                    "id": "smoke-game",
+                    "name": "Smoke Game",
+                    "monitoring_path": "/Applications/Smoke.app",
+                    "launch_path": "/Applications/Smoke.app",
+                    "preferred_launch_type": "direct",
+                },
+            )
+            if seed_status != 201:
+                raise RuntimeError(f"process seed failed: {seed_status} {seed_body}")
             pair_status, pair_body = _json_request("POST", f"{base_url}/remote/pair/start")
             if pair_status != 200:
                 raise RuntimeError(f"pair/start failed: {pair_status} {pair_body}")
             code = str(pair_body.get("code") or "")
             if len(code) != 6 or not code.isdigit():
                 raise RuntimeError(f"unexpected pairing code payload: {pair_body}")
-            _compile_and_run_swift_smoke(base_url, code, temp_dir)
+            _compile_and_run_swift_smoke(base_url, code, "smoke-game", temp_dir)
             return 0
         except Exception as exc:
             print(f"macOS RemoteAPIClient smoke failed: {exc}", file=sys.stderr)

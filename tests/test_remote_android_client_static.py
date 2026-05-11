@@ -159,6 +159,9 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Android-PC 연결" in main_activity
     assert "gameLinks" in main_activity
     assert "Android 실행" in main_activity
+    assert "fun createGameLink()" in main_activity
+    assert "Android-PC 연결 저장" in main_activity
+    assert "gameLinkPackageName" in main_activity
     assert "fun refreshToken()" in main_activity
     assert "토큰 갱신" in main_activity
     assert "formatDuration" in main_activity
