@@ -1,6 +1,7 @@
 # Remote Controller 작업 보고서
 
-브랜치: `dev-remote`
+현재 통합 브랜치: `main`
+작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
 최초 작성: 2026-05-11
 
 ## 보고서 운영 방식
@@ -13,6 +14,43 @@
 - 기존 앱 영향 검토
 - Korean Lore 커밋 메시지
 - 남은 리스크/다음 작업
+
+---
+
+## 2026-05-11 — main squash merge 이후 상태 감사
+
+### 작업 범위
+
+- `dev-remote` 누적 작업을 `main`에 Korean Lore 형식의 squash commit으로 통합했다.
+- squash merge 후 `origin/dev-remote`와 로컬 `dev-remote` 브랜치를 삭제했다.
+- merge 이후 문서가 여전히 `dev-remote`만 기준으로 보이던 부분을 `main` 통합 상태로 갱신했다.
+- 통합 검증 진입점을 `tools/verify_remote_controller.py`로 문서화하고 Android SDK License blocker 처리 방식을 명시했다.
+
+### 자체 코드 리뷰 메모
+
+- merge 결과는 `main`의 단일 결정 커밋으로 남겼고, feature branch는 사용자 요청대로 삭제했다.
+- Android APK 산출은 Google Android SDK License 수락이 필요한 상태라 에이전트가 임의로 완료 처리하지 않는다.
+- `--allow-android-license-blocker`는 현재 blocker를 명시적으로 인정하는 검증 모드일 뿐, APK assemble 완료를 대체하지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → Python 전체 테스트 132 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단.
+- `git diff --cached --check` → squash merge commit 직전 통과.
+- `git status --short --branch` → `main...origin/main` clean 상태 확인 후 문서 갱신 시작.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+리모트 컨트롤러 통합 후 남은 검증 경계를 문서에 고정한다
+
+Constraint: dev-remote는 main에 squash merge 후 삭제되었지만 Android APK 산출은 SDK License 수락 전이라 완료로 표시할 수 없음
+Rejected: merge 전 브랜치 기준 문서 유지 | 현재 작업 기준과 남은 blocker가 불명확해 다음 검증자가 잘못된 branch/명령을 사용할 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: Android SDK License 승인 후 verifier를 blocker 허용 없이 실행하고 APK install/device smoke 결과를 이 보고서에 추가할 것
+Tested: 문서 갱신 후 ./.venv/bin/python -m pytest; git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
 
 ---
 

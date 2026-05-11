@@ -1,7 +1,8 @@
 # Remote Controller TODO
 
 작성/갱신: 2026-05-11
-브랜치: `dev-remote`
+현재 통합 브랜치: `main`
+작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
 기준 설계 문서: `remote-controller-technical-review.md`
 
 ## 목표
@@ -19,6 +20,8 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 ## 1차 수직 슬라이스 — 진행 중
 
 - [x] `dev-remote` 브랜치 생성
+- [x] `dev-remote` 작업분을 `main`에 Korean Lore squash merge
+- [x] squash merge 후 `dev-remote` 원격/로컬 브랜치 삭제
 - [x] 기술 검토 문서 루트 보존: `remote-controller-technical-review.md`
 - [x] TODO 문서 생성: `remote-controller-todo.md`
 - [x] 작업 보고서 생성: `remote-controller-work-report.md`
@@ -56,10 +59,12 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android Gradle wrapper 생성
 - [x] Android token 저장소를 Keystore 암호화 저장으로 교체
 - [x] Android 클라이언트 정적 계약 pytest 추가
+- [x] Remote Controller 통합 검증 스크립트 추가: `tools/verify_remote_controller.py`
 - [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
 
 ## 사용자 의사결정 필요 예정 항목
 
+0. Google Android SDK License를 수락하고 `sdkmanager --licenses` 및 SDK package 설치를 진행할지.
 1. 1차 실사용 연결 방식을 Tailscale로 고정할지, ZeroTier도 동등 지원할지.
 2. SmartThings 전원 제어를 macOS 앱 직접 실행으로 둘지, PC/LAN helper 또는 릴레이 경유로 추상화할지.
 3. Remote Agent 인증을 로컬 pairing code만으로 시작할지, 처음부터 device registry + token revoke UI까지 포함할지.

@@ -1,7 +1,8 @@
 # HomeworkHelper Remote Controller 구동 환경 가이드
 
 작성일: 2026-05-11
-브랜치: `dev-remote`
+현재 통합 브랜치: `main`
+작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
 
 ## 1. 개발/로컬 검증
 
@@ -98,7 +99,7 @@ HH_REMOTE_STATUS_TIMEOUT_SECONDS=4
 
 ## 5. Android 클라이언트 초안
 
-Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`에 둔다. 현재 개발 환경에는 Java Runtime/Android SDK/Gradle이 없어 APK 산출은 검증하지 못했지만, macOS 앱에서 검증한 Remote Agent API 계약을 Kotlin + Jetpack Compose UI로 전파했다.
+Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`에 둔다. 현재 개발 환경에는 OpenJDK 17, Gradle wrapper, Android command line tools 경로가 준비되어 있지만, Google Android SDK License 수락 전이라 APK 산출은 아직 완료하지 못했다. macOS 앱에서 검증한 Remote Agent API 계약은 Kotlin + Jetpack Compose UI로 전파했다.
 
 현재 Android 범위:
 
@@ -126,10 +127,19 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 
 ## 6. 현재 검증 명령
 
-커밋 전 최소 검증:
+통합 검증:
+
+```bash
+./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker
+```
+
+`--allow-android-license-blocker`는 Android SDK License 수락 전의 알려진 blocker만 허용한다. License 수락 및 SDK package 설치가 끝난 뒤에는 이 flag 없이 실행해 Android APK assemble까지 green인지 확인한다.
+
+개별 최소 검증:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_routes.py
 ./.venv/bin/python -m pytest
 cd remote_clients/macos/HomeworkHelperRemote && swift build
+cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug
 ```
