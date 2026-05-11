@@ -35,6 +35,21 @@ class RemoteApiClient(
         )
     }
 
+    fun capabilities(): RemoteCapabilities {
+        val json = JSONObject(get("remote/capabilities"))
+        val capabilities = json.getJSONObject("capabilities")
+        return RemoteCapabilities(
+            apiVersion = json.optString("remote_api_version"),
+            processLaunch = capabilities.optBoolean("process_launch"),
+            shortcutOpen = capabilities.optBoolean("shortcut_open"),
+            dashboardSummary = capabilities.optBoolean("dashboard_summary"),
+            beholderIncidents = capabilities.optBoolean("beholder_incidents"),
+            powerControl = capabilities.optBoolean("power_control"),
+            authRequired = capabilities.optBoolean("auth_required"),
+            pairing = capabilities.optBoolean("pairing"),
+        )
+    }
+
     fun beholderIncidents(): List<RemoteBeholderIncident> {
         val json = JSONObject(get("remote/beholder/incidents"))
         return json.getJSONArray("incidents").mapObjects { item ->

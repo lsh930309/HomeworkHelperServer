@@ -110,7 +110,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.2"
+    assert body["remote_api_version"] == "0.1.3"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -177,6 +177,35 @@ def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_
     assert body["metrics"]["total_seconds"] == 3600.0
     assert body["metrics"]["session_count"] == 1
     assert body["metrics"]["top_game"]["display_name"] == "Game A"
+
+
+def test_remote_capabilities_endpoint_matches_status_capability_contract():
+    controller = ConfigurablePowerController(
+        RemotePowerConfig(
+            smartthings_device_id="device-1",
+            smartthings_cli_path="/opt/homebrew/bin/smartthings",
+        ),
+        runner=lambda _args, _timeout: True,
+        tcp_checker=lambda _host, _port, _timeout: False,
+    )
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        auth_token="secret-token",
+        power_controller=controller,
+    )
+
+    headers = {"Authorization": "Bearer secret-token"}
+    status_response = client.get("/remote/status", headers=headers)
+    capabilities_response = client.get("/remote/capabilities", headers=headers)
+
+    assert status_response.status_code == 200
+    assert capabilities_response.status_code == 200
+    status_body = status_response.json()
+    capabilities_body = capabilities_response.json()
+    assert capabilities_body["remote_api_version"] == status_body["remote_api_version"]
+    assert capabilities_body["capabilities"] == status_body["capabilities"]
+    assert capabilities_body["capabilities"]["auth_required"] is True
+    assert capabilities_body["capabilities"]["power_control"] is True
+    assert capabilities_body["power"]["supported_actions"] == ["wake"]
 
 
 def test_remote_beholder_incidents_exposes_pending_incidents_without_resolving():

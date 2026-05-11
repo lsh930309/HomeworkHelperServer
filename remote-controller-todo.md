@@ -26,6 +26,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] TODO 문서 생성: `remote-controller-todo.md`
 - [x] 작업 보고서 생성: `remote-controller-work-report.md`
 - [x] `/remote/status` 최소 Remote Agent API 추가
+- [x] `/remote/capabilities` 기능 협상 API 추가
 - [x] `/remote/processes`, `/remote/processes/{id}/launch` 추가
 - [x] `/remote/shortcuts`, `/remote/shortcuts/{id}/open` 추가
 - [x] `/remote/dashboard/summary` read-only 플레이 요약 API 추가

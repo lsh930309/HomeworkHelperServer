@@ -47,6 +47,7 @@ def test_android_api_client_tracks_remote_agent_contract():
 
     for endpoint in [
         "remote/status",
+        "remote/capabilities",
         "remote/dashboard/summary",
         "remote/beholder/incidents",
         "remote/processes",
@@ -62,6 +63,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'setRequestProperty("Authorization", "Bearer $bearerToken")' in api_client
     assert 'optString("name", item.optString("device_name"))' in api_client
     assert "data class RemoteStatus" in models
+    assert "data class RemoteCapabilities" in models
     assert "data class RemoteDashboardSummary" in models
     assert "data class RemoteBeholderIncident" in models
     assert "data class RemotePowerStatus" in models
@@ -72,6 +74,8 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'optJSONObject("power")' in api_client
     assert 'capabilities.optBoolean("dashboard_summary")' in api_client
     assert 'capabilities.optBoolean("beholder_incidents")' in api_client
+    assert 'fun capabilities(): RemoteCapabilities' in api_client
+    assert 'processLaunch = capabilities.optBoolean("process_launch")' in api_client
     assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
     assert 'fun beholderIncidents(): List<RemoteBeholderIncident>' in api_client
     assert 'item.optString("user_title")' in api_client

@@ -159,6 +159,18 @@ struct RemoteDevicesResponse: Decodable {
     let devices: [RemoteDevice]
 }
 
+struct RemoteCapabilitiesResponse: Decodable {
+    let remoteAPIVersion: String
+    let capabilities: RemoteStatus.Capabilities
+    let power: RemoteStatus.Power?
+
+    enum CodingKeys: String, CodingKey {
+        case remoteAPIVersion = "remote_api_version"
+        case capabilities
+        case power
+    }
+}
+
 struct RemoteDashboardSummary: Decodable {
     struct Range: Decodable {
         let start: String

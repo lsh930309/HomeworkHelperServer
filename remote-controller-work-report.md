@@ -17,6 +17,44 @@
 
 ---
 
+## 2026-05-11 — Remote capabilities를 독립 기능 협상 endpoint로 분리
+
+### 작업 범위
+
+- Remote API에 `GET /remote/capabilities` endpoint를 추가했다.
+- `/remote/status`와 `/remote/capabilities`가 같은 capability helper를 사용하도록 해 기능 drift를 줄였다.
+- macOS `RemoteAPIClient`/DTO에 capabilities 응답 모델과 client method를 추가하고, 실제 Remote Agent smoke에서 status와 capabilities endpoint가 일치하는지 검증했다.
+- Android `RemoteApiClient`/DTO에 capabilities 응답 모델과 client method를 전파했다.
+- TODO, setup guide, completion audit에 독립 capabilities endpoint와 evidence를 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 기술 검토서 초안의 `/remote/capabilities`를 status의 하위 필드만으로 대체하지 않고 가벼운 기능 협상 endpoint로 분리했다.
+- endpoint는 상태/설정 조회만 수행하고 명령 side effect가 없으므로 사용자 승인이나 외부 장비가 필요 없는 로컬 보강 범위다.
+- Android는 APK compile 전이므로 정적 계약/DTO 전파까지 검증하고, 실제 runtime은 SDK License 승인 후 APK smoke로 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 32 passed, 4 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.3, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0`
+- `swift build` → Build complete (1.25s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 13 passed, full pytest 141 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote capabilities를 독립 기능 협상 endpoint로 분리한다
+
+Constraint: 네이티브 클라이언트는 전체 status payload 없이도 Remote API 기능 지원 여부를 가볍게 협상할 수 있어야 함
+Rejected: status.capabilities만 계속 재사용 | capabilities drift를 테스트하기 어렵고 기술 검토서의 독립 endpoint 계약이 남아 있음
+Confidence: high
+Scope-risk: narrow
+Directive: 새 Remote capability를 추가할 때는 status와 /remote/capabilities helper, macOS smoke, Android 정적 계약을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (32 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (141 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator capabilities client smoke
+```
+
 ## 2026-05-11 — Remote Beholder incidents를 네이티브 read-only 알림으로 노출
 
 ### 작업 범위

@@ -23,6 +23,7 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 주요 Remote API:
 
 - `GET /remote/status`
+- `GET /remote/capabilities`
 - `GET /remote/processes`
 - `POST /remote/processes/{id}/launch`
 - `GET /remote/shortcuts`

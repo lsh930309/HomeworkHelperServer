@@ -26,6 +26,17 @@ data class RemotePowerStatus(
     val targetHost: String,
 )
 
+data class RemoteCapabilities(
+    val apiVersion: String,
+    val processLaunch: Boolean,
+    val shortcutOpen: Boolean,
+    val dashboardSummary: Boolean,
+    val beholderIncidents: Boolean,
+    val powerControl: Boolean,
+    val authRequired: Boolean,
+    val pairing: Boolean,
+)
+
 data class RemoteProcess(
     val id: String,
     val name: String,

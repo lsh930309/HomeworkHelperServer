@@ -33,6 +33,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "PairingConfirmResponse",
         "RemoteDevice",
         "RemoteDevicesResponse",
+        "RemoteCapabilitiesResponse",
         "RemoteDashboardSummary",
         "RemoteBeholderIncident",
         "RemoteBeholderIncidentsResponse",
@@ -83,6 +84,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
 
     for endpoint in [
         'remote/status',
+        'remote/capabilities',
         'remote/dashboard/summary',
         'remote/beholder/incidents',
         'remote/processes',

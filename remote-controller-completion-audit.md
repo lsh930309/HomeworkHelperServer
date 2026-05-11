@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote Beholder incidents를 네이티브 read-only 알림으로 노출한다` commit 참조
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote capabilities를 독립 기능 협상 endpoint로 분리한다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -26,14 +26,14 @@
 | Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98`, 이후 UsageStats gate commit 및 문서-only 보정 commit 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
-| Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include, `/remote/dashboard/summary` read-only analytics summary, `/remote/beholder/incidents` read-only pending incident list | 충족 | Beholder resolve flow 전체 원격화는 후속 범위 |
+| Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include, `/remote/capabilities`, `/remote/dashboard/summary` read-only analytics summary, `/remote/beholder/incidents` read-only pending incident list | 충족 | Beholder resolve flow 전체 원격화는 후속 범위 |
 | Pairing/device token | `src/core/remote_pairing.py`, `/remote/pair/start`, `/remote/pair/confirm`, `/remote/devices` | 충족 | 실제 외부망 pairing UX는 후속 실기기 검증 필요 |
 | 감사 로그 | `src/core/remote_audit.py` 및 command route 기록 | 충족 | 장기 rotation/retention 정책 후속 |
 | 전원 adapter | `src/core/remote_power.py`, `remote_power_config.example.json`, power status/action API | 부분 충족 | 실제 SmartThings/SSH 전원 동작은 로컬 설정/장비 필요 |
 | 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 `remote_power_config.json`, SmartThings CLI, SSH key 설정 누락 blocker |
 | macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote` | 충족 | 실제 SwiftUI 버튼 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
-| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
+| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/dashboard/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | macOS dashboard/Beholder read-only 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`Beholder 알림` 카드, macOS API smoke DTO decode | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
@@ -62,17 +62,17 @@
 
 확인 결과:
 
-- `tests/test_remote_routes.py` → 12 passed
+- `tests/test_remote_routes.py` → 13 passed
 - `tests/test_remote_android_client_static.py` → 8 passed
 - `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
-- `tools/smoke_macos_remote_api_client.py` → dashboard summary/Beholder incident decode 포함 passed
+- `tools/smoke_macos_remote_api_client.py` → capabilities/dashboard summary/Beholder incident decode 포함 passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_remote_controller_connectivity.py --help` 및 verifier contract test → connectivity smoke 진입점 확인
 - `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
 - `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/강제 gate/설정 화면 option 확인
-- 전체 pytest → 140 passed, 4 warnings
+- 전체 pytest → 141 passed, 4 warnings
 - macOS `swift build` → passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 명시 보고
 - `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker 포함 6 passed

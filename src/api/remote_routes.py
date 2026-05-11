@@ -17,7 +17,7 @@ from src.core.remote_power import ConfigurablePowerController, PowerAction
 from src.data import beholder, crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.2"
+REMOTE_API_VERSION = "0.1.3"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -151,6 +151,18 @@ def create_remote_router(
 
     router.dependencies.append(Depends(require_remote_auth))
 
+    def _remote_capabilities(power_status: dict[str, Any]) -> dict[str, bool]:
+        return {
+            "process_launch": True,
+            "shortcut_open": True,
+            "dashboard_summary": True,
+            "beholder_incidents": True,
+            "power_control": bool(power_status.get("configured")),
+            "beholder": True,
+            "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
+            "pairing": True,
+        }
+
     @router.post("/pair/start")
     def start_remote_pairing():
         pairing = device_registry.start_pairing(now=now())
@@ -208,16 +220,16 @@ def create_remote_router(
                 "shortcuts": len(shortcuts),
                 "active_sessions": active_count,
             },
-            "capabilities": {
-                "process_launch": True,
-                "shortcut_open": True,
-                "dashboard_summary": True,
-                "beholder_incidents": True,
-                "power_control": bool(power_status.get("configured")),
-                "beholder": True,
-                "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
-                "pairing": True,
-            },
+            "capabilities": _remote_capabilities(power_status),
+            "power": power_status,
+        }
+
+    @router.get("/capabilities")
+    def remote_capabilities():
+        power_status = power_controller.status() if hasattr(power_controller, "status") else {}
+        return {
+            "remote_api_version": REMOTE_API_VERSION,
+            "capabilities": _remote_capabilities(power_status),
             "power": power_status,
         }
 
