@@ -17,6 +17,39 @@
 
 ---
 
+## 2026-05-11 — 완료 감사 최신 commit 포인터 보정
+
+### 작업 범위
+
+- `remote-controller-completion-audit.md`의 최신 확인 commit을 실제 `origin/main` HEAD인 `b055b98`로 갱신했다.
+- completion audit의 Korean Lore evidence 목록에 squash merge commit `a386423`과 이후 후속 검증 commit들을 빠짐없이 반영했다.
+- 완료 판정 자체는 변경하지 않고 Android SDK License, APK assemble/install, 실기기 UsageStats, 외부망, 실제 전원 장비 blocker를 유지했다.
+
+### 자체 코드 리뷰 메모
+
+- 문서 최신성만 보정하는 좁은 변경이며 제품 코드/검증 스크립트 동작에는 영향을 주지 않는다.
+- active goal 완료 여부는 proxy signal이 아니라 audit의 실제 blocker 목록으로 계속 판단한다.
+- 최신 commit 포인터가 낡으면 다음 검증자가 이미 반영된 UsageStats smoke option 감사 상태를 재작업할 수 있어 즉시 보정했다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 6 passed
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+완료 감사가 실제 main 최신 commit을 가리키게 한다
+
+Constraint: main은 이미 b055b98까지 push되었지만 completion audit의 최신 확인 commit이 c8ed3f5에 머물러 있었음
+Rejected: stale audit 유지 | 목표 완료 여부와 남은 Android blocker 판단이 최신 main 상태와 어긋날 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: 후속 검증 commit을 추가할 때 completion audit의 최신 확인 commit과 evidence 목록을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py (6 passed); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats smoke
+```
+
 ## 2026-05-11 — main squash merge 이후 상태 감사
 
 ### 작업 범위
