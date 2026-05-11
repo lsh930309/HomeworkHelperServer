@@ -1,5 +1,6 @@
 import datetime as dt
 import sqlite3
+import tempfile
 
 import pytest
 
@@ -39,8 +40,10 @@ def _session_factory(monkeypatch):
     models.Base.metadata.create_all(bind=engine)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     import src.api.beholder_routes as routes
+    import src.data.crud as crud_mod
 
     monkeypatch.setattr(routes, "SessionLocal", TestingSession)
+    monkeypatch.setattr(crud_mod, "base_dir", tempfile.mkdtemp(prefix="hh-test-data-"))
     return TestingSession
 
 
@@ -398,6 +401,44 @@ def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch):
     assert session.close_reason == "beholder_power_loss_close_at_last_heartbeat"
 
 
+def test_open_session_recovery_decide_later_keeps_incident_pending(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    heartbeat = dt.datetime(2026, 5, 8, 10, 30).timestamp()
+    crud.upsert_app_runtime_heartbeat(
+        db,
+        app_instance_id="app-a",
+        runtime_kind="pyqt",
+        timestamp=heartbeat,
+        boot_id="boot-a",
+    )
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=start,
+        session_status="open",
+        heartbeat_timestamp=heartbeat,
+    )
+    db.add(session)
+    db.commit()
+
+    incident = beholder.create_open_session_recovery_incidents(db, running_process_ids=set())[0]
+    payload = beholder.incident_to_dict(incident)
+    action_ids = {action["id"] for action in payload["available_actions"]}
+    assert "decide_later" in action_ids
+    assert "deny" not in action_ids
+
+    result = beholder.resolve_incident_action(db, incident, "decide_later")
+
+    assert result["action"] == "decide_later"
+    db.expire_all()
+    still_pending = db.query(models.BeholderIncident).filter_by(id=incident.id).one()
+    assert still_pending.status == beholder.STATUS_PENDING
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+
+
 def test_continue_existing_session_resolution_reuses_open_session(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -729,6 +770,42 @@ def test_delete_process_resolution_aborts_when_snapshot_fails(monkeypatch, tmp_p
     assert still_open.session_status == "open"
 
 
+def test_close_at_heartbeat_resolution_aborts_when_session_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    heartbeat = dt.datetime(2026, 5, 8, 10, 30).timestamp()
+    crud.upsert_app_runtime_heartbeat(
+        db,
+        app_instance_id="app-a",
+        runtime_kind="pyqt",
+        timestamp=heartbeat,
+        boot_id="boot-a",
+    )
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=start,
+        session_status="open",
+        heartbeat_timestamp=heartbeat,
+    )
+    db.add(session)
+    db.commit()
+    incident = beholder.create_open_session_recovery_incidents(db, running_process_ids=set())[0]
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        beholder.resolve_incident_action(db, incident, "close_at_last_app_heartbeat")
+
+    db.rollback()
+    db.expire_all()
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+    assert still_open.session_status == "open"
+
+
 def test_delete_process_aborts_when_direct_snapshot_fails(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
@@ -788,6 +865,70 @@ def test_delete_process_allow_once_aborts_when_snapshot_fails(monkeypatch, tmp_p
     assert still_open.session_status == "open"
 
 
+def test_settings_save_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    settings = crud.get_settings(db)
+    assert settings.theme == "system"
+    monkeypatch.setattr(crud_mod, "backup_settings_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        crud.patch_settings(
+            db,
+            {"theme": "dark"},
+            actor="global_settings_dialog",
+            allowed_fields={"theme"},
+        )
+
+    db.rollback()
+    db.expire_all()
+    assert crud.get_settings(db).theme == "system"
+
+
+def test_shortcut_delete_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    shortcut = crud.create_shortcut(db, schemas.WebShortcutCreate(
+        id="delete-shortcut-snapshot",
+        name="Delete Shortcut Snapshot",
+        url="https://example.test",
+    ))
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        crud.delete_shortcut(db, shortcut.id)
+
+    db.rollback()
+    db.expire_all()
+    assert db.query(models.WebShortcut).filter_by(id=shortcut.id).one_or_none() is not None
+
+
+def test_end_session_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    start = dt.datetime(2026, 5, 8, 10, 0).timestamp()
+    end = dt.datetime(2026, 5, 8, 11, 0).timestamp()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        crud.end_session(db, session.id, end, actor="process_monitor")
+
+    db.rollback()
+    db.expire_all()
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+
+
 def test_resolving_delete_process_incident_refreshes_client_process_cache(monkeypatch):
     from src.api.client import ApiClient
 
@@ -818,6 +959,55 @@ def test_resolving_delete_process_incident_refreshes_client_process_cache(monkey
     result = client.resolve_beholder_incident(incident_id=1, action="close_sessions_and_delete_process")
 
     assert result["action"] == "close_sessions_and_delete_process"
+    assert client.managed_processes == ["fresh"]
+
+
+def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import ManagedProcess
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.managed_processes = []
+    client.web_shortcuts = []
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    monkeypatch.setattr(ApiClient, "_fetch_all_processes", lambda self: ["fresh"])
+    payloads = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        payloads.append(kwargs["json"])
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+        stamina_current=120,
+        stamina_max=100,
+        stamina_updated_at=124.0,
+    )
+
+    assert client.update_process_runtime_state(process) is True
+
+    assert payloads == [
+        {"last_played_timestamp": 123.0},
+        {"stamina_current": 120, "stamina_max": 100, "stamina_updated_at": 124.0},
+    ]
     assert client.managed_processes == ["fresh"]
 
 
@@ -1233,6 +1423,40 @@ def test_hoyolab_followup_session_stamina_rewrite_is_allowed(monkeypatch, tmp_pa
     updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
     assert updated.stamina_at_end == 92
     assert beholder.active_incidents(db) == []
+
+
+def test_hoyolab_followup_session_stamina_rewrite_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="game-a",
+        process_name="Game A",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        stamina_at_end=100,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        crud.update_session_stamina(
+            db,
+            session.id,
+            92,
+            actor="hoyolab_slow_followup",
+            operation_kind="hoyolab_session_stamina_rewrite",
+        )
+
+    db.rollback()
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.stamina_at_end == 100
 
 
 def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeypatch):

@@ -748,8 +748,16 @@ class MainWindow(QMainWindow):
     def _on_always_on_top_toggled(self, checked: bool):
         """메뉴바 [항상 위] 체크박스 토글 시 즉시 적용 및 설정 저장."""
         gs = self.data_manager.global_settings
+        previous = gs.always_on_top
         gs.always_on_top = checked
-        self.data_manager.save_global_settings(gs, actor="global_settings_dialog")
+        if not self.data_manager.save_global_settings(gs, actor="global_settings_dialog"):
+            gs.always_on_top = previous
+            self.data_manager.global_settings.always_on_top = previous
+            QMessageBox.warning(self, "저장 실패", "항상 위 설정 저장이 차단되었거나 실패해 변경을 적용하지 않았습니다.")
+            self._poll_beholder_incidents()
+            self._load_always_on_top_setting()
+            self.show()
+            return
         self._load_always_on_top_setting()
         self.show()
 

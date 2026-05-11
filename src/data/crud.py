@@ -18,6 +18,26 @@ from src.data.database import base_dir
 
 logger = logging.getLogger(__name__)
 
+
+def _require_snapshot(path: str | None, message: str) -> str:
+    if not path:
+        raise ValueError(message)
+    return path
+
+
+def _backup_model_snapshot_or_raise(model: Any, *, table: str, reason: str) -> str:
+    return _require_snapshot(
+        backup_model_snapshot(model, table=table, reason=reason),
+        f"{table} 변경 전 백업을 만들지 못했습니다. 데이터 보존을 위해 변경을 중단했습니다.",
+    )
+
+
+def _backup_settings_snapshot_or_raise(settings: models.GlobalSettings, *, reason: str) -> str:
+    return _require_snapshot(
+        backup_settings_snapshot(settings, reason=reason),
+        "설정 변경 전 백업을 만들지 못했습니다. 데이터 보존을 위해 저장을 중단했습니다.",
+    )
+
 def db_retry_on_lock(func):
     """데이터베이스 락 발생 시 재시도하는 데코레이터"""
     def wrapper(*args, **kwargs):
@@ -106,9 +126,7 @@ def delete_process(
             override_token=override_token,
         )
         beholder.guard_process_delete(db, db_process, operation)
-        snapshot_path = backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
-        if not snapshot_path:
-            raise ValueError("삭제 전 게임 항목 백업을 만들지 못했습니다. 데이터 보존을 위해 삭제를 중단했습니다.")
+        _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         db.delete(db_process)
         db.commit()
     return db_process
@@ -145,7 +163,7 @@ def update_process(
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
-            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+            _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -186,7 +204,7 @@ def update_process_stamina(
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
-            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+            _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -231,7 +249,7 @@ def update_process_runtime_state(
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
         if changed:
-            backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+            _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_process, key, value)
         db.commit()
@@ -308,7 +326,7 @@ def update_shortcut(
             proposed_values={key: update_data.get(key) for key in sorted(changed)},
         )
         if changed:
-            backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
+            _backup_model_snapshot_or_raise(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         for key, value in update_data.items():
             setattr(db_shortcut, key, value)
         db.commit()
@@ -337,7 +355,7 @@ def delete_shortcut(
             override_token=override_token,
             proposed_values={"deleted_shortcut_id": shortcut_id},
         )
-        backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
+        _backup_model_snapshot_or_raise(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         db.delete(db_shortcut)
         db.commit()
     return db_shortcut
@@ -549,7 +567,7 @@ def update_settings(
         )
         beholder.guard_settings_update(db, db_settings, update_data, operation)
         if changed:
-            backup_settings_snapshot(db_settings, reason=operation_kind)
+            _backup_settings_snapshot_or_raise(db_settings, reason=operation_kind)
         for key, value in update_data.items():
             if hasattr(db_settings, key):
                 setattr(db_settings, key, value)
@@ -587,7 +605,7 @@ def patch_settings(
     )
     beholder.guard_settings_update(db, db_settings, update_data, operation)
     if changed:
-        backup_settings_snapshot(db_settings, reason=operation_kind)
+        _backup_settings_snapshot_or_raise(db_settings, reason=operation_kind)
     for key, value in update_data.items():
         setattr(db_settings, key, value)
     db.commit()
@@ -687,7 +705,7 @@ def end_session(
         beholder.guard_session_end(db, db_session, end_timestamp, operation)
         if stamina_at_end is not None:
             beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
-        backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
+        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
         db_session.session_status = "closed"
@@ -756,7 +774,7 @@ def update_session_stamina(
             override_token=override_token,
         )
         beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
-        backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
+        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.stamina_at_end = stamina_at_end
         db.commit()
         db.refresh(db_session)
@@ -789,7 +807,7 @@ def mark_shortcut_opened(
             override_token=override_token,
             proposed_values={"last_reset_timestamp": opened_at},
         )
-        backup_model_snapshot(shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
+        _backup_model_snapshot_or_raise(shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         shortcut.last_reset_timestamp = opened_at
         db.add(shortcut)
         db.commit()

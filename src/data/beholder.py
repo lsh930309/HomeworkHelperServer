@@ -1081,7 +1081,7 @@ def create_open_session_recovery_incidents(db: Session, *, running_process_ids: 
             actions = [
                 {"id": "close_at_last_app_heartbeat", "label": "마지막 앱 실행 시각에 종료", "description": "마지막으로 앱이 살아있던 시각에 게임도 종료된 것으로 기록합니다.", "recommended": True},
                 {"id": "abandon_open_sessions", "label": "복구 불가 기록 버리기", "description": "열린 기록을 0초 abandoned 기록으로 정리합니다."},
-                {"id": "deny", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않습니다."},
+                {"id": "decide_later", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않고 안내를 다음 실행까지 보류합니다."},
             ]
             summary = "현재 게임은 실행 중이 아니며, 앱이 꺼질 때 닫히지 않은 플레이 기록이 남아 있습니다."
             recommendation = "마지막 앱 생존 시각에 플레이가 끝난 것으로 닫는 것이 가장 안전합니다."
@@ -1092,7 +1092,7 @@ def create_open_session_recovery_incidents(db: Session, *, running_process_ids: 
             recommended_action = "abandon_open_sessions"
             actions = [
                 {"id": "abandon_open_sessions", "label": "복구 불가 기록 버리기", "description": "마지막 앱 생존 시각을 알 수 없는 열린 기록을 abandoned로 정리합니다.", "recommended": True},
-                {"id": "deny", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않습니다."},
+                {"id": "decide_later", "label": "나중에 결정", "description": "이번에는 기록을 바꾸지 않고 안내를 다음 실행까지 보류합니다."},
             ]
             summary = "마지막 앱 생존 시각을 알 수 없는 오래된 열린 플레이 기록이 남아 있습니다."
             recommendation = "정확한 종료 시각을 복구할 수 없으므로 기록을 abandoned로 정리하는 것이 안전합니다."
@@ -1158,6 +1158,8 @@ def resolve_incident_action(db: Session, incident: models.BeholderIncident, acti
         return {"incident": incident_to_dict(mark_incident(db, incident.id, STATUS_DENIED))}
     if action == "quarantine":
         return {"incident": incident_to_dict(mark_incident(db, incident.id, STATUS_QUARANTINED))}
+    if action == "decide_later":
+        return {"incident": incident_to_dict(incident), "action": "decide_later"}
     if action == "continue_existing_session":
         return _continue_existing_session(db, incident)
     if action == "close_previous_and_start_new":
@@ -1191,12 +1193,30 @@ def _open_sessions_for_context(db: Session, context: dict[str, Any]) -> list[mod
     return query.order_by(models.ProcessSession.start_timestamp.desc()).all()
 
 
+def _snapshot_sessions_or_raise(
+    sessions: list[models.ProcessSession],
+    *,
+    reason: str,
+) -> list[str]:
+    if not sessions:
+        return []
+    from src.data.crud import backup_model_snapshot
+    paths: list[str] = []
+    for session in sessions:
+        snapshot_path = backup_model_snapshot(session, table=PROCESS_SESSIONS_TABLE, reason=reason)
+        if not snapshot_path:
+            raise ValueError("플레이 기록 변경 전 백업을 만들지 못했습니다. 데이터 보존을 위해 복구 작업을 중단했습니다.")
+        paths.append(snapshot_path)
+    return paths
+
+
 def _continue_existing_session(db: Session, incident: models.BeholderIncident) -> dict[str, Any]:
     context = _context_for(incident)
     open_sessions = _open_sessions_for_context(db, context)
     if not open_sessions:
         raise ValueError("이어갈 수 있는 열린 세션을 찾지 못했습니다.")
     session = open_sessions[0]
+    continued_snapshot_paths = _snapshot_sessions_or_raise([session], reason="beholder_continue_existing_session")
     now = time.time()
     session.session_status = "open"
     session.session_owner = context.get("actor") or incident.actor
@@ -1222,6 +1242,7 @@ def _continue_existing_session(db: Session, incident: models.BeholderIncident) -
             "selected_action": "continue_existing_session",
             "continued_session_id": session.id,
             "abandoned_session_ids": abandoned_ids,
+            "continued_snapshot_paths": continued_snapshot_paths,
         },
         commit=False,
     )
@@ -1236,6 +1257,7 @@ def _close_previous_and_start_new(db: Session, incident: models.BeholderIncident
     now = time.time()
     split_at = float(context.get("requested_start_timestamp") or now)
     open_sessions = _open_sessions_for_context(db, context)
+    snapshot_paths = _snapshot_sessions_or_raise(open_sessions, reason="beholder_close_previous_and_start_new")
     for session in open_sessions:
         end_ts = max(float(session.start_timestamp), split_at)
         session.end_timestamp = end_ts
@@ -1257,7 +1279,17 @@ def _close_previous_and_start_new(db: Session, incident: models.BeholderIncident
     )
     db.add(new_session)
     db.flush()
-    updated = mark_incident(db, incident.id, STATUS_RESOLVED, {"selected_action": "close_previous_and_start_new", "new_session_id": new_session.id}, commit=False)
+    updated = mark_incident(
+        db,
+        incident.id,
+        STATUS_RESOLVED,
+        {
+            "selected_action": "close_previous_and_start_new",
+            "new_session_id": new_session.id,
+            "session_snapshot_paths": snapshot_paths,
+        },
+        commit=False,
+    )
     db.commit()
     db.refresh(new_session)
     return {"incident": incident_to_dict(updated), "session_id": new_session.id, "action": "close_previous_and_start_new"}
@@ -1269,6 +1301,7 @@ def _close_at_last_app_heartbeat(db: Session, incident: models.BeholderIncident)
     close_ts = context.get("close_timestamp") or _close_timestamp_from_heartbeat(db, open_sessions)
     if close_ts is None:
         raise ValueError("마지막 앱 생존 시각을 찾지 못했습니다.")
+    snapshot_paths = _snapshot_sessions_or_raise(open_sessions, reason="beholder_close_at_last_app_heartbeat")
     closed_ids: list[int] = []
     for session in open_sessions:
         end_ts = max(float(session.start_timestamp), float(close_ts))
@@ -1283,7 +1316,12 @@ def _close_at_last_app_heartbeat(db: Session, incident: models.BeholderIncident)
         db,
         incident.id,
         STATUS_RESOLVED,
-        {"selected_action": "close_at_last_app_heartbeat", "closed_session_ids": closed_ids, "close_timestamp": close_ts},
+        {
+            "selected_action": "close_at_last_app_heartbeat",
+            "closed_session_ids": closed_ids,
+            "close_timestamp": close_ts,
+            "session_snapshot_paths": snapshot_paths,
+        },
         commit=False,
     )
     db.commit()
@@ -1292,6 +1330,7 @@ def _close_at_last_app_heartbeat(db: Session, incident: models.BeholderIncident)
 
 def _abandon_sessions(db: Session, sessions: list[models.ProcessSession], *, reason: str, incident_id: int) -> list[int]:
     abandoned_ids: list[int] = []
+    _snapshot_sessions_or_raise(sessions, reason=reason)
     now = time.time()
     for session in sessions:
         end_ts = float(session.start_timestamp)

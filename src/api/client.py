@@ -230,20 +230,29 @@ class ApiClient:
 
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool:
         """Persist only runtime-owned process fields after monitor stop/calibration."""
+        actor, operation = "process_monitor", "process_runtime_state_update"
+        payloads: list[dict[str, Any]] = []
+        if updated_process.last_played_timestamp is not None:
+            payloads.append({"last_played_timestamp": updated_process.last_played_timestamp})
+        stamina_payload = {
+            "stamina_current": updated_process.stamina_current,
+            "stamina_max": updated_process.stamina_max,
+            "stamina_updated_at": updated_process.stamina_updated_at,
+        }
+        stamina_payload = {key: value for key, value in stamina_payload.items() if value is not None}
+        if stamina_payload:
+            payloads.append(stamina_payload)
+        if not payloads:
+            return True
         try:
-            actor, operation = "process_monitor", "process_runtime_state_update"
-            response = requests.patch(
-                f"{self.base_url}/processes/{updated_process.id}/runtime-state",
-                json={
-                    "last_played_timestamp": updated_process.last_played_timestamp,
-                    "stamina_current": updated_process.stamina_current,
-                    "stamina_max": updated_process.stamina_max,
-                    "stamina_updated_at": updated_process.stamina_updated_at,
-                },
-                headers=self._beholder_headers(actor, operation),
-                timeout=10,
-            )
-            self._raise_for_status(response)
+            for payload in payloads:
+                response = requests.patch(
+                    f"{self.base_url}/processes/{updated_process.id}/runtime-state",
+                    json=payload,
+                    headers=self._beholder_headers(actor, operation),
+                    timeout=10,
+                )
+                self._raise_for_status(response)
             self._clear_pending_override(actor, operation)
             self.managed_processes = self._fetch_all_processes()
             return True
