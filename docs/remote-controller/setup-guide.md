@@ -135,6 +135,14 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 
 `--allow-android-license-blocker`는 Android SDK License 수락 전의 알려진 blocker만 허용한다. License 수락 및 SDK package 설치가 끝난 뒤에는 이 flag 없이 실행해 Android APK assemble까지 green인지 확인한다.
 
+Remote Agent를 TestClient가 아닌 실제 loopback server process로 띄워 pairing/token 경계를 확인하려면 다음 smoke를 단독 실행한다.
+
+```bash
+./.venv/bin/python tools/smoke_remote_controller_runtime.py
+```
+
+이 smoke는 임시 `HOME`과 임시 loopback port를 사용해 `/remote/status`, `/remote/pair/start`, `/remote/pair/confirm`, token 없는 요청의 401, token 있는 `/remote/devices` 조회를 검증한다.
+
 개별 최소 검증:
 
 ```bash

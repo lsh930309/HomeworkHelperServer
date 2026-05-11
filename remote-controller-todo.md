@@ -60,6 +60,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android token 저장소를 Keystore 암호화 저장으로 교체
 - [x] Android 클라이언트 정적 계약 pytest 추가
 - [x] Remote Controller 통합 검증 스크립트 추가: `tools/verify_remote_controller.py`
+- [x] 실제 서버 프로세스 기반 Remote API pairing/token smoke 추가: `tools/smoke_remote_controller_runtime.py`
 - [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
 
 ## 사용자 의사결정 필요 예정 항목

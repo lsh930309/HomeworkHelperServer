@@ -54,6 +54,43 @@ Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Andro
 
 ---
 
+## 2026-05-11 — 실제 서버 프로세스 기반 Remote API smoke 추가
+
+### 작업 범위
+
+- `tools/smoke_remote_controller_runtime.py`를 추가했다.
+- smoke는 `homework_helper.pyw`의 `run_server_main()`을 별도 Python subprocess로 띄우고 실제 HTTP 요청으로 Remote API를 검증한다.
+- 임시 `HOME`과 임시 loopback port를 사용해 사용자 데이터/기존 서버 상태를 오염시키지 않도록 했다.
+- `tools/verify_remote_controller.py`의 통합 검증 루프에 runtime smoke를 포함했다.
+- 구동 환경 가이드와 TODO에 실제 서버 프로세스 smoke 진입점을 기록했다.
+
+### 자체 코드 리뷰 메모
+
+- 기존 `tests/test_remote_routes.py`는 FastAPI TestClient로 router 계약을 빠르게 검증하지만, 실제 `homework_helper.pyw` 서버 부팅/환경변수/uvicorn 경로까지는 검증하지 않는다.
+- 새 smoke는 macOS/Android 네이티브 앱이 실제로 호출하는 HTTP 경로에 더 가까운 검증이다.
+- pairing 후 token 없는 `/remote/status`가 401이 되고, 발급 token으로 `/remote/status`와 `/remote/devices`가 성공하는 경계를 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_remote_controller_runtime.py` → passed, 임시 loopback server로 Remote Controller runtime smoke 통과.
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --skip-full-pytest` → remote routes 10 passed, Android static 8 passed, macOS static 5 passed, runtime smoke passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote API pairing 경계를 실제 서버 프로세스로 검증한다
+
+Constraint: Android License 수락 전에는 APK 산출 대신 macOS 개발 환경에서 더 강한 런타임 검증을 추가해야 함
+Rejected: TestClient 계약 테스트만 신뢰 | 실제 homework_helper.pyw 서버 부팅과 HTTP pairing/token 경로 회귀를 놓칠 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: Android SDK License 승인 후 이 verifier를 blocker 허용 없이 실행하고 APK install/device smoke를 이어서 추가할 것
+Tested: ./.venv/bin/python tools/smoke_remote_controller_runtime.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --skip-full-pytest; git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위
