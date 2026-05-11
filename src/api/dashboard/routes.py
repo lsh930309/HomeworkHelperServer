@@ -18,7 +18,7 @@ from sqlalchemy import func
 from contextlib import contextmanager
 
 from src.data import models
-from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size
+from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size, safe_icon_cache_key
 from .settings import load_settings, save_settings
 
 router = APIRouter()
@@ -813,12 +813,13 @@ def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256)):
             return Response(content=generate_fallback_svg("?", "#6366f1"), media_type="image/svg+xml")
         name = process.name
         exe_path = process.monitoring_path or process.launch_path
-        icon_path = get_icon_for_size(process_id, size)
+        cache_key = safe_icon_cache_key(process_id)
+        icon_path = get_icon_for_size(cache_key, size)
         if icon_path:
             return FileResponse(str(icon_path), media_type="image/png")
         if exe_path and os.path.exists(exe_path):
-            extract_icon_from_exe(exe_path, process_id)
-            icon_path = get_icon_for_size(process_id, size)
+            extract_icon_from_exe(exe_path, cache_key)
+            icon_path = get_icon_for_size(cache_key, size)
             if icon_path:
                 return FileResponse(str(icon_path), media_type="image/png")
         return Response(content=generate_fallback_svg(name, get_color_for_game(name)), media_type="image/svg+xml")

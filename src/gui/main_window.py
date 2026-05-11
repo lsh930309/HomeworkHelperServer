@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
+        self._beholder_restore_runtime_suspended = False
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -436,11 +437,22 @@ class MainWindow(QMainWindow):
             return False
         result = self.data_manager.restore_beholder_backup(int(slot))
         if result and result.get("ok"):
+            self._suspend_runtime_after_beholder_restore()
             QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
             return True
         else:
             QMessageBox.warning(self, "Beholder 백업 복구", "복구에 실패했습니다.")
             return False
+
+    def _suspend_runtime_after_beholder_restore(self) -> None:
+        """Stop runtime DB writers after replacing the live DB until the user restarts."""
+        self._beholder_restore_runtime_suspended = True
+        if hasattr(self, "process_monitor"):
+            self.process_monitor.active_monitored_processes.clear()
+        for timer_name in ("monitor_timer", "scheduler_timer", "runtime_heartbeat_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -551,11 +563,13 @@ class MainWindow(QMainWindow):
         """
         timers_restarted = []
 
-        if hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
+        runtime_suspended = getattr(self, "_beholder_restore_runtime_suspended", False)
+
+        if not runtime_suspended and hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
             self.monitor_timer.start(1000)
             timers_restarted.append('monitor_timer')
 
-        if hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
+        if not runtime_suspended and hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
             self.scheduler_timer.start(1000)
             timers_restarted.append('scheduler_timer')
 

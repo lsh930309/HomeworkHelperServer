@@ -203,6 +203,35 @@ def test_games_api_groups_normalized_names_and_returns_icon_candidate(monkeypatc
     assert grouped["gamea"]["color"].startswith("hsl(")
 
 
+def test_dashboard_icon_endpoint_uses_safe_cache_key(monkeypatch):
+    import src.api.dashboard.routes as routes
+    from src.api.dashboard.icons import safe_icon_cache_key
+
+    unsafe_id = r"..\evil"
+    seen_cache_keys = []
+
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[models.Process(id=unsafe_id, name="Unsafe", monitoring_path=None, launch_path=None)],
+    )
+    monkeypatch.setattr(
+        routes,
+        "get_icon_for_size",
+        lambda process_id, size: seen_cache_keys.append(process_id) or None,
+    )
+    monkeypatch.setattr(
+        routes,
+        "extract_icon_from_exe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no extraction without exe")),
+    )
+
+    response = client.get("/api/dashboard/icons/..%5Cevil")
+
+    assert response.status_code == 200
+    assert seen_cache_keys == [safe_icon_cache_key(unsafe_id)]
+    assert seen_cache_keys[0] != unsafe_id
+
+
 def test_game_key_filter_includes_all_process_ids_in_group(monkeypatch):
     client = _client_with_seed(
         monkeypatch,

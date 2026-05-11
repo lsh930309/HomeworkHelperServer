@@ -63,6 +63,34 @@ class ProcessMonitor:
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
 
+    def _is_runtime_process_running(self, process_id: str, context: dict[str, Any] | None = None) -> bool:
+        """Return whether the process selected by a late Beholder decision is still running."""
+        context = context or {}
+        expected_pid = context.get("pid")
+        if expected_pid is not None:
+            try:
+                if psutil.pid_exists(int(expected_pid)):
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+        expected_exe = self._normalize_path(context.get("exe"))
+        if not expected_exe:
+            for managed_proc in self.data_manager.managed_processes:
+                if managed_proc.id == process_id:
+                    expected_exe = self._normalize_path(managed_proc.monitoring_path)
+                    break
+        if not expected_exe:
+            return False
+
+        for proc in psutil.process_iter(["exe"]):
+            try:
+                if self._normalize_path(proc.info.get("exe")) == expected_exe:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+        return False
+
     def apply_beholder_resolution(self, result: dict[str, Any] | None) -> None:
         """Bind active runtime cache to a session selected/created by Beholder."""
         if not result:
@@ -76,6 +104,14 @@ class ProcessMonitor:
         if process_id and action == "close_sessions_and_delete_process":
             self.active_monitored_processes.pop(process_id, None)
             return
+        if process_id and incident.get("operation_kind") == "runtime_stop":
+            entry = self.active_monitored_processes.get(process_id)
+            if result.get("override_token"):
+                if entry is not None:
+                    entry.pop("runtime_stop_pending", None)
+            else:
+                self.active_monitored_processes.pop(process_id, None)
+            return
         if process_id and result.get("override_token") and incident.get("operation_kind") == "runtime_start":
             self.active_monitored_processes.pop(process_id, None)
             return
@@ -83,6 +119,13 @@ class ProcessMonitor:
             return
         entry = self.active_monitored_processes.get(process_id)
         if entry is None:
+            if not self._is_runtime_process_running(process_id, context):
+                logger.info(
+                    "Beholder resolution returned session %s for '%s', but the process is no longer running; leaving monitor cache unbound.",
+                    session_id,
+                    process_id,
+                )
+                return
             entry = {"pid": context.get("pid"), "exe": context.get("exe"), "start_time_approx": context.get("requested_start_timestamp")}
             self.active_monitored_processes[process_id] = entry
         entry["session_id"] = session_id
@@ -196,7 +239,8 @@ class ProcessMonitor:
                         logger.warning(f"'{managed_proc.name}'이 실행 중으로 감지되었으나, 프로세스 인스턴스 정보를 찾을 수 없습니다.")
             else:
                 if was_previously_active:
-                    termination_time = time.time()
+                    cached_info = self.active_monitored_processes.get(managed_proc.id, {})
+                    termination_time = cached_info.get("pending_termination_time") or time.time()
                     previous_last_played = managed_proc.last_played_timestamp
                     managed_proc.last_played_timestamp = termination_time
 
@@ -208,7 +252,9 @@ class ProcessMonitor:
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
 
                     # 세션 종료 기록 (스태미나 값 포함)
-                    cached_info = self.active_monitored_processes.get(managed_proc.id, {})
+                    if cached_info.get("runtime_stop_pending"):
+                        managed_proc.last_played_timestamp = previous_last_played
+                        continue
                     session_id = cached_info.get('session_id')
                     _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:
@@ -219,6 +265,13 @@ class ProcessMonitor:
                         else:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
                             managed_proc.last_played_timestamp = previous_last_played
+                            incident = getattr(self.data_manager, "latest_beholder_incident", None)
+                            if (
+                                isinstance(incident, dict)
+                                and incident.get("operation_kind") == "runtime_stop"
+                            ):
+                                cached_info["runtime_stop_pending"] = True
+                                cached_info["pending_termination_time"] = termination_time
                             continue
                     else:
                         logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, no session was recorded)")

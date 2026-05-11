@@ -395,9 +395,11 @@ def run_server_main():
         while True:
             try:
                 time.sleep(interval)
-                with engine.connect() as conn:
-                    conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
-                    conn.commit()
+                from src.api.beholder_routes import database_access_gate
+                with database_access_gate():
+                    with engine.connect() as conn:
+                        conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
+                        conn.commit()
                 logger.info("WAL checkpoint 완료")
             except Exception as e:
                 logger.error(f"Checkpoint 오류: {e}", exc_info=True)

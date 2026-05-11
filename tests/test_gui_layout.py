@@ -956,6 +956,53 @@ def test_process_icon_prefers_process_id_cache_without_existing_exe(monkeypatch,
     app.processEvents()
 
 
+def test_restore_suspends_runtime_timers_and_monitor_cache():
+    import types
+    import src.gui.main_window as main_window
+
+    class FakeTimer:
+        def __init__(self):
+            self.active = True
+            self.start_calls = []
+            self.stop_calls = 0
+
+        def isActive(self):
+            return self.active
+
+        def stop(self):
+            self.active = False
+            self.stop_calls += 1
+
+        def start(self, interval):
+            self.active = True
+            self.start_calls.append(interval)
+
+    monitor_timer = FakeTimer()
+    scheduler_timer = FakeTimer()
+    heartbeat_timer = FakeTimer()
+    ui_timer = FakeTimer()
+    process_monitor = types.SimpleNamespace(active_monitored_processes={"game-a": {"session_id": 1}})
+    window = types.SimpleNamespace(
+        process_monitor=process_monitor,
+        monitor_timer=monitor_timer,
+        scheduler_timer=scheduler_timer,
+        runtime_heartbeat_timer=heartbeat_timer,
+        ui_refresh_timer=ui_timer,
+        _UI_REFRESH_INTERVAL_MS=1000,
+    )
+
+    main_window.MainWindow._suspend_runtime_after_beholder_restore(window)
+    main_window.MainWindow._ensure_timers_running(window)
+
+    assert window._beholder_restore_runtime_suspended is True
+    assert process_monitor.active_monitored_processes == {}
+    assert monitor_timer.stop_calls == 1
+    assert scheduler_timer.stop_calls == 1
+    assert heartbeat_timer.stop_calls == 1
+    assert monitor_timer.start_calls == []
+    assert scheduler_timer.start_calls == []
+
+
 def test_windows_title_bar_color_noops_off_windows(monkeypatch):
     import src.utils.windows as windows
 

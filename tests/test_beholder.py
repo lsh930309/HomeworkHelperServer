@@ -1643,6 +1643,86 @@ def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeyp
     assert "game-a" in monitor.active_monitored_processes
 
 
+def test_process_monitor_pauses_duplicate_runtime_stop_after_beholder_block(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+    import src.core.process_monitor as process_monitor_module
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+    )
+
+    class FakeDataManager:
+        managed_processes = [process]
+        latest_beholder_incident = {"operation_kind": "runtime_stop"}
+        end_calls = 0
+
+        def end_session(self, session_id, end_timestamp, stamina_at_end=None):
+            self.end_calls += 1
+            return None
+
+        def update_process_runtime_state(self, updated_process):
+            raise AssertionError("blocked stop must not save runtime state")
+
+    monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
+
+    data_manager = FakeDataManager()
+    monitor = ProcessMonitor(data_manager)
+    monitor.active_monitored_processes["game-a"] = {
+        "pid": 100,
+        "exe": "/games/a.exe",
+        "start_time_approx": 1.0,
+        "session_id": 7,
+    }
+
+    first = monitor.check_and_update_statuses()
+    second = monitor.check_and_update_statuses()
+
+    assert first.changed is False
+    assert second.changed is False
+    assert data_manager.end_calls == 1
+    assert monitor.active_monitored_processes["game-a"]["runtime_stop_pending"] is True
+    assert process.last_played_timestamp == 123.0
+
+
+def test_process_monitor_does_not_rebind_late_resolution_for_exited_game(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+    import src.core.process_monitor as process_monitor_module
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+    )
+
+    class FakeDataManager:
+        managed_processes = [process]
+
+    monkeypatch.setattr(process_monitor_module.psutil, "pid_exists", lambda _pid: False)
+    monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
+
+    monitor = ProcessMonitor(FakeDataManager())
+    monitor.apply_beholder_resolution({
+        "session_id": 9,
+        "process_id": "game-a",
+        "action": "continue_existing_session",
+        "incident": {
+            "operation_kind": "runtime_start",
+            "resolution_metadata": {
+                "action_context": {"process_id": "game-a", "exe": "/games/a.exe", "pid": 100},
+            },
+        },
+    })
+
+    assert "game-a" not in monitor.active_monitored_processes
+
+
 def test_process_monitor_retries_runtime_start_after_allow_once(monkeypatch):
     from src.core.process_monitor import ProcessMonitor
     from src.data.data_models import ManagedProcess
