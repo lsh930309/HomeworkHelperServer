@@ -91,6 +91,42 @@ Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Andro
 
 ---
 
+## 2026-05-11 — Swift RemoteAPIClient 실통신 smoke 추가
+
+### 작업 범위
+
+- `tools/smoke_macos_remote_api_client.py`를 추가했다.
+- smoke는 실제 Remote Agent를 임시 loopback port로 띄우고, 생산 코드인 `RemoteAPIClient.swift`와 `RemoteModels.swift`를 임시 Swift binary에 함께 컴파일한다.
+- Python은 pairing code 발급만 담당하고, Swift binary가 `confirmPairing`, Bearer token 기반 `status`, `devices` 조회를 수행한다.
+- `tools/verify_remote_controller.py` 통합 검증 루프에 macOS `RemoteAPIClient` smoke를 포함했다.
+- 구동 환경 가이드와 TODO에 macOS-native smoke 진입점을 기록했다.
+
+### 자체 코드 리뷰 메모
+
+- `swift build`는 macOS 앱 컴파일 가능성만 보장하고, `RemoteAPIClient`의 endpoint 조립/DTO decode/token header가 실제 서버 응답과 맞는지는 직접 확인하지 못한다.
+- 새 smoke는 SwiftUI 창 자동화 대신, macOS 앱의 핵심 네트워크 클라이언트 코드를 그대로 컴파일해 실제 HTTP 경로를 검증한다.
+- 임시 `HOME`과 임시 loopback port를 사용하므로 사용자 Keychain/기존 서버 상태를 건드리지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.0, devices=1`.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS RemoteAPIClient가 실제 Remote Agent 계약을 통신으로 검증한다
+
+Constraint: macOS 선행 앱 검증은 Swift build만이 아니라 실제 Swift 클라이언트의 HTTP/DTO/token 경로까지 확인해야 함
+Rejected: Python runtime smoke만 유지 | 서버 경로는 확인해도 macOS RemoteAPIClient의 endpoint 조립과 Decodable 계약 회귀를 놓칠 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: SwiftUI 화면 자동화가 가능한 환경에서는 이 smoke 뒤에 실제 버튼 클릭 smoke를 추가할 것
+Tested: ./.venv/bin/python tools/smoke_macos_remote_api_client.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: SwiftUI 실제 창 클릭 자동화, Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위

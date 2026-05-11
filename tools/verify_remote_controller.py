@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     checks.append(_run("android static contract", [sys.executable, "-m", "pytest", "tests/test_remote_android_client_static.py"]))
     checks.append(_run("macOS static contract", [sys.executable, "-m", "pytest", "tests/test_remote_macos_client_static.py"]))
     checks.append(_run("remote runtime smoke", [sys.executable, "tools/smoke_remote_controller_runtime.py"]))
+    checks.append(_run("macOS RemoteAPIClient smoke", [sys.executable, "tools/smoke_macos_remote_api_client.py"]))
     if not args.skip_full_pytest:
         checks.append(_run("full pytest", [sys.executable, "-m", "pytest"]))
     checks.append(_run("macOS Swift build", ["swift", "build"], cwd=MACOS_CLIENT_DIR))

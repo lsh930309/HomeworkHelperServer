@@ -143,6 +143,14 @@ Remote Agent를 TestClient가 아닌 실제 loopback server process로 띄워 pa
 
 이 smoke는 임시 `HOME`과 임시 loopback port를 사용해 `/remote/status`, `/remote/pair/start`, `/remote/pair/confirm`, token 없는 요청의 401, token 있는 `/remote/devices` 조회를 검증한다.
 
+Swift `RemoteAPIClient.swift`와 `RemoteModels.swift`를 실제로 컴파일해 Remote Agent와 통신하는 macOS-native smoke는 다음 명령으로 단독 실행한다.
+
+```bash
+./.venv/bin/python tools/smoke_macos_remote_api_client.py
+```
+
+이 smoke는 Python으로 pairing code만 발급한 뒤, 임시 Swift binary가 `confirmPairing`, Bearer token `status`, `devices` 조회를 수행해 macOS 클라이언트 DTO/endpoint/token 경계를 검증한다.
+
 개별 최소 검증:
 
 ```bash
