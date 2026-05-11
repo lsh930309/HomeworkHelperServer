@@ -25,6 +25,8 @@ DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "ap
 DEFAULT_PACKAGE = "dev.homeworkhelper.remote"
 DEFAULT_ACTIVITY = "dev.homeworkhelper.remote/.MainActivity"
 DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
+USAGE_ACCESS_SETTINGS_ACTION = "android.settings.USAGE_ACCESS_SETTINGS"
+USAGE_STATS_OP = "android:get_usage_stats"
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,18 @@ def _package_installed(adb: str, package_name: str, *, device: str | None = None
     return result.returncode == 0 and f"package:{package_name}" in result.output
 
 
+def _usage_stats_appop(adb: str, package_name: str, *, device: str | None = None) -> str:
+    result = _run(_command_with_device(adb, device, ["shell", "cmd", "appops", "get", package_name, "GET_USAGE_STATS"]))
+    output = result.output.strip()
+    if result.returncode != 0 or not output:
+        return f"unknown ({output or 'no appops output'})"
+    return output
+
+
+def _open_usage_access_settings(adb: str, *, device: str | None = None) -> CommandResult:
+    return _run(_command_with_device(adb, device, ["shell", "am", "start", "-a", USAGE_ACCESS_SETTINGS_ACTION]))
+
+
 def _assert_manifest_contract() -> None:
     build_file = ANDROID_ROOT / "app" / "build.gradle.kts"
     manifest = ANDROID_ROOT / "app" / "src" / "main" / "AndroidManifest.xml"
@@ -111,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--skip-install", action="store_true", help="Do not run adb install; only verify device/package and launch.")
     parser.add_argument("--skip-launch", action="store_true", help="Do not launch the activity after install/package verification.")
+    parser.add_argument("--report-usage-access", action="store_true", help="Report GET_USAGE_STATS appop state after package verification.")
+    parser.add_argument("--open-usage-access-settings", action="store_true", help="Open Android Usage Access settings after package verification.")
     args = parser.parse_args(argv)
 
     try:
@@ -155,6 +171,16 @@ def main(argv: list[str] | None = None) -> int:
     if not _package_installed(adb, args.package, device=device):
         print(f"Package {args.package} is not installed on {device}.", file=sys.stderr)
         return 1
+
+    if args.report_usage_access:
+        print(f"UsageStats appop: {_usage_stats_appop(adb, args.package, device=device)}")
+
+    if args.open_usage_access_settings:
+        settings_result = _open_usage_access_settings(adb, device=device)
+        print(settings_result.output.rstrip())
+        if settings_result.returncode != 0:
+            print("opening Usage Access settings failed", file=sys.stderr)
+            return 1
 
     if not args.skip_launch:
         launch_result = _run(_command_with_device(adb, device, ["shell", "am", "start", "-n", args.activity]))

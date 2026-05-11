@@ -67,6 +67,11 @@ def test_android_apk_smoke_distinguishes_missing_apk_from_device_launch():
         "android.intent.action.MAIN",
         "android.intent.category.LAUNCHER",
         "android.permission.INTERNET",
+        "--report-usage-access",
+        "--open-usage-access-settings",
+        "GET_USAGE_STATS",
+        "android.settings.USAGE_ACCESS_SETTINGS",
+        "UsageStats appop",
     ]:
         assert marker in smoke
 

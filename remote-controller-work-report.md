@@ -307,6 +307,42 @@ Not-tested: 실제 SmartThings WoL/SSH shutdown/sleep/restart, Android SDK Licen
 
 ---
 
+## 2026-05-11 — Android UsageStats smoke 보조 옵션 추가
+
+### 작업 범위
+
+- `tools/smoke_android_remote_controller.py`에 `--report-usage-access` option을 추가했다.
+- 설치된 APK에 대해 `adb shell cmd appops get <package> GET_USAGE_STATS` 결과를 보고해 UsageStats 권한 상태를 확인할 수 있게 했다.
+- `--open-usage-access-settings` option으로 Android Usage Access 설정 화면을 열 수 있게 했다.
+- 구동 환경 가이드에 UsageStats 권한 상태 보고와 설정 화면 진입 명령을 추가했다.
+- verifier contract test에 UsageStats appops/설정 화면 marker를 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- Usage Access 허용은 사용자의 기기 설정 작업이므로 스크립트가 기본으로 권한을 변경하면 안 된다.
+- 기본 install/launch smoke는 그대로 유지하고, appops 보고와 설정 화면 열기는 명시 option으로만 수행한다.
+- 이 옵션은 Android APK가 실제 설치된 후 UsageStats provider smoke로 넘어가기 전 권한 blocker를 빠르게 확인하는 용도다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_android_remote_controller.py --help` → `--report-usage-access`, `--open-usage-access-settings` option 출력 확인.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android smoke가 UsageStats 권한 blocker도 보고할 수 있게 한다
+
+Constraint: Usage Access 허용은 사용자 기기 설정 작업이므로 smoke가 기본으로 권한을 변경하면 안 됨
+Rejected: APK launch만 smoke | UsageStats 권한 blocker를 별도 수동 adb 절차로 확인해야 해 Android 세션 추적 검증이 끊김
+Confidence: high
+Scope-risk: narrow
+Directive: APK 설치 후 --report-usage-access로 권한 상태를 기록하고, 필요 시 --open-usage-access-settings로 사용자가 직접 허용하게 할 것
+Tested: ./.venv/bin/python tools/smoke_android_remote_controller.py --help; ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: 실제 Android device/emulator의 Usage Access 허용/조회, Android SDK License 수락 이후 APK assemble/install
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위

@@ -67,6 +67,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Remote Controller verifier/smoke script 정적 계약 pytest 추가: `tests/test_remote_verifier_contract.py`
 - [x] LAN/Tailscale/ZeroTier Remote Agent connectivity smoke 추가: `tools/smoke_remote_controller_connectivity.py`
 - [x] Remote power adapter 설정 readiness preflight 추가: `tools/check_remote_power_readiness.py`
+- [x] Android APK smoke에 UsageStats appops 보고/설정 화면 열기 옵션 추가
 - [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
 
 ## 사용자 의사결정 필요 예정 항목
