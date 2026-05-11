@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 기능/검증 확인 commit: `b055b98 완료 감사가 UsageStats smoke option까지 반영한다`
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Android smoke가 UsageStats 허용 상태를 완료 gate로 검증한다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | 기술 검토서 보존 | `remote-controller-technical-review.md` 존재 | 충족 | 없음 |
 | `dev-remote` 브랜치 생성/작업 | 작업 이력 commit들이 `dev-remote`에서 생성되었고 이후 사용자 요청대로 `main`에 squash merge | 충족 | 브랜치는 merge 후 삭제됨 |
-| Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98` 및 이후 문서-only 보정 commit 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
+| Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98`, 이후 UsageStats gate commit 및 문서-only 보정 commit 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
 | Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include | 충족 | Beholder/대시보드 전체 원격화는 후속 범위 |
@@ -42,7 +42,7 @@
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
 | Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
-| Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고 `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 APK/device가 없어 appops evidence 없음 |
+| Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 APK/device가 없어 appops allow evidence 없음 |
 | Android APK assemble | `tools/verify_remote_controller.py`가 `:app:assembleDebug`를 실행하나 SDK License blocker 확인 | 미충족 | Google Android SDK License 수락 및 SDK package 설치 필요 |
 | 전체 Python 테스트벤치 | verifier에서 `138 passed, 4 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
@@ -70,9 +70,11 @@
 - `tools/smoke_remote_controller_connectivity.py --help` 및 verifier contract test → connectivity smoke 진입점 확인
 - `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
-- `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/설정 화면 option 확인
+- `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/강제 gate/설정 화면 option 확인
 - 전체 pytest → 138 passed, 4 warnings
 - macOS `swift build` → passed
+- `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 명시 보고
+- `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker 포함 6 passed
 - Android `./gradlew :app:assembleDebug --stacktrace` → `build-tools;35.0.0`, `platforms;android-36` license 미수락 blocker
 
 ## 4. 완료 불가 판정 사유
@@ -99,6 +101,7 @@ sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0
 cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug
 cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access
 ./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --report-usage-access --open-usage-access-settings
+./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access
 ./.venv/bin/python tools/smoke_remote_controller_connectivity.py --base-url http://100.x.y.z:8000 --token "<paired-device-token>" --expect-auth
 ```
 

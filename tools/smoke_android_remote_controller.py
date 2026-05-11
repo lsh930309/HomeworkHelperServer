@@ -87,6 +87,10 @@ def _usage_stats_appop(adb: str, package_name: str, *, device: str | None = None
     return output
 
 
+def _usage_stats_allowed(appop_output: str) -> bool:
+    return bool(re.search(r"\ballow\b", appop_output, flags=re.IGNORECASE))
+
+
 def _open_usage_access_settings(adb: str, *, device: str | None = None) -> CommandResult:
     return _run(_command_with_device(adb, device, ["shell", "am", "start", "-a", USAGE_ACCESS_SETTINGS_ACTION]))
 
@@ -126,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-install", action="store_true", help="Do not run adb install; only verify device/package and launch.")
     parser.add_argument("--skip-launch", action="store_true", help="Do not launch the activity after install/package verification.")
     parser.add_argument("--report-usage-access", action="store_true", help="Report GET_USAGE_STATS appop state after package verification.")
+    parser.add_argument("--require-usage-access", action="store_true", help="Fail unless GET_USAGE_STATS appop is allowed after package verification.")
     parser.add_argument("--open-usage-access-settings", action="store_true", help="Open Android Usage Access settings after package verification.")
     args = parser.parse_args(argv)
 
@@ -172,8 +177,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Package {args.package} is not installed on {device}.", file=sys.stderr)
         return 1
 
-    if args.report_usage_access:
-        print(f"UsageStats appop: {_usage_stats_appop(adb, args.package, device=device)}")
+    if args.report_usage_access or args.require_usage_access:
+        usage_appop = _usage_stats_appop(adb, args.package, device=device)
+        print(f"UsageStats appop: {usage_appop}")
+        if args.require_usage_access and not _usage_stats_allowed(usage_appop):
+            print(
+                "UsageStats access not allowed. Re-run with --open-usage-access-settings and enable the app in Android settings.",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.open_usage_access_settings:
         settings_result = _open_usage_access_settings(adb, device=device)

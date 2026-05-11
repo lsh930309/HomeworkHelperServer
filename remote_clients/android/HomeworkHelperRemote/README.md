@@ -56,6 +56,7 @@ curl -X POST http://127.0.0.1:8000/remote/pair/start
 - Android 패키지명은 현재 수동 입력으로 검증합니다. 예: `com.example.game`
 - 앱 실행은 Android package visibility와 launcher intent에 의존하므로 실제 기기에서 설치된 패키지로 smoke test가 필요합니다.
 - Usage Access는 manifest 선언만으로 활성화되지 않습니다. 앱의 `Usage 권한` 버튼으로 Android 설정에 들어가 사용자가 직접 허용해야 합니다.
+- APK 설치 후 `./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access`로 `GET_USAGE_STATS` appop이 `allow` 상태인지 gate할 수 있습니다.
 
 ## 다음 단계
 

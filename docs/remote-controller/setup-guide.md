@@ -191,6 +191,12 @@ APK 설치 후 UsageStats 권한 상태까지 같이 보고하려면:
 ./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access
 ```
 
+Usage Access를 사용자가 허용한 뒤 해당 권한을 smoke gate로 강제하려면:
+
+```bash
+./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access
+```
+
 Usage Access 설정 화면을 기기에서 열어 수동 허용을 이어가려면:
 
 ```bash

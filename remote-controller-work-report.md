@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-05-11 — Android UsageStats 허용 gate 추가
+
+### 작업 범위
+
+- `tools/smoke_android_remote_controller.py`에 `--require-usage-access` option을 추가했다.
+- 설치된 APK에 대해 `GET_USAGE_STATS` appop이 `allow`가 아니면 smoke가 실패하도록 해 Usage Access 허용 여부를 실제 gate로 확인할 수 있게 했다.
+- 구동 환경 가이드, Android README, TODO, completion audit에 권한 보고/설정 화면 진입/허용 gate 순서를 반영했다.
+- verifier contract test에 `--require-usage-access`와 실패 메시지 marker를 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- Usage Access 허용은 여전히 사용자가 Android 설정에서 수행해야 하므로 스크립트가 권한을 변경하지 않는다.
+- `--report-usage-access`는 관찰용, `--require-usage-access`는 APK 설치 후 완료 gate용으로 역할을 분리했다.
+- APK/실기기 blocker는 유지되며, 이번 변경은 승인 이후 검증이 단순 launch smoke에서 권한 gate까지 이어지도록 만드는 안전한 보조 단계다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_android_remote_controller.py --help` → `--require-usage-access` option 출력 확인
+- `./.venv/bin/python tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 보고하고 정상 종료
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 6 passed
+- `git diff --check` → 통과
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → 138 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android smoke가 UsageStats 허용 상태를 완료 gate로 검증한다
+
+Constraint: Usage Access 허용은 사용자 기기 설정 작업이므로 smoke가 권한을 변경하지 않고 관찰/검증만 해야 함
+Rejected: appops 상태 출력만 유지 | 실제 허용 여부가 실패 조건이 아니면 Android UsageStats smoke 완료를 잘못 판단할 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: APK 설치와 Usage Access 수동 허용 후 --require-usage-access를 실행해 appops allow evidence를 보고서에 남길 것
+Tested: ./.venv/bin/python tools/smoke_android_remote_controller.py --help; ./.venv/bin/python tools/smoke_android_remote_controller.py --allow-missing-apk; ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py (6 passed); ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (138 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: 실제 Android device/emulator의 Usage Access 허용/조회, Android SDK License 수락 이후 APK assemble/install
+```
+
 ## 2026-05-11 — 완료 감사 최신 commit 포인터 보정
 
 ### 작업 범위
