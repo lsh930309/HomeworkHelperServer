@@ -141,7 +141,12 @@ class ApiClient:
                 timeout=20,
             )
             self._raise_for_status(response)
-            return response.json()
+            result = response.json()
+            self.managed_processes = self._fetch_all_processes()
+            self.web_shortcuts = self._fetch_all_web_shortcuts()
+            self.global_settings = self._fetch_global_settings()
+            self._pending_beholder_overrides.clear()
+            return result
         except requests.RequestException as e:
             print(f"Beholder 백업 복구 실패: {e}")
             return None
@@ -392,7 +397,6 @@ class ApiClient:
                 timeout=10,
             )
             self._raise_for_status(response)
-            self._clear_pending_override(actor, "settings_update")
 
             # 서버로부터 최종적으로 저장된 데이터를 응답으로 받습니다.
             saved_settings_data = response.json()

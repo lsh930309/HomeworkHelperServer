@@ -458,6 +458,10 @@ def _normalize_sidebar_settings_update(current_settings: models.GlobalSettings, 
     update_data["sidebar_enabled"] = mode != SIDEBAR_MODE_DISABLED
 
 
+def _schema_fields_set(model: Any) -> set[str]:
+    return set(getattr(model, "model_fields_set", None) or getattr(model, "__fields_set__", None) or set())
+
+
 def backup_settings_snapshot(settings: models.GlobalSettings, *, reason: str = "settings_update", max_backups: int = 20) -> str | None:
     try:
         backup_dir = Path(base_dir) / "backups" / "settings"
@@ -550,6 +554,15 @@ def update_settings(
     db_settings = get_settings(db)
     if db_settings:
         update_data = _dump_schema(settings)
+        supplied_fields = _schema_fields_set(settings)
+        if (
+            supplied_fields
+            and "sidebar_enabled" in supplied_fields
+            and "sidebar_mode" not in supplied_fields
+            and update_data.get("sidebar_enabled") is False
+            and update_data.get("sidebar_mode") == "game"
+        ):
+            update_data["sidebar_mode"] = SIDEBAR_MODE_DISABLED
         _normalize_sidebar_settings_update(db_settings, update_data)
         allowed = set(allowed_fields) if allowed_fields is not None else beholder.allowed_settings_fields_for_actor(actor)
         changed = _changed_fields(db_settings, update_data)

@@ -479,8 +479,16 @@ def _override_scope(operation: BeholderOperation, *, target_summary: str | None 
         "target_summary": target_summary,
         "changed_fields": sorted(operation.evidence.get("changed_fields") or []),
         "context": _operation_context(operation),
-        "proposed_values_hash": _canonical_hash(operation.evidence.get("proposed_values") or {}),
+        "proposed_values_hash": _canonical_hash(_override_proposed_values(operation)),
     }
+
+
+def _override_proposed_values(operation: BeholderOperation) -> dict[str, Any]:
+    proposed = dict(operation.evidence.get("proposed_values") or {})
+    if operation.kind == "runtime_stop":
+        for volatile in ("end_timestamp", "session_duration", "heartbeat_timestamp"):
+            proposed.pop(volatile, None)
+    return proposed
 
 
 def _scope_matches_operation(incident: models.BeholderIncident, operation: BeholderOperation | str) -> bool:
@@ -503,7 +511,7 @@ def _scope_matches_operation(incident: models.BeholderIncident, operation: Behol
         if key not in actual_context or actual_context.get(key) != expected:
             return False
     expected_hash = scope.get("proposed_values_hash")
-    actual_hash = _canonical_hash(operation.evidence.get("proposed_values") or {})
+    actual_hash = _canonical_hash(_override_proposed_values(operation))
     if expected_hash and expected_hash != actual_hash:
         return False
     return True

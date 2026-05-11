@@ -172,6 +172,36 @@ def test_session_end_override_token_is_bound_to_close_reason(monkeypatch):
     assert unchanged.end_timestamp is None
 
 
+def test_runtime_stop_override_allows_retry_timestamp_drift(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 1, 1, 0, 0).timestamp()
+    first_end = dt.datetime(2026, 5, 8, 0, 0).timestamp()
+    retry_end = first_end + 1
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(db, session.id, first_end, actor="process_monitor", close_reason="process_exit")
+        pytest.fail("long session should be blocked")
+    except beholder.BeholderBlocked as exc:
+        token = beholder.issue_override_token(db, exc.incident)
+
+    closed = crud.end_session(
+        db,
+        session.id,
+        retry_end,
+        actor="process_monitor",
+        close_reason="process_exit",
+        override_token=token,
+    )
+
+    assert closed.end_timestamp == retry_end
+    assert db.query(models.BeholderIncident).one().override_used_at is not None
+
+
 def test_session_end_override_token_covers_later_stamina_guard(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -609,6 +639,22 @@ def test_sidebar_mode_is_guarded_and_normalizes_legacy_bool(monkeypatch, tmp_pat
     assert settings.sidebar_enabled is False
 
 
+def test_full_settings_legacy_disabled_sidebar_without_mode_stays_disabled(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    legacy_payload = schemas.GlobalSettingsSchema(sidebar_enabled=False)
+
+    saved = crud.update_settings(
+        db,
+        legacy_payload,
+        actor="settings_full_update",
+        allowed_fields=beholder.allowed_settings_fields_for_actor("settings_full_update"),
+    )
+
+    assert saved.sidebar_mode == "disabled"
+    assert saved.sidebar_enabled is False
+
+
 def test_settings_guard_blocks_invalid_sidebar_mode(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
@@ -960,6 +1006,100 @@ def test_resolving_delete_process_incident_refreshes_client_process_cache(monkey
 
     assert result["action"] == "close_sessions_and_delete_process"
     assert client.managed_processes == ["fresh"]
+
+
+def test_restoring_backup_refreshes_all_client_caches(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.managed_processes = ["old-process"]
+    client.web_shortcuts = ["old-shortcut"]
+    client.global_settings = GlobalSettings(theme="light")
+    client._pending_beholder_overrides = {("settings_update", "global_settings_dialog"): "token"}
+    monkeypatch.setattr(ApiClient, "_fetch_all_processes", lambda self: ["new-process"])
+    monkeypatch.setattr(ApiClient, "_fetch_all_web_shortcuts", lambda self: ["new-shortcut"])
+    monkeypatch.setattr(ApiClient, "_fetch_global_settings", lambda self: GlobalSettings(theme="dark"))
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    import src.api.client as client_mod
+    monkeypatch.setattr(client_mod.requests, "post", lambda *args, **kwargs: _Response())
+
+    result = client.restore_beholder_backup(slot=1)
+
+    assert result == {"ok": True}
+    assert client.managed_processes == ["new-process"]
+    assert client.web_shortcuts == ["new-shortcut"]
+    assert client.global_settings.theme == "dark"
+    assert client._pending_beholder_overrides == {}
+
+
+def test_settings_safe_save_keeps_unused_override_token(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.global_settings = GlobalSettings(theme="system")
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {("settings_update", "global_settings_dialog"): "token"}
+    seen_headers = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return GlobalSettings(theme="dark").to_dict()
+
+    import src.api.client as client_mod
+
+    def _put(*args, **kwargs):
+        seen_headers.append(kwargs.get("headers") or {})
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "put", _put)
+
+    assert client.save_global_settings(GlobalSettings(theme="dark"), actor="global_settings_dialog") is True
+
+    assert seen_headers[0]["X-HH-Beholder-Override"] == "token"
+    assert client._pending_beholder_overrides[("settings_update", "global_settings_dialog")] == "token"
+    assert client.global_settings.theme == "dark"
+
+
+def test_runtime_heartbeat_keeps_unused_override_token(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.app_instance_id = "app-a"
+    client._pending_beholder_overrides = {("runtime_start", "process_monitor"): "token"}
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    import src.api.client as client_mod
+    monkeypatch.setattr(client_mod.requests, "post", lambda *args, **kwargs: _Response())
+
+    assert client.send_runtime_heartbeat() == {"ok": True}
+    assert client._pending_beholder_overrides[("runtime_start", "process_monitor")] == "token"
 
 
 def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
@@ -1501,3 +1641,40 @@ def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeyp
     assert data_manager.runtime_state_saved is False
     assert process.last_played_timestamp == 123.0
     assert "game-a" in monitor.active_monitored_processes
+
+
+def test_process_monitor_retries_runtime_start_after_allow_once(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+    )
+
+    class FakeDataManager:
+        managed_processes = [process]
+
+    monitor = ProcessMonitor(FakeDataManager())
+    monitor.active_monitored_processes["game-a"] = {
+        "pid": 100,
+        "exe": "/games/a.exe",
+        "start_time_approx": 1.0,
+        "session_id": None,
+    }
+
+    monitor.apply_beholder_resolution({
+        "override_token": "token",
+        "incident": {
+            "operation_kind": "runtime_start",
+            "resolution_metadata": {
+                "override_scope": {
+                    "context": {"process_id": "game-a"},
+                },
+            },
+        },
+    })
+
+    assert "game-a" not in monitor.active_monitored_processes

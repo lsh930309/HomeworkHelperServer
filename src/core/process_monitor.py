@@ -69,10 +69,14 @@ class ProcessMonitor:
             return
         session_id = result.get("session_id")
         incident = result.get("incident") or {}
-        context = (incident.get("resolution_metadata") or {}).get("action_context") or {}
+        metadata = incident.get("resolution_metadata") or {}
+        context = metadata.get("action_context") or (metadata.get("override_scope") or {}).get("context") or {}
         process_id = result.get("process_id") or context.get("process_id")
         action = result.get("action")
         if process_id and action == "close_sessions_and_delete_process":
+            self.active_monitored_processes.pop(process_id, None)
+            return
+        if process_id and result.get("override_token") and incident.get("operation_kind") == "runtime_start":
             self.active_monitored_processes.pop(process_id, None)
             return
         if not process_id or not session_id:
