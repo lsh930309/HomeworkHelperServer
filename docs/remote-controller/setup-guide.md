@@ -151,6 +151,20 @@ Swift `RemoteAPIClient.swift`와 `RemoteModels.swift`를 실제로 컴파일해 
 
 이 smoke는 Python으로 pairing code만 발급한 뒤, 임시 Swift binary가 `confirmPairing`, Bearer token `status`, `devices` 조회를 수행해 macOS 클라이언트 DTO/endpoint/token 경계를 검증한다.
 
+Android APK가 생성된 뒤 device/emulator에 install + launch smoke를 수행하려면 다음 명령을 사용한다.
+
+```bash
+./.venv/bin/python tools/smoke_android_remote_controller.py
+```
+
+SDK License 수락 전 또는 APK 산출 전에는 준비 상태만 확인할 수 있다.
+
+```bash
+./.venv/bin/python tools/smoke_android_remote_controller.py --allow-missing-apk
+```
+
+이 smoke는 Android manifest/applicationId 계약을 확인하고, APK가 있으면 `adb install -r`과 `adb shell am start -n dev.homeworkhelper.remote/.MainActivity`로 실제 앱 launch를 검증한다.
+
 개별 최소 검증:
 
 ```bash
