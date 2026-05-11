@@ -93,6 +93,31 @@ class RemoteDeviceRegistry:
             self._write(state)
         return matched
 
+    def refresh_token(self, token: str, *, now: float | None = None) -> dict[str, Any] | None:
+        """Rotate an active device token and return the new bearer token.
+
+        The old token becomes invalid immediately. Static HH_REMOTE_TOKEN values
+        are intentionally not refreshable because they are not device-bound.
+        """
+
+        now = now or time.time()
+        token_hash = _sha256(token)
+        state = self._read()
+        for device in state.get("devices", []):
+            if device.get("revoked_at"):
+                continue
+            if not secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
+                continue
+            next_token = secrets.token_urlsafe(32)
+            device["token_hash"] = _sha256(next_token)
+            device["last_seen_at"] = now
+            device["token_refreshed_at"] = now
+            self._write(state)
+            public = self._public_device(device)
+            public["token"] = next_token
+            return public
+        return None
+
     def list_devices(self) -> list[dict[str, Any]]:
         return [self._public_device(device) for device in self._read().get("devices", [])]
 
@@ -131,5 +156,6 @@ class RemoteDeviceRegistry:
             "platform": device.get("platform"),
             "created_at": device.get("created_at"),
             "last_seen_at": device.get("last_seen_at"),
+            "token_refreshed_at": device.get("token_refreshed_at"),
             "revoked_at": device.get("revoked_at"),
         }

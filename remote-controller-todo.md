@@ -47,6 +47,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 
 - [x] Remote Agent 선택적 Bearer token 인증 1차 구현
 - [x] Pairing code/device registry/token revoke API 구현
+- [x] Device token refresh/rotation API 및 macOS/Android 클라이언트 계약 구현
 - [x] macOS pairing code 입력 및 Keychain token 저장 구현
 - [x] Device revoke UI 구현
 - [x] command audit log JSONL 파일 추가

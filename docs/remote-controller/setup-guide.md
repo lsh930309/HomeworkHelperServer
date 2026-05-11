@@ -24,6 +24,7 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 
 - `GET /remote/status`
 - `GET /remote/capabilities`
+- `POST /remote/tokens/refresh`
 - `GET /remote/processes`
 - `POST /remote/processes/{id}/launch`
 - `GET /remote/shortcuts`
@@ -44,7 +45,7 @@ curl -X POST http://127.0.0.1:8000/remote/pair/start
 2. macOS 앱에서 Base URL과 pairing code를 입력하고 `페어링`을 누른다.
 3. 앱은 `/remote/pair/confirm` 응답으로 받은 device token을 macOS Keychain에 저장한다.
 4. 등록 디바이스가 하나라도 생기면 `/remote/*` 보호 API는 token을 요구한다.
-5. macOS 앱의 `등록 디바이스` 섹션에서 토큰을 폐기할 수 있다.
+5. macOS 앱의 `등록 디바이스` 섹션에서 현재 device token을 갱신하거나 폐기할 수 있다.
 
 주의: `/remote/pair/start`는 loopback 요청 또는 이미 인증된 디바이스 요청에서만 허용된다.
 

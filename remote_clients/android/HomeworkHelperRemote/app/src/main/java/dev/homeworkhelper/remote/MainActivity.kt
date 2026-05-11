@@ -158,6 +158,18 @@ fun RemoteApp() {
         }
     }
 
+    fun refreshToken() {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { client().refreshToken() } }
+                .onSuccess { refreshed ->
+                    token = refreshed.token
+                    savePreferences("${refreshed.deviceName} 토큰을 갱신했습니다.")
+                    refresh(includeDevices = true)
+                }
+                .onFailure { message = it.message ?: "토큰 갱신 실패" }
+        }
+    }
+
     Scaffold { padding ->
         LazyColumn(
             modifier = Modifier
@@ -196,6 +208,7 @@ fun RemoteApp() {
                             preferences.clearLegacyToken()
                             message = "로컬 토큰을 삭제했습니다."
                         }) { Text("토큰 삭제") }
+                        Button(onClick = { refreshToken() }, enabled = token.isNotBlank()) { Text("토큰 갱신") }
                         Button(onClick = { refresh() }) { Text("새로고침") }
                     }
                     Text(message, style = MaterialTheme.typography.bodyMedium)
@@ -361,6 +374,7 @@ fun RemoteApp() {
                             Column(Modifier.weight(1f)) {
                                 Text(device.deviceName)
                                 Text(device.platform)
+                                if (device.tokenRefreshedAt.isNotBlank()) Text("refreshed: ${device.tokenRefreshedAt}")
                                 if (device.revokedAt.isNotBlank()) Text("revoked: ${device.revokedAt}")
                             }
                             Button(onClick = { revokeDevice(device) }, enabled = device.revokedAt.isBlank()) { Text("폐기") }

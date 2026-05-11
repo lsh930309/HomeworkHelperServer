@@ -143,6 +143,7 @@ struct RemoteDevice: Decodable, Identifiable {
     let platform: String?
     let createdAt: Double?
     let lastSeenAt: Double?
+    let tokenRefreshedAt: Double?
     let revokedAt: Double?
 
     enum CodingKeys: String, CodingKey {
@@ -151,6 +152,7 @@ struct RemoteDevice: Decodable, Identifiable {
         case platform
         case createdAt = "created_at"
         case lastSeenAt = "last_seen_at"
+        case tokenRefreshedAt = "token_refreshed_at"
         case revokedAt = "revoked_at"
     }
 }

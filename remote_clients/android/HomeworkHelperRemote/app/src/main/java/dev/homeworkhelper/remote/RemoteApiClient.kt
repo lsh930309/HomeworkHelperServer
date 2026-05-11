@@ -121,6 +121,16 @@ class RemoteApiClient(
         )
     }
 
+    fun refreshToken(): PairingResult {
+        val json = JSONObject(post("remote/tokens/refresh", "{}"))
+        return PairingResult(
+            id = json.optString("id"),
+            deviceName = json.optString("name", json.optString("device_name")),
+            platform = json.optString("platform"),
+            token = json.optString("token"),
+        )
+    }
+
     fun devices(): List<RemoteDevice> {
         val json = JSONObject(get("remote/devices"))
         return json.getJSONArray("devices").mapObjects { item ->
@@ -128,6 +138,7 @@ class RemoteApiClient(
                 id = item.optString("id"),
                 deviceName = item.optString("name", item.optString("device_name")),
                 platform = item.optString("platform"),
+                tokenRefreshedAt = item.optString("token_refreshed_at"),
                 revokedAt = item.optString("revoked_at"),
             )
         }

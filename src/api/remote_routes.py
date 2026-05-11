@@ -17,7 +17,7 @@ from src.core.remote_power import ConfigurablePowerController, PowerAction
 from src.data import beholder, crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.3"
+REMOTE_API_VERSION = "0.1.4"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -194,6 +194,32 @@ def create_remote_router(
         if not device_registry.revoke_device(device_id, now=now()):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="디바이스를 찾을 수 없습니다.")
         return {"revoked": True, "device_id": device_id}
+
+    @router.post("/tokens/refresh")
+    def refresh_remote_device_token(authorization: str | None = Header(None)):
+        token = _bearer_token(authorization)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="갱신할 device Bearer token이 필요합니다.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        device = device_registry.refresh_token(token, now=now())
+        if not device:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="갱신 가능한 device token을 찾을 수 없습니다.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        auditor.record(
+            command="token.refresh",
+            accepted=True,
+            status="accepted",
+            target_id=device.get("id"),
+            target_name=device.get("name"),
+            target=device.get("platform"),
+        )
+        return device
 
     @router.get("/status")
     def remote_status(db: Session = Depends(get_db_dependency)):

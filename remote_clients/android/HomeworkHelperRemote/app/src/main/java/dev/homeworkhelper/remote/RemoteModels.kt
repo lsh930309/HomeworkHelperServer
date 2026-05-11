@@ -90,5 +90,6 @@ data class RemoteDevice(
     val id: String,
     val deviceName: String,
     val platform: String,
+    val tokenRefreshedAt: String,
     val revokedAt: String,
 )

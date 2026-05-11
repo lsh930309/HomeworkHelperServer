@@ -98,9 +98,10 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "confirmPairing" in macos
     assert "authedClient.status()" in macos
     assert "authedClient.capabilities()" in macos
-    assert "authedClient.dashboardSummary()" in macos
-    assert "authedClient.beholderIncidents()" in macos
-    assert "authedClient.devices()" in macos
+    assert "authedClient.refreshToken()" in macos
+    assert "refreshedClient.dashboardSummary()" in macos
+    assert "refreshedClient.beholderIncidents()" in macos
+    assert "refreshedClient.devices()" in macos
 
 
 def test_connectivity_smoke_supports_tailnet_or_lan_status_checks():

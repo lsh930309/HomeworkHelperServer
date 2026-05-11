@@ -60,6 +60,10 @@ struct RemoteAPIClient {
         return try await post("remote/pair/confirm", body: body)
     }
 
+    func refreshToken() async throws -> PairingConfirmResponse {
+        try await post("remote/tokens/refresh", body: Data("{}".utf8))
+    }
+
     func devices() async throws -> [RemoteDevice] {
         let response: RemoteDevicesResponse = try await get("remote/devices")
         return response.devices

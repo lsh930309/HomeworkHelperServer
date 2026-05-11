@@ -17,6 +17,45 @@
 
 ---
 
+## 2026-05-11 — Remote device token refresh를 회전 가능한 인증 경계로 추가
+
+### 작업 범위
+
+- `RemoteDeviceRegistry.refresh_token()`을 추가해 현재 device Bearer token을 즉시 회전하고 이전 token을 무효화한다.
+- Remote API에 `POST /remote/tokens/refresh` endpoint를 추가하고 `token.refresh` 감사 이벤트를 남기도록 했다.
+- macOS `RemoteAPIClient`/DTO/SwiftUI에 현재 토큰 갱신 흐름을 추가하고 Keychain token을 새 token으로 교체하도록 했다.
+- Android `RemoteApiClient`/DTO/Compose UI에 동일한 token refresh 흐름을 전파하고 Keystore token을 새 token으로 교체하도록 했다.
+- macOS API client smoke가 실제 Remote Agent와 통신해 token refresh 후 새 token으로 후속 API를 호출하도록 확장했다.
+- TODO, setup guide, completion audit에 token refresh/rotation 범위와 evidence를 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 정적 `HH_REMOTE_TOKEN`은 device-bound가 아니므로 refresh 대상에서 제외하고, pairing으로 등록된 device token만 회전한다.
+- refresh endpoint는 기존 Bearer token 인증 경계 안에서 동작하며, 성공 직후 old token은 사용할 수 없도록 hash를 교체한다.
+- Android는 APK compile 전이므로 정적 계약/DTO/UI 전파까지 검증하고, 실제 Keystore token 교체는 SDK License 승인 후 APK smoke로 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 33 passed, 4 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.4, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0`
+- `swift build` → Build complete (0.08s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 14 passed, full pytest 142 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote device token refresh를 회전 가능한 인증 경계로 추가한다
+
+Constraint: 외부망 노출 전 device token은 폐기뿐 아니라 현재 기기에서 안전하게 회전할 수 있어야 함
+Rejected: 재페어링만으로 token 교체 | 사용자가 PC 로컬 pairing code를 다시 발급해야 해 유출 의심 시 빠른 회전 UX가 약함
+Confidence: high
+Scope-risk: moderate
+Directive: token 수명/refresh token 분리를 도입할 때는 HH_REMOTE_TOKEN과 device token 경계를 섞지 말고 rotation audit와 old-token rejection 테스트를 유지할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (33 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (142 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator Keystore token refresh smoke
+```
+
 ## 2026-05-11 — Remote capabilities를 독립 기능 협상 endpoint로 분리
 
 ### 작업 범위

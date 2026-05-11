@@ -110,7 +110,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.3"
+    assert body["remote_api_version"] == "0.1.4"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -361,6 +361,32 @@ def test_pairing_code_registers_device_token_and_revoke_blocks_it():
     assert devices.json()["devices"][0]["id"] == device_id
     assert revoked.status_code == 200
     assert rejected_after_revoke.status_code == 401
+
+
+def test_device_token_refresh_rotates_bearer_token_and_audits_security_event():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
+
+    start = client.post("/remote/pair/start")
+    confirm = client.post(
+        "/remote/pair/confirm",
+        json={"code": start.json()["code"], "device_name": "Android", "platform": "android"},
+    )
+    old_token = confirm.json()["token"]
+    device_id = confirm.json()["id"]
+    refresh = client.post("/remote/tokens/refresh", headers={"Authorization": f"Bearer {old_token}"})
+    new_token = refresh.json()["token"]
+    old_rejected = client.get("/remote/status", headers={"Authorization": f"Bearer {old_token}"})
+    new_accepted = client.get("/remote/status", headers={"Authorization": f"Bearer {new_token}"})
+    devices = client.get("/remote/devices", headers={"Authorization": f"Bearer {new_token}"})
+
+    assert refresh.status_code == 200
+    assert refresh.json()["id"] == device_id
+    assert new_token and new_token != old_token
+    assert old_rejected.status_code == 401
+    assert new_accepted.status_code == 200
+    assert devices.json()["devices"][0]["token_refreshed_at"] == 1778497000.0
+    assert auditor.events[-1]["command"] == "token.refresh"
+    assert auditor.events[-1]["target_id"] == device_id
 
 
 def test_pairing_start_is_limited_to_loopback_or_authenticated_devices():

@@ -66,6 +66,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'targetName = "target_name"',
         'createdAt = "created_at"',
         'lastSeenAt = "last_seen_at"',
+        'tokenRefreshedAt = "token_refreshed_at"',
         'revokedAt = "revoked_at"',
         'deviceID = "device_id"',
         'dailyAverageSeconds = "daily_average_seconds"',
@@ -91,6 +92,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/shortcuts',
         'remote/power/\\(action)',
         'remote/pair/confirm',
+        'remote/tokens/refresh',
         'remote/devices',
         'remote/processes/\\(id)/launch',
         'remote/shortcuts/\\(id)/open',
@@ -133,3 +135,5 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "formatDuration" in app
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app
+    assert "func refreshToken() async" in app
+    assert "현재 토큰 갱신" in app

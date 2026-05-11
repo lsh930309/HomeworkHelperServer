@@ -136,6 +136,18 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    func refreshToken() async {
+        guard let client else { return }
+        do {
+            let response = try await client.refreshToken()
+            tokenText = response.token
+            message = "'\(response.name)' 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
+            await refreshDevices()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     func refreshDevices() async {
         guard let client else { return }
         do {
@@ -228,6 +240,12 @@ struct RemoteDashboardView: View {
                             Label("디바이스 새로고침", systemImage: "person.2")
                         }
                         .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                        Button {
+                            Task { await viewModel.refreshToken() }
+                        } label: {
+                            Label("현재 토큰 갱신", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
 
                         ForEach(viewModel.devices) { device in
                             HStack {
@@ -236,6 +254,11 @@ struct RemoteDashboardView: View {
                                     Text(device.platform ?? "unknown")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if let tokenRefreshedAt = device.tokenRefreshedAt {
+                                        Text("refreshed: \(tokenRefreshedAt, specifier: "%.0f")")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 if device.revokedAt == nil {

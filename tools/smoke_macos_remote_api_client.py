@@ -108,12 +108,17 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
                     if capabilities.capabilities.processLaunch != status.capabilities.processLaunch {{
                         fatalError("capabilities endpoint drifted from status processLaunch")
                     }}
-                    let summary = try await authedClient.dashboardSummary()
+                    let refreshed = try await authedClient.refreshToken()
+                    if refreshed.token == pair.token {{
+                        fatalError("token refresh did not rotate the bearer token")
+                    }}
+                    let refreshedClient = RemoteAPIClient(baseURL: baseURL, bearerToken: refreshed.token)
+                    let summary = try await refreshedClient.dashboardSummary()
                     if summary.metrics.sessionCount < 0 {{
                         fatalError("dashboard summary decoded an invalid session count")
                     }}
-                    let incidents = try await authedClient.beholderIncidents()
-                    let devices = try await authedClient.devices()
+                    let incidents = try await refreshedClient.beholderIncidents()
+                    let devices = try await refreshedClient.devices()
                     if !devices.contains(where: {{ $0.id == pair.id }}) {{
                         fatalError("paired device missing from device list")
                     }}

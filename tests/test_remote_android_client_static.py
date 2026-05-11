@@ -54,6 +54,7 @@ def test_android_api_client_tracks_remote_agent_contract():
         "remote/shortcuts",
         "remote/power/$action",
         "remote/pair/confirm",
+        "remote/tokens/refresh",
         "remote/devices",
         "remote/processes/$id/launch",
         "remote/shortcuts/$id/open",
@@ -71,11 +72,15 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert "val supportedActions: Set<String>" in models
     assert "data class PairingResult" in models
     assert "data class RemoteDevice" in models
+    assert "tokenRefreshedAt" in models
     assert 'optJSONObject("power")' in api_client
     assert 'capabilities.optBoolean("dashboard_summary")' in api_client
     assert 'capabilities.optBoolean("beholder_incidents")' in api_client
     assert 'fun capabilities(): RemoteCapabilities' in api_client
     assert 'processLaunch = capabilities.optBoolean("process_launch")' in api_client
+    assert 'fun refreshToken(): PairingResult' in api_client
+    assert 'post("remote/tokens/refresh", "{}")' in api_client
+    assert 'item.optString("token_refreshed_at")' in api_client
     assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
     assert 'fun beholderIncidents(): List<RemoteBeholderIncident>' in api_client
     assert 'item.optString("user_title")' in api_client
@@ -144,6 +149,8 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "dashboardSummary" in main_activity
     assert "Beholder 알림" in main_activity
     assert "beholderIncidents" in main_activity
+    assert "fun refreshToken()" in main_activity
+    assert "토큰 갱신" in main_activity
     assert "formatDuration" in main_activity
 
 
