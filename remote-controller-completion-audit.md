@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 확인 commit: `4f28b99 전원 adapter 설정도 명령 실행 전 readiness로 분리한다`
+최신 확인 commit: `c8ed3f5 Android smoke가 UsageStats 권한 blocker도 보고할 수 있게 한다`
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
 ## 1. 완료 판단 기준
@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | 기술 검토서 보존 | `remote-controller-technical-review.md` 존재 | 충족 | 없음 |
 | `dev-remote` 브랜치 생성/작업 | 작업 이력 commit들이 `dev-remote`에서 생성되었고 이후 사용자 요청대로 `main`에 squash merge | 충족 | 브랜치는 merge 후 삭제됨 |
-| Korean Lore commit + push | `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `4f28b99` 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
+| Korean Lore commit + push | `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `4f28b99`, `c8ed3f5` 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
 | Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include | 충족 | Beholder/대시보드 전체 원격화는 후속 범위 |
@@ -96,7 +96,8 @@ sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0
 ./.venv/bin/python tools/check_remote_power_readiness.py
 ./.venv/bin/python tools/verify_remote_controller.py
 cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug
-cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py
+cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access
+./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --report-usage-access --open-usage-access-settings
 ./.venv/bin/python tools/smoke_remote_controller_connectivity.py --base-url http://100.x.y.z:8000 --token "<paired-device-token>" --expect-auth
 ```
 
