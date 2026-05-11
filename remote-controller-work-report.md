@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — dev-remote 최신 검증과 Android License blocker를 재확인
+
+### 작업 범위
+
+- `dev-remote`가 `origin/dev-remote`와 같은 `53a2675`에 있고, `main`/`origin/main`은 기준점 `4052da3`에 남아 있음을 재확인했다.
+- Android SDK readiness를 다시 실행해 license files와 required SDK package 누락 blocker가 유지됨을 확인했다.
+- 통합 verifier를 license blocker 허용 모드로 재실행해 macOS/Remote API 경로는 green이고 Android APK assemble만 Google Android SDK License 미수락으로 차단됨을 문서화했다.
+- branch 이동/merge/reset 없이 문서 evidence만 최신화한다.
+
+### 자체 코드 리뷰 메모
+
+- 코드 변경은 없고, 사용자 지시대로 `dev-remote`에서만 문서 evidence를 보정한다.
+- Android License 수락은 법적/외부 설치 동의가 필요한 의사결정이므로 우회하지 않는다.
+- `--allow-android-license-blocker` 결과는 완료 신호가 아니라, 현재 안전하게 확인 가능한 범위의 회귀 방어 증거로만 취급한다.
+
+### 테스트/검증 결과
+
+- `git status --short --branch && git branch --show-current && git rev-parse --short HEAD && git rev-parse --short main && git rev-parse --short origin/main && git rev-parse --short origin/dev-remote` → `dev-remote`, HEAD/origin `53a2675`, main/origin `4052da3`, clean
+- `./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker` → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker 유지
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 20 passed, Android static 8 passed, macOS static 5 passed, runtime smoke passed, macOS RemoteAPIClient smoke passed, power readiness blocker report passed, Android SDK/APK readiness blocker report passed, full pytest 148 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+dev-remote 검증 기록이 Android License blocker 최신 상태를 보존한다
+
+Constraint: main은 기준점 4052da3에 남겨야 하며 Android SDK License는 사용자 승인 없이 수락할 수 없음
+Rejected: blocker 허용 verifier를 완료 증거로 승격 | APK assemble과 실기기 smoke가 아직 없으므로 완료 판정이 과장됨
+Confidence: high
+Scope-risk: narrow
+Directive: Android SDK License 승인 전에는 sdkmanager --licenses나 license 우회를 실행하지 말고 dev-remote 문서/검증 경계만 유지할 것
+Tested: git branch/hash 상태 확인; ./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: Android SDK License 수락 이후 SDK package 설치, APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-11 — 완료 감사가 power config 최신 verifier 결과를 반영
 
 ### 작업 범위

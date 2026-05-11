@@ -1,9 +1,9 @@
 # Remote Controller 완료 감사
 
-작성/갱신: 2026-05-11
+작성/갱신: 2026-05-12
 현재 작업 브랜치: `dev-remote`
 최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote power config 설정 UI를 안전 저장 경계로 추가한다` commit 참조
-문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
+문서-only 보정 commit: 최신 `dev-remote` 검증 기록 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
 ## 1. 완료 판단 기준
@@ -57,10 +57,15 @@
 최근 통합 검증 명령:
 
 ```bash
+git status --short --branch && git branch --show-current && git rev-parse --short HEAD && git rev-parse --short main && git rev-parse --short origin/main && git rev-parse --short origin/dev-remote
+./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker
 ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker
 ```
 
 확인 결과:
+
+- branch/hash 확인 → `dev-remote`, HEAD/origin `53a2675`, `main`/`origin/main` `4052da3`, working tree clean
+- Android SDK readiness → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker 유지
 
 - `tests/test_remote_routes.py` → 20 passed
 - `tests/test_remote_android_client_static.py` → 8 passed
@@ -80,7 +85,7 @@
 
 ## 4. 완료 불가 판정 사유
 
-현재 상태만으로는 active goal을 완료로 표시하지 않는다.
+2026-05-12 현재 상태만으로는 active goal을 완료로 표시하지 않는다.
 
 이유:
 
