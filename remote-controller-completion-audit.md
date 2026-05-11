@@ -22,7 +22,7 @@
 | 요구사항 / gate | 현재 evidence | 판정 | 남은 gap |
 | --- | --- | --- | --- |
 | 기술 검토서 보존 | `remote-controller-technical-review.md` 존재 | 충족 | 없음 |
-| `dev-remote` 브랜치 생성/작업 | remote-controller 변경분은 `dev-remote`/`origin/dev-remote`에 있고 `main`/`origin/main`은 `4052da3` 기준점으로 복구됨 | 충족 | 브랜치 이동 금지 원칙 유지 필요 |
+| `dev-remote` 브랜치 생성/작업 | remote-controller 변경분은 `dev-remote`/`origin/dev-remote`에 있고 `main`/`origin/main`은 `4052da3` 기준점으로 복구됨. `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3` gate로 verifier 단계에서 브랜치 drift를 잡을 수 있음 | 충족 | 브랜치 이동 금지 원칙 유지 필요 |
 | Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98`, 이후 UsageStats gate commit 및 문서-only 보정 commit 등 `dev-remote` commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
@@ -59,14 +59,15 @@
 ```bash
 git status --short --branch && git branch --show-current && git rev-parse --short HEAD && git rev-parse --short main && git rev-parse --short origin/main && git rev-parse --short origin/dev-remote
 ./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker
-./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker
+./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3
 ```
 
 확인 결과:
 
-- branch/hash 확인 → `dev-remote`, HEAD/origin `53a2675`, `main`/`origin/main` `4052da3`, working tree clean
+- branch/hash 확인 → `dev-remote`, HEAD/origin `5b88f08`, `main`/`origin/main` `4052da3`, working tree clean
 - Android SDK readiness → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker 유지
 
+- verifier branch discipline gate → `dev-remote`와 `main`/`origin/main` 기준점 확인 passed
 - `tests/test_remote_routes.py` → 20 passed
 - `tests/test_remote_android_client_static.py` → 8 passed
 - `tests/test_remote_macos_client_static.py` → 5 passed

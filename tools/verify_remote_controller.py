@@ -68,6 +68,61 @@ def _run(name: str, command: Iterable[str], *, cwd: Path = PROJECT_ROOT, env: di
     )
 
 
+def _git(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ("git", *tuple(args)),
+        cwd=PROJECT_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def _verify_branch_discipline(required_branch: str | None, expected_main_hash: str | None) -> CheckResult:
+    """Report git branch state and optionally fail on branch-discipline drift."""
+
+    output_lines: list[str] = []
+    failures: list[str] = []
+
+    branch = _git(["branch", "--show-current"])
+    current_branch = branch.stdout.strip()
+    output_lines.append(f"current_branch: {current_branch or '(detached)'}")
+    if branch.returncode != 0:
+        failures.append("failed to read current branch")
+    elif required_branch and current_branch != required_branch:
+        failures.append(f"expected branch {required_branch!r}, found {current_branch or '(detached)'}")
+
+    status = _git(["status", "--short", "--branch"])
+    if status.returncode == 0:
+        output_lines.append(status.stdout.rstrip())
+    else:
+        failures.append("failed to read git status")
+        output_lines.append(status.stdout.rstrip())
+
+    if expected_main_hash:
+        for ref in ("main", "origin/main"):
+            revision = _git(["rev-parse", "--short", ref])
+            actual = revision.stdout.strip()
+            output_lines.append(f"{ref}: {actual or '(unavailable)'}")
+            if revision.returncode != 0:
+                failures.append(f"failed to read {ref}")
+            elif actual != expected_main_hash:
+                failures.append(f"expected {ref} at {expected_main_hash}, found {actual}")
+
+    if failures:
+        output_lines.append("branch discipline failures:")
+        output_lines.extend(f"- {failure}" for failure in failures)
+
+    return CheckResult(
+        name="branch discipline",
+        command=("git", "branch/status/rev-parse"),
+        returncode=1 if failures else 0,
+        status="failed" if failures else "passed",
+        output="\n".join(line for line in output_lines if line),
+    )
+
+
 def _is_android_license_blocker(result: CheckResult) -> bool:
     return result.returncode != 0 and any(marker in result.output for marker in ANDROID_LICENSE_MARKERS)
 
@@ -91,9 +146,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run targeted Python tests but skip the full pytest suite.",
     )
+    parser.add_argument(
+        "--require-branch",
+        help="Fail when the current git branch is not the expected work branch, e.g. dev-remote.",
+    )
+    parser.add_argument(
+        "--expect-main-hash",
+        help="Fail when local main or origin/main no longer points at this short commit hash.",
+    )
     args = parser.parse_args(argv)
 
     checks: list[CheckResult] = []
+    checks.append(_verify_branch_discipline(args.require_branch, args.expect_main_hash))
     checks.append(_run("remote routes", [sys.executable, "-m", "pytest", "tests/test_remote_routes.py"]))
     checks.append(_run("android static contract", [sys.executable, "-m", "pytest", "tests/test_remote_android_client_static.py"]))
     checks.append(_run("macOS static contract", [sys.executable, "-m", "pytest", "tests/test_remote_macos_client_static.py"]))

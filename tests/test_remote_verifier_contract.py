@@ -24,6 +24,10 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "./gradlew",
         ":app:assembleDebug",
         "--stacktrace",
+        "branch discipline",
+        "--require-branch",
+        "--expect-main-hash",
+        "branch/status/rev-parse",
     ]:
         assert marker in verifier
 

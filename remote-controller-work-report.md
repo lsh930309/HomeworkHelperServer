@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — verifier가 dev-remote 브랜치 경계를 직접 확인한다
+
+### 작업 범위
+
+- `tools/verify_remote_controller.py`에 브랜치 discipline preflight를 추가했다.
+- `--require-branch dev-remote`로 현재 작업 브랜치가 `dev-remote`가 아니면 verifier가 실패하게 했다.
+- `--expect-main-hash 4052da3`로 `main`/`origin/main`이 사용자 지정 기준점에서 벗어나면 verifier가 실패하게 했다.
+- verifier contract test와 TODO/완료 감사 문서를 새 gate에 맞춰 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 기본 실행은 브랜치 상태를 보고만 하고, 명시 옵션을 준 검증/커밋 전 단계에서만 실패 gate로 동작하게 해 향후 main 병합 후 일반 verifier 실행과 충돌하지 않게 했다.
+- git 명령은 read-only `branch/status/rev-parse`만 사용하며, checkout/reset/push 같은 브랜치 이동 작업은 수행하지 않는다.
+- Android SDK License blocker는 그대로 유지하며 우회하지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → verifier branch gate marker 포함 통과
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3` → branch discipline passed, Remote/macOS/Android static/runtime smoke passed, full pytest 148 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+verifier가 dev-remote 브랜치 경계를 검증 단계에 묶는다
+
+Constraint: remote-controller 작업은 dev-remote에만 남아야 하며 main은 4052da3 기준점에서 drift하면 안 됨
+Rejected: 수동 git status 확인만 반복 | 커밋 전 verifier가 브랜치 사고를 자동으로 잡지 못해 같은 실수를 재발시킬 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: remote-controller 검증/커밋 전에는 --require-branch dev-remote --expect-main-hash 4052da3 gate를 함께 실행할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3; git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-12 — dev-remote 최신 검증과 Android License blocker를 재확인
 
 ### 작업 범위
