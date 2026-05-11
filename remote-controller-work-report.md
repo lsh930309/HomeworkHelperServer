@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — macOS Android-PC 안내문이 세션 sync 구현 상태와 맞물린다
+
+### 작업 범위
+
+- macOS SwiftUI `Android-PC 연결` 카드의 stale 안내문을 보정했다.
+- 기존 문구는 모바일 세션 sync가 후속 단계라고 안내했지만, 현재는 수동 start/end와 Android UsageStats sync 흐름이 구현되어 있어 사용자 안내를 실제 상태와 맞췄다.
+- macOS 정적 계약 테스트에 새 안내문과 과거 stale 문구 금지 assertion을 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- 동작 로직은 변경하지 않고 사용자-facing 설명만 구현 상태에 맞췄다.
+- stale 문구 재발을 정적 테스트로 막아 macOS 앱에서 잘못된 작업 단계 안내가 다시 노출되지 않게 했다.
+- Android SDK License blocker는 계속 우회하지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py` → 5 passed
+- `swift build` in `remote_clients/macos/HomeworkHelperRemote` → passed
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest` → branch discipline passed, targeted Remote/macOS/Android static/runtime smoke passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS 연결 안내가 모바일 세션 sync 현실을 따르게 한다
+
+Constraint: Android APK는 License blocker로 막혀 있지만 macOS 앱은 구현된 수동/UsageStats 세션 흐름을 stale하게 안내하면 안 됨
+Rejected: 후속 단계 안내문 유지 | 이미 구현된 세션 sync 경로를 사용자에게 숨겨 검증·사용 방향을 혼동시킴
+Confidence: high
+Scope-risk: narrow
+Directive: 기능 상태를 바꾸면 macOS/Android 사용자 안내문도 정적 계약 테스트와 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest; git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats sync smoke
+```
+
+---
+
 ## 2026-05-12 — 브랜치 보호 verifier의 pass/fail 경로를 단위 테스트로 잠근다
 
 ### 작업 범위

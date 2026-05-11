@@ -461,7 +461,7 @@ struct RemoteDashboardView: View {
 
                 GroupBox("Android-PC 연결") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("PC process ID와 Android package name을 매칭합니다. 모바일 세션 sync는 후속 단계에서 연결합니다.")
+                        Text("PC process ID와 Android package name을 매칭합니다. 모바일 세션은 수동 시작/종료와 Android UsageStats sync 흐름에 사용됩니다.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {

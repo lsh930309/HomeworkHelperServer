@@ -190,6 +190,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app
     assert "Android-PC 연결" in app
+    assert "모바일 세션은 수동 시작/종료와 Android UsageStats sync 흐름에 사용됩니다." in app
+    assert "모바일 세션 sync는 후속 단계에서 연결합니다." not in app
     assert "gameLinks" in app
     assert "mobileSessions" in app
     assert "func startMobileSession(_ link: RemoteGameLink) async" in app

@@ -34,7 +34,7 @@
 | macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote` | 충족 | 실제 SwiftUI 버튼 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
 | macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
-| macOS dashboard/Beholder read-only 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림` 카드, macOS API smoke DTO decode | 충족 | SwiftUI 창 조작 smoke는 후속 |
+| macOS dashboard/Beholder/read-only 및 Android-PC 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 카드, macOS API smoke DTO decode, Android-PC 안내문이 수동 세션/UsageStats sync 구현 상태와 일치함 | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
 | Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
@@ -70,7 +70,7 @@ git status --short --branch && git branch --show-current && git rev-parse --shor
 - verifier branch discipline gate → `dev-remote`와 `main`/`origin/main` 기준점 확인 passed
 - `tests/test_remote_routes.py` → 20 passed
 - `tests/test_remote_android_client_static.py` → 8 passed
-- `tests/test_remote_macos_client_static.py` → 5 passed
+- `tests/test_remote_macos_client_static.py` → 5 passed, Android-PC 연결 stale 안내문 방지 assertion 포함
 - `tools/smoke_remote_controller_runtime.py` → passed
 - `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics summary/Beholder incident decode 포함 passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed

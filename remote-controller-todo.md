@@ -61,6 +61,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android package visibility / Intent / UsageStats 권한 모델 구현
 - [x] Android-PC game-links Remote API 및 macOS/Android 클라이언트 계약 구현
 - [x] macOS/Android game-links 생성 UI 및 macOS 실제 smoke 검증 추가
+- [x] macOS Android-PC 연결 안내문을 수동 세션/UsageStats sync 구현 상태와 일치하도록 보정
 - [x] `/remote/mobile-sessions/start|end` 수동 세션 API 및 macOS/Android 클라이언트 계약 구현
 - [x] Android UsageStatsManager 최근 전면 앱 조회 기반 추가
 - [x] Android 전원 capability 기반 버튼 비활성화 구현
