@@ -22,7 +22,7 @@
 | 요구사항 / gate | 현재 evidence | 판정 | 남은 gap |
 | --- | --- | --- | --- |
 | 기술 검토서 보존 | `remote-controller-technical-review.md` 존재 | 충족 | 없음 |
-| `dev-remote` 브랜치 생성/작업 | remote-controller 변경분은 `dev-remote`/`origin/dev-remote`에 있고 `main`/`origin/main`은 `4052da3` 기준점으로 복구됨. `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3` gate로 verifier 단계에서 브랜치 drift를 잡을 수 있음 | 충족 | 브랜치 이동 금지 원칙 유지 필요 |
+| `dev-remote` 브랜치 생성/작업 | remote-controller 변경분은 `dev-remote`/`origin/dev-remote`에 있고 `main`/`origin/main`은 `4052da3` 기준점으로 복구됨. `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3` gate로 verifier 단계에서 브랜치 drift를 잡을 수 있고, contract test가 pass/fail 경로를 직접 검증함 | 충족 | 브랜치 이동 금지 원칙 유지 필요 |
 | Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98`, 이후 UsageStats gate commit 및 문서-only 보정 commit 등 `dev-remote` commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
@@ -45,10 +45,10 @@
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
 | Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 APK/device가 없어 appops allow evidence 없음 |
 | Android APK assemble | `tools/verify_remote_controller.py`가 `:app:assembleDebug`를 실행하나 SDK License blocker 확인 | 미충족 | Google Android SDK License 수락 및 SDK package 설치 필요 |
-| 전체 Python 테스트벤치 | verifier에서 `148 passed, 6 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
+| 전체 Python 테스트벤치 | 최신 전체 pytest에서 `150 passed, 6 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
-| verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier와 smoke script 구성 drift 방지 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
+| verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier/smoke script 구성 drift 방지와 branch discipline pass/fail 단위 검증 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
 | 통합 verifier | `tools/verify_remote_controller.py` | 충족 | License 수락 후 `--allow-android-license-blocker` 없이 green 필요 |
 | 사용자 의사결정 blocker | Android SDK License 수락 여부 질문으로 중단 | 충족 | 사용자 승인 필요 |
 
@@ -78,10 +78,10 @@ git status --short --branch && git branch --show-current && git rev-parse --shor
 - `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
 - `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/강제 gate/설정 화면 option 확인
-- 전체 pytest → 148 passed, 6 warnings
+- 전체 pytest → 150 passed, 6 warnings
 - macOS `swift build` → passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 명시 보고
-- `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker 포함 6 passed
+- `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker와 branch discipline pass/fail 단위 테스트 포함 8 passed
 - Android `./gradlew :app:assembleDebug --stacktrace` → `build-tools;35.0.0`, `platforms;android-36` license 미수락 blocker
 
 ## 4. 완료 불가 판정 사유

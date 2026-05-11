@@ -71,6 +71,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android 클라이언트 정적 계약 pytest 추가
 - [x] Remote Controller 통합 검증 스크립트 추가: `tools/verify_remote_controller.py`
 - [x] Remote Controller verifier에 `--require-branch dev-remote`/`--expect-main-hash 4052da3` 브랜치 보호 gate 추가
+- [x] Remote Controller verifier 브랜치 보호 gate pass/fail 단위 테스트 추가
 - [x] 실제 서버 프로세스 기반 Remote API pairing/token smoke 추가: `tools/smoke_remote_controller_runtime.py`
 - [x] Swift `RemoteAPIClient` 기반 macOS-native HTTP/DTO/token smoke 추가: `tools/smoke_macos_remote_api_client.py`
 - [x] Android SDK/License readiness preflight 추가: `tools/check_android_sdk_readiness.py`

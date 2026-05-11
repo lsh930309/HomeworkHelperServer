@@ -1,3 +1,6 @@
+import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -6,6 +9,19 @@ TOOLS = Path("tools")
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _load_verifier_module():
+    spec = importlib.util.spec_from_file_location(
+        "verify_remote_controller",
+        TOOLS / "verify_remote_controller.py",
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_remote_verifier_runs_all_controller_validation_lanes():
@@ -35,6 +51,52 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
     assert "ANDROID_LICENSE_MARKERS" in verifier
     assert "blocked: android-sdk-license" in verifier
     assert "--skip-full-pytest" in verifier
+
+
+def test_remote_verifier_branch_discipline_passes_when_refs_match(monkeypatch):
+    verifier = _load_verifier_module()
+
+    responses = {
+        ("branch", "--show-current"): subprocess.CompletedProcess((), 0, stdout="dev-remote\n", stderr=""),
+        ("status", "--short", "--branch"): subprocess.CompletedProcess(
+            (),
+            0,
+            stdout="## dev-remote...origin/dev-remote\n",
+            stderr="",
+        ),
+        ("rev-parse", "--short", "main"): subprocess.CompletedProcess((), 0, stdout="4052da3\n", stderr=""),
+        ("rev-parse", "--short", "origin/main"): subprocess.CompletedProcess((), 0, stdout="4052da3\n", stderr=""),
+    }
+
+    monkeypatch.setattr(verifier, "_git", lambda args: responses[tuple(args)])
+
+    result = verifier._verify_branch_discipline("dev-remote", "4052da3")
+
+    assert result.returncode == 0
+    assert result.status == "passed"
+    assert "current_branch: dev-remote" in result.output
+    assert "main: 4052da3" in result.output
+    assert "origin/main: 4052da3" in result.output
+
+
+def test_remote_verifier_branch_discipline_fails_on_branch_or_main_drift(monkeypatch):
+    verifier = _load_verifier_module()
+
+    responses = {
+        ("branch", "--show-current"): subprocess.CompletedProcess((), 0, stdout="main\n", stderr=""),
+        ("status", "--short", "--branch"): subprocess.CompletedProcess((), 0, stdout="## main...origin/main\n", stderr=""),
+        ("rev-parse", "--short", "main"): subprocess.CompletedProcess((), 0, stdout="deadbee\n", stderr=""),
+        ("rev-parse", "--short", "origin/main"): subprocess.CompletedProcess((), 0, stdout="4052da3\n", stderr=""),
+    }
+
+    monkeypatch.setattr(verifier, "_git", lambda args: responses[tuple(args)])
+
+    result = verifier._verify_branch_discipline("dev-remote", "4052da3")
+
+    assert result.returncode == 1
+    assert result.status == "failed"
+    assert "expected branch 'dev-remote', found main" in result.output
+    assert "expected main at 4052da3, found deadbee" in result.output
 
 
 def test_android_sdk_readiness_script_reports_blockers_without_mutating_sdk():

@@ -18,6 +18,42 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — 브랜치 보호 verifier의 pass/fail 경로를 단위 테스트로 잠근다
+
+### 작업 범위
+
+- `tests/test_remote_verifier_contract.py`가 `tools/verify_remote_controller.py`를 직접 import해 branch discipline helper를 검증하도록 확장했다.
+- `dev-remote`/`4052da3` 기준이 맞을 때 pass하는 경로와, 현재 브랜치 또는 `main` hash가 drift할 때 fail하는 경로를 monkeypatch로 고정했다.
+- TODO와 완료 감사 문서의 verifier evidence를 8개 contract test 기준으로 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 실제 git branch를 변경하지 않고 `_git` helper만 monkeypatch하므로 main이나 dev-remote 이력을 건드리지 않는다.
+- 이전 정적 marker 테스트만으로는 branch guard의 실패 판정을 증명하지 못했으므로, pass/fail 결과와 오류 메시지를 직접 확인한다.
+- Android SDK License blocker는 계속 우회하지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 8 passed
+- `./.venv/bin/python -m pytest` → 150 passed, 6 warnings
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest` → branch discipline passed, targeted Remote/macOS/Android static/runtime smoke passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+브랜치 보호 verifier가 실패 경로까지 증명된다
+
+Constraint: main drift 재발 방지를 verifier에 맡기려면 gate 존재뿐 아니라 실패 판정도 테스트되어야 함
+Rejected: marker 문자열 테스트만 유지 | 옵션 이름은 있어도 실제 branch/hash mismatch를 잡는다는 증거가 부족함
+Confidence: high
+Scope-risk: narrow
+Directive: branch discipline helper를 바꿀 때는 pass와 drift fail 테스트를 함께 유지할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python -m pytest; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-12 — 완료 감사의 dev-remote hash drift 표현을 제거한다
 
 ### 작업 범위
