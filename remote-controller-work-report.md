@@ -18,6 +18,38 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-12 — 완료 감사의 dev-remote hash drift 표현을 제거한다
+
+### 작업 범위
+
+- `remote-controller-completion-audit.md`의 최신 branch evidence를 특정 `dev-remote` commit hash가 아니라 HEAD/origin 일치 조건으로 정리했다.
+- 직전 branch gate 커밋 이후 감사 문서가 곧바로 stale hash를 갖지 않도록 표현만 보정했다.
+
+### 자체 코드 리뷰 메모
+
+- 코드 변경은 없고, 감사 문서의 증거 표현 drift만 줄인다.
+- `main` 기준점 `4052da3`은 계속 명시해 브랜치 이동 금지 조건을 보존한다.
+
+### 테스트/검증 결과
+
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+완료 감사가 dev-remote 최신 hash drift를 만들지 않는다
+
+Constraint: dev-remote는 계속 전진하지만 main 기준점 4052da3은 고정되어야 함
+Rejected: 감사 문서에 매 commit마다 dev-remote 최신 hash를 고정 | 문서-only 커밋 직후 evidence가 다시 stale해져 완료 감사 신뢰도를 낮춤
+Confidence: high
+Scope-risk: narrow
+Directive: dev-remote 최신성은 HEAD/origin 일치로 표현하고, 고정해야 하는 기준점만 commit hash로 명시할 것
+Tested: git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-12 — verifier가 dev-remote 브랜치 경계를 직접 확인한다
 
 ### 작업 범위

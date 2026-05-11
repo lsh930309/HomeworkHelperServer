@@ -64,7 +64,7 @@ git status --short --branch && git branch --show-current && git rev-parse --shor
 
 확인 결과:
 
-- branch/hash 확인 → `dev-remote`, HEAD/origin `5b88f08`, `main`/`origin/main` `4052da3`, working tree clean
+- branch/hash 확인 → 현재 브랜치 `dev-remote`, HEAD와 `origin/dev-remote` 일치, `main`/`origin/main` `4052da3`, working tree clean
 - Android SDK readiness → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker 유지
 
 - verifier branch discipline gate → `dev-remote`와 `main`/`origin/main` 기준점 확인 passed
