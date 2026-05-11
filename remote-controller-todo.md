@@ -95,5 +95,5 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [ ] 실제 Android package name 실행 Intent smoke test
 - [ ] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행
 - [x] Mobile session analytics 병합 구현
-- [ ] UsageStatsManager 기반 자동 세션 기록/Remote Agent sync 구현
+- [x] UsageStatsManager 기반 자동 세션 기록/Remote Agent sync 구현
 - [ ] 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test

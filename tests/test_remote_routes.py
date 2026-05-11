@@ -395,6 +395,34 @@ def test_remote_mobile_sessions_start_end_from_game_link_and_audit():
     assert [event["command"] for event in auditor.events[-2:]] == ["mobile_session.start", "mobile_session.end"]
 
 
+def test_remote_mobile_session_start_accepts_usage_stats_source_and_started_at():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="game-a", name="Game A", monitoring_path="/game.exe", launch_path="/game.url")],
+        game_links=[
+            models.GamePlatformLink(
+                id="link-a",
+                pc_process_id="game-a",
+                pc_display_name="Game A",
+                android_package_name="com.example.game",
+                sync_strategy="usage_stats",
+                created_at=1778496000.0,
+                updated_at=1778496000.0,
+            )
+        ],
+    )
+
+    response = client.post(
+        "/remote/mobile-sessions/start",
+        json={"game_link_id": "link-a", "source": "usage_stats", "started_at": 1778496900.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "usage_stats"
+    assert body["started_at"] == 1778496900.0
+    assert auditor.events[-1]["metadata"] == {"game_link_id": "link-a", "source": "usage_stats"}
+
+
 def test_remote_mobile_session_start_rejects_unknown_game_link():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
 

@@ -18,6 +18,41 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-11 — Android UsageStats 세션 sync를 Remote mobile sessions에 연결
+
+### 작업 범위
+
+- Android `RemoteApiClient.startMobileSession`에 `started_at` 전달을 추가해 UsageStats event timestamp로 Remote mobile session을 시작할 수 있게 했다.
+- Android Compose에 `Usage 동기화` 버튼과 `syncUsageStatsSessions()`를 추가했다. 최근 전면 앱 package가 game-link와 매칭되면 `source=usage_stats` 세션을 시작하고, 다른 자동 세션은 종료한다.
+- 자동 sync는 수동 mobile session을 자동 종료하지 않도록 `source == "usage_stats"` 활성 세션만 대상으로 제한했다.
+- Remote API 테스트에 `source=usage_stats`와 `started_at` 계약을 고정하고 Android 정적 계약 테스트에 자동 sync marker를 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- 실제 Android device 권한과 UsageStats provider 동작은 SDK License/APK blocker 때문에 아직 실행하지 못하므로, 이번 단계는 macOS에서 검증 가능한 Remote API 계약과 Android 정적 UI/로직 전파에 한정했다.
+- foreground package가 등록된 game-link와 매칭되지 않으면 기존 `usage_stats` 자동 세션을 종료해 앱 전환 시 세션이 열린 채 남지 않게 했다.
+- 수동으로 시작한 세션은 사용자의 명시 조작으로만 종료하도록 자동 sync에서 제외했다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 33 passed, 6 warnings
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 19 passed, full pytest 147 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android UsageStats 세션 sync를 Remote mobile sessions에 연결한다
+
+Constraint: Android APK/device 실행은 SDK License blocker 전이라 실제 provider smoke 대신 Remote API 계약과 Android 정적 sync 흐름을 먼저 고정해야 함
+Rejected: 수동 mobile session만 유지 | UsageStats 권한을 이미 노출했는데 Remote Agent 세션 기록으로 이어지지 않아 Android-PC analytics gap이 남음
+Confidence: medium
+Scope-risk: moderate
+Directive: SDK License 승인 후 실제 기기에서 Usage Access 허용, mapped package foreground 전환, 자동 start/end, mobile_metrics 반영을 한 번에 smoke할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (33 passed); ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (147 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats provider 자동 start/end runtime
+```
+
 ## 2026-05-11 — Remote mobile session analytics를 dashboard summary에 병합
 
 ### 작업 범위

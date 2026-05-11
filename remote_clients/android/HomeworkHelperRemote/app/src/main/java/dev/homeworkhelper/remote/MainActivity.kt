@@ -169,6 +169,9 @@ fun RemoteApp() {
     fun activeMobileSession(link: RemoteGameLink): RemoteMobileSession? =
         mobileSessions.firstOrNull { it.gameLinkId == link.id && it.status == "active" }
 
+    fun activeUsageStatsMobileSessions(): List<RemoteMobileSession> =
+        mobileSessions.filter { it.status == "active" && it.source == "usage_stats" }
+
     fun startMobileSession(link: RemoteGameLink) {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { client().startMobileSession(link.id) } }
@@ -188,6 +191,51 @@ fun RemoteApp() {
                     refresh(includeDevices = token.isNotBlank())
                 }
                 .onFailure { message = it.message ?: "모바일 세션 종료 실패" }
+        }
+    }
+
+    fun syncUsageStatsSessions() {
+        if (!androidIntegration.hasUsageAccess()) {
+            usageAccessGranted = false
+            message = "Usage Access 권한이 필요합니다."
+            androidIntegration.openUsageAccessSettings()
+            return
+        }
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val usage = androidIntegration.recentForegroundApp()
+                    val matchedLink = usage?.let { snapshot ->
+                        gameLinks.firstOrNull { it.androidPackageName == snapshot.packageName }
+                    }
+                    val api = client()
+                    val activeAutoSessions = activeUsageStatsMobileSessions()
+                    val ended = activeAutoSessions
+                        .filter { matchedLink == null || it.gameLinkId != matchedLink.id }
+                        .map { api.endMobileSession(it.id) }
+                    val started = if (matchedLink != null && usage != null && activeMobileSession(matchedLink) == null) {
+                        api.startMobileSession(
+                            gameLinkId = matchedLink.id,
+                            source = "usage_stats",
+                            startedAtSeconds = usage.timestampMillis / 1000.0,
+                        )
+                    } else {
+                        null
+                    }
+                    UsageSyncResult(usage, matchedLink, started, ended)
+                }
+            }.onSuccess { result ->
+                usageAccessGranted = true
+                recentUsage = result.usage
+                refresh(includeDevices = token.isNotBlank())
+                message = when {
+                    result.started != null -> "${result.started.pcDisplayName.ifBlank { result.started.pcProcessId }} UsageStats 세션을 시작했습니다."
+                    result.ended.isNotEmpty() -> "UsageStats 자동 세션 ${result.ended.size}개를 종료했습니다."
+                    result.matchedLink != null -> "${result.matchedLink.androidPackageName} 세션이 이미 동기화되어 있습니다."
+                    result.usage != null -> "최근 전면 앱 ${result.usage.packageName}에 연결된 game-link가 없습니다."
+                    else -> "최근 전면 앱을 찾지 못했습니다."
+                }
+            }.onFailure { message = it.message ?: "UsageStats 세션 동기화 실패" }
         }
     }
 
@@ -333,6 +381,7 @@ fun RemoteApp() {
                                 message = if (ok) "$androidPackageName 실행 요청" else "Android 패키지 실행 실패"
                             }) { Text("앱 실행") }
                             Button(onClick = { androidIntegration.openUsageAccessSettings() }) { Text("Usage 권한") }
+                            Button(onClick = { syncUsageStatsSessions() }, enabled = gameLinks.isNotEmpty()) { Text("Usage 동기화") }
                             Button(onClick = {
                                 usageAccessGranted = androidIntegration.hasUsageAccess()
                                 recentUsage = androidIntegration.recentForegroundApp()
@@ -485,6 +534,13 @@ private data class RemoteSnapshot(
     val processes: List<RemoteProcess>,
     val shortcuts: List<RemoteShortcut>,
     val devices: List<RemoteDevice>,
+)
+
+private data class UsageSyncResult(
+    val usage: AndroidUsageSnapshot?,
+    val matchedLink: RemoteGameLink?,
+    val started: RemoteMobileSession?,
+    val ended: List<RemoteMobileSession>,
 )
 
 private fun formatDuration(seconds: Double): String {

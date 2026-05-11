@@ -138,12 +138,14 @@ class RemoteApiClient(
         return json.getJSONArray("sessions").mapObjects { item -> item.toMobileSession() }
     }
 
-    fun startMobileSession(gameLinkId: String, source: String = "manual"): RemoteMobileSession {
+    fun startMobileSession(gameLinkId: String, source: String = "manual", startedAtSeconds: Double? = null): RemoteMobileSession {
         val body = JSONObject()
             .put("game_link_id", gameLinkId)
             .put("source", source)
-            .toString()
-        return JSONObject(post("remote/mobile-sessions/start", body)).toMobileSession()
+        if (startedAtSeconds != null) {
+            body.put("started_at", startedAtSeconds)
+        }
+        return JSONObject(post("remote/mobile-sessions/start", body.toString())).toMobileSession()
     }
 
     fun endMobileSession(sessionId: String): RemoteMobileSession {

@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 작업 브랜치: `dev-remote`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote mobile session analytics를 dashboard summary에 병합한다` commit 참조
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Android UsageStats 세션 sync를 Remote mobile sessions에 연결한다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -37,9 +37,9 @@
 | macOS dashboard/Beholder read-only 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림` 카드, macOS API smoke DTO decode | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
-| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·세션 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
+| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
-| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch/mobile session card | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
+| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch/mobile session card, `Usage 동기화` 자동 start/end 로직 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
 | Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
@@ -86,7 +86,7 @@
 
 1. Android APK assemble이 Google Android SDK License 수락 전이라 완료되지 않았다.
 2. 실제 Android device/emulator install smoke가 없다.
-3. Android Keystore, UsageStats provider, game-link 생성 UI, package Intent 실행, 수동 mobile session start/end는 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
+3. Android Keystore, UsageStats provider, game-link 생성 UI, package Intent 실행, 수동/UsageStats 자동 mobile session start/end는 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
 4. 기술 검토서의 Tailscale/ZeroTier 외부망 실접속은 smoke 스크립트와 가이드까지 준비되었지만 LTE/tailnet 실제 URL/token evidence는 아직 없다.
 5. 실제 SmartThings/SSH 전원 동작은 readiness까지만 확인되었고 장비 side effect가 있어 별도 승인된 환경이 필요하다.
 

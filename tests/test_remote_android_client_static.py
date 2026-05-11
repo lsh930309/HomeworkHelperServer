@@ -92,7 +92,8 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
     assert 'fun gameLinks(): List<RemoteGameLink>' in api_client
     assert 'fun createGameLink(processId: String, androidPackageName: String' in api_client
-    assert 'fun startMobileSession(gameLinkId: String' in api_client
+    assert 'fun startMobileSession(gameLinkId: String, source: String = "manual", startedAtSeconds: Double? = null)' in api_client
+    assert 'body.put("started_at", startedAtSeconds)' in api_client
     assert 'fun endMobileSession(sessionId: String)' in api_client
     assert 'fun activeMobileSessions(): List<RemoteMobileSession>' in api_client
     assert 'json.getJSONArray("links")' in api_client
@@ -191,6 +192,11 @@ def test_android_usage_stats_ui_can_query_recent_foreground_app():
 
     assert "var recentUsage by remember" in main_activity
     assert "androidIntegration.recentForegroundApp()" in main_activity
+    assert "fun syncUsageStatsSessions()" in main_activity
+    assert "activeUsageStatsMobileSessions()" in main_activity
+    assert 'source = "usage_stats"' in main_activity
+    assert "UsageSyncResult" in main_activity
+    assert "Usage 동기화" in main_activity
     assert "최근 앱" in main_activity
     assert "최근 전면 앱" in main_activity
     assert "Usage Access 권한이 없거나 최근 전면 앱을 찾지 못했습니다." in main_activity
