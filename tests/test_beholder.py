@@ -696,7 +696,7 @@ def test_settings_guard_blocks_invalid_sidebar_trigger_range(monkeypatch, tmp_pa
         assert "sidebar_trigger_y_start>sidebar_trigger_y_end" in payload["risk_factors"]
 
 
-def test_settings_override_does_not_bypass_later_personalized_reset(monkeypatch, tmp_path):
+def test_settings_override_bypasses_later_guards_for_same_scoped_mutation(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -721,23 +721,18 @@ def test_settings_override_does_not_bypass_later_personalized_reset(monkeypatch,
         assert "invalid_setting_value" in exc.incident.risk_factors
         token = beholder.issue_override_token(db, exc.incident)
 
-    try:
-        crud.patch_settings(
-            db,
-            risky_update,
-            actor="sidebar_settings_dialog",
-            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
-            override_token=token,
-        )
-        pytest.fail("invalid-value override must not bypass personalized reset guard")
-    except beholder.BeholderBlocked as exc:
-        assert "personalized_settings_default_regression" in exc.incident.risk_factors
-        assert "screenshot_save_dir" in exc.incident.risk_factors
+    crud.patch_settings(
+        db,
+        risky_update,
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+        override_token=token,
+    )
 
     db.expire_all()
     settings = crud.get_settings(db)
-    assert settings.screenshot_save_dir == "D:/CustomScreenshots"
-    assert settings.sidebar_height_ratio == 0.8
+    assert settings.screenshot_save_dir == ""
+    assert settings.sidebar_height_ratio == 2.0
 
 
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
@@ -1065,17 +1060,81 @@ def test_settings_safe_save_keeps_unused_override_token(monkeypatch):
 
     import src.api.client as client_mod
 
-    def _put(*args, **kwargs):
+    def _patch(*args, **kwargs):
         seen_headers.append(kwargs.get("headers") or {})
         return _Response()
 
-    monkeypatch.setattr(client_mod.requests, "put", _put)
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
 
     assert client.save_global_settings(GlobalSettings(theme="dark"), actor="global_settings_dialog") is True
 
     assert seen_headers[0]["X-HH-Beholder-Override"] == "token"
     assert client._pending_beholder_overrides[("settings_update", "global_settings_dialog")] == "token"
     assert client.global_settings.theme == "dark"
+
+
+def test_dialog_settings_save_sends_only_actor_owned_fields(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.global_settings = GlobalSettings()
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    seen_payloads = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return GlobalSettings(sidebar_mode="always", theme="dark").to_dict()
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        seen_payloads.append(kwargs.get("json") or {})
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    settings = GlobalSettings(sidebar_mode="always", theme="dark")
+    assert client.save_global_settings(settings, actor="sidebar_settings_dialog") is True
+
+    assert "sidebar_mode" in seen_payloads[0]
+    assert "theme" not in seen_payloads[0]
+
+
+def test_settings_override_returns_after_first_consumed_guard(monkeypatch):
+    from src.data import beholder as beholder_mod
+
+    settings = models.GlobalSettings(sidebar_trigger_y_start=0.25, sidebar_mode="always")
+    update_data = {"sidebar_trigger_y_start": 2.0, "sidebar_mode": "game"}
+    operation = beholder_mod.BeholderOperation(
+        kind="settings_update",
+        actor="sidebar_settings_dialog",
+        allowed_tables={beholder_mod.GLOBAL_SETTINGS_TABLE},
+        allowed_columns={beholder_mod.GLOBAL_SETTINGS_TABLE: {"sidebar_trigger_y_start", "sidebar_mode"}},
+        evidence={
+            "changed_fields": ["sidebar_trigger_y_start", "sidebar_mode"],
+            "context": {"settings_id": 1},
+            "proposed_values": update_data,
+        },
+        override_token="token",
+    )
+    consume_calls = []
+    monkeypatch.setattr(
+        beholder_mod,
+        "consume_override_token",
+        lambda *_args, **_kwargs: consume_calls.append(True) or True,
+    )
+
+    beholder_mod.guard_settings_update(None, settings, update_data, operation)
+
+    assert len(consume_calls) == 1
 
 
 def test_runtime_heartbeat_keeps_unused_override_token(monkeypatch):
@@ -1265,26 +1324,38 @@ def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp
     edited = crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
         name="Daily Check 2",
         url="https://example.test/2",
-        refresh_time_str=None,
+        refresh_time_str="05:00",
     ))
-    assert edited.refresh_time_str is None
+    assert edited.refresh_time_str == "05:00"
     assert edited.last_reset_timestamp == opened_at
 
-    try:
-        crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
-            name="Daily Check 2",
-            url="https://example.test/2",
-            refresh_time_str=None,
-            last_reset_timestamp=None,
-        ))
-        pytest.fail("editor updates must not mutate runtime-owned shortcut fields")
-    except beholder.BeholderBlocked as exc:
-        assert "unauthorized_column_write" in exc.incident.risk_factors
-        assert "last_reset_timestamp" in exc.incident.risk_factors
+    cleared = crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
+        name="Daily Check 2",
+        url="https://example.test/2",
+        refresh_time_str=None,
+        last_reset_timestamp=None,
+    ))
+    assert cleared.last_reset_timestamp is None
+
+    crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
+        name="Daily Check 2",
+        url="https://example.test/2",
+        refresh_time_str="05:00",
+    ))
+    crud.mark_shortcut_opened(db, shortcut.id, opened_at)
+    newer_opened_at = opened_at + 3600
+    crud.mark_shortcut_opened(db, shortcut.id, newer_opened_at)
+    edited_again = crud.update_shortcut(db, shortcut.id, schemas.WebShortcutCreate(
+        name="Daily Check 3",
+        url="https://example.test/3",
+        refresh_time_str="05:00",
+        last_reset_timestamp=opened_at,
+    ))
+    assert edited_again.last_reset_timestamp == newer_opened_at
 
     db.expire_all()
     unchanged = db.query(models.WebShortcut).filter_by(id=shortcut.id).one()
-    assert unchanged.last_reset_timestamp == opened_at
+    assert unchanged.last_reset_timestamp == newer_opened_at
 
 
 def test_process_runtime_stamina_guard_blocks_impossible_range(monkeypatch, tmp_path):
@@ -1721,6 +1792,82 @@ def test_process_monitor_does_not_rebind_late_resolution_for_exited_game(monkeyp
     })
 
     assert "game-a" not in monitor.active_monitored_processes
+
+
+def test_process_monitor_rejects_reused_pid_for_late_resolution(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+    import src.core.process_monitor as process_monitor_module
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+    )
+
+    class FakeProcess:
+        def exe(self):
+            return "/other/process.exe"
+
+        def create_time(self):
+            return 1.0
+
+        def is_running(self):
+            return True
+
+    class FakeDataManager:
+        managed_processes = [process]
+
+    monkeypatch.setattr(process_monitor_module.psutil, "Process", lambda _pid: FakeProcess())
+    monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
+
+    monitor = ProcessMonitor(FakeDataManager())
+
+    assert monitor._is_runtime_process_running(
+        "game-a",
+        {"pid": 100, "exe": "/games/a.exe", "requested_start_timestamp": 1.0},
+    ) is False
+
+
+def test_process_monitor_pending_stop_skips_hoyolab_exit_refresh(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    from src.data.data_models import ManagedProcess
+    import src.core.process_monitor as process_monitor_module
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+        stamina_tracking_enabled=True,
+        hoyolab_game_id="genshin",
+    )
+
+    class FakeDataManager:
+        managed_processes = [process]
+
+    monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
+    monkeypatch.setattr(
+        ProcessMonitor,
+        "_update_stamina_on_game_exit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pending stop should skip stamina refresh")),
+    )
+
+    monitor = ProcessMonitor(FakeDataManager())
+    monitor.active_monitored_processes["game-a"] = {
+        "pid": 100,
+        "exe": "/games/a.exe",
+        "start_time_approx": 1.0,
+        "session_id": 7,
+        "runtime_stop_pending": True,
+    }
+
+    result = monitor.check_and_update_statuses()
+
+    assert result.changed is False
+    assert process.last_played_timestamp == 123.0
 
 
 def test_process_monitor_retries_runtime_start_after_allow_once(monkeypatch):

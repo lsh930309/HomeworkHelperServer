@@ -66,27 +66,36 @@ class ProcessMonitor:
     def _is_runtime_process_running(self, process_id: str, context: dict[str, Any] | None = None) -> bool:
         """Return whether the process selected by a late Beholder decision is still running."""
         context = context or {}
-        expected_pid = context.get("pid")
-        if expected_pid is not None:
-            try:
-                if psutil.pid_exists(int(expected_pid)):
-                    return True
-            except (TypeError, ValueError):
-                pass
-
         expected_exe = self._normalize_path(context.get("exe"))
         if not expected_exe:
             for managed_proc in self.data_manager.managed_processes:
                 if managed_proc.id == process_id:
                     expected_exe = self._normalize_path(managed_proc.monitoring_path)
                     break
+        expected_start = context.get("requested_start_timestamp") or context.get("start_time_approx")
+        expected_pid = context.get("pid")
+        if expected_pid is not None:
+            try:
+                proc = psutil.Process(int(expected_pid))
+                proc_exe = self._normalize_path(proc.exe())
+                if expected_exe and proc_exe != expected_exe:
+                    return False
+                if expected_start is not None and abs(proc.create_time() - float(expected_start)) > 2:
+                    return False
+                return proc.is_running()
+            except (TypeError, ValueError, psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
+                pass
+
         if not expected_exe:
             return False
 
         for proc in psutil.process_iter(["exe"]):
             try:
-                if self._normalize_path(proc.info.get("exe")) == expected_exe:
-                    return True
+                if self._normalize_path(proc.info.get("exe")) != expected_exe:
+                    continue
+                if expected_start is not None and abs(proc.create_time() - float(expected_start)) > 2:
+                    continue
+                return True
             except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
                 continue
         return False
@@ -240,6 +249,8 @@ class ProcessMonitor:
             else:
                 if was_previously_active:
                     cached_info = self.active_monitored_processes.get(managed_proc.id, {})
+                    if cached_info.get("runtime_stop_pending"):
+                        continue
                     termination_time = cached_info.get("pending_termination_time") or time.time()
                     previous_last_played = managed_proc.last_played_timestamp
                     managed_proc.last_played_timestamp = termination_time
@@ -252,9 +263,6 @@ class ProcessMonitor:
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
 
                     # 세션 종료 기록 (스태미나 값 포함)
-                    if cached_info.get("runtime_stop_pending"):
-                        managed_proc.last_played_timestamp = previous_last_played
-                        continue
                     session_id = cached_info.get('session_id')
                     _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:

@@ -679,6 +679,24 @@ def run_server_main():
             override_token=x_hh_beholder_override,
         )
 
+    @app.patch("/settings", response_model=schemas.GlobalSettingsSchema)
+    def patch_global_settings(
+        settings_data: dict[str, Any],
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        actor = x_hh_beholder_actor or "settings_patch"
+        return crud.patch_settings(
+            db=db,
+            updates=settings_data,
+            actor=actor,
+            operation_kind=x_hh_beholder_operation or "settings_update",
+            allowed_fields=beholder.allowed_settings_fields_for_actor(actor),
+            override_token=x_hh_beholder_override,
+        )
+
     # create / read / update [process sessions]
     @app.post("/sessions", response_model=schemas.ProcessSessionSchema, status_code=201)
     def create_new_session(

@@ -803,60 +803,62 @@ def guard_settings_update(db: Session, current_settings: models.GlobalSettings, 
 
     invalid_values = _invalid_settings_values(current_settings, update_data, changed_fields)
     if invalid_values:
-        if not consume_override_token(db, operation.override_token, operation):
-            relation_invalid = any(">" in item for item in invalid_values)
-            incident = create_incident(
-                db,
-                severity=SEVERITY_CRITICAL,
-                operation=operation,
-                target_summary="global_settings",
-                suspected_cause="설정 화면에서 저장할 수 없는 범위 또는 조합의 값이 들어왔습니다.",
-                current_state_summary=f"현재 변경 대상: {sorted(changed_fields)}",
-                proposed_change_summary=f"비정상 설정 값: {invalid_values}",
-                risk_score=91,
-                risk_factors=[
-                    "invalid_setting_value",
-                    *invalid_values,
-                    *(["invalid_setting_relation"] if relation_invalid else []),
-                ],
-                safe_recommendation="저장을 차단했습니다. 설정 창에서 허용 범위 안의 값으로 다시 저장하세요.",
-                user_title="설정 값이 안전한 범위를 벗어났습니다",
-                user_summary="저장하려는 설정 중 앱이 정상적으로 해석할 수 없는 값이 있습니다.",
-                user_impact="그대로 저장하면 사이드바 위치, 알림 시각, 캡처/녹화 동작이 비정상적으로 계산될 수 있어 기존 설정을 유지했습니다.",
-                recommended_action="deny",
-                available_actions=[
-                    {"id": "deny", "label": "차단 유지", "description": "비정상 설정을 저장하지 않고 기존 설정을 유지합니다.", "recommended": True},
-                    {"id": "allow_once", "label": "이번 한 번 허용", "description": "백업 복구 등 의도한 특수 작업일 때만 한 번 허용합니다.", "danger": True},
-                ],
-            )
-            raise BeholderBlocked(incident)
+        if consume_override_token(db, operation.override_token, operation):
+            return
+        relation_invalid = any(">" in item for item in invalid_values)
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="설정 화면에서 저장할 수 없는 범위 또는 조합의 값이 들어왔습니다.",
+            current_state_summary=f"현재 변경 대상: {sorted(changed_fields)}",
+            proposed_change_summary=f"비정상 설정 값: {invalid_values}",
+            risk_score=91,
+            risk_factors=[
+                "invalid_setting_value",
+                *invalid_values,
+                *(["invalid_setting_relation"] if relation_invalid else []),
+            ],
+            safe_recommendation="저장을 차단했습니다. 설정 창에서 허용 범위 안의 값으로 다시 저장하세요.",
+            user_title="설정 값이 안전한 범위를 벗어났습니다",
+            user_summary="저장하려는 설정 중 앱이 정상적으로 해석할 수 없는 값이 있습니다.",
+            user_impact="그대로 저장하면 사이드바 위치, 알림 시각, 캡처/녹화 동작이 비정상적으로 계산될 수 있어 기존 설정을 유지했습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "비정상 설정을 저장하지 않고 기존 설정을 유지합니다.", "recommended": True},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "백업 복구 등 의도한 특수 작업일 때만 한 번 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
 
     defaults = _schema_defaults()
     defaulted = [field for field in changed_fields if field in defaults and update_data.get(field) == defaults[field]]
     if len(changed_fields) >= 8 and len(defaulted) >= max(6, int(len(changed_fields) * 0.6)):
-        if not consume_override_token(db, operation.override_token, operation):
-            incident = create_incident(
-                db,
-                severity=SEVERITY_CRITICAL,
-                operation=operation,
-                target_summary="global_settings",
-                suspected_cause="많은 설정이 동시에 기본값으로 되돌아가려 했습니다.",
-                current_state_summary=f"변경 대상 {len(changed_fields)}개: {sorted(changed_fields)}",
-                proposed_change_summary=f"그중 기본값 회귀 {len(defaulted)}개: {sorted(defaulted)}",
-                risk_score=96,
-                risk_factors=["bulk_settings_default_regression", *sorted(defaulted)],
-                safe_recommendation="저장을 차단했습니다. 설정 백업 또는 DB 백업에서 복구 가능성을 먼저 확인하세요.",
-                user_title="설정 초기화로 보이는 변경을 막았습니다",
-                user_summary="여러 설정이 한꺼번에 초기값으로 돌아가려고 했습니다.",
-                user_impact="저장했다면 사이드바/스크린샷/녹화 같은 개인 설정이 사라질 수 있었습니다.",
-                recommended_action="deny",
-                available_actions=[
-                    {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
-                    {"id": "quarantine", "label": "나중에 검토", "description": "사건만 보류 상태로 표시합니다."},
-                    {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 1회만 허용합니다.", "danger": True},
-                ],
-            )
-            raise BeholderBlocked(incident)
+        if consume_override_token(db, operation.override_token, operation):
+            return
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="많은 설정이 동시에 기본값으로 되돌아가려 했습니다.",
+            current_state_summary=f"변경 대상 {len(changed_fields)}개: {sorted(changed_fields)}",
+            proposed_change_summary=f"그중 기본값 회귀 {len(defaulted)}개: {sorted(defaulted)}",
+            risk_score=96,
+            risk_factors=["bulk_settings_default_regression", *sorted(defaulted)],
+            safe_recommendation="저장을 차단했습니다. 설정 백업 또는 DB 백업에서 복구 가능성을 먼저 확인하세요.",
+            user_title="설정 초기화로 보이는 변경을 막았습니다",
+            user_summary="여러 설정이 한꺼번에 초기값으로 돌아가려고 했습니다.",
+            user_impact="저장했다면 사이드바/스크린샷/녹화 같은 개인 설정이 사라질 수 있었습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
+                {"id": "quarantine", "label": "나중에 검토", "description": "사건만 보류 상태로 표시합니다."},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 1회만 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
 
     personalized_defaulted = []
     for field in sorted(changed_fields & PERSONALIZED_SETTINGS_FIELDS):
@@ -868,28 +870,29 @@ def guard_settings_update(db: Session, current_settings: models.GlobalSettings, 
         if current != default and proposed == default:
             personalized_defaulted.append(field)
     if personalized_defaulted:
-        if not consume_override_token(db, operation.override_token, operation):
-            incident = create_incident(
-                db,
-                severity=SEVERITY_CRITICAL,
-                operation=operation,
-                target_summary="global_settings",
-                suspected_cause="개인화 설정 일부가 기본값으로 되돌아가려 했습니다.",
-                current_state_summary=f"보존해야 할 개인화 설정: {personalized_defaulted}",
-                proposed_change_summary=f"기본값 회귀 필드: {personalized_defaulted}",
-                risk_score=90,
-                risk_factors=["personalized_settings_default_regression", *personalized_defaulted],
-                safe_recommendation="저장을 차단했습니다. 의도한 초기화라면 Beholder에서 이번 한 번 허용을 선택하세요.",
-                user_title="개인 설정이 초기화될 수 있어 저장하지 않았습니다",
-                user_summary="사이드바/스크린샷/OBS 같은 개인화 설정 일부가 기본값으로 돌아가려고 했습니다.",
-                user_impact="저장했다면 직접 지정한 경로, 캡처 방식, 사이드바 표시 방식 등이 사라질 수 있었습니다.",
-                recommended_action="deny",
-                available_actions=[
-                    {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
-                    {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 한 번만 허용합니다.", "danger": True},
-                ],
-            )
-            raise BeholderBlocked(incident)
+        if consume_override_token(db, operation.override_token, operation):
+            return
+        incident = create_incident(
+            db,
+            severity=SEVERITY_CRITICAL,
+            operation=operation,
+            target_summary="global_settings",
+            suspected_cause="개인화 설정 일부가 기본값으로 되돌아가려 했습니다.",
+            current_state_summary=f"보존해야 할 개인화 설정: {personalized_defaulted}",
+            proposed_change_summary=f"기본값 회귀 필드: {personalized_defaulted}",
+            risk_score=90,
+            risk_factors=["personalized_settings_default_regression", *personalized_defaulted],
+            safe_recommendation="저장을 차단했습니다. 의도한 초기화라면 Beholder에서 이번 한 번 허용을 선택하세요.",
+            user_title="개인 설정이 초기화될 수 있어 저장하지 않았습니다",
+            user_summary="사이드바/스크린샷/OBS 같은 개인화 설정 일부가 기본값으로 돌아가려고 했습니다.",
+            user_impact="저장했다면 직접 지정한 경로, 캡처 방식, 사이드바 표시 방식 등이 사라질 수 있었습니다.",
+            recommended_action="deny",
+            available_actions=[
+                {"id": "deny", "label": "차단 유지", "description": "현재 저장된 설정을 유지합니다.", "recommended": True},
+                {"id": "allow_once", "label": "이번 한 번 허용", "description": "정말 의도한 초기화라면 한 번만 허용합니다.", "danger": True},
+            ],
+        )
+        raise BeholderBlocked(incident)
 
 
 def guard_session_start(db: Session, session_data: Any, operation: BeholderOperation) -> None:

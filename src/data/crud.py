@@ -306,13 +306,17 @@ def update_shortcut(
     if db_shortcut:
         update_data = _dump_schema(shortcut, exclude_unset=True)
         update_data.pop("id", None)
+        explicit_refresh_disable_clear = (
+            "refresh_time_str" in update_data
+            and update_data.get("refresh_time_str") is None
+            and "last_reset_timestamp" in update_data
+            and update_data.get("last_reset_timestamp") is None
+        )
+        if actor == "web_shortcut_editor" and not explicit_refresh_disable_clear:
+            update_data.pop("last_reset_timestamp", None)
         changed = {key for key, value in update_data.items() if hasattr(db_shortcut, key) and getattr(db_shortcut, key) != value}
         allowed_fields = beholder.WEB_SHORTCUT_EDITOR_FIELDS - {"id"}
-        if (
-            "refresh_time_str" in changed
-            and update_data.get("refresh_time_str") is None
-            and update_data.get("last_reset_timestamp") is None
-        ):
+        if explicit_refresh_disable_clear and "refresh_time_str" in changed:
             allowed_fields = allowed_fields | {"last_reset_timestamp"}
         _guard_write(
             db,

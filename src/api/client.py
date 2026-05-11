@@ -4,6 +4,7 @@ import requests
 from typing import Any, List, Optional
 import os
 import uuid
+from src.data import beholder
 from src.data.data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
 
 
@@ -390,9 +391,15 @@ class ApiClient:
     def save_global_settings(self, updated_settings: GlobalSettings, actor: str = "settings_full_update") -> bool:
         """전역 설정을 서버에 업데이트합니다."""
         try:
-            response = requests.put(
+            payload = updated_settings.to_dict()
+            request = requests.put
+            if actor in {"sidebar_settings_dialog", "global_settings_dialog"}:
+                owned_fields = beholder.allowed_settings_fields_for_actor(actor)
+                payload = {key: value for key, value in payload.items() if key in owned_fields}
+                request = requests.patch
+            response = request(
                 f"{self.base_url}/settings",
-                json=updated_settings.to_dict(),
+                json=payload,
                 headers=self._beholder_headers(actor, "settings_update"),
                 timeout=10,
             )
