@@ -255,7 +255,18 @@ def start_api_server() -> bool:
 
     except Exception as e:
         print(f"API 서버 시작 실패: {e}")
-        QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
+        message = f"API 서버 시작에 실패했습니다.\n\n{e}"
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.critical(None, "치명적 오류", message)
+            elif os.name == "nt":
+                ctypes.windll.user32.MessageBoxW(0, message, "치명적 오류", 0x10)
+            else:
+                print(message, file=sys.stderr)
+        except Exception as msgbox_exc:
+            print(f"[start_api_server] 오류 표시 실패: {msgbox_exc}", file=sys.stderr)
+            print(message, file=sys.stderr)
         return False
 
 def run_server_main():
@@ -459,11 +470,13 @@ def run_server_main():
 
     # Dependency
     def get_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+        from src.api.beholder_routes import database_access_gate
+        with database_access_gate():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
 
     # create / read / update / delete [managed processes]
     @app.get("/processes", response_model=List[schemas.ProcessSchema])
@@ -479,12 +492,38 @@ def run_server_main():
         return db_process
 
     @app.post("/processes", response_model=schemas.ProcessSchema, status_code=201)
-    def create_new_process(process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
-        return crud.create_process(db = db, process = process_data)
+    def create_new_process(
+        process_data: schemas.ProcessCreateSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        return crud.create_process(
+            db=db,
+            process=process_data,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_create",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/processes/{process_id}", response_model=schemas.ProcessSchema)
-    def update_existing_process(process_id: str, process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
-        updated_process = crud.update_process(db = db, process_id = process_id, process = process_data)
+    def update_existing_process(
+        process_id: str,
+        process_data: schemas.ProcessCreateSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_process = crud.update_process(
+            db=db,
+            process_id=process_id,
+            process=process_data,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_update",
+            override_token=x_hh_beholder_override,
+        )
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
@@ -512,8 +551,20 @@ def run_server_main():
         return updated_process
 
     @app.delete("/processes/{process_id}")
-    def delete_existing_process(process_id: str, db: Session = Depends(get_db)):
-        deleted_process = crud.delete_process(db = db, process_id = process_id)
+    def delete_existing_process(
+        process_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        deleted_process = crud.delete_process(
+            db=db,
+            process_id=process_id,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_delete",
+            override_token=x_hh_beholder_override,
+        )
         if deleted_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return {"message": "프로세스가 삭제되었습니다."}
@@ -532,12 +583,38 @@ def run_server_main():
         return db_shortcut
 
     @app.post("/shortcuts", response_model=schemas.WebShortcutSchema, status_code=201)
-    def create_new_shortcut(shortcut_data: schemas.WebShortcutCreate, db: Session = Depends(get_db)):
-        return crud.create_shortcut(db = db, shortcut = shortcut_data)
+    def create_new_shortcut(
+        shortcut_data: schemas.WebShortcutCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        return crud.create_shortcut(
+            db=db,
+            shortcut=shortcut_data,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_create",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/shortcuts/{shortcut_id}", response_model=schemas.WebShortcutSchema)
-    def update_existing_shortcut(shortcut_id: str, shortcut_data: schemas.WebShortcutCreate, db: Session = Depends(get_db)):
-        updated_shortcut = crud.update_shortcut(db = db, shortcut_id = shortcut_id, shortcut = shortcut_data)
+    def update_existing_shortcut(
+        shortcut_id: str,
+        shortcut_data: schemas.WebShortcutCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_shortcut = crud.update_shortcut(
+            db=db,
+            shortcut_id=shortcut_id,
+            shortcut=shortcut_data,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_update",
+            override_token=x_hh_beholder_override,
+        )
         if updated_shortcut is None:
             raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
         return updated_shortcut
@@ -559,8 +636,20 @@ def run_server_main():
         return updated_shortcut
 
     @app.delete("/shortcuts/{shortcut_id}")
-    def delete_existing_shortcut(shortcut_id: str, db: Session = Depends(get_db)):
-        deleted_shortcut = crud.delete_shortcut(db = db, shortcut_id = shortcut_id)
+    def delete_existing_shortcut(
+        shortcut_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        deleted_shortcut = crud.delete_shortcut(
+            db=db,
+            shortcut_id=shortcut_id,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_delete",
+            override_token=x_hh_beholder_override,
+        )
         if deleted_shortcut is None:
             raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
         return {"message": "웹 바로 가기가 삭제되었습니다."}

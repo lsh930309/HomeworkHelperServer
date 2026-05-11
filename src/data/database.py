@@ -239,6 +239,14 @@ def auto_migrate_database():
                 ))
                 conn.commit()
 
+        with engine.connect() as conn:
+            if "beholder_incidents" in inspector.get_table_names():
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_beholder_incidents_status_created_at "
+                    "ON beholder_incidents (status, created_at)"
+                ))
+                conn.commit()
+
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:
         print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")

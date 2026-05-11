@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from sqlalchemy import func
+from contextlib import contextmanager
 
 from src.data import models
 from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size
@@ -32,6 +33,20 @@ EPOCH_DATE = dt.date(1970, 1, 1)
 MAX_OPEN_SESSION_SECONDS = 24 * 60 * 60
 MIN_SMART_SESSION_SECONDS = 60
 MIN_LONG_SESSION_SECONDS = 3 * 60 * 60
+
+
+@contextmanager
+def _dashboard_db_session():
+    """Serialize dashboard DB reads with Beholder backup restore swaps."""
+    from src.api.beholder_routes import database_access_gate
+    from src.data.database import SessionLocal
+
+    with database_access_gate():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
 
 
 def _game_key(name: str | None) -> str:
@@ -484,10 +499,7 @@ def update_settings(settings: dict = Body(...)):
 @router.get("/api/analytics/games")
 def get_analytics_games(show_unregistered: bool = Query(False)):
     """Return normalized game choices independent of the active dashboard filters."""
-    from src.data.database import SessionLocal
-
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         sessions = _filter_registered(db, _query_all_completed_sessions(db), show_unregistered)
         groups = _build_game_groups(db, sessions, show_unregistered)
         totals = defaultdict(float)
@@ -505,8 +517,6 @@ def get_analytics_games(show_unregistered: bool = Query(False)):
             })
         rows.sort(key=lambda row: row["total_seconds"], reverse=True)
         return {"games": rows}
-    finally:
-        db.close()
 
 
 @router.get("/api/analytics/range")
@@ -515,14 +525,9 @@ def get_analytics_range(
     show_unregistered: bool = Query(False),
 ):
     """Return the actual session date bounds for all-time range selection."""
-    from src.data.database import SessionLocal
-
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date, end_date = _data_bounds(db, game_id, show_unregistered)
         return {"start": start_date.isoformat(), "end": end_date.isoformat()}
-    finally:
-        db.close()
 
 
 @router.get("/api/analytics/timeline")
@@ -534,15 +539,12 @@ def get_analytics_timeline(
     show_unregistered: bool = Query(False),
 ):
     """Daily timeline based on each session's start date and duration."""
-    from src.data.database import SessionLocal
-
     try:
         start_date, end_date, start_dt, end_dt = _resolve_range(start, end)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
@@ -587,8 +589,6 @@ def get_analytics_timeline(
             reverse=True,
         )
         return {"range": {"start": start_date.isoformat(), "end": end_date.isoformat()}, "bucket": bucket, "days": day_rows, "games": game_rows}
-    finally:
-        db.close()
 
 
 @router.get("/api/analytics/summary")
@@ -599,15 +599,12 @@ def get_analytics_summary(
     show_unregistered: bool = Query(False),
 ):
     """Range summary plus previous-period deltas."""
-    from src.data.database import SessionLocal
-
     try:
         start_date, end_date, start_dt, end_dt = _resolve_range(start, end)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date, end_date, start_dt, end_dt, current_sessions = _sessions_for_range(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
@@ -639,8 +636,6 @@ def get_analytics_summary(
                 "session_count": _delta(current["session_count"], previous["session_count"]),
             },
         }
-    finally:
-        db.close()
 
 
 @router.get("/api/analytics/patterns")
@@ -651,15 +646,12 @@ def get_analytics_patterns(
     show_unregistered: bool = Query(False),
 ):
     """Weekday/hour heatmap data for play-pattern analysis."""
-    from src.data.database import SessionLocal
-
     try:
         start_date, end_date, start_dt, end_dt = _resolve_range(start, end)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
@@ -678,8 +670,6 @@ def get_analytics_patterns(
             "hours": list(range(24)),
             "heatmap": heatmap,
         }
-    finally:
-        db.close()
 
 
 @router.get("/api/analytics/sessions")
@@ -691,15 +681,12 @@ def get_analytics_sessions(
     limit: int = Query(500, ge=1, le=2000),
 ):
     """Session detail rows for the selected date/game drawer."""
-    from src.data.database import SessionLocal
-
     try:
         start_date, end_date, start_dt, end_dt = _resolve_range(start, end)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date, end_date, start_dt, end_dt, sessions = _sessions_for_range(
             db, start_date, end_date, start_dt, end_dt, game_id, show_unregistered
         )
@@ -709,8 +696,6 @@ def get_analytics_sessions(
             rows.append(_serialize_session(session, overlap_seconds, groups))
         rows.sort(key=lambda row: row["start_timestamp"], reverse=True)
         return {"range": {"start": start_date.isoformat(), "end": end_date.isoformat()}, "sessions": rows[:limit]}
-    finally:
-        db.close()
 
 
 @router.get("/api/dashboard/playtime")
@@ -722,10 +707,7 @@ def get_playtime_stats(
     show_unregistered: bool = Query(False),
 ):
     """Legacy period playtime stats kept for compatibility."""
-    from src.data.database import SessionLocal
-
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         now = dt.datetime.now()
         days = 7 if period == "week" else 30
         if period == "week":
@@ -790,17 +772,12 @@ def get_playtime_stats(
             if day_dt >= current_month_start and day_dt.month == now.month:
                 month_minutes += day_total
         return {"dates": dates, "games": games_data, "stats": {"today_minutes": today_minutes, "week_minutes": week_minutes, "month_minutes": month_minutes}}
-    finally:
-        db.close()
 
 
 @router.get("/api/dashboard/calendar")
 def get_calendar_data(year: int = Query(...), month: int = Query(..., ge=0, le=11), threshold: int = Query(10), show_unregistered: bool = Query(False)):
     """Calendar data API kept for compatibility."""
-    from src.data.database import SessionLocal
-
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         start_date = dt.datetime(year, month + 1, 1)
         end_date = dt.datetime(year + 1, 1, 1) if month == 11 else dt.datetime(year, month + 2, 1)
         registered_names = set()
@@ -825,17 +802,12 @@ def get_calendar_data(year: int = Query(...), month: int = Query(..., ge=0, le=1
                 continue
             days_data.setdefault(row.play_date, {"games": []})["games"].append({"id": row.process_id, "name": row.process_name, "minutes": total_min})
         return {"days": days_data}
-    finally:
-        db.close()
 
 
 @router.get("/api/dashboard/icons/{process_id}")
 def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256)):
     """Game icon API: PNG cache with SVG fallback."""
-    from src.data.database import SessionLocal
-
-    db = SessionLocal()
-    try:
+    with _dashboard_db_session() as db:
         process = db.query(models.Process).filter(models.Process.id == process_id).first()
         if not process:
             return Response(content=generate_fallback_svg("?", "#6366f1"), media_type="image/svg+xml")
@@ -850,5 +822,3 @@ def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256)):
             if icon_path:
                 return FileResponse(str(icon_path), media_type="image/png")
         return Response(content=generate_fallback_svg(name, get_color_for_game(name)), media_type="image/svg+xml")
-    finally:
-        db.close()

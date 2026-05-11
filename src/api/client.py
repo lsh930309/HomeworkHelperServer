@@ -28,6 +28,7 @@ class ApiClient:
         self.base_url = base_url
         self.app_instance_id = str(uuid.uuid4())
         self.latest_beholder_incident: dict[str, Any] | None = None
+        self._pending_beholder_overrides: dict[tuple[str, str], str] = {}
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
@@ -51,6 +52,25 @@ class ApiClient:
         self.latest_beholder_incident = None
         return incident
 
+    def _beholder_headers(self, actor: str, operation: str) -> dict[str, str]:
+        headers = {"X-HH-Beholder-Actor": actor, "X-HH-Beholder-Operation": operation}
+        token = self._pending_beholder_overrides.get((operation, actor))
+        if token:
+            headers["X-HH-Beholder-Override"] = token
+        return headers
+
+    def _clear_pending_override(self, actor: str, operation: str) -> None:
+        self._pending_beholder_overrides.pop((operation, actor), None)
+
+    def _remember_override_token(self, result: dict[str, Any] | None) -> None:
+        if not result or not result.get("override_token"):
+            return
+        incident = result.get("incident") or {}
+        operation = incident.get("operation_kind")
+        actor = incident.get("actor")
+        if operation and actor:
+            self._pending_beholder_overrides[(operation, actor)] = result["override_token"]
+
     def get_active_beholder_incidents(self) -> list[dict[str, Any]]:
         try:
             response = requests.get(f"{self.base_url}/api/beholder/incidents/active", timeout=5)
@@ -68,7 +88,11 @@ class ApiClient:
                 timeout=10,
             )
             self._raise_for_status(response)
-            return response.json()
+            result = response.json()
+            self._remember_override_token(result)
+            if result.get("action") == "close_sessions_and_delete_process":
+                self.managed_processes = self._fetch_all_processes()
+            return result
         except requests.RequestException as e:
             print(f"Beholder incident 결정 저장 실패: {e}")
             return None
@@ -144,8 +168,15 @@ class ApiClient:
             if 'id' in data_to_send:
                 del data_to_send['id']
 
-            response = requests.post(f"{self.base_url}/processes", json=data_to_send, timeout=10)
+            actor, operation = "process_editor", "process_create"
+            response = requests.post(
+                f"{self.base_url}/processes",
+                json=data_to_send,
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다. (전체 목록을 다시 가져오는 것이 가장 간단하고 확실함)
             self.managed_processes = self._fetch_all_processes()
@@ -157,8 +188,14 @@ class ApiClient:
     def remove_process(self, process_id: str) -> bool:
         """ID로 프로세스를 서버에서 삭제합니다."""
         try:
-            response = requests.delete(f"{self.base_url}/processes/{process_id}", timeout=10)
+            actor, operation = "process_editor", "process_delete"
+            response = requests.delete(
+                f"{self.base_url}/processes/{process_id}",
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
@@ -174,8 +211,15 @@ class ApiClient:
             if 'id' in data_to_send:
                 del data_to_send['id'] # id는 경로로 전달하므로 본문에서는 제외
 
-            response = requests.put(f"{self.base_url}/processes/{updated_process.id}", json=data_to_send, timeout=10)
+            actor, operation = "process_editor", "process_update"
+            response = requests.put(
+                f"{self.base_url}/processes/{updated_process.id}",
+                json=data_to_send,
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.managed_processes = self._fetch_all_processes()
@@ -187,6 +231,7 @@ class ApiClient:
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool:
         """Persist only runtime-owned process fields after monitor stop/calibration."""
         try:
+            actor, operation = "process_monitor", "process_runtime_state_update"
             response = requests.patch(
                 f"{self.base_url}/processes/{updated_process.id}/runtime-state",
                 json={
@@ -195,9 +240,11 @@ class ApiClient:
                     "stamina_max": updated_process.stamina_max,
                     "stamina_updated_at": updated_process.stamina_updated_at,
                 },
+                headers=self._beholder_headers(actor, operation),
                 timeout=10,
             )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             self.managed_processes = self._fetch_all_processes()
             return True
         except requests.RequestException as e:
@@ -230,8 +277,15 @@ class ApiClient:
             if 'id' in data_to_send:
                 del data_to_send['id']
 
-            response = requests.post(f"{self.base_url}/shortcuts", json=data_to_send, timeout=10)
+            actor, operation = "web_shortcut_editor", "shortcut_create"
+            response = requests.post(
+                f"{self.base_url}/shortcuts",
+                json=data_to_send,
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -243,8 +297,14 @@ class ApiClient:
     def remove_web_shortcut(self, shortcut_id: str) -> bool:
         """ID로 웹 바로 가기를 서버에서 삭제합니다."""
         try:
-            response = requests.delete(f"{self.base_url}/shortcuts/{shortcut_id}", timeout=10)
+            actor, operation = "web_shortcut_editor", "shortcut_delete"
+            response = requests.delete(
+                f"{self.base_url}/shortcuts/{shortcut_id}",
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -260,8 +320,15 @@ class ApiClient:
             if 'id' in data_to_send:
                 del data_to_send['id']
 
-            response = requests.put(f"{self.base_url}/shortcuts/{updated_shortcut.id}", json=data_to_send, timeout=10)
+            actor, operation = "web_shortcut_editor", "shortcut_update"
+            response = requests.put(
+                f"{self.base_url}/shortcuts/{updated_shortcut.id}",
+                json=data_to_send,
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
             
             # 성공 시, 내부 데이터 목록도 새로고침합니다.
             self.web_shortcuts = self._fetch_all_web_shortcuts()
@@ -273,8 +340,14 @@ class ApiClient:
     def mark_web_shortcut_opened(self, shortcut_id: str) -> bool:
         """웹 바로가기 클릭 완료 시각을 런타임 경로로 저장합니다."""
         try:
-            response = requests.post(f"{self.base_url}/shortcuts/{shortcut_id}/opened", timeout=10)
+            actor, operation = "web_shortcut_runtime", "shortcut_opened"
+            response = requests.post(
+                f"{self.base_url}/shortcuts/{shortcut_id}/opened",
+                headers=self._beholder_headers(actor, operation),
+                timeout=10,
+            )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, operation)
 
             self.web_shortcuts = self._fetch_all_web_shortcuts()
             return True
@@ -306,10 +379,11 @@ class ApiClient:
             response = requests.put(
                 f"{self.base_url}/settings",
                 json=updated_settings.to_dict(),
-                headers={"X-HH-Beholder-Actor": actor, "X-HH-Beholder-Operation": "settings_update"},
+                headers=self._beholder_headers(actor, "settings_update"),
                 timeout=10,
             )
             self._raise_for_status(response)
+            self._clear_pending_override(actor, "settings_update")
 
             # 서버로부터 최종적으로 저장된 데이터를 응답으로 받습니다.
             saved_settings_data = response.json()
@@ -339,10 +413,11 @@ class ApiClient:
             response = requests.post(
                 f"{self.base_url}/sessions",
                 json=data,
-                headers={"X-HH-Beholder-Actor": "process_monitor", "X-HH-Beholder-Operation": "runtime_start"},
+                headers=self._beholder_headers("process_monitor", "runtime_start"),
                 timeout=10,
             )
             self._raise_for_status(response)
+            self._clear_pending_override("process_monitor", "runtime_start")
             return ProcessSession.from_dict(response.json())
         except requests.RequestException as e:
             print(f"세션 시작 실패: {e}")
@@ -360,10 +435,11 @@ class ApiClient:
             response = requests.put(
                 f"{self.base_url}/sessions/{session_id}/end",
                 json=data,
-                headers={"X-HH-Beholder-Actor": "process_monitor", "X-HH-Beholder-Operation": "runtime_stop"},
+                headers=self._beholder_headers("process_monitor", "runtime_stop"),
                 timeout=10
             )
             self._raise_for_status(response)
+            self._clear_pending_override("process_monitor", "runtime_stop")
             return ProcessSession.from_dict(response.json())
         except requests.RequestException as e:
             print(f"세션 종료 실패: {e}")
@@ -428,10 +504,11 @@ class ApiClient:
             response = requests.patch(
                 f"{self.base_url}/sessions/{session_id}/stamina",
                 params={"stamina_at_end": stamina_at_end},
-                headers={"X-HH-Beholder-Actor": "hoyolab_slow_followup", "X-HH-Beholder-Operation": "hoyolab_session_stamina_rewrite"},
+                headers=self._beholder_headers("hoyolab_slow_followup", "hoyolab_session_stamina_rewrite"),
                 timeout=10
             )
             self._raise_for_status(response)
+            self._clear_pending_override("hoyolab_slow_followup", "hoyolab_session_stamina_rewrite")
             return True
         except requests.RequestException as e:
             print(f"세션 스태미나 업데이트 실패: {e}")

@@ -336,10 +336,12 @@ class MainWindow(QMainWindow):
         self.runtime_heartbeat_timer = QTimer(self)
         self.runtime_heartbeat_timer.timeout.connect(self._send_runtime_heartbeat)
         self.runtime_heartbeat_timer.start(30000)
-        self._send_runtime_heartbeat()
+        # Reconcile stale open sessions before the first fresh heartbeat so
+        # crash-recovery decisions can use the pre-crash heartbeat.
+        QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
+        QTimer.singleShot(1200, self._send_runtime_heartbeat)
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
-        QTimer.singleShot(1200, self._reconcile_open_sessions_after_startup)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -859,7 +861,9 @@ class MainWindow(QMainWindow):
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
             upd_gs = dlg.get_updated_settings() # 업데이트된 설정 가져오기
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
-            self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
+            if not self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog"):
+                QMessageBox.warning(self, "저장 실패", "전역 설정 저장이 차단되었거나 실패했습니다. 변경 사항은 적용하지 않습니다.")
+                return
 
             # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
             def _log_admin_debug(msg):

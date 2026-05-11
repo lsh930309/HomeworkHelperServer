@@ -1,6 +1,6 @@
 # models.py
 
-from sqlalchemy import Column, Integer, String, Boolean, Float, JSON
+from sqlalchemy import Column, Integer, String, Boolean, Float, JSON, Index
 from src.data.database import Base
 
 class Process(Base):
@@ -134,6 +134,9 @@ class ProcessSession(Base):
 class BeholderIncident(Base):
     """A blocked or user-actionable Beholder data safety incident."""
     __tablename__ = "beholder_incidents"
+    __table_args__ = (
+        Index("ix_beholder_incidents_status_created_at", "status", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     severity = Column(String, nullable=False, default="warning")

@@ -6,6 +6,7 @@ from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
 from typing import Any, Optional
 from pathlib import Path
+import re
 import json
 import uuid
 import time
@@ -67,7 +68,11 @@ def create_process(
         actor=actor,
         allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
         allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS},
-        evidence={"changed_fields": sorted(guard_columns), "context": {"process_id": process_id, "process_name": process_data.get("name")}},
+        evidence={
+            "changed_fields": sorted(guard_columns),
+            "context": {"process_id": process_id, "process_name": process_data.get("name")},
+            "proposed_values": {**process_data, "id": process_id},
+        },
         override_token=override_token,
     )
     beholder.guard_process_update(db, None, process_data, operation, guard_columns)
@@ -93,11 +98,17 @@ def delete_process(
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
             allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_FIELDS},
-            evidence={"changed_fields": ["id"], "context": {"process_id": process_id, "process_name": db_process.name}},
+            evidence={
+                "changed_fields": ["id"],
+                "context": {"process_id": process_id, "process_name": db_process.name},
+                "proposed_values": {"deleted_process_id": process_id},
+            },
             override_token=override_token,
         )
         beholder.guard_process_delete(db, db_process, operation)
-        backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        snapshot_path = backup_model_snapshot(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        if not snapshot_path:
+            raise ValueError("삭제 전 게임 항목 백업을 만들지 못했습니다. 데이터 보존을 위해 삭제를 중단했습니다.")
         db.delete(db_process)
         db.commit()
     return db_process
@@ -116,13 +127,20 @@ def update_process(
     if db_process:
         update_data = _dump_schema(process, exclude_unset=True)
         update_data.pop("id", None)
+        if actor == "process_editor":
+            for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
+                update_data.pop(runtime_field, None)
         changed = {key for key, value in update_data.items() if hasattr(db_process, key) and getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
             allowed_columns={beholder.MANAGED_PROCESSES_TABLE: beholder.PROCESS_EDITOR_FIELDS - {"id"}},
-            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
             override_token=override_token,
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
@@ -159,7 +177,11 @@ def update_process_stamina(
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
             allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"stamina_current", "stamina_max", "stamina_updated_at"}},
-            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
             override_token=override_token,
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
@@ -200,7 +222,11 @@ def update_process_runtime_state(
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
             allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}},
-            evidence={"changed_fields": sorted(changed), "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)}},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
             override_token=override_token,
         )
         beholder.guard_process_update(db, db_process, update_data, operation, changed)
@@ -240,6 +266,7 @@ def create_shortcut(
         allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS,
         context={"shortcut_id": shortcut_id, "shortcut_name": shortcut_data.get("name")},
         override_token=override_token,
+        proposed_values={**shortcut_data, "id": shortcut_id},
     )
     db_shortcut = models.WebShortcut(id=shortcut_id, **shortcut_data)
     db.add(db_shortcut)
@@ -262,15 +289,23 @@ def update_shortcut(
         update_data = _dump_schema(shortcut, exclude_unset=True)
         update_data.pop("id", None)
         changed = {key for key, value in update_data.items() if hasattr(db_shortcut, key) and getattr(db_shortcut, key) != value}
+        allowed_fields = beholder.WEB_SHORTCUT_EDITOR_FIELDS - {"id"}
+        if (
+            "refresh_time_str" in changed
+            and update_data.get("refresh_time_str") is None
+            and update_data.get("last_reset_timestamp") is None
+        ):
+            allowed_fields = allowed_fields | {"last_reset_timestamp"}
         _guard_write(
             db,
             table=beholder.WEB_SHORTCUTS_TABLE,
             columns=changed,
             actor=actor,
             operation_kind=operation_kind,
-            allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS - {"id"},
+            allowed_fields=allowed_fields,
             context={"shortcut_id": shortcut_id, "shortcut_name": getattr(db_shortcut, "name", None)},
             override_token=override_token,
+            proposed_values={key: update_data.get(key) for key in sorted(changed)},
         )
         if changed:
             backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
@@ -300,6 +335,7 @@ def delete_shortcut(
             allowed_fields=beholder.WEB_SHORTCUT_EDITOR_FIELDS,
             context={"shortcut_id": shortcut_id, "shortcut_name": db_shortcut.name},
             override_token=override_token,
+            proposed_values={"deleted_shortcut_id": shortcut_id},
         )
         backup_model_snapshot(db_shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         db.delete(db_shortcut)
@@ -316,12 +352,19 @@ def _model_to_dict(model: Any) -> dict[str, Any]:
     return {column.name: getattr(model, column.name) for column in model.__table__.columns}
 
 
+def _safe_snapshot_segment(value: Any) -> str:
+    text = str(value if value is not None else "row")
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._") or "row"
+
+
 def backup_model_snapshot(model: Any, *, table: str, reason: str, max_backups: int = 50) -> str | None:
     try:
         backup_dir = Path(base_dir) / "backups" / "mutations" / table
         backup_dir.mkdir(parents=True, exist_ok=True)
-        model_id = getattr(model, "id", "row")
-        path = backup_dir / f"{table}.{model_id}.{int(time.time() * 1000)}.{reason}.json"
+        safe_table = _safe_snapshot_segment(table)
+        safe_model_id = _safe_snapshot_segment(getattr(model, "id", "row"))
+        safe_reason = _safe_snapshot_segment(reason)
+        path = backup_dir / f"{safe_table}.{safe_model_id}.{int(time.time() * 1000)}.{safe_reason}.json"
         payload = {
             "created_at": time.time(),
             "reason": reason,
@@ -329,7 +372,11 @@ def backup_model_snapshot(model: Any, *, table: str, reason: str, max_backups: i
             "row": _model_to_dict(model),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        snapshots = sorted(backup_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        snapshots = sorted(
+            backup_dir.glob(f"{safe_table}.{safe_model_id}.*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
         for old in snapshots[max_backups:]:
             old.unlink(missing_ok=True)
         return str(path)
@@ -338,13 +385,28 @@ def backup_model_snapshot(model: Any, *, table: str, reason: str, max_backups: i
         return None
 
 
-def _guard_write(db: Session, *, table: str, columns: set[str], actor: str, operation_kind: str, allowed_fields: set[str], context: dict[str, Any] | None = None, override_token: str | None = None) -> beholder.BeholderOperation:
+def _guard_write(
+    db: Session,
+    *,
+    table: str,
+    columns: set[str],
+    actor: str,
+    operation_kind: str,
+    allowed_fields: set[str],
+    context: dict[str, Any] | None = None,
+    override_token: str | None = None,
+    proposed_values: dict[str, Any] | None = None,
+) -> beholder.BeholderOperation:
     operation = beholder.BeholderOperation(
         kind=operation_kind,
         actor=actor,
         allowed_tables={table},
         allowed_columns={table: allowed_fields},
-        evidence={"changed_fields": sorted(columns), "context": context or {}},
+        evidence={
+            "changed_fields": sorted(columns),
+            "context": context or {},
+            "proposed_values": proposed_values or {},
+        },
         override_token=override_token,
     )
     beholder.guard_table_write(db, operation, table, columns)
@@ -478,7 +540,11 @@ def update_settings(
             actor=actor,
             allowed_tables={beholder.GLOBAL_SETTINGS_TABLE},
             allowed_columns={beholder.GLOBAL_SETTINGS_TABLE: allowed},
-            evidence={"changed_fields": sorted(changed)},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"settings_id": 1},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
             override_token=override_token,
         )
         beholder.guard_settings_update(db, db_settings, update_data, operation)
@@ -512,7 +578,11 @@ def patch_settings(
         actor=actor,
         allowed_tables={beholder.GLOBAL_SETTINGS_TABLE},
         allowed_columns={beholder.GLOBAL_SETTINGS_TABLE: allowed},
-        evidence={"changed_fields": sorted(changed)},
+        evidence={
+            "changed_fields": sorted(changed),
+            "context": {"settings_id": 1},
+            "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+        },
         override_token=override_token,
     )
     beholder.guard_settings_update(db, db_settings, update_data, operation)
@@ -537,6 +607,13 @@ def create_session(
 ):
     """새로운 프로세스 세션 시작 기록"""
     runtime_evidence = getattr(session, "runtime_evidence", None) or {}
+    context = {
+        **runtime_evidence,
+        "process_id": session.process_id,
+        "process_name": session.process_name,
+        "requested_start_timestamp": session.start_timestamp,
+        "requested_user_preset_id": getattr(session, "user_preset_id", None),
+    }
     operation = beholder.BeholderOperation(
         kind=operation_kind,
         actor=actor,
@@ -544,7 +621,13 @@ def create_session(
         allowed_columns={beholder.PROCESS_SESSIONS_TABLE: beholder.SESSION_FIELDS},
         evidence={
             "changed_fields": ["process_id", "process_name", "start_timestamp"],
-            "context": runtime_evidence,
+            "context": context,
+            "proposed_values": {
+                "process_id": session.process_id,
+                "process_name": session.process_name,
+                "start_timestamp": session.start_timestamp,
+                "user_preset_id": getattr(session, "user_preset_id", None),
+            },
         },
         override_token=override_token,
     )
@@ -579,7 +662,13 @@ def end_session(
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
         changed_fields = ["end_timestamp", "session_duration", "session_status", "close_reason", "heartbeat_timestamp"]
-        proposed_values = {"end_timestamp": end_timestamp}
+        proposed_values = {
+            "end_timestamp": end_timestamp,
+            "session_duration": end_timestamp - db_session.start_timestamp,
+            "session_status": "closed",
+            "close_reason": close_reason,
+            "heartbeat_timestamp": end_timestamp,
+        }
         if stamina_at_end is not None:
             changed_fields.append("stamina_at_end")
             proposed_values["stamina_at_end"] = stamina_at_end
@@ -595,11 +684,9 @@ def end_session(
             },
             override_token=override_token,
         )
-        override_bypassed = beholder.consume_override_token(db, override_token, operation_kind)
-        if not override_bypassed:
-            beholder.guard_session_end(db, db_session, end_timestamp, operation)
-            if stamina_at_end is not None:
-                beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        beholder.guard_session_end(db, db_session, end_timestamp, operation)
+        if stamina_at_end is not None:
+            beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
         backup_model_snapshot(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
@@ -700,6 +787,7 @@ def mark_shortcut_opened(
             allowed_fields={"last_reset_timestamp"},
             context={"shortcut_id": shortcut_id, "shortcut_name": shortcut.name},
             override_token=override_token,
+            proposed_values={"last_reset_timestamp": opened_at},
         )
         backup_model_snapshot(shortcut, table=beholder.WEB_SHORTCUTS_TABLE, reason=operation_kind)
         shortcut.last_reset_timestamp = opened_at

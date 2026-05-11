@@ -70,7 +70,11 @@ class ProcessMonitor:
         session_id = result.get("session_id")
         incident = result.get("incident") or {}
         context = (incident.get("resolution_metadata") or {}).get("action_context") or {}
-        process_id = context.get("process_id")
+        process_id = result.get("process_id") or context.get("process_id")
+        action = result.get("action")
+        if process_id and action == "close_sessions_and_delete_process":
+            self.active_monitored_processes.pop(process_id, None)
+            return
         if not process_id or not session_id:
             return
         entry = self.active_monitored_processes.get(process_id)
@@ -213,7 +217,10 @@ class ProcessMonitor:
                             managed_proc.last_played_timestamp = previous_last_played
                             continue
                     else:
-                        logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
+                        logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, no session was recorded)")
+                        managed_proc.last_played_timestamp = previous_last_played
+                        self.active_monitored_processes.pop(managed_proc.id, None)
+                        continue
 
                     self.active_monitored_processes.pop(managed_proc.id, None)
                     stopped_events.append(

@@ -1,6 +1,8 @@
 import datetime as dt
 import sqlite3
 
+import pytest
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -65,7 +67,7 @@ def test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open(mon
             actor="process_monitor",
             operation_kind="runtime_stop",
         )
-        assert False, "Beholder should block extreme stale session close"
+        pytest.fail("Beholder should block extreme stale session close")
     except beholder.BeholderBlocked as exc:
         incident = exc.incident
         assert incident.severity == "critical"
@@ -104,6 +106,69 @@ def test_beholder_allows_long_session_with_override_token(monkeypatch):
     assert db.query(models.BeholderIncident).one().override_used_at is not None
 
 
+def test_session_end_override_token_cannot_bypass_later_distinct_guard(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 1, 1, 0, 0).timestamp()
+    end = dt.datetime(2026, 5, 8, 0, 0).timestamp()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(db, session.id, end, stamina_at_end=-1, actor="process_monitor")
+        pytest.fail("long session should be blocked before stamina guard")
+    except beholder.BeholderBlocked as exc:
+        assert "extreme_duration_without_sufficient_evidence" in exc.incident.risk_factors
+        token = beholder.issue_override_token(db, exc.incident)
+
+    try:
+        crud.end_session(db, session.id, end, stamina_at_end=-1, actor="process_monitor", override_token=token)
+        pytest.fail("the long-session override must not bypass the later negative-stamina guard")
+    except beholder.BeholderBlocked as exc:
+        assert "invalid_negative_stamina" in exc.incident.risk_factors
+
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.end_timestamp is None
+    assert unchanged.stamina_at_end is None
+
+
+def test_session_end_override_token_is_bound_to_close_reason(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    start = dt.datetime(2026, 1, 1, 0, 0).timestamp()
+    end = dt.datetime(2026, 5, 8, 0, 0).timestamp()
+    session = models.ProcessSession(process_id="game-a", process_name="Game A", start_timestamp=start)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        crud.end_session(db, session.id, end, actor="process_monitor", close_reason="process_exit")
+        pytest.fail("long session should be blocked")
+    except beholder.BeholderBlocked as exc:
+        token = beholder.issue_override_token(db, exc.incident)
+
+    try:
+        crud.end_session(
+            db,
+            session.id,
+            end,
+            actor="process_monitor",
+            close_reason="manual_override",
+            override_token=token,
+        )
+        pytest.fail("override for one close_reason must not allow another")
+    except beholder.BeholderBlocked as exc:
+        assert "extreme_duration_without_sufficient_evidence" in exc.incident.risk_factors
+
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.end_timestamp is None
+
+
 def test_session_end_override_token_covers_later_stamina_guard(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -116,7 +181,7 @@ def test_session_end_override_token_covers_later_stamina_guard(monkeypatch):
     end = dt.datetime(2026, 5, 8, 11, 0).timestamp()
     try:
         crud.end_session(db, session.id, end, stamina_at_end=-1, actor="process_monitor")
-        assert False, "negative stamina should be blocked by the later session-stamina guard"
+        pytest.fail("negative stamina should be blocked by the later session-stamina guard")
     except beholder.BeholderBlocked as exc:
         token = beholder.issue_override_token(db, exc.incident)
 
@@ -150,7 +215,7 @@ def test_session_end_blocks_non_runtime_actor(monkeypatch):
             dt.datetime(2026, 5, 8, 10, 5).timestamp(),
             actor="manual_debug_tool",
         )
-        assert False, "non-runtime actors must not close sessions directly"
+        pytest.fail("non-runtime actors must not close sessions directly")
     except beholder.BeholderBlocked as exc:
         assert "actor_not_runtime_owner" in exc.incident.risk_factors
 
@@ -248,7 +313,7 @@ def test_duplicate_open_session_incident_offers_continue_action(monkeypatch):
             process_name="Game A",
             start_timestamp=dt.datetime(2026, 5, 8, 11, 0).timestamp(),
         ))
-        assert False, "duplicate open session should be blocked"
+        pytest.fail("duplicate open session should be blocked")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -280,7 +345,7 @@ def test_legacy_open_session_duplicate_recommends_abandon_and_start_new(monkeypa
             start_timestamp=dt.datetime(2026, 5, 8, 10, 0).timestamp(),
             runtime_evidence={"current_process_running": True},
         ))
-        assert False, "legacy open session should block duplicate session creation"
+        pytest.fail("legacy open session should block duplicate session creation")
     except beholder.BeholderBlocked as exc:
         incident = exc.incident
         payload = beholder.incident_to_dict(incident)
@@ -379,7 +444,7 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
             actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "sidebar settings patch must not mutate disallowed fields"
+        pytest.fail("sidebar settings patch must not mutate disallowed fields")
     except beholder.BeholderBlocked as exc:
         assert "unauthorized_column_write" in exc.incident.risk_factors
 
@@ -401,7 +466,7 @@ def test_sidebar_settings_actor_is_labeled_as_pyqt_sidebar_dialog(monkeypatch, t
             actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "sidebar settings dialog writes outside its field scope should be guarded"
+        pytest.fail("sidebar settings dialog writes outside its field scope should be guarded")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -428,7 +493,7 @@ def test_settings_guard_blocks_small_personalized_default_regression(monkeypatch
             actor="sidebar_settings_dialog",
             allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
-        assert False, "personalized path reset should be blocked"
+        pytest.fail("personalized path reset should be blocked")
     except beholder.BeholderBlocked as exc:
         assert "personalized_settings_default_regression" in exc.incident.risk_factors
         assert "screenshot_save_dir" in exc.incident.risk_factors
@@ -455,7 +520,7 @@ def test_settings_guard_blocks_invalid_value_ranges(monkeypatch, tmp_path):
             actor="sidebar_settings_dialog",
             allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
-        assert False, "invalid setting ranges should be blocked centrally"
+        pytest.fail("invalid setting ranges should be blocked centrally")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_setting_value" in payload["risk_factors"]
@@ -516,7 +581,7 @@ def test_settings_guard_blocks_invalid_sidebar_mode(monkeypatch, tmp_path):
             actor="sidebar_settings_dialog",
             allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
-        assert False, "invalid sidebar modes should be blocked centrally"
+        pytest.fail("invalid sidebar modes should be blocked centrally")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_setting_value" in payload["risk_factors"]
@@ -536,12 +601,56 @@ def test_settings_guard_blocks_invalid_sidebar_trigger_range(monkeypatch, tmp_pa
             actor="sidebar_settings_dialog",
             allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
         )
-        assert False, "invalid sidebar trigger ranges should be blocked centrally"
+        pytest.fail("invalid sidebar trigger ranges should be blocked centrally")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_setting_value" in payload["risk_factors"]
         assert "invalid_setting_relation" in payload["risk_factors"]
         assert "sidebar_trigger_y_start>sidebar_trigger_y_end" in payload["risk_factors"]
+
+
+def test_settings_override_does_not_bypass_later_personalized_reset(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    crud.patch_settings(
+        db,
+        {"screenshot_save_dir": "D:/CustomScreenshots", "sidebar_height_ratio": 0.8},
+        actor="sidebar_settings_dialog",
+        allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+    )
+
+    risky_update = {"sidebar_height_ratio": 2.0, "screenshot_save_dir": ""}
+    try:
+        crud.patch_settings(
+            db,
+            risky_update,
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+        )
+        pytest.fail("invalid sidebar height should be blocked before personalized reset")
+    except beholder.BeholderBlocked as exc:
+        assert "invalid_setting_value" in exc.incident.risk_factors
+        token = beholder.issue_override_token(db, exc.incident)
+
+    try:
+        crud.patch_settings(
+            db,
+            risky_update,
+            actor="sidebar_settings_dialog",
+            allowed_fields=beholder.SIDEBAR_SETTINGS_FIELDS,
+            override_token=token,
+        )
+        pytest.fail("invalid-value override must not bypass personalized reset guard")
+    except beholder.BeholderBlocked as exc:
+        assert "personalized_settings_default_regression" in exc.incident.risk_factors
+        assert "screenshot_save_dir" in exc.incident.risk_factors
+
+    db.expire_all()
+    settings = crud.get_settings(db)
+    assert settings.screenshot_save_dir == "D:/CustomScreenshots"
+    assert settings.sidebar_height_ratio == 0.8
 
 
 def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch, tmp_path):
@@ -565,7 +674,7 @@ def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch
 
     try:
         crud.delete_process(db, process.id)
-        assert False, "deleting a process with an open session should be blocked"
+        pytest.fail("deleting a process with an open session should be blocked")
     except beholder.BeholderBlocked as exc:
         incident = exc.incident
         payload = beholder.incident_to_dict(incident)
@@ -580,6 +689,136 @@ def test_delete_process_with_open_session_offers_safe_cleanup_action(monkeypatch
     closed = db.query(models.ProcessSession).filter_by(process_id="game-open").one()
     assert closed.end_timestamp is not None
     assert closed.close_reason == "beholder_close_before_process_delete"
+
+
+def test_delete_process_resolution_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="delete-snapshot",
+        name="Delete Snapshot",
+        monitoring_path="C:/Games/DeleteSnapshot.exe",
+        launch_path="C:/Games/DeleteSnapshot.lnk",
+    ))
+    session = models.ProcessSession(
+        process_id=process.id,
+        process_name=process.name,
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        session_status="open",
+    )
+    db.add(session)
+    db.commit()
+
+    try:
+        crud.delete_process(db, process.id)
+        pytest.fail("open-session delete should create a Beholder incident")
+    except beholder.BeholderBlocked as exc:
+        incident = exc.incident
+
+    with pytest.raises(ValueError, match="백업"):
+        beholder.resolve_incident_action(db, incident, "close_sessions_and_delete_process")
+
+    db.rollback()
+    db.expire_all()
+    assert db.query(models.Process).filter_by(id=process.id).one_or_none() is not None
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+    assert still_open.session_status == "open"
+
+
+def test_delete_process_aborts_when_direct_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="direct-delete-snapshot",
+        name="Direct Delete Snapshot",
+        monitoring_path="C:/Games/DirectDeleteSnapshot.exe",
+        launch_path="C:/Games/DirectDeleteSnapshot.lnk",
+    ))
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="백업"):
+        crud.delete_process(db, process.id)
+
+    db.rollback()
+    db.expire_all()
+    assert db.query(models.Process).filter_by(id=process.id).one_or_none() is not None
+
+
+def test_delete_process_allow_once_aborts_when_snapshot_fails(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="allow-delete-snapshot",
+        name="Allow Delete Snapshot",
+        monitoring_path="C:/Games/AllowDeleteSnapshot.exe",
+        launch_path="C:/Games/AllowDeleteSnapshot.lnk",
+    ))
+    session = models.ProcessSession(
+        process_id=process.id,
+        process_name=process.name,
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        session_status="open",
+    )
+    db.add(session)
+    db.commit()
+
+    try:
+        crud.delete_process(db, process.id)
+        pytest.fail("open-session delete should create an allow_once-capable incident")
+    except beholder.BeholderBlocked as exc:
+        token = beholder.issue_override_token(db, exc.incident)
+
+    monkeypatch.setattr(crud_mod, "backup_model_snapshot", lambda *args, **kwargs: None)
+    with pytest.raises(ValueError, match="백업"):
+        crud.delete_process(db, process.id, override_token=token)
+
+    db.rollback()
+    db.expire_all()
+    assert db.query(models.Process).filter_by(id=process.id).one_or_none() is not None
+    still_open = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert still_open.end_timestamp is None
+    assert still_open.session_status == "open"
+
+
+def test_resolving_delete_process_incident_refreshes_client_process_cache(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.managed_processes = ["stale"]
+    client.web_shortcuts = []
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    monkeypatch.setattr(ApiClient, "_fetch_all_processes", lambda self: ["fresh"])
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "action": "close_sessions_and_delete_process",
+                "process_id": "game-a",
+                "incident": {"operation_kind": "process_delete", "actor": "process_editor"},
+            }
+
+    import src.api.client as client_mod
+    monkeypatch.setattr(client_mod.requests, "post", lambda *args, **kwargs: _Response())
+
+    result = client.resolve_beholder_incident(incident_id=1, action="close_sessions_and_delete_process")
+
+    assert result["action"] == "close_sessions_and_delete_process"
+    assert client.managed_processes == ["fresh"]
 
 
 def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
@@ -599,7 +838,7 @@ def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatc
 
     try:
         crud.update_session_stamina(db, session.id, -1)
-        assert False, "negative stamina should be blocked"
+        pytest.fail("negative stamina should be blocked")
     except beholder.BeholderBlocked as exc:
         assert "invalid_negative_stamina" in exc.incident.risk_factors
 
@@ -636,7 +875,7 @@ def test_end_session_blocks_negative_stamina_and_keeps_session_open(monkeypatch,
             actor="process_monitor",
             operation_kind="runtime_stop",
         )
-        assert False, "end_session should not bypass stamina_at_end guard"
+        pytest.fail("end_session should not bypass stamina_at_end guard")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_negative_stamina" in payload["risk_factors"]
@@ -666,20 +905,16 @@ def test_process_editor_cannot_mutate_runtime_fields(monkeypatch, tmp_path):
         last_played_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
     )
 
-    try:
-        crud.update_process(db, process.id, schemas.ProcessCreateSchema(
-            name="Runtime Game",
-            monitoring_path="C:/Games/Runtime.exe",
-            launch_path="C:/Games/Runtime.lnk",
-            last_played_timestamp=dt.datetime(2026, 5, 9, 12, 0).timestamp(),
-        ))
-        assert False, "editor updates must not mutate runtime-owned process fields"
-    except beholder.BeholderBlocked as exc:
-        assert "unauthorized_column_write" in exc.incident.risk_factors
-        assert "last_played_timestamp" in exc.incident.risk_factors
+    crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+        name="Runtime Game Renamed",
+        monitoring_path="C:/Games/Runtime.exe",
+        launch_path="C:/Games/Runtime.lnk",
+        last_played_timestamp=dt.datetime(2026, 5, 9, 12, 0).timestamp(),
+    ))
 
     db.expire_all()
     unchanged = db.query(models.Process).filter_by(id=process.id).one()
+    assert unchanged.name == "Runtime Game Renamed"
     assert unchanged.last_played_timestamp == dt.datetime(2026, 5, 8, 12, 0).timestamp()
 
 
@@ -712,7 +947,7 @@ def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp
             refresh_time_str=None,
             last_reset_timestamp=None,
         ))
-        assert False, "editor updates must not mutate runtime-owned shortcut fields"
+        pytest.fail("editor updates must not mutate runtime-owned shortcut fields")
     except beholder.BeholderBlocked as exc:
         assert "unauthorized_column_write" in exc.incident.risk_factors
         assert "last_reset_timestamp" in exc.incident.risk_factors
@@ -749,7 +984,7 @@ def test_process_runtime_stamina_guard_blocks_impossible_range(monkeypatch, tmp_
             stamina_max=100,
             stamina_updated_at=dt.datetime(2026, 5, 8, 12, 5).timestamp(),
         )
-        assert False, "current stamina greater than max should be blocked"
+        pytest.fail("current stamina greater than max should be blocked")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
         assert "invalid_process_value" in payload["risk_factors"]
@@ -761,6 +996,44 @@ def test_process_runtime_stamina_guard_blocks_impossible_range(monkeypatch, tmp_
     unchanged = db.query(models.Process).filter_by(id=process.id).one()
     assert unchanged.stamina_current == 20
     assert unchanged.stamina_max == 100
+
+
+def test_process_runtime_override_is_bound_to_exact_values(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="runtime-override",
+        name="Runtime Override",
+        monitoring_path="C:/Games/RuntimeOverride.exe",
+        launch_path="C:/Games/RuntimeOverride.lnk",
+    ))
+
+    try:
+        crud.update_process_runtime_state(
+            db,
+            process.id,
+            stamina_current=120,
+            stamina_max=100,
+            stamina_updated_at=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        )
+        pytest.fail("invalid runtime stamina should be blocked")
+    except beholder.BeholderBlocked as exc:
+        token = beholder.issue_override_token(db, exc.incident)
+
+    try:
+        crud.update_process_runtime_state(
+            db,
+            process.id,
+            stamina_current=130,
+            stamina_max=100,
+            stamina_updated_at=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+            override_token=token,
+        )
+        pytest.fail("override for one runtime value set must not allow another")
+    except beholder.BeholderBlocked as exc:
+        assert "invalid_stamina_range" in exc.incident.risk_factors
 
 
 def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
@@ -775,7 +1048,7 @@ def test_beholder_payload_explains_risks_and_action_outcomes(monkeypatch):
             actor="sidebar_settings_dialog",
             allowed_fields={"theme"},
         )
-        assert False, "sidebar settings patch must not mutate disallowed fields"
+        pytest.fail("sidebar settings patch must not mutate disallowed fields")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -799,7 +1072,7 @@ def test_beholder_payload_localizes_invalid_value_risks(monkeypatch):
             actor="sidebar_settings_dialog",
             allowed_fields={"sidebar_height_ratio"},
         )
-        assert False, "invalid sidebar height range should be blocked"
+        pytest.fail("invalid sidebar height range should be blocked")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -833,7 +1106,7 @@ def test_beholder_payload_localizes_session_end_risks(monkeypatch):
             actor="manual_debug_tool",
             operation_kind="runtime_stop",
         )
-        assert False, "negative duration and closed status should be blocked"
+        pytest.fail("negative duration and closed status should be blocked")
     except beholder.BeholderBlocked as exc:
         payload = beholder.incident_to_dict(exc.incident)
 
@@ -863,7 +1136,7 @@ def test_beholder_rejects_resolving_non_pending_incidents(monkeypatch):
 
     try:
         beholder.resolve_incident_action(db, incident, "close_previous_and_start_new")
-        assert False, "already resolved incident should not execute side effects"
+        pytest.fail("already resolved incident should not execute side effects")
     except ValueError as exc:
         assert "이미 처리된" in str(exc)
 
@@ -890,7 +1163,7 @@ def test_beholder_rejects_unoffered_incident_actions(monkeypatch):
 
     try:
         beholder.resolve_incident_action(db, incident, "abandon_open_sessions")
-        assert False, "actions absent from available_actions must be rejected"
+        pytest.fail("actions absent from available_actions must be rejected")
     except ValueError as exc:
         assert "제공하지 않은" in str(exc)
 
@@ -922,7 +1195,7 @@ def test_open_sessions_context_without_target_matches_nothing(monkeypatch):
 
     try:
         beholder.resolve_incident_action(db, incident, "abandon_open_sessions")
-        assert False, "empty action context must not select every open session"
+        pytest.fail("empty action context must not select every open session")
     except ValueError as exc:
         assert "열린 세션" in str(exc)
 

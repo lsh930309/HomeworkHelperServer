@@ -5,6 +5,7 @@ import os
 import sys
 import hashlib
 import configparser
+import re
 from PyQt6.QtWidgets import QFileIconProvider # 아이콘 제공자
 from PyQt6.QtCore import QFileInfo          # 파일 정보 객체
 from PyQt6.QtGui import QIcon, QPixmap
@@ -93,11 +94,18 @@ def get_qicon_for_file(
                 )
             return QIcon(pixmap)
 
+        def _safe_cache_key(raw: str) -> str:
+            cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
+            if cleaned and cleaned == raw and "/" not in raw and "\\" not in raw:
+                return cleaned
+            return "process_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
         # 메인 GUI는 관리 프로세스 ID 기준 캐시를 우선 사용합니다.
         # 실사용 DB/캐시 복원 환경이나 비-Windows 검증 환경에서는 원본 exe 경로가 없어도
         # process_id 기반 캐시가 존재할 수 있으므로, 파일 존재 여부보다 먼저 확인합니다.
+        safe_process_cache_key = _safe_cache_key(process_id) if process_id else None
         if process_id:
-            cached_icon = _icon_from_cache(process_id)
+            cached_icon = _icon_from_cache(safe_process_cache_key)
             if cached_icon is not None:
                 return cached_icon
 
@@ -106,7 +114,7 @@ def get_qicon_for_file(
 
         # 캐시 키: process_id가 있으면 앱 전체에서 안정적인 ID 캐시를 공유하고,
         # 없으면 기존 동작처럼 파일 경로 기반 고유 ID를 사용합니다.
-        cache_key = process_id or hashlib.md5(os.path.normcase(os.path.abspath(file_path)).encode()).hexdigest()
+        cache_key = safe_process_cache_key or hashlib.md5(os.path.normcase(os.path.abspath(file_path)).encode()).hexdigest()
 
         # 아이콘 추출 (캐시가 있으면 캐시 사용)
         extract_icon_from_exe(file_path, cache_key)
