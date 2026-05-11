@@ -33,6 +33,7 @@
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
 | macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
+| LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
 | Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote` | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
 | Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |

@@ -55,6 +55,17 @@ HH_REMOTE_REQUIRE_AUTH=1 \
 - `HH_REMOTE_REQUIRE_AUTH=1` 유지
 - `HH_REMOTE_TOKEN` 또는 device pairing token 없이 공인망/터널에 노출 금지
 
+tailnet/LAN URL이 실제로 열렸는지 확인하려면 connectivity smoke를 실행한다.
+
+```bash
+./.venv/bin/python tools/smoke_remote_controller_connectivity.py \
+  --base-url http://100.x.y.z:8000 \
+  --token "<paired-device-token>" \
+  --expect-auth
+```
+
+이 smoke는 서버를 직접 시작하지 않는다. 이미 실행 중인 Remote Agent에 대해 `/remote/status`의 metadata, counts, capabilities, power 계약과 Bearer token 인증 경계를 확인한다.
+
 ## 4. 전원 제어 설정
 
 실제 파일은 사용자 데이터 디렉터리에 둔다.

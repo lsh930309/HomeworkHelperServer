@@ -234,6 +234,43 @@ Not-tested: Android SDK License 수락 이후 SDK package 설치, APK assemble/i
 
 ---
 
+## 2026-05-11 — LAN/Tailscale connectivity smoke 추가
+
+### 작업 범위
+
+- `tools/smoke_remote_controller_connectivity.py`를 추가했다.
+- 이 smoke는 서버를 직접 시작하지 않고, 이미 실행 중인 Remote Agent의 LAN/Tailscale/ZeroTier URL을 받아 `/remote/status` metadata/counts/capabilities/power 계약을 검증한다.
+- `--token`, `--expect-auth`, `--expect-no-auth` option으로 Bearer token 인증 경계를 확인할 수 있게 했다.
+- 구동 환경 가이드의 Tailscale/ZeroTier 섹션에 connectivity smoke 실행 예시를 추가했다.
+- verifier/smoke 계약 pytest에 connectivity smoke 필수 marker를 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- 외부망/tailnet 실접속은 실제 네트워크와 token이 필요해 기본 verifier에 자동 포함할 수 없다.
+- 대신 반복 가능한 smoke script를 repo에 고정해, 사용자 환경이 준비되는 즉시 같은 기준으로 실접속 evidence를 남길 수 있게 했다.
+- smoke는 `/remote/status`만 사용하므로 실행/전원 명령 side effect 없이 안전하게 connectivity와 인증 요구 여부를 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_remote_controller_connectivity.py --help` → CLI option 출력 확인.
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → connectivity smoke marker 포함 검증.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+외부망 Remote Agent 접속 검증도 side-effect 없는 smoke로 고정한다
+
+Constraint: Tailscale/ZeroTier 실접속은 사용자 네트워크와 token이 필요해 기본 verifier에서 자동 실행할 수 없음
+Rejected: 외부망 검증을 수동 curl 절차로만 유지 | 실접속 evidence 기준이 매번 달라져 완료 감사의 남은 gap을 줄이기 어려움
+Confidence: high
+Scope-risk: narrow
+Directive: tailnet URL과 paired token이 준비되면 connectivity smoke를 --expect-auth로 실행해 결과를 보고서와 완료 감사에 반영할 것
+Tested: ./.venv/bin/python tools/smoke_remote_controller_connectivity.py --help; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: 실제 Tailscale/ZeroTier/LAN 원격 URL 접속, Android SDK License 수락 이후 APK assemble/install
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위

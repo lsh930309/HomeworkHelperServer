@@ -90,3 +90,22 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "confirmPairing" in macos
     assert "authedClient.status()" in macos
     assert "authedClient.devices()" in macos
+
+
+def test_connectivity_smoke_supports_tailnet_or_lan_status_checks():
+    connectivity = _read(TOOLS / "smoke_remote_controller_connectivity.py")
+
+    for marker in [
+        "--base-url",
+        "--token",
+        "--expect-auth",
+        "--expect-no-auth",
+        "/remote/status",
+        "process_launch",
+        "shortcut_open",
+        "auth_required",
+        "pairing",
+        "power_control",
+        "Remote Controller connectivity smoke passed",
+    ]:
+        assert marker in connectivity
