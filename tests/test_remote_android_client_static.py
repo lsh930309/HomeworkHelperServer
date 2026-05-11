@@ -57,6 +57,7 @@ def test_android_api_client_tracks_remote_agent_contract():
         "remote/processes",
         "remote/shortcuts",
         "remote/power/$action",
+        "remote/power/config",
         "remote/pair/confirm",
         "remote/tokens/refresh",
         "remote/devices",
@@ -74,6 +75,8 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert "data class RemoteGameLink" in models
     assert "data class RemoteMobileSession" in models
     assert "data class RemotePowerStatus" in models
+    assert "data class RemotePowerConfigPayload" in models
+    assert "data class RemotePowerConfigResponse" in models
     assert "fun isPowerActionEnabled(action: String): Boolean" in models
     assert "val supportedActions: Set<String>" in models
     assert "data class PairingResult" in models
@@ -84,6 +87,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'capabilities.optBoolean("beholder_incidents")' in api_client
     assert 'capabilities.optBoolean("game_links")' in api_client
     assert 'capabilities.optBoolean("mobile_sessions")' in api_client
+    assert 'capabilities.optBoolean("power_config")' in api_client
     assert 'fun capabilities(): RemoteCapabilities' in api_client
     assert 'processLaunch = capabilities.optBoolean("process_launch")' in api_client
     assert 'fun refreshToken(): PairingResult' in api_client
@@ -109,6 +113,10 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'mobileTopGame?.optString("android_package_name")' in api_client
     assert 'optJSONArray("supported_actions")?.toStringSet().orEmpty()' in api_client
     assert 'targetHost = it.optString("target_host")' in api_client
+    assert 'fun powerConfig(): RemotePowerConfigResponse' in api_client
+    assert 'fun savePowerConfig(config: RemotePowerConfigPayload)' in api_client
+    assert 'put("remote/power/config", body)' in api_client
+    assert 'toPowerConfigResponse()' in api_client
 
 
 def test_android_token_storage_uses_keystore_not_plaintext_preferences():
@@ -165,6 +173,9 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert 'enabled = isPowerActionEnabled("shutdown")' in main_activity
     assert "지원 명령" in main_activity
     assert "전원 상태" in main_activity
+    assert "전원 설정" in main_activity
+    assert "전원 설정 저장" in main_activity
+    assert "fun savePowerConfig()" in main_activity
     assert "플레이 요약" in main_activity
     assert "dashboardSummary" in main_activity
     assert "모바일 플레이" in main_activity

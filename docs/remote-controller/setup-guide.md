@@ -38,6 +38,8 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 - `POST /remote/mobile-sessions/start`
 - `POST /remote/mobile-sessions/end`
 - `GET /remote/power/status`
+- `GET /remote/power/config`
+- `PUT /remote/power/config`
 - `POST /remote/power/{wake|sleep|restart|shutdown}`
 
 ## 2. 페어링 절차
@@ -133,7 +135,7 @@ HH_REMOTE_STATUS_TIMEOUT_SECONDS=4
 ./.venv/bin/python tools/check_remote_power_readiness.py --allow-blocker
 ```
 
-이 preflight는 SmartThings 또는 SSH 명령을 실행하지 않고 `remote_power_config.json`, SmartThings CLI path, SSH host/user/key path, 지원 가능한 action 목록만 보고한다.
+이 preflight와 macOS/Android `전원 설정` 카드는 SmartThings 또는 SSH 명령을 실행하지 않고 `remote_power_config.json`, SmartThings CLI path, SSH host/user/key path, 지원 가능한 action 목록만 보고하거나 저장한다.
 
 
 ## 5. Android 클라이언트 초안

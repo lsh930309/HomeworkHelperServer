@@ -34,6 +34,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteDevice",
         "RemoteDevicesResponse",
         "RemoteCapabilitiesResponse",
+        "RemotePowerConfigPayload",
+        "RemotePowerConfigResponse",
         "RemoteGameLink",
         "RemoteGameLinksResponse",
         "RemoteMobileSession",
@@ -60,10 +62,22 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'beholderIncidents = "beholder_incidents"',
         'gameLinks = "game_links"',
         'mobileSessions = "mobile_sessions"',
+        'powerConfig = "power_config"',
         'powerControl = "power_control"',
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
         'targetHost = "target_host"',
+        'smartthingsDeviceID = "smartthings_device_id"',
+        'smartthingsCLIPath = "smartthings_cli_path"',
+        'sshHost = "ssh_host"',
+        'sshPort = "ssh_port"',
+        'sshUser = "ssh_user"',
+        'sshKeyPath = "ssh_key_path"',
+        'statusTimeoutSeconds = "status_timeout_seconds"',
+        'configPath = "config_path"',
+        'configExists = "config_exists"',
+        'wakeConfigured = "wake_configured"',
+        'sshConfigured = "ssh_configured"',
         'remoteAPIVersion = "remote_api_version"',
         'serverTime = "server_time"',
         'monitoringPath = "monitoring_path"',
@@ -117,6 +131,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/processes',
         'remote/shortcuts',
         'remote/power/\\(action)',
+        'remote/power/config',
         'remote/pair/confirm',
         'remote/tokens/refresh',
         'remote/devices',
@@ -133,6 +148,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func startMobileSession(gameLinkID: String' in client
     assert 'func endMobileSession(sessionID: String)' in client
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
+    assert 'func powerConfig() async throws -> RemotePowerConfigResponse' in client
+    assert 'func savePowerConfig(_ config: RemotePowerConfigPayload)' in client
+    assert 'request(path: path, method: "PUT")' in client
     assert 'RemoteAPIError.http(status: http.statusCode, message: message)' in client
 
 
@@ -161,6 +179,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 제어 adapter가 설정되지" in app
     assert "지원 명령" in app
     assert "전원 상태" in app
+    assert "전원 설정" in app
+    assert "전원 설정 저장" in app
+    assert "savePowerConfig" in app
     assert "플레이 요약" in app
     assert "dashboardSummary" in app
     assert "모바일 플레이" in app

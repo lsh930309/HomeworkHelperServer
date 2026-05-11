@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 작업 브랜치: `dev-remote`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Android UsageStats 세션 sync를 Remote mobile sessions에 연결한다` commit 참조
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote power config 설정 UI를 안전 저장 경계로 추가한다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -29,8 +29,8 @@
 | Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include, `/remote/capabilities`, `/remote/dashboard/summary` read-only analytics summary, `/remote/beholder/incidents` read-only pending incident list, `/remote/game-links` Android-PC mapping, `/remote/mobile-sessions/start|end` 수동 모바일 세션 기록, `/remote/dashboard/summary` `mobile_metrics` 모바일 세션 집계 | 충족 | Beholder resolve flow 전체 원격화는 후속 범위 |
 | Pairing/device token | `src/core/remote_pairing.py`, `/remote/pair/start`, `/remote/pair/confirm`, `/remote/tokens/refresh`, `/remote/devices` | 충족 | 실제 외부망 pairing UX는 후속 실기기 검증 필요 |
 | 감사 로그 | `src/core/remote_audit.py` 및 command route 기록 | 충족 | 장기 rotation/retention 정책 후속 |
-| 전원 adapter | `src/core/remote_power.py`, `remote_power_config.example.json`, power status/action API | 부분 충족 | 실제 SmartThings/SSH 전원 동작은 로컬 설정/장비 필요 |
-| 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 `remote_power_config.json`, SmartThings CLI, SSH key 설정 누락 blocker |
+| 전원 adapter | `src/core/remote_power.py`, `remote_power_config.example.json`, power status/action API, `/remote/power/config`, macOS/Android `전원 설정` UI | 부분 충족 | 실제 SmartThings/SSH 전원 동작은 로컬 설정/장비 필요 |
+| 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 실제 SmartThings CLI, SSH key, 장비 side effect smoke blocker |
 | macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote` | 충족 | 실제 SwiftUI 버튼 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
 | macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
@@ -88,7 +88,7 @@
 2. 실제 Android device/emulator install smoke가 없다.
 3. Android Keystore, UsageStats provider, game-link 생성 UI, package Intent 실행, 수동/UsageStats 자동 mobile session start/end는 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
 4. 기술 검토서의 Tailscale/ZeroTier 외부망 실접속은 smoke 스크립트와 가이드까지 준비되었지만 LTE/tailnet 실제 URL/token evidence는 아직 없다.
-5. 실제 SmartThings/SSH 전원 동작은 readiness까지만 확인되었고 장비 side effect가 있어 별도 승인된 환경이 필요하다.
+5. SmartThings/SSH 설정 저장 UI는 추가되었지만 실제 전원 동작은 장비 side effect가 있어 별도 승인된 환경이 필요하다.
 
 ## 5. 다음 unblock 순서
 

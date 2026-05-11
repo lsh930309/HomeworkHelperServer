@@ -68,6 +68,8 @@ fun RemoteApp() {
     var androidPackageName by remember { mutableStateOf("") }
     var gameLinkProcessId by remember { mutableStateOf("") }
     var gameLinkPackageName by remember { mutableStateOf("") }
+    var powerConfig by remember { mutableStateOf(RemotePowerConfigPayload()) }
+    var powerConfigResponse by remember { mutableStateOf<RemotePowerConfigResponse?>(null) }
     var usageAccessGranted by remember { mutableStateOf(androidIntegration.hasUsageAccess()) }
     var recentUsage by remember { mutableStateOf<AndroidUsageSnapshot?>(null) }
     var status by remember { mutableStateOf<RemoteStatus?>(null) }
@@ -100,17 +102,20 @@ fun RemoteApp() {
                     val nextIncidents = api.beholderIncidents()
                     val nextGameLinks = api.gameLinks()
                     val nextMobileSessions = api.activeMobileSessions()
+                    val nextPowerConfig = api.powerConfig()
                     val nextProcesses = api.processes()
                     val nextShortcuts = api.shortcuts()
                     val nextDevices = if (includeDevices) api.devices() else emptyList()
-                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextProcesses, nextShortcuts, nextDevices)
+                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextPowerConfig, nextProcesses, nextShortcuts, nextDevices)
                 }
-            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextProcesses, nextShortcuts, nextDevices) ->
+            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextPowerConfig, nextProcesses, nextShortcuts, nextDevices) ->
                 status = nextStatus
                 dashboardSummary = nextSummary
                 beholderIncidents = nextIncidents
                 gameLinks = nextGameLinks
                 mobileSessions = nextMobileSessions
+                powerConfigResponse = nextPowerConfig
+                powerConfig = nextPowerConfig.config
                 processes = nextProcesses
                 shortcuts = nextShortcuts
                 devices = nextDevices
@@ -138,6 +143,19 @@ fun RemoteApp() {
             return
         }
         command { power(action) }
+    }
+
+    fun savePowerConfig() {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { client().savePowerConfig(powerConfig) } }
+                .onSuccess { response ->
+                    powerConfigResponse = response
+                    powerConfig = response.config
+                    message = "전원 설정을 저장했습니다. 지원 명령: ${if (response.supportedActions.isEmpty()) "없음" else response.supportedActions.joinToString(", ")}"
+                    refresh(includeDevices = token.isNotBlank())
+                }
+                .onFailure { message = it.message ?: "전원 설정 저장 실패" }
+        }
     }
 
     fun confirmPairing() {
@@ -339,6 +357,7 @@ fun RemoteApp() {
                             Text("Beholder 알림: ${if (current.beholderIncidents) "${beholderIncidents.size}건" else "미지원"}")
                             Text("Android-PC 연결: ${if (current.gameLinks) "${gameLinks.size}개" else "미지원"}")
                             Text("모바일 세션: ${if (current.mobileSessions) "${mobileSessions.size}개" else "미지원"}")
+                            Text("전원 설정 UI: ${if (current.powerConfig) "사용 가능" else "미지원"}")
                             Text("전원 제어: ${if (current.powerControl) "설정됨" else "미설정"}")
                             current.power?.let { power ->
                                 Text("전원 상태: ${power.status}")
@@ -360,6 +379,25 @@ fun RemoteApp() {
                             Button(onClick = { powerCommand("sleep") }, enabled = isPowerActionEnabled("sleep")) { Text("절전") }
                             Button(onClick = { powerCommand("restart") }, enabled = isPowerActionEnabled("restart")) { Text("재시작") }
                             Button(onClick = { powerCommand("shutdown") }, enabled = isPowerActionEnabled("shutdown")) { Text("끄기") }
+                        }
+                    }
+                }
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("전원 설정", style = MaterialTheme.typography.titleMedium)
+                            powerConfigResponse?.let { response ->
+                                Text("설정 파일: ${response.configPath}")
+                                Text("지원 명령: ${if (response.supportedActions.isEmpty()) "없음" else response.supportedActions.joinToString(", ")}")
+                            }
+                            OutlinedTextField(value = powerConfig.smartthingsDeviceId, onValueChange = { powerConfig = powerConfig.copy(smartthingsDeviceId = it) }, label = { Text("SmartThings device id") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = powerConfig.smartthingsCliPath, onValueChange = { powerConfig = powerConfig.copy(smartthingsCliPath = it) }, label = { Text("SmartThings CLI path") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = powerConfig.sshHost, onValueChange = { powerConfig = powerConfig.copy(sshHost = it) }, label = { Text("SSH host") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = powerConfig.sshUser, onValueChange = { powerConfig = powerConfig.copy(sshUser = it) }, label = { Text("SSH user") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = powerConfig.sshKeyPath, onValueChange = { powerConfig = powerConfig.copy(sshKeyPath = it) }, label = { Text("SSH key path") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(value = powerConfig.sshPort.toString(), onValueChange = { powerConfig = powerConfig.copy(sshPort = it.toIntOrNull() ?: 22) }, label = { Text("SSH port") }, modifier = Modifier.fillMaxWidth())
+                            Button(onClick = { savePowerConfig() }) { Text("전원 설정 저장") }
+                            Text("저장은 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
                         }
                     }
                 }
@@ -531,6 +569,7 @@ private data class RemoteSnapshot(
     val beholderIncidents: List<RemoteBeholderIncident>,
     val gameLinks: List<RemoteGameLink>,
     val mobileSessions: List<RemoteMobileSession>,
+    val powerConfig: RemotePowerConfigResponse,
     val processes: List<RemoteProcess>,
     val shortcuts: List<RemoteShortcut>,
     val devices: List<RemoteDevice>,

@@ -5,6 +5,7 @@ import platform
 import time
 import webbrowser
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -14,11 +15,12 @@ from sqlalchemy.orm import Session
 from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
-from src.core.remote_power import ConfigurablePowerController, PowerAction
+from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
+from src.data.database import data_dir
 from src.data import beholder, crud, models, schemas
 
 
-REMOTE_API_VERSION = "0.1.7"
+REMOTE_API_VERSION = "0.1.8"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -50,6 +52,16 @@ class RemoteMobileSessionStartRequest(BaseModel):
 class RemoteMobileSessionEndRequest(BaseModel):
     session_id: str
     ended_at: float | None = None
+
+
+class RemotePowerConfigRequest(BaseModel):
+    smartthings_device_id: str = ""
+    smartthings_cli_path: str = ""
+    ssh_host: str = ""
+    ssh_port: int = 22
+    ssh_user: str = ""
+    ssh_key_path: str = ""
+    status_timeout_seconds: float = 4.0
 
 
 def _model_dump(model: Any) -> dict[str, Any]:
@@ -158,6 +170,50 @@ def _mobile_session_metrics(
     }
 
 
+def _power_config_payload(config: RemotePowerConfig, config_path: Path, config_exists: bool) -> dict[str, Any]:
+    wake_ready = bool(config.smartthings_device_id and config.smartthings_cli_path)
+    ssh_ready = bool(config.ssh_host and config.ssh_user and config.ssh_key_path and config.ssh_port)
+    supported_actions: list[str] = []
+    if wake_ready:
+        supported_actions.append("wake")
+    if ssh_ready:
+        supported_actions.extend(["shutdown", "sleep", "restart"])
+    return {
+        "config_path": str(config_path),
+        "config_exists": config_exists,
+        "config": {
+            "smartthings_device_id": config.smartthings_device_id,
+            "smartthings_cli_path": config.smartthings_cli_path,
+            "ssh_host": config.ssh_host,
+            "ssh_port": config.ssh_port,
+            "ssh_user": config.ssh_user,
+            "ssh_key_path": config.ssh_key_path,
+            "status_timeout_seconds": config.status_timeout_seconds,
+        },
+        "readiness": {
+            "wake_configured": wake_ready,
+            "ssh_configured": ssh_ready,
+            "supported_actions": supported_actions,
+        },
+    }
+
+
+def _save_power_config(path: Path, config: RemotePowerConfig) -> None:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "smartthings_device_id": config.smartthings_device_id,
+        "smartthings_cli_path": config.smartthings_cli_path,
+        "ssh_host": config.ssh_host,
+        "ssh_port": config.ssh_port,
+        "ssh_user": config.ssh_user,
+        "ssh_key_path": config.ssh_key_path,
+        "status_timeout_seconds": config.status_timeout_seconds,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
     """Resolve the same launch preference used by the PyQt main window.
 
@@ -189,6 +245,7 @@ def create_remote_router(
     auth_token: str | None = None,
     require_auth: bool = False,
     now: Callable[[], float] | None = None,
+    power_config_path: Path | None = None,
 ) -> APIRouter:
     """Create HomeworkHelper's native-client remote-control API router.
 
@@ -205,6 +262,7 @@ def create_remote_router(
     device_registry = device_registry or RemoteDeviceRegistry()
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
     now = now or time.time
+    power_config_path = power_config_path or Path(data_dir) / "remote_power_config.json"
 
     def _bearer_token(authorization: str | None) -> str | None:
         if not authorization:
@@ -257,6 +315,7 @@ def create_remote_router(
             "beholder_incidents": True,
             "game_links": True,
             "mobile_sessions": True,
+            "power_config": True,
             "power_control": bool(power_status.get("configured")),
             "beholder": True,
             "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
@@ -358,6 +417,46 @@ def create_remote_router(
             "capabilities": _remote_capabilities(power_status),
             "power": power_status,
         }
+
+    @router.get("/power/config")
+    def remote_power_config():
+        """Return editable power adapter config without sending power commands."""
+
+        config = RemotePowerConfig.load(power_config_path)
+        return _power_config_payload(config, power_config_path, power_config_path.exists())
+
+    @router.put("/power/config")
+    def update_remote_power_config(request: RemotePowerConfigRequest):
+        """Persist fixed-schema power config and refresh the in-process adapter.
+
+        This endpoint writes only HomeworkHelper's allowlisted
+        ``remote_power_config.json`` shape. It never accepts raw commands and
+        never performs wake/shutdown/sleep/restart side effects.
+        """
+
+        config = RemotePowerConfig(
+            smartthings_device_id=request.smartthings_device_id.strip(),
+            smartthings_cli_path=request.smartthings_cli_path.strip(),
+            ssh_host=request.ssh_host.strip(),
+            ssh_port=int(request.ssh_port or 22),
+            ssh_user=request.ssh_user.strip(),
+            ssh_key_path=request.ssh_key_path.strip(),
+            status_timeout_seconds=float(request.status_timeout_seconds or 4.0),
+        )
+        _save_power_config(power_config_path, config)
+        if isinstance(power_controller, ConfigurablePowerController):
+            power_controller.config = config
+        auditor.record(
+            command="power.config.update",
+            accepted=True,
+            status="accepted",
+            target=str(power_config_path),
+            metadata={
+                "wake_configured": config.wake_configured,
+                "ssh_configured": config.ssh_configured,
+            },
+        )
+        return _power_config_payload(config, power_config_path, True)
 
     @router.get("/dashboard/summary")
     def remote_dashboard_summary(

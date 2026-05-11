@@ -86,6 +86,15 @@ struct RemoteAPIClient {
         try await post("remote/power/\(action)", body: Data("{}".utf8))
     }
 
+    func powerConfig() async throws -> RemotePowerConfigResponse {
+        try await get("remote/power/config")
+    }
+
+    func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse {
+        let body = try JSONEncoder().encode(config)
+        return try await put("remote/power/config", body: body)
+    }
+
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
         let payload = [
             "code": code,
@@ -117,6 +126,15 @@ struct RemoteAPIClient {
 
     private func post<T: Decodable>(_ path: String, body: Data) async throws -> T {
         var request = request(path: path, method: "POST")
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func put<T: Decodable>(_ path: String, body: Data) async throws -> T {
+        var request = request(path: path, method: "PUT")
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.data(for: request)

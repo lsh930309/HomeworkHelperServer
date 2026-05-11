@@ -18,6 +18,44 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-11 — Remote power config 설정 UI를 안전 저장 경계로 추가
+
+### 작업 범위
+
+- Remote Agent에 `GET /remote/power/config`, `PUT /remote/power/config`를 추가해 고정 스키마 `remote_power_config.json`을 조회/저장할 수 있게 했다.
+- 저장 endpoint는 SmartThings/SSH 명령을 실행하지 않고 JSON 파일만 갱신하며, in-process `ConfigurablePowerController` 설정을 새 값으로 갱신한다.
+- macOS SwiftUI에 `전원 설정` 섹션을 추가해 SmartThings device/CLI, SSH host/user/key/port를 입력하고 저장할 수 있게 했다.
+- Android Compose에도 동일한 `전원 설정` 카드와 저장 흐름을 전파했다.
+- Remote API 단위 테스트와 macOS/Android 정적 계약 테스트로 power config endpoint/UI marker를 고정했다.
+
+### 자체 코드 리뷰 메모
+
+- 설정 저장은 allowlisted JSON field만 받으며 raw shell command나 임의 파일 경로를 받지 않는다.
+- 실제 wake/shutdown/sleep/restart는 기존 power action endpoint로만 실행되며, 이번 설정 저장 경로에서는 전원 side effect가 발생하지 않는다.
+- 실제 SmartThings/SSH 장비 smoke는 별도 사용자 승인과 장비 준비가 필요해 blocker로 유지했다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 39 passed, 6 warnings
+- `swift build` → Build complete (1.48s)
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.8, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=1, mobile_session=ended, mobile_summary_sessions=1`
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 20 passed, full pytest 148 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote power config 설정 UI를 안전 저장 경계로 추가한다
+
+Constraint: 실제 전원 명령은 SmartThings/SSH side effect가 있으므로 설정 UI는 고정 JSON 저장과 readiness 갱신까지만 수행해야 함
+Rejected: 전원 설정을 문서 편집으로만 남김 | native controller에서 power capability를 닫기 위한 macOS-first 설정 경계가 없어 반복 검증이 어려움
+Confidence: medium
+Scope-risk: moderate
+Directive: 전원 action을 확장할 때도 config 저장 endpoint는 raw command를 받지 말고 실제 장비 smoke는 별도 승인된 환경에서만 수행할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (39 passed); swift build; ./.venv/bin/python tools/smoke_macos_remote_api_client.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (148 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: 실제 SmartThings WoL/SSH shutdown/sleep/restart side effect, Android SDK License 수락 이후 APK assemble/install
+```
+
 ## 2026-05-11 — Android UsageStats 세션 sync를 Remote mobile sessions에 연결
 
 ### 작업 범위

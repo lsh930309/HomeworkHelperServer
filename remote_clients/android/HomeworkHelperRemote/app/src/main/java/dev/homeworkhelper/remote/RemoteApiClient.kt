@@ -23,6 +23,7 @@ class RemoteApiClient(
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
             gameLinks = capabilities.optBoolean("game_links"),
             mobileSessions = capabilities.optBoolean("mobile_sessions"),
+            powerConfig = capabilities.optBoolean("power_config"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -48,6 +49,7 @@ class RemoteApiClient(
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
             gameLinks = capabilities.optBoolean("game_links"),
             mobileSessions = capabilities.optBoolean("mobile_sessions"),
+            powerConfig = capabilities.optBoolean("power_config"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -136,6 +138,21 @@ class RemoteApiClient(
     fun activeMobileSessions(): List<RemoteMobileSession> {
         val json = JSONObject(get("remote/mobile-sessions/active"))
         return json.getJSONArray("sessions").mapObjects { item -> item.toMobileSession() }
+    }
+
+    fun powerConfig(): RemotePowerConfigResponse = JSONObject(get("remote/power/config")).toPowerConfigResponse()
+
+    fun savePowerConfig(config: RemotePowerConfigPayload): RemotePowerConfigResponse {
+        val body = JSONObject()
+            .put("smartthings_device_id", config.smartthingsDeviceId)
+            .put("smartthings_cli_path", config.smartthingsCliPath)
+            .put("ssh_host", config.sshHost)
+            .put("ssh_port", config.sshPort)
+            .put("ssh_user", config.sshUser)
+            .put("ssh_key_path", config.sshKeyPath)
+            .put("status_timeout_seconds", config.statusTimeoutSeconds)
+            .toString()
+        return JSONObject(put("remote/power/config", body)).toPowerConfigResponse()
     }
 
     fun startMobileSession(gameLinkId: String, source: String = "manual", startedAtSeconds: Double? = null): RemoteMobileSession {
@@ -231,6 +248,8 @@ class RemoteApiClient(
 
     private fun post(path: String, body: String): String = request(path, "POST", body)
 
+    private fun put(path: String, body: String): String = request(path, "PUT", body)
+
     private fun delete(path: String): String = request(path, "DELETE", null)
 
     private fun request(path: String, method: String, body: String?): String {
@@ -272,6 +291,27 @@ private fun JSONObject.toMobileSession(): RemoteMobileSession = RemoteMobileSess
     endedAt = optDouble("ended_at"),
     durationSeconds = optDouble("duration_seconds"),
 )
+
+private fun JSONObject.toPowerConfigResponse(): RemotePowerConfigResponse {
+    val config = getJSONObject("config")
+    val readiness = getJSONObject("readiness")
+    return RemotePowerConfigResponse(
+        configPath = optString("config_path"),
+        configExists = optBoolean("config_exists"),
+        config = RemotePowerConfigPayload(
+            smartthingsDeviceId = config.optString("smartthings_device_id"),
+            smartthingsCliPath = config.optString("smartthings_cli_path"),
+            sshHost = config.optString("ssh_host"),
+            sshPort = config.optInt("ssh_port", 22),
+            sshUser = config.optString("ssh_user"),
+            sshKeyPath = config.optString("ssh_key_path"),
+            statusTimeoutSeconds = config.optDouble("status_timeout_seconds", 4.0),
+        ),
+        wakeConfigured = readiness.optBoolean("wake_configured"),
+        sshConfigured = readiness.optBoolean("ssh_configured"),
+        supportedActions = readiness.optJSONArray("supported_actions")?.toStringSet().orEmpty(),
+    )
+}
 
 private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> = buildList {
     for (index in 0 until length()) {

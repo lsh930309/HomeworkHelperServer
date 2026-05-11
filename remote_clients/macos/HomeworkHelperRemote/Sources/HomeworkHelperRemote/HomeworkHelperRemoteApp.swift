@@ -27,6 +27,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var deviceName = Host.current().localizedName ?? "Mac"
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
+    @Published var powerConfig = RemotePowerConfigPayload()
+    @Published var powerConfigResponse: RemotePowerConfigResponse?
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -62,6 +64,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             async let fetchedIncidents = client.beholderIncidents()
             async let fetchedGameLinks = client.gameLinks()
             async let fetchedMobileSessions = client.activeMobileSessions()
+            async let fetchedPowerConfig = client.powerConfig()
             async let fetchedProcesses = client.processes()
             async let fetchedShortcuts = client.shortcuts()
             status = try await fetchedStatus
@@ -69,6 +72,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = try await fetchedIncidents
             gameLinks = try await fetchedGameLinks
             mobileSessions = try await fetchedMobileSessions
+            powerConfigResponse = try await fetchedPowerConfig
+            powerConfig = powerConfigResponse?.config ?? RemotePowerConfigPayload()
             processes = try await fetchedProcesses
             shortcuts = try await fetchedShortcuts
             if !tokenText.isEmpty {
@@ -161,6 +166,20 @@ final class RemoteDashboardViewModel: ObservableObject {
             let result = try await client.power(action: action)
             message = result.message
             await refresh()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func savePowerConfig() async {
+        guard let client else { return }
+        do {
+            let response = try await client.savePowerConfig(powerConfig)
+            powerConfigResponse = response
+            powerConfig = response.config
+            status = try await client.status()
+            let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
+            message = "전원 설정을 저장했습니다. 지원 명령: \(supportedActions)"
         } catch {
             message = error.localizedDescription
         }
@@ -285,6 +304,31 @@ struct RemoteDashboardView: View {
                         PowerButtonRow(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
                         PowerButtonRow(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
                         PowerButtonRow(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                    }
+
+                    Section("전원 설정") {
+                        if let response = viewModel.powerConfigResponse {
+                            LabeledContent("설정 파일", value: response.configPath)
+                            LabeledContent("저장 상태", value: response.configExists ? "있음" : "없음")
+                            LabeledContent("지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
+                        }
+                        TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("SSH host", text: $viewModel.powerConfig.sshHost)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("SSH user", text: $viewModel.powerConfig.sshUser)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
+                            .textFieldStyle(.roundedBorder)
+                        Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
+                        Button("전원 설정 저장") {
+                            Task { await viewModel.savePowerConfig() }
+                        }
+                        Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("등록 디바이스") {

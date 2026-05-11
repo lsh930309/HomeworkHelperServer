@@ -9,6 +9,7 @@ data class RemoteStatus(
     val beholderIncidents: Boolean,
     val gameLinks: Boolean,
     val mobileSessions: Boolean,
+    val powerConfig: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,
@@ -28,6 +29,25 @@ data class RemotePowerStatus(
     val targetHost: String,
 )
 
+data class RemotePowerConfigPayload(
+    val smartthingsDeviceId: String = "",
+    val smartthingsCliPath: String = "",
+    val sshHost: String = "",
+    val sshPort: Int = 22,
+    val sshUser: String = "",
+    val sshKeyPath: String = "",
+    val statusTimeoutSeconds: Double = 4.0,
+)
+
+data class RemotePowerConfigResponse(
+    val configPath: String,
+    val configExists: Boolean,
+    val config: RemotePowerConfigPayload,
+    val wakeConfigured: Boolean,
+    val sshConfigured: Boolean,
+    val supportedActions: Set<String>,
+)
+
 data class RemoteCapabilities(
     val apiVersion: String,
     val processLaunch: Boolean,
@@ -36,6 +56,7 @@ data class RemoteCapabilities(
     val beholderIncidents: Boolean,
     val gameLinks: Boolean,
     val mobileSessions: Boolean,
+    val powerConfig: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,

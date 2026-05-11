@@ -54,7 +54,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] command audit log JSONL 파일 추가
 - [x] `pc_remote` SmartThings/SSH 전원 제어 adapter를 안전한 설정 기반으로 이식
 - [x] remote_power_config.json 설정 문서화/예시 파일 추가
-- [ ] remote_power_config.json 설정 UI 구현
+- [x] remote_power_config.json 설정 UI 구현
 - [x] Tailscale/ZeroTier 연결 가이드와 Agent bind 설정 추가
 - [x] macOS 앱 Keychain 저장소 도입
 - [x] Android Kotlin/Compose 프로젝트 생성

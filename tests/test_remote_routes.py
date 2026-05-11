@@ -48,6 +48,7 @@ def _client_with_seed(
     power_controller=None,
     require_auth=False,
     client_address=("testclient", 50000),
+    power_config_path=None,
 ):
     engine = create_engine(
         "sqlite:///:memory:",
@@ -101,6 +102,7 @@ def _client_with_seed(
             auth_token=auth_token,
             require_auth=require_auth,
             now=lambda: 1778497000.0,
+            power_config_path=power_config_path,
         )
     )
     return TestClient(app, client=client_address), fake_launcher, opened_urls, fake_auditor, device_registry
@@ -116,7 +118,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.7"
+    assert body["remote_api_version"] == "0.1.8"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -125,6 +127,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["beholder_incidents"] is True
     assert body["capabilities"]["game_links"] is True
     assert body["capabilities"]["mobile_sessions"] is True
+    assert body["capabilities"]["power_config"] is True
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
@@ -251,6 +254,47 @@ def test_remote_capabilities_endpoint_matches_status_capability_contract():
     assert capabilities_body["capabilities"]["auth_required"] is True
     assert capabilities_body["capabilities"]["power_control"] is True
     assert capabilities_body["power"]["supported_actions"] == ["wake"]
+
+
+def test_remote_power_config_can_be_saved_without_sending_power_commands(tmp_path):
+    config_path = tmp_path / "remote_power_config.json"
+    controller = ConfigurablePowerController(
+        RemotePowerConfig(),
+        runner=lambda _args, _timeout: (_ for _ in ()).throw(AssertionError("power command should not run")),
+        tcp_checker=lambda _host, _port, _timeout: False,
+    )
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        power_controller=controller,
+        power_config_path=config_path,
+    )
+
+    before = client.get("/remote/power/config")
+    saved = client.put(
+        "/remote/power/config",
+        json={
+            "smartthings_device_id": "device-1",
+            "smartthings_cli_path": "/opt/homebrew/bin/smartthings",
+            "ssh_host": "pc.example.test",
+            "ssh_port": 50022,
+            "ssh_user": "player",
+            "ssh_key_path": "~/.ssh/id_ed25519",
+            "status_timeout_seconds": 3.0,
+        },
+    )
+    status_response = client.get("/remote/status")
+
+    assert before.status_code == 200
+    assert before.json()["config_exists"] is False
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["config_exists"] is True
+    assert body["config"]["ssh_host"] == "pc.example.test"
+    assert body["readiness"]["supported_actions"] == ["wake", "shutdown", "sleep", "restart"]
+    assert config_path.exists()
+    assert status_response.json()["capabilities"]["power_control"] is True
+    assert set(status_response.json()["power"]["supported_actions"]) == {"wake", "shutdown", "sleep", "restart"}
+    assert auditor.events[-1]["command"] == "power.config.update"
+    assert auditor.events[-1]["metadata"] == {"wake_configured": True, "ssh_configured": True}
 
 
 def test_remote_beholder_incidents_exposes_pending_incidents_without_resolving():

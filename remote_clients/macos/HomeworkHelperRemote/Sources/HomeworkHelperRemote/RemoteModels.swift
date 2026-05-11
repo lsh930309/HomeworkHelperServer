@@ -20,6 +20,7 @@ struct RemoteStatus: Decodable {
         let beholderIncidents: Bool
         let gameLinks: Bool
         let mobileSessions: Bool
+        let powerConfig: Bool
         let powerControl: Bool
         let beholder: Bool
         let authRequired: Bool
@@ -32,6 +33,7 @@ struct RemoteStatus: Decodable {
             case beholderIncidents = "beholder_incidents"
             case gameLinks = "game_links"
             case mobileSessions = "mobile_sessions"
+            case powerConfig = "power_config"
             case powerControl = "power_control"
             case authRequired = "auth_required"
             case beholder
@@ -71,6 +73,52 @@ struct RemoteStatus: Decodable {
         case counts
         case capabilities
         case power
+    }
+}
+
+struct RemotePowerConfigPayload: Codable {
+    var smartthingsDeviceID: String = ""
+    var smartthingsCLIPath: String = ""
+    var sshHost: String = ""
+    var sshPort: Int = 22
+    var sshUser: String = ""
+    var sshKeyPath: String = ""
+    var statusTimeoutSeconds: Double = 4.0
+
+    enum CodingKeys: String, CodingKey {
+        case smartthingsDeviceID = "smartthings_device_id"
+        case smartthingsCLIPath = "smartthings_cli_path"
+        case sshHost = "ssh_host"
+        case sshPort = "ssh_port"
+        case sshUser = "ssh_user"
+        case sshKeyPath = "ssh_key_path"
+        case statusTimeoutSeconds = "status_timeout_seconds"
+    }
+}
+
+struct RemotePowerConfigResponse: Decodable {
+    struct Readiness: Decodable {
+        let wakeConfigured: Bool
+        let sshConfigured: Bool
+        let supportedActions: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case wakeConfigured = "wake_configured"
+            case sshConfigured = "ssh_configured"
+            case supportedActions = "supported_actions"
+        }
+    }
+
+    let configPath: String
+    let configExists: Bool
+    let config: RemotePowerConfigPayload
+    let readiness: Readiness
+
+    enum CodingKeys: String, CodingKey {
+        case configPath = "config_path"
+        case configExists = "config_exists"
+        case config
+        case readiness
     }
 }
 
