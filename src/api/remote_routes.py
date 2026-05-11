@@ -17,7 +17,7 @@ from src.core.remote_power import ConfigurablePowerController, PowerAction
 from src.data import beholder, crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.5"
+REMOTE_API_VERSION = "0.1.6"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -38,6 +38,17 @@ class PairingConfirmRequest(BaseModel):
     code: str
     device_name: str
     platform: str | None = None
+
+
+class RemoteMobileSessionStartRequest(BaseModel):
+    game_link_id: str
+    source: Literal["manual", "usage_stats"] = "manual"
+    started_at: float | None = None
+
+
+class RemoteMobileSessionEndRequest(BaseModel):
+    session_id: str
+    ended_at: float | None = None
 
 
 def _model_dump(model: Any) -> dict[str, Any]:
@@ -64,6 +75,12 @@ def _serialize_game_platform_link(link: Any) -> dict[str, Any]:
     if hasattr(schemas.GamePlatformLinkSchema, "model_validate"):
         return _model_dump(schemas.GamePlatformLinkSchema.model_validate(link))
     return _model_dump(schemas.GamePlatformLinkSchema.from_orm(link))
+
+
+def _serialize_mobile_game_session(session: Any) -> dict[str, Any]:
+    if hasattr(schemas.MobileGameSessionSchema, "model_validate"):
+        return _model_dump(schemas.MobileGameSessionSchema.model_validate(session))
+    return _model_dump(schemas.MobileGameSessionSchema.from_orm(session))
 
 
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
@@ -164,6 +181,7 @@ def create_remote_router(
             "dashboard_summary": True,
             "beholder_incidents": True,
             "game_links": True,
+            "mobile_sessions": True,
             "power_control": bool(power_status.get("configured")),
             "beholder": True,
             "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
@@ -342,6 +360,56 @@ def create_remote_router(
             metadata={"pc_process_id": link.pc_process_id, "sync_strategy": link.sync_strategy},
         )
         return _serialize_game_platform_link(link)
+
+
+    @router.get("/mobile-sessions/active")
+    def list_active_remote_mobile_sessions(db: Session = Depends(get_db_dependency)):
+        sessions = [_serialize_mobile_game_session(session) for session in crud.get_active_mobile_game_sessions(db)]
+        return {"sessions": sessions, "count": len(sessions)}
+
+    @router.post("/mobile-sessions/start")
+    def start_remote_mobile_session(request: RemoteMobileSessionStartRequest, db: Session = Depends(get_db_dependency)):
+        try:
+            session = crud.start_mobile_game_session(
+                db,
+                game_link_id=request.game_link_id,
+                source=request.source,
+                started_at=request.started_at,
+                timestamp=now(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        auditor.record(
+            command="mobile_session.start",
+            accepted=True,
+            status="accepted",
+            target_id=session.id,
+            target_name=session.pc_display_name,
+            target=session.android_package_name,
+            metadata={"game_link_id": session.game_link_id, "source": session.source},
+        )
+        return _serialize_mobile_game_session(session)
+
+    @router.post("/mobile-sessions/end")
+    def end_remote_mobile_session(request: RemoteMobileSessionEndRequest, db: Session = Depends(get_db_dependency)):
+        session = crud.end_mobile_game_session(
+            db,
+            session_id=request.session_id,
+            ended_at=request.ended_at,
+            timestamp=now(),
+        )
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="활성 모바일 세션을 찾을 수 없습니다.")
+        auditor.record(
+            command="mobile_session.end",
+            accepted=True,
+            status="accepted",
+            target_id=session.id,
+            target_name=session.pc_display_name,
+            target=session.android_package_name,
+            metadata={"game_link_id": session.game_link_id, "duration_seconds": session.duration_seconds},
+        )
+        return _serialize_mobile_game_session(session)
 
     @router.get("/processes")
     def list_remote_processes(db: Session = Depends(get_db_dependency)):

@@ -22,6 +22,7 @@ class RemoteApiClient(
             dashboardSummary = capabilities.optBoolean("dashboard_summary"),
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
             gameLinks = capabilities.optBoolean("game_links"),
+            mobileSessions = capabilities.optBoolean("mobile_sessions"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -46,6 +47,7 @@ class RemoteApiClient(
             dashboardSummary = capabilities.optBoolean("dashboard_summary"),
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
             gameLinks = capabilities.optBoolean("game_links"),
+            mobileSessions = capabilities.optBoolean("mobile_sessions"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -119,6 +121,25 @@ class RemoteApiClient(
             hoyolabGameId = item.optString("hoyolab_game_id"),
             syncStrategy = item.optString("sync_strategy", "manual"),
         )
+    }
+
+
+    fun activeMobileSessions(): List<RemoteMobileSession> {
+        val json = JSONObject(get("remote/mobile-sessions/active"))
+        return json.getJSONArray("sessions").mapObjects { item -> item.toMobileSession() }
+    }
+
+    fun startMobileSession(gameLinkId: String, source: String = "manual"): RemoteMobileSession {
+        val body = JSONObject()
+            .put("game_link_id", gameLinkId)
+            .put("source", source)
+            .toString()
+        return JSONObject(post("remote/mobile-sessions/start", body)).toMobileSession()
+    }
+
+    fun endMobileSession(sessionId: String): RemoteMobileSession {
+        val body = JSONObject().put("session_id", sessionId).toString()
+        return JSONObject(post("remote/mobile-sessions/end", body)).toMobileSession()
     }
 
     fun processes(): List<RemoteProcess> = JSONArray(get("remote/processes")).mapObjects { item ->
@@ -227,6 +248,19 @@ class RemoteApiClient(
         return text
     }
 }
+
+private fun JSONObject.toMobileSession(): RemoteMobileSession = RemoteMobileSession(
+    id = optString("id"),
+    gameLinkId = optString("game_link_id"),
+    pcProcessId = optString("pc_process_id"),
+    pcDisplayName = optString("pc_display_name"),
+    androidPackageName = optString("android_package_name"),
+    source = optString("source", "manual"),
+    status = optString("status"),
+    startedAt = optDouble("started_at"),
+    endedAt = optDouble("ended_at"),
+    durationSeconds = optDouble("duration_seconds"),
+)
 
 private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> = buildList {
     for (index in 0 until length()) {

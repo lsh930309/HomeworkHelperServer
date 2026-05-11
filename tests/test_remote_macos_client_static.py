@@ -36,6 +36,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteCapabilitiesResponse",
         "RemoteGameLink",
         "RemoteGameLinksResponse",
+        "RemoteMobileSession",
+        "RemoteMobileSessionsResponse",
         "RemoteDashboardSummary",
         "RemoteBeholderIncident",
         "RemoteBeholderIncidentsResponse",
@@ -56,6 +58,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'dashboardSummary = "dashboard_summary"',
         'beholderIncidents = "beholder_incidents"',
         'gameLinks = "game_links"',
+        'mobileSessions = "mobile_sessions"',
         'powerControl = "power_control"',
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
@@ -77,6 +80,9 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'platformAccountHint = "platform_account_hint"',
         'hoyolabGameID = "hoyolab_game_id"',
         'syncStrategy = "sync_strategy"',
+        'gameLinkID = "game_link_id"',
+        'startedAt = "started_at"',
+        'durationSeconds = "duration_seconds"',
         'tokenRefreshedAt = "token_refreshed_at"',
         'revokedAt = "revoked_at"',
         'deviceID = "device_id"',
@@ -100,6 +106,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/dashboard/summary',
         'remote/beholder/incidents',
         'remote/game-links',
+        'remote/mobile-sessions/active',
+        'remote/mobile-sessions/start',
+        'remote/mobile-sessions/end',
         'remote/processes',
         'remote/shortcuts',
         'remote/power/\\(action)',
@@ -116,6 +125,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'request.setValue("application/json", forHTTPHeaderField: "Content-Type")' in client
     assert 'func gameLinks() async throws -> [RemoteGameLink]' in client
     assert 'func createGameLink(processID: String, androidPackageName: String' in client
+    assert 'func startMobileSession(gameLinkID: String' in client
+    assert 'func endMobileSession(sessionID: String)' in client
+    assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
     assert 'RemoteAPIError.http(status: http.statusCode, message: message)' in client
 
 
@@ -151,6 +163,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "beholderIncidents" in app
     assert "Android-PC 연결" in app
     assert "gameLinks" in app
+    assert "mobileSessions" in app
+    assert "func startMobileSession(_ link: RemoteGameLink) async" in app
+    assert "func endMobileSession(_ session: RemoteMobileSession) async" in app
     assert "func createGameLink() async" in app
     assert "연결 저장" in app
     assert "gameLinkAndroidPackage" in app

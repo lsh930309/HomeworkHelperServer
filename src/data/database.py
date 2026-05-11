@@ -193,6 +193,31 @@ def auto_migrate_database():
                 "ON game_platform_links (android_package_name)"
             ))
             conn.commit()
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS mobile_game_sessions ("
+                "id TEXT PRIMARY KEY, "
+                "game_link_id TEXT NOT NULL, "
+                "pc_process_id TEXT NOT NULL, "
+                "pc_display_name TEXT, "
+                "android_package_name TEXT NOT NULL, "
+                "source TEXT NOT NULL DEFAULT 'manual', "
+                "status TEXT NOT NULL DEFAULT 'active', "
+                "started_at REAL NOT NULL, "
+                "ended_at REAL, "
+                "duration_seconds REAL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_mobile_game_sessions_status_started_at "
+                "ON mobile_game_sessions (status, started_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_mobile_game_sessions_game_link_id "
+                "ON mobile_game_sessions (game_link_id)"
+            ))
+            conn.commit()
             for table_name, column_name, column_type, default_value in migrations:
                 # 테이블 존재 여부 확인
                 if table_name not in inspector.get_table_names():

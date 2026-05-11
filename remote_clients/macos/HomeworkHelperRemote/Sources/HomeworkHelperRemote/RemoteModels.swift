@@ -19,6 +19,7 @@ struct RemoteStatus: Decodable {
         let dashboardSummary: Bool
         let beholderIncidents: Bool
         let gameLinks: Bool
+        let mobileSessions: Bool
         let powerControl: Bool
         let beholder: Bool
         let authRequired: Bool
@@ -30,6 +31,7 @@ struct RemoteStatus: Decodable {
             case dashboardSummary = "dashboard_summary"
             case beholderIncidents = "beholder_incidents"
             case gameLinks = "game_links"
+            case mobileSessions = "mobile_sessions"
             case powerControl = "power_control"
             case authRequired = "auth_required"
             case beholder
@@ -205,6 +207,37 @@ struct RemoteGameLink: Decodable, Identifiable {
 
 struct RemoteGameLinksResponse: Decodable {
     let links: [RemoteGameLink]
+    let count: Int
+}
+
+struct RemoteMobileSession: Decodable, Identifiable {
+    let id: String
+    let gameLinkID: String
+    let pcProcessID: String
+    let pcDisplayName: String?
+    let androidPackageName: String
+    let source: String
+    let status: String
+    let startedAt: Double
+    let endedAt: Double?
+    let durationSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case gameLinkID = "game_link_id"
+        case pcProcessID = "pc_process_id"
+        case pcDisplayName = "pc_display_name"
+        case androidPackageName = "android_package_name"
+        case source
+        case status
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSeconds = "duration_seconds"
+    }
+}
+
+struct RemoteMobileSessionsResponse: Decodable {
+    let sessions: [RemoteMobileSession]
     let count: Int
 }
 

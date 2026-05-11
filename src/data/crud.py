@@ -560,6 +560,73 @@ def create_game_platform_link(
     db.refresh(db_link)
     return db_link
 
+
+def get_active_mobile_game_sessions(db: Session):
+    return (
+        db.query(models.MobileGameSession)
+        .filter(models.MobileGameSession.status == "active")
+        .order_by(models.MobileGameSession.started_at.desc())
+        .all()
+    )
+
+
+def get_mobile_game_session_by_id(db: Session, session_id: str):
+    return db.query(models.MobileGameSession).filter(models.MobileGameSession.id == session_id).first()
+
+
+@db_retry_on_lock
+def start_mobile_game_session(
+    db: Session,
+    *,
+    game_link_id: str,
+    source: str = "manual",
+    started_at: float | None = None,
+    timestamp: float | None = None,
+):
+    link = get_game_platform_link_by_id(db, game_link_id)
+    if link is None:
+        raise ValueError("연결된 Android-PC game link를 찾을 수 없습니다.")
+    now = float(timestamp or time.time())
+    start_time = float(started_at or now)
+    session = models.MobileGameSession(
+        id=str(uuid.uuid4()),
+        game_link_id=link.id,
+        pc_process_id=link.pc_process_id,
+        pc_display_name=link.pc_display_name,
+        android_package_name=link.android_package_name,
+        source=str(source or "manual"),
+        status="active",
+        started_at=start_time,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@db_retry_on_lock
+def end_mobile_game_session(
+    db: Session,
+    *,
+    session_id: str,
+    ended_at: float | None = None,
+    timestamp: float | None = None,
+):
+    session = get_mobile_game_session_by_id(db, session_id)
+    if session is None or session.status != "active":
+        return None
+    now = float(timestamp or time.time())
+    end_time = float(ended_at or now)
+    session.ended_at = end_time
+    session.duration_seconds = max(0.0, end_time - float(session.started_at))
+    session.status = "ended"
+    session.updated_at = now
+    db.commit()
+    db.refresh(session)
+    return session
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):

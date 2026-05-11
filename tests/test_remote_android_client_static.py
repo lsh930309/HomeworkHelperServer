@@ -51,6 +51,9 @@ def test_android_api_client_tracks_remote_agent_contract():
         "remote/dashboard/summary",
         "remote/beholder/incidents",
         "remote/game-links",
+        "remote/mobile-sessions/active",
+        "remote/mobile-sessions/start",
+        "remote/mobile-sessions/end",
         "remote/processes",
         "remote/shortcuts",
         "remote/power/$action",
@@ -69,6 +72,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert "data class RemoteDashboardSummary" in models
     assert "data class RemoteBeholderIncident" in models
     assert "data class RemoteGameLink" in models
+    assert "data class RemoteMobileSession" in models
     assert "data class RemotePowerStatus" in models
     assert "fun isPowerActionEnabled(action: String): Boolean" in models
     assert "val supportedActions: Set<String>" in models
@@ -79,6 +83,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'capabilities.optBoolean("dashboard_summary")' in api_client
     assert 'capabilities.optBoolean("beholder_incidents")' in api_client
     assert 'capabilities.optBoolean("game_links")' in api_client
+    assert 'capabilities.optBoolean("mobile_sessions")' in api_client
     assert 'fun capabilities(): RemoteCapabilities' in api_client
     assert 'processLaunch = capabilities.optBoolean("process_launch")' in api_client
     assert 'fun refreshToken(): PairingResult' in api_client
@@ -87,6 +92,9 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
     assert 'fun gameLinks(): List<RemoteGameLink>' in api_client
     assert 'fun createGameLink(processId: String, androidPackageName: String' in api_client
+    assert 'fun startMobileSession(gameLinkId: String' in api_client
+    assert 'fun endMobileSession(sessionId: String)' in api_client
+    assert 'fun activeMobileSessions(): List<RemoteMobileSession>' in api_client
     assert 'json.getJSONArray("links")' in api_client
     assert 'item.optString("android_package_name")' in api_client
     assert 'fun beholderIncidents(): List<RemoteBeholderIncident>' in api_client
@@ -159,6 +167,10 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Android-PC 연결" in main_activity
     assert "gameLinks" in main_activity
     assert "Android 실행" in main_activity
+    assert "모바일 시작" in main_activity
+    assert "모바일 종료" in main_activity
+    assert "fun startMobileSession(link: RemoteGameLink)" in main_activity
+    assert "fun endMobileSession(session: RemoteMobileSession)" in main_activity
     assert "fun createGameLink()" in main_activity
     assert "Android-PC 연결 저장" in main_activity
     assert "gameLinkPackageName" in main_activity

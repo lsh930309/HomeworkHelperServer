@@ -33,6 +33,9 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 - `GET /remote/beholder/incidents`
 - `GET /remote/game-links`
 - `POST /remote/game-links`
+- `GET /remote/mobile-sessions/active`
+- `POST /remote/mobile-sessions/start`
+- `POST /remote/mobile-sessions/end`
 - `GET /remote/power/status`
 - `POST /remote/power/{wake|sleep|restart|shutdown}`
 
@@ -149,6 +152,7 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 - `/remote/game-links`로 PC process와 Android package mapping 조회/생성 계약 전파
 - macOS 앱에서 PC process ID와 Android package를 입력해 mapping 생성
 - Android 앱에서 PC process ID와 Android package를 입력해 mapping 생성하고 등록 package를 로컬 launcher Intent로 실행
+- Android-PC mapping 기반 모바일 세션 수동 start/end API 및 UI 계약
 - Usage Access 설정 화면 연결, `PACKAGE_USAGE_STATS` 권한 선언, 최근 전면 앱 조회 smoke
 
 빌드 가능 환경에서는 Gradle wrapper를 사용한다.
@@ -189,7 +193,7 @@ Swift `RemoteAPIClient.swift`와 `RemoteModels.swift`를 실제로 컴파일해 
 ./.venv/bin/python tools/smoke_macos_remote_api_client.py
 ```
 
-이 smoke는 Python으로 pairing code만 발급한 뒤, 임시 Swift binary가 `confirmPairing`, Bearer token `status`, token refresh, game-link 생성/조회, dashboard/Beholder, `devices` 조회를 수행해 macOS 클라이언트 DTO/endpoint/token 경계를 검증한다.
+이 smoke는 Python으로 pairing code만 발급한 뒤, 임시 Swift binary가 `confirmPairing`, Bearer token `status`, token refresh, game-link 생성/조회, 모바일 세션 start/end, dashboard/Beholder, `devices` 조회를 수행해 macOS 클라이언트 DTO/endpoint/token 경계를 검증한다.
 
 Android APK가 생성된 뒤 device/emulator에 install + launch smoke를 수행하려면 다음 명령을 사용한다.
 

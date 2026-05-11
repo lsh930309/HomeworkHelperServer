@@ -21,6 +21,27 @@ struct RemoteAPIClient {
         try await get("remote/processes")
     }
 
+
+    func activeMobileSessions() async throws -> [RemoteMobileSession] {
+        let response: RemoteMobileSessionsResponse = try await get("remote/mobile-sessions/active")
+        return response.sessions
+    }
+
+    func startMobileSession(gameLinkID: String, source: String = "manual") async throws -> RemoteMobileSession {
+        let payload = [
+            "game_link_id": gameLinkID,
+            "source": source,
+        ]
+        let body = try JSONEncoder().encode(payload)
+        return try await post("remote/mobile-sessions/start", body: body)
+    }
+
+    func endMobileSession(sessionID: String) async throws -> RemoteMobileSession {
+        let payload = ["session_id": sessionID]
+        let body = try JSONEncoder().encode(payload)
+        return try await post("remote/mobile-sessions/end", body: body)
+    }
+
     func shortcuts() async throws -> [RemoteShortcut] {
         try await get("remote/shortcuts")
     }

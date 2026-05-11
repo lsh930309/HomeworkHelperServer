@@ -74,6 +74,7 @@ fun RemoteApp() {
     var dashboardSummary by remember { mutableStateOf<RemoteDashboardSummary?>(null) }
     var beholderIncidents by remember { mutableStateOf(emptyList<RemoteBeholderIncident>()) }
     var gameLinks by remember { mutableStateOf(emptyList<RemoteGameLink>()) }
+    var mobileSessions by remember { mutableStateOf(emptyList<RemoteMobileSession>()) }
     var processes by remember { mutableStateOf(emptyList<RemoteProcess>()) }
     var shortcuts by remember { mutableStateOf(emptyList<RemoteShortcut>()) }
     var devices by remember { mutableStateOf(emptyList<RemoteDevice>()) }
@@ -98,21 +99,23 @@ fun RemoteApp() {
                     val nextSummary = api.dashboardSummary()
                     val nextIncidents = api.beholderIncidents()
                     val nextGameLinks = api.gameLinks()
+                    val nextMobileSessions = api.activeMobileSessions()
                     val nextProcesses = api.processes()
                     val nextShortcuts = api.shortcuts()
                     val nextDevices = if (includeDevices) api.devices() else emptyList()
-                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextGameLinks, nextProcesses, nextShortcuts, nextDevices)
+                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextProcesses, nextShortcuts, nextDevices)
                 }
-            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextGameLinks, nextProcesses, nextShortcuts, nextDevices) ->
+            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextGameLinks, nextMobileSessions, nextProcesses, nextShortcuts, nextDevices) ->
                 status = nextStatus
                 dashboardSummary = nextSummary
                 beholderIncidents = nextIncidents
                 gameLinks = nextGameLinks
+                mobileSessions = nextMobileSessions
                 processes = nextProcesses
                 shortcuts = nextShortcuts
                 devices = nextDevices
                 usageAccessGranted = androidIntegration.hasUsageAccess()
-                savePreferences("동기화 완료: 게임 ${nextProcesses.size}개, 연결 ${nextGameLinks.size}개, 숏컷 ${nextShortcuts.size}개")
+                savePreferences("동기화 완료: 게임 ${nextProcesses.size}개, 연결 ${nextGameLinks.size}개, 모바일 세션 ${nextMobileSessions.size}개, 숏컷 ${nextShortcuts.size}개")
             }.onFailure {
                 message = it.message ?: "연결 실패"
             }
@@ -160,6 +163,31 @@ fun RemoteApp() {
                     refresh(includeDevices = true)
                 }
                 .onFailure { message = it.message ?: "토큰 폐기 실패" }
+        }
+    }
+
+    fun activeMobileSession(link: RemoteGameLink): RemoteMobileSession? =
+        mobileSessions.firstOrNull { it.gameLinkId == link.id && it.status == "active" }
+
+    fun startMobileSession(link: RemoteGameLink) {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { client().startMobileSession(link.id) } }
+                .onSuccess { session ->
+                    message = "${session.pcDisplayName.ifBlank { session.pcProcessId }} 모바일 세션을 시작했습니다."
+                    refresh(includeDevices = token.isNotBlank())
+                }
+                .onFailure { message = it.message ?: "모바일 세션 시작 실패" }
+        }
+    }
+
+    fun endMobileSession(session: RemoteMobileSession) {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { client().endMobileSession(session.id) } }
+                .onSuccess { ended ->
+                    message = "${ended.pcDisplayName.ifBlank { ended.pcProcessId }} 모바일 세션을 종료했습니다."
+                    refresh(includeDevices = token.isNotBlank())
+                }
+                .onFailure { message = it.message ?: "모바일 세션 종료 실패" }
         }
     }
 
@@ -262,6 +290,7 @@ fun RemoteApp() {
                             Text("대시보드 요약: ${if (current.dashboardSummary) "사용 가능" else "미지원"}")
                             Text("Beholder 알림: ${if (current.beholderIncidents) "${beholderIncidents.size}건" else "미지원"}")
                             Text("Android-PC 연결: ${if (current.gameLinks) "${gameLinks.size}개" else "미지원"}")
+                            Text("모바일 세션: ${if (current.mobileSessions) "${mobileSessions.size}개" else "미지원"}")
                             Text("전원 제어: ${if (current.powerControl) "설정됨" else "미설정"}")
                             current.power?.let { power ->
                                 Text("전원 상태: ${power.status}")
@@ -367,10 +396,15 @@ fun RemoteApp() {
                                 Text("sync: ${link.syncStrategy}")
                                 if (link.platformAccountHint.isNotBlank()) Text(link.platformAccountHint)
                             }
-                            Button(onClick = {
-                                val ok = androidIntegration.launchPackage(link.androidPackageName)
-                                message = if (ok) "${link.androidPackageName} 실행 요청" else "Android 연결 앱 실행 실패"
-                            }) { Text("Android 실행") }
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Button(onClick = {
+                                    val ok = androidIntegration.launchPackage(link.androidPackageName)
+                                    message = if (ok) "${link.androidPackageName} 실행 요청" else "Android 연결 앱 실행 실패"
+                                }) { Text("Android 실행") }
+                                activeMobileSession(link)?.let { session ->
+                                    Button(onClick = { endMobileSession(session) }) { Text("모바일 종료") }
+                                } ?: Button(onClick = { startMobileSession(link) }) { Text("모바일 시작") }
+                            }
                         }
                     }
                 }
@@ -440,6 +474,7 @@ private data class RemoteSnapshot(
     val dashboardSummary: RemoteDashboardSummary,
     val beholderIncidents: List<RemoteBeholderIncident>,
     val gameLinks: List<RemoteGameLink>,
+    val mobileSessions: List<RemoteMobileSession>,
     val processes: List<RemoteProcess>,
     val shortcuts: List<RemoteShortcut>,
     val devices: List<RemoteDevice>,

@@ -180,3 +180,20 @@ class GamePlatformLinkSchema(GamePlatformLinkBase):
 
     class Config:
         from_attributes = True
+
+class MobileGameSessionSchema(BaseModel):
+    id: str
+    game_link_id: str
+    pc_process_id: str
+    pc_display_name: Optional[str] = None
+    android_package_name: str
+    source: str = "manual"
+    status: str = "active"
+    started_at: float
+    ended_at: Optional[float] = None
+    duration_seconds: Optional[float] = None
+    created_at: float
+    updated_at: float
+
+    class Config:
+        from_attributes = True

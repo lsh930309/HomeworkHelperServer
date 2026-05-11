@@ -183,6 +183,28 @@ class GamePlatformLink(Base):
     updated_at = Column(Float, nullable=False)
 
 
+class MobileGameSession(Base):
+    """Android/mobile play session linked back to a HomeworkHelper PC process."""
+    __tablename__ = "mobile_game_sessions"
+    __table_args__ = (
+        Index("ix_mobile_game_sessions_status_started_at", "status", "started_at"),
+        Index("ix_mobile_game_sessions_game_link_id", "game_link_id"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    game_link_id = Column(String, nullable=False)
+    pc_process_id = Column(String, nullable=False)
+    pc_display_name = Column(String, nullable=True)
+    android_package_name = Column(String, nullable=False)
+    source = Column(String, nullable=False, default="manual")
+    status = Column(String, nullable=False, default="active")
+    started_at = Column(Float, nullable=False)
+    ended_at = Column(Float, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
 class AppRuntimeHeartbeat(Base):
     """Last known application/runtime heartbeat used for Beholder recovery decisions."""
     __tablename__ = "app_runtime_heartbeats"

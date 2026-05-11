@@ -122,6 +122,18 @@ def _swift_smoke_source(base_url: str, pairing_code: str, process_id: str) -> st
                         fatalError("dashboard summary decoded an invalid session count")
                     }}
                     let incidents = try await refreshedClient.beholderIncidents()
+                    let startedMobileSession = try await refreshedClient.startMobileSession(gameLinkID: createdGameLink.id)
+                    if startedMobileSession.gameLinkID != createdGameLink.id || startedMobileSession.status != "active" {{
+                        fatalError("mobile session start did not return an active linked session")
+                    }}
+                    let activeMobileSessions = try await refreshedClient.activeMobileSessions()
+                    if !activeMobileSessions.contains(where: {{ $0.id == startedMobileSession.id }}) {{
+                        fatalError("started mobile session missing from active list")
+                    }}
+                    let endedMobileSession = try await refreshedClient.endMobileSession(sessionID: startedMobileSession.id)
+                    if endedMobileSession.status != "ended" || endedMobileSession.durationSeconds == nil {{
+                        fatalError("mobile session end did not close the session")
+                    }}
                     let gameLinks = try await refreshedClient.gameLinks()
                     if !gameLinks.contains(where: {{ $0.id == createdGameLink.id }}) {{
                         fatalError("created game-link missing from list response")
@@ -130,7 +142,7 @@ def _swift_smoke_source(base_url: str, pairing_code: str, process_id: str) -> st
                     if !devices.contains(where: {{ $0.id == pair.id }}) {{
                         fatalError("paired device missing from device list")
                     }}
-                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count), capabilities=ok, dashboard_sessions=\\(summary.metrics.sessionCount), beholder_incidents=\\(incidents.count), game_links=\\(gameLinks.count)")
+                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count), capabilities=ok, dashboard_sessions=\\(summary.metrics.sessionCount), beholder_incidents=\\(incidents.count), game_links=\\(gameLinks.count), mobile_session=\\(endedMobileSession.status)")
                 }} catch {{
                     fputs("macOS RemoteAPIClient smoke failed: \\(error)\\n", stderr)
                     Foundation.exit(1)

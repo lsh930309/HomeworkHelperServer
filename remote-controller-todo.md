@@ -60,6 +60,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android package visibility / Intent / UsageStats 권한 모델 구현
 - [x] Android-PC game-links Remote API 및 macOS/Android 클라이언트 계약 구현
 - [x] macOS/Android game-links 생성 UI 및 macOS 실제 smoke 검증 추가
+- [x] `/remote/mobile-sessions/start|end` 수동 세션 API 및 macOS/Android 클라이언트 계약 구현
 - [x] Android UsageStatsManager 최근 전면 앱 조회 기반 추가
 - [x] Android 전원 capability 기반 버튼 비활성화 구현
 - [x] macOS/Android 클라이언트에 Remote dashboard summary 카드 전파
@@ -92,6 +93,6 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [ ] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
 - [ ] 실제 Android package name 실행 Intent smoke test
 - [ ] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행
-- [ ] `/remote/mobile-sessions/start|end` 및 analytics 병합 구현
-- [ ] UsageStatsManager 기반 세션 기록/Remote Agent sync 구현
+- [ ] Mobile session analytics 병합 구현
+- [ ] UsageStatsManager 기반 자동 세션 기록/Remote Agent sync 구현
 - [ ] 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test

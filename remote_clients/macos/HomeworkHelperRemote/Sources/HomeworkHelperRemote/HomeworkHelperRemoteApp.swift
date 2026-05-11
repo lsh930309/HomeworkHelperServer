@@ -31,6 +31,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
     @Published var gameLinks: [RemoteGameLink] = []
+    @Published var mobileSessions: [RemoteMobileSession] = []
     @Published var processes: [RemoteProcess] = []
     @Published var shortcuts: [RemoteShortcut] = []
     @Published var devices: [RemoteDevice] = []
@@ -60,18 +61,46 @@ final class RemoteDashboardViewModel: ObservableObject {
             async let fetchedSummary = client.dashboardSummary()
             async let fetchedIncidents = client.beholderIncidents()
             async let fetchedGameLinks = client.gameLinks()
+            async let fetchedMobileSessions = client.activeMobileSessions()
             async let fetchedProcesses = client.processes()
             async let fetchedShortcuts = client.shortcuts()
             status = try await fetchedStatus
             dashboardSummary = try await fetchedSummary
             beholderIncidents = try await fetchedIncidents
             gameLinks = try await fetchedGameLinks
+            mobileSessions = try await fetchedMobileSessions
             processes = try await fetchedProcesses
             shortcuts = try await fetchedShortcuts
             if !tokenText.isEmpty {
                 devices = try await client.devices()
             }
-            message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 숏컷 \(shortcuts.count)개"
+            message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개, 숏컷 \(shortcuts.count)개"
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func activeMobileSession(for link: RemoteGameLink) -> RemoteMobileSession? {
+        mobileSessions.first { $0.gameLinkID == link.id && $0.status == "active" }
+    }
+
+    func startMobileSession(_ link: RemoteGameLink) async {
+        guard let client else { return }
+        do {
+            let session = try await client.startMobileSession(gameLinkID: link.id)
+            mobileSessions = try await client.activeMobileSessions()
+            message = "'\(session.pcDisplayName ?? session.pcProcessID)' 모바일 세션을 시작했습니다."
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func endMobileSession(_ session: RemoteMobileSession) async {
+        guard let client else { return }
+        do {
+            let ended = try await client.endMobileSession(sessionID: session.id)
+            mobileSessions = try await client.activeMobileSessions()
+            message = "'\(ended.pcDisplayName ?? ended.pcProcessID)' 모바일 세션을 종료했습니다."
         } catch {
             message = error.localizedDescription
         }
@@ -235,6 +264,7 @@ struct RemoteDashboardView: View {
                         LabeledContent("대시보드 요약", value: status.capabilities.dashboardSummary ? "사용 가능" : "미지원")
                         LabeledContent("Beholder", value: status.capabilities.beholderIncidents ? "\(viewModel.beholderIncidents.count)건" : "미지원")
                         LabeledContent("Android-PC 연결", value: status.capabilities.gameLinks ? "\(viewModel.gameLinks.count)개" : "미지원")
+                        LabeledContent("모바일 세션", value: status.capabilities.mobileSessions ? "\(viewModel.mobileSessions.count)개" : "미지원")
                         LabeledContent("전원 제어", value: status.capabilities.powerControl ? "설정됨" : "미설정")
                         if let power = status.power {
                             LabeledContent("전원 상태", value: power.status ?? "unknown")
@@ -393,15 +423,27 @@ struct RemoteDashboardView: View {
                                 .foregroundStyle(.secondary)
                         }
                         List(viewModel.gameLinks) { link in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(link.pcDisplayName ?? link.pcProcessID)
-                                    .font(.headline)
-                                Text(link.androidPackageName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text("sync: \(link.syncStrategy)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(link.pcDisplayName ?? link.pcProcessID)
+                                        .font(.headline)
+                                    Text(link.androidPackageName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text("sync: \(link.syncStrategy)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let session = viewModel.activeMobileSession(for: link) {
+                                    Button("모바일 종료") {
+                                        Task { await viewModel.endMobileSession(session) }
+                                    }
+                                } else {
+                                    Button("모바일 시작") {
+                                        Task { await viewModel.startMobileSession(link) }
+                                    }
+                                }
                             }
                         }
                         .frame(minHeight: 140)

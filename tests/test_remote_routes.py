@@ -42,6 +42,7 @@ def _client_with_seed(
     sessions=None,
     incidents=None,
     game_links=None,
+    mobile_sessions=None,
     auth_token=None,
     device_registry=None,
     power_controller=None,
@@ -68,6 +69,8 @@ def _client_with_seed(
             db.add(incident)
         for game_link in game_links or []:
             db.add(game_link)
+        for mobile_session in mobile_sessions or []:
+            db.add(mobile_session)
         db.commit()
     finally:
         db.close()
@@ -113,7 +116,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.5"
+    assert body["remote_api_version"] == "0.1.6"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -121,6 +124,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["dashboard_summary"] is True
     assert body["capabilities"]["beholder_incidents"] is True
     assert body["capabilities"]["game_links"] is True
+    assert body["capabilities"]["mobile_sessions"] is True
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
@@ -313,6 +317,51 @@ def test_remote_game_link_create_rejects_unknown_pc_process():
         "/remote/game-links",
         json={"pc_process_id": "missing", "android_package_name": "com.example.game"},
     )
+
+    assert response.status_code == 404
+
+
+
+def test_remote_mobile_sessions_start_end_from_game_link_and_audit():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="game-a", name="Game A", monitoring_path="/game.exe", launch_path="/game.url")],
+        game_links=[
+            models.GamePlatformLink(
+                id="link-a",
+                pc_process_id="game-a",
+                pc_display_name="Game A",
+                android_package_name="com.example.game",
+                sync_strategy="manual",
+                created_at=1778496000.0,
+                updated_at=1778496000.0,
+            )
+        ],
+    )
+
+    started = client.post("/remote/mobile-sessions/start", json={"game_link_id": "link-a", "source": "manual"})
+    active = client.get("/remote/mobile-sessions/active")
+    ended = client.post("/remote/mobile-sessions/end", json={"session_id": started.json()["id"], "ended_at": 1778497060.0})
+    active_after_end = client.get("/remote/mobile-sessions/active")
+
+    assert started.status_code == 200
+    started_body = started.json()
+    assert started_body["game_link_id"] == "link-a"
+    assert started_body["pc_process_id"] == "game-a"
+    assert started_body["android_package_name"] == "com.example.game"
+    assert started_body["status"] == "active"
+    assert active.json()["count"] == 1
+    assert active.json()["sessions"][0]["id"] == started_body["id"]
+    assert ended.status_code == 200
+    assert ended.json()["status"] == "ended"
+    assert ended.json()["duration_seconds"] == 60.0
+    assert active_after_end.json()["count"] == 0
+    assert [event["command"] for event in auditor.events[-2:]] == ["mobile_session.start", "mobile_session.end"]
+
+
+def test_remote_mobile_session_start_rejects_unknown_game_link():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
+
+    response = client.post("/remote/mobile-sessions/start", json={"game_link_id": "missing"})
 
     assert response.status_code == 404
 

@@ -17,6 +17,44 @@
 
 ---
 
+## 2026-05-11 — Remote mobile sessions 수동 기록 경계를 game-links 위에 추가
+
+### 작업 범위
+
+- `mobile_game_sessions` 테이블/스키마/자동 생성 migration을 추가해 Android-PC game-link 기반 모바일 세션을 기록할 수 있게 했다.
+- Remote API에 `GET /remote/mobile-sessions/active`, `POST /remote/mobile-sessions/start`, `POST /remote/mobile-sessions/end`를 추가하고 start/end 감사 이벤트를 남기도록 했다.
+- macOS `RemoteAPIClient`/DTO/SwiftUI에 수동 모바일 세션 시작/종료 흐름을 추가하고, 실제 macOS smoke에서 game-link 생성 후 mobile session start/end round trip을 검증했다.
+- Android `RemoteApiClient`/DTO/Compose UI에 동일한 수동 start/end 흐름을 전파했다.
+- TODO, setup guide, completion audit, Android README에 mobile session 수동 기록 범위와 남은 UsageStats 자동 sync gap을 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 이번 단계는 UsageStats 자동 추적 전 수동 start/end 경계만 구현해 Android License blocker 없이 검증 가능한 최소 세션 기록 계약을 만들었다.
+- 세션 row는 game-link snapshot을 저장해 이후 link가 바뀌어도 기록의 PC process/package 근거가 남도록 했다.
+- analytics 병합과 자동 UsageStats sync는 실제 Android APK/device smoke 이후 별도 단계로 남겼다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 37 passed, 6 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.6, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=1, mobile_session=ended`
+- `swift build` → Build complete (1.41s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 18 passed, full pytest 146 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote mobile sessions 수동 기록 경계를 game-links 위에 추가한다
+
+Constraint: Android UsageStats 자동 sync는 APK/device 검증 전이라 수동 start/end 세션 경계를 먼저 macOS smoke로 닫아야 함
+Rejected: UsageStats 자동 세션 sync를 먼저 구현 | Android License blocker 때문에 provider 동작을 확인할 수 없어 세션 정확도 검증 공백이 커짐
+Confidence: high
+Scope-risk: moderate
+Directive: UsageStats 자동 sync와 analytics 병합을 추가할 때는 수동 mobile session 계약을 유지하고 active/end idempotency 및 실제 Android device smoke를 함께 추가할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (37 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (146 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator mobile session start/end 및 UsageStats 자동 sync
+```
+
 ## 2026-05-11 — Remote game-links 생성 흐름을 네이티브 smoke와 UI까지 닫음
 
 ### 작업 범위
