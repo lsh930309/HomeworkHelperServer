@@ -17,6 +17,7 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "tests/test_remote_macos_client_static.py",
         "tools/smoke_remote_controller_runtime.py",
         "tools/smoke_macos_remote_api_client.py",
+        "tools/check_remote_power_readiness.py",
         "tools/check_android_sdk_readiness.py",
         "tools/smoke_android_remote_controller.py",
         "swift",
@@ -109,3 +110,22 @@ def test_connectivity_smoke_supports_tailnet_or_lan_status_checks():
         "Remote Controller connectivity smoke passed",
     ]:
         assert marker in connectivity
+
+
+def test_remote_power_readiness_reports_config_without_sending_power_commands():
+    readiness = _read(TOOLS / "check_remote_power_readiness.py")
+
+    for marker in [
+        "remote_power_config.json",
+        "remote_power_config.example.json",
+        "smartthings_cli_path",
+        "ssh_host",
+        "ssh_key_path",
+        "--allow-blocker",
+        "Remote power readiness blocked",
+        "supported_actions",
+    ]:
+        assert marker in readiness
+
+    assert "perform(" not in readiness
+    assert "subprocess.run" not in readiness

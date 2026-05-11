@@ -107,6 +107,14 @@ HH_REMOTE_STATUS_TIMEOUT_SECONDS=4
 - Remote API는 action enum만 받고 임의 shell 명령을 받지 않는다.
 - 전원 명령 결과는 `remote_command_audit.jsonl`에 기록된다.
 
+전원 제어 설정이 실제 명령을 보내기 전에 충분히 채워졌는지 확인하려면 다음 preflight를 실행한다.
+
+```bash
+./.venv/bin/python tools/check_remote_power_readiness.py --allow-blocker
+```
+
+이 preflight는 SmartThings 또는 SSH 명령을 실행하지 않고 `remote_power_config.json`, SmartThings CLI path, SSH host/user/key path, 지원 가능한 action 목록만 보고한다.
+
 
 ## 5. Android 클라이언트 초안
 

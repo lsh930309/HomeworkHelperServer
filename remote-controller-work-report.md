@@ -271,6 +271,42 @@ Not-tested: 실제 Tailscale/ZeroTier/LAN 원격 URL 접속, Android SDK License
 
 ---
 
+## 2026-05-11 — Remote power adapter readiness preflight 추가
+
+### 작업 범위
+
+- `tools/check_remote_power_readiness.py`를 추가했다.
+- preflight는 `remote_power_config.json` 또는 환경변수로 로드되는 `RemotePowerConfig`를 검사하되 SmartThings/SSH 명령은 실행하지 않는다.
+- SmartThings CLI path, SSH host/user/key path, 지원 가능한 power action 목록을 보고한다.
+- `tools/verify_remote_controller.py` 통합 검증 루프에 remote power readiness check를 포함했다.
+- 구동 환경 가이드와 TODO에 power readiness 진입점을 기록하고, verifier contract test에 script marker를 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- 실제 wake/shutdown/sleep/restart는 개인 장비와 네트워크에 side effect가 있으므로 기본 verifier에서 수행하면 안 된다.
+- readiness preflight는 설정 누락과 지원 action을 명확히 보고해 macOS/Android UI의 power capability gating을 실제 설정 단계와 연결한다.
+- 현재 환경에는 `remote_power_config.json`이 없어 blocker로 보고된다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/check_remote_power_readiness.py --allow-blocker` → config/SmartThings/SSH key 누락 blocker 보고.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+전원 adapter 설정도 명령 실행 전 readiness로 분리한다
+
+Constraint: SmartThings/SSH 전원 명령은 실제 장비 side effect가 있어 기본 verifier에서 실행하면 안 됨
+Rejected: 전원 readiness를 문서 확인에만 의존 | 설정 누락과 지원 action을 반복 검증할 수 없어 power capability gating 검증이 약해짐
+Confidence: high
+Scope-risk: narrow
+Directive: remote_power_config.json을 구성한 뒤 readiness를 --allow-blocker 없이 실행하고 실제 전원 명령은 별도 승인된 환경에서만 smoke할 것
+Tested: ./.venv/bin/python tools/check_remote_power_readiness.py --allow-blocker; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: 실제 SmartThings WoL/SSH shutdown/sleep/restart, Android SDK License 수락 이후 APK assemble/install
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위
