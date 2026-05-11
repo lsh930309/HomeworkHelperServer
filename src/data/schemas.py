@@ -157,3 +157,26 @@ class ProcessSessionSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+class GamePlatformLinkBase(BaseModel):
+    pc_process_id: str
+    pc_display_name: Optional[str] = None
+    android_package_name: str
+    android_launch_intent_uri: Optional[str] = None
+    android_store_url: Optional[str] = None
+    platform_account_hint: Optional[str] = None
+    hoyolab_game_id: Optional[str] = None
+    sync_strategy: str = "manual"
+
+
+class GamePlatformLinkCreate(GamePlatformLinkBase):
+    id: Optional[str] = None
+
+
+class GamePlatformLinkSchema(GamePlatformLinkBase):
+    id: str
+    created_at: float
+    updated_at: float
+
+    class Config:
+        from_attributes = True

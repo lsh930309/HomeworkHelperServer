@@ -18,6 +18,7 @@ struct RemoteStatus: Decodable {
         let shortcutOpen: Bool
         let dashboardSummary: Bool
         let beholderIncidents: Bool
+        let gameLinks: Bool
         let powerControl: Bool
         let beholder: Bool
         let authRequired: Bool
@@ -28,6 +29,7 @@ struct RemoteStatus: Decodable {
             case shortcutOpen = "shortcut_open"
             case dashboardSummary = "dashboard_summary"
             case beholderIncidents = "beholder_incidents"
+            case gameLinks = "game_links"
             case powerControl = "power_control"
             case authRequired = "auth_required"
             case beholder
@@ -171,6 +173,39 @@ struct RemoteCapabilitiesResponse: Decodable {
         case capabilities
         case power
     }
+}
+
+struct RemoteGameLink: Decodable, Identifiable {
+    let id: String
+    let pcProcessID: String
+    let pcDisplayName: String?
+    let androidPackageName: String
+    let androidLaunchIntentURI: String?
+    let androidStoreURL: String?
+    let platformAccountHint: String?
+    let hoyolabGameID: String?
+    let syncStrategy: String
+    let createdAt: Double
+    let updatedAt: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pcProcessID = "pc_process_id"
+        case pcDisplayName = "pc_display_name"
+        case androidPackageName = "android_package_name"
+        case androidLaunchIntentURI = "android_launch_intent_uri"
+        case androidStoreURL = "android_store_url"
+        case platformAccountHint = "platform_account_hint"
+        case hoyolabGameID = "hoyolab_game_id"
+        case syncStrategy = "sync_strategy"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct RemoteGameLinksResponse: Decodable {
+    let links: [RemoteGameLink]
+    let count: Int
 }
 
 struct RemoteDashboardSummary: Decodable {

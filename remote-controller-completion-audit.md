@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote device token refresh를 회전 가능한 인증 경계로 추가한다` commit 참조
+최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote Android-PC game links를 원격 매칭 계약으로 추가한다` commit 참조
 문서-only 보정 commit: `git log --oneline`의 최신 `완료 감사` 문서 보정 commit 참조
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
@@ -26,7 +26,7 @@
 | Korean Lore commit + push | `a386423`, `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162`, `845b712`, `c57f961`, `5b7b26f`, `4f28b99`, `30bf741`, `c8ed3f5`, `b055b98`, 이후 UsageStats gate commit 및 문서-only 보정 commit 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
-| Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include, `/remote/capabilities`, `/remote/dashboard/summary` read-only analytics summary, `/remote/beholder/incidents` read-only pending incident list | 충족 | Beholder resolve flow 전체 원격화는 후속 범위 |
+| Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include, `/remote/capabilities`, `/remote/dashboard/summary` read-only analytics summary, `/remote/beholder/incidents` read-only pending incident list, `/remote/game-links` Android-PC mapping | 충족 | Beholder resolve flow 전체 원격화는 후속 범위 |
 | Pairing/device token | `src/core/remote_pairing.py`, `/remote/pair/start`, `/remote/pair/confirm`, `/remote/tokens/refresh`, `/remote/devices` | 충족 | 실제 외부망 pairing UX는 후속 실기기 검증 필요 |
 | 감사 로그 | `src/core/remote_audit.py` 및 command route 기록 | 충족 | 장기 rotation/retention 정책 후속 |
 | 전원 adapter | `src/core/remote_power.py`, `remote_power_config.example.json`, power status/action API | 부분 충족 | 실제 SmartThings/SSH 전원 동작은 로컬 설정/장비 필요 |
@@ -37,15 +37,15 @@
 | macOS dashboard/Beholder read-only 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`Beholder 알림` 카드, macOS API smoke DTO decode | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
-| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, Compose `플레이 요약`/`Beholder 알림` 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
+| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, Compose `플레이 요약`/`Beholder 알림`/`Android-PC 연결` 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
-| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
+| Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link package launch card | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
 | Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
 | Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 APK/device가 없어 appops allow evidence 없음 |
 | Android APK assemble | `tools/verify_remote_controller.py`가 `:app:assembleDebug`를 실행하나 SDK License blocker 확인 | 미충족 | Google Android SDK License 수락 및 SDK package 설치 필요 |
-| 전체 Python 테스트벤치 | verifier에서 `142 passed, 4 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
+| 전체 Python 테스트벤치 | verifier에서 `144 passed, 5 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
 | verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier와 smoke script 구성 drift 방지 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
@@ -62,17 +62,17 @@
 
 확인 결과:
 
-- `tests/test_remote_routes.py` → 14 passed
+- `tests/test_remote_routes.py` → 16 passed
 - `tests/test_remote_android_client_static.py` → 8 passed
 - `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
-- `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/dashboard summary/Beholder incident decode 포함 passed
+- `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/dashboard summary/Beholder incident/game-links decode 포함 passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_remote_controller_connectivity.py --help` 및 verifier contract test → connectivity smoke 진입점 확인
 - `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
 - `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/강제 gate/설정 화면 option 확인
-- 전체 pytest → 142 passed, 4 warnings
+- 전체 pytest → 144 passed, 5 warnings
 - macOS `swift build` → passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 명시 보고
 - `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker 포함 6 passed
@@ -86,7 +86,7 @@
 
 1. Android APK assemble이 Google Android SDK License 수락 전이라 완료되지 않았다.
 2. 실제 Android device/emulator install smoke가 없다.
-3. Android Keystore, UsageStats provider, package Intent 실행은 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
+3. Android Keystore, UsageStats provider, game-link package Intent 실행은 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
 4. 기술 검토서의 Tailscale/ZeroTier 외부망 실접속은 smoke 스크립트와 가이드까지 준비되었지만 LTE/tailnet 실제 URL/token evidence는 아직 없다.
 5. 실제 SmartThings/SSH 전원 동작은 readiness까지만 확인되었고 장비 side effect가 있어 별도 승인된 환경이 필요하다.
 
@@ -115,4 +115,4 @@ cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py --rep
 5. `/remote/status`, process/shortcut/device 조회
 6. PC 명령 버튼의 capability gating 확인
 7. Usage Access 허용 후 최근 전면 앱 조회
-8. Android package Intent 실행
+8. Android game-link package Intent 실행

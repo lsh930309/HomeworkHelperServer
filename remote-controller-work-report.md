@@ -17,6 +17,44 @@
 
 ---
 
+## 2026-05-11 — Remote Android-PC game links를 원격 매칭 계약으로 추가
+
+### 작업 범위
+
+- `game_platform_links` 테이블/스키마/자동 생성 migration을 추가해 PC process와 Android package mapping을 저장할 수 있게 했다.
+- Remote API에 `GET /remote/game-links`, `POST /remote/game-links`를 추가하고 create 명령은 `game_link.create` 감사 이벤트를 남기도록 했다.
+- macOS `RemoteAPIClient`/DTO/SwiftUI에 game-links 조회/생성 계약과 `Android-PC 연결` read-only 카드를 추가했다.
+- Android `RemoteApiClient`/DTO/Compose UI에 동일한 game-links 계약을 전파하고, 등록된 Android package를 launcher Intent로 실행하는 `Android-PC 연결` 카드를 추가했다.
+- macOS API client smoke가 실제 Remote Agent와 통신해 game-links DTO를 decode하도록 확장했다.
+
+### 자체 코드 리뷰 메모
+
+- 이번 단계는 Android-PC 게임 매칭의 기반 계약만 추가하고, 모바일 세션 start/end 및 analytics 병합은 별도 후속 범위로 남겼다.
+- `/remote/game-links` create는 기존 PC process 존재를 확인한 뒤 저장하며, 임의 Android package 실행은 Android 앱의 package manager launcher Intent 경계로 제한한다.
+- Android는 APK compile 전이므로 정적 계약/UI 전파까지 검증하고, 실제 package launch는 SDK License 승인 후 APK smoke에서 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 35 passed, 5 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.5, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=0`
+- `swift build` → Build complete (1.16s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 16 passed, full pytest 144 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote Android-PC game links를 원격 매칭 계약으로 추가한다
+
+Constraint: Android APK License blocker가 남아 있어 실기기 세션 sync 전에도 PC process와 Android package mapping 계약은 서버/macOS/Android 정적 경계에서 먼저 고정해야 함
+Rejected: 모바일 세션 analytics 병합까지 한 번에 구현 | Usage Access 실기기 검증과 APK compile이 막힌 상태에서 데이터 모델 확장을 과도하게 넓히면 검증 공백이 커짐
+Confidence: high
+Scope-risk: moderate
+Directive: `/remote/mobile-sessions`를 추가할 때는 game-links FK/매칭 정책, UsageStats 권한 gate, analytics 병합 테스트, Android 실기기 smoke를 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (35 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (144 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator game-link package launch 및 UsageStats session sync
+```
+
 ## 2026-05-11 — Remote device token refresh를 회전 가능한 인증 경계로 추가
 
 ### 작업 범위

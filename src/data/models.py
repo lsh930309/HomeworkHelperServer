@@ -162,6 +162,27 @@ class BeholderIncident(Base):
     override_used_at = Column(Float, nullable=True)
 
 
+class GamePlatformLink(Base):
+    """Mapping between a HomeworkHelper PC process and an Android launch target."""
+    __tablename__ = "game_platform_links"
+    __table_args__ = (
+        Index("ix_game_platform_links_pc_process_id", "pc_process_id"),
+        Index("ix_game_platform_links_android_package_name", "android_package_name"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    pc_process_id = Column(String, nullable=False)
+    pc_display_name = Column(String, nullable=True)
+    android_package_name = Column(String, nullable=False)
+    android_launch_intent_uri = Column(String, nullable=True)
+    android_store_url = Column(String, nullable=True)
+    platform_account_hint = Column(String, nullable=True)
+    hoyolab_game_id = Column(String, nullable=True)
+    sync_strategy = Column(String, nullable=False, default="manual")
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
 class AppRuntimeHeartbeat(Base):
     """Last known application/runtime heartbeat used for Beholder recovery decisions."""
     __tablename__ = "app_runtime_heartbeats"

@@ -71,6 +71,7 @@ fun RemoteApp() {
     var status by remember { mutableStateOf<RemoteStatus?>(null) }
     var dashboardSummary by remember { mutableStateOf<RemoteDashboardSummary?>(null) }
     var beholderIncidents by remember { mutableStateOf(emptyList<RemoteBeholderIncident>()) }
+    var gameLinks by remember { mutableStateOf(emptyList<RemoteGameLink>()) }
     var processes by remember { mutableStateOf(emptyList<RemoteProcess>()) }
     var shortcuts by remember { mutableStateOf(emptyList<RemoteShortcut>()) }
     var devices by remember { mutableStateOf(emptyList<RemoteDevice>()) }
@@ -94,20 +95,22 @@ fun RemoteApp() {
                     val nextStatus = api.status()
                     val nextSummary = api.dashboardSummary()
                     val nextIncidents = api.beholderIncidents()
+                    val nextGameLinks = api.gameLinks()
                     val nextProcesses = api.processes()
                     val nextShortcuts = api.shortcuts()
                     val nextDevices = if (includeDevices) api.devices() else emptyList()
-                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextProcesses, nextShortcuts, nextDevices)
+                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextGameLinks, nextProcesses, nextShortcuts, nextDevices)
                 }
-            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextProcesses, nextShortcuts, nextDevices) ->
+            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextGameLinks, nextProcesses, nextShortcuts, nextDevices) ->
                 status = nextStatus
                 dashboardSummary = nextSummary
                 beholderIncidents = nextIncidents
+                gameLinks = nextGameLinks
                 processes = nextProcesses
                 shortcuts = nextShortcuts
                 devices = nextDevices
                 usageAccessGranted = androidIntegration.hasUsageAccess()
-                savePreferences("동기화 완료: 게임 ${nextProcesses.size}개, 숏컷 ${nextShortcuts.size}개")
+                savePreferences("동기화 완료: 게임 ${nextProcesses.size}개, 연결 ${nextGameLinks.size}개, 숏컷 ${nextShortcuts.size}개")
             }.onFailure {
                 message = it.message ?: "연결 실패"
             }
@@ -238,6 +241,7 @@ fun RemoteApp() {
                             Text("게임 ${current.processCount}개 / 숏컷 ${current.shortcutCount}개 / 활성 세션 ${current.activeSessionCount}개")
                             Text("대시보드 요약: ${if (current.dashboardSummary) "사용 가능" else "미지원"}")
                             Text("Beholder 알림: ${if (current.beholderIncidents) "${beholderIncidents.size}건" else "미지원"}")
+                            Text("Android-PC 연결: ${if (current.gameLinks) "${gameLinks.size}개" else "미지원"}")
                             Text("전원 제어: ${if (current.powerControl) "설정됨" else "미설정"}")
                             current.power?.let { power ->
                                 Text("전원 상태: ${power.status}")
@@ -326,6 +330,31 @@ fun RemoteApp() {
                     }
                 }
             }
+
+            if (gameLinks.isNotEmpty()) {
+                item { Text("Android-PC 연결", style = MaterialTheme.typography.titleMedium) }
+                items(gameLinks, key = { it.id }) { link ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(link.pcDisplayName.ifBlank { link.pcProcessId })
+                                Text(link.androidPackageName)
+                                Text("sync: ${link.syncStrategy}")
+                                if (link.platformAccountHint.isNotBlank()) Text(link.platformAccountHint)
+                            }
+                            Button(onClick = {
+                                val ok = androidIntegration.launchPackage(link.androidPackageName)
+                                message = if (ok) "${link.androidPackageName} 실행 요청" else "Android 연결 앱 실행 실패"
+                            }) { Text("Android 실행") }
+                        }
+                    }
+                }
+            }
             item { Text("게임", style = MaterialTheme.typography.titleMedium) }
             items(processes, key = { it.id }) { process ->
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -390,6 +419,7 @@ private data class RemoteSnapshot(
     val status: RemoteStatus,
     val dashboardSummary: RemoteDashboardSummary,
     val beholderIncidents: List<RemoteBeholderIncident>,
+    val gameLinks: List<RemoteGameLink>,
     val processes: List<RemoteProcess>,
     val shortcuts: List<RemoteShortcut>,
     val devices: List<RemoteDevice>,

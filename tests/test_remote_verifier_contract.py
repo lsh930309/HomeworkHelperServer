@@ -101,6 +101,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "authedClient.refreshToken()" in macos
     assert "refreshedClient.dashboardSummary()" in macos
     assert "refreshedClient.beholderIncidents()" in macos
+    assert "refreshedClient.gameLinks()" in macos
     assert "refreshedClient.devices()" in macos
 
 

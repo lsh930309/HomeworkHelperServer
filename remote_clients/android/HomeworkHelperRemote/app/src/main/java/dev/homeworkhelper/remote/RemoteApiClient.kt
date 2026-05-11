@@ -21,6 +21,7 @@ class RemoteApiClient(
             activeSessionCount = counts.optInt("active_sessions"),
             dashboardSummary = capabilities.optBoolean("dashboard_summary"),
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
+            gameLinks = capabilities.optBoolean("game_links"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -44,6 +45,7 @@ class RemoteApiClient(
             shortcutOpen = capabilities.optBoolean("shortcut_open"),
             dashboardSummary = capabilities.optBoolean("dashboard_summary"),
             beholderIncidents = capabilities.optBoolean("beholder_incidents"),
+            gameLinks = capabilities.optBoolean("game_links"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -79,6 +81,43 @@ class RemoteApiClient(
             sessionCount = metrics.optInt("session_count"),
             topGameName = topGame?.optString("display_name").orEmpty(),
             topGameSeconds = topGame?.optDouble("total_seconds") ?: 0.0,
+        )
+    }
+
+    fun gameLinks(): List<RemoteGameLink> {
+        val json = JSONObject(get("remote/game-links"))
+        return json.getJSONArray("links").mapObjects { item ->
+            RemoteGameLink(
+                id = item.optString("id"),
+                pcProcessId = item.optString("pc_process_id"),
+                pcDisplayName = item.optString("pc_display_name"),
+                androidPackageName = item.optString("android_package_name"),
+                androidLaunchIntentUri = item.optString("android_launch_intent_uri"),
+                androidStoreUrl = item.optString("android_store_url"),
+                platformAccountHint = item.optString("platform_account_hint"),
+                hoyolabGameId = item.optString("hoyolab_game_id"),
+                syncStrategy = item.optString("sync_strategy", "manual"),
+            )
+        }
+    }
+
+    fun createGameLink(processId: String, androidPackageName: String, syncStrategy: String = "manual"): RemoteGameLink {
+        val body = JSONObject()
+            .put("pc_process_id", processId)
+            .put("android_package_name", androidPackageName)
+            .put("sync_strategy", syncStrategy)
+            .toString()
+        val item = JSONObject(post("remote/game-links", body))
+        return RemoteGameLink(
+            id = item.optString("id"),
+            pcProcessId = item.optString("pc_process_id"),
+            pcDisplayName = item.optString("pc_display_name"),
+            androidPackageName = item.optString("android_package_name"),
+            androidLaunchIntentUri = item.optString("android_launch_intent_uri"),
+            androidStoreUrl = item.optString("android_store_url"),
+            platformAccountHint = item.optString("platform_account_hint"),
+            hoyolabGameId = item.optString("hoyolab_game_id"),
+            syncStrategy = item.optString("sync_strategy", "manual"),
         )
     }
 

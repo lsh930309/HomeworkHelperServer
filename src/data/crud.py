@@ -526,6 +526,40 @@ def get_app_runtime_heartbeat(db: Session) -> models.AppRuntimeHeartbeat | None:
     return db.query(models.AppRuntimeHeartbeat).filter(models.AppRuntimeHeartbeat.id == 1).first()
 
 
+
+def get_game_platform_links(db: Session):
+    return db.query(models.GamePlatformLink).order_by(models.GamePlatformLink.updated_at.desc()).all()
+
+
+def get_game_platform_link_by_id(db: Session, link_id: str):
+    return db.query(models.GamePlatformLink).filter(models.GamePlatformLink.id == link_id).first()
+
+
+@db_retry_on_lock
+def create_game_platform_link(
+    db: Session,
+    link: schemas.GamePlatformLinkCreate,
+    *,
+    timestamp: float | None = None,
+):
+    link_data = _dump_schema(link)
+    provided_id = link_data.pop("id", None)
+    link_id = provided_id if provided_id else str(uuid.uuid4())
+    now = float(timestamp or time.time())
+    link_data["pc_process_id"] = str(link_data.get("pc_process_id") or "").strip()
+    link_data["android_package_name"] = str(link_data.get("android_package_name") or "").strip()
+    if not link_data["pc_process_id"]:
+        raise ValueError("pc_process_id가 필요합니다.")
+    if not link_data["android_package_name"]:
+        raise ValueError("android_package_name이 필요합니다.")
+    if not link_data.get("sync_strategy"):
+        link_data["sync_strategy"] = "manual"
+    db_link = models.GamePlatformLink(id=link_id, created_at=now, updated_at=now, **link_data)
+    db.add(db_link)
+    db.commit()
+    db.refresh(db_link)
+    return db_link
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):

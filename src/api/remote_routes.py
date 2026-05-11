@@ -17,7 +17,7 @@ from src.core.remote_power import ConfigurablePowerController, PowerAction
 from src.data import beholder, crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.4"
+REMOTE_API_VERSION = "0.1.5"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -58,6 +58,12 @@ def _serialize_shortcut(shortcut: Any) -> dict[str, Any]:
     if hasattr(schemas.WebShortcutSchema, "model_validate"):
         return _model_dump(schemas.WebShortcutSchema.model_validate(shortcut))
     return _model_dump(schemas.WebShortcutSchema.from_orm(shortcut))
+
+
+def _serialize_game_platform_link(link: Any) -> dict[str, Any]:
+    if hasattr(schemas.GamePlatformLinkSchema, "model_validate"):
+        return _model_dump(schemas.GamePlatformLinkSchema.model_validate(link))
+    return _model_dump(schemas.GamePlatformLinkSchema.from_orm(link))
 
 
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
@@ -157,6 +163,7 @@ def create_remote_router(
             "shortcut_open": True,
             "dashboard_summary": True,
             "beholder_incidents": True,
+            "game_links": True,
             "power_control": bool(power_status.get("configured")),
             "beholder": True,
             "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
@@ -307,6 +314,34 @@ def create_remote_router(
 
         incidents = [beholder.incident_to_dict(incident) for incident in beholder.active_incidents(db)]
         return {"incidents": incidents, "count": len(incidents)}
+
+
+    @router.get("/game-links")
+    def list_remote_game_links(db: Session = Depends(get_db_dependency)):
+        links = [_serialize_game_platform_link(link) for link in crud.get_game_platform_links(db)]
+        return {"links": links, "count": len(links)}
+
+    @router.post("/game-links")
+    def create_remote_game_link(request: schemas.GamePlatformLinkCreate, db: Session = Depends(get_db_dependency)):
+        process = crud.get_process_by_id(db, request.pc_process_id)
+        if process is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="연결할 PC 프로세스를 찾을 수 없습니다.")
+        if not request.pc_display_name:
+            request.pc_display_name = getattr(process, "name", None)
+        try:
+            link = crud.create_game_platform_link(db, request, timestamp=now())
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        auditor.record(
+            command="game_link.create",
+            accepted=True,
+            status="accepted",
+            target_id=link.id,
+            target_name=link.pc_display_name,
+            target=link.android_package_name,
+            metadata={"pc_process_id": link.pc_process_id, "sync_strategy": link.sync_strategy},
+        )
+        return _serialize_game_platform_link(link)
 
     @router.get("/processes")
     def list_remote_processes(db: Session = Depends(get_db_dependency)):

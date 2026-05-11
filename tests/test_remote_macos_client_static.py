@@ -34,6 +34,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteDevice",
         "RemoteDevicesResponse",
         "RemoteCapabilitiesResponse",
+        "RemoteGameLink",
+        "RemoteGameLinksResponse",
         "RemoteDashboardSummary",
         "RemoteBeholderIncident",
         "RemoteBeholderIncidentsResponse",
@@ -53,6 +55,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'shortcutOpen = "shortcut_open"',
         'dashboardSummary = "dashboard_summary"',
         'beholderIncidents = "beholder_incidents"',
+        'gameLinks = "game_links"',
         'powerControl = "power_control"',
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
@@ -66,6 +69,14 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'targetName = "target_name"',
         'createdAt = "created_at"',
         'lastSeenAt = "last_seen_at"',
+        'pcProcessID = "pc_process_id"',
+        'pcDisplayName = "pc_display_name"',
+        'androidPackageName = "android_package_name"',
+        'androidLaunchIntentURI = "android_launch_intent_uri"',
+        'androidStoreURL = "android_store_url"',
+        'platformAccountHint = "platform_account_hint"',
+        'hoyolabGameID = "hoyolab_game_id"',
+        'syncStrategy = "sync_strategy"',
         'tokenRefreshedAt = "token_refreshed_at"',
         'revokedAt = "revoked_at"',
         'deviceID = "device_id"',
@@ -88,6 +99,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/capabilities',
         'remote/dashboard/summary',
         'remote/beholder/incidents',
+        'remote/game-links',
         'remote/processes',
         'remote/shortcuts',
         'remote/power/\\(action)',
@@ -102,6 +114,8 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
 
     assert 'request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization")' in client
     assert 'request.setValue("application/json", forHTTPHeaderField: "Content-Type")' in client
+    assert 'func gameLinks() async throws -> [RemoteGameLink]' in client
+    assert 'func createGameLink(processID: String, androidPackageName: String' in client
     assert 'RemoteAPIError.http(status: http.statusCode, message: message)' in client
 
 
@@ -135,5 +149,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "formatDuration" in app
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app
+    assert "Android-PC 연결" in app
+    assert "gameLinks" in app
     assert "func refreshToken() async" in app
     assert "현재 토큰 갱신" in app

@@ -7,6 +7,7 @@ data class RemoteStatus(
     val activeSessionCount: Int,
     val dashboardSummary: Boolean,
     val beholderIncidents: Boolean,
+    val gameLinks: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,
@@ -32,6 +33,7 @@ data class RemoteCapabilities(
     val shortcutOpen: Boolean,
     val dashboardSummary: Boolean,
     val beholderIncidents: Boolean,
+    val gameLinks: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,
@@ -49,6 +51,18 @@ data class RemoteShortcut(
     val id: String,
     val name: String,
     val url: String,
+)
+
+data class RemoteGameLink(
+    val id: String,
+    val pcProcessId: String,
+    val pcDisplayName: String,
+    val androidPackageName: String,
+    val androidLaunchIntentUri: String,
+    val androidStoreUrl: String,
+    val platformAccountHint: String,
+    val hoyolabGameId: String,
+    val syncStrategy: String,
 )
 
 data class RemoteDashboardSummary(

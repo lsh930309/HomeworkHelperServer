@@ -29,6 +29,21 @@ struct RemoteAPIClient {
         try await get("remote/dashboard/summary")
     }
 
+    func gameLinks() async throws -> [RemoteGameLink] {
+        let response: RemoteGameLinksResponse = try await get("remote/game-links")
+        return response.links
+    }
+
+    func createGameLink(processID: String, androidPackageName: String, syncStrategy: String = "manual") async throws -> RemoteGameLink {
+        let payload = [
+            "pc_process_id": processID,
+            "android_package_name": androidPackageName,
+            "sync_strategy": syncStrategy,
+        ]
+        let body = try JSONEncoder().encode(payload)
+        return try await post("remote/game-links", body: body)
+    }
+
     func beholderIncidents() async throws -> [RemoteBeholderIncident] {
         let response: RemoteBeholderIncidentsResponse = try await get("remote/beholder/incidents")
         return response.incidents

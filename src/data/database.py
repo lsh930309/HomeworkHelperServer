@@ -169,6 +169,30 @@ def auto_migrate_database():
                 ")"
             ))
             conn.commit()
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS game_platform_links ("
+                "id TEXT PRIMARY KEY, "
+                "pc_process_id TEXT NOT NULL, "
+                "pc_display_name TEXT, "
+                "android_package_name TEXT NOT NULL, "
+                "android_launch_intent_uri TEXT, "
+                "android_store_url TEXT, "
+                "platform_account_hint TEXT, "
+                "hoyolab_game_id TEXT, "
+                "sync_strategy TEXT NOT NULL DEFAULT 'manual', "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_game_platform_links_pc_process_id "
+                "ON game_platform_links (pc_process_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_game_platform_links_android_package_name "
+                "ON game_platform_links (android_package_name)"
+            ))
+            conn.commit()
             for table_name, column_name, column_type, default_value in migrations:
                 # 테이블 존재 여부 확인
                 if table_name not in inspector.get_table_names():

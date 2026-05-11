@@ -41,6 +41,7 @@ def _client_with_seed(
     shortcuts=None,
     sessions=None,
     incidents=None,
+    game_links=None,
     auth_token=None,
     device_registry=None,
     power_controller=None,
@@ -65,6 +66,8 @@ def _client_with_seed(
             db.add(session)
         for incident in incidents or []:
             db.add(incident)
+        for game_link in game_links or []:
+            db.add(game_link)
         db.commit()
     finally:
         db.close()
@@ -110,13 +113,14 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.4"
+    assert body["remote_api_version"] == "0.1.5"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
     assert body["capabilities"]["shortcut_open"] is True
     assert body["capabilities"]["dashboard_summary"] is True
     assert body["capabilities"]["beholder_incidents"] is True
+    assert body["capabilities"]["game_links"] is True
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
@@ -253,6 +257,64 @@ def test_remote_beholder_incidents_exposes_pending_incidents_without_resolving()
     assert body["incidents"][0]["user_title"] == "플레이 기록 확인 필요"
     assert body["incidents"][0]["status"] == "pending"
     assert body["incidents"][0]["risk_labels"] == ["마지막 앱 생존 시각이 너무 오래됨"]
+
+
+
+def test_remote_game_links_create_and_list_android_package_mapping():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="game-a", name="Game A", monitoring_path="/game.exe", launch_path="/game.url")],
+        game_links=[
+            models.GamePlatformLink(
+                id="link-old",
+                pc_process_id="game-a",
+                pc_display_name="Game A",
+                android_package_name="com.example.old",
+                sync_strategy="manual",
+                created_at=1778496000.0,
+                updated_at=1778496000.0,
+            )
+        ],
+    )
+
+    listed = client.get("/remote/game-links")
+    created = client.post(
+        "/remote/game-links",
+        json={
+            "pc_process_id": "game-a",
+            "android_package_name": "com.example.game",
+            "android_launch_intent_uri": "intent://game#Intent;package=com.example.game;end",
+            "android_store_url": "https://play.google.com/store/apps/details?id=com.example.game",
+            "platform_account_hint": "same HoYoLab account",
+            "hoyolab_game_id": "hkrpg",
+            "sync_strategy": "usage_stats",
+        },
+    )
+    relisted = client.get("/remote/game-links")
+
+    assert listed.status_code == 200
+    assert listed.json()["count"] == 1
+    assert listed.json()["links"][0]["android_package_name"] == "com.example.old"
+    assert created.status_code == 200
+    body = created.json()
+    assert body["pc_process_id"] == "game-a"
+    assert body["pc_display_name"] == "Game A"
+    assert body["android_package_name"] == "com.example.game"
+    assert body["sync_strategy"] == "usage_stats"
+    assert body["created_at"] == 1778497000.0
+    assert relisted.json()["count"] == 2
+    assert auditor.events[-1]["command"] == "game_link.create"
+    assert auditor.events[-1]["target"] == "com.example.game"
+
+
+def test_remote_game_link_create_rejects_unknown_pc_process():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
+
+    response = client.post(
+        "/remote/game-links",
+        json={"pc_process_id": "missing", "android_package_name": "com.example.game"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_remote_launch_can_request_direct_mode_without_mutating_process_preference():
