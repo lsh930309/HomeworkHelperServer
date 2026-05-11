@@ -199,6 +199,41 @@ Not-tested: Android SDK License 수락 이후 SDK package 설치, APK assemble/i
 
 ---
 
+## 2026-05-11 — Remote Controller 검증 스크립트 계약 테스트 추가
+
+### 작업 범위
+
+- `tests/test_remote_verifier_contract.py`를 추가했다.
+- 통합 verifier가 Remote API pytest, Android/macOS 정적 계약, 실제 서버 smoke, Swift `RemoteAPIClient` smoke, Android SDK readiness, Android APK smoke readiness, Swift build, Gradle assemble을 모두 호출하는지 정적으로 검증한다.
+- Android SDK readiness script가 license/package 상태만 보고하고 SDK를 변경하지 않는 계약을 검증한다.
+- Android APK smoke가 APK 누락 blocker와 실제 `adb install`/`am start` 경로를 구분하는 계약을 검증한다.
+- macOS smoke들이 실제 `homework_helper.pyw` 서버 프로세스와 생산 Swift client 파일을 사용한다는 계약을 검증한다.
+
+### 자체 코드 리뷰 메모
+
+- 검증 스크립트 자체가 회귀하면 전체 완료 감사가 잘못된 proxy signal에 의존할 수 있다.
+- 정적 테스트는 Android SDK License 수락 전에도 실행 가능하며, 기본 `pytest`에 포함되어 검증 루프의 구성 drift를 막는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 4 passed.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote Controller verifier 자체도 테스트벤치에 고정한다
+
+Constraint: Android License 승인 전에는 verifier/smoke 구성 drift를 정적 테스트로 막아야 함
+Rejected: 검증 스크립트는 수동 관리 | verifier가 일부 lane을 누락해도 테스트가 통과하는 proxy signal 문제가 생길 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: 새 smoke나 blocker lane을 추가하면 tests/test_remote_verifier_contract.py도 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: Android SDK License 수락 이후 SDK package 설치, APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위

@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-11
 현재 통합 브랜치: `main`
-최신 확인 commit: `35585dc Android APK smoke가 산출 전 blocker와 install 경로를 구분한다`
+최신 확인 commit: `a1e3162 Android SDK blocker를 Gradle 실행 전 readiness로 분리한다`
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
 ## 1. 완료 판단 기준
@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | 기술 검토서 보존 | `remote-controller-technical-review.md` 존재 | 충족 | 없음 |
 | `dev-remote` 브랜치 생성/작업 | 작업 이력 commit들이 `dev-remote`에서 생성되었고 이후 사용자 요청대로 `main`에 squash merge | 충족 | 브랜치는 merge 후 삭제됨 |
-| Korean Lore commit + push | `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc` 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
+| Korean Lore commit + push | `b69457d`, `9e6142e`, `486cc75`, `f38cf0d`, `f4ff55d`, `35585dc`, `ea8dcc6`, `a1e3162` 등 main commit이 Lore trailer 포함 | 충족 | 없음 |
 | TODO 문서 | `remote-controller-todo.md` | 충족 | Android 후속 항목 남음 |
 | 매 커밋 작업 보고서 | `remote-controller-work-report.md` | 충족 | Android 실기기 검증 후 추가 기록 필요 |
 | Remote Agent API | `src/api/remote_routes.py`, `homework_helper.pyw` router include | 충족 | Beholder/대시보드 전체 원격화는 후속 범위 |
@@ -37,11 +37,13 @@
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
 | Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
+| Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
 | Android APK assemble | `tools/verify_remote_controller.py`가 `:app:assembleDebug`를 실행하나 SDK License blocker 확인 | 미충족 | Google Android SDK License 수락 및 SDK package 설치 필요 |
 | 전체 Python 테스트벤치 | verifier에서 `132 passed, 4 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
+| verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier와 smoke script 구성 drift 방지 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
 | 통합 verifier | `tools/verify_remote_controller.py` | 충족 | License 수락 후 `--allow-android-license-blocker` 없이 green 필요 |
 | 사용자 의사결정 blocker | Android SDK License 수락 여부 질문으로 중단 | 충족 | 사용자 승인 필요 |
 
@@ -60,6 +62,7 @@
 - `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
 - `tools/smoke_macos_remote_api_client.py` → passed
+- `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
 - 전체 pytest → 132 passed, 4 warnings
 - macOS `swift build` → passed
@@ -98,4 +101,3 @@ cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py
 6. PC 명령 버튼의 capability gating 확인
 7. Usage Access 허용 후 최근 전면 앱 조회
 8. Android package Intent 실행
-
