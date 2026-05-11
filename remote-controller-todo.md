@@ -62,6 +62,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Remote Controller 통합 검증 스크립트 추가: `tools/verify_remote_controller.py`
 - [x] 실제 서버 프로세스 기반 Remote API pairing/token smoke 추가: `tools/smoke_remote_controller_runtime.py`
 - [x] Swift `RemoteAPIClient` 기반 macOS-native HTTP/DTO/token smoke 추가: `tools/smoke_macos_remote_api_client.py`
+- [x] Android SDK/License readiness preflight 추가: `tools/check_android_sdk_readiness.py`
 - [x] Android APK install/launch smoke preflight 추가: `tools/smoke_android_remote_controller.py`
 - [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
 

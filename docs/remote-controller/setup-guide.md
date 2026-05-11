@@ -160,10 +160,11 @@ Android APK가 생성된 뒤 device/emulator에 install + launch smoke를 수행
 SDK License 수락 전 또는 APK 산출 전에는 준비 상태만 확인할 수 있다.
 
 ```bash
+./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker
 ./.venv/bin/python tools/smoke_android_remote_controller.py --allow-missing-apk
 ```
 
-이 smoke는 Android manifest/applicationId 계약을 확인하고, APK가 있으면 `adb install -r`과 `adb shell am start -n dev.homeworkhelper.remote/.MainActivity`로 실제 앱 launch를 검증한다.
+SDK readiness preflight는 `sdkmanager`, `adb`, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, Android SDK license 파일 존재 여부를 변경 없이 보고한다. APK smoke는 Android manifest/applicationId 계약을 확인하고, APK가 있으면 `adb install -r`과 `adb shell am start -n dev.homeworkhelper.remote/.MainActivity`로 실제 앱 launch를 검증한다.
 
 개별 최소 검증:
 

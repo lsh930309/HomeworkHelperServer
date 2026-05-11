@@ -163,6 +163,42 @@ Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Andro
 
 ---
 
+## 2026-05-11 — Android SDK/License readiness preflight 추가
+
+### 작업 범위
+
+- `tools/check_android_sdk_readiness.py`를 추가했다.
+- preflight는 SDK 상태를 변경하지 않고 `sdkmanager`, `adb`, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, Android SDK license 파일 존재 여부를 보고한다.
+- `--allow-blocker`를 주면 현재처럼 License/package 미설치 상태를 명시 blocker로 출력하고 0으로 종료한다.
+- `tools/verify_remote_controller.py` 통합 검증 루프에 Android SDK readiness check를 포함했다.
+- TODO와 구동 환경 가이드에 SDK readiness 진입점을 기록했다.
+
+### 자체 코드 리뷰 메모
+
+- Gradle stacktrace만으로 blocker를 확인하면 필요한 SDK package와 license 상태를 한눈에 보기 어렵다.
+- readiness preflight는 license 수락이나 package 설치를 수행하지 않으므로 사용자 의사결정 경계를 침범하지 않는다.
+- License 승인 후에는 `--allow-blocker` 없이 실행해 package/license/adb 준비가 모두 green인지 확인할 수 있다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker` → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락을 blocker로 보고.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android SDK blocker를 Gradle 실행 전 readiness로 분리한다
+
+Constraint: SDK License 수락은 사용자 결정이므로 preflight는 상태 보고만 하고 설치/수락을 수행하면 안 됨
+Rejected: Gradle assemble stacktrace만 blocker evidence로 유지 | 어떤 SDK package와 license가 빠졌는지 반복 검증 때 즉시 파악하기 어려움
+Confidence: high
+Scope-risk: narrow
+Directive: SDK License 승인 후 check_android_sdk_readiness.py를 --allow-blocker 없이 실행해 Android toolchain 준비를 먼저 green으로 만들 것
+Tested: ./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker; git diff --check
+Not-tested: Android SDK License 수락 이후 SDK package 설치, APK assemble/install, 실제 Android device/emulator smoke
+```
+
+---
+
 ## 2026-05-11 — 착수 / 1차 수직 슬라이스 준비
 
 ### 작업 범위
