@@ -1,0 +1,56 @@
+# Remote Controller TODO
+
+작성/갱신: 2026-05-11
+브랜치: `dev-remote`
+기준 설계 문서: `remote-controller-technical-review.md`
+
+## 목표
+
+HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서 수행할 수 있도록 Remote Agent API, macOS 앱, 이후 Android 앱으로 확장 가능한 구동 환경을 만든다.
+
+## 진행 원칙
+
+- macOS 네이티브 앱을 먼저 실제 빌드/동작 확인하며 로직을 다진다.
+- Android APK는 검증된 Remote API/DTO/명령 모델을 전파하는 순서로 진행한다.
+- 매 커밋 직전 자체 코드 리뷰, 동작 테스트, 기초 테스트벤치 검증을 수행한다.
+- 커밋 메시지는 Korean Lore 형식을 사용한다.
+- 의사결정이 필요한 지점은 작업을 멈추고 사용자 확인 후 재개한다.
+
+## 1차 수직 슬라이스 — 진행 중
+
+- [x] `dev-remote` 브랜치 생성
+- [x] 기술 검토 문서 루트 보존: `remote-controller-technical-review.md`
+- [x] TODO 문서 생성: `remote-controller-todo.md`
+- [x] 작업 보고서 생성: `remote-controller-work-report.md`
+- [x] `/remote/status` 최소 Remote Agent API 추가
+- [x] `/remote/processes`, `/remote/processes/{id}/launch` 추가
+- [x] `/remote/shortcuts`, `/remote/shortcuts/{id}/open` 추가
+- [x] 안전 기본 전원 adapter 추가: 미설정 상태에서는 명령 차단
+- [x] Remote API 단위 테스트 추가
+- [x] macOS SwiftUI 네이티브 클라이언트 골격 생성
+- [x] macOS 앱 전원 제어 버튼 연결
+- [x] macOS SwiftUI 클라이언트 빌드 검증
+- [x] Python Remote API 테스트 검증
+- [x] 자체 코드 리뷰 후 1차 커밋 준비 완료
+- [x] `dev-remote` 원격 푸시
+
+## 다음 단계 후보
+
+- [x] Remote Agent 선택적 Bearer token 인증 1차 구현
+- [x] Pairing code/device registry/token revoke API 구현
+- [x] macOS pairing code 입력 및 Keychain token 저장 구현
+- [x] Device revoke UI 구현
+- [x] command audit log JSONL 파일 추가
+- [x] `pc_remote` SmartThings/SSH 전원 제어 adapter를 안전한 설정 기반으로 이식
+- [x] remote_power_config.json 설정 문서화/예시 파일 추가
+- [ ] remote_power_config.json 설정 UI 구현
+- [x] Tailscale/ZeroTier 연결 가이드와 Agent bind 설정 추가
+- [x] macOS 앱 Keychain 저장소 도입
+- [ ] Android Kotlin/Compose 프로젝트 생성
+- [ ] Android package visibility / Intent / UsageStats 권한 모델 구현
+
+## 사용자 의사결정 필요 예정 항목
+
+1. 1차 실사용 연결 방식을 Tailscale로 고정할지, ZeroTier도 동등 지원할지.
+2. SmartThings 전원 제어를 macOS 앱 직접 실행으로 둘지, PC/LAN helper 또는 릴레이 경유로 추상화할지.
+3. Remote Agent 인증을 로컬 pairing code만으로 시작할지, 처음부터 device registry + token revoke UI까지 포함할지.

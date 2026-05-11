@@ -105,3 +105,7 @@ certs/.thumbprint
 node_modules/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Swift Package Manager build artifacts
+**/.build/
+**/.swiftpm/

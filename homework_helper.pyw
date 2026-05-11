@@ -794,6 +794,7 @@ def run_server_main():
     from src.api.dashboard import router as dashboard_router
     from src.api.beholder_routes import router as beholder_router
     from src.api.dashboard.static_files import dashboard_static_dir
+    from src.api.remote_routes import create_remote_router
     
     # 정적 파일 서빙 (CSS, JS)
     dashboard_static_path = dashboard_static_dir()
@@ -805,12 +806,27 @@ def run_server_main():
     
     app.include_router(dashboard_router)
     app.include_router(beholder_router)
+
+    api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
+    api_port = int(os.environ.get("HH_API_PORT", "8000"))
+    loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+    remote_require_auth = (
+        os.environ.get("HH_REMOTE_REQUIRE_AUTH", "").lower() in {"1", "true", "yes", "on"}
+        or api_host not in loopback_hosts
+    )
+    if remote_require_auth and not os.environ.get("HH_REMOTE_TOKEN"):
+        logger.warning(
+            "Remote API 인증 강제 모드입니다. 기존 pairing token이 없다면 로컬에서 /remote/pair/start로 먼저 페어링하세요."
+        )
+    app.include_router(create_remote_router(get_db, require_auth=remote_require_auth))
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
+    logger.info("리모트 컨트롤 라우터 등록 완료 (/remote/*)")
 
 
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    logger.info(f"API 서버 바인딩: {api_host}:{api_port}")
+    uvicorn.run(app, host=api_host, port=api_port, log_level="warning")
 
 def stop_api_server():
     """독립 프로세스로 실행된 API 서버를 종료합니다."""

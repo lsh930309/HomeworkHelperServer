@@ -1,0 +1,142 @@
+import Foundation
+
+struct RemoteStatus: Decodable {
+    struct Counts: Decodable {
+        let processes: Int
+        let shortcuts: Int
+        let activeSessions: Int
+
+        enum CodingKeys: String, CodingKey {
+            case processes
+            case shortcuts
+            case activeSessions = "active_sessions"
+        }
+    }
+
+    struct Capabilities: Decodable {
+        let processLaunch: Bool
+        let shortcutOpen: Bool
+        let powerControl: Bool
+        let beholder: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case processLaunch = "process_launch"
+            case shortcutOpen = "shortcut_open"
+            case powerControl = "power_control"
+            case beholder
+        }
+    }
+
+    let app: String
+    let remoteAPIVersion: String
+    let serverTime: Double
+    let counts: Counts
+    let capabilities: Capabilities
+
+    enum CodingKeys: String, CodingKey {
+        case app
+        case remoteAPIVersion = "remote_api_version"
+        case serverTime = "server_time"
+        case counts
+        case capabilities
+    }
+}
+
+struct RemoteProcess: Decodable, Identifiable {
+    let processID: String?
+    let name: String
+    let monitoringPath: String?
+    let launchPath: String?
+    let preferredLaunchType: String?
+    let lastPlayedTimestamp: Double?
+    let staminaCurrent: Int?
+    let staminaMax: Int?
+
+    var id: String { processID ?? name }
+
+    enum CodingKeys: String, CodingKey {
+        case processID = "id"
+        case name
+        case monitoringPath = "monitoring_path"
+        case launchPath = "launch_path"
+        case preferredLaunchType = "preferred_launch_type"
+        case lastPlayedTimestamp = "last_played_timestamp"
+        case staminaCurrent = "stamina_current"
+        case staminaMax = "stamina_max"
+    }
+}
+
+struct RemoteShortcut: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let url: String
+    let refreshTime: String?
+    let lastResetTimestamp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case url
+        case refreshTime = "refresh_time_str"
+        case lastResetTimestamp = "last_reset_timestamp"
+    }
+}
+
+struct RemoteCommandResult: Decodable {
+    let accepted: Bool
+    let command: String
+    let targetID: String?
+    let targetName: String?
+    let target: String?
+    let status: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case command
+        case targetID = "target_id"
+        case targetName = "target_name"
+        case target
+        case status
+        case message
+    }
+}
+
+struct PairingConfirmResponse: Decodable {
+    let id: String
+    let name: String
+    let platform: String?
+    let token: String
+}
+
+struct RemoteDevice: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let platform: String?
+    let createdAt: Double?
+    let lastSeenAt: Double?
+    let revokedAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case platform
+        case createdAt = "created_at"
+        case lastSeenAt = "last_seen_at"
+        case revokedAt = "revoked_at"
+    }
+}
+
+struct RemoteDevicesResponse: Decodable {
+    let devices: [RemoteDevice]
+}
+
+struct RevokeDeviceResponse: Decodable {
+    let revoked: Bool
+    let deviceID: String
+
+    enum CodingKeys: String, CodingKey {
+        case revoked
+        case deviceID = "device_id"
+    }
+}
