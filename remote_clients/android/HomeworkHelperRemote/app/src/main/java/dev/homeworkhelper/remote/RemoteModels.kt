@@ -6,6 +6,7 @@ data class RemoteStatus(
     val shortcutCount: Int,
     val activeSessionCount: Int,
     val dashboardSummary: Boolean,
+    val beholderIncidents: Boolean,
     val powerControl: Boolean,
     val authRequired: Boolean,
     val pairing: Boolean,
@@ -48,6 +49,16 @@ data class RemoteDashboardSummary(
     val sessionCount: Int,
     val topGameName: String,
     val topGameSeconds: Double,
+)
+
+data class RemoteBeholderIncident(
+    val id: Int,
+    val severity: String,
+    val status: String,
+    val userTitle: String,
+    val userSummary: String,
+    val riskScore: Int,
+    val riskLabels: List<String>,
 )
 
 data class RemoteCommandResult(

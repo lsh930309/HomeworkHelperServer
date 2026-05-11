@@ -17,6 +17,45 @@
 
 ---
 
+## 2026-05-11 — Remote Beholder incidents를 네이티브 read-only 알림으로 노출
+
+### 작업 범위
+
+- Remote API에 read-only `GET /remote/beholder/incidents` endpoint를 추가했다.
+- pending Beholder incident만 `/remote/*` 인증/페어링 경계 안에서 조회하도록 하고 resolve/override side effect는 포함하지 않았다.
+- macOS `RemoteAPIClient`/DTO/SwiftUI에 `RemoteBeholderIncident`와 `Beholder 알림` 카드를 추가했다.
+- Android `RemoteApiClient`/DTO/Compose UI에 동일한 Beholder incident 모델과 알림 카드를 전파했다.
+- macOS API client smoke가 실제 Remote Agent와 통신해 Beholder incident DTO까지 decode하도록 확장했다.
+- TODO, setup guide, Android README, completion audit에 Beholder read-only 범위와 evidence를 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 기술 검토서의 Beholder incident list 요구를 resolve flow까지 확대하지 않고 read-only 관찰로 시작했다.
+- incident resolve는 세션/설정/삭제 등 side effect를 만들 수 있으므로 후속 allowlist 명령과 별도 테스트가 필요하다.
+- Android는 APK compile 전이므로 정적 계약/DTO/UI 전파까지 검증하고, 실제 Compose runtime은 SDK License 승인 후 APK smoke로 확인한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 31 passed, 4 warnings
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.2, devices=1, dashboard_sessions=0, beholder_incidents=0`
+- `swift build` → Build complete (1.05s)
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 12 passed, full pytest 140 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote Beholder incidents를 네이티브 read-only 알림으로 노출한다
+
+Constraint: Beholder resolve는 데이터 수정 side effect가 있으므로 이번 단계는 pending incident read-only 조회로 제한해야 함
+Rejected: resolve flow까지 한 번에 원격화 | 세션 복구/삭제/override side effect를 원격 명령으로 허용하기 전 별도 allowlist와 테스트가 필요함
+Confidence: high
+Scope-risk: moderate
+Directive: Beholder resolve를 추가할 때는 action allowlist, audit log, 실패 복구 테스트, macOS smoke, Android 정적 계약을 함께 갱신할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (31 passed); ./.venv/bin/python tools/smoke_macos_remote_api_client.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (140 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator Compose Beholder 카드 smoke, Beholder resolve side-effect flow
+```
+
 ## 2026-05-11 — Remote dashboard summary를 네이티브 앱에 전파
 
 ### 작업 범위

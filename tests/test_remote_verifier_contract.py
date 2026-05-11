@@ -98,6 +98,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "confirmPairing" in macos
     assert "authedClient.status()" in macos
     assert "authedClient.dashboardSummary()" in macos
+    assert "authedClient.beholderIncidents()" in macos
     assert "authedClient.devices()" in macos
 
 

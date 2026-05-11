@@ -40,6 +40,7 @@ def _client_with_seed(
     processes=None,
     shortcuts=None,
     sessions=None,
+    incidents=None,
     auth_token=None,
     device_registry=None,
     power_controller=None,
@@ -62,6 +63,8 @@ def _client_with_seed(
             db.add(shortcut)
         for session in sessions or []:
             db.add(session)
+        for incident in incidents or []:
+            db.add(incident)
         db.commit()
     finally:
         db.close()
@@ -107,11 +110,13 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.1"
+    assert body["remote_api_version"] == "0.1.2"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
     assert body["capabilities"]["shortcut_open"] is True
+    assert body["capabilities"]["dashboard_summary"] is True
+    assert body["capabilities"]["beholder_incidents"] is True
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
@@ -172,6 +177,53 @@ def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_
     assert body["metrics"]["total_seconds"] == 3600.0
     assert body["metrics"]["session_count"] == 1
     assert body["metrics"]["top_game"]["display_name"] == "Game A"
+
+
+def test_remote_beholder_incidents_exposes_pending_incidents_without_resolving():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        incidents=[
+            models.BeholderIncident(
+                severity="warning",
+                status="pending",
+                operation_kind="runtime_stop",
+                actor="runtime",
+                target_summary="Game A session",
+                suspected_cause="test",
+                current_state_summary="open",
+                proposed_change_summary="close",
+                risk_score=7,
+                risk_factors=["stale_heartbeat"],
+                safe_recommendation="검토 후 처리하세요.",
+                user_title="플레이 기록 확인 필요",
+                created_at=1778497000.0,
+            ),
+            models.BeholderIncident(
+                severity="info",
+                status="resolved",
+                operation_kind="runtime_stop",
+                actor="runtime",
+                target_summary="Old session",
+                suspected_cause="test",
+                current_state_summary="open",
+                proposed_change_summary="close",
+                risk_score=1,
+                risk_factors=[],
+                safe_recommendation="resolved",
+                user_title="resolved",
+                created_at=1778496000.0,
+                resolved_at=1778496500.0,
+            ),
+        ],
+    )
+
+    response = client.get("/remote/beholder/incidents")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["incidents"][0]["user_title"] == "플레이 기록 확인 필요"
+    assert body["incidents"][0]["status"] == "pending"
+    assert body["incidents"][0]["risk_labels"] == ["마지막 앱 생존 시각이 너무 오래됨"]
 
 
 def test_remote_launch_can_request_direct_mode_without_mutating_process_preference():

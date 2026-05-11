@@ -70,6 +70,7 @@ fun RemoteApp() {
     var recentUsage by remember { mutableStateOf<AndroidUsageSnapshot?>(null) }
     var status by remember { mutableStateOf<RemoteStatus?>(null) }
     var dashboardSummary by remember { mutableStateOf<RemoteDashboardSummary?>(null) }
+    var beholderIncidents by remember { mutableStateOf(emptyList<RemoteBeholderIncident>()) }
     var processes by remember { mutableStateOf(emptyList<RemoteProcess>()) }
     var shortcuts by remember { mutableStateOf(emptyList<RemoteShortcut>()) }
     var devices by remember { mutableStateOf(emptyList<RemoteDevice>()) }
@@ -92,14 +93,16 @@ fun RemoteApp() {
                     val api = client()
                     val nextStatus = api.status()
                     val nextSummary = api.dashboardSummary()
+                    val nextIncidents = api.beholderIncidents()
                     val nextProcesses = api.processes()
                     val nextShortcuts = api.shortcuts()
                     val nextDevices = if (includeDevices) api.devices() else emptyList()
-                    RemoteSnapshot(nextStatus, nextSummary, nextProcesses, nextShortcuts, nextDevices)
+                    RemoteSnapshot(nextStatus, nextSummary, nextIncidents, nextProcesses, nextShortcuts, nextDevices)
                 }
-            }.onSuccess { (nextStatus, nextSummary, nextProcesses, nextShortcuts, nextDevices) ->
+            }.onSuccess { (nextStatus, nextSummary, nextIncidents, nextProcesses, nextShortcuts, nextDevices) ->
                 status = nextStatus
                 dashboardSummary = nextSummary
+                beholderIncidents = nextIncidents
                 processes = nextProcesses
                 shortcuts = nextShortcuts
                 devices = nextDevices
@@ -221,6 +224,7 @@ fun RemoteApp() {
                             Text("API ${current.apiVersion}")
                             Text("게임 ${current.processCount}개 / 숏컷 ${current.shortcutCount}개 / 활성 세션 ${current.activeSessionCount}개")
                             Text("대시보드 요약: ${if (current.dashboardSummary) "사용 가능" else "미지원"}")
+                            Text("Beholder 알림: ${if (current.beholderIncidents) "${beholderIncidents.size}건" else "미지원"}")
                             Text("전원 제어: ${if (current.powerControl) "설정됨" else "미설정"}")
                             current.power?.let { power ->
                                 Text("전원 상태: ${power.status}")
@@ -292,6 +296,23 @@ fun RemoteApp() {
                     }
                 }
             }
+            if (beholderIncidents.isNotEmpty()) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Beholder 알림", style = MaterialTheme.typography.titleMedium)
+                            beholderIncidents.take(3).forEach { incident ->
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(incident.userTitle)
+                                    Text("위험도 ${incident.riskScore} · ${incident.severity}")
+                                    if (incident.userSummary.isNotBlank()) Text(incident.userSummary)
+                                    if (incident.riskLabels.isNotEmpty()) Text(incident.riskLabels.joinToString(", "))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             item { Text("게임", style = MaterialTheme.typography.titleMedium) }
             items(processes, key = { it.id }) { process ->
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -354,6 +375,7 @@ fun RemoteApp() {
 private data class RemoteSnapshot(
     val status: RemoteStatus,
     val dashboardSummary: RemoteDashboardSummary,
+    val beholderIncidents: List<RemoteBeholderIncident>,
     val processes: List<RemoteProcess>,
     val shortcuts: List<RemoteShortcut>,
     val devices: List<RemoteDevice>,

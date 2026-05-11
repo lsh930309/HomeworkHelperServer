@@ -20,6 +20,7 @@ class RemoteApiClient(
             shortcutCount = counts.optInt("shortcuts"),
             activeSessionCount = counts.optInt("active_sessions"),
             dashboardSummary = capabilities.optBoolean("dashboard_summary"),
+            beholderIncidents = capabilities.optBoolean("beholder_incidents"),
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
@@ -32,6 +33,21 @@ class RemoteApiClient(
                 )
             },
         )
+    }
+
+    fun beholderIncidents(): List<RemoteBeholderIncident> {
+        val json = JSONObject(get("remote/beholder/incidents"))
+        return json.getJSONArray("incidents").mapObjects { item ->
+            RemoteBeholderIncident(
+                id = item.optInt("id"),
+                severity = item.optString("severity"),
+                status = item.optString("status"),
+                userTitle = item.optString("user_title"),
+                userSummary = item.optString("user_summary"),
+                riskScore = item.optInt("risk_score"),
+                riskLabels = item.optJSONArray("risk_labels")?.toStringList().orEmpty(),
+            )
+        }
     }
 
     fun dashboardSummary(): RemoteDashboardSummary {
@@ -155,6 +171,12 @@ private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> = bu
 
 
 private fun JSONArray.toStringSet(): Set<String> = buildSet {
+    for (index in 0 until length()) {
+        optString(index).takeIf { it.isNotBlank() }?.let { add(it) }
+    }
+}
+
+private fun JSONArray.toStringList(): List<String> = buildList {
     for (index in 0 until length()) {
         optString(index).takeIf { it.isNotBlank() }?.let { add(it) }
     }

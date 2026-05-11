@@ -25,6 +25,11 @@ struct RemoteAPIClient {
         try await get("remote/dashboard/summary")
     }
 
+    func beholderIncidents() async throws -> [RemoteBeholderIncident] {
+        let response: RemoteBeholderIncidentsResponse = try await get("remote/beholder/incidents")
+        return response.incidents
+    }
+
     func launchProcess(id: String, mode: String? = nil) async throws -> RemoteCommandResult {
         var body = Data("{}".utf8)
         if let mode {

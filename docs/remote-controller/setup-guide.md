@@ -28,6 +28,7 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 - `GET /remote/shortcuts`
 - `POST /remote/shortcuts/{id}/open`
 - `GET /remote/dashboard/summary`
+- `GET /remote/beholder/incidents`
 - `GET /remote/power/status`
 - `POST /remote/power/{wake|sleep|restart|shutdown}`
 
@@ -137,6 +138,7 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 - pairing code confirm으로 device token 발급
 - status/process/shortcut/device 조회
 - dashboard summary 조회 및 플레이 요약 카드 표시
+- Beholder pending incident 조회 및 read-only 알림 카드 표시
 - PC 게임 실행, 웹 숏컷 열기, 전원 명령 호출
 - 등록 device token revoke
 - Android package name 수동 입력 기반 launcher Intent 실행

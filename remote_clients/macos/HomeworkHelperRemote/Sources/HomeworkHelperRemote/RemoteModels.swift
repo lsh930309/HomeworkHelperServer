@@ -17,6 +17,7 @@ struct RemoteStatus: Decodable {
         let processLaunch: Bool
         let shortcutOpen: Bool
         let dashboardSummary: Bool
+        let beholderIncidents: Bool
         let powerControl: Bool
         let beholder: Bool
         let authRequired: Bool
@@ -26,6 +27,7 @@ struct RemoteStatus: Decodable {
             case processLaunch = "process_launch"
             case shortcutOpen = "shortcut_open"
             case dashboardSummary = "dashboard_summary"
+            case beholderIncidents = "beholder_incidents"
             case powerControl = "power_control"
             case authRequired = "auth_required"
             case beholder
@@ -193,6 +195,33 @@ struct RemoteDashboardSummary: Decodable {
 
     let range: Range
     let metrics: Metrics
+}
+
+struct RemoteBeholderIncident: Decodable, Identifiable {
+    let id: Int
+    let severity: String
+    let status: String
+    let userTitle: String
+    let userSummary: String?
+    let riskScore: Int
+    let riskLabels: [String]
+    let createdAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case severity
+        case status
+        case userTitle = "user_title"
+        case userSummary = "user_summary"
+        case riskScore = "risk_score"
+        case riskLabels = "risk_labels"
+        case createdAt = "created_at"
+    }
+}
+
+struct RemoteBeholderIncidentsResponse: Decodable {
+    let incidents: [RemoteBeholderIncident]
+    let count: Int
 }
 
 struct RevokeDeviceResponse: Decodable {

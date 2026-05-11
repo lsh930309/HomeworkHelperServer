@@ -34,6 +34,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteDevice",
         "RemoteDevicesResponse",
         "RemoteDashboardSummary",
+        "RemoteBeholderIncident",
+        "RemoteBeholderIncidentsResponse",
         "RevokeDeviceResponse",
     ]:
         assert f"struct {model_name}" in models
@@ -49,6 +51,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'processLaunch = "process_launch"',
         'shortcutOpen = "shortcut_open"',
         'dashboardSummary = "dashboard_summary"',
+        'beholderIncidents = "beholder_incidents"',
         'powerControl = "power_control"',
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
@@ -68,6 +71,9 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'totalSeconds = "total_seconds"',
         'topGame = "top_game"',
         'displayName = "display_name"',
+        'userTitle = "user_title"',
+        'riskLabels = "risk_labels"',
+        'riskScore = "risk_score"',
     ]:
         assert coding_key in models
 
@@ -78,6 +84,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     for endpoint in [
         'remote/status',
         'remote/dashboard/summary',
+        'remote/beholder/incidents',
         'remote/processes',
         'remote/shortcuts',
         'remote/power/\\(action)',
@@ -122,3 +129,5 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "플레이 요약" in app
     assert "dashboardSummary" in app
     assert "formatDuration" in app
+    assert "Beholder 알림" in app
+    assert "beholderIncidents" in app

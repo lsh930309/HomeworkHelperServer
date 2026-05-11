@@ -29,6 +29,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] `/remote/processes`, `/remote/processes/{id}/launch` 추가
 - [x] `/remote/shortcuts`, `/remote/shortcuts/{id}/open` 추가
 - [x] `/remote/dashboard/summary` read-only 플레이 요약 API 추가
+- [x] `/remote/beholder/incidents` read-only Beholder 알림 API 추가
 - [x] 안전 기본 전원 adapter 추가: 미설정 상태에서는 명령 차단
 - [x] Remote API power status가 클라이언트 gating 필드를 제공하도록 테스트 고정
 - [x] Remote API 단위 테스트 추가
@@ -58,6 +59,7 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android UsageStatsManager 최근 전면 앱 조회 기반 추가
 - [x] Android 전원 capability 기반 버튼 비활성화 구현
 - [x] macOS/Android 클라이언트에 Remote dashboard summary 카드 전파
+- [x] macOS/Android 클라이언트에 Beholder incident list read-only 카드 전파
 - [x] Android Gradle wrapper 생성
 - [x] Android token 저장소를 Keystore 암호화 저장으로 교체
 - [x] Android 클라이언트 정적 계약 pytest 추가

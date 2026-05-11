@@ -14,10 +14,10 @@ from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController, PowerAction
-from src.data import crud, schemas
+from src.data import beholder, crud, schemas
 
 
-REMOTE_API_VERSION = "0.1.1"
+REMOTE_API_VERSION = "0.1.2"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -212,6 +212,7 @@ def create_remote_router(
                 "process_launch": True,
                 "shortcut_open": True,
                 "dashboard_summary": True,
+                "beholder_incidents": True,
                 "power_control": bool(power_status.get("configured")),
                 "beholder": True,
                 "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
@@ -261,6 +262,13 @@ def create_remote_router(
             "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
             "metrics": _aggregate_summary(sessions, start_dt, end_dt, groups),
         }
+
+    @router.get("/beholder/incidents")
+    def remote_beholder_incidents(db: Session = Depends(get_db_dependency)):
+        """Read-only Beholder incident list for native remote dashboards."""
+
+        incidents = [beholder.incident_to_dict(incident) for incident in beholder.active_incidents(db)]
+        return {"incidents": incidents, "count": len(incidents)}
 
     @router.get("/processes")
     def list_remote_processes(db: Session = Depends(get_db_dependency)):
