@@ -52,6 +52,8 @@ android/.cxx/
 # 데이터 및 로그
 # ===========================
 **/homework_helper_data/
+HomeworkHelper/
+HomeworkHelper.zip
 *.log
 *.db
 *.sqlite
@@ -79,6 +81,8 @@ src/screenshot/_method.txt
 *.bak
 *.tmp
 *.temp
+artifacts/
+local-artifacts/
 
 # ===========================
 # 코드 서명 인증서

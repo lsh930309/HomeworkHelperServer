@@ -16,13 +16,14 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton,
+    QLabel, QProgressBar, QSlider, QToolButton, QInputDialog,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
 from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog
+from src.gui.beholder_dialog import BeholderIncidentDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
@@ -33,7 +34,11 @@ import requests
 from src.api.client import ApiClient
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
-from src.utils.windows import set_startup_shortcut, get_startup_shortcut_status
+from src.utils.windows import (
+    apply_windows_title_bar_color,
+    set_startup_shortcut,
+    get_startup_shortcut_status,
+)
 from src.core.launcher import Launcher
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -97,6 +102,12 @@ class MainWindow(QMainWindow):
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
+    _MIN_WINDOW_WIDTH = 320
+    _MIN_WINDOW_HEIGHT = 120
+    _SCREEN_SIZE_RATIO = 0.92
+    _TABLE_ROW_HEIGHT = 30
+    _TABLE_ICON_LOGICAL_SIZE = 24
+    _TABLE_ICON_COLUMN_PADDING = 4
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -136,15 +147,16 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
 
-        # 창 너비 설정: 고정 너비 (절전 복귀 시 안정성 확보)
-        self.setMinimumWidth(470)
-        self.setFixedWidth(470)  # 고정 너비 설정
-        self.setGeometry(100, 100, 470, 300) # 창 초기 위치 및 크기 설정
+        # 창 크기: 테이블/버튼 실제 sizeHint를 기반으로 동적으로 최적화합니다.
+        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
+        self.resize(470, 300) # 최초 표시 전 임시 크기
 
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
+        self._beholder_seen_incidents: set[int] = set()
+        self._beholder_restore_runtime_suspended = False
 
         # 저장된 창 위치 복원
         self._restore_window_geometry()
@@ -288,10 +300,12 @@ class MainWindow(QMainWindow):
         # 테이블 행 높이 및 아이콘 크기 설정
         vh = self.process_table.verticalHeader()
         if vh:
-            vh.setDefaultSectionSize(36)  # 기본 행 높이를 36px로 설정 (여유 있게)
+            vh.setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
+            vh.setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
 
-        # 아이콘 크기: 행 높이(36px)에서 여백을 뺀 28px로 설정 (DPI 배율은 get_qicon_for_file 내부에서 적용)
-        self._table_icon_logical_size = 28
+        # 아이콘 크기: Image #1에 가까운 압축 비율을 유지하면서도 캐시 아이콘을 선명하게 배치합니다.
+        # DPI 배율은 get_qicon_for_file 내부에서 적용합니다.
+        self._table_icon_logical_size = self._TABLE_ICON_LOGICAL_SIZE
         self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
 
         main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
@@ -316,6 +330,19 @@ class MainWindow(QMainWindow):
         self.ui_refresh_timer = QTimer(self)
         self.ui_refresh_timer.timeout.connect(self._on_ui_refresh_tick)
         self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
+
+        self.beholder_timer = QTimer(self)
+        self.beholder_timer.timeout.connect(self._poll_beholder_incidents)
+        self.beholder_timer.start(1500)
+        self.runtime_heartbeat_timer = QTimer(self)
+        self.runtime_heartbeat_timer.timeout.connect(self._send_runtime_heartbeat)
+        self.runtime_heartbeat_timer.start(30000)
+        # Reconcile stale open sessions before the first fresh heartbeat so
+        # crash-recovery decisions can use the pre-crash heartbeat.
+        QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
+        QTimer.singleShot(1200, self._send_runtime_heartbeat)
+        QTimer.singleShot(500, self._poll_beholder_incidents)
+        QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -326,6 +353,106 @@ class MainWindow(QMainWindow):
             status_bar.showMessage("준비 완료.", 5000) # 상태 표시줄 메시지
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
+
+
+    def _poll_beholder_incidents(self):
+        """Show Beholder incidents promptly in the PyQt main GUI."""
+        incident = self.data_manager.pop_latest_beholder_incident()
+        incidents = [incident] if incident else self.data_manager.get_active_beholder_incidents()
+        for item in incidents:
+            if not item:
+                continue
+            incident_id = item.get("id")
+            if incident_id in self._beholder_seen_incidents:
+                continue
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+            dialog = BeholderIncidentDialog(item, self)
+            if not dialog.exec() or not dialog.action:
+                break
+            if dialog.action == "restore_backup":
+                if self._handle_beholder_restore_request() and incident_id is not None:
+                    self._beholder_seen_incidents.add(incident_id)
+            elif incident_id is not None:
+                result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
+                if result:
+                    self._beholder_seen_incidents.add(incident_id)
+                if result and hasattr(self, "process_monitor"):
+                    self.process_monitor.apply_beholder_resolution(result)
+                if dialog.action == "allow_once" and result and result.get("override_token"):
+                    QMessageBox.information(
+                        self,
+                        "Beholder 허용 토큰 발급",
+                        "이번 요청을 1회 허용하는 토큰을 발급했습니다. 동일 작업을 다시 시도하면 한 번만 허용됩니다.",
+                    )
+            break
+
+    def _apply_sidebar_startup_mode(self) -> None:
+        """앱 시작 시 always/game/disabled 사이드바 사용 모드를 반영합니다."""
+        controller = getattr(self, '_sidebar_controller', None)
+        if controller is not None and hasattr(controller, 'apply_settings'):
+            controller.apply_settings(self.data_manager.global_settings)
+
+    def _send_runtime_heartbeat(self):
+        if hasattr(self.data_manager, "send_runtime_heartbeat"):
+            self.data_manager.send_runtime_heartbeat(runtime_kind="pyqt")
+
+    def _reconcile_open_sessions_after_startup(self):
+        if not hasattr(self.data_manager, "reconcile_open_sessions"):
+            return
+        running_ids = list(self.process_monitor.detect_running_process_ids())
+        incidents = self.data_manager.reconcile_open_sessions(running_ids)
+        if incidents:
+            self._poll_beholder_incidents()
+
+    def _handle_beholder_restore_request(self) -> bool:
+        backups = self.data_manager.get_beholder_backups()
+        if not backups:
+            QMessageBox.warning(self, "Beholder 백업 복구", "사용 가능한 DB 백업을 찾지 못했습니다.")
+            return False
+        labels = [
+            f"backup.{item.get('slot')} · {datetime.datetime.fromtimestamp(item.get('modified_at', 0)).strftime('%Y-%m-%d %H:%M:%S')} · {item.get('size', 0)} bytes"
+            for item in backups
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Beholder 백업 복구",
+            "복구할 백업을 선택하세요. 현재 DB는 복구 직전 별도 snapshot으로 보존됩니다.",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return False
+        slot = backups[labels.index(choice)].get("slot")
+        confirm = QMessageBox.question(
+            self,
+            "백업 복구 확인",
+            f"backup.{slot}로 DB를 교체합니다. 계속할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return False
+        result = self.data_manager.restore_beholder_backup(int(slot))
+        if result and result.get("ok"):
+            self._suspend_runtime_after_beholder_restore()
+            QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
+            return True
+        else:
+            QMessageBox.warning(self, "Beholder 백업 복구", "복구에 실패했습니다.")
+            return False
+
+    def _suspend_runtime_after_beholder_restore(self) -> None:
+        """Stop runtime DB writers after replacing the live DB until the user restarts."""
+        self._beholder_restore_runtime_suspended = True
+        if hasattr(self, "process_monitor"):
+            self.process_monitor.active_monitored_processes.clear()
+        for timer_name in ("monitor_timer", "scheduler_timer", "runtime_heartbeat_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -358,6 +485,11 @@ class MainWindow(QMainWindow):
         """창이 표시될 때 호출됩니다."""
         super().showEvent(event)
         # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
+        QTimer.singleShot(0, self._sync_windows_title_bar_color)
+        # 트레이/복원/플랫폼별 native show 타이밍 이후에도 사이드바 모드를
+        # 한 번 더 반영해, always 모드 손잡이가 시작 시점 경합으로 누락되는
+        # 경로를 줄입니다.
+        QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
     def _on_monitor_timer_tick(self):
         """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
@@ -431,11 +563,13 @@ class MainWindow(QMainWindow):
         """
         timers_restarted = []
 
-        if hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
+        runtime_suspended = getattr(self, "_beholder_restore_runtime_suspended", False)
+
+        if not runtime_suspended and hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
             self.monitor_timer.start(1000)
             timers_restarted.append('monitor_timer')
 
-        if hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
+        if not runtime_suspended and hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
             self.scheduler_timer.start(1000)
             timers_restarted.append('scheduler_timer')
 
@@ -456,8 +590,8 @@ class MainWindow(QMainWindow):
         # 2. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
         #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
         w, h = self.width(), self.height()
-        self.setFixedSize(w + 1, h + 1)  # 고정 크기 모드에서는 setFixedSize 사용
-        self.setFixedSize(w, h)
+        self.resize(w + 1, h + 1)
+        self.resize(w, h)
 
         # 3. 저장된 geometry가 있으면 위치도 복원
         if self._saved_geometry:
@@ -498,12 +632,23 @@ class MainWindow(QMainWindow):
     def _configure_table_header(self):
         h = self.process_table.horizontalHeader()
         if h:
-            h.setSectionResizeMode(self.COL_ICON, QHeaderView.ResizeMode.ResizeToContents) # 아이콘 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_NAME, QHeaderView.ResizeMode.Stretch) # 이름 컬럼: 남은 공간 채우기
-            h.setSectionResizeMode(self.COL_LAST_PLAYED, QHeaderView.ResizeMode.Fixed) # 진행률 컬럼: 고정 폭
-            h.resizeSection(self.COL_LAST_PLAYED, 120)  # 진행률 컬럼 폭 120px로 고정
-            h.setSectionResizeMode(self.COL_LAUNCH_BTN, QHeaderView.ResizeMode.ResizeToContents) # 실행 버튼 컬럼: 내용에 맞게
-            h.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents) # 상태 컬럼: 내용에 맞게
+            h.hide()
+            h.setSectionsClickable(False)
+            h.setHighlightSections(False)
+            for col in range(self.TOTAL_COLUMNS):
+                h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+
+        vh = self.process_table.verticalHeader()
+        if vh:
+            vh.hide()
+            vh.setHidden(True)
+            vh.setVisible(False)
+            vh.setMinimumWidth(0)
+            vh.setMaximumWidth(0)
+            vh.setFixedWidth(0)
+            vh.setSectionsClickable(False)
+            vh.setHighlightSections(False)
+        self.process_table.setCornerButtonEnabled(False)
 
     def _create_menu_bar(self):
         mb = self.menuBar()
@@ -592,7 +737,10 @@ class MainWindow(QMainWindow):
         dlg = SidebarSettingsDialog(gs, self)
         if dlg.exec():
             updated = dlg.get_updated_settings()
-            self.data_manager.save_global_settings(updated)
+            if not self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog"):
+                QMessageBox.warning(self, "사이드바 설정", "설정을 저장하지 못해 실행 중 설정도 변경하지 않았습니다.")
+                self._poll_beholder_incidents()
+                return
             if hasattr(self, '_sidebar_controller'):
                 self._sidebar_controller.apply_settings(updated)
             self._apply_screenshot_settings()
@@ -614,13 +762,22 @@ class MainWindow(QMainWindow):
     def _on_always_on_top_toggled(self, checked: bool):
         """메뉴바 [항상 위] 체크박스 토글 시 즉시 적용 및 설정 저장."""
         gs = self.data_manager.global_settings
+        previous = gs.always_on_top
         gs.always_on_top = checked
-        self.data_manager.save_global_settings(gs)
+        if not self.data_manager.save_global_settings(gs, actor="global_settings_dialog"):
+            gs.always_on_top = previous
+            self.data_manager.global_settings.always_on_top = previous
+            QMessageBox.warning(self, "저장 실패", "항상 위 설정 저장이 차단되었거나 실패해 변경을 적용하지 않았습니다.")
+            self._poll_beholder_incidents()
+            self._load_always_on_top_setting()
+            self.show()
+            return
         self._load_always_on_top_setting()
         self.show()
 
     def _apply_theme(self, theme: str = "system"):
         """테마를 적용합니다. theme: 'system' | 'light' | 'dark'"""
+        self._current_theme = theme
         app = QApplication.instance()
         if app is None:
             return
@@ -679,6 +836,41 @@ class MainWindow(QMainWindow):
             app.setPalette(QPalette())
         # 스타일 변경 후 폰트 복원
         app.setFont(saved_font)
+        self._sync_windows_title_bar_color()
+
+    def _is_effective_dark_theme(self) -> bool:
+        """현재 팔레트가 실질적으로 다크 테마인지 반환합니다."""
+        current_theme = getattr(self, "_current_theme", "system")
+        if current_theme == "dark":
+            return True
+        if current_theme == "light":
+            return False
+        palette = self.palette()
+        return palette.color(QPalette.ColorRole.WindowText).lightness() > palette.color(QPalette.ColorRole.Window).lightness()
+
+    def _sync_windows_title_bar_color(self) -> bool:
+        """가능한 Windows 환경에서 표준 제목 표시줄 색상을 앱 GUI 팔레트와 맞춥니다."""
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        text = palette.color(QPalette.ColorRole.WindowText)
+        return apply_windows_title_bar_color(
+            int(self.winId()),
+            caption_color=(window.red(), window.green(), window.blue()),
+            text_color=(text.red(), text.green(), text.blue()),
+            dark_mode=self._is_effective_dark_theme(),
+        )
+
+    def _table_default_colors(self) -> tuple[QColor, QColor]:
+        """테이블 기본 배경/전경색을 반환합니다.
+
+        일부 플랫폼 스타일은 앱 팔레트가 다크여도 QTableWidgetItem에 저장한
+        palette(base) 브러시를 밝은 기본색으로 해석할 수 있어, 다크 테마에서는
+        명시 색상을 사용해 셀 배경이 창 배경과 어긋나지 않게 합니다.
+        """
+        if self._is_effective_dark_theme():
+            return QColor(42, 42, 42), QColor(220, 220, 220)
+        palette = self.process_table.palette()
+        return palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Text)
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
@@ -691,7 +883,9 @@ class MainWindow(QMainWindow):
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
             upd_gs = dlg.get_updated_settings() # 업데이트된 설정 가져오기
             # self.data_manager.global_settings = upd_gs # 전역 설정 업데이트
-            self.data_manager.save_global_settings(upd_gs)
+            if not self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog"):
+                QMessageBox.warning(self, "저장 실패", "전역 설정 저장이 차단되었거나 실패했습니다. 변경 사항은 적용하지 않습니다.")
+                return
 
             # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
             def _log_admin_debug(msg):
@@ -724,7 +918,7 @@ class MainWindow(QMainWindow):
                         # 재시작 실패 시 설정 롤백
                         _log_admin_debug("재시작 실패, 설정 롤백")
                         upd_gs.run_as_admin = False
-                        self.data_manager.save_global_settings(upd_gs)
+                        self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
                         status_bar = self.statusBar()
                         if status_bar:
                             status_bar.showMessage("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
@@ -806,20 +1000,32 @@ class MainWindow(QMainWindow):
                 status_bar.showMessage("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only() # 상태 컬럼만 업데이트
 
-            # 게임 모드 체크 (최적화: 상태 변경이 있을 때만 확인)
-            self._check_and_toggle_game_mode()
+        # 사이드바/게임 모드는 ProcessMonitor의 시작·종료 이벤트 외에도
+        # Beholder 복구, startup reconcile, 외부 캐시 재결합처럼 이미 실행 중인
+        # 상태가 캐시에 들어온 뒤 steady-state tick만 발생하는 경로가 있습니다.
+        # changed=True에만 묶으면 앱 기동 후 서랍 손잡이 트리거가 시작되지 않을 수
+        # 있으므로 매 tick 실제 active cache와 UI 모드를 재동기화합니다.
+        self._check_and_toggle_game_mode()
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
         # 게임 감지 시 창 숨기기 기능이 비활성화된 경우 게임 모드 플래그만 갱신
         hide_enabled = getattr(self.data_manager.global_settings, 'hide_on_game', True)
 
-        # 현재 모니터링 중인 프로세스 중 '실행중' 상태인 것이 있는지 확인
-        any_game_running = False
+        # 현재 모니터링 중인 프로세스 중 ProcessMonitor가 실제 실행 중으로
+        # 보유한 항목을 직접 확인합니다. Scheduler의 시각 상태도 이 캐시를
+        # 0순위로 보지만, 여기서는 사이드바를 열 대상 process/pid까지 같은
+        # 스냅샷에서 얻어야 하므로 active cache를 기준으로 삼습니다.
+        running_process = None
+        running_pid = None
         for p in self.data_manager.managed_processes:
-            if self.scheduler.determine_process_visual_status(p, datetime.datetime.now(), self.data_manager.global_settings) == PROC_STATE_RUNNING:
-                any_game_running = True
+            entry = self.process_monitor.active_monitored_processes.get(p.id)
+            if entry is not None:
+                running_process = p
+                running_pid = entry.get('pid')
                 break
+
+        any_game_running = running_process is not None
 
         if any_game_running and not self._is_game_mode_active:
             # 게임이 실행되었고, 아직 게임 모드가 활성화되지 않았다면
@@ -829,15 +1035,6 @@ class MainWindow(QMainWindow):
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
-            # 사이드바 활성화: 실행 중인 프로세스 탐색
-            running_process = None
-            running_pid = None
-            for proc in self.data_manager.managed_processes:
-                entry = self.process_monitor.active_monitored_processes.get(proc.id)
-                if entry is not None:
-                    running_process = proc
-                    running_pid = entry.get('pid')
-                    break
             if hasattr(self, '_sidebar_controller') and running_process is not None:
                 self._sidebar_controller.activate_for_game(
                     running_process,
@@ -894,8 +1091,7 @@ class MainWindow(QMainWindow):
         }
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
-        palette = self.process_table.palette()
-        df_bg, df_fg = palette.base(), palette.text()
+        df_bg, df_fg = self._table_default_colors()
 
         # 현재 테이블의 행 수와 프로세스 수가 다르면 전체 새로고침 필요
         if self.process_table.rowCount() != len(processes_by_id):
@@ -947,23 +1143,60 @@ class MainWindow(QMainWindow):
             if status_bar:
                 status_bar.showMessage("프로세스 상태 업데이트됨.", 2000)
 
+    def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
+        """앱 아이콘을 아이콘 전용 셀 중앙에 배치하는 라벨을 생성합니다."""
+        icon_size = getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE)
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setContentsMargins(0, 0, 0, 0)
+        label.setMinimumSize(icon_size, icon_size)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label.setStyleSheet("QLabel { background: transparent; border: none; }")
+        if icon and not icon.isNull():
+            label.setPixmap(icon.pixmap(QSize(icon_size, icon_size)))
+        return label
+
+    def _create_centered_resource_icon_label(self, icon_path: Optional[str], *, size: int = 18, pixmap_size: int = 16) -> QLabel:
+        """진행률/자원 아이콘을 고정 공간 중앙에 배치하는 라벨을 생성합니다."""
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setContentsMargins(0, 0, 0, 0)
+        icon_label.setFixedSize(size, size)
+        if icon_path and os.path.exists(icon_path):
+            icon_label.setPixmap(
+                QPixmap(icon_path).scaled(
+                    pixmap_size,
+                    pixmap_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        return icon_label
+
     def populate_process_list(self):
         """관리 대상 프로세스 목록을 테이블에 채웁니다."""
-        self.process_table.setSortingEnabled(False) # 정렬 기능 임시 비활성화
-        processes = self.data_manager.managed_processes # 관리 대상 프로세스 목록 가져오기
+        self.process_table.setSortingEnabled(False) # 사용자가 바꿀 수 없는 고정 정렬
+        processes = sorted(
+            self.data_manager.managed_processes,
+            key=lambda process: ((process.name or "").casefold(), process.id or ""),
+        )
         self.process_table.setRowCount(len(processes)) # 행 개수 설정
 
         now_dt = datetime.datetime.now() # 현재 시각
         gs = self.data_manager.global_settings # 전역 설정
-        palette = self.process_table.palette() # 테이블 팔레트
-        df_bg, df_fg = palette.base(), palette.text() # 기본 배경색 및 글자색
+        df_bg, df_fg = self._table_default_colors() # 기본 배경색 및 글자색
 
         for r, p in enumerate(processes): # 각 프로세스에 대해 반복
             # 아이콘 컬럼
             icon_item = QTableWidgetItem()
-            qi = get_qicon_for_file(p.monitoring_path, icon_size=getattr(self, '_table_icon_logical_size', 28))
-            if qi and not qi.isNull(): icon_item.setIcon(qi)
+            qi = get_qicon_for_file(
+                p.monitoring_path,
+                icon_size=getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE),
+                process_id=p.id,
+            )
+            icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
+            self.process_table.setCellWidget(r, self.COL_ICON, self._create_centered_app_icon_cell(qi))
 
             # 이름 컬럼 (UserRole에 ID 저장)
             name_item = QTableWidgetItem(p.name)
@@ -1009,9 +1242,8 @@ class MainWindow(QMainWindow):
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
 
-        self.process_table.setSortingEnabled(True) # 정렬 기능 다시 활성화
-        self.process_table.sortByColumn(self.COL_NAME, Qt.SortOrder.AscendingOrder) # 이름 컬럼 기준 오름차순 정렬
         self.scheduler.invalidate_visual_status_snapshot()
+        QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
         """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
@@ -1348,8 +1580,7 @@ class MainWindow(QMainWindow):
                 status_changes += 1
 
                 # 상태에 따른 배경색 설정
-                palette = self.process_table.palette()
-                df_bg, df_fg = palette.base(), palette.text()
+                df_bg, df_fg = self._table_default_colors()
 
                 status_item.setBackground(df_bg)  # 기본 배경색으로 초기화
                 status_item.setForeground(df_fg)  # 기본 글자색으로 초기화
@@ -1420,8 +1651,12 @@ class MainWindow(QMainWindow):
 
         # 초기화 시간이 설정된 바로가기인 경우, 마지막 초기화 타임스탬프 업데이트
         if shortcut.refresh_time_str:
-            shortcut.last_reset_timestamp = datetime.datetime.now().timestamp() # 현재 시각으로 업데이트
-            if self.data_manager.update_web_shortcut(shortcut): # 데이터 매니저 통해 정보 업데이트
+            if hasattr(self.data_manager, "mark_web_shortcut_opened"):
+                saved = self.data_manager.mark_web_shortcut_opened(shortcut.id)
+            else:
+                shortcut.last_reset_timestamp = datetime.datetime.now().timestamp() # 현재 시각으로 업데이트
+                saved = self.data_manager.update_web_shortcut(shortcut) # legacy 데이터 매니저 폴백
+            if saved:
                 self._refresh_web_button_states() # 버튼 상태 즉시 새로고침
 
     def _open_add_web_shortcut_dialog(self):
@@ -1635,6 +1870,10 @@ class MainWindow(QMainWindow):
             self.scheduler_timer.stop()
         if hasattr(self, 'ui_refresh_timer') and self.ui_refresh_timer.isActive():
             self.ui_refresh_timer.stop()
+        if hasattr(self, 'runtime_heartbeat_timer') and self.runtime_heartbeat_timer.isActive():
+            self.runtime_heartbeat_timer.stop()
+        if hasattr(self.data_manager, "send_runtime_heartbeat"):
+            self.data_manager.send_runtime_heartbeat(shutdown=True, runtime_kind="pyqt")
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
@@ -1667,176 +1906,164 @@ class MainWindow(QMainWindow):
         if app_instance:
             app_instance.quit()
 
+    def _visible_table_columns(self) -> list[int]:
+        return [
+            column
+            for column in range(self.process_table.columnCount())
+            if not self.process_table.isColumnHidden(column)
+        ]
+
+    def _cell_content_width(self, row: int, column: int) -> int:
+        """아이템/셀 위젯의 실제 sizeHint를 함께 반영한 컬럼 최소 폭."""
+        if column == self.COL_ICON:
+            # 아이콘 전용 컬럼은 QTableWidgetItem.sizeHint()의 플랫폼별 기본 여백을
+            # 신뢰하지 않고, 표시 아이콘 + 최소 여백만으로 고정해 불필요한 빈 폭을 막습니다.
+            return self.process_table.iconSize().width() + self._TABLE_ICON_COLUMN_PADDING
+
+        style = self.process_table.style() or self.style()
+        focus_margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) if style else 2
+        metrics = self.process_table.fontMetrics()
+        padding = max(metrics.horizontalAdvance("  "), focus_margin * 2 + self.process_table.frameWidth() * 2)
+
+        widget = self.process_table.cellWidget(row, column)
+        widget_width = widget.sizeHint().width() if widget is not None else 0
+
+        item = self.process_table.item(row, column)
+        item_width = 0
+        if item is not None:
+            item_width = max(
+                item.sizeHint().width(),
+                metrics.horizontalAdvance(f" {item.text()} ") + padding,
+            )
+            if not item.icon().isNull():
+                item_width += self.process_table.iconSize().width() + padding
+
+        return max(widget_width, item_width)
+
+    def _resize_table_to_contents(self, max_table_size: Optional[QSize] = None) -> QSize:
+        """헤더 없이도 각 셀 내용에 맞는 테이블 고정 크기를 계산합니다."""
+        table = self.process_table
+        self._configure_table_header()
+        table.resizeRowsToContents()
+
+        default_row_height = max(self._TABLE_ROW_HEIGHT, table.verticalHeader().defaultSectionSize())
+        for row in range(table.rowCount()):
+            table.setRowHeight(row, max(default_row_height, table.rowHeight(row)))
+
+        visible_columns = self._visible_table_columns()
+        style = table.style() or self.style()
+        column_gap = style.pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing) if style else 6
+        column_gap = max(4, column_gap)
+
+        for column in visible_columns:
+            max_width = 0
+            for row in range(table.rowCount()):
+                max_width = max(max_width, self._cell_content_width(row, column))
+            if table.rowCount() == 0:
+                max_width = max(max_width, table.fontMetrics().horizontalAdvance("빈 목록") + column_gap * 2)
+            if column == self.COL_ICON:
+                table.setColumnWidth(column, max_width)
+            else:
+                table.setColumnWidth(column, max_width + column_gap)
+
+        frame = table.frameWidth() * 2
+        content_width = sum(table.columnWidth(column) for column in visible_columns) + frame
+        content_height = frame
+        if table.rowCount() > 0:
+            content_height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+        else:
+            content_height += max(default_row_height, table.fontMetrics().height() + column_gap * 2)
+
+        max_width = max_table_size.width() if max_table_size and max_table_size.width() > 0 else None
+        max_height = max_table_size.height() if max_table_size and max_table_size.height() > 0 else None
+
+        horizontal_overflow = max_width is not None and content_width > max_width
+        vertical_overflow = max_height is not None and content_height > max_height
+        table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if horizontal_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if vertical_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+        target_width = content_width
+        target_height = content_height
+        if vertical_overflow and not horizontal_overflow:
+            target_width += table.verticalScrollBar().sizeHint().width()
+        if horizontal_overflow:
+            target_height += table.horizontalScrollBar().sizeHint().height()
+
+        if max_width is not None:
+            target_width = min(target_width, max_width)
+        if max_height is not None:
+            target_height = min(target_height, max_height)
+
+        target = QSize(max(target_width, 1), max(target_height, 1))
+        table.setFixedSize(target)
+        table.updateGeometry()
+        return target
+
     def _adjust_window_size_to_content(self):
-        """테이블 내용에 맞춰 메인 윈도우의 높이를 자동으로 조절합니다. 너비는 고정합니다."""
-        # 테이블 행 높이를 내용에 맞게 조절
-        if self.process_table.rowCount() > 0:
-            self.process_table.resizeRowsToContents()
+        """현재 테이블/웹 버튼/상태바 sizeHint에 맞춰 창 크기를 동적으로 최적화합니다."""
+        table_size = self._resize_table_to_contents()
 
-        # 테이블 내용 높이 계산
-        table_content_height = 0
+        central_widget = self.centralWidget()
+        if central_widget and central_widget.layout():
+            central_widget.layout().invalidate()
+            central_widget.layout().activate()
 
-        # 1. 수평 헤더 높이 추가
-        header = self.process_table.horizontalHeader()
-        if header and not header.isHidden():
-            table_content_height += header.height()
+        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
+        target = self.sizeHint().expandedTo(self.minimumSizeHint())
 
-        # 2. 모든 행의 높이 합산
-        if self.process_table.rowCount() > 0:
-            for i in range(self.process_table.rowCount()):
-                table_content_height += self.process_table.rowHeight(i)
-            table_content_height += self.process_table.frameWidth() * 2  # 테이블 테두리 두께 고려
-        else:
-            # 행이 없을 경우, 기본 높이 추정치 사용
-            default_row_height_approx = self.fontMetrics().height() + 12
-            table_content_height += default_row_height_approx
-            table_content_height += self.process_table.frameWidth() * 2
+        screen = self.screen() or QApplication.primaryScreen()
+        max_width: Optional[int] = None
+        max_height: Optional[int] = None
+        if screen is not None:
+            available = screen.availableGeometry()
+            max_width = max(self._MIN_WINDOW_WIDTH, int(available.width() * self._SCREEN_SIZE_RATIO))
+            max_height = max(self._MIN_WINDOW_HEIGHT, int(available.height() * self._SCREEN_SIZE_RATIO))
 
-        # 테이블의 고정 높이 설정
-        self.process_table.setFixedHeight(table_content_height)
+        if (
+            (max_width is not None and target.width() > max_width)
+            or (max_height is not None and target.height() > max_height)
+        ):
+            extra_width = max(0, target.width() - table_size.width())
+            extra_height = max(0, target.height() - table_size.height())
+            capped_table_size = QSize(
+                max(1, (max_width or target.width()) - extra_width),
+                max(1, (max_height or target.height()) - extra_height),
+            )
+            self._resize_table_to_contents(capped_table_size)
+            if central_widget and central_widget.layout():
+                central_widget.layout().invalidate()
+                central_widget.layout().activate()
+            target = self.sizeHint().expandedTo(self.minimumSizeHint())
 
-        # 웹 버튼이 있을 때만 창 너비 조절
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
+        target.setWidth(max(target.width(), self.minimumSizeHint().width(), self._MIN_WINDOW_WIDTH))
+        target.setHeight(max(target.height(), self.minimumSizeHint().height(), self._MIN_WINDOW_HEIGHT))
+        if max_width is not None:
+            target.setWidth(min(target.width(), max_width))
+        if max_height is not None:
+            target.setHeight(min(target.height(), max_height))
 
-        # 창 너비 결정 (고정 너비 + 웹 버튼)
-        if web_button_count > 0:
-            target_width = 400
-        else:
-            target_width = 470
+        self.resize(target)
+        self.updateGeometry()
+        self.update()
 
-        # 너비 제약 업데이트 (setFixedWidth 으로 min/max 동시 설정)
-        self.setFixedWidth(target_width)
-
-        # 창 높이 계산
-        # - 상단 버튼 영역 높이: 약 35px
-        # - 테이블 높이 (계산된 값)
-        # - 레이아웃 여백: 약 15px
-        # - 메뉴바, 상태바 높이
-        menu_bar = self.menuBar()
-        status_bar = self.statusBar()
-        menu_height = menu_bar.height() if menu_bar else 0
-        status_height = status_bar.height() if status_bar else 0
-
-        top_button_height = 35
-        layout_margin = 15
-
-        total_height = menu_height + top_button_height + table_content_height + status_height + layout_margin
-
-        # 창 크기 설정 (너비는 고정, 높이만 조절)
-        self.resize(target_width, total_height)
-        self.show()
-
-        # print(f"윈도우 크기 조절됨. 새 크기: {self.width()}x{self.height()}, 테이블 높이: {table_content_height}, 웹 버튼 개수: {web_button_count}")
+        self._saved_size = self.size()
+        self._saved_geometry = self.geometry()
 
     def _adjust_window_height_to_table(self):
         """기존 메서드명 호환성을 위한 별칭"""
         self._adjust_window_size_to_content()
 
     def _adjust_window_width_for_web_buttons(self):
-        """웹 바로가기 버튼 추가/삭제 시에만 창 너비를 조절합니다."""
-        # 웹 버튼 개수 확인
-        web_button_count = 0
-        if hasattr(self, 'dynamic_web_buttons_layout') and self.dynamic_web_buttons_layout:
-            for i in range(self.dynamic_web_buttons_layout.count()):
-                item = self.dynamic_web_buttons_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget and widget.isVisible():
-                        web_button_count += 1
-
-        # 창 너비 결정 (최초 창 너비보다 작은 값으로는 축소되지 않음)
-        if web_button_count > 0:
-            target_width = 400  # 웹 버튼이 있을 때의 고정 너비
-        else:
-            target_width = 470  # 웹 버튼이 없을 때의 고정 너비
-
-        # 현재 너비가 목표 너비와 다르면 조절
-        current_width = self.width()
-        if current_width != target_width:
-            # 창 최소 너비 제거 후 너비 설정
-            current_min_width = self.minimumWidth()
-            self.setMinimumWidth(0)  # 최소 너비 제거
-            self.resize(target_width, self.height())
-            self.setMinimumWidth(current_min_width)  # 원래 최소 너비 복원
-            # print(f"웹 버튼에 따른 창 너비 조절: {current_width} -> {target_width}")
+        """웹 바로가기 변경 후 전체 content 기반 크기 계산을 다시 수행합니다."""
+        self._adjust_window_size_to_content()
 
     def _adjust_window_height_for_table_rows(self):
-        """테이블 내용에 맞게 창 높이를 조절합니다.
-
-        명시적으로 크기를 계산하고 setFixedHeight로 설정하여 절전 복귀 시 안정성 확보.
-        """
-        # 1. 테이블 높이 계산
-        current_row_count = self.process_table.rowCount()
-        table_height = 0
-
-        # 헤더 높이 추가
-        header = self.process_table.horizontalHeader()
-        if header and not header.isHidden():
-            table_height += header.height()
-
-        # 행 높이 계산
-        if current_row_count > 0:
-            for i in range(current_row_count):
-                table_height += self.process_table.rowHeight(i)
-        else:
-            # 행이 없을 경우 기본 행 높이 추가
-            table_height += self.fontMetrics().height() + 12
-
-        # 테이블 테두리 두께 고려
-        table_height += self.process_table.frameWidth() * 2
-
-        # 2. 테이블 고정 높이 설정
-        self.process_table.setFixedHeight(table_height)
-
-        # 3. 레이아웃 재계산 요청
-        central_widget = self.centralWidget()
-        if central_widget and central_widget.layout():
-            central_widget.layout().invalidate()
-            central_widget.layout().activate()
-
-        # 4. 테이블 geometry 업데이트 요청
-        self.process_table.updateGeometry()
-
-        # 5. 창의 이상적인 높이 계산 (모든 UI 요소 포함)
-        total_height = 0
-
-        # 메뉴바 높이
-        menu_bar = self.menuBar()
-        if menu_bar and not menu_bar.isHidden():
-            total_height += menu_bar.sizeHint().height()
-
-        # 상단 버튼 영역 높이
-        if hasattr(self, 'top_button_area_layout'):
-            total_height += self.top_button_area_layout.sizeHint().height()
-            total_height += 10  # 레이아웃 여백
-
-        # 테이블 높이
-        total_height += table_height
-
-        # 상태바 높이
-        status_bar = self.statusBar()
-        if status_bar and not status_bar.isHidden():
-            total_height += status_bar.sizeHint().height()
-
-        # 창 프레임 및 레이아웃 여백 추가
-        total_height += 20  # 여유 공간
-
-        # 6. 창 높이를 고정 (너비는 이미 고정되어 있음)
-        self.setFixedHeight(total_height)
-
-        # 7. 화면 업데이트
-        self.update()
-
-        # 8. 정상 상태의 창 크기/위치 저장 (절전 복귀 시 복원에 사용)
-        self._saved_size = self.size()
-        self._saved_geometry = self.geometry()
+        """기존 호출부 호환: 전체 content 기반 크기 계산을 수행합니다."""
+        self._adjust_window_size_to_content()
 
     # ───────── 볼륨 패널 ─────────
 
@@ -2108,6 +2335,8 @@ class MainWindow(QMainWindow):
 
     def _recover_gamebar_setting_if_needed(self) -> None:
         """이전 비정상 종료로 남은 Game Bar 설정이 있으면 앱 시작 시 복원합니다."""
+        if sys.platform != "win32":
+            return
         if self._gamebar_original_value is not None:
             return
         persisted_value = self._load_persisted_gamebar_original_value()
@@ -2119,6 +2348,8 @@ class MainWindow(QMainWindow):
 
     def _set_gamebar_capture(self, enabled: bool) -> None:
         """Game Bar 스크린샷 캡처 활성화 여부를 레지스트리로 제어합니다."""
+        if sys.platform != "win32":
+            return
         try:
             import winreg
             key_path = r"Software\Microsoft\Windows\CurrentVersion\GameDVR"
@@ -2140,6 +2371,8 @@ class MainWindow(QMainWindow):
 
     def _restore_gamebar_setting(self) -> None:
         """Game Bar 설정을 원래 값으로 복원합니다."""
+        if sys.platform != "win32":
+            return
         if self._gamebar_original_value is None:
             self._gamebar_original_value = self._load_persisted_gamebar_original_value()
             if self._gamebar_original_value is None:
@@ -2229,16 +2462,7 @@ class MainWindow(QMainWindow):
             layout.setSpacing(4)
 
             # 프리셋 아이콘 표시
-            icon_label = QLabel()
-            icon_path = self._get_stamina_icon_path(process)
-
-            if icon_path and os.path.exists(icon_path):
-                pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                icon_label.setPixmap(pixmap)
-                icon_label.setFixedSize(18, 18)
-            else:
-                # 아이콘이 없으면 공간 확보
-                icon_label.setFixedSize(18, 18)
+            icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
             layout.addWidget(icon_label)
 
             # 텍스트 라벨
@@ -2263,16 +2487,7 @@ class MainWindow(QMainWindow):
                     layout.setSpacing(4)
 
                     # 아이콘 라벨
-                    icon_label = QLabel()
-                    icon_path = self._get_stamina_icon_path(process)
-
-                    if icon_path and os.path.exists(icon_path):
-                        pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        icon_label.setPixmap(pixmap)
-                        icon_label.setFixedSize(18, 18)
-                    else:
-                        # 아이콘이 없어도 공간 확보
-                        icon_label.setFixedSize(18, 18)
+                    icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
                     layout.addWidget(icon_label)
 
                     # Progress Bar
@@ -2290,16 +2505,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
 
         # 프리셋 아이콘 표시
-        icon_label = QLabel()
-        icon_path = self._get_stamina_icon_path(process)
-
-        if icon_path and os.path.exists(icon_path):
-            pixmap = QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            icon_label.setPixmap(pixmap)
-            icon_label.setFixedSize(18, 18)
-        else:
-            # 아이콘이 없으면 공간 확보
-            icon_label.setFixedSize(18, 18)
+        icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
         layout.addWidget(icon_label)
 
         # Progress Bar

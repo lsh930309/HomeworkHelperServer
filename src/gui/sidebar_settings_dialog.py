@@ -7,7 +7,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QMetaObject, pyqtSlot, Q_ARG
 
-from src.data.data_models import GlobalSettings
+from src.data.data_models import (
+    GlobalSettings,
+    SIDEBAR_MODE_ALWAYS,
+    SIDEBAR_MODE_GAME,
+    SIDEBAR_MODE_DISABLED,
+    normalize_sidebar_mode,
+)
 
 
 class SidebarSettingsDialog(QDialog):
@@ -40,9 +46,22 @@ class SidebarSettingsDialog(QDialog):
         basic_group = QGroupBox("기본 설정")
         basic_form = QFormLayout(basic_group)
 
-        self._enabled_cb = QCheckBox()
-        self._enabled_cb.setChecked(self._settings.sidebar_enabled)
-        basic_form.addRow("사이드바 사용", self._enabled_cb)
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("항상 사용", SIDEBAR_MODE_ALWAYS)
+        self._mode_combo.addItem("게임 중에만 사용", SIDEBAR_MODE_GAME)
+        self._mode_combo.addItem("사용 안함", SIDEBAR_MODE_DISABLED)
+        current_mode = normalize_sidebar_mode(
+            getattr(self._settings, 'sidebar_mode', None),
+            getattr(self._settings, 'sidebar_enabled', True),
+        )
+        mode_index = self._mode_combo.findData(current_mode)
+        self._mode_combo.setCurrentIndex(max(0, mode_index))
+        self._mode_combo.setToolTip(
+            "항상 사용: 게임 실행 여부와 관계없이 손잡이를 표시\n"
+            "게임 중에만 사용: 등록 게임 실행 중에만 손잡이를 표시\n"
+            "사용 안함: 손잡이와 사이드바를 숨김"
+        )
+        basic_form.addRow("사이드바 사용 방식", self._mode_combo)
 
         self._height_spin = QDoubleSpinBox()
         self._height_spin.setRange(0.3, 1.0)
@@ -67,12 +86,36 @@ class SidebarSettingsDialog(QDialog):
         self._auto_hide_spin.setToolTip("0 = 커서가 벗어나는 즉시 숨김\n100ms 단위 조절, 직접 입력 시 1ms 단위")
         basic_form.addRow("자동 숨김 대기", self._auto_hide_spin)
 
+        self._handle_auto_hide_cb = QCheckBox()
+        self._handle_auto_hide_cb.setChecked(getattr(self._settings, 'sidebar_handle_auto_hide', True))
+        self._handle_auto_hide_cb.setToolTip(
+            "켜짐: 평소에는 손잡이를 숨기고 우측 감지 영역에 커서가 들어오면 표시\n"
+            "꺼짐: 사이드바가 닫힌 동안 손잡이를 항상 표시"
+        )
+        basic_form.addRow("손잡이 자동 숨김/등장", self._handle_auto_hide_cb)
+
         self._edge_width_spin = QSpinBox()
         self._edge_width_spin.setRange(1, 50)
         self._edge_width_spin.setSuffix(" px")
         self._edge_width_spin.setValue(self._settings.sidebar_edge_width_px)
         self._edge_width_spin.setToolTip("화면 우측 가장자리 트리거 감지 영역 너비\n값이 클수록 덜 정밀하게 위치시켜도 트리거됨")
         basic_form.addRow("엣지 감지 너비", self._edge_width_spin)
+
+        self._trigger_y_start_spin = QDoubleSpinBox()
+        self._trigger_y_start_spin.setRange(0.0, 1.0)
+        self._trigger_y_start_spin.setSingleStep(0.05)
+        self._trigger_y_start_spin.setDecimals(2)
+        self._trigger_y_start_spin.setValue(getattr(self._settings, 'sidebar_trigger_y_start', 0.1))
+        self._trigger_y_start_spin.setToolTip("손잡이를 튀어나오게 할 세로 감지 범위의 시작 비율 (0.00 = 화면 상단)")
+        basic_form.addRow("감지 시작 Y", self._trigger_y_start_spin)
+
+        self._trigger_y_end_spin = QDoubleSpinBox()
+        self._trigger_y_end_spin.setRange(0.0, 1.0)
+        self._trigger_y_end_spin.setSingleStep(0.05)
+        self._trigger_y_end_spin.setDecimals(2)
+        self._trigger_y_end_spin.setValue(getattr(self._settings, 'sidebar_trigger_y_end', 0.9))
+        self._trigger_y_end_spin.setToolTip("손잡이를 튀어나오게 할 세로 감지 범위의 종료 비율 (1.00 = 화면 하단)")
+        basic_form.addRow("감지 종료 Y", self._trigger_y_end_spin)
 
         left_col.addWidget(basic_group)
 
@@ -348,11 +391,17 @@ class SidebarSettingsDialog(QDialog):
         """변경된 설정을 반영한 GlobalSettings 를 반환합니다."""
         import copy
         gs = copy.copy(self._settings)
-        gs.sidebar_enabled = self._enabled_cb.isChecked()
+        gs.sidebar_mode = self._mode_combo.currentData()
+        gs.sidebar_enabled = gs.sidebar_mode != SIDEBAR_MODE_DISABLED
         gs.sidebar_height_ratio = self._height_spin.value()
         gs.sidebar_opacity = self._opacity_spin.value()
         gs.sidebar_auto_hide_ms = self._auto_hide_spin.value()
         gs.sidebar_edge_width_px = self._edge_width_spin.value()
+        y_start = self._trigger_y_start_spin.value()
+        y_end = self._trigger_y_end_spin.value()
+        gs.sidebar_trigger_y_start = min(y_start, y_end)
+        gs.sidebar_trigger_y_end = max(y_start, y_end)
+        gs.sidebar_handle_auto_hide = self._handle_auto_hide_cb.isChecked()
         gs.sidebar_clock_enabled = self._clock_enabled_cb.isChecked()
         gs.sidebar_clock_format = self._clock_format_edit.text().strip() or "%H:%M:%S"
         gs.sidebar_playtime_enabled = self._playtime_enabled_cb.isChecked()

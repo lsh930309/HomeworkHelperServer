@@ -4,6 +4,24 @@ import time
 import uuid # 프로세스 ID 생성을 위해 추가
 from typing import List, Optional, Dict, Any, Tuple
 
+SIDEBAR_MODE_ALWAYS = "always"
+SIDEBAR_MODE_GAME = "game"
+SIDEBAR_MODE_DISABLED = "disabled"
+SIDEBAR_MODE_VALUES = {SIDEBAR_MODE_ALWAYS, SIDEBAR_MODE_GAME, SIDEBAR_MODE_DISABLED}
+
+
+def normalize_sidebar_mode(value: object, sidebar_enabled: bool = True) -> str:
+    """사이드바 사용 모드를 정규화합니다.
+
+    기존 bool 설정만 있는 데이터는 ``sidebar_enabled`` 값으로 3-state 모드를
+    복원합니다.
+    """
+    mode = str(value or "").strip().lower()
+    if mode in SIDEBAR_MODE_VALUES:
+        return mode
+    return SIDEBAR_MODE_GAME if bool(sidebar_enabled) else SIDEBAR_MODE_DISABLED
+
+
 class ManagedProcess:
     def __init__(self,
                  name: str,
@@ -153,8 +171,10 @@ class GlobalSettings:
                  hide_on_game: bool = True,
                  # 사이드바 설정
                  sidebar_enabled: bool = True,
+                 sidebar_mode: Optional[str] = None,
                  sidebar_trigger_y_start: float = 0.1,
                  sidebar_trigger_y_end: float = 0.9,
+                 sidebar_handle_auto_hide: bool = True,
                  sidebar_auto_hide_ms: int = 3000,
                  sidebar_edge_width_px: int = 2,
                  sidebar_effect: str = "acrylic",
@@ -204,9 +224,11 @@ class GlobalSettings:
         self.theme = theme
         self.hide_on_game = hide_on_game
         # 사이드바
-        self.sidebar_enabled = sidebar_enabled
+        self.sidebar_mode = normalize_sidebar_mode(sidebar_mode, sidebar_enabled)
+        self.sidebar_enabled = self.sidebar_mode != SIDEBAR_MODE_DISABLED
         self.sidebar_trigger_y_start = sidebar_trigger_y_start
         self.sidebar_trigger_y_end = sidebar_trigger_y_end
+        self.sidebar_handle_auto_hide = sidebar_handle_auto_hide
         self.sidebar_auto_hide_ms = sidebar_auto_hide_ms
         self.sidebar_edge_width_px = sidebar_edge_width_px
         self.sidebar_effect = sidebar_effect
@@ -279,11 +301,14 @@ class GlobalSettings:
         if 'hide_on_game' not in data:
             data['hide_on_game'] = True
         # 사이드바 설정 하위 호환성 + 타입/범위 정규화
-        data['sidebar_enabled'] = bool(data.get('sidebar_enabled', True))
+        legacy_sidebar_enabled = bool(data.get('sidebar_enabled', True))
+        data['sidebar_mode'] = normalize_sidebar_mode(data.get('sidebar_mode'), legacy_sidebar_enabled)
+        data['sidebar_enabled'] = data['sidebar_mode'] != SIDEBAR_MODE_DISABLED
         _y_start = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_start', 0.1))))
         _y_end   = max(0.0, min(1.0, float(data.get('sidebar_trigger_y_end',   0.9))))
         data['sidebar_trigger_y_start'] = min(_y_start, _y_end)
         data['sidebar_trigger_y_end']   = max(_y_start, _y_end)
+        data['sidebar_handle_auto_hide'] = bool(data.get('sidebar_handle_auto_hide', True))
         # sidebar_auto_hide_ms 하위 호환성 (구버전: sidebar_auto_hide_sec)
         if 'sidebar_auto_hide_ms' not in data and 'sidebar_auto_hide_sec' in data:
             data['sidebar_auto_hide_ms'] = max(0, int(data['sidebar_auto_hide_sec'])) * 1000

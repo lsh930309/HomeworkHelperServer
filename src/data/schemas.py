@@ -85,6 +85,10 @@ class GlobalSettingsSchema(BaseModel):
     hide_on_game: bool = True
     # 사이드바
     sidebar_enabled: bool = True
+    sidebar_mode: str = "game"
+    sidebar_trigger_y_start: float = 0.1
+    sidebar_trigger_y_end: float = 0.9
+    sidebar_handle_auto_hide: bool = True
     sidebar_auto_hide_ms: int = 3000
     sidebar_edge_width_px: int = 2
     sidebar_height_ratio: float = 1.0
@@ -121,6 +125,9 @@ class ProcessSessionCreate(BaseModel):
     process_name: str
     start_timestamp: float
     user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
+    session_owner: Optional[str] = None
+    lease_token: Optional[str] = None
+    runtime_evidence: Optional[dict] = None
 
 
 class ProcessSessionUpdate(BaseModel):
@@ -128,6 +135,7 @@ class ProcessSessionUpdate(BaseModel):
     end_timestamp: float
     session_duration: float
     stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
+    close_reason: Optional[str] = None
 
 
 class ProcessSessionSchema(BaseModel):
@@ -140,6 +148,12 @@ class ProcessSessionSchema(BaseModel):
     session_duration: Optional[float] = None
     user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
     stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
+    session_status: Optional[str] = None
+    session_owner: Optional[str] = None
+    heartbeat_timestamp: Optional[float] = None
+    lease_token: Optional[str] = None
+    close_reason: Optional[str] = None
+    guard_flags: Optional[dict] = None
 
     class Config:
         from_attributes = True

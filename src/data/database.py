@@ -97,6 +97,13 @@ def auto_migrate_database():
         ("process_sessions", "stamina_at_end", "INTEGER", None),
         ("process_sessions", "process_name", "TEXT", None),
         ("process_sessions", "session_duration", "REAL", None),
+        # Beholder session metadata (nullable for legacy DB compatibility)
+        ("process_sessions", "session_status", "TEXT", None),
+        ("process_sessions", "session_owner", "TEXT", None),
+        ("process_sessions", "heartbeat_timestamp", "REAL", None),
+        ("process_sessions", "lease_token", "TEXT", None),
+        ("process_sessions", "close_reason", "TEXT", None),
+        ("process_sessions", "guard_flags", "TEXT", None),
         # Process 테이블 - 앱 볼륨 제어
         ("managed_processes", "default_volume", "INTEGER", None),
         ("managed_processes", "default_muted", "INTEGER", "0"),
@@ -104,6 +111,10 @@ def auto_migrate_database():
         ("global_settings", "theme", "TEXT", "'system'"),
         ("global_settings", "hide_on_game", "INTEGER", "1"),
         ("global_settings", "sidebar_enabled", "INTEGER", "1"),
+        ("global_settings", "sidebar_mode", "TEXT", "'game'"),
+        ("global_settings", "sidebar_trigger_y_start", "REAL", "0.1"),
+        ("global_settings", "sidebar_trigger_y_end", "REAL", "0.9"),
+        ("global_settings", "sidebar_handle_auto_hide", "INTEGER", "1"),
         ("global_settings", "sidebar_auto_hide_ms", "INTEGER", "3000"),
         ("global_settings", "sidebar_edge_width_px", "INTEGER", "2"),
         ("global_settings", "sidebar_height_ratio", "REAL", "1.0"),
@@ -120,6 +131,7 @@ def auto_migrate_database():
         ("global_settings", "screenshot_disable_gamebar", "INTEGER", "0"),
         ("global_settings", "screenshot_capture_mode", "TEXT", "'fullscreen'"),
         ("global_settings", "screenshot_gamepad_button_index", "INTEGER", "-1"),
+        ("global_settings", "screenshot_trigger_vk", "INTEGER", "178"),
         # Recording (OBS)
         ("global_settings", "recording_enabled", "INTEGER", "0"),
         ("global_settings", "obs_host", "TEXT", "'localhost'"),
@@ -131,12 +143,32 @@ def auto_migrate_database():
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
+        # Beholder incident UX / resolution metadata
+        ("beholder_incidents", "user_title", "TEXT", None),
+        ("beholder_incidents", "user_summary", "TEXT", None),
+        ("beholder_incidents", "user_impact", "TEXT", None),
+        ("beholder_incidents", "recommended_action", "TEXT", None),
+        ("beholder_incidents", "available_actions", "TEXT", None),
+        ("beholder_incidents", "resolution_metadata", "TEXT", None),
     ]
     
     try:
         inspector = inspect(engine)
+        added_columns: set[tuple[str, str]] = set()
         
         with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS app_runtime_heartbeats ("
+                "id INTEGER PRIMARY KEY, "
+                "app_instance_id TEXT, "
+                "runtime_kind TEXT, "
+                "boot_id TEXT, "
+                "started_at REAL, "
+                "last_heartbeat_at REAL, "
+                "last_shutdown_at REAL"
+                ")"
+            ))
+            conn.commit()
             for table_name, column_name, column_type, default_value in migrations:
                 # 테이블 존재 여부 확인
                 if table_name not in inspector.get_table_names():
@@ -155,6 +187,7 @@ def auto_migrate_database():
                 
                 conn.execute(text(sql))
                 conn.commit()
+                added_columns.add((table_name, column_name))
                 print(f"[Migration] {table_name}.{column_name} 컬럼 추가됨")
 
         # 데이터 마이그레이션: game_schema_id → user_preset_id 복사
@@ -185,11 +218,32 @@ def auto_migrate_database():
 
         # sidebar_auto_hide_sec → sidebar_auto_hide_ms 데이터 마이그레이션
         with engine.connect() as conn:
-            existing_columns = [col['name'] for col in inspector.get_columns("global_settings")]
+            existing_columns = [row[1] for row in conn.execute(text("PRAGMA table_info(global_settings)"))]
             if "sidebar_auto_hide_sec" in existing_columns and "sidebar_auto_hide_ms" in existing_columns:
                 conn.execute(text(
                     "UPDATE global_settings SET sidebar_auto_hide_ms = COALESCE(sidebar_auto_hide_sec, 3) * 1000 "
                     "WHERE sidebar_auto_hide_ms = 3000"
+                ))
+                conn.commit()
+
+            if "sidebar_mode" in existing_columns and "sidebar_enabled" in existing_columns:
+                mode_where = (
+                    "1 = 1"
+                    if ("global_settings", "sidebar_mode") in added_columns
+                    else "sidebar_mode IS NULL OR sidebar_mode = '' OR sidebar_mode NOT IN ('always', 'game', 'disabled')"
+                )
+                conn.execute(text(
+                    "UPDATE global_settings "
+                    "SET sidebar_mode = CASE WHEN COALESCE(sidebar_enabled, 1) = 0 THEN 'disabled' ELSE 'game' END "
+                    f"WHERE {mode_where}"
+                ))
+                conn.commit()
+
+        with engine.connect() as conn:
+            if "beholder_incidents" in inspector.get_table_names():
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_beholder_incidents_status_created_at "
+                    "ON beholder_incidents (status, created_at)"
                 ))
                 conn.commit()
 

@@ -352,6 +352,7 @@ class SidebarWidget(QWidget):
         reconnect_recording: Optional[Callable[[], None]] = None,
         get_recording_error: Optional[Callable[[], str]] = None,
         get_recording_elapsed: Optional[Callable[[], int]] = None,
+        on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(
@@ -367,6 +368,7 @@ class SidebarWidget(QWidget):
         self._reconnect_recording = reconnect_recording
         self._get_recording_error = get_recording_error
         self._get_recording_elapsed = get_recording_elapsed
+        self._on_hidden = on_hidden
         self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
@@ -387,13 +389,13 @@ class SidebarWidget(QWidget):
 
         self._screen = screen or QApplication.primaryScreen()
 
-        # 내부 프레임 (반투명 배경 + 테두리)
+        # 내부 프레임 (반투명 배경 + 무테두리 서랍)
         self._frame = QFrame(self)
         self._frame.setObjectName("SidebarFrame")
         self._frame.setStyleSheet("""
             QFrame#SidebarFrame {
                 background-color: rgba(12, 12, 16, 240);
-                border-left: 1px solid rgba(180, 200, 255, 18);
+                border: none;
                 border-radius: 0px;
             }
         """)
@@ -1722,6 +1724,11 @@ class SidebarWidget(QWidget):
         except (RuntimeError, TypeError):
             pass
         self.hide()
+        if self._on_hidden is not None:
+            try:
+                self._on_hidden()
+            except Exception:
+                logger.exception("SidebarWidget 숨김 콜백 예외")
 
     def _try_apply_blur(self) -> None:
         try:

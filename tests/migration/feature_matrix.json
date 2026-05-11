@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "updated": "2026-05-10",
+  "notes": "This change updates the current installed PyQt GUI. Tauri/React preview parity remains explicitly not assessed here. Launch foreground focus was removed to keep sidebar edge handling deterministic.",
+  "features": [
+    {
+      "id": "GUI-TABLE-001",
+      "name": "Main PyQt game table headers, fixed sort, and dynamic sizing",
+      "area": "gui",
+      "data_contract": "%APPDATA%/HomeworkHelper/homework_helper_data/app_data.db read through ApiClient/data models",
+      "risk": "medium",
+      "legacy_gui_status": "implemented",
+      "pyqt_status": "updated",
+      "new_gui_status": "tauri-preview-not-assessed",
+      "automated_tests": [
+        "tests/test_gui_layout.py::test_main_table_hides_headers_and_uses_fixed_name_sort",
+        "tests/test_gui_layout.py::test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen",
+        "tests/test_gui_layout.py::test_restore_window_state_does_not_leave_fixed_size"
+      ],
+      "real_data_check": "HomeworkHelper.zip clone rendered to ignored screenshot artifact",
+      "manual_smoke": "docs/migration-smoke-checklist.md#main-gui-table-sizing-with-real-data"
+    },
+    {
+      "id": "SIDEBAR-001",
+      "name": "Three-state sidebar drawer mode with auto-revealed handle",
+      "area": "sidebar",
+      "data_contract": "GlobalSettings sidebar fields read through data manager/API boundary",
+      "risk": "medium",
+      "legacy_gui_status": "implemented",
+      "pyqt_status": "updated",
+      "new_gui_status": "tauri-preview-not-assessed",
+      "automated_tests": [
+        "tests/test_gui_layout.py::test_global_settings_derives_sidebar_mode_from_legacy_bool",
+        "tests/test_gui_layout.py::test_sidebar_settings_dialog_persists_three_state_sidebar_mode",
+        "tests/test_gui_layout.py::test_sidebar_controller_always_mode_starts_trigger_without_game",
+        "tests/test_gui_layout.py::test_edge_trigger_auto_hide_reveals_from_configured_edge_zone",
+        "tests/test_gui_layout.py::test_edge_trigger_starts_with_always_visible_borderless_click_handle",
+        "tests/test_gui_layout.py::test_edge_trigger_click_invokes_callback_without_hiding_handle",
+        "tests/test_gui_layout.py::test_sidebar_controller_edge_trigger_callback_slides_sidebar_in",
+        "tests/test_gui_layout.py::test_sidebar_controller_hides_handle_until_sidebar_finishes_hiding",
+        "tests/test_beholder.py::test_sidebar_mode_is_guarded_and_normalizes_legacy_bool",
+        "tests/test_beholder.py::test_settings_guard_blocks_invalid_sidebar_mode",
+        "tests/test_beholder.py::test_settings_guard_blocks_invalid_sidebar_trigger_range",
+        "tests/test_gui_layout.py::test_sidebar_frame_css_remains_borderless"
+      ],
+      "manual_smoke": "docs/migration-smoke-checklist.md#sidebar-drawer-handle",
+      "windows_only_manual_gate": "deferred-off-device"
+    }
+  ]
+}

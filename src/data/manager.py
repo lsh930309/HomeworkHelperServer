@@ -47,7 +47,7 @@ class DataManager:
                     print(f"Error loading global settings from {path}: {e}.")
         return GlobalSettings()
 
-    def save_global_settings(self, settings=None):
+    def save_global_settings(self, settings=None, actor: str | None = None):
         """전역 설정을 파일에 저장합니다.
 
         Args:
@@ -59,8 +59,10 @@ class DataManager:
         try:
             with open(self.settings_file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.global_settings.to_dict(), f, ensure_ascii=False, indent=4)
+            return True
         except IOError as e:
             print(f"Error saving global settings: {e}")
+            return False
 
     def _load_managed_processes(self) -> List[ManagedProcess]:
         """파일에서 관리 대상 프로세스 목록을 로드합니다. 주파일 없으면 .bak에서 폴백합니다."""

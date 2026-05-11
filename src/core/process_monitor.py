@@ -26,6 +26,7 @@ def _debug_log(message: str):
 class ProcessesDataPort(Protocol):
     managed_processes: list[ManagedProcess]
     def update_process(self, updated_process: ManagedProcess) -> bool: ...
+    def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool: ...
     def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Any: ...
     def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Any: ...
     def get_last_session(self, process_id: str) -> Any: ...
@@ -62,6 +63,82 @@ class ProcessMonitor:
         self.data_manager = data_manager
         self.active_monitored_processes: Dict[str, Dict[str, Any]] = {}  # key: process_id, value: {pid, exe, start_time_approx, session_id}
 
+    def _is_runtime_process_running(self, process_id: str, context: dict[str, Any] | None = None) -> bool:
+        """Return whether the process selected by a late Beholder decision is still running."""
+        context = context or {}
+        expected_exe = self._normalize_path(context.get("exe"))
+        if not expected_exe:
+            for managed_proc in self.data_manager.managed_processes:
+                if managed_proc.id == process_id:
+                    expected_exe = self._normalize_path(managed_proc.monitoring_path)
+                    break
+        expected_start = context.get("requested_start_timestamp") or context.get("start_time_approx")
+        expected_pid = context.get("pid")
+        if expected_pid is not None:
+            try:
+                proc = psutil.Process(int(expected_pid))
+                proc_exe = self._normalize_path(proc.exe())
+                if expected_exe and proc_exe != expected_exe:
+                    return False
+                if expected_start is not None and abs(proc.create_time() - float(expected_start)) > 2:
+                    return False
+                return proc.is_running()
+            except (TypeError, ValueError, psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
+                pass
+
+        if not expected_exe:
+            return False
+
+        for proc in psutil.process_iter(["exe"]):
+            try:
+                if self._normalize_path(proc.info.get("exe")) != expected_exe:
+                    continue
+                if expected_start is not None and abs(proc.create_time() - float(expected_start)) > 2:
+                    continue
+                return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+        return False
+
+    def apply_beholder_resolution(self, result: dict[str, Any] | None) -> None:
+        """Bind active runtime cache to a session selected/created by Beholder."""
+        if not result:
+            return
+        session_id = result.get("session_id")
+        incident = result.get("incident") or {}
+        metadata = incident.get("resolution_metadata") or {}
+        context = metadata.get("action_context") or (metadata.get("override_scope") or {}).get("context") or {}
+        process_id = result.get("process_id") or context.get("process_id")
+        action = result.get("action")
+        if process_id and action == "close_sessions_and_delete_process":
+            self.active_monitored_processes.pop(process_id, None)
+            return
+        if process_id and incident.get("operation_kind") == "runtime_stop":
+            entry = self.active_monitored_processes.get(process_id)
+            if result.get("override_token"):
+                if entry is not None:
+                    entry.pop("runtime_stop_pending", None)
+            else:
+                self.active_monitored_processes.pop(process_id, None)
+            return
+        if process_id and result.get("override_token") and incident.get("operation_kind") == "runtime_start":
+            self.active_monitored_processes.pop(process_id, None)
+            return
+        if not process_id or not session_id:
+            return
+        entry = self.active_monitored_processes.get(process_id)
+        if entry is None:
+            if not self._is_runtime_process_running(process_id, context):
+                logger.info(
+                    "Beholder resolution returned session %s for '%s', but the process is no longer running; leaving monitor cache unbound.",
+                    session_id,
+                    process_id,
+                )
+                return
+            entry = {"pid": context.get("pid"), "exe": context.get("exe"), "start_time_approx": context.get("requested_start_timestamp")}
+            self.active_monitored_processes[process_id] = entry
+        entry["session_id"] = session_id
+
     def _get_hoyolab_service(self):
         """reset 이후에도 최신 전역 HoYoLab 서비스 인스턴스를 반환합니다."""
         try:
@@ -79,6 +156,23 @@ class ProcessMonitor:
             return os.path.normcase(os.path.abspath(path))
         except Exception: 
             return path 
+
+    def detect_running_process_ids(self) -> set[str]:
+        """Return managed process IDs currently visible in the OS process table."""
+        running_exes: set[str] = set()
+        for proc in psutil.process_iter(['exe']):
+            try:
+                exe_path = self._normalize_path(proc.info['exe'])
+                if exe_path:
+                    running_exes.add(exe_path)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+                continue
+        running_ids: set[str] = set()
+        for managed_proc in self.data_manager.managed_processes:
+            normalized_monitoring_path = self._normalize_path(managed_proc.monitoring_path)
+            if normalized_monitoring_path and normalized_monitoring_path in running_exes:
+                running_ids.add(managed_proc.id)
+        return running_ids
 
     def check_and_update_statuses(self) -> ProcessMonitorTickResult:
         """시스템 프로세스 스냅샷과 내부 캐시를 비교해 시작/종료 이벤트를 기록합니다."""
@@ -154,7 +248,11 @@ class ProcessMonitor:
                         logger.warning(f"'{managed_proc.name}'이 실행 중으로 감지되었으나, 프로세스 인스턴스 정보를 찾을 수 없습니다.")
             else:
                 if was_previously_active:
-                    termination_time = time.time()
+                    cached_info = self.active_monitored_processes.get(managed_proc.id, {})
+                    if cached_info.get("runtime_stop_pending"):
+                        continue
+                    termination_time = cached_info.get("pending_termination_time") or time.time()
+                    previous_last_played = managed_proc.last_played_timestamp
                     managed_proc.last_played_timestamp = termination_time
 
                     # 호요버스 게임인 경우 스태미나 조회를 세션 종료 전에 먼저 수행
@@ -165,7 +263,6 @@ class ProcessMonitor:
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
 
                     # 세션 종료 기록 (스태미나 값 포함)
-                    cached_info = self.active_monitored_processes.pop(managed_proc.id)
                     session_id = cached_info.get('session_id')
                     _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:
@@ -175,9 +272,22 @@ class ProcessMonitor:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info})")
                         else:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
+                            managed_proc.last_played_timestamp = previous_last_played
+                            incident = getattr(self.data_manager, "latest_beholder_incident", None)
+                            if (
+                                isinstance(incident, dict)
+                                and incident.get("operation_kind") == "runtime_stop"
+                            ):
+                                cached_info["runtime_stop_pending"] = True
+                                cached_info["pending_termination_time"] = termination_time
+                            continue
                     else:
-                        logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')})")
+                        logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, no session was recorded)")
+                        managed_proc.last_played_timestamp = previous_last_played
+                        self.active_monitored_processes.pop(managed_proc.id, None)
+                        continue
 
+                    self.active_monitored_processes.pop(managed_proc.id, None)
                     stopped_events.append(
                         ProcessLifecycleEvent(
                             process_id=managed_proc.id,
@@ -191,7 +301,11 @@ class ProcessMonitor:
                         )
                     )
                     changed_occurred = True
-                    if not self.data_manager.update_process(managed_proc):
+                    if hasattr(self.data_manager, "update_process_runtime_state"):
+                        saved = self.data_manager.update_process_runtime_state(managed_proc)
+                    else:
+                        saved = self.data_manager.update_process(managed_proc)
+                    if not saved:
                         logger.warning(
                             "Process STOPPED 상태 저장 실패: process_id=%s",
                             managed_proc.id,
@@ -283,7 +397,7 @@ class ProcessMonitor:
                 process.stamina_current = actual_current
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = stamina.updated_at.timestamp()
-                self.data_manager.update_process(process)
+                self.data_manager.update_process_runtime_state(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
                 return
@@ -332,7 +446,7 @@ class ProcessMonitor:
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
             process.stamina_updated_at = stamina.updated_at.timestamp()
-            self.data_manager.update_process(process)
+            self.data_manager.update_process_runtime_state(process)
             _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 
         except Exception as e:

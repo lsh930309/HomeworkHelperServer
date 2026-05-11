@@ -3,6 +3,7 @@
 
 import os
 import hashlib
+import re
 from pathlib import Path
 
 # 아이콘 캐시 디렉토리
@@ -23,6 +24,14 @@ def generate_game_color(index: int, total: int) -> str:
 ICON_SIZES = [16, 24, 32, 48, 64, 96, 128, 256]
 
 
+def safe_icon_cache_key(raw: str) -> str:
+    """Return a filename-safe, stable icon cache key for an external process id."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
+    if cleaned and cleaned == raw and "/" not in raw and "\\" not in raw:
+        return cleaned
+    return "process_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
 def get_color_for_game(name: str, index: int = 0, total: int = 10) -> str:
     """HSL 기반 게임 색상 반환"""
     if index is not None:
@@ -41,11 +50,12 @@ def get_cached_icon_path(process_id: str, size: int = None) -> Path:
     """캐시된 아이콘 경로 반환 (버전 포함)"""
     # 아이콘 추출 방식 변경 시 버전 업데이트하여 캐시 무효화
     version = "v5_multires"
+    cache_key = safe_icon_cache_key(process_id)
 
     if size is None:
-        return Path(ICON_CACHE_DIR) / f"{process_id}_{version}_original.png"
+        return Path(ICON_CACHE_DIR) / f"{cache_key}_{version}_original.png"
     else:
-        return Path(ICON_CACHE_DIR) / f"{process_id}_{version}_{size}px.png"
+        return Path(ICON_CACHE_DIR) / f"{cache_key}_{version}_{size}px.png"
 
 
 def resize_icon_high_quality(image, target_size: int):

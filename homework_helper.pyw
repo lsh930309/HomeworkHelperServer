@@ -255,7 +255,18 @@ def start_api_server() -> bool:
 
     except Exception as e:
         print(f"API 서버 시작 실패: {e}")
-        QMessageBox.critical(None, "치명적 오류", f"API 서버 시작에 실패했습니다.\n\n{e}")
+        message = f"API 서버 시작에 실패했습니다.\n\n{e}"
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.critical(None, "치명적 오류", message)
+            elif os.name == "nt":
+                ctypes.windll.user32.MessageBoxW(0, message, "치명적 오류", 0x10)
+            else:
+                print(message, file=sys.stderr)
+        except Exception as msgbox_exc:
+            print(f"[start_api_server] 오류 표시 실패: {msgbox_exc}", file=sys.stderr)
+            print(message, file=sys.stderr)
         return False
 
 def run_server_main():
@@ -337,9 +348,11 @@ def run_server_main():
         logger.error(f"PID 파일 생성 실패: {e}")
 
     # --- main.py의 내용을 여기로 통합 ---
-    from fastapi import FastAPI, Depends, HTTPException
+    from fastapi import FastAPI, Depends, HTTPException, Header
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel
     from sqlalchemy.orm import Session
-    from src.data import crud, models, schemas
+    from src.data import crud, models, schemas, beholder
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
 
     # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
@@ -382,9 +395,11 @@ def run_server_main():
         while True:
             try:
                 time.sleep(interval)
-                with engine.connect() as conn:
-                    conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
-                    conn.commit()
+                from src.api.beholder_routes import database_access_gate
+                with database_access_gate():
+                    with engine.connect() as conn:
+                        conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
+                        conn.commit()
                 logger.info("WAL checkpoint 완료")
             except Exception as e:
                 logger.error(f"Checkpoint 오류: {e}", exc_info=True)
@@ -439,13 +454,31 @@ def run_server_main():
 
     app = FastAPI()
 
+    class ProcessRuntimeStatePatch(BaseModel):
+        last_played_timestamp: float | None = None
+        stamina_current: int | None = None
+        stamina_max: int | None = None
+        stamina_updated_at: float | None = None
+
+    @app.exception_handler(beholder.BeholderBlocked)
+    async def beholder_blocked_handler(request, exc):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": exc.incident.safe_recommendation or "Beholder가 비정상 데이터 변경을 차단했습니다.",
+                "beholder_incident": beholder.incident_to_dict(exc.incident),
+            },
+        )
+
     # Dependency
     def get_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+        from src.api.beholder_routes import database_access_gate
+        with database_access_gate():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
 
     # create / read / update / delete [managed processes]
     @app.get("/processes", response_model=List[schemas.ProcessSchema])
@@ -461,19 +494,79 @@ def run_server_main():
         return db_process
 
     @app.post("/processes", response_model=schemas.ProcessSchema, status_code=201)
-    def create_new_process(process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
-        return crud.create_process(db = db, process = process_data)
+    def create_new_process(
+        process_data: schemas.ProcessCreateSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        return crud.create_process(
+            db=db,
+            process=process_data,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_create",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/processes/{process_id}", response_model=schemas.ProcessSchema)
-    def update_existing_process(process_id: str, process_data: schemas.ProcessCreateSchema, db: Session = Depends(get_db)):
-        updated_process = crud.update_process(db = db, process_id = process_id, process = process_data)
+    def update_existing_process(
+        process_id: str,
+        process_data: schemas.ProcessCreateSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_process = crud.update_process(
+            db=db,
+            process_id=process_id,
+            process=process_data,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_update",
+            override_token=x_hh_beholder_override,
+        )
+        if updated_process is None:
+            raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        return updated_process
+
+    @app.patch("/processes/{process_id}/runtime-state", response_model=schemas.ProcessSchema)
+    def update_process_runtime_state(
+        process_id: str,
+        patch: ProcessRuntimeStatePatch,
+        db: Session = Depends(get_db),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_process = crud.update_process_runtime_state(
+            db=db,
+            process_id=process_id,
+            last_played_timestamp=patch.last_played_timestamp,
+            stamina_current=patch.stamina_current,
+            stamina_max=patch.stamina_max,
+            stamina_updated_at=patch.stamina_updated_at,
+            actor="process_monitor",
+            operation_kind="process_runtime_state_update",
+            override_token=x_hh_beholder_override,
+        )
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
 
     @app.delete("/processes/{process_id}")
-    def delete_existing_process(process_id: str, db: Session = Depends(get_db)):
-        deleted_process = crud.delete_process(db = db, process_id = process_id)
+    def delete_existing_process(
+        process_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        deleted_process = crud.delete_process(
+            db=db,
+            process_id=process_id,
+            actor=x_hh_beholder_actor or "process_editor",
+            operation_kind=x_hh_beholder_operation or "process_delete",
+            override_token=x_hh_beholder_override,
+        )
         if deleted_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return {"message": "프로세스가 삭제되었습니다."}
@@ -492,19 +585,73 @@ def run_server_main():
         return db_shortcut
 
     @app.post("/shortcuts", response_model=schemas.WebShortcutSchema, status_code=201)
-    def create_new_shortcut(shortcut_data: schemas.WebShortcutCreate, db: Session = Depends(get_db)):
-        return crud.create_shortcut(db = db, shortcut = shortcut_data)
+    def create_new_shortcut(
+        shortcut_data: schemas.WebShortcutCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        return crud.create_shortcut(
+            db=db,
+            shortcut=shortcut_data,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_create",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/shortcuts/{shortcut_id}", response_model=schemas.WebShortcutSchema)
-    def update_existing_shortcut(shortcut_id: str, shortcut_data: schemas.WebShortcutCreate, db: Session = Depends(get_db)):
-        updated_shortcut = crud.update_shortcut(db = db, shortcut_id = shortcut_id, shortcut = shortcut_data)
+    def update_existing_shortcut(
+        shortcut_id: str,
+        shortcut_data: schemas.WebShortcutCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_shortcut = crud.update_shortcut(
+            db=db,
+            shortcut_id=shortcut_id,
+            shortcut=shortcut_data,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_update",
+            override_token=x_hh_beholder_override,
+        )
+        if updated_shortcut is None:
+            raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
+        return updated_shortcut
+
+    @app.post("/shortcuts/{shortcut_id}/opened", response_model=schemas.WebShortcutSchema)
+    def mark_shortcut_opened(
+        shortcut_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_shortcut = crud.mark_shortcut_opened(
+            db=db,
+            shortcut_id=shortcut_id,
+            opened_at=datetime.datetime.now().timestamp(),
+            override_token=x_hh_beholder_override,
+        )
         if updated_shortcut is None:
             raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
         return updated_shortcut
 
     @app.delete("/shortcuts/{shortcut_id}")
-    def delete_existing_shortcut(shortcut_id: str, db: Session = Depends(get_db)):
-        deleted_shortcut = crud.delete_shortcut(db = db, shortcut_id = shortcut_id)
+    def delete_existing_shortcut(
+        shortcut_id: str,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        deleted_shortcut = crud.delete_shortcut(
+            db=db,
+            shortcut_id=shortcut_id,
+            actor=x_hh_beholder_actor or "web_shortcut_editor",
+            operation_kind=x_hh_beholder_operation or "shortcut_delete",
+            override_token=x_hh_beholder_override,
+        )
         if deleted_shortcut is None:
             raise HTTPException(status_code=404, detail="웹 바로 가기를 찾을 수 없습니다.")
         return {"message": "웹 바로 가기가 삭제되었습니다."}
@@ -515,23 +662,78 @@ def run_server_main():
         return crud.get_settings(db)
 
     @app.put("/settings", response_model=schemas.GlobalSettingsSchema)
-    def update_global_settings(settings_data: schemas.GlobalSettingsSchema, db: Session = Depends(get_db)):
-        return crud.update_settings(db = db, settings = settings_data)
+    def update_global_settings(
+        settings_data: schemas.GlobalSettingsSchema,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        actor = x_hh_beholder_actor or "settings_full_update"
+        return crud.update_settings(
+            db=db,
+            settings=settings_data,
+            actor=actor,
+            operation_kind=x_hh_beholder_operation or "settings_update",
+            allowed_fields=beholder.allowed_settings_fields_for_actor(actor),
+            override_token=x_hh_beholder_override,
+        )
+
+    @app.patch("/settings", response_model=schemas.GlobalSettingsSchema)
+    def patch_global_settings(
+        settings_data: dict[str, Any],
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        actor = x_hh_beholder_actor or "settings_patch"
+        return crud.patch_settings(
+            db=db,
+            updates=settings_data,
+            actor=actor,
+            operation_kind=x_hh_beholder_operation or "settings_update",
+            allowed_fields=beholder.allowed_settings_fields_for_actor(actor),
+            override_token=x_hh_beholder_override,
+        )
 
     # create / read / update [process sessions]
     @app.post("/sessions", response_model=schemas.ProcessSessionSchema, status_code=201)
-    def create_new_session(session_data: schemas.ProcessSessionCreate, db: Session = Depends(get_db)):
+    def create_new_session(
+        session_data: schemas.ProcessSessionCreate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """새로운 프로세스 세션 시작"""
-        return crud.create_session(db=db, session=session_data)
+        return crud.create_session(
+            db=db,
+            session=session_data,
+            actor=x_hh_beholder_actor or "process_monitor",
+            operation_kind=x_hh_beholder_operation or "runtime_start",
+            override_token=x_hh_beholder_override,
+        )
 
     @app.put("/sessions/{session_id}/end", response_model=schemas.ProcessSessionSchema)
-    def end_process_session(session_id: int, end_data: schemas.ProcessSessionUpdate, db: Session = Depends(get_db)):
+    def end_process_session(
+        session_id: int,
+        end_data: schemas.ProcessSessionUpdate,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """프로세스 세션 종료"""
         ended_session = crud.end_session(
             db=db,
             session_id=session_id,
             end_timestamp=end_data.end_timestamp,
-            stamina_at_end=end_data.stamina_at_end
+            stamina_at_end=end_data.stamina_at_end,
+            actor=x_hh_beholder_actor or "process_monitor",
+            operation_kind=x_hh_beholder_operation or "runtime_stop",
+            close_reason=end_data.close_reason or "process_exit",
+            override_token=x_hh_beholder_override,
         )
         if ended_session is None:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
@@ -559,9 +761,23 @@ def run_server_main():
         return session
 
     @app.patch("/sessions/{session_id}/stamina", response_model=schemas.ProcessSessionSchema)
-    def update_session_stamina(session_id: int, stamina_at_end: int, db: Session = Depends(get_db)):
+    def update_session_stamina(
+        session_id: int,
+        stamina_at_end: int,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
         """세션의 종료 스태미나 값을 업데이트"""
-        success = crud.update_session_stamina(db=db, session_id=session_id, stamina_at_end=stamina_at_end)
+        success = crud.update_session_stamina(
+            db=db,
+            session_id=session_id,
+            stamina_at_end=stamina_at_end,
+            actor=x_hh_beholder_actor or "hoyolab_slow_followup",
+            operation_kind=x_hh_beholder_operation or "hoyolab_session_stamina_rewrite",
+            override_token=x_hh_beholder_override,
+        )
         if not success:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
         # 업데이트된 세션 반환
@@ -576,6 +792,7 @@ def run_server_main():
     # === 대시보드 라우터 및 정적 파일 등록 ===
     from fastapi.staticfiles import StaticFiles
     from src.api.dashboard import router as dashboard_router
+    from src.api.beholder_routes import router as beholder_router
     from src.api.dashboard.static_files import dashboard_static_dir
     
     # 정적 파일 서빙 (CSS, JS)
@@ -587,6 +804,7 @@ def run_server_main():
         logger.warning(f"대시보드 정적 파일 없음: {dashboard_static_path}")
     
     app.include_router(dashboard_router)
+    app.include_router(beholder_router)
     logger.info("대시보드 라우터 등록 완료 (/dashboard, /api/dashboard/*)")
 
 
@@ -657,6 +875,23 @@ def ensure_process_table_schema():
                 if 'sidebar_enabled' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_enabled INTEGER DEFAULT 1"))
                     print("[Migration] global_settings.sidebar_enabled 컬럼 추가됨")
+                sidebar_mode_added = False
+                if 'sidebar_mode' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_mode TEXT DEFAULT 'game'"))
+                    print("[Migration] global_settings.sidebar_mode 컬럼 추가됨")
+                    gs_existing_cols.add('sidebar_mode')
+                    sidebar_mode_added = True
+                if 'sidebar_mode' in gs_existing_cols and 'sidebar_enabled' in gs_existing_cols:
+                    mode_where = (
+                        "1 = 1"
+                        if sidebar_mode_added
+                        else "sidebar_mode IS NULL OR sidebar_mode = '' OR sidebar_mode NOT IN ('always', 'game', 'disabled')"
+                    )
+                    conn.execute(text(
+                        "UPDATE global_settings "
+                        "SET sidebar_mode = CASE WHEN COALESCE(sidebar_enabled, 1) = 0 THEN 'disabled' ELSE 'game' END "
+                        f"WHERE {mode_where}"
+                    ))
                 if 'sidebar_auto_hide_sec' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_auto_hide_sec INTEGER DEFAULT 3"))
                     print("[Migration] global_settings.sidebar_auto_hide_sec 컬럼 추가됨")
@@ -681,6 +916,31 @@ def ensure_process_table_schema():
                 if 'sidebar_volume_section_enabled' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN sidebar_volume_section_enabled INTEGER DEFAULT 1"))
                     print("[Migration] global_settings.sidebar_volume_section_enabled 컬럼 추가됨")
+                if 'screenshot_trigger_vk' not in gs_existing_cols:
+                    conn.execute(text("ALTER TABLE global_settings ADD COLUMN screenshot_trigger_vk INTEGER DEFAULT 178"))
+                    print("[Migration] global_settings.screenshot_trigger_vk 컬럼 추가됨")
+
+            incident_table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='beholder_incidents'")
+            ).fetchone()
+            if incident_table_exists:
+                incident_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(beholder_incidents)"))}
+                for col in ['user_title', 'user_summary', 'user_impact', 'recommended_action', 'available_actions', 'resolution_metadata']:
+                    if col not in incident_cols:
+                        conn.execute(text(f"ALTER TABLE beholder_incidents ADD COLUMN {col} TEXT"))
+                        print(f"[Migration] beholder_incidents.{col} 컬럼 추가됨")
+
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS app_runtime_heartbeats ("
+                "id INTEGER PRIMARY KEY, "
+                "app_instance_id TEXT, "
+                "runtime_kind TEXT, "
+                "boot_id TEXT, "
+                "started_at REAL, "
+                "last_heartbeat_at REAL, "
+                "last_shutdown_at REAL"
+                ")"
+            ))
 
             conn.commit()
     except Exception as e:
@@ -798,7 +1058,6 @@ if __name__ == "__main__":
         # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
 
     # GUI 애플리케이션 실행
-    # (multiprocessing.Process 방식에서는 --run-server 분기 불필요)
     check_admin_requirement()
 
     # API 서버 시작 및 준비 확인

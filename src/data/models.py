@@ -1,6 +1,6 @@
 # models.py
 
-from sqlalchemy import Column, Integer, String, Boolean, Float, JSON
+from sqlalchemy import Column, Integer, String, Boolean, Float, JSON, Index
 from src.data.database import Base
 
 class Process(Base):
@@ -75,6 +75,10 @@ class GlobalSettings(Base):
 
     # 사이드바
     sidebar_enabled = Column(Boolean, default=True)
+    sidebar_mode = Column(String, default="game")  # "always" | "game" | "disabled"
+    sidebar_trigger_y_start = Column(Float, default=0.1)
+    sidebar_trigger_y_end = Column(Float, default=0.9)
+    sidebar_handle_auto_hide = Column(Boolean, default=True)
     sidebar_auto_hide_ms = Column(Integer, default=3000)
     sidebar_edge_width_px = Column(Integer, default=2)
     sidebar_height_ratio = Column(Float, default=1.0)
@@ -91,6 +95,7 @@ class GlobalSettings(Base):
     screenshot_disable_gamebar = Column(Boolean, default=False)
     screenshot_capture_mode = Column(String, default="fullscreen")
     screenshot_gamepad_button_index = Column(Integer, default=-1)
+    screenshot_trigger_vk = Column(Integer, default=0xB2)
     # Recording (OBS)
     recording_enabled = Column(Boolean, default=False)
     obs_host = Column(String, default="localhost")
@@ -116,3 +121,55 @@ class ProcessSession(Base):
     session_duration = Column(Float, nullable=True)  # 세션 길이 (초 단위, 종료 시 계산)
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
     stamina_at_end = Column(Integer, nullable=True)  # 종료 시점 스태미나
+
+    # Beholder metadata (nullable for legacy DB compatibility)
+    session_status = Column(String, nullable=True)
+    session_owner = Column(String, nullable=True)
+    heartbeat_timestamp = Column(Float, nullable=True)
+    lease_token = Column(String, nullable=True)
+    close_reason = Column(String, nullable=True)
+    guard_flags = Column(JSON, nullable=True)
+
+
+class BeholderIncident(Base):
+    """A blocked or user-actionable Beholder data safety incident."""
+    __tablename__ = "beholder_incidents"
+    __table_args__ = (
+        Index("ix_beholder_incidents_status_created_at", "status", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    severity = Column(String, nullable=False, default="warning")
+    status = Column(String, nullable=False, default="pending")
+    operation_kind = Column(String, nullable=False)
+    actor = Column(String, nullable=False)
+    target_summary = Column(String, nullable=True)
+    suspected_cause = Column(String, nullable=True)
+    current_state_summary = Column(String, nullable=True)
+    proposed_change_summary = Column(String, nullable=True)
+    risk_score = Column(Integer, nullable=False, default=0)
+    risk_factors = Column(JSON, nullable=True)
+    safe_recommendation = Column(String, nullable=True)
+    user_title = Column(String, nullable=True)
+    user_summary = Column(String, nullable=True)
+    user_impact = Column(String, nullable=True)
+    recommended_action = Column(String, nullable=True)
+    available_actions = Column(JSON, nullable=True)
+    resolution_metadata = Column(JSON, nullable=True)
+    created_at = Column(Float, nullable=False)
+    resolved_at = Column(Float, nullable=True)
+    override_token = Column(String, nullable=True, index=True)
+    override_used_at = Column(Float, nullable=True)
+
+
+class AppRuntimeHeartbeat(Base):
+    """Last known application/runtime heartbeat used for Beholder recovery decisions."""
+    __tablename__ = "app_runtime_heartbeats"
+
+    id = Column(Integer, primary_key=True, default=1)
+    app_instance_id = Column(String, nullable=True)
+    runtime_kind = Column(String, nullable=True)
+    boot_id = Column(String, nullable=True)
+    started_at = Column(Float, nullable=True)
+    last_heartbeat_at = Column(Float, nullable=True)
+    last_shutdown_at = Column(Float, nullable=True)
