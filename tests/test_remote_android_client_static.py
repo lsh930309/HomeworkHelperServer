@@ -102,6 +102,10 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'item.optJSONArray("risk_labels")?.toStringList().orEmpty()' in api_client
     assert 'metrics.optDouble("daily_average_seconds")' in api_client
     assert 'metrics.optJSONObject("top_game")' in api_client
+    assert 'json.optJSONObject("mobile_metrics")' in api_client
+    assert 'mobileMetrics?.optDouble("total_seconds")' in api_client
+    assert 'mobileMetrics?.optInt("active_session_count")' in api_client
+    assert 'mobileTopGame?.optString("android_package_name")' in api_client
     assert 'optJSONArray("supported_actions")?.toStringSet().orEmpty()' in api_client
     assert 'targetHost = it.optString("target_host")' in api_client
 
@@ -162,6 +166,8 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 상태" in main_activity
     assert "플레이 요약" in main_activity
     assert "dashboardSummary" in main_activity
+    assert "모바일 플레이" in main_activity
+    assert "mobileSessionCount" in models
     assert "Beholder 알림" in main_activity
     assert "beholderIncidents" in main_activity
     assert "Android-PC 연결" in main_activity

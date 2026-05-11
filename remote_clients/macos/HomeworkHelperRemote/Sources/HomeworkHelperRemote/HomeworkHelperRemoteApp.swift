@@ -368,6 +368,19 @@ struct RemoteDashboardView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            if let mobile = summary.mobileMetrics {
+                                Divider()
+                                HStack {
+                                    SummaryMetric(label: "모바일 플레이", value: formatDuration(mobile.totalSeconds))
+                                    SummaryMetric(label: "모바일 세션", value: "\(mobile.sessionCount)")
+                                    SummaryMetric(label: "활성 모바일", value: "\(mobile.activeSessionCount)")
+                                }
+                                if let topMobileGame = mobile.topGame {
+                                    Text("Mobile Top: \(topMobileGame.displayName) · \(topMobileGame.androidPackageName) · \(formatDuration(topMobileGame.totalSeconds))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }

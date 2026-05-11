@@ -4,6 +4,7 @@ import os
 import platform
 import time
 import webbrowser
+from collections import defaultdict
 from typing import Any, Callable, Iterable, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -14,10 +15,10 @@ from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController, PowerAction
-from src.data import beholder, crud, schemas
+from src.data import beholder, crud, models, schemas
 
 
-REMOTE_API_VERSION = "0.1.6"
+REMOTE_API_VERSION = "0.1.7"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -81,6 +82,80 @@ def _serialize_mobile_game_session(session: Any) -> dict[str, Any]:
     if hasattr(schemas.MobileGameSessionSchema, "model_validate"):
         return _model_dump(schemas.MobileGameSessionSchema.model_validate(session))
     return _model_dump(schemas.MobileGameSessionSchema.from_orm(session))
+
+
+def _mobile_session_effective_end(session: Any, now_ts: float) -> float:
+    if getattr(session, "ended_at", None) is not None:
+        return float(session.ended_at)
+    if getattr(session, "duration_seconds", None) is not None:
+        return float(session.started_at) + float(session.duration_seconds)
+    if getattr(session, "status", None) == "active":
+        return now_ts
+    return float(session.started_at)
+
+
+def _mobile_session_metrics(
+    sessions: Iterable[Any],
+    *,
+    start_ts: float,
+    end_ts: float,
+    now_ts: float,
+) -> dict[str, Any]:
+    total_seconds = 0.0
+    active_seconds = 0.0
+    session_count = 0
+    active_session_count = 0
+    games: dict[str, dict[str, Any]] = {}
+    source_breakdown: dict[str, int] = defaultdict(int)
+
+    for session in sessions:
+        raw_start = float(session.started_at)
+        raw_end = _mobile_session_effective_end(session, now_ts)
+        overlap_start = max(raw_start, start_ts)
+        overlap_end = min(raw_end, end_ts)
+        if overlap_end <= overlap_start:
+            continue
+
+        overlap_seconds = overlap_end - overlap_start
+        total_seconds += overlap_seconds
+        session_count += 1
+        source_breakdown[str(getattr(session, "source", None) or "manual")] += 1
+        if getattr(session, "status", None) == "active":
+            active_session_count += 1
+            active_seconds += overlap_seconds
+
+        process_id = str(getattr(session, "pc_process_id", "") or "")
+        display_name = str(getattr(session, "pc_display_name", None) or process_id or "알 수 없는 게임")
+        game = games.setdefault(
+            process_id or display_name,
+            {
+                "process_id": process_id,
+                "display_name": display_name,
+                "android_package_name": str(getattr(session, "android_package_name", "") or ""),
+                "total_seconds": 0.0,
+                "session_count": 0,
+                "active_session_count": 0,
+            },
+        )
+        game["total_seconds"] += overlap_seconds
+        game["session_count"] += 1
+        if getattr(session, "status", None) == "active":
+            game["active_session_count"] += 1
+
+    game_rows = sorted(games.values(), key=lambda row: row["total_seconds"], reverse=True)
+    for row in game_rows:
+        row["total_seconds"] = round(row["total_seconds"], 3)
+        row["share"] = round(row["total_seconds"] / total_seconds, 6) if total_seconds else 0
+
+    return {
+        "total_seconds": round(total_seconds, 3),
+        "active_seconds": round(active_seconds, 3),
+        "session_count": session_count,
+        "active_session_count": active_session_count,
+        "source_breakdown": dict(sorted(source_breakdown.items())),
+        "top_game": game_rows[0] if game_rows else None,
+        "games": game_rows,
+    }
 
 
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
@@ -321,9 +396,18 @@ def create_remote_router(
             show_unregistered,
         )
         groups = _build_game_groups(db, sessions, show_unregistered)
+        mobile_sessions = db.query(models.MobileGameSession).filter(
+            models.MobileGameSession.started_at < end_dt.timestamp(),
+        ).all()
         return {
             "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
             "metrics": _aggregate_summary(sessions, start_dt, end_dt, groups),
+            "mobile_metrics": _mobile_session_metrics(
+                mobile_sessions,
+                start_ts=start_dt.timestamp(),
+                end_ts=end_dt.timestamp(),
+                now_ts=now(),
+            ),
         }
 
     @router.get("/beholder/incidents")

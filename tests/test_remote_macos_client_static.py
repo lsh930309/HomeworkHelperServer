@@ -48,6 +48,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
     assert "struct Power: Decodable" in models
     assert "struct Metrics: Decodable" in models
     assert "struct Game: Decodable" in models
+    assert "struct MobileMetrics: Decodable" in models
     assert "let power: Power?" in models
     assert "var supportedPowerActions: Set<String>" in models
 
@@ -83,6 +84,10 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'gameLinkID = "game_link_id"',
         'startedAt = "started_at"',
         'durationSeconds = "duration_seconds"',
+        'mobileMetrics = "mobile_metrics"',
+        'activeSeconds = "active_seconds"',
+        'activeSessionCount = "active_session_count"',
+        'sourceBreakdown = "source_breakdown"',
         'tokenRefreshedAt = "token_refreshed_at"',
         'revokedAt = "revoked_at"',
         'deviceID = "device_id"',
@@ -158,6 +163,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 상태" in app
     assert "플레이 요약" in app
     assert "dashboardSummary" in app
+    assert "모바일 플레이" in app
+    assert "mobileMetrics" in app
     assert "formatDuration" in app
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app

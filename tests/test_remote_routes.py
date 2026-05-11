@@ -116,7 +116,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.6"
+    assert body["remote_api_version"] == "0.1.7"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -172,6 +172,36 @@ def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_
                 session_duration=3600.0,
             )
         ],
+        mobile_sessions=[
+            models.MobileGameSession(
+                id="mobile-a",
+                game_link_id="link-a",
+                pc_process_id="game-a",
+                pc_display_name="Game A",
+                android_package_name="dev.game.a",
+                source="manual",
+                status="ended",
+                started_at=1778464800.0,
+                ended_at=1778468400.0,
+                duration_seconds=3600.0,
+                created_at=1778464800.0,
+                updated_at=1778468400.0,
+            ),
+            models.MobileGameSession(
+                id="mobile-active",
+                game_link_id="link-a",
+                pc_process_id="game-a",
+                pc_display_name="Game A",
+                android_package_name="dev.game.a",
+                source="usage_stats",
+                status="active",
+                started_at=1778493400.0,
+                ended_at=None,
+                duration_seconds=None,
+                created_at=1778493400.0,
+                updated_at=1778493400.0,
+            ),
+        ],
     )
 
     status_response = client.get("/remote/status")
@@ -185,6 +215,13 @@ def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_
     assert body["metrics"]["total_seconds"] == 3600.0
     assert body["metrics"]["session_count"] == 1
     assert body["metrics"]["top_game"]["display_name"] == "Game A"
+    assert body["mobile_metrics"]["total_seconds"] == 7200.0
+    assert body["mobile_metrics"]["active_seconds"] == 3600.0
+    assert body["mobile_metrics"]["session_count"] == 2
+    assert body["mobile_metrics"]["active_session_count"] == 1
+    assert body["mobile_metrics"]["source_breakdown"] == {"manual": 1, "usage_stats": 1}
+    assert body["mobile_metrics"]["top_game"]["display_name"] == "Game A"
+    assert body["mobile_metrics"]["top_game"]["android_package_name"] == "dev.game.a"
 
 
 def test_remote_capabilities_endpoint_matches_status_capability_contract():

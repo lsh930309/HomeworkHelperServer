@@ -74,6 +74,8 @@ class RemoteApiClient(
         val range = json.getJSONObject("range")
         val metrics = json.getJSONObject("metrics")
         val topGame = metrics.optJSONObject("top_game")
+        val mobileMetrics = json.optJSONObject("mobile_metrics")
+        val mobileTopGame = mobileMetrics?.optJSONObject("top_game")
         return RemoteDashboardSummary(
             rangeStart = range.optString("start"),
             rangeEnd = range.optString("end"),
@@ -83,6 +85,13 @@ class RemoteApiClient(
             sessionCount = metrics.optInt("session_count"),
             topGameName = topGame?.optString("display_name").orEmpty(),
             topGameSeconds = topGame?.optDouble("total_seconds") ?: 0.0,
+            mobileTotalSeconds = mobileMetrics?.optDouble("total_seconds") ?: 0.0,
+            mobileActiveSeconds = mobileMetrics?.optDouble("active_seconds") ?: 0.0,
+            mobileSessionCount = mobileMetrics?.optInt("session_count") ?: 0,
+            mobileActiveSessionCount = mobileMetrics?.optInt("active_session_count") ?: 0,
+            mobileTopGameName = mobileTopGame?.optString("display_name").orEmpty(),
+            mobileTopAndroidPackageName = mobileTopGame?.optString("android_package_name").orEmpty(),
+            mobileTopGameSeconds = mobileTopGame?.optDouble("total_seconds") ?: 0.0,
         )
     }
 

@@ -134,6 +134,10 @@ def _swift_smoke_source(base_url: str, pairing_code: str, process_id: str) -> st
                     if endedMobileSession.status != "ended" || endedMobileSession.durationSeconds == nil {{
                         fatalError("mobile session end did not close the session")
                     }}
+                    let mobileSummary = try await refreshedClient.dashboardSummary()
+                    if mobileSummary.mobileMetrics?.sessionCount ?? 0 < 1 {{
+                        fatalError("dashboard summary did not include the ended mobile session metrics")
+                    }}
                     let gameLinks = try await refreshedClient.gameLinks()
                     if !gameLinks.contains(where: {{ $0.id == createdGameLink.id }}) {{
                         fatalError("created game-link missing from list response")
@@ -142,7 +146,7 @@ def _swift_smoke_source(base_url: str, pairing_code: str, process_id: str) -> st
                     if !devices.contains(where: {{ $0.id == pair.id }}) {{
                         fatalError("paired device missing from device list")
                     }}
-                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count), capabilities=ok, dashboard_sessions=\\(summary.metrics.sessionCount), beholder_incidents=\\(incidents.count), game_links=\\(gameLinks.count), mobile_session=\\(endedMobileSession.status)")
+                    print("macOS RemoteAPIClient smoke passed: \\(status.remoteAPIVersion), devices=\\(devices.count), capabilities=ok, dashboard_sessions=\\(summary.metrics.sessionCount), beholder_incidents=\\(incidents.count), game_links=\\(gameLinks.count), mobile_session=\\(endedMobileSession.status), mobile_summary_sessions=\\(mobileSummary.mobileMetrics?.sessionCount ?? 0)")
                 }} catch {{
                     fputs("macOS RemoteAPIClient smoke failed: \\(error)\\n", stderr)
                     Foundation.exit(1)

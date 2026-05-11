@@ -1,8 +1,9 @@
 # HomeworkHelper Remote Controller 구동 환경 가이드
 
 작성일: 2026-05-11
-현재 통합 브랜치: `main`
-작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
+현재 작업 브랜치: `dev-remote`
+main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한다`
+작업 브랜치 이력: remote-controller 변경분은 `dev-remote`에 유지하고 `main`은 기준점으로 복구 완료
 
 ## 1. 개발/로컬 검증
 
@@ -29,7 +30,7 @@ macOS 앱은 기본 URL `http://127.0.0.1:8000`으로 접속한다.
 - `POST /remote/processes/{id}/launch`
 - `GET /remote/shortcuts`
 - `POST /remote/shortcuts/{id}/open`
-- `GET /remote/dashboard/summary`
+- `GET /remote/dashboard/summary` — PC playtime metrics와 `mobile_metrics` 모바일 세션 집계 포함
 - `GET /remote/beholder/incidents`
 - `GET /remote/game-links`
 - `POST /remote/game-links`
@@ -144,7 +145,7 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 - Remote Agent URL/device name 저장 및 device token Android Keystore 암호화 저장
 - pairing code confirm으로 device token 발급
 - status/process/shortcut/device 조회
-- dashboard summary 조회 및 플레이 요약 카드 표시
+- dashboard summary 조회 및 플레이 요약/모바일 플레이 집계 카드 표시
 - Beholder pending incident 조회 및 read-only 알림 카드 표시
 - PC 게임 실행, 웹 숏컷 열기, 전원 명령 호출
 - 등록 device token revoke

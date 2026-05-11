@@ -275,8 +275,49 @@ struct RemoteDashboardSummary: Decodable {
         }
     }
 
+    struct MobileMetrics: Decodable {
+        struct Game: Decodable {
+            let displayName: String
+            let androidPackageName: String
+            let totalSeconds: Double
+            let sessionCount: Int
+            let activeSessionCount: Int
+
+            enum CodingKeys: String, CodingKey {
+                case displayName = "display_name"
+                case androidPackageName = "android_package_name"
+                case totalSeconds = "total_seconds"
+                case sessionCount = "session_count"
+                case activeSessionCount = "active_session_count"
+            }
+        }
+
+        let totalSeconds: Double
+        let activeSeconds: Double
+        let sessionCount: Int
+        let activeSessionCount: Int
+        let sourceBreakdown: [String: Int]
+        let topGame: Game?
+
+        enum CodingKeys: String, CodingKey {
+            case totalSeconds = "total_seconds"
+            case activeSeconds = "active_seconds"
+            case sessionCount = "session_count"
+            case activeSessionCount = "active_session_count"
+            case sourceBreakdown = "source_breakdown"
+            case topGame = "top_game"
+        }
+    }
+
     let range: Range
     let metrics: Metrics
+    let mobileMetrics: MobileMetrics?
+
+    enum CodingKeys: String, CodingKey {
+        case range
+        case metrics
+        case mobileMetrics = "mobile_metrics"
+    }
 }
 
 struct RemoteBeholderIncident: Decodable, Identifiable {

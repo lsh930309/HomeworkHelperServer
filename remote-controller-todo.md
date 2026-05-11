@@ -1,8 +1,9 @@
 # Remote Controller TODO
 
 작성/갱신: 2026-05-11
-현재 통합 브랜치: `main`
-작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
+현재 작업 브랜치: `dev-remote`
+main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한다`
+작업 브랜치 이력: remote-controller 변경분은 `dev-remote`에 유지하고 `main`은 기준점으로 복구 완료
 기준 설계 문서: `remote-controller-technical-review.md`
 
 ## 목표
@@ -20,8 +21,8 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 ## 1차 수직 슬라이스 — 진행 중
 
 - [x] `dev-remote` 브랜치 생성
-- [x] `dev-remote` 작업분을 `main`에 Korean Lore squash merge
-- [x] squash merge 후 `dev-remote` 원격/로컬 브랜치 삭제
+- [x] remote-controller 변경분을 `dev-remote` 원격/로컬 브랜치에 유지
+- [x] 잘못 올라간 `main` remote-controller 커밋을 `dev-remote`로 이전하고 `main`을 기준점으로 복구
 - [x] 기술 검토 문서 루트 보존: `remote-controller-technical-review.md`
 - [x] TODO 문서 생성: `remote-controller-todo.md`
 - [x] 작업 보고서 생성: `remote-controller-work-report.md`
@@ -93,6 +94,6 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [ ] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
 - [ ] 실제 Android package name 실행 Intent smoke test
 - [ ] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행
-- [ ] Mobile session analytics 병합 구현
+- [x] Mobile session analytics 병합 구현
 - [ ] UsageStatsManager 기반 자동 세션 기록/Remote Agent sync 구현
 - [ ] 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test

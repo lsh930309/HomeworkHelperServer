@@ -1,7 +1,8 @@
 # Remote Controller 작업 보고서
 
-현재 통합 브랜치: `main`
-작업 브랜치 이력: `dev-remote`에서 개발 후 `main`에 squash merge, 브랜치 삭제 완료
+현재 작업 브랜치: `dev-remote`
+main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한다`
+작업 브랜치 이력: remote-controller 변경분은 `dev-remote`에 유지하고 `main`은 기준점으로 복구 완료
 최초 작성: 2026-05-11
 
 ## 보고서 운영 방식
@@ -16,6 +17,43 @@
 - 남은 리스크/다음 작업
 
 ---
+
+## 2026-05-11 — Remote mobile session analytics를 dashboard summary에 병합
+
+### 작업 범위
+
+- `/remote/dashboard/summary` 응답에 `mobile_metrics`를 추가해 수동/UsageStats 모바일 세션의 총 시간, 활성 시간, 세션 수, source breakdown, Top 모바일 게임을 집계했다.
+- Remote API 버전을 `0.1.7`로 올리고, macOS `RemoteDashboardSummary` DTO와 SwiftUI `플레이 요약` 카드에 모바일 플레이 요약을 표시하도록 했다.
+- Android `RemoteDashboardSummary` 파서/DTO/Compose 카드에도 동일한 모바일 플레이 집계를 전파했다.
+- macOS production `RemoteAPIClient` smoke가 mobile session start/end 후 dashboard summary의 mobile metrics를 확인하도록 강화했다.
+
+### 자체 코드 리뷰 메모
+
+- 기존 PC `metrics`는 유지하고 `mobile_metrics`를 별도 필드로 추가해 기존 dashboard analytics 의미를 깨지 않게 했다.
+- active mobile session은 현재 시각까지의 overlap으로 집계하되, macOS smoke는 end 이후 재조회로 deterministic하게 검증한다.
+- `remote_power_config.json` 설정 UI는 원격으로 서버 파일을 수정하는 보안 결정이 필요해 이번 자동 작업 범위에서 제외했다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 37 passed, 6 warnings
+- `swift build` → Build complete (1.56s)
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.7, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=1, mobile_session=ended, mobile_summary_sessions=1`
+- `./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker` → remote routes 18 passed, full pytest 146 passed, macOS Swift build passed, Android assembleDebug는 SDK License blocker로만 중단
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Remote mobile session analytics를 dashboard summary에 병합한다
+
+Constraint: Android 실기기 UsageStats sync 전이라도 수동 mobile session 기록은 macOS production client smoke로 dashboard summary 집계까지 닫아야 함
+Rejected: PC metrics에 모바일 시간을 직접 합산 | 기존 dashboard playtime 의미가 바뀌어 PC 세션 회귀를 숨길 수 있어 별도 mobile_metrics로 분리
+Confidence: high
+Scope-risk: narrow
+Directive: UsageStats 자동 sync를 추가할 때도 mobile_metrics 계약과 macOS smoke의 start/end 후 summary 검증을 유지할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py (37 passed); swift build; ./.venv/bin/python tools/smoke_macos_remote_api_client.py; ./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker (146 passed, Android SDK License blocker acknowledged); git diff --check
+Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Android device/emulator UsageStats 자동 sync 및 mobile metrics UI runtime
+```
 
 ## 2026-05-11 — Remote mobile sessions 수동 기록 경계를 game-links 위에 추가
 

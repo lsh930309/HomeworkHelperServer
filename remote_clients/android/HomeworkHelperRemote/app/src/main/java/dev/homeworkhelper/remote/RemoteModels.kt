@@ -89,6 +89,13 @@ data class RemoteDashboardSummary(
     val sessionCount: Int,
     val topGameName: String,
     val topGameSeconds: Double,
+    val mobileTotalSeconds: Double,
+    val mobileActiveSeconds: Double,
+    val mobileSessionCount: Int,
+    val mobileActiveSessionCount: Int,
+    val mobileTopGameName: String,
+    val mobileTopAndroidPackageName: String,
+    val mobileTopGameSeconds: Double,
 )
 
 data class RemoteBeholderIncident(

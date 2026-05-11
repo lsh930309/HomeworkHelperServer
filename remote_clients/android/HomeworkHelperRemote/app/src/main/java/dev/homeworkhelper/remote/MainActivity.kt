@@ -358,6 +358,13 @@ fun RemoteApp() {
                             if (summary.topGameName.isNotBlank()) {
                                 Text("Top: ${summary.topGameName} · ${formatDuration(summary.topGameSeconds)}")
                             }
+                            Text("모바일 플레이 ${formatDuration(summary.mobileTotalSeconds)} / 모바일 세션 ${summary.mobileSessionCount}개")
+                            if (summary.mobileActiveSessionCount > 0) {
+                                Text("활성 모바일 ${summary.mobileActiveSessionCount}개 · ${formatDuration(summary.mobileActiveSeconds)}")
+                            }
+                            if (summary.mobileTopGameName.isNotBlank()) {
+                                Text("Mobile Top: ${summary.mobileTopGameName} · ${summary.mobileTopAndroidPackageName} · ${formatDuration(summary.mobileTopGameSeconds)}")
+                            }
                         }
                     }
                 }

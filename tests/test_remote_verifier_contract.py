@@ -105,10 +105,12 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "refreshedClient.startMobileSession" in macos
     assert "refreshedClient.endMobileSession" in macos
     assert "refreshedClient.activeMobileSessions()" in macos
+    assert "mobileSummary.mobileMetrics" in macos
     assert "refreshedClient.gameLinks()" in macos
     assert "created game-link missing" in macos
     assert "started mobile session missing" in macos
     assert "mobile session end did not close" in macos
+    assert "dashboard summary did not include the ended mobile session metrics" in macos
     assert "process seed failed" in macos
     assert "refreshedClient.devices()" in macos
 
