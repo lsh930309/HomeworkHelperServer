@@ -18,6 +18,36 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-11 — 완료 감사가 power config 최신 verifier 결과를 반영
+
+### 작업 범위
+
+- `remote-controller-completion-audit.md`의 최신 verifier evidence를 power config 설정 UI 이후 결과로 보정했다.
+- remote routes count와 full pytest count를 최신 `20 passed`, `148 passed`로 맞췄다.
+
+### 자체 코드 리뷰 메모
+
+- 코드 변경은 없고, 감사 문서의 evidence drift만 보정했다.
+- `dev-remote`에서만 보정하며 `main` 기준점은 변경하지 않는다.
+
+### 테스트/검증 결과
+
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+완료 감사가 power config 최신 verifier 결과를 반영한다
+
+Constraint: remote-controller 변경분은 dev-remote에만 유지해야 하며 completion audit evidence가 최신 검증 결과와 일치해야 함
+Rejected: stale verifier 숫자 유지 | 완료 판단 때 proxy evidence가 실제 최신 상태와 어긋날 수 있음
+Confidence: high
+Scope-risk: narrow
+Directive: verifier count가 바뀌는 기능 커밋 뒤에는 completion audit의 최신 evidence 숫자도 함께 갱신할 것
+Tested: git diff --check
+Not-tested: 코드 변경 없음
+```
+
 ## 2026-05-11 — Remote power config 설정 UI를 안전 저장 경계로 추가
 
 ### 작업 범위
