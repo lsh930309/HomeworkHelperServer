@@ -83,18 +83,18 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Remote power adapter 설정 readiness preflight 추가: `tools/check_remote_power_readiness.py`
 - [x] Android APK smoke에 UsageStats appops 보고/설정 화면 열기 옵션 추가
 - [x] Android APK smoke에 UsageStats 허용 상태 강제 gate 추가
-- [ ] Android SDK License 수락 후 SDK platform/build-tools 설치
+- [x] Android SDK License 수락 후 SDK platform/build-tools 설치
 
 ## 사용자 의사결정 필요 예정 항목
 
-0. Google Android SDK License를 수락하고 `sdkmanager --licenses` 및 SDK package 설치를 진행할지.
 1. 1차 실사용 연결 방식을 Tailscale로 고정할지, ZeroTier도 동등 지원할지.
 2. SmartThings 전원 제어를 macOS 앱 직접 실행으로 둘지, PC/LAN helper 또는 릴레이 경유로 추상화할지.
 3. Remote Agent 인증을 로컬 pairing code만으로 시작할지, 처음부터 device registry + token revoke UI까지 포함할지.
 
 ## Android 후속 검증 항목
 
-- [ ] Android SDK License 수락 후 `./gradlew :app:assembleDebug` 실행
+- [x] Android SDK License 수락 후 `./gradlew :app:assembleDebug` 실행
+- [ ] 연결된 Android 기기 또는 emulator 확보 후 `tools/smoke_android_remote_controller.py --report-usage-access` 실행
 - [ ] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
 - [ ] 실제 Android package name 실행 Intent smoke test
 - [ ] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행

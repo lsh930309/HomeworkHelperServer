@@ -140,7 +140,7 @@ HH_REMOTE_STATUS_TIMEOUT_SECONDS=4
 
 ## 5. Android 클라이언트 초안
 
-Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`에 둔다. 현재 개발 환경에는 OpenJDK 17, Gradle wrapper, Android command line tools 경로가 준비되어 있지만, Google Android SDK License 수락 전이라 APK 산출은 아직 완료하지 못했다. macOS 앱에서 검증한 Remote Agent API 계약은 Kotlin + Jetpack Compose UI로 전파했다.
+Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`에 둔다. 현재 개발 환경에는 OpenJDK 17, Android command line tools, Android SDK license/package, Gradle wrapper가 준비되어 있고 `:app:assembleDebug`가 성공해 debug APK까지 산출된다. macOS 앱에서 검증한 Remote Agent API 계약은 Kotlin + Jetpack Compose UI로 전파했다.
 
 현재 Android 범위:
 
@@ -162,13 +162,13 @@ Android 네이티브 앱 초안은 `remote_clients/android/HomeworkHelperRemote`
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 ./gradlew :app:assembleDebug
 ```
 
-이번 macOS 검증에서 OpenJDK 17/Gradle/Android command line tools 설치와 Gradle wrapper 생성까지 완료했다. 다만 Android SDK package 설치는 Google Android SDK License 수락이 필요해 중단되었고, `assembleDebug`는 `build-tools;35.0.0`, `platforms;android-36` license 미수락으로 실패했다. 사용자 승인 후 `sdkmanager --licenses`와 `sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"`를 실행한 뒤 APK 빌드를 재시도한다.
+2026-05-12 검증에서 `sdkmanager --licenses`와 `sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"`를 완료했고, AndroidX 및 Java/Kotlin 17 toolchain 설정을 저장소에 고정해 `./gradlew :app:assembleDebug --stacktrace`가 성공했다. 추가로 Android emulator/system image 설치를 시도했으나 로컬 디스크 여유 공간 부족(`No space left on device`, 약 5.5GiB available)으로 system image 준비가 중단되어 adb install/launch smoke는 실제 device/emulator 연결 후 재개한다.
 
 주의: Android token은 Android Keystore AES/GCM key로 암호화해 저장한다. 기존 초안의 평문 `SharedPreferences` token은 최초 실행 시 암호화 저장소로 마이그레이션하고 제거한다.
 
@@ -177,14 +177,17 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 통합 검증:
 
 ```bash
-./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker \
+./.venv/bin/python tools/verify_remote_controller.py \
   --require-branch dev-remote \
-  --expect-main-hash 4052da3
+  --expect-main-hash 4052da3 \
+  --allow-android-device-blocker
 ```
 
-`--allow-android-license-blocker`는 Android SDK License 수락 전의 알려진 blocker만 허용한다. License 수락 및 SDK package 설치가 끝난 뒤에는 이 flag 없이 실행해 Android APK assemble까지 green인지 확인한다.
+`--allow-android-license-blocker`는 Android SDK License 수락 전의 알려진 blocker만 허용한다. License 수락 및 SDK package 설치가 끝난 현재 상태에서는 이 flag를 사용하지 않는다.
 
-`--require-branch dev-remote`와 `--expect-main-hash 4052da3`는 remote-controller 작업이 `dev-remote`에서만 진행되고 `main`/`origin/main`이 기준점에서 drift하지 않았는지 확인하는 보호 gate다. Android SDK License 승인 전 커밋 검증에서는 이 두 flag를 함께 유지한다.
+`--allow-android-device-blocker`는 APK가 산출된 뒤에도 연결된 adb device/emulator가 없을 때만 허용하는 gate다. 이 flag 없이 verifier를 실행하면 device/emulator 부재를 실패로 취급한다.
+
+`--require-branch dev-remote`와 `--expect-main-hash 4052da3`는 remote-controller 작업이 `dev-remote`에서만 진행되고 `main`/`origin/main`이 기준점에서 drift하지 않았는지 확인하는 보호 gate다.
 
 Remote Agent를 TestClient가 아닌 실제 loopback server process로 띄워 pairing/token 경계를 확인하려면 다음 smoke를 단독 실행한다.
 
@@ -208,7 +211,7 @@ Android APK가 생성된 뒤 device/emulator에 install + launch smoke를 수행
 ./.venv/bin/python tools/smoke_android_remote_controller.py
 ```
 
-SDK License 수락 전 또는 APK 산출 전에는 준비 상태만 확인할 수 있다.
+SDK package/license 또는 APK 산출 전에는 준비 상태만 확인할 수 있다. APK 산출 후 device/emulator가 없으면 install/launch smoke는 `Expected exactly one connected adb device` blocker를 보고한다.
 
 ```bash
 ./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker

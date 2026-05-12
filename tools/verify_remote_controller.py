@@ -20,12 +20,18 @@ from typing import Iterable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MACOS_CLIENT_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote"
 ANDROID_CLIENT_DIR = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
-DEFAULT_JAVA_HOME = Path("/opt/homebrew/opt/openjdk@17")
+DEFAULT_JAVA_HOME = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home")
 DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
 ANDROID_LICENSE_MARKERS = (
     "licenses have not been accepted",
     "License for package Android SDK",
     "Android SDK License",
+)
+ANDROID_DEVICE_BLOCKER_MARKERS = (
+    "Expected exactly one connected adb device",
+    "adb devices failed",
+    "adb not found",
+    "Requested adb device",
 )
 
 
@@ -127,6 +133,10 @@ def _is_android_license_blocker(result: CheckResult) -> bool:
     return result.returncode != 0 and any(marker in result.output for marker in ANDROID_LICENSE_MARKERS)
 
 
+def _is_android_device_blocker(result: CheckResult) -> bool:
+    return result.returncode != 0 and any(marker in result.output for marker in ANDROID_DEVICE_BLOCKER_MARKERS)
+
+
 def _print_result(result: CheckResult) -> None:
     print(f"\n== {result.name}: {result.status} ({result.returncode}) ==")
     print("$ " + " ".join(result.command))
@@ -140,6 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-android-license-blocker",
         action="store_true",
         help="Exit 0 when the only failure is the known Android SDK License blocker.",
+    )
+    parser.add_argument(
+        "--allow-android-device-blocker",
+        action="store_true",
+        help="Exit 0 when the only failure is the absence of a connected Android device/emulator for APK smoke.",
     )
     parser.add_argument(
         "--skip-full-pytest",
@@ -180,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[CheckResult] = []
     android_license_blockers: list[CheckResult] = []
+    android_device_blockers: list[CheckResult] = []
     for result in checks:
         if result.returncode == 0:
             _print_result(result)
@@ -187,6 +203,11 @@ def main(argv: list[str] | None = None) -> int:
         if result.name == "Android assembleDebug" and _is_android_license_blocker(result):
             object.__setattr__(result, "status", "blocked: android-sdk-license")
             android_license_blockers.append(result)
+            _print_result(result)
+            continue
+        if result.name == "Android APK smoke readiness" and _is_android_device_blocker(result):
+            object.__setattr__(result, "status", "blocked: android-device")
+            android_device_blockers.append(result)
             _print_result(result)
             continue
         failures.append(result)
@@ -198,9 +219,17 @@ def main(argv: list[str] | None = None) -> int:
     if android_license_blockers and not args.allow_android_license_blocker:
         print("\nVerification blocked by Android SDK License acceptance.")
         return 2
+    if android_device_blockers and not args.allow_android_device_blocker:
+        print("\nVerification blocked by missing connected Android device/emulator.")
+        return 2
 
-    if android_license_blockers:
-        print("\nVerification passed except for the acknowledged Android SDK License blocker.")
+    if android_license_blockers or android_device_blockers:
+        acknowledged = []
+        if android_license_blockers:
+            acknowledged.append("Android SDK License")
+        if android_device_blockers:
+            acknowledged.append("Android device/emulator")
+        print(f"\nVerification passed except for acknowledged blocker(s): {', '.join(acknowledged)}.")
     else:
         print("\nVerification passed.")
     return 0

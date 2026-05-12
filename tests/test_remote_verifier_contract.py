@@ -50,6 +50,9 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
     assert "--allow-android-license-blocker" in verifier
     assert "ANDROID_LICENSE_MARKERS" in verifier
     assert "blocked: android-sdk-license" in verifier
+    assert "--allow-android-device-blocker" in verifier
+    assert "ANDROID_DEVICE_BLOCKER_MARKERS" in verifier
+    assert "blocked: android-device" in verifier
     assert "--skip-full-pytest" in verifier
 
 

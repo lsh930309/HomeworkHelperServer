@@ -2,8 +2,8 @@
 
 작성/갱신: 2026-05-12
 현재 작업 브랜치: `dev-remote`
-최신 기능/검증 확인 commit: `git log --oneline`의 최신 `Remote power config 설정 UI를 안전 저장 경계로 추가한다` commit 참조
-문서-only 보정 commit: 최신 `dev-remote` 검증 기록 보정 commit 참조
+최신 기능/검증 확인 commit: `0ace714 Android 검증 문서가 브랜치 gate와 game-link 현실을 따른다` 이후 Android SDK/build gate 해소 변경은 다음 커밋에 포함 예정
+문서-only 보정 commit: Android SDK license/build 검증 기록은 다음 Korean Lore 커밋에 포함 예정
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
 ## 1. 완료 판단 기준
@@ -37,78 +37,79 @@
 | macOS dashboard/Beholder/read-only 및 Android-PC 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 카드, macOS API smoke DTO decode, Android-PC 안내문이 수동 세션/UsageStats sync 구현 상태와 일치함 | 충족 | SwiftUI 창 조작 smoke는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
-| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드 | 부분 충족 | APK assemble/install 전까지 compile/runtime 보장은 불완전 |
+| Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드, `./gradlew :app:assembleDebug --stacktrace` BUILD SUCCESSFUL | 부분 충족 | 실제 device/emulator install/launch 전까지 Android runtime 보장은 불완전 |
 | Android token 보안 | `AndroidTokenStore.kt` Keystore AES/GCM, legacy token migration | 정적 충족 | 실제 Android Keystore provider smoke 미완료 |
 | Android UsageStats/Intent | `AndroidIntegration.kt`, manifest `PACKAGE_USAGE_STATS`, UI 경로, game-link create/package launch/mobile session card, `Usage 동기화` 자동 start/end 로직, Android README/구동 가이드가 stale game-link TODO 대신 실기기 smoke gap을 안내 | 정적 충족 | Usage Access 허용 후 실기기 provider 동작 미완료 |
 | Android Gradle wrapper | `remote_clients/android/HomeworkHelperRemote/gradlew`, wrapper jar/properties | 충족 | 없음 |
-| Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고 | 부분 충족 | 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker |
-| Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행 | 부분 충족 | 현재는 APK 누락 blocker를 `--allow-missing-apk`로 명시 확인, 실제 device/emulator 실행은 APK 산출 후 필요 |
-| Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 APK/device가 없어 appops allow evidence 없음 |
-| Android APK assemble | `tools/verify_remote_controller.py`가 `:app:assembleDebug`를 실행하나 SDK License blocker 확인 | 미충족 | Google Android SDK License 수락 및 SDK package 설치 필요 |
+| Android SDK readiness preflight | `tools/check_android_sdk_readiness.py`가 `sdkmanager`, `adb`, required SDK package, license files를 변경 없이 보고하고, 현재 `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, `android-sdk-license`, `android-sdk-preview-license` present로 passed | 충족 | 없음 |
+| Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행. 현재 APK는 `app/build/outputs/apk/debug/app-debug.apk`로 산출됨 | 부분 충족 | 연결된 adb device/emulator가 없어 install/launch smoke는 `Expected exactly one connected adb device; connected=[]` blocker |
+| Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 device/emulator가 없어 appops allow evidence 없음 |
+| Android APK assemble | Android SDK license/package 설치 후 `remote_clients/android/HomeworkHelperRemote/gradle.properties`의 AndroidX 설정과 Java/Kotlin 17 toolchain을 고정했고 `./gradlew :app:assembleDebug --stacktrace` 및 통합 verifier 내 Android assembleDebug가 BUILD SUCCESSFUL | 충족 | Gradle 10 deprecation warning은 후속 정리 가능 |
 | 전체 Python 테스트벤치 | 최신 전체 pytest에서 `150 passed, 6 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
 | verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier/smoke script 구성 drift 방지와 branch discipline pass/fail 단위 검증 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
-| 통합 verifier | `tools/verify_remote_controller.py` | 충족 | License 수락 후 `--allow-android-license-blocker` 없이 green 필요 |
-| 사용자 의사결정 blocker | Android SDK License 수락 여부 질문으로 중단 | 충족 | 사용자 승인 필요 |
+| 통합 verifier | `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker` → Android assembleDebug 포함 passed, Android device/emulator blocker만 명시 허용 | 부분 충족 | 실제 device/emulator 연결 후 `--allow-android-device-blocker` 없이 green 필요 |
+| 사용자 의사결정 blocker | 사용자가 Android SDK License 수락과 추가 도구 설치를 승인했고 `sdkmanager --licenses` 및 필수 SDK package 설치를 완료 | 충족 | 없음 |
 
 ## 3. 최신 검증 evidence
 
 최근 통합 검증 명령:
 
 ```bash
-git status --short --branch && git branch --show-current && git rev-parse --short HEAD && git rev-parse --short main && git rev-parse --short origin/main && git rev-parse --short origin/dev-remote
-./.venv/bin/python tools/check_android_sdk_readiness.py --allow-blocker
-./.venv/bin/python tools/verify_remote_controller.py --allow-android-license-blocker --require-branch dev-remote --expect-main-hash 4052da3
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"
+./.venv/bin/python tools/check_android_sdk_readiness.py
+cd remote_clients/android/HomeworkHelperRemote && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools ./gradlew :app:assembleDebug --stacktrace
+./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py
+./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker
 ```
 
 확인 결과:
 
-- branch/hash 확인 → 현재 브랜치 `dev-remote`, HEAD와 `origin/dev-remote` 일치, `main`/`origin/main` `4052da3`, working tree clean
-- Android SDK readiness → `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, license files 누락 blocker 유지
-
-- verifier branch discipline gate → `dev-remote`와 `main`/`origin/main` 기준점 확인 passed
-- `tests/test_remote_routes.py` → 20 passed
-- `tests/test_remote_android_client_static.py` → 8 passed, Android README/setup guide stale TODO 및 branch verifier 문서 assertion 포함
-- `tests/test_remote_macos_client_static.py` → 5 passed, Android-PC 연결 stale 안내문 방지 assertion 포함
+- branch/hash 확인 → 현재 브랜치 `dev-remote`, `main`/`origin/main` `4052da3`, branch discipline gate passed
+- Android SDK readiness → `sdkmanager` present, `adb` present, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, `android-sdk-license`, `android-sdk-preview-license` present, readiness passed
+- Android Gradle build → `./gradlew :app:assembleDebug --stacktrace` BUILD SUCCESSFUL, APK `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk` 생성
+- Android build 설정 보정 → `gradle.properties`에 `android.useAndroidX=true`, 앱 Gradle에 Java/Kotlin 17 target/toolchain 고정
+- `tests/test_remote_verifier_contract.py` → 8 passed, `--allow-android-device-blocker`와 `blocked: android-device` 계약 포함
+- `tests/test_remote_routes.py` → 20 passed, 6 warnings
+- `tests/test_remote_android_client_static.py` → 8 passed
+- `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
 - `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics summary/Beholder incident decode 포함 passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed
-- `tools/smoke_remote_controller_connectivity.py --help` 및 verifier contract test → connectivity smoke 진입점 확인
-- `tools/check_android_sdk_readiness.py --allow-blocker` → SDK package/license 누락 blocker 명시 후 readiness report passed
-- `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker 명시 후 readiness passed
-- `tools/smoke_android_remote_controller.py --help` → UsageStats appops 보고/강제 gate/설정 화면 option 확인
+- `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK는 존재하나 connected adb device가 없어 `Expected exactly one connected adb device; connected=[]` blocker
 - 전체 pytest → 150 passed, 6 warnings
 - macOS `swift build` → passed
-- `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK 누락 blocker를 명시 보고
-- `tests/test_remote_verifier_contract.py` → `--require-usage-access` gate marker와 branch discipline pass/fail 단위 테스트 포함 8 passed
-- Android `./gradlew :app:assembleDebug --stacktrace` → `build-tools;35.0.0`, `platforms;android-36` license 미수락 blocker
+- 통합 verifier → Android assembleDebug까지 passed, Android device/emulator blocker만 `--allow-android-device-blocker`로 명시 허용
+- Android emulator 추가 설치 시도 → `emulator` package는 설치됐으나 `system-images;android-36;google_apis;arm64-v8a`는 로컬 디스크 여유 공간 부족(`No space left on device`, 약 5.5GiB available)으로 중단
 
 ## 4. 완료 불가 판정 사유
 
-2026-05-12 현재 상태만으로는 active goal을 완료로 표시하지 않는다.
+2026-05-12 현재 Android SDK License 및 APK assemble blocker는 해소되었지만, active goal을 완료로 표시하지 않는다.
 
 이유:
 
-1. Android APK assemble이 Google Android SDK License 수락 전이라 완료되지 않았다.
-2. 실제 Android device/emulator install smoke가 없다.
-3. Android Keystore, UsageStats provider, game-link 생성 UI, package Intent 실행, 수동/UsageStats 자동 mobile session start/end는 정적 계약과 APK smoke preflight로만 검증되었고 실제 device/emulator 동작은 미검증이다.
+1. 실제 Android device/emulator install/launch smoke가 없다. 현재 `adb devices` 결과 connected device가 없다.
+2. Android emulator를 준비하려고 `emulator`와 `system-images;android-36;google_apis;arm64-v8a` 설치를 시도했으나 system image는 로컬 디스크 여유 공간 부족으로 설치되지 않았다.
+3. Android Keystore, UsageStats provider, game-link 생성 UI, package Intent 실행, 수동/UsageStats 자동 mobile session start/end는 APK compile과 정적 계약으로는 검증됐지만 실제 device/emulator runtime 동작은 미검증이다.
 4. 기술 검토서의 Tailscale/ZeroTier 외부망 실접속은 smoke 스크립트와 가이드까지 준비되었지만 LTE/tailnet 실제 URL/token evidence는 아직 없다.
 5. SmartThings/SSH 설정 저장 UI는 추가되었지만 실제 전원 동작은 장비 side effect가 있어 별도 승인된 환경이 필요하다.
 
 ## 5. 다음 unblock 순서
 
-사용자 승인 후 다음 순서로 진행한다.
+현재 다음 순서로 재개한다.
 
 ```bash
-sdkmanager --licenses
-sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"
-./.venv/bin/python tools/check_remote_power_readiness.py
-./.venv/bin/python tools/verify_remote_controller.py
-cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug
-cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access
+# 디스크 여유 공간 확보 후 emulator system image 설치 또는 실제 Android 기기 연결
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home sdkmanager --install "system-images;android-36;google_apis;arm64-v8a"
+avdmanager create avd --name HomeworkHelperRemoteApi36 --package "system-images;android-36;google_apis;arm64-v8a" --device pixel_8
+emulator -avd HomeworkHelperRemoteApi36 -no-snapshot -no-audio
+
+# 또는 USB/무선 디버깅 device 연결 후
+./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access
 ./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --report-usage-access --open-usage-access-settings
 ./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access
+./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3
 ./.venv/bin/python tools/smoke_remote_controller_connectivity.py --base-url http://100.x.y.z:8000 --token "<paired-device-token>" --expect-auth
 ```
 
@@ -122,3 +123,4 @@ cd ../../.. && ./.venv/bin/python tools/smoke_android_remote_controller.py --rep
 6. PC 명령 버튼의 capability gating 확인
 7. Usage Access 허용 후 최근 전면 앱 조회
 8. Android game-link package Intent 실행
+9. 수동/UsageStats 자동 mobile session start/end 및 dashboard mobile metrics 반영

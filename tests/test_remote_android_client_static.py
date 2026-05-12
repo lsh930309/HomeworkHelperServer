@@ -217,20 +217,23 @@ def test_android_usage_stats_ui_can_query_recent_foreground_app():
     assert "events.getNextEvent(event)" in integration
 
 
-def test_android_docs_pin_current_sdk_license_blocker():
+def test_android_docs_pin_current_sdk_build_and_device_blocker():
     readme = _read(ANDROID_ROOT / "README.md")
     guide = _read(Path("docs/remote-controller/setup-guide.md"))
     todo = _read(Path("remote-controller-todo.md"))
 
-    assert "Android SDK License" in readme
-    assert "sdkmanager --licenses" in readme
+    assert "Android SDK license" in readme
+    assert "BUILD SUCCESSFUL" in readme
+    assert "adb device/emulator" in readme
     assert 'build-tools;35.0.0' in readme
     assert 'platforms;android-36' in readme
     assert "Android Keystore" in guide
     assert "--require-branch dev-remote" in guide
     assert "--expect-main-hash 4052da3" in guide
+    assert "--allow-android-device-blocker" in guide
     assert "usage_stats` 자동 세션 sync" in guide
     assert "game-link package Intent 실행 및 UsageStats 자동 세션 전환 smoke test" in readme
     assert "PC 게임과 Android package/deeplink 매칭 데이터 모델 추가" not in readme
-    assert "Android SDK License 수락 후 SDK platform/build-tools 설치" in todo
+    assert "[x] Android SDK License 수락 후 SDK platform/build-tools 설치" in todo
+    assert "연결된 Android 기기 또는 emulator 확보" in todo
     assert "Android token 저장소를 Keystore 암호화 저장으로 교체" in todo
