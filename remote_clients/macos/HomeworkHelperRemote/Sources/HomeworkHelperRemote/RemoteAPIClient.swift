@@ -3,7 +3,7 @@ import Foundation
 struct RemoteAPIClient {
     var baseURL: URL
     var bearerToken: String?
-    var session: URLSession = .shared
+    var session: URLSession = URLSession(configuration: .ephemeral)
 
     private func endpoint(_ path: String) -> URL {
         baseURL.appendingPathComponent(path)

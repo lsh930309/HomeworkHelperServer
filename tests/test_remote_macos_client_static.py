@@ -166,24 +166,28 @@ def test_macos_keychain_store_uses_service_and_account_boundaries():
     assert 'SecItemAdd' in keychain
     assert 'SecItemUpdate' in keychain
     assert 'SecItemDelete' in keychain
+    assert 'protocol RemoteTokenStore' in keychain
+    assert 'struct KeychainTokenStore: RemoteTokenStore' in keychain
 
 
 def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
+    view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
 
-    assert "func isPowerActionEnabled(_ action: String) -> Bool" in app
-    assert "status.capabilities.powerControl" in app
-    assert "status.power?.configured == true" in app
-    assert "status.supportedPowerActions" in app
+    assert "RemoteDashboardViewModel()" in app
+    assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
+    assert "status.capabilities.powerControl" in view_model
+    assert "status.power?.configured == true" in view_model
+    assert "status.supportedPowerActions" in view_model
     assert "!viewModel.isPowerActionEnabled(action)" in app
-    assert "전원 제어 adapter가 설정되지" in app
+    assert "전원 제어 adapter가 설정되지" in view_model
     assert "지원 명령" in app
     assert "전원 상태" in app
     assert "전원 설정" in app
     assert "전원 설정 저장" in app
-    assert "savePowerConfig" in app
+    assert "savePowerConfig" in view_model
     assert "플레이 요약" in app
-    assert "dashboardSummary" in app
+    assert "dashboardSummary" in view_model
     assert "모바일 플레이" in app
     assert "mobileMetrics" in app
     assert "formatDuration" in app
@@ -192,12 +196,12 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Android-PC 연결" in app
     assert "모바일 세션은 수동 시작/종료와 Android UsageStats sync 흐름에 사용됩니다." in app
     assert "모바일 세션 sync는 후속 단계에서 연결합니다." not in app
-    assert "gameLinks" in app
-    assert "mobileSessions" in app
-    assert "func startMobileSession(_ link: RemoteGameLink) async" in app
-    assert "func endMobileSession(_ session: RemoteMobileSession) async" in app
-    assert "func createGameLink() async" in app
+    assert "gameLinks" in view_model
+    assert "mobileSessions" in view_model
+    assert "func startMobileSession(_ link: RemoteGameLink) async" in view_model
+    assert "func endMobileSession(_ session: RemoteMobileSession) async" in view_model
+    assert "func createGameLink() async" in view_model
     assert "연결 저장" in app
-    assert "gameLinkAndroidPackage" in app
-    assert "func refreshToken() async" in app
+    assert "gameLinkAndroidPackage" in view_model
+    assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app

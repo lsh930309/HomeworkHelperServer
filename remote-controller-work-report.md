@@ -1835,3 +1835,46 @@ Directive: APK manifest 계약을 바꾸면 check_android_apk_artifact.py와 ver
 Tested: ./.venv/bin/python tools/check_android_apk_artifact.py; ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker
 Not-tested: adb install/launch, Android runtime providers
 ```
+
+---
+
+## 2026-05-13 — macOS 앱 ViewModel 경계를 분리해 기능 검증 기반을 만든다
+
+### 작업 범위
+
+- `RemoteDashboardViewModel`을 `HomeworkHelperRemoteApp.swift`에서 `RemoteDashboardViewModel.swift`로 분리해 SwiftUI View와 앱 상태/액션 로직의 경계를 명확히 했다.
+- `RemoteTokenStore` protocol을 추가하고 `KeychainTokenStore`가 이를 구현하도록 바꿔, macOS 앱의 token 저장 경계를 테스트 가능한 구조로 열었다.
+- `RemoteAPIClient` 기본 `URLSession`을 `.ephemeral` configuration으로 바꿔 Remote Agent command/status 요청이 shared URL cache 상태에 덜 의존하도록 했다.
+- macOS 정적 계약 테스트가 분리된 ViewModel 파일에서 전원 gating, dashboard, Beholder, Android-PC/mobile session 액션을 확인하도록 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 이번 변경은 macOS UI 창 자동 클릭 검증 자체가 아니라, 버튼이 호출하는 ViewModel 로직을 별도 파일/토큰 저장 추상화로 분리해 다음 smoke를 붙일 수 있게 하는 기반 정리다.
+- Keychain의 production service/account 값은 그대로 유지했다.
+- API client smoke가 통과해 `.ephemeral` session 변경이 production DTO/endpoint 통신을 깨지 않음을 확인했다.
+
+### 테스트/검증 결과
+
+- `swift build` in `remote_clients/macos/HomeworkHelperRemote` → Build complete
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py` → 5 passed
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → macOS RemoteAPIClient smoke passed
+
+### 남은 macOS 검증 gap
+
+- SwiftUI 실제 창 클릭 자동화는 아직 미구현이다.
+- ViewModel headless runtime smoke는 MainActor/URLSession 실행 모델 때문에 별도 안정화가 필요해 이번 커밋에는 포함하지 않는다.
+- 실제 외부망/Tailscale/ZeroTier 접속 및 SmartThings/SSH 전원 side effect smoke는 환경 의존 항목으로 남는다.
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS 앱 상태 로직을 UI 파일 밖으로 분리해 기능 검증 길을 연다
+
+Constraint: macOS 앱은 API client smoke는 통과했지만 SwiftUI 버튼이 호출하는 상태 로직을 독립적으로 검증하기 어려웠음
+Rejected: 거대한 App.swift 유지 | View와 네트워크/토큰 상태가 한 파일에 묶여 macOS 기능 smoke를 확장하기 어려움
+Confidence: high
+Scope-risk: narrow
+Directive: 다음 macOS 기능 검증은 RemoteDashboardViewModel 경계에 안정적인 runtime smoke를 붙이고, 실제 창 클릭 자동화는 별도 gate로 분리할 것
+Tested: swift build; ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py; ./.venv/bin/python tools/smoke_macos_remote_api_client.py
+Not-tested: SwiftUI 실제 창 클릭 자동화, ViewModel headless runtime smoke, 외부망/전원 side effect smoke
+```

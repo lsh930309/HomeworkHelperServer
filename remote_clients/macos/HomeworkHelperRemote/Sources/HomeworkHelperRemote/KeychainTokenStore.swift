@@ -1,7 +1,13 @@
 import Foundation
 import Security
 
-struct KeychainTokenStore {
+protocol RemoteTokenStore {
+    func load() -> String
+    func save(_ token: String)
+    func delete()
+}
+
+struct KeychainTokenStore: RemoteTokenStore {
     private let service = "dev.homeworkhelper.remote"
     private let account = "remote-api-token"
 
