@@ -205,6 +205,14 @@ Swift `RemoteAPIClient.swift`와 `RemoteModels.swift`를 실제로 컴파일해 
 
 이 smoke는 Python으로 pairing code만 발급한 뒤, 임시 Swift binary가 `confirmPairing`, Bearer token `status`, token refresh, game-link 생성/조회, 모바일 세션 start/end, dashboard/Beholder, `devices` 조회를 수행해 macOS 클라이언트 DTO/endpoint/token 경계를 검증한다.
 
+SwiftUI 버튼이 호출하는 ViewModel 상태 전이를 실제 Remote Agent와 함께 검증하려면 다음 smoke를 실행한다.
+
+```bash
+./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
+```
+
+이 smoke는 production `RemoteDashboardViewModel.swift`와 `RemoteAPIClient.swift`를 같이 컴파일하고, 임시 in-memory token store를 주입해 pairing/token 저장, refresh, power guard, game-link 생성, 모바일 세션 start/end, token refresh, device refresh를 검증한다. SwiftUI 창 클릭 자동화는 아니지만 macOS 앱 버튼의 핵심 기능 경계를 deterministic하게 확인한다.
+
 Android APK가 생성된 뒤 device/emulator에 install + launch smoke를 수행하려면 다음 명령을 사용한다.
 
 ```bash

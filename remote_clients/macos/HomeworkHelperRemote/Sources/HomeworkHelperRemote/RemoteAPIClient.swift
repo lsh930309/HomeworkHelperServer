@@ -3,7 +3,7 @@ import Foundation
 struct RemoteAPIClient {
     var baseURL: URL
     var bearerToken: String?
-    var session: URLSession = URLSession(configuration: .ephemeral)
+    var session: URLSession = URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())
 
     private func endpoint(_ path: String) -> URL {
         baseURL.appendingPathComponent(path)
@@ -161,7 +161,8 @@ struct RemoteAPIClient {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
             let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw RemoteAPIError.http(status: http.statusCode, message: message)
+            let path = http.url?.path ?? "unknown endpoint"
+            throw RemoteAPIError.http(status: http.statusCode, message: "\(path): \(message)")
         }
     }
 }

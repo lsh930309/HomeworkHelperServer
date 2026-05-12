@@ -33,6 +33,8 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "tests/test_remote_macos_client_static.py",
         "tools/smoke_remote_controller_runtime.py",
         "tools/smoke_macos_remote_api_client.py",
+        "tools/smoke_macos_remote_viewmodel.py",
+        "macOS RemoteDashboardViewModel smoke",
         "tools/check_remote_power_readiness.py",
         "tools/check_android_sdk_readiness.py",
         "tools/smoke_android_remote_controller.py",
@@ -179,6 +181,7 @@ def test_android_apk_artifact_check_pins_packaged_manifest_contract():
 def test_macos_smokes_use_real_server_process_and_production_swift_client():
     runtime = _read(TOOLS / "smoke_remote_controller_runtime.py")
     macos = _read(TOOLS / "smoke_macos_remote_api_client.py")
+    viewmodel = _read(TOOLS / "smoke_macos_remote_viewmodel.py")
 
     assert "runpy.run_path('homework_helper.pyw')" in runtime
     assert "run_server_main" in runtime
@@ -207,6 +210,18 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "dashboard summary did not include the ended mobile session metrics" in macos
     assert "process seed failed" in macos
     assert "refreshedClient.devices()" in macos
+
+    assert "RemoteDashboardViewModel.swift" in viewmodel
+    assert "KeychainTokenStore.swift" in viewmodel
+    assert "InMemoryTokenStore" in viewmodel
+    assert "RemoteDashboardViewModel(tokenStore: store)" in viewmodel
+    assert "await viewModel.confirmPairing()" in viewmodel
+    assert "await viewModel.createGameLink()" in viewmodel
+    assert "await viewModel.startMobileSession(link)" in viewmodel
+    assert "await viewModel.endMobileSession(active)" in viewmodel
+    assert "await viewModel.refreshToken()" in viewmodel
+    assert "await viewModel.refreshDevices()" in viewmodel
+    assert "macOS RemoteDashboardViewModel smoke passed" in viewmodel
 
 
 def test_connectivity_smoke_supports_tailnet_or_lan_status_checks():

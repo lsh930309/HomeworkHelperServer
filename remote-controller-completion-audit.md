@@ -1,9 +1,9 @@
 # Remote Controller 완료 감사
 
-작성/갱신: 2026-05-12
+작성/갱신: 2026-05-13
 현재 작업 브랜치: `dev-remote`
-최신 기능/검증 확인 commit: `0ace714 Android 검증 문서가 브랜치 gate와 game-link 현실을 따른다` 이후 Android SDK/build gate 해소 변경은 다음 커밋에 포함 예정
-문서-only 보정 commit: Android SDK license/build 검증 기록은 다음 Korean Lore 커밋에 포함 예정
+최신 기능/검증 확인 commit: `880a012 macOS 앱 상태 로직을 UI 파일 밖으로 분리해 기능 검증 길을 연다` 이후 macOS ViewModel smoke 강화 변경은 다음 커밋에 포함 예정
+문서-only 보정 commit: Android SDK license/build 검증 기록은 반영됨
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
 ## 1. 완료 판단 기준
@@ -31,10 +31,11 @@
 | 감사 로그 | `src/core/remote_audit.py` 및 command route 기록 | 충족 | 장기 rotation/retention 정책 후속 |
 | 전원 adapter | `src/core/remote_power.py`, `remote_power_config.example.json`, power status/action API, `/remote/power/config`, macOS/Android `전원 설정` UI | 부분 충족 | 실제 SmartThings/SSH 전원 동작은 로컬 설정/장비 필요 |
 | 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 실제 SmartThings CLI, SSH key, 장비 side effect smoke blocker |
-| macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote` | 충족 | 실제 SwiftUI 버튼 클릭 자동화는 미검증 |
+| macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote`, `RemoteDashboardViewModel` 분리 및 `tools/smoke_macos_remote_viewmodel.py`의 ViewModel 기능 smoke | 충족 | 실제 SwiftUI 창 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
-| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics/beholder/devices 통신 | 충족 | SwiftUI 창 조작 smoke는 후속 |
-| macOS dashboard/Beholder/read-only 및 Android-PC 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 카드, macOS API smoke DTO decode, Android-PC 안내문이 수동 세션/UsageStats sync 구현 상태와 일치함 | 충족 | SwiftUI 창 조작 smoke는 후속 |
+| macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics/beholder/devices 통신 | 충족 | 없음 |
+| macOS ViewModel 기능 smoke | `tools/smoke_macos_remote_viewmodel.py` → real loopback server와 production Swift ViewModel을 컴파일해 pairing/token 저장, refresh, power guard, game-link 생성, mobile session start/end, token refresh, device refresh를 검증 | 충족 | SwiftUI 창 클릭 자동화는 후속 |
+| macOS dashboard/Beholder/read-only 및 Android-PC 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 카드, macOS API smoke DTO decode, ViewModel smoke의 game-link/mobile-session 상태 전이 검증, Android-PC 안내문이 수동 세션/UsageStats sync 구현 상태와 일치함 | 충족 | SwiftUI 창 클릭 자동화는 후속 |
 | 실제 서버 프로세스 smoke | `tools/smoke_remote_controller_runtime.py` → `homework_helper.pyw` subprocess + HTTP pairing/token 검증 | 충족 | 외부망/tailnet 실접속은 후속 |
 | LAN/Tailscale/ZeroTier connectivity smoke | `tools/smoke_remote_controller_connectivity.py` → 실행 중인 Remote Agent URL과 optional token으로 `/remote/status` 계약 및 인증 경계 확인 | 부분 충족 | 실제 tailnet/LAN URL과 paired token이 필요해 아직 실행 evidence 없음 |
 | Android Kotlin/Compose 전파 | `remote_clients/android/HomeworkHelperRemote`, `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteGameLink`, `RemoteMobileSession`, Compose `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 생성·실행·수동/UsageStats 자동 세션 카드, `./gradlew :app:assembleDebug --stacktrace` BUILD SUCCESSFUL | 부분 충족 | 실제 device/emulator install/launch 전까지 Android runtime 보장은 불완전 |
@@ -50,7 +51,7 @@
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
 | verifier/smoke script 계약 테스트 | `tests/test_remote_verifier_contract.py` → verifier/smoke script 구성 drift 방지와 branch discipline pass/fail 단위 검증 | 충족 | 새 smoke 추가 시 함께 갱신 필요 |
-| 통합 verifier | `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker` → Android assembleDebug 포함 passed, Android device/emulator blocker만 명시 허용 | 부분 충족 | 실제 device/emulator 연결 후 `--allow-android-device-blocker` 없이 green 필요 |
+| 통합 verifier | `tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker`가 macOS API smoke와 ViewModel smoke까지 포함 | 부분 충족 | 이번 변경 후 재실행 필요. 실제 device/emulator 연결 후 `--allow-android-device-blocker` 없이 green 필요 |
 | 사용자 의사결정 blocker | 사용자가 Android SDK License 수락과 추가 도구 설치를 승인했고 `sdkmanager --licenses` 및 필수 SDK package 설치를 완료 | 충족 | 없음 |
 
 ## 3. 최신 검증 evidence
@@ -78,6 +79,7 @@ cd remote_clients/android/HomeworkHelperRemote && JAVA_HOME=/opt/homebrew/opt/op
 - `tests/test_remote_macos_client_static.py` → 5 passed
 - `tools/smoke_remote_controller_runtime.py` → passed
 - `tools/smoke_macos_remote_api_client.py` → capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics summary/Beholder incident decode 포함 passed
+- `tools/smoke_macos_remote_viewmodel.py` → production Swift ViewModel이 real loopback server에서 pairing/token 저장, refresh, power guard, game-link 생성, mobile session start/end, token refresh, device refresh passed
 - `tools/check_remote_power_readiness.py --allow-blocker` → power config/CLI/key 누락 blocker 명시 후 readiness report passed
 - `tools/smoke_android_remote_controller.py --allow-missing-apk` → APK는 존재하나 connected adb device가 없어 `Expected exactly one connected adb device; connected=[]` blocker
 - 전체 pytest → 150 passed, 6 warnings

@@ -151,7 +151,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func powerConfig() async throws -> RemotePowerConfigResponse' in client
     assert 'func savePowerConfig(_ config: RemotePowerConfigPayload)' in client
     assert 'request(path: path, method: "PUT")' in client
-    assert 'RemoteAPIError.http(status: http.statusCode, message: message)' in client
+    assert 'URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())' in client
+    assert 'let path = http.url?.path ?? "unknown endpoint"' in client
+    assert 'RemoteAPIError.http(status: http.statusCode, message: "\\(path): \\(message)")' in client
 
 
 def test_macos_keychain_store_uses_service_and_account_boundaries():
@@ -175,6 +177,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
 
     assert "RemoteDashboardViewModel()" in app
+    assert "private actor RemoteDashboardService" in view_model
+    assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
     assert "status.capabilities.powerControl" in view_model
     assert "status.power?.configured == true" in view_model

@@ -18,6 +18,46 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS ViewModel 기능 smoke가 실제 버튼 경계를 닫는다
+
+### 작업 범위
+
+- macOS SwiftUI 버튼이 호출하는 `RemoteDashboardViewModel` 메서드를 별도 파일 경계에서 실제 Remote Agent에 붙여 검증하는 smoke를 추가했다.
+- ViewModel refresh를 sequential fetch로 바꿔, 인증 token last-seen을 파일에 기록하는 Remote Agent registry와 병렬 authenticated request가 경합하지 않게 했다.
+- macOS API client HTTP 오류 메시지에 endpoint path를 포함해 기능 smoke 실패 지점을 즉시 식별할 수 있게 했다.
+- 통합 verifier와 정적 contract 테스트에 새 macOS ViewModel smoke를 포함했다.
+
+### 자체 코드 리뷰 메모
+
+- SwiftUI 창 클릭 자동화보다 한 단계 아래인 ViewModel boundary를 먼저 닫아 pairing, refresh, game-link, mobile session, token refresh, power guard를 deterministic하게 검증했다.
+- 병렬 refresh 제거는 성능 최적화보다 인증 registry 안정성을 우선한 선택이다. UI 데이터 개수는 작고 smoke/실사용 모두 안전성이 더 중요하다.
+- 실제 전원 명령은 호출하지 않고, power adapter 미설정 시 로컬 guard 메시지만 검증한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/smoke_macos_remote_api_client.py` → `macOS RemoteAPIClient smoke passed: 0.1.8, devices=1, capabilities=ok, dashboard_sessions=0, beholder_incidents=0, game_links=1, mobile_session=ended, mobile_summary_sessions=1`
+- `./.venv/bin/python tools/smoke_macos_remote_viewmodel.py` → `macOS RemoteDashboardViewModel smoke passed: processes=1, game_links=1, devices=1`
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_verifier_contract.py` → 14 passed
+- `swift build` → passed
+- `./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker --skip-full-pytest` → branch discipline, Remote routes, Android/macOS static, runtime smoke, macOS API/ViewModel smoke, power/SDK readiness, macOS build, Android assembleDebug, APK artifact passed. Android device/emulator blocker만 명시 허용.
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS ViewModel 기능 smoke가 실제 버튼 경계를 닫는다
+
+Constraint: macOS 앱은 API client smoke만으로 SwiftUI 버튼이 호출하는 상태 전이를 증명하기 부족했음
+Rejected: SwiftUI 창 클릭 자동화부터 추가 | GUI flake가 큰 반면 ViewModel 경계가 더 안정적으로 기능 계약을 검증함
+Confidence: high
+Scope-risk: moderate
+Directive: SwiftUI UI 자동화는 ViewModel smoke와 분리해 flake-tolerant gate로 추가할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/smoke_macos_remote_api_client.py; ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py; swift build; ./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker --skip-full-pytest; git diff --check
+Not-tested: SwiftUI 실제 창 클릭 자동화, 외부망/전원 side effect smoke, Android device/emulator install/launch
+```
+
+---
+
 ## 2026-05-12 — Android/검증 문서가 브랜치 gate와 game-link 현실을 따른다
 
 ### 작업 범위
