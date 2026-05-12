@@ -2,7 +2,7 @@
 
 작성/갱신: 2026-05-13
 현재 작업 브랜치: `dev-remote`
-최신 기능/검증 확인 commit: `fdc3101 macOS ViewModel 기능 smoke가 실제 버튼 경계를 닫는다` 이후 Android emulator/e2e smoke 강화 변경은 다음 커밋에 포함 예정
+최신 기능/검증 확인 commit: `9b2c732 Android emulator e2e가 실사용 직전 경계를 닫는다`
 문서-only 보정 commit: Android SDK license/build 검증 기록은 반영됨
 목표 원문: `remote-controller-technical-review.md`에서 제안한 방식대로 리모트 컨트롤 인터페이스 앱 및 구동 환경 제작에 착수한다.
 
