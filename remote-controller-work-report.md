@@ -1778,6 +1778,8 @@ Not-tested: Android SDK License 수락 이후 APK assemble/install, 실제 Andro
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./.venv/bin/python tools/check_android_sdk_readiness.py` → passed
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools ./gradlew :app:assembleDebug --stacktrace` → BUILD SUCCESSFUL
 - APK 산출물: `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk` (약 11M)
+- `aapt dump badging app-debug.apk` → package `dev.homeworkhelper.remote`, version `0.1.0`, minSdk 26, targetSdk 36 확인
+- `aapt dump permissions app-debug.apk` → `android.permission.INTERNET`, `android.permission.PACKAGE_USAGE_STATS` 확인
 - `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 8 passed
 - `./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker` → passed except acknowledged Android device/emulator blocker
 - `sdkmanager --install "emulator" "system-images;android-36;google_apis;arm64-v8a"` → emulator package 설치 후 system image에서 `No space left on device` blocker

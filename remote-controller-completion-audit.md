@@ -69,6 +69,7 @@ cd remote_clients/android/HomeworkHelperRemote && JAVA_HOME=/opt/homebrew/opt/op
 - branch/hash 확인 → 현재 브랜치 `dev-remote`, `main`/`origin/main` `4052da3`, branch discipline gate passed
 - Android SDK readiness → `sdkmanager` present, `adb` present, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, `android-sdk-license`, `android-sdk-preview-license` present, readiness passed
 - Android Gradle build → `./gradlew :app:assembleDebug --stacktrace` BUILD SUCCESSFUL, APK `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk` 생성
+- APK artifact contract → `aapt dump badging`에서 package `dev.homeworkhelper.remote`, version `0.1.0`, minSdk 26, targetSdk 36 확인; `aapt dump permissions`에서 `android.permission.INTERNET`, `android.permission.PACKAGE_USAGE_STATS` 확인
 - Android build 설정 보정 → `gradle.properties`에 `android.useAndroidX=true`, 앱 Gradle에 Java/Kotlin 17 target/toolchain 고정
 - `tests/test_remote_verifier_contract.py` → 8 passed, `--allow-android-device-blocker`와 `blocked: android-device` 계약 포함
 - `tests/test_remote_routes.py` → 20 passed, 6 warnings
