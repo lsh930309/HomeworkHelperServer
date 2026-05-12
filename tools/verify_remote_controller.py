@@ -192,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             env=_env_for_android(),
         )
     )
+    checks.append(_run("Android APK artifact", [sys.executable, "tools/check_android_apk_artifact.py"], env=_env_for_android()))
 
     failures: list[CheckResult] = []
     android_license_blockers: list[CheckResult] = []

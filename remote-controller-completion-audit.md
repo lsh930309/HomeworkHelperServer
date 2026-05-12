@@ -45,6 +45,7 @@
 | Android APK install/launch smoke preflight | `tools/smoke_android_remote_controller.py`가 manifest/applicationId 계약을 확인하고 APK가 있으면 `adb install -r` 및 `am start`를 수행. 현재 APK는 `app/build/outputs/apk/debug/app-debug.apk`로 산출됨 | 부분 충족 | 연결된 adb device/emulator가 없어 install/launch smoke는 `Expected exactly one connected adb device; connected=[]` blocker |
 | Android UsageStats appops smoke option | `tools/smoke_android_remote_controller.py --report-usage-access`가 `GET_USAGE_STATS` appops 상태를 보고하고, `--require-usage-access`가 허용 상태를 gate하며, `--open-usage-access-settings`가 설정 화면을 열 수 있음 | 부분 충족 | 실제 device/emulator가 없어 appops allow evidence 없음 |
 | Android APK assemble | Android SDK license/package 설치 후 `remote_clients/android/HomeworkHelperRemote/gradle.properties`의 AndroidX 설정과 Java/Kotlin 17 toolchain을 고정했고 `./gradlew :app:assembleDebug --stacktrace` 및 통합 verifier 내 Android assembleDebug가 BUILD SUCCESSFUL | 충족 | Gradle 10 deprecation warning은 후속 정리 가능 |
+| Android APK artifact 계약 | `tools/check_android_apk_artifact.py`가 `aapt dump badging/permissions`로 package `dev.homeworkhelper.remote`, version `0.1.0`, minSdk 26, targetSdk 36, `INTERNET`, `PACKAGE_USAGE_STATS`를 검증 | 충족 | 실제 install/launch/runtime smoke는 device/emulator 필요 |
 | 전체 Python 테스트벤치 | 최신 전체 pytest에서 `150 passed, 6 warnings` | 충족 | warnings는 기존 SQLAlchemy/Pydantic deprecation |
 | Android 정적 계약 테스트 | `tests/test_remote_android_client_static.py` → 8 passed | 부분 충족 | compile/runtime 대체 불가 |
 | macOS 정적 계약 테스트 | `tests/test_remote_macos_client_static.py` → 5 passed | 충족 | 없음 |
@@ -69,7 +70,7 @@ cd remote_clients/android/HomeworkHelperRemote && JAVA_HOME=/opt/homebrew/opt/op
 - branch/hash 확인 → 현재 브랜치 `dev-remote`, `main`/`origin/main` `4052da3`, branch discipline gate passed
 - Android SDK readiness → `sdkmanager` present, `adb` present, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, `android-sdk-license`, `android-sdk-preview-license` present, readiness passed
 - Android Gradle build → `./gradlew :app:assembleDebug --stacktrace` BUILD SUCCESSFUL, APK `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk` 생성
-- APK artifact contract → `aapt dump badging`에서 package `dev.homeworkhelper.remote`, version `0.1.0`, minSdk 26, targetSdk 36 확인; `aapt dump permissions`에서 `android.permission.INTERNET`, `android.permission.PACKAGE_USAGE_STATS` 확인
+- APK artifact contract → `tools/check_android_apk_artifact.py` 및 `aapt dump badging/permissions`에서 package `dev.homeworkhelper.remote`, version `0.1.0`, minSdk 26, targetSdk 36, `android.permission.INTERNET`, `android.permission.PACKAGE_USAGE_STATS` 확인
 - Android build 설정 보정 → `gradle.properties`에 `android.useAndroidX=true`, 앱 Gradle에 Java/Kotlin 17 target/toolchain 고정
 - `tests/test_remote_verifier_contract.py` → 8 passed, `--allow-android-device-blocker`와 `blocked: android-device` 계약 포함
 - `tests/test_remote_routes.py` → 20 passed, 6 warnings

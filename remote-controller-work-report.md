@@ -1798,3 +1798,40 @@ Directive: 연결된 Android device/emulator가 준비되면 --allow-android-dev
 Tested: check_android_sdk_readiness.py passed; ./gradlew :app:assembleDebug --stacktrace BUILD SUCCESSFUL; pytest tests/test_remote_verifier_contract.py; verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker
 Not-tested: adb device/emulator install/launch, Android Keystore provider runtime, UsageStats appops allow, game-link Intent runtime, emulator system image install due local disk space blocker
 ```
+
+
+---
+
+## 2026-05-12 — APK artifact 계약 검증을 verifier에 편입
+
+### 작업 범위
+
+- `tools/check_android_apk_artifact.py`를 추가해 빌드된 Android debug APK를 device 없이 검증한다.
+- `aapt dump badging/permissions` 결과에서 package, versionName, minSdk, targetSdk, `INTERNET`, `PACKAGE_USAGE_STATS` 계약을 확인하도록 했다.
+- 통합 verifier가 `:app:assembleDebug` 뒤 APK artifact 검증을 실행하도록 연결했다.
+- verifier contract test와 Android README/setup guide/completion audit를 APK artifact gate 기준으로 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 이 검증은 install/launch smoke를 대체하지 않고, Gradle build와 adb device smoke 사이의 산출물 계약 drift만 좁게 잡는다.
+- UsageStats provider 허용, Keystore provider, Intent 실행은 여전히 device/emulator runtime gate로 남긴다.
+- `aapt` 경로는 `ANDROID_HOME`/`ANDROID_SDK_ROOT`와 최신 build-tools 아래에서 찾도록 해 로컬 경로 파일을 커밋하지 않는다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python tools/check_android_apk_artifact.py` → Android APK artifact passed
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 9 passed
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+APK artifact 계약을 device smoke와 분리해 자동 검증한다
+
+Constraint: 현재 connected adb device가 없어 install smoke는 막혔지만 APK 내부 manifest 계약은 aapt로 검증 가능함
+Rejected: 수동 aapt evidence만 문서에 유지 | 다음 verifier 실행에서 APK package/permission drift를 자동으로 잡지 못함
+Confidence: high
+Scope-risk: narrow
+Directive: APK manifest 계약을 바꾸면 check_android_apk_artifact.py와 verifier contract test를 함께 갱신할 것
+Tested: ./.venv/bin/python tools/check_android_apk_artifact.py; ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --allow-android-device-blocker
+Not-tested: adb install/launch, Android runtime providers
+```

@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Validate the built Android Remote APK artifact without requiring a device.
+
+This check sits between Gradle assemble and adb install smoke: it proves that
+an APK exists and that the packaged manifest still exposes the expected package,
+SDK bounds, launcher activity label, and sensitive permissions. It intentionally
+does not claim runtime behavior such as Keystore, UsageStats provider access, or
+Intent launch success; those remain device/emulator smoke gates.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
+DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
+EXPECTED_PACKAGE = "dev.homeworkhelper.remote"
+EXPECTED_VERSION_NAME = "0.1.0"
+EXPECTED_MIN_SDK = "26"
+EXPECTED_TARGET_SDK = "36"
+EXPECTED_PERMISSIONS = {
+    "android.permission.INTERNET",
+    "android.permission.PACKAGE_USAGE_STATS",
+}
+
+
+@dataclass(frozen=True)
+class ApkReport:
+    apk: Path
+    aapt: Path
+    package_name: str
+    version_name: str
+    min_sdk: str
+    target_sdk: str
+    permissions: set[str]
+
+
+def _sdk_root() -> Path:
+    return Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or DEFAULT_ANDROID_SDK_ROOT)
+
+
+def _find_aapt(explicit: str | None) -> Path | None:
+    if explicit:
+        return Path(explicit)
+    found = shutil.which("aapt")
+    if found:
+        return Path(found)
+    build_tools = _sdk_root() / "build-tools"
+    if not build_tools.exists():
+        return None
+    candidates = sorted(build_tools.glob("*/aapt"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _run(command: list[str]) -> str:
+    completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"command failed ({completed.returncode}): {' '.join(command)}\n{completed.stdout}")
+    return completed.stdout
+
+
+def _extract(pattern: str, text: str, field: str) -> str:
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError(f"APK badging missing {field}")
+    return match.group(1)
+
+
+def inspect_apk(apk: Path, aapt: Path) -> ApkReport:
+    badging = _run([str(aapt), "dump", "badging", str(apk)])
+    permissions_text = _run([str(aapt), "dump", "permissions", str(apk)])
+    permissions = set(re.findall(r"uses-permission: name='([^']+)'", permissions_text))
+    return ApkReport(
+        apk=apk,
+        aapt=aapt,
+        package_name=_extract(r"package: name='([^']+)'", badging, "package name"),
+        version_name=_extract(r"versionName='([^']+)'", badging, "versionName"),
+        min_sdk=_extract(r"sdkVersion:'([^']+)'", badging, "minSdk"),
+        target_sdk=_extract(r"targetSdkVersion:'([^']+)'", badging, "targetSdk"),
+        permissions=permissions,
+    )
+
+
+def _print_report(report: ApkReport) -> None:
+    print("Android APK artifact")
+    print(f"- apk: {report.apk}")
+    print(f"- aapt: {report.aapt}")
+    print(f"- package: {report.package_name}")
+    print(f"- version_name: {report.version_name}")
+    print(f"- min_sdk: {report.min_sdk}")
+    print(f"- target_sdk: {report.target_sdk}")
+    print("- permissions:")
+    for permission in sorted(report.permissions):
+        print(f"  - {permission}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check the Android Remote debug APK packaged manifest contract.")
+    parser.add_argument("--apk", type=Path, default=DEFAULT_APK)
+    parser.add_argument("--aapt", default=None)
+    args = parser.parse_args(argv)
+
+    try:
+        if not args.apk.exists():
+            print(f"Android APK artifact missing: {args.apk}")
+            return 2
+        aapt = _find_aapt(args.aapt)
+        if not aapt or not aapt.exists():
+            print("aapt not found. Install Android build-tools or set --aapt/ANDROID_HOME.")
+            return 2
+        report = inspect_apk(args.apk, aapt)
+        _print_report(report)
+
+        failures: list[str] = []
+        if report.package_name != EXPECTED_PACKAGE:
+            failures.append(f"expected package {EXPECTED_PACKAGE}, found {report.package_name}")
+        if report.version_name != EXPECTED_VERSION_NAME:
+            failures.append(f"expected versionName {EXPECTED_VERSION_NAME}, found {report.version_name}")
+        if report.min_sdk != EXPECTED_MIN_SDK:
+            failures.append(f"expected minSdk {EXPECTED_MIN_SDK}, found {report.min_sdk}")
+        if report.target_sdk != EXPECTED_TARGET_SDK:
+            failures.append(f"expected targetSdk {EXPECTED_TARGET_SDK}, found {report.target_sdk}")
+        missing_permissions = sorted(EXPECTED_PERMISSIONS - report.permissions)
+        if missing_permissions:
+            failures.append(f"missing permissions: {', '.join(missing_permissions)}")
+
+        if failures:
+            print("Android APK artifact failed:")
+            for failure in failures:
+                print(f"- {failure}")
+            return 1
+        print("Android APK artifact passed.")
+        return 0
+    except Exception as exc:
+        print(f"Android APK artifact check failed unexpectedly: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

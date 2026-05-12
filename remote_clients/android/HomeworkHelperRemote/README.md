@@ -32,6 +32,7 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 - `tools/check_android_sdk_readiness.py` → SDK package/license readiness passed
 - `./gradlew :app:assembleDebug --stacktrace` → BUILD SUCCESSFUL
 - APK: `app/build/outputs/apk/debug/app-debug.apk`
+- `tools/check_android_apk_artifact.py` → APK package/version/SDK/permission contract passed
 
 현재 남은 blocker:
 

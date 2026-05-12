@@ -36,6 +36,8 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "tools/check_remote_power_readiness.py",
         "tools/check_android_sdk_readiness.py",
         "tools/smoke_android_remote_controller.py",
+        "tools/check_android_apk_artifact.py",
+        "Android APK artifact",
         "swift",
         "./gradlew",
         ":app:assembleDebug",
@@ -149,6 +151,29 @@ def test_android_apk_smoke_distinguishes_missing_apk_from_device_launch():
     assert "return 0 if args.allow_missing_apk else 2" in smoke
     assert "Expected exactly one connected adb device" in smoke
     assert "Package {args.package} is not installed" in smoke
+
+
+def test_android_apk_artifact_check_pins_packaged_manifest_contract():
+    artifact = _read(TOOLS / "check_android_apk_artifact.py")
+
+    for marker in [
+        "app-debug.apk",
+        "aapt",
+        "dump",
+        "badging",
+        "permissions",
+        "dev.homeworkhelper.remote",
+        "0.1.0",
+        "EXPECTED_MIN_SDK",
+        "EXPECTED_TARGET_SDK",
+        "android.permission.INTERNET",
+        "android.permission.PACKAGE_USAGE_STATS",
+        "Android APK artifact passed",
+    ]:
+        assert marker in artifact
+
+    assert "Android APK artifact missing" in artifact
+    assert "aapt not found" in artifact
 
 
 def test_macos_smokes_use_real_server_process_and_production_swift_client():
