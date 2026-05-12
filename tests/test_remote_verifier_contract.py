@@ -38,6 +38,7 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "tools/check_remote_power_readiness.py",
         "tools/check_android_sdk_readiness.py",
         "tools/smoke_android_remote_controller.py",
+        "tools/smoke_android_remote_e2e.py",
         "tools/check_android_apk_artifact.py",
         "Android APK artifact",
         "swift",
@@ -153,6 +154,27 @@ def test_android_apk_smoke_distinguishes_missing_apk_from_device_launch():
     assert "return 0 if args.allow_missing_apk else 2" in smoke
     assert "Expected exactly one connected adb device" in smoke
     assert "Package {args.package} is not installed" in smoke
+
+
+def test_android_remote_e2e_smoke_drives_runtime_pairing_and_secure_token_paths():
+    smoke = _read(TOOLS / "smoke_android_remote_e2e.py")
+
+    for marker in [
+        "runpy.run_path('homework_helper.pyw')",
+        "run_server_main",
+        "remote/pair/start",
+        "Pairing code",
+        "페어링 완료",
+        "encrypted_bearer_token",
+        "GET_USAGE_STATS",
+        "모바일 시작",
+        "모바일 종료",
+        "Usage 동기화",
+        "force-stop",
+        "새로고침",
+        "Android Remote e2e smoke passed",
+    ]:
+        assert marker in smoke
 
 
 def test_android_apk_artifact_check_pins_packaged_manifest_contract():

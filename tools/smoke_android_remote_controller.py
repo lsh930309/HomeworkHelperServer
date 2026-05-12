@@ -76,7 +76,7 @@ def _package_installed(adb: str, package_name: str, *, device: str | None = None
         command.extend(["-s", device])
     command.extend(["shell", "pm", "path", package_name])
     result = _run(command)
-    return result.returncode == 0 and f"package:{package_name}" in result.output
+    return result.returncode == 0 and any(line.startswith("package:") for line in result.output.splitlines())
 
 
 def _usage_stats_appop(adb: str, package_name: str, *, device: str | None = None) -> str:

@@ -182,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     checks.append(_run("remote power readiness", [sys.executable, "tools/check_remote_power_readiness.py", "--allow-blocker"]))
     checks.append(_run("Android SDK readiness", [sys.executable, "tools/check_android_sdk_readiness.py", "--allow-blocker"]))
     checks.append(_run("Android APK smoke readiness", [sys.executable, "tools/smoke_android_remote_controller.py", "--allow-missing-apk"]))
+    checks.append(_run("Android Remote e2e smoke", [sys.executable, "tools/smoke_android_remote_e2e.py"]))
     if not args.skip_full_pytest:
         checks.append(_run("full pytest", [sys.executable, "-m", "pytest"]))
     checks.append(_run("macOS Swift build", ["swift", "build"], cwd=MACOS_CLIENT_DIR))
@@ -207,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             android_license_blockers.append(result)
             _print_result(result)
             continue
-        if result.name == "Android APK smoke readiness" and _is_android_device_blocker(result):
+        if result.name in {"Android APK smoke readiness", "Android Remote e2e smoke"} and _is_android_device_blocker(result):
             object.__setattr__(result, "status", "blocked: android-device")
             android_device_blockers.append(result)
             _print_result(result)

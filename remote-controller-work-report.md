@@ -18,6 +18,50 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — Android emulator e2e가 실사용 직전 경계를 닫는다
+
+### 작업 범위
+
+- 확보된 디스크 여유 공간으로 Android API 36 Google APIs ARM64 system image를 설치하고 `HomeworkHelperRemoteApi36` headless AVD를 생성했다.
+- `tools/smoke_android_remote_controller.py`의 package 설치 확인을 실제 `pm path` 출력 형식에 맞게 보정했다.
+- `tools/smoke_android_remote_e2e.py`를 추가해 실제 Remote Agent + Android emulator UI로 pairing, Android Keystore 암호화 token 저장, 앱 재시작 후 refresh, mobile session start/end, UsageStats sync를 검증한다.
+- 통합 verifier에 Android e2e smoke를 포함하고, TODO/완료 감사/구동 가이드를 emulator 검증 완료 상태로 갱신했다.
+
+### 자체 코드 리뷰 메모
+
+- 새 e2e smoke는 UI 조작이 필요한 runtime-only 경로만 담당하고, 기존 APK smoke는 install/launch와 appops gate로 유지했다.
+- Remote Agent는 임시 HOME으로 실행해 실제 사용자 데이터와 분리하고, Android 기본 emulator host URL인 `http://10.0.2.2:8000`을 사용한다.
+- UsageStats 권한은 emulator에서 `adb shell appops set ... allow`로 부여했다. 물리 기기에서는 사용자가 설정 화면에서 허용해야 한다.
+
+### 테스트/검증 결과
+
+- `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home sdkmanager --install "system-images;android-36;google_apis;arm64-v8a"` → 설치 완료
+- `printf 'no\n' | JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home avdmanager create avd --force --name HomeworkHelperRemoteApi36 --package "system-images;android-36;google_apis;arm64-v8a" --device pixel_8` → AVD 생성
+- `/opt/homebrew/share/android-commandlinetools/emulator/emulator -avd HomeworkHelperRemoteApi36 -no-snapshot -no-audio -no-window -gpu swiftshader_indirect -no-boot-anim` → `emulator-5554` boot completed
+- `./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access` → install/launch passed
+- `adb shell appops set dev.homeworkhelper.remote GET_USAGE_STATS allow && ./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access --report-usage-access` → `GET_USAGE_STATS: allow`, passed
+- `./.venv/bin/python tools/smoke_android_remote_e2e.py` → `Android Remote e2e smoke passed: device=emulator-5554, pairing=ok, encrypted_token=ok, restart_refresh=ok, mobile_session=ok, usage_message='최근 전면 앱: dev.homeworkhelper.remote'`
+- `./.venv/bin/python -m pytest tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py` → 18 passed
+- `./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest` → branch discipline, Remote routes, Android/macOS static, runtime smoke, macOS API/ViewModel smoke, Android APK install/launch, Android e2e, macOS build, Android assembleDebug, APK artifact 모두 passed
+- `./.venv/bin/python -m pytest` → 152 passed, 6 warnings
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+Android emulator e2e가 실사용 직전 경계를 닫는다
+
+Constraint: Android compile/APK artifact만으로는 pairing, Keystore, UsageStats, mobile-session UI runtime을 증명할 수 없었음
+Rejected: 물리 기기 연결 전까지 Android runtime을 blocker로 유지 | headless emulator로 실사용 직전 기능 경계를 자동 검증할 수 있음
+Confidence: high
+Scope-risk: moderate
+Directive: Android UI나 token 저장 경계를 바꾸면 install/launch smoke와 e2e smoke를 함께 갱신할 것
+Tested: sdkmanager system image install; avdmanager create avd; emulator boot; ./.venv/bin/python tools/smoke_android_remote_controller.py --report-usage-access; adb shell appops set dev.homeworkhelper.remote GET_USAGE_STATS allow && ./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access --report-usage-access; ./.venv/bin/python tools/smoke_android_remote_e2e.py; ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/verify_remote_controller.py --require-branch dev-remote --expect-main-hash 4052da3 --skip-full-pytest; ./.venv/bin/python -m pytest; git diff --check
+Not-tested: 물리 Android 기기, 실제 Tailscale/LAN 외부망, SmartThings/SSH 전원 side effect
+```
+
+---
+
 ## 2026-05-13 — macOS ViewModel 기능 smoke가 실제 버튼 경계를 닫는다
 
 ### 작업 범위

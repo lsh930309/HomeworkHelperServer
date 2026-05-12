@@ -1,6 +1,6 @@
 # Remote Controller TODO
 
-작성/갱신: 2026-05-12
+작성/갱신: 2026-05-13
 현재 작업 브랜치: `dev-remote`
 main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한다`
 작업 브랜치 이력: remote-controller 변경분은 `dev-remote`에 유지하고 `main`은 기준점으로 복구 완료
@@ -84,6 +84,10 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 - [x] Android APK smoke에 UsageStats appops 보고/설정 화면 열기 옵션 추가
 - [x] Android APK smoke에 UsageStats 허용 상태 강제 gate 추가
 - [x] Android SDK License 수락 후 SDK platform/build-tools 설치
+- [x] Android emulator system image 설치 및 headless AVD 생성
+- [x] Android APK install/launch smoke를 emulator에서 실행
+- [x] Android emulator에서 pairing/token Keystore 저장/재시작/refresh e2e smoke 실행
+- [x] Android emulator에서 mobile session start/end 및 UsageStats sync e2e smoke 실행
 
 ## 사용자 의사결정 필요 예정 항목
 
@@ -94,10 +98,16 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 ## Android 후속 검증 항목
 
 - [x] Android SDK License 수락 후 `./gradlew :app:assembleDebug` 실행
-- [ ] 연결된 Android 기기 또는 emulator 확보 후 `tools/smoke_android_remote_controller.py --report-usage-access` 실행
-- [ ] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
-- [ ] 실제 Android package name 실행 Intent smoke test
-- [ ] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행
+- [x] 연결된 Android 기기 또는 emulator 확보 후 `tools/smoke_android_remote_controller.py --report-usage-access` 실행
+- [x] 실제 Android 기기 또는 emulator에서 pairing/token 저장/refresh smoke test
+- [x] 실제 Android package name 실행 Intent smoke test
+- [x] Usage Access 허용 후 `tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access` 실행
 - [x] Mobile session analytics 병합 구현
 - [x] UsageStatsManager 기반 자동 세션 기록/Remote Agent sync 구현
-- [ ] 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test
+- [x] 실제 기기 또는 emulator에서 Android Keystore token 저장/재시작 복호화 smoke test
+
+## 실사용 테스트 진입 전 남은 환경 의존 항목
+
+- [ ] 실제 물리 Android 기기에서 APK install/launch, Usage Access 허용, pairing/Keystore/UsageStats smoke 재실행
+- [ ] 실제 Tailscale/LAN URL과 paired token으로 `tools/smoke_remote_controller_connectivity.py --expect-auth` 실행
+- [ ] 실제 SmartThings/SSH 설정이 준비된 환경에서 전원 side-effect smoke 별도 승인 후 실행
