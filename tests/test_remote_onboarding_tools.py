@@ -228,3 +228,21 @@ def test_tailscale_status_cache_avoids_repeated_cli_poll(monkeypatch):
     assert first.ready is True
     assert second.ready is True
     assert calls['run'] == 1
+
+
+def test_smartthings_device_parser_extracts_candidate_ids():
+    from src.core.remote_power_setup import _parse_smartthings_devices
+
+    devices = _parse_smartthings_devices([
+        "────────────────",
+        "d8f4f6b1-1111-2222-3333-444444444444 Bedroom Plug ONLINE",
+        "short bad",
+    ])
+
+    assert devices == [
+        {
+            "id": "d8f4f6b1-1111-2222-3333-444444444444",
+            "name": "Bedroom Plug ONLINE",
+            "raw": "d8f4f6b1-1111-2222-3333-444444444444 Bedroom Plug ONLINE",
+        }
+    ]

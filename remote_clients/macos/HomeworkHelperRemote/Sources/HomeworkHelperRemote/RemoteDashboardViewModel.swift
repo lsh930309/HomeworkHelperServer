@@ -82,6 +82,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var powerSetup: RemotePowerSetupResponse?
     @Published var localSSHKey: LocalSSHKeyPair?
     @Published var smartThingsDevices: [String] = []
+    @Published var smartThingsDeviceCandidates: [RemoteSmartThingsDeviceCandidate] = []
     @Published var readiness: RemoteReadiness?
     @Published var localTailscale: LocalTailscaleSnapshot?
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
@@ -477,6 +478,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let result = try await service.smartThingsDevices(cliPath: powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : powerConfig.smartthingsCLIPath)
             smartThingsDevices = result.devices
+            smartThingsDeviceCandidates = result.deviceCandidates
             if let cliPath = result.cliPath, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 powerConfig.smartthingsCLIPath = cliPath
             }
@@ -486,7 +488,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func savePowerConfig() async {        guard let service else { return }
+    func applySmartThingsDevice(_ candidate: RemoteSmartThingsDeviceCandidate) {
+        powerConfig.smartthingsDeviceID = candidate.id
+        message = "SmartThings device id 후보를 적용했습니다. 전원 설정 저장을 누르세요: \(candidate.name)"
+    }
+
+    func savePowerConfig() async {
+        guard let service else { return }
         do {
             let response = try await service.savePowerConfig(powerConfig)
             powerConfigResponse = response

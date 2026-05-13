@@ -263,7 +263,19 @@ struct RemoteDashboardView: View {
                                 if let key = viewModel.localSSHKey {
                                     SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
                                 }
-                                if !viewModel.smartThingsDevices.isEmpty {
+                                if !viewModel.smartThingsDeviceCandidates.isEmpty {
+                                    Text("SmartThings device 후보")
+                                        .font(.caption.bold())
+                                    ForEach(viewModel.smartThingsDeviceCandidates.prefix(5)) { candidate in
+                                        Button {
+                                            viewModel.applySmartThingsDevice(candidate)
+                                        } label: {
+                                            Text("\(candidate.name) · \(candidate.id)")
+                                                .font(.caption2)
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                } else if !viewModel.smartThingsDevices.isEmpty {
                                     Text("SmartThings devices")
                                         .font(.caption.bold())
                                     ForEach(viewModel.smartThingsDevices.prefix(5), id: \.self) { device in

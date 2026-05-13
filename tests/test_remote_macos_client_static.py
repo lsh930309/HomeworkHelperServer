@@ -39,6 +39,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemotePowerSetupResponse",
         "RemoteSSHKeyRegistrationResponse",
         "RemoteSmartThingsDevicesResponse",
+        "RemoteSmartThingsDeviceCandidate",
         "RemoteReadiness",
         "RemoteGameLink",
         "RemoteGameLinksResponse",
@@ -271,3 +272,6 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "generateAndSendSSHKey" in view_model
     assert "probeSmartThingsDevices" in view_model
     assert "refreshPowerSetup" in view_model
+    assert "smartThingsDeviceCandidates" in view_model
+    assert "applySmartThingsDevice" in view_model
+    assert "SmartThings device 후보" in app

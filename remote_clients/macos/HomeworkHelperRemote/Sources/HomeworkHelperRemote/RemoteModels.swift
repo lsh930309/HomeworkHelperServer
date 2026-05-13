@@ -213,15 +213,23 @@ struct RemoteSSHKeyRegistrationResponse: Decodable {
     }
 }
 
+struct RemoteSmartThingsDeviceCandidate: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let raw: String
+}
+
 struct RemoteSmartThingsDevicesResponse: Decodable {
     let available: Bool
     let devices: [String]
+    let deviceCandidates: [RemoteSmartThingsDeviceCandidate]
     let message: String
     let cliPath: String?
 
     enum CodingKeys: String, CodingKey {
         case available
         case devices
+        case deviceCandidates = "device_candidates"
         case message
         case cliPath = "cli_path"
     }

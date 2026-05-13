@@ -137,6 +137,8 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "/remote/power/ssh-key" in dialog_source
     assert "/remote/power/smartthings/devices" in dialog_source
     assert "SSH public key 승인/등록" in dialog_source
+    assert "smartthings_device_combo" in dialog_source
+    assert "선택 device id 적용" in dialog_source
 
 
 def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():

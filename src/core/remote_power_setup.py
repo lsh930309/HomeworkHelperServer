@@ -90,6 +90,23 @@ def smartthings_cli_candidates() -> list[str]:
     return candidates
 
 
+
+def _parse_smartthings_devices(lines: list[str]) -> list[dict[str, str]]:
+    devices: list[dict[str, str]] = []
+    for line in lines:
+        lowered = line.lower()
+        if not line or lowered.startswith("id ") or "----" in line or not any(ch.isalnum() for ch in line):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        candidate_id = parts[0]
+        if len(candidate_id) < 8 or candidate_id.lower() in {"id", "name", "label"}:
+            continue
+        name = " ".join(parts[1:]).strip()
+        devices.append({"id": candidate_id, "name": name or candidate_id, "raw": line})
+    return devices
+
 def list_smartthings_devices(cli_path: str | None = None, runner=None) -> dict[str, Any]:
     cli = cli_path or (smartthings_cli_candidates()[0] if smartthings_cli_candidates() else "")
     if not cli:
@@ -100,7 +117,8 @@ def list_smartthings_devices(cli_path: str | None = None, runner=None) -> dict[s
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": True, "devices": [], "message": f"SmartThings CLI 실행 실패: {exc}", "cli_path": cli}
     lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-    return {"available": True, "devices": lines, "message": "SmartThings device 목록 조회 완료" if result.returncode == 0 else (result.stderr or "SmartThings 로그인/권한 확인 필요"), "cli_path": cli}
+    parsed = _parse_smartthings_devices(lines)
+    return {"available": True, "devices": lines, "device_candidates": parsed, "message": "SmartThings device 목록 조회 완료" if result.returncode == 0 else (result.stderr or "SmartThings 로그인/권한 확인 필요"), "cli_path": cli}
 
 
 def power_setup_status() -> dict[str, Any]:

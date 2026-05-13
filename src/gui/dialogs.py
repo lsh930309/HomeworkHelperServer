@@ -134,6 +134,8 @@ class RemoteSettingsDialog(QDialog):
         self.public_key_edit = QTextEdit()
         self.public_key_edit.setPlaceholderText("macOS 클라이언트에서 생성한 SSH public key를 붙여넣고 승인/등록하세요")
         self.public_key_edit.setMaximumHeight(80)
+        self.smartthings_device_combo = QComboBox()
+        self.smartthings_device_combo.setEditable(False)
         save_button = QPushButton("전원 설정 저장")
         save_button.clicked.connect(self._save_power_config)
         refresh_button = QPushButton("전원 설정 새로고침")
@@ -144,6 +146,8 @@ class RemoteSettingsDialog(QDialog):
         register_key_button.clicked.connect(self._register_public_key)
         smartthings_button = QPushButton("SmartThings CLI/기기 확인")
         smartthings_button.clicked.connect(self._probe_smartthings_devices)
+        apply_smartthings_button = QPushButton("선택 device id 적용")
+        apply_smartthings_button.clicked.connect(self._apply_selected_smartthings_device)
         layout.addRow("SmartThings device id:", self.smartthings_device_id_edit)
         layout.addRow("SmartThings CLI path:", self.smartthings_cli_path_edit)
         layout.addRow("SSH host:", self.ssh_host_edit)
@@ -153,6 +157,7 @@ class RemoteSettingsDialog(QDialog):
         layout.addRow(self.power_status_label)
         layout.addRow("준비 상태:", self.power_setup_text)
         layout.addRow("SSH public key:", self.public_key_edit)
+        layout.addRow("SmartThings 후보:", self.smartthings_device_combo)
         row = QHBoxLayout()
         row.addWidget(save_button)
         row.addWidget(refresh_button)
@@ -162,6 +167,7 @@ class RemoteSettingsDialog(QDialog):
         key_row = QHBoxLayout()
         key_row.addWidget(register_key_button)
         key_row.addWidget(smartthings_button)
+        key_row.addWidget(apply_smartthings_button)
         key_row.addStretch(1)
         layout.addRow(key_row)
         return widget
@@ -316,13 +322,28 @@ class RemoteSettingsDialog(QDialog):
             response.raise_for_status()
             payload = response.json()
             devices = payload.get("devices") or []
+            candidates = payload.get("device_candidates") or []
+            self.smartthings_device_combo.clear()
+            for candidate in candidates:
+                label = f"{candidate.get('name') or candidate.get('id')} ({candidate.get('id')})"
+                self.smartthings_device_combo.addItem(label, candidate.get("id") or "")
             self.power_setup_text.setPlainText(
                 f"SmartThings CLI: {payload.get('cli_path') or self.smartthings_cli_path_edit.text()}\n"
                 f"message: {payload.get('message')}\n"
+                f"device candidates: {len(candidates)}\n"
                 f"devices:\n" + "\n".join(str(item) for item in devices)
             )
         except requests.RequestException as exc:
             QMessageBox.warning(self, "SmartThings 확인 실패", str(exc))
+
+
+    def _apply_selected_smartthings_device(self):
+        device_id = self.smartthings_device_combo.currentData()
+        if not device_id:
+            QMessageBox.information(self, "선택 필요", "SmartThings 기기 확인 후 후보를 선택하세요.")
+            return
+        self.smartthings_device_id_edit.setText(str(device_id))
+        self.power_status_label.setText("SmartThings device id 후보를 적용했습니다. 전원 설정 저장을 누르세요.")
 
     def _save_power_config(self):
         payload = {
