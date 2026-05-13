@@ -179,11 +179,20 @@ http://100.109.140.97:8000
 http://100.109.140.97:8000
 ```
 
-### 2.3 pairing code 입력
+### 2.3 6자리 PIN 1회 입력으로 자동 설정
 
-Windows 데스크탑에서 발급한 6자리 pairing code를 MacBook 앱의 `페어링 코드` 칸에 입력하고 `페어링`을 누른다.
+Windows 데스크탑에서 발급한 6자리 pairing code를 MacBook 앱의 `페어링 코드` 칸에 입력하고 `페어링 및 자동 설정`을 누른다.
 
-성공하면 MacBook Keychain에 device token이 저장된다.
+성공하면 MacBook Keychain에 device token이 저장되고, 앱이 이어서 다음을 자동 점검/설정한다.
+
+- 서버 Tailscale 상태 확인/복구
+- SSH key 생성 및 Windows host로 public key 등록
+- SSH host/key path 전원 설정 반영
+- SmartThings CLI/device 후보 조회
+- 후보가 1개이면 wake 대상 자동 적용, 여러 개이면 후보 선택 안내
+- power config 저장
+
+Windows 쪽 `전원` 탭은 주 마법사가 아니라 authorized_keys 승인/상태 확인 fallback이다. 기본 흐름은 macOS 클라이언트가 주도한다.
 
 ### 2.4 새로고침 및 readiness 확인
 
