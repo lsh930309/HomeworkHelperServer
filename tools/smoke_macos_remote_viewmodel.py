@@ -28,6 +28,9 @@ MACOS_SOURCE_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRe
 REMOTE_MODELS = MACOS_SOURCE_DIR / "RemoteModels.swift"
 REMOTE_API_CLIENT = MACOS_SOURCE_DIR / "RemoteAPIClient.swift"
 KEYCHAIN_TOKEN_STORE = MACOS_SOURCE_DIR / "KeychainTokenStore.swift"
+LOCAL_SSH_KEY_MANAGER = MACOS_SOURCE_DIR / "LocalSSHKeyManager.swift"
+LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
+TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
 
 
@@ -74,7 +77,7 @@ def _wait_for_status(base_url: str, *, timeout_seconds: float) -> None:
     raise RuntimeError(f"server did not become ready within {timeout_seconds}s: {last_error}")
 
 
-def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
+def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) -> str:
     source = r'''
         import Foundation
         import SwiftUI
@@ -124,6 +127,14 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
                 guard viewModel.message.contains("전원 제어 adapter") else {
                     fatalError("disabled power action did not report local guard: \(viewModel.message)")
                 }
+                smokeStep("offline local wake")
+                viewModel.hostConnectionState = "offline"
+                viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"
+                viewModel.powerConfig.smartthingsDeviceID = "smoke-device"
+                await viewModel.power("wake")
+                guard viewModel.message.contains("wake 신호") else {
+                    fatalError("offline local wake did not use SmartThings fallback: \(viewModel.message)")
+                }
 
                 smokeStep("createGameLink")
                 viewModel.gameLinkProcessID = "smoke-game"
@@ -162,19 +173,22 @@ def _swift_smoke_source(base_url: str, pairing_code: str) -> str:
             }
         }
     '''
-    return textwrap.dedent(source).replace("__BASE_URL__", base_url).replace("__PAIRING_CODE__", pairing_code)
+    return textwrap.dedent(source).replace("__BASE_URL__", base_url).replace("__PAIRING_CODE__", pairing_code).replace("__SMARTTHINGS_CLI__", smartthings_cli)
 
 
-def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, work_dir: Path, env: dict[str, str]) -> None:
+def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, smartthings_cli: str, work_dir: Path, env: dict[str, str]) -> None:
     smoke_source = work_dir / "MacOSRemoteViewModelSmoke.swift"
     binary = work_dir / "macos-remote-viewmodel-smoke"
-    smoke_source.write_text(_swift_smoke_source(base_url, pairing_code), encoding="utf-8")
+    smoke_source.write_text(_swift_smoke_source(base_url, pairing_code, smartthings_cli), encoding="utf-8")
     compile_cmd = [
         "swiftc",
         "-parse-as-library",
         str(REMOTE_MODELS),
         str(REMOTE_API_CLIENT),
         str(KEYCHAIN_TOKEN_STORE),
+        str(LOCAL_SSH_KEY_MANAGER),
+        str(LOCAL_POWER_WAKE_MANAGER),
+        str(TAILSCALE_DISCOVERY),
         str(REMOTE_VIEW_MODEL),
         str(smoke_source),
         "-o",
@@ -248,7 +262,10 @@ def main(argv: list[str] | None = None) -> int:
             code = str(pair_body.get("code") or "")
             if len(code) != 6 or not code.isdigit():
                 raise RuntimeError(f"unexpected pairing code payload: {pair_body}")
-            _compile_and_run_swift_smoke(base_url, code, temp_dir, env)
+            fake_smartthings = temp_dir / "smartthings"
+            fake_smartthings.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_smartthings.chmod(0o755)
+            _compile_and_run_swift_smoke(base_url, code, str(fake_smartthings), temp_dir, env)
             return 0
         except Exception as exc:
             print(f"macOS RemoteDashboardViewModel smoke failed: {exc}", file=sys.stderr)
