@@ -18,6 +18,42 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS 클라이언트가 터미널 분리 app 번들로 패키징된다
+
+### 작업 범위
+
+- `tools/package_macos_remote_app.py`를 추가해 SwiftPM release executable을 Finder/open으로 실행 가능한 `HomeworkHelperRemote.app` 번들로 묶도록 했다.
+- macOS 실사용 튜토리얼을 `swift run` 대신 `.app` 패키징 후 `open dist/macos/HomeworkHelperRemote.app`으로 실행하도록 수정했다.
+- packaging script contract를 verifier 정적 테스트에 추가했다.
+
+### 자체 코드 리뷰 메모
+
+- `swift run`은 터미널-attached 실행이라 키보드 입력/포커스가 터미널과 꼬일 수 있으므로 수동 UI 테스트 대상에서 제외한다.
+- `.app` 번들은 `dist/macos/HomeworkHelperRemote.app`에 생성되며, `Info.plist`에는 `CFBundlePackageType=APPL`, bundle id, executable 정보를 포함한다.
+- 앱 번들 산출물은 빌드 artifact이므로 소스 커밋 대상은 packaging script와 문서/테스트만이다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 10 passed
+- `./.venv/bin/python tools/package_macos_remote_app.py` → `macOS app packaged: /Users/lsh930309/projects/HomeworkHelperServer/dist/macos/HomeworkHelperRemote.app`
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS 클라이언트가 터미널 분리 app 번들로 패키징된다
+
+Constraint: swift run 실행 앱은 터미널에 붙어 키보드 입력/포커스가 터미널과 꼬일 수 있었음
+Rejected: swift run으로 계속 수동 UI 테스트 | 실사용 검증은 Finder/open으로 실행되는 .app 번들에서 해야 함
+Confidence: high
+Scope-risk: narrow
+Directive: macOS 수동 UI 테스트는 dist/macos/HomeworkHelperRemote.app 번들을 open으로 실행해 수행할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/package_macos_remote_app.py; git diff --check
+Not-tested: 패키징된 앱에서 Windows Remote Agent와 수동 페어링
+```
+
+---
+
 ## 2026-05-13 — macOS 설정 입력칸이 Form/sidebar 포커스 문제를 우회한다
 
 ### 작업 범위

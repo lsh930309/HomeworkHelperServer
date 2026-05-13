@@ -75,11 +75,25 @@ MacBook은 Remote Client 역할이다.
 
 ### 2.1 macOS Remote Client 앱 실행
 
-MacBook 터미널에서:
+실사용 UI 테스트는 `swift run`이 아니라 `.app` 번들로 실행한다. `swift run`은 터미널에 붙은 프로세스로 실행되어 키보드 입력/포커스가 터미널과 꼬일 수 있다.
+
+MacBook 터미널에서 앱 번들을 만든다.
 
 ```bash
-cd /Users/lsh930309/projects/HomeworkHelperServer/remote_clients/macos/HomeworkHelperRemote
-swift run
+cd /Users/lsh930309/projects/HomeworkHelperServer
+./.venv/bin/python tools/package_macos_remote_app.py
+```
+
+생성 위치:
+
+```text
+/Users/lsh930309/projects/HomeworkHelperServer/dist/macos/HomeworkHelperRemote.app
+```
+
+실행:
+
+```bash
+open /Users/lsh930309/projects/HomeworkHelperServer/dist/macos/HomeworkHelperRemote.app
 ```
 
 이미 앱이 떠 있다면 완전히 종료한 뒤 다시 실행한다.

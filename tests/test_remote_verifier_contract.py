@@ -204,6 +204,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     runtime = _read(TOOLS / "smoke_remote_controller_runtime.py")
     macos = _read(TOOLS / "smoke_macos_remote_api_client.py")
     viewmodel = _read(TOOLS / "smoke_macos_remote_viewmodel.py")
+    packager = _read(TOOLS / "package_macos_remote_app.py")
 
     assert "runpy.run_path('homework_helper.pyw')" in runtime
     assert "run_server_main" in runtime
@@ -244,6 +245,13 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "await viewModel.refreshToken()" in viewmodel
     assert "await viewModel.refreshDevices()" in viewmodel
     assert "macOS RemoteDashboardViewModel smoke passed" in viewmodel
+
+    assert "swift\", \"build\", \"-c\", \"release" in packager
+    assert "HomeworkHelperRemote.app" in packager
+    assert "CFBundlePackageType" in packager
+    assert "APPL" in packager
+    assert "CFBundleIdentifier" in packager
+    assert "open {app}" in packager
 
 
 def test_connectivity_smoke_supports_tailnet_or_lan_status_checks():
