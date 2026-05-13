@@ -113,6 +113,20 @@ struct RemoteDashboardView: View {
                                 }
                                 .disabled(viewModel.isLoading || !viewModel.isPaired)
                             }
+                            HStack {
+                                Button {
+                                    Task { await viewModel.recoverPairing() }
+                                } label: {
+                                    Label("페어링 토큰 복구", systemImage: "key.fill")
+                                }
+                                .disabled(viewModel.isLoading || !viewModel.isPaired)
+                                Button(role: .destructive) {
+                                    viewModel.clearLocalPairing()
+                                } label: {
+                                    Label("로컬 토큰 삭제", systemImage: "trash")
+                                }
+                                .disabled(viewModel.isLoading || !viewModel.isPaired)
+                            }
                             Text(viewModel.setupProgress)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

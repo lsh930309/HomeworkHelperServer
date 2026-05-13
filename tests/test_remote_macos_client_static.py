@@ -239,6 +239,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "viewModel.bootstrap()" in app
     assert "자동 설정 점검" in app
     assert "서버 Tailscale 확인/복구" in app
+    assert "페어링 토큰 복구" in app
+    assert "로컬 토큰 삭제" in app
     assert "SetupChecklistRow" in app
     assert "runSetupAutomation" in view_model
     assert "ensureServerTailscale" in view_model
@@ -246,5 +248,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "serverTailscaleEnsure" in view_model
     assert "setupChecklist" in view_model
     assert "connectionGuidance" in view_model
+    assert "func recoverPairing" in view_model
+    assert "func clearLocalPairing" in view_model
+    assert "pairingRecoveryMessage" in view_model
     assert "저장된 Keychain 토큰으로 자동 연결했습니다." in view_model
     assert "SSH host 채우기" in app

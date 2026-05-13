@@ -80,6 +80,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var localTailscale: LocalTailscaleSnapshot?
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
     @Published var setupProgress = "원격 설정 준비 전입니다."
+    @Published var pairingRecoveryMessage = ""
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -96,7 +97,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
             ("2. Windows 서버", readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인", readiness?.serverModeReadiness.color == "green"),
-            ("3. 페어링", tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨", !tokenText.isEmpty),
+            ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, !tokenText.isEmpty && !pairingRecoveryMessage.contains("재페어링")),
             ("4. 전원 관리", powerConfigResponse?.readiness.supportedActions.isEmpty == false ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "")" : "SmartThings/SSH 설정 저장 필요", powerConfigResponse?.readiness.supportedActions.isEmpty == false),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
@@ -134,8 +135,13 @@ final class RemoteDashboardViewModel: ObservableObject {
             baseURLText = url
             setupProgress = "저장된 Base URL이 없어서 Windows Desktop 후보를 적용했습니다: \(url)"
         }
+        if isPaired {
+            await recoverPairing(silent: true)
+        }
         await refresh()
-        if status != nil {
+        if pairingRecoveryMessage.contains("재페어링") {
+            setupProgress = "Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급해 입력하세요."
+        } else if status != nil {
             setupProgress = isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
         } else if snapshot.running {
             setupProgress = "Tailscale은 준비됐지만 Windows Remote Agent에 연결하지 못했습니다. Windows 앱의 서버 모드와 방화벽을 확인하세요."
@@ -153,6 +159,49 @@ final class RemoteDashboardViewModel: ObservableObject {
             return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
         }
         return raw
+    }
+
+    func recoverPairing(silent: Bool = false) async {
+        guard isPaired else {
+            pairingRecoveryMessage = "페어링 코드가 필요합니다."
+            setupProgress = "Windows 앱의 [설정 > 원격 설정]에서 페어링 코드를 발급해 입력하세요."
+            return
+        }
+        if !silent {
+            isLoading = true
+        }
+        defer { if !silent { isLoading = false } }
+        do {
+            let refreshed = try await service?.refreshToken()
+            if let refreshed {
+                tokenText = refreshed.token
+                pairingRecoveryMessage = "토큰 갱신 완료: \(refreshed.name)"
+                setupProgress = "저장된 페어링을 확인하고 Keychain 토큰을 갱신했습니다."
+                devices = (try? await service?.devices()) ?? devices
+            }
+        } catch {
+            let guidance = connectionGuidance(for: error)
+            if guidance.contains("페어링 토큰") || guidance.contains("HTTP 401") || guidance.contains("HTTP 403") {
+                tokenText = ""
+                devices = []
+                pairingRecoveryMessage = "저장된 토큰이 만료/폐기되었습니다. 재페어링이 필요합니다."
+                setupProgress = "Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급해 입력하세요."
+            } else {
+                pairingRecoveryMessage = guidance
+                setupProgress = guidance
+            }
+            if !silent {
+                message = setupProgress
+            }
+        }
+    }
+
+    func clearLocalPairing() {
+        tokenText = ""
+        devices = []
+        pairingRecoveryMessage = "이 Mac의 로컬 토큰을 삭제했습니다. 서버 등록은 Windows 원격 설정에서 언페어링하세요."
+        setupProgress = pairingRecoveryMessage
+        message = pairingRecoveryMessage
     }
 
     func runSetupAutomation() async {
@@ -183,7 +232,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerConfig = powerConfigResponse?.config ?? powerConfig
 
             if isPaired {
-                setupProgress = "3/4 등록 디바이스와 서버 Tailscale 확인 중..."
+                setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
+                await recoverPairing(silent: true)
                 devices = (try? await service.devices()) ?? devices
                 serverTailscaleEnsure = try? await service.ensureServerTailscale()
                 status = try await service.status()
@@ -408,6 +458,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             let response = try await service.confirmPairing(code: pairingCode, deviceName: deviceName)
             tokenText = response.token
             pairingCode = ""
+            pairingRecoveryMessage = "페어링 완료: \(response.name)"
+            setupProgress = "페어링 완료. 이후에는 Keychain 토큰으로 자동 연결합니다."
             message = "'\(response.name)' 디바이스 페어링 완료. 토큰을 Keychain에 저장했습니다."
             await refresh(using: RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token)), includeDevices: true)
         } catch {
@@ -420,6 +472,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let response = try await service.refreshToken()
             tokenText = response.token
+            pairingRecoveryMessage = "토큰 갱신 완료: \(response.name)"
+            setupProgress = "현재 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             message = "'\(response.name)' 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             await refreshDevices()
         } catch {
