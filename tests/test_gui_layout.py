@@ -132,6 +132,11 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "devices_table" in dialog_source
     assert "tailscale_health_text" in dialog_source
     assert "smartthings_device_id_edit" in dialog_source
+    assert "power_setup_text" in dialog_source
+    assert "/remote/power/setup" in dialog_source
+    assert "/remote/power/ssh-key" in dialog_source
+    assert "/remote/power/smartthings/devices" in dialog_source
+    assert "SSH public key 승인/등록" in dialog_source
 
 
 def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():

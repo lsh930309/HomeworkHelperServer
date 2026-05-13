@@ -36,6 +36,9 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteCapabilitiesResponse",
         "RemotePowerConfigPayload",
         "RemotePowerConfigResponse",
+        "RemotePowerSetupResponse",
+        "RemoteSSHKeyRegistrationResponse",
+        "RemoteSmartThingsDevicesResponse",
         "RemoteReadiness",
         "RemoteGameLink",
         "RemoteGameLinksResponse",
@@ -138,6 +141,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/shortcuts',
         'remote/power/\\(action)',
         'remote/power/config',
+        'remote/power/setup',
+        'remote/power/ssh-key',
+        'remote/power/smartthings/devices',
         'remote/pair/confirm',
         'remote/tokens/refresh',
         'remote/tailscale/ensure',
@@ -157,6 +163,9 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
     assert 'func powerConfig() async throws -> RemotePowerConfigResponse' in client
     assert 'func savePowerConfig(_ config: RemotePowerConfigPayload)' in client
+    assert 'func powerSetup() async throws -> RemotePowerSetupResponse' in client
+    assert 'func registerPowerSSHKey(publicKey: String, label: String)' in client
+    assert 'func smartThingsDevices(cliPath: String?)' in client
     assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
     assert 'request(path: path, method: "PUT")' in client
     assert 'URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())' in client
@@ -253,3 +262,12 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "pairingRecoveryMessage" in view_model
     assert "저장된 Keychain 토큰으로 자동 연결했습니다." in view_model
     assert "SSH host 채우기" in app
+    assert "Windows 전원 준비" in app
+    assert "준비 상태 확인" in app
+    assert "SSH key 생성/전송" in app
+    assert "SmartThings 기기 확인" in app
+    assert "LocalSSHKeyManager" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
+    assert "ssh-keygen" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
+    assert "generateAndSendSSHKey" in view_model
+    assert "probeSmartThingsDevices" in view_model
+    assert "refreshPowerSetup" in view_model

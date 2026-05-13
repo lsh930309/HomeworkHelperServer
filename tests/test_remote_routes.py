@@ -120,7 +120,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.9"
+    assert body["remote_api_version"] == "0.1.10"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -765,3 +765,38 @@ def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands
     assert commands[3][-1] == "shutdown /r /t 0"
     assert "player@pc.example.test" in commands[1]
     assert "50022" in commands[1]
+
+
+def test_remote_power_setup_reports_host_readiness_and_registers_public_key():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
+
+    authorized_keys = Path(os.environ["HOME"]) / ".ssh" / "authorized_keys"
+    if authorized_keys.exists():
+        authorized_keys.unlink()
+    setup = client.get("/remote/power/setup")
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZha2VLZXlGb3JUZXN0T25seU5vdFJlYWw= macbook"
+    registered = client.post("/remote/power/ssh-key", json={"public_key": key, "label": "MacBook"})
+    registered_again = client.post("/remote/power/ssh-key", json={"public_key": key, "label": "MacBook"})
+    invalid = client.post("/remote/power/ssh-key", json={"public_key": "not-a-key", "label": "bad"})
+
+    assert setup.status_code == 200
+    assert "authorized_keys_path" in setup.json()
+    assert "ssh_service" in setup.json()
+    assert registered.status_code == 200
+    assert registered.json()["registered"] is True
+    assert Path(registered.json()["authorized_keys_path"]).read_text(encoding="utf-8").count("ssh-ed25519") == 1
+    assert registered_again.status_code == 200
+    assert registered_again.json()["already_present"] is True
+    assert invalid.status_code == 400
+    assert auditor.events[-2]["command"] == "power.ssh_key.register"
+
+
+def test_remote_power_smartthings_probe_is_safe_when_cli_missing():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
+
+    response = client.post("/remote/power/smartthings/devices", json={"cli_path": "/missing/smartthings"})
+
+    assert response.status_code == 200
+    assert response.json()["available"] is True
+    assert response.json()["devices"] == []
+    assert auditor.events[-1]["command"] == "power.smartthings.devices"

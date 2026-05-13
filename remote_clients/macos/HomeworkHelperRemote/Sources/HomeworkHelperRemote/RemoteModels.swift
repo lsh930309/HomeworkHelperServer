@@ -154,6 +154,79 @@ struct RemotePowerConfigPayload: Codable {
     }
 }
 
+
+struct RemotePowerSetupResponse: Decodable {
+    struct SSHService: Decodable {
+        let available: Bool
+        let running: Bool
+        let startType: String
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case available
+            case running
+            case startType = "start_type"
+            case message
+        }
+    }
+
+    struct Firewall: Decodable {
+        let available: Bool
+        let enabled: Bool
+        let message: String
+    }
+
+    let hostPlatform: String
+    let user: String
+    let authorizedKeysPath: String
+    let authorizedKeysExists: Bool
+    let sshService: SSHService
+    let firewall: Firewall
+    let smartthingsCLICandidates: [String]
+    let smartthingsReady: Bool
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case hostPlatform = "host_platform"
+        case user
+        case authorizedKeysPath = "authorized_keys_path"
+        case authorizedKeysExists = "authorized_keys_exists"
+        case sshService = "ssh_service"
+        case firewall
+        case smartthingsCLICandidates = "smartthings_cli_candidates"
+        case smartthingsReady = "smartthings_ready"
+        case message
+    }
+}
+
+struct RemoteSSHKeyRegistrationResponse: Decodable {
+    let registered: Bool
+    let alreadyPresent: Bool
+    let authorizedKeysPath: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case registered
+        case alreadyPresent = "already_present"
+        case authorizedKeysPath = "authorized_keys_path"
+        case message
+    }
+}
+
+struct RemoteSmartThingsDevicesResponse: Decodable {
+    let available: Bool
+    let devices: [String]
+    let message: String
+    let cliPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case devices
+        case message
+        case cliPath = "cli_path"
+    }
+}
+
 struct RemotePowerConfigResponse: Decodable {
     struct Readiness: Decodable {
         let wakeConfigured: Bool

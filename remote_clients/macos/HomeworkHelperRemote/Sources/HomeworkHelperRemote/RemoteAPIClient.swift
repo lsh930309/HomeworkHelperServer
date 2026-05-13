@@ -94,6 +94,25 @@ struct RemoteAPIClient {
         try await get("remote/power/config")
     }
 
+    func powerSetup() async throws -> RemotePowerSetupResponse {
+        try await get("remote/power/setup")
+    }
+
+    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse {
+        let payload = [
+            "public_key": publicKey,
+            "label": label,
+        ]
+        let body = try JSONEncoder().encode(payload)
+        return try await post("remote/power/ssh-key", body: body)
+    }
+
+    func smartThingsDevices(cliPath: String?) async throws -> RemoteSmartThingsDevicesResponse {
+        let payload = ["cli_path": cliPath ?? ""]
+        let body = try JSONEncoder().encode(payload)
+        return try await post("remote/power/smartthings/devices", body: body)
+    }
+
     func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse {
         let body = try JSONEncoder().encode(config)
         return try await put("remote/power/config", body: body)

@@ -15,6 +15,9 @@ private actor RemoteDashboardService {
     func gameLinks() async throws -> [RemoteGameLink] { try await client.gameLinks() }
     func activeMobileSessions() async throws -> [RemoteMobileSession] { try await client.activeMobileSessions() }
     func powerConfig() async throws -> RemotePowerConfigResponse { try await client.powerConfig() }
+    func powerSetup() async throws -> RemotePowerSetupResponse { try await client.powerSetup() }
+    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
+    func smartThingsDevices(cliPath: String?) async throws -> RemoteSmartThingsDevicesResponse { try await client.smartThingsDevices(cliPath: cliPath) }
     func processes() async throws -> [RemoteProcess] { try await client.processes() }
     func shortcuts() async throws -> [RemoteShortcut] { try await client.shortcuts() }
     func devices() async throws -> [RemoteDevice] { try await client.devices() }
@@ -76,6 +79,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var gameLinkAndroidPackage = ""
     @Published var powerConfig = RemotePowerConfigPayload()
     @Published var powerConfigResponse: RemotePowerConfigResponse?
+    @Published var powerSetup: RemotePowerSetupResponse?
+    @Published var localSSHKey: LocalSSHKeyPair?
+    @Published var smartThingsDevices: [String] = []
     @Published var readiness: RemoteReadiness?
     @Published var localTailscale: LocalTailscaleSnapshot?
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
@@ -229,6 +235,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 readiness = try? await service.readiness()
             }
             powerConfigResponse = try? await service.powerConfig()
+            powerSetup = try? await service.powerSetup()
             powerConfig = powerConfigResponse?.config ?? powerConfig
 
             if isPaired {
@@ -307,6 +314,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             gameLinks = try await service.gameLinks()
             mobileSessions = try await service.activeMobileSessions()
             powerConfigResponse = try await service.powerConfig()
+            powerSetup = try? await service.powerSetup()
             powerConfig = powerConfigResponse?.config ?? RemotePowerConfigPayload()
             processes = try await service.processes()
             shortcuts = try await service.shortcuts()
@@ -427,8 +435,58 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func savePowerConfig() async {
+
+    func refreshPowerSetup() async {
         guard let service else { return }
+        do {
+            powerSetup = try await service.powerSetup()
+            if let first = powerSetup?.smartthingsCLICandidates.first, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                powerConfig.smartthingsCLIPath = first
+            }
+            message = powerSetup?.message ?? "전원 준비 상태 확인 완료"
+        } catch {
+            message = connectionGuidance(for: error)
+        }
+    }
+
+    func generateAndSendSSHKey() async {
+        guard let service else {
+            message = "Remote Agent URL이 올바르지 않습니다."
+            return
+        }
+        guard isPaired else {
+            message = "SSH key 등록은 페어링 후 사용할 수 있습니다."
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? LocalSSHKeyManager.defaultPrivateKeyPath : powerConfig.sshKeyPath)
+            localSSHKey = key
+            powerConfig.sshKeyPath = key.privateKeyPath
+            let result = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
+            powerSetup = try? await service.powerSetup()
+            message = result.message
+        } catch {
+            message = connectionGuidance(for: error)
+        }
+    }
+
+    func probeSmartThingsDevices() async {
+        guard let service else { return }
+        do {
+            let result = try await service.smartThingsDevices(cliPath: powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : powerConfig.smartthingsCLIPath)
+            smartThingsDevices = result.devices
+            if let cliPath = result.cliPath, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                powerConfig.smartthingsCLIPath = cliPath
+            }
+            message = result.message
+        } catch {
+            message = connectionGuidance(for: error)
+        }
+    }
+
+    func savePowerConfig() async {        guard let service else { return }
         do {
             let response = try await service.savePowerConfig(powerConfig)
             powerConfigResponse = response

@@ -48,6 +48,7 @@ class RemoteSettingsDialog(QDialog):
         self._refresh_devices()
         self._refresh_tailscale()
         self._refresh_power_config()
+        self._refresh_power_setup()
 
     def _build_server_tab(self) -> QWidget:
         widget = QWidget()
@@ -127,10 +128,22 @@ class RemoteSettingsDialog(QDialog):
         self.ssh_user_edit = QLineEdit()
         self.ssh_key_path_edit = QLineEdit()
         self.power_status_label = QLabel("")
+        self.power_setup_text = QTextEdit()
+        self.power_setup_text.setReadOnly(True)
+        self.power_setup_text.setMinimumHeight(120)
+        self.public_key_edit = QTextEdit()
+        self.public_key_edit.setPlaceholderText("macOS 클라이언트에서 생성한 SSH public key를 붙여넣고 승인/등록하세요")
+        self.public_key_edit.setMaximumHeight(80)
         save_button = QPushButton("전원 설정 저장")
         save_button.clicked.connect(self._save_power_config)
         refresh_button = QPushButton("전원 설정 새로고침")
         refresh_button.clicked.connect(self._refresh_power_config)
+        setup_button = QPushButton("전원 준비 상태 확인")
+        setup_button.clicked.connect(self._refresh_power_setup)
+        register_key_button = QPushButton("SSH public key 승인/등록")
+        register_key_button.clicked.connect(self._register_public_key)
+        smartthings_button = QPushButton("SmartThings CLI/기기 확인")
+        smartthings_button.clicked.connect(self._probe_smartthings_devices)
         layout.addRow("SmartThings device id:", self.smartthings_device_id_edit)
         layout.addRow("SmartThings CLI path:", self.smartthings_cli_path_edit)
         layout.addRow("SSH host:", self.ssh_host_edit)
@@ -138,11 +151,19 @@ class RemoteSettingsDialog(QDialog):
         layout.addRow("SSH user:", self.ssh_user_edit)
         layout.addRow("SSH key path:", self.ssh_key_path_edit)
         layout.addRow(self.power_status_label)
+        layout.addRow("준비 상태:", self.power_setup_text)
+        layout.addRow("SSH public key:", self.public_key_edit)
         row = QHBoxLayout()
         row.addWidget(save_button)
         row.addWidget(refresh_button)
+        row.addWidget(setup_button)
         row.addStretch(1)
         layout.addRow(row)
+        key_row = QHBoxLayout()
+        key_row.addWidget(register_key_button)
+        key_row.addWidget(smartthings_button)
+        key_row.addStretch(1)
+        layout.addRow(key_row)
         return widget
 
     def _save_server_mode(self):
@@ -242,6 +263,66 @@ class RemoteSettingsDialog(QDialog):
         self.ssh_key_path_edit.setText(str(config.get("ssh_key_path") or ""))
         readiness = payload.get("readiness") or {}
         self.power_status_label.setText(f"지원 명령: {', '.join(readiness.get('supported_actions') or []) or '(없음)'}")
+
+
+    def _refresh_power_setup(self):
+        try:
+            response = requests.get(f"{self.base_url}/remote/power/setup", timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            self.power_setup_text.setPlainText(f"전원 준비 상태 조회 실패: {exc}")
+            return
+        ssh_service = payload.get("ssh_service") or {}
+        firewall = payload.get("firewall") or {}
+        smartthings = payload.get("smartthings_cli_candidates") or []
+        self.power_setup_text.setPlainText(
+            "전원 관리 준비 마법사\n"
+            f"- host: {payload.get('host_platform')} / user: {payload.get('user')}\n"
+            f"- authorized_keys: {payload.get('authorized_keys_path')} (exists={payload.get('authorized_keys_exists')})\n"
+            f"- OpenSSH Server: running={ssh_service.get('running')} start_type={ssh_service.get('start_type')} message={ssh_service.get('message')}\n"
+            f"- Firewall: enabled={firewall.get('enabled')} message={firewall.get('message')}\n"
+            f"- SmartThings CLI candidates: {smartthings or '(없음)'}\n"
+            "OpenSSH 설치/방화벽 활성화는 Windows 권한 상승이 필요하므로 명시적으로 수동 승인 후 진행하세요."
+        )
+        if smartthings and not self.smartthings_cli_path_edit.text().strip():
+            self.smartthings_cli_path_edit.setText(str(smartthings[0]))
+
+    def _register_public_key(self):
+        public_key = self.public_key_edit.toPlainText().strip()
+        if not public_key:
+            QMessageBox.information(self, "SSH key 필요", "macOS 클라이언트에서 생성한 SSH public key를 붙여넣으세요.")
+            return
+        try:
+            response = requests.post(
+                f"{self.base_url}/remote/power/ssh-key",
+                json={"public_key": public_key, "label": "HomeworkHelper Remote"},
+                timeout=5,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            self.power_setup_text.setPlainText(str(payload))
+            self._refresh_power_setup()
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "SSH key 등록 실패", str(exc))
+
+    def _probe_smartthings_devices(self):
+        try:
+            response = requests.post(
+                f"{self.base_url}/remote/power/smartthings/devices",
+                json={"cli_path": self.smartthings_cli_path_edit.text().strip() or None},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            devices = payload.get("devices") or []
+            self.power_setup_text.setPlainText(
+                f"SmartThings CLI: {payload.get('cli_path') or self.smartthings_cli_path_edit.text()}\n"
+                f"message: {payload.get('message')}\n"
+                f"devices:\n" + "\n".join(str(item) for item in devices)
+            )
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "SmartThings 확인 실패", str(exc))
 
     def _save_power_config(self):
         payload = {

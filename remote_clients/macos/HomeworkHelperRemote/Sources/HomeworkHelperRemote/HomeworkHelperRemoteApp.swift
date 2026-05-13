@@ -218,6 +218,17 @@ struct RemoteDashboardView: View {
                                     SidebarInfoRow(label: "저장 상태", value: response.configExists ? "있음" : "없음")
                                     SidebarInfoRow(label: "지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
                                 }
+                                if let setup = viewModel.powerSetup {
+                                    SetupInstructionBlock(
+                                        title: "Windows 전원 준비",
+                                        lines: [
+                                            "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
+                                            "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
+                                            "authorized_keys: \(setup.authorizedKeysPath)",
+                                            "SmartThings CLI: \(setup.smartthingsCLICandidates.first ?? "감지 안 됨")"
+                                        ]
+                                    )
+                                }
                                 TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
                                     .textFieldStyle(.roundedBorder)
                                 TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
@@ -233,11 +244,36 @@ struct RemoteDashboardView: View {
                                     Button("SSH host 채우기") {
                                         viewModel.applySuggestedPowerHost()
                                     }
+                                    Button("준비 상태 확인") {
+                                        Task { await viewModel.refreshPowerSetup() }
+                                    }
+                                    Button("SSH key 생성/전송") {
+                                        Task { await viewModel.generateAndSendSSHKey() }
+                                    }
+                                    .disabled(!viewModel.isPaired || viewModel.isLoading)
+                                }
+                                HStack {
+                                    Button("SmartThings 기기 확인") {
+                                        Task { await viewModel.probeSmartThingsDevices() }
+                                    }
                                     Button("전원 설정 저장") {
                                         Task { await viewModel.savePowerConfig() }
                                     }
                                 }
-                                Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
+                                if let key = viewModel.localSSHKey {
+                                    SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
+                                }
+                                if !viewModel.smartThingsDevices.isEmpty {
+                                    Text("SmartThings devices")
+                                        .font(.caption.bold())
+                                    ForEach(viewModel.smartThingsDevices.prefix(5), id: \.self) { device in
+                                        Text(device)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다. OpenSSH 설치/방화벽 변경은 Windows에서 명시적으로 승인해야 합니다.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

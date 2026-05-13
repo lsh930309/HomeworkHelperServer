@@ -16,12 +16,13 @@ from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
+from src.core.remote_power_setup import list_smartthings_devices, power_setup_status, register_public_key
 from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
 from src.data import beholder, crud, models, schemas
 
 
-REMOTE_API_VERSION = "0.1.9"
+REMOTE_API_VERSION = "0.1.10"
 TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 
 
@@ -71,6 +72,15 @@ class RemotePowerConfigRequest(BaseModel):
     ssh_user: str = ""
     ssh_key_path: str = ""
     status_timeout_seconds: float = 4.0
+
+
+class RemotePublicKeyRequest(BaseModel):
+    public_key: str
+    label: str = "HomeworkHelper Remote"
+
+
+class SmartThingsProbeRequest(BaseModel):
+    cli_path: str | None = None
 
 
 def _model_dump(model: Any) -> dict[str, Any]:
@@ -308,6 +318,12 @@ def create_remote_router(
             return method == "DELETE"
         if path.endswith("/remote/power/config"):
             return method in {"GET", "PUT"}
+        if path.endswith("/remote/power/setup"):
+            return method == "GET"
+        if path.endswith("/remote/power/ssh-key"):
+            return method == "POST"
+        if path.endswith("/remote/power/smartthings/devices"):
+            return method == "POST"
         if path.endswith("/remote/tailscale/ensure"):
             return method == "POST"
         return False
@@ -551,6 +567,35 @@ def create_remote_router(
             },
         )
         return result.as_dict()
+
+    @router.get("/power/setup")
+    def remote_power_setup():
+        return power_setup_status()
+
+    @router.post("/power/ssh-key")
+    def remote_power_register_ssh_key(request: RemotePublicKeyRequest):
+        try:
+            result = register_public_key(request.public_key, label=request.label)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        auditor.record(
+            command="power.ssh_key.register",
+            accepted=bool(result.get("registered") or result.get("already_present")),
+            status="registered" if result.get("registered") else "already_present" if result.get("already_present") else "rejected",
+            target=result.get("authorized_keys_path"),
+        )
+        return result
+
+    @router.post("/power/smartthings/devices")
+    def remote_power_smartthings_devices(request: SmartThingsProbeRequest):
+        result = list_smartthings_devices(request.cli_path)
+        auditor.record(
+            command="power.smartthings.devices",
+            accepted=bool(result.get("available")),
+            status="available" if result.get("available") else "missing",
+            target=result.get("cli_path"),
+        )
+        return result
 
     @router.get("/power/config")
     def remote_power_config():
