@@ -84,6 +84,8 @@ cd /Users/lsh930309/projects/HomeworkHelperServer
 ./.venv/bin/python tools/package_macos_remote_app.py
 ```
 
+이 패키징 단계는 Tailscale/LAN의 `http://100.109.140.97:8000` Remote Agent에 접속할 수 있도록 macOS App Transport Security 예외를 `Info.plist`에 포함한다. `swift run`으로 직접 실행하면 이 앱 번들 설정이 적용되지 않을 수 있으므로 실사용 테스트는 반드시 아래 `.app`을 `open`으로 실행한다.
+
 생성 위치:
 
 ```text

@@ -52,6 +52,12 @@ def _info_plist() -> dict[str, object]:
         "CFBundleVersion": "1",
         "LSApplicationCategoryType": "public.app-category.productivity",
         "LSMinimumSystemVersion": "13.0",
+        "NSAppTransportSecurity": {
+            # Remote Agent is intentionally exposed on a private LAN/Tailscale
+            # HTTP endpoint during local remote-control testing. Pairing +
+            # bearer tokens still protect the command surface.
+            "NSAllowsArbitraryLoads": True,
+        },
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
     }

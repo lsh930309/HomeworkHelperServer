@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS app 번들이 Tailscale HTTP Remote Agent를 허용한다
+
+### 작업 범위
+
+- macOS `.app` 패키징 `Info.plist`에 `NSAppTransportSecurity` / `NSAllowsArbitraryLoads`를 추가했다.
+- Tailscale/LAN의 `http://100.109.140.97:8000` Remote Agent에 접속하는 실사용 테스트는 반드시 `.app` 번들을 `open`으로 실행하도록 튜토리얼에 ATS 설명을 추가했다.
+- packaging contract test가 ATS key를 고정하도록 확장했다.
+
+### 자체 코드 리뷰 메모
+
+- 현재 Remote Agent는 private LAN/Tailscale HTTP endpoint + pairing/bearer token 설계이므로 macOS ATS 예외가 필요하다.
+- 이 예외는 packaged `.app`의 `Info.plist`에만 적용된다. `swift run` 직접 실행은 여전히 수동 UI 테스트 대상으로 보지 않는다.
+- 장기적으로 공개망 노출이나 배포를 고려하면 HTTPS/TLS terminate 계층을 추가해야 한다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py` → 10 passed
+- `./.venv/bin/python tools/package_macos_remote_app.py` → `macOS app packaged: /Users/lsh930309/projects/HomeworkHelperServer/dist/macos/HomeworkHelperRemote.app`
+- `plutil -p dist/macos/HomeworkHelperRemote.app/Contents/Info.plist | grep -A4 NSAppTransportSecurity` → `NSAllowsArbitraryLoads => true`
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS app 번들이 Tailscale HTTP Remote Agent를 허용한다
+
+Constraint: macOS ATS가 http://100.109.140.97:8000 Remote Agent 요청을 차단했음
+Rejected: 테스트 중 HTTPS를 먼저 도입 | 현재 실사용 smoke는 private Tailscale HTTP + pairing token 경계를 검증하는 단계임
+Confidence: high
+Scope-risk: narrow
+Directive: 공개망/배포 단계로 넘어가면 ATS arbitrary loads 대신 HTTPS/TLS 또는 좁은 exception으로 전환할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_verifier_contract.py; ./.venv/bin/python tools/package_macos_remote_app.py; plutil -p dist/macos/HomeworkHelperRemote.app/Contents/Info.plist | grep -A4 NSAppTransportSecurity; git diff --check
+Not-tested: Windows Remote Agent와 실제 페어링 재시도
+```
+
+---
+
 ## 2026-05-13 — macOS 클라이언트가 터미널 분리 app 번들로 패키징된다
 
 ### 작업 범위

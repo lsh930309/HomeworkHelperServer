@@ -251,6 +251,8 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "CFBundlePackageType" in packager
     assert "APPL" in packager
     assert "CFBundleIdentifier" in packager
+    assert "NSAppTransportSecurity" in packager
+    assert "NSAllowsArbitraryLoads" in packager
     assert "open {app}" in packager
 
 
