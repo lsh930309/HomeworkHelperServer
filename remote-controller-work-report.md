@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS 좌측 설정 패널이 실사용 창에서 읽히도록 넓어진다
+
+### 작업 범위
+
+- macOS 앱 최소 창 크기를 `1100x680`으로 키워 detail 영역과 설정 sidebar가 동시에 읽히도록 했다.
+- `NavigationSplitView` sidebar 폭을 최소 340px, 권장 390px로 지정했다.
+- Base URL, bearer token, device name, pairing code 입력을 Form의 가로 label/value 배치 대신 세로 label + 입력칸 배치로 바꿔 좁은 sidebar에서도 내용이 잘리지 않게 했다.
+
+### 자체 코드 리뷰 메모
+
+- 기능 로직은 변경하지 않고 SwiftUI layout만 조정했다.
+- Windows 데스크탑/Tailscale 주소를 입력해야 하는 맥 클라이언트 실사용 상황을 고려해 Base URL placeholder를 명확히 했다.
+- token 필드는 여전히 SecureField이며 Keychain 저장 흐름은 유지된다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py` → 5 passed
+- `./.venv/bin/python tools/smoke_macos_remote_viewmodel.py` → `macOS RemoteDashboardViewModel smoke passed: processes=1, game_links=1, devices=1`
+- `swift build` → passed
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS 설정 패널이 실사용 창에서 읽히도록 넓어진다
+
+Constraint: 실제 macOS 앱 창에서 NavigationSplitView sidebar가 좁아 Base URL/token/pairing controls가 잘렸음
+Rejected: 사용자에게 수동으로 split divider를 조정하라고 안내 | 기본 창 상태에서 실사용 입력 항목이 읽혀야 함
+Confidence: high
+Scope-risk: narrow
+Directive: macOS 설정 항목을 추가할 때 sidebar 최소 폭과 label/input 세로 배치를 유지할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py; ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py; swift build; git diff --check
+Not-tested: 실제 Windows Remote Agent와의 GUI 수동 페어링 재시도
+```
+
+---
+
 ## 2026-05-13 — Android emulator e2e가 실사용 직전 경계를 닫는다
 
 ### 작업 범위

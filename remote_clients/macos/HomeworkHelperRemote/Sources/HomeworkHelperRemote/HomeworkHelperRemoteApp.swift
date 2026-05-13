@@ -5,7 +5,7 @@ struct HomeworkHelperRemoteApp: App {
     var body: some Scene {
         WindowGroup {
             RemoteDashboardView()
-                .frame(minWidth: 720, minHeight: 520)
+                .frame(minWidth: 1100, minHeight: 680)
         }
         MenuBarExtra("HomeworkHelper", systemImage: "gamecontroller") {
             Button("대시보드 열기") {
@@ -24,19 +24,39 @@ struct RemoteDashboardView: View {
         NavigationSplitView {
             Form {
                 Section("Remote Agent") {
-                    TextField("Base URL", text: $viewModel.baseURLText)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField("Bearer token (선택)", text: $viewModel.tokenText)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("디바이스 이름", text: $viewModel.deviceName)
-                        .textFieldStyle(.roundedBorder)
-                    HStack {
-                        TextField("페어링 코드", text: $viewModel.pairingCode)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Base URL")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("http://windows-host-or-tailnet-ip:8000", text: $viewModel.baseURLText)
                             .textFieldStyle(.roundedBorder)
-                        Button("페어링") {
-                            Task { await viewModel.confirmPairing() }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Bearer token (선택)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        SecureField("페어링 후 Keychain에 저장됩니다", text: $viewModel.tokenText)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("디바이스 이름")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("MacBook", text: $viewModel.deviceName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("페어링 코드")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            TextField("6자리 코드", text: $viewModel.pairingCode)
+                                .textFieldStyle(.roundedBorder)
+                            Button("페어링") {
+                                Task { await viewModel.confirmPairing() }
+                            }
+                            .disabled(viewModel.isLoading)
                         }
-                        .disabled(viewModel.isLoading)
                     }
                     Button {
                         Task { await viewModel.refresh() }
@@ -149,6 +169,7 @@ struct RemoteDashboardView: View {
                 }
             }
             .navigationTitle("HomeworkHelper")
+            .navigationSplitViewColumnWidth(min: 340, ideal: 390, max: 480)
         } detail: {
             VStack(alignment: .leading, spacing: 16) {
                 GroupBox("게임 실행") {

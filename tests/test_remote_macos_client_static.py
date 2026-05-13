@@ -177,6 +177,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
 
     assert "RemoteDashboardViewModel()" in app
+    assert ".frame(minWidth: 1100, minHeight: 680)" in app
+    assert ".navigationSplitViewColumnWidth(min: 340, ideal: 390, max: 480)" in app
+    assert "http://windows-host-or-tailnet-ip:8000" in app
+    assert "페어링 후 Keychain에 저장됩니다" in app
+    assert "6자리 코드" in app
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
