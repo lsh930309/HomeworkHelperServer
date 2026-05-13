@@ -49,6 +49,7 @@ def _client_with_seed(
     require_auth=False,
     client_address=("testclient", 50000),
     power_config_path=None,
+    tailscale_probe=None,
 ):
     engine = create_engine(
         "sqlite:///:memory:",
@@ -103,6 +104,7 @@ def _client_with_seed(
             require_auth=require_auth,
             now=lambda: 1778497000.0,
             power_config_path=power_config_path,
+            tailscale_probe=tailscale_probe,
         )
     )
     return TestClient(app, client=client_address), fake_launcher, opened_urls, fake_auditor, device_registry
@@ -118,7 +120,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.8"
+    assert body["remote_api_version"] == "0.1.9"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -255,6 +257,53 @@ def test_remote_capabilities_endpoint_matches_status_capability_contract():
     assert capabilities_body["capabilities"]["power_control"] is True
     assert capabilities_body["power"]["supported_actions"] == ["wake"]
 
+
+
+def test_remote_readiness_reports_tailscale_and_power_sections():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.114.138.46"],
+                "self_hostname": "macbook",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "windows-desktop",
+                        "dns_name": "windows-desktop.tailnet.ts.net.",
+                        "ips": ["100.109.140.97"],
+                        "online": True,
+                        "os": "windows",
+                        "primary_ipv4": "100.109.140.97",
+                    }
+                ],
+            }
+
+        @property
+        def peers(self):
+            from src.core.tailscale import TailscalePeer
+
+            return (TailscalePeer("windows-desktop", "windows-desktop.tailnet.ts.net.", ("100.109.140.97",), True, "windows"),)
+
+    controller = ConfigurablePowerController(
+        RemotePowerConfig(ssh_host="pc.example.test", ssh_user="player", ssh_key_path="~/.ssh/id_ed25519"),
+        tcp_checker=lambda _host, _port, _timeout: True,
+    )
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        auth_token="secret-token",
+        power_controller=controller,
+        tailscale_probe=lambda: _Snapshot(),
+    )
+
+    body = client.get("/remote/readiness", headers={"Authorization": "Bearer secret-token"}).json()
+
+    assert body["tailscale_readiness"]["color"] == "green"
+    assert body["tailscale_readiness"]["suggested_base_urls"] == ["http://100.109.140.97:8000"]
+    assert body["power_readiness"]["color"] == "green"
+    assert body["remote_connectivity"]["color"] == "green"
+    assert set(body) >= {"beholder_health", "remote_connectivity", "server_mode_readiness", "power_readiness", "tailscale_readiness"}
 
 def test_remote_power_config_can_be_saved_without_sending_power_commands(tmp_path):
     config_path = tmp_path / "remote_power_config.json"

@@ -9,6 +9,7 @@ private actor RemoteDashboardService {
     }
 
     func status() async throws -> RemoteStatus { try await client.status() }
+    func readiness() async throws -> RemoteReadiness { try await client.readiness() }
     func dashboardSummary() async throws -> RemoteDashboardSummary { try await client.dashboardSummary() }
     func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await client.beholderIncidents() }
     func gameLinks() async throws -> [RemoteGameLink] { try await client.gameLinks() }
@@ -45,6 +46,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var gameLinkAndroidPackage = ""
     @Published var powerConfig = RemotePowerConfigPayload()
     @Published var powerConfigResponse: RemotePowerConfigResponse?
+    @Published var readiness: RemoteReadiness?
+    @Published var localTailscale: LocalTailscaleSnapshot?
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -89,6 +92,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
             status = try await service.status()
+            if let statusReadiness = status?.readiness {
+                readiness = statusReadiness
+            } else {
+                readiness = try? await service.readiness()
+            }
             dashboardSummary = try await service.dashboardSummary()
             beholderIncidents = try await service.beholderIncidents()
             gameLinks = try await service.gameLinks()
@@ -104,6 +112,24 @@ final class RemoteDashboardViewModel: ObservableObject {
         } catch {
             message = error.localizedDescription
         }
+    }
+
+
+    func discoverTailscale() async {
+        message = "Tailscale CLI 확인 중..."
+        let snapshot = await TailscaleDiscovery.ensureReady()
+        localTailscale = snapshot
+        if let url = snapshot.suggestedBaseURLs.first {
+            baseURLText = url
+            message = "Tailscale 확인/설치 후 후보를 Base URL로 적용했습니다: \(url)"
+        } else {
+            message = snapshot.message
+        }
+    }
+
+    func applySuggestedBaseURL(_ url: String) {
+        baseURLText = url
+        message = "Base URL 적용: \(url)"
     }
 
     func activeMobileSession(for link: RemoteGameLink) -> RemoteMobileSession? {
@@ -200,6 +226,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerConfigResponse = response
             powerConfig = response.config
             status = try await service.status()
+            readiness = status?.readiness
             let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
             message = "전원 설정을 저장했습니다. 지원 명령: \(supportedActions)"
         } catch {

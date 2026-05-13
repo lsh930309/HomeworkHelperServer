@@ -16,11 +16,12 @@ from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
+from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
 from src.data import beholder, crud, models, schemas
 
 
-REMOTE_API_VERSION = "0.1.8"
+REMOTE_API_VERSION = "0.1.9"
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -246,6 +247,7 @@ def create_remote_router(
     require_auth: bool = False,
     now: Callable[[], float] | None = None,
     power_config_path: Path | None = None,
+    tailscale_probe: Callable[[], Any] | None = None,
 ) -> APIRouter:
     """Create HomeworkHelper's native-client remote-control API router.
 
@@ -263,6 +265,7 @@ def create_remote_router(
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
     now = now or time.time
     power_config_path = power_config_path or Path(data_dir) / "remote_power_config.json"
+    tailscale_probe = tailscale_probe or tailscale_status
 
     def _bearer_token(authorization: str | None) -> str | None:
         if not authorization:
@@ -320,6 +323,62 @@ def create_remote_router(
             "beholder": True,
             "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
             "pairing": True,
+            "tailscale_discovery": True,
+            "readiness": True,
+        }
+
+    def _readiness_payload(power_status: dict[str, Any], *, active_beholder_incidents: int | None = None) -> dict[str, Any]:
+        try:
+            ts_snapshot = tailscale_probe()
+            tailscale_payload = ts_snapshot.as_dict() if hasattr(ts_snapshot, "as_dict") else dict(ts_snapshot)
+        except Exception as exc:
+            tailscale_payload = {
+                "installed": False,
+                "running": False,
+                "backend_state": "error",
+                "self_ips": [],
+                "self_hostname": "",
+                "peers": [],
+                "message": f"tailscale readiness 확인 실패: {exc}",
+            }
+            ts_snapshot = None
+        tailscale_ready = bool(tailscale_payload.get("installed") and tailscale_payload.get("running"))
+        power_ready = bool(power_status.get("configured"))
+        auth_ready = bool(require_auth or auth_token or device_registry.has_registered_devices())
+        beholder_state = "ok" if not active_beholder_incidents else "warning"
+        remote_state = "ok" if auth_ready else "warning"
+        server_state = "ok" if auth_ready and tailscale_ready else "warning"
+        return {
+            "beholder_health": {
+                "state": beholder_state,
+                "color": "green" if beholder_state == "ok" else "yellow",
+                "message": "Beholder 대기 중인 incident 없음" if beholder_state == "ok" else f"Beholder incident {active_beholder_incidents}건 확인 필요",
+                "active_incidents": int(active_beholder_incidents or 0),
+            },
+            "remote_connectivity": {
+                "state": remote_state,
+                "color": "green" if remote_state == "ok" else "yellow",
+                "message": "Remote 인증/페어링 준비됨" if auth_ready else "첫 페어링 전에는 로컬 pair/start로 시작하세요.",
+                "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
+            },
+            "server_mode_readiness": {
+                "state": server_state,
+                "color": "green" if server_state == "ok" else "yellow",
+                "message": "서버 모드 준비됨" if server_state == "ok" else "Tailscale 또는 페어링 준비가 더 필요합니다.",
+            },
+            "power_readiness": {
+                "state": "ok" if power_ready else "warning",
+                "color": "green" if power_ready else "yellow",
+                "message": power_status.get("message") or ("전원 제어 adapter 설정됨" if power_ready else "전원 제어 adapter 미설정"),
+                "supported_actions": power_status.get("supported_actions") or [],
+            },
+            "tailscale_readiness": {
+                "state": "ok" if tailscale_ready else "warning",
+                "color": "green" if tailscale_ready else "yellow",
+                "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
+                "suggested_base_urls": suggest_remote_base_urls(ts_snapshot) if tailscale_ready and ts_snapshot is not None else [],
+                "details": tailscale_payload,
+            },
         }
 
     @router.post("/pair/start")
@@ -407,6 +466,7 @@ def create_remote_router(
             },
             "capabilities": _remote_capabilities(power_status),
             "power": power_status,
+            "readiness": _readiness_payload(power_status, active_beholder_incidents=len(beholder.active_incidents(db))),
         }
 
     @router.get("/capabilities")
@@ -416,7 +476,28 @@ def create_remote_router(
             "remote_api_version": REMOTE_API_VERSION,
             "capabilities": _remote_capabilities(power_status),
             "power": power_status,
+            "readiness": _readiness_payload(power_status),
         }
+
+    @router.get("/readiness")
+    def remote_readiness():
+        power_status = power_controller.status() if hasattr(power_controller, "status") else {}
+        return _readiness_payload(power_status)
+
+    @router.post("/tailscale/ensure")
+    def remote_tailscale_ensure():
+        result = ensure_tailscale_ready()
+        auditor.record(
+            command="tailscale.ensure",
+            accepted=bool(result.ready),
+            status="ready" if result.ready else "not_ready",
+            target=result.method,
+            metadata={
+                "install_attempted": result.install_attempted,
+                "launch_attempted": result.launch_attempted,
+            },
+        )
+        return result.as_dict()
 
     @router.get("/power/config")
     def remote_power_config():

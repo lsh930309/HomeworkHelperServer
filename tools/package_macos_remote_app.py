@@ -22,6 +22,8 @@ EXECUTABLE = MACOS_ROOT / ".build" / "release" / "HomeworkHelperRemote"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "dist" / "macos"
 APP_NAME = "HomeworkHelperRemote.app"
 BUNDLE_IDENTIFIER = "dev.homeworkhelper.remote.macos"
+ICON_SOURCE = PROJECT_ROOT / "assets" / "icons" / "app" / "app_icon.png"
+ICON_NAME = "HomeworkHelperRemote.icns"
 
 
 def _run(command: list[str], *, cwd: Path) -> None:
@@ -45,6 +47,7 @@ def _info_plist() -> dict[str, object]:
         "CFBundleDisplayName": "HomeworkHelper Remote",
         "CFBundleExecutable": "HomeworkHelperRemote",
         "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+        "CFBundleIconFile": ICON_NAME,
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "HomeworkHelperRemote",
         "CFBundlePackageType": "APPL",
@@ -61,6 +64,21 @@ def _info_plist() -> dict[str, object]:
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
     }
+
+
+def _copy_icon(resources: Path) -> None:
+    if not ICON_SOURCE.exists():
+        return
+    iconset = resources / "HomeworkHelperRemote.iconset"
+    iconset.mkdir(parents=True, exist_ok=True)
+    sizes = [16, 32, 128, 256, 512]
+    for size in sizes:
+        target = iconset / f"icon_{size}x{size}.png"
+        _run(["sips", "-z", str(size), str(size), str(ICON_SOURCE), "--out", str(target)], cwd=PROJECT_ROOT)
+        retina = iconset / f"icon_{size}x{size}@2x.png"
+        _run(["sips", "-z", str(size * 2), str(size * 2), str(ICON_SOURCE), "--out", str(retina)], cwd=PROJECT_ROOT)
+    _run(["iconutil", "-c", "icns", str(iconset), "-o", str(resources / ICON_NAME)], cwd=PROJECT_ROOT)
+    shutil.rmtree(iconset, ignore_errors=True)
 
 
 def package_app(output_dir: Path) -> Path:
@@ -80,6 +98,10 @@ def package_app(output_dir: Path) -> Path:
     target_executable = macos / "HomeworkHelperRemote"
     shutil.copy2(EXECUTABLE, target_executable)
     target_executable.chmod(0o755)
+    try:
+        _copy_icon(resources)
+    except Exception as exc:
+        print(f"warning: app icon generation skipped: {exc}")
     with (contents / "Info.plist").open("wb") as file:
         plistlib.dump(_info_plist(), file, sort_keys=True)
     return app

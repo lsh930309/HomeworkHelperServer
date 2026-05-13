@@ -36,6 +36,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteCapabilitiesResponse",
         "RemotePowerConfigPayload",
         "RemotePowerConfigResponse",
+        "RemoteReadiness",
         "RemoteGameLink",
         "RemoteGameLinksResponse",
         "RemoteMobileSession",
@@ -48,6 +49,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         assert f"struct {model_name}" in models
 
     assert "struct Power: Decodable" in models
+    assert "let readiness: RemoteReadiness?" in models
     assert "struct Metrics: Decodable" in models
     assert "struct Game: Decodable" in models
     assert "struct MobileMetrics: Decodable" in models
@@ -122,6 +124,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     for endpoint in [
         'remote/status',
         'remote/capabilities',
+        'remote/readiness',
         'remote/dashboard/summary',
         'remote/beholder/incidents',
         'remote/game-links',
@@ -197,6 +200,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 상태" in app
     assert "전원 설정" in app
     assert "전원 설정 저장" in app
+    assert "Tailscale 찾기" in app
+    assert "ensureReady" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
+    assert "pkgs.tailscale.com/stable/?v=latest" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
+    assert "ReadinessPill" in app
     assert "savePowerConfig" in view_model
     assert "플레이 요약" in app
     assert "dashboardSummary" in view_model

@@ -40,6 +40,8 @@ from src.utils.windows import (
     get_startup_shortcut_status,
 )
 from src.core.launcher import Launcher
+from src.core.remote_power import RemotePowerConfig
+from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
@@ -121,6 +123,8 @@ class MainWindow(QMainWindow):
 
         # statusBar, menuBar 명시적 생성
         self.setStatusBar(QStatusBar(self))
+        self._remote_readiness_indicator_labels: dict[str, QLabel] = {}
+        self._setup_remote_readiness_indicators()
         self.setMenuBar(QMenuBar(self))
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
@@ -337,6 +341,9 @@ class MainWindow(QMainWindow):
         self.runtime_heartbeat_timer = QTimer(self)
         self.runtime_heartbeat_timer.timeout.connect(self._send_runtime_heartbeat)
         self.runtime_heartbeat_timer.start(30000)
+        self.remote_readiness_timer = QTimer(self)
+        self.remote_readiness_timer.timeout.connect(self._refresh_remote_readiness_indicators)
+        self.remote_readiness_timer.start(5000)
         # Reconcile stale open sessions before the first fresh heartbeat so
         # crash-recovery decisions can use the pre-crash heartbeat.
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
@@ -344,6 +351,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
@@ -354,6 +362,81 @@ class MainWindow(QMainWindow):
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
 
+
+
+    def _setup_remote_readiness_indicators(self) -> None:
+        """Add compact remote-server readiness dots to the persistent status bar."""
+        status_bar = self.statusBar()
+        if status_bar is None:
+            return
+        for key, label in [
+            ("beholder", "Beholder"),
+            ("remote", "Remote"),
+            ("server", "Server"),
+            ("power", "Power"),
+            ("tailscale", "Tailscale"),
+        ]:
+            widget = QLabel(f"● {label}", self)
+            widget.setObjectName(f"remoteReadiness_{key}")
+            widget.setToolTip("원격 제어 준비 상태를 확인 중입니다.")
+            widget.setStyleSheet("color: #808080; padding: 0 4px;")
+            status_bar.addPermanentWidget(widget)
+            self._remote_readiness_indicator_labels[key] = widget
+
+    def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
+        widget = self._remote_readiness_indicator_labels.get(key)
+        if widget is None:
+            return
+        palette = {
+            "green": "#22c55e",
+            "yellow": "#eab308",
+            "red": "#ef4444",
+            "gray": "#808080",
+        }
+        widget.setStyleSheet(f"color: {palette.get(color, palette['gray'])}; padding: 0 4px;")
+        widget.setToolTip(message)
+
+    def _refresh_remote_readiness_indicators(self) -> None:
+        """Refresh bottom-dot readiness without touching transient status messages."""
+        try:
+            incidents = self.data_manager.get_active_beholder_incidents() if hasattr(self.data_manager, "get_active_beholder_incidents") else []
+            if incidents:
+                self._set_remote_readiness_indicator("beholder", "yellow", f"Beholder incident {len(incidents)}건 확인 필요")
+            else:
+                self._set_remote_readiness_indicator("beholder", "green", "Beholder 대기 중인 incident 없음")
+        except Exception as exc:
+            self._set_remote_readiness_indicator("beholder", "red", f"Beholder 상태 확인 실패: {exc}")
+
+        config = RemotePowerConfig.load()
+        if config.configured:
+            self._set_remote_readiness_indicator("power", "green", "전원 제어 설정이 저장되어 있습니다.")
+        else:
+            self._set_remote_readiness_indicator("power", "yellow", "전원 제어 설정이 아직 저장되지 않았습니다.")
+
+        try:
+            snapshot = tailscale_status(timeout_seconds=0.8)
+            if snapshot.ready:
+                self._set_remote_readiness_indicator("tailscale", "green", f"Tailscale IP: {', '.join(snapshot.self_ips)}")
+            elif snapshot.installed:
+                self._set_remote_readiness_indicator("tailscale", "yellow", snapshot.message)
+            else:
+                self._set_remote_readiness_indicator("tailscale", "yellow", "tailscale CLI를 찾지 못했습니다.")
+        except Exception as exc:
+            self._set_remote_readiness_indicator("tailscale", "red", f"Tailscale 상태 확인 실패: {exc}")
+
+        api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
+        externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
+        has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
+        if externally_bound or has_token:
+            self._set_remote_readiness_indicator("remote", "green", "Remote API 외부/토큰 모드 준비됨")
+        else:
+            self._set_remote_readiness_indicator("remote", "yellow", "첫 페어링 전에는 로컬에서 pairing code를 발급하세요.")
+        server_ready = (externally_bound or has_token) and config.configured
+        self._set_remote_readiness_indicator(
+            "server",
+            "green" if server_ready else "yellow",
+            "서버 모드 준비됨" if server_ready else "Remote API 노출, 페어링, 전원/Tailscale 설정을 확인하세요.",
+        )
 
     def _poll_beholder_incidents(self):
         """Show Beholder incidents promptly in the PyQt main GUI."""
@@ -1872,6 +1955,8 @@ class MainWindow(QMainWindow):
             self.ui_refresh_timer.stop()
         if hasattr(self, 'runtime_heartbeat_timer') and self.runtime_heartbeat_timer.isActive():
             self.runtime_heartbeat_timer.stop()
+        if hasattr(self, 'remote_readiness_timer') and self.remote_readiness_timer.isActive():
+            self.remote_readiness_timer.stop()
         if hasattr(self.data_manager, "send_runtime_heartbeat"):
             self.data_manager.send_runtime_heartbeat(shutdown=True, runtime_kind="pyqt")
 

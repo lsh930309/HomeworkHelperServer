@@ -7,7 +7,7 @@ struct HomeworkHelperRemoteApp: App {
             RemoteDashboardView()
                 .frame(minWidth: 1100, minHeight: 680)
         }
-        MenuBarExtra("HomeworkHelper", systemImage: "gamecontroller") {
+        MenuBarExtra("HomeworkHelper", systemImage: "house.circle") {
             Button("대시보드 열기") {
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -62,6 +62,12 @@ struct RemoteDashboardView: View {
                             }
                             HStack {
                                 Button {
+                                    Task { await viewModel.discoverTailscale() }
+                                } label: {
+                                    Label("Tailscale 찾기", systemImage: "network")
+                                }
+                                .disabled(viewModel.isLoading)
+                                Button {
                                     Task { await viewModel.refresh() }
                                 } label: {
                                     Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
@@ -77,9 +83,44 @@ struct RemoteDashboardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    GroupBox("Tailscale") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let local = viewModel.localTailscale {
+                                SidebarInfoRow(label: "로컬 상태", value: local.message)
+                                if !local.selfIPs.isEmpty {
+                                    SidebarInfoRow(label: "이 Mac", value: local.selfIPs.joined(separator: ", "))
+                                }
+                                let suggestions = local.suggestedBaseURLs
+                                if !suggestions.isEmpty {
+                                    Text("Windows Desktop 후보")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    ForEach(suggestions, id: \.self) { url in
+                                        Button(url) { viewModel.applySuggestedBaseURL(url) }
+                                            .buttonStyle(.borderless)
+                                    }
+                                }
+                            } else {
+                                Text("tailscale CLI로 Windows Desktop tailnet IP를 자동 탐색합니다. 실패하면 Base URL 수동 입력을 계속 사용할 수 있습니다.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     if let status = viewModel.status {
                         GroupBox("상태") {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let readiness = viewModel.readiness {
+                                    ReadinessDotRow(title: "Beholder", section: readiness.beholderHealth)
+                                    ReadinessDotRow(title: "Remote", section: readiness.remoteConnectivity)
+                                    ReadinessDotRow(title: "Server", section: readiness.serverModeReadiness)
+                                    ReadinessDotRow(title: "Power", section: readiness.powerReadiness)
+                                    ReadinessDotRow(title: "Tailscale", section: readiness.tailscaleReadiness)
+                                    Divider()
+                                }
+
                                 SidebarInfoRow(label: "API", value: status.remoteAPIVersion)
                                 SidebarInfoRow(label: "게임", value: "\(status.counts.processes)")
                                 SidebarInfoRow(label: "숏컷", value: "\(status.counts.shortcuts)")
@@ -196,6 +237,22 @@ struct RemoteDashboardView: View {
             .navigationSplitViewColumnWidth(min: 360, ideal: 420, max: 520)
         } detail: {
             VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("HomeworkHelper Remote")
+                        .font(.largeTitle.bold())
+                    Text("Windows HomeworkHelper 서버와 페어링해 게임 실행, 전원 제어, 플레이 요약을 한 화면에서 확인합니다.")
+                        .foregroundStyle(.secondary)
+                    if let readiness = viewModel.readiness {
+                        HStack {
+                            ReadinessPill(title: "Beholder", section: readiness.beholderHealth)
+                            ReadinessPill(title: "Remote", section: readiness.remoteConnectivity)
+                            ReadinessPill(title: "Server", section: readiness.serverModeReadiness)
+                            ReadinessPill(title: "Power", section: readiness.powerReadiness)
+                            ReadinessPill(title: "Tailscale", section: readiness.tailscaleReadiness)
+                        }
+                    }
+                }
+
                 GroupBox("게임 실행") {
                     List(viewModel.processes) { process in
                         HStack {
@@ -405,5 +462,53 @@ struct PowerButtonRow: View {
             Label(label, systemImage: systemImage)
         }
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
+    }
+}
+
+struct ReadinessDotRow: View {
+    let title: String
+    let section: RemoteReadiness.Section
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(readinessColor(section.color))
+                .frame(width: 9, height: 9)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.bold())
+                Text(section.message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ReadinessPill: View {
+    let title: String
+    let section: RemoteReadiness.Section
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(readinessColor(section.color)).frame(width: 8, height: 8)
+            Text(title)
+                .font(.caption.bold())
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+        .help(section.message)
+    }
+}
+
+private func readinessColor(_ color: String) -> Color {
+    switch color {
+    case "green": return .green
+    case "yellow": return .yellow
+    case "red": return .red
+    default: return .gray
     }
 }

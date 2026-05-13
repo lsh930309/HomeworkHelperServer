@@ -61,6 +61,7 @@ struct RemoteStatus: Decodable {
     let counts: Counts
     let capabilities: Capabilities
     let power: Power?
+    let readiness: RemoteReadiness?
 
     var supportedPowerActions: Set<String> {
         Set(power?.supportedActions ?? [])
@@ -73,6 +74,63 @@ struct RemoteStatus: Decodable {
         case counts
         case capabilities
         case power
+        case readiness
+    }
+}
+
+struct RemoteReadiness: Decodable {
+    struct Section: Decodable {
+        let state: String
+        let color: String
+        let message: String
+        let activeIncidents: Int?
+        let authRequired: Bool?
+        let supportedActions: [String]?
+        let suggestedBaseURLs: [String]?
+        let details: TailscaleDetails?
+
+        enum CodingKeys: String, CodingKey {
+            case state
+            case color
+            case message
+            case activeIncidents = "active_incidents"
+            case authRequired = "auth_required"
+            case supportedActions = "supported_actions"
+            case suggestedBaseURLs = "suggested_base_urls"
+            case details
+        }
+    }
+
+    struct TailscaleDetails: Decodable {
+        let installed: Bool
+        let running: Bool
+        let backendState: String
+        let selfIPs: [String]
+        let selfHostname: String
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case installed
+            case running
+            case backendState = "backend_state"
+            case selfIPs = "self_ips"
+            case selfHostname = "self_hostname"
+            case message
+        }
+    }
+
+    let beholderHealth: Section
+    let remoteConnectivity: Section
+    let serverModeReadiness: Section
+    let powerReadiness: Section
+    let tailscaleReadiness: Section
+
+    enum CodingKeys: String, CodingKey {
+        case beholderHealth = "beholder_health"
+        case remoteConnectivity = "remote_connectivity"
+        case serverModeReadiness = "server_mode_readiness"
+        case powerReadiness = "power_readiness"
+        case tailscaleReadiness = "tailscale_readiness"
     }
 }
 
