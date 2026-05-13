@@ -35,14 +35,43 @@ private actor RemoteDashboardService {
     func revokeDevice(id: String) async throws -> RevokeDeviceResponse { try await client.revokeDevice(id: id) }
 }
 
+
+private enum RemoteClientPreferences {
+    private static let defaults = UserDefaults.standard
+    private static let baseURLKey = "remote.baseURL"
+    private static let deviceNameKey = "remote.deviceName"
+
+    static func loadBaseURL() -> String {
+        let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? "http://127.0.0.1:8000" : stored
+    }
+
+    static func saveBaseURL(_ value: String) {
+        defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: baseURLKey)
+    }
+
+    static func loadDeviceName() -> String {
+        let stored = defaults.string(forKey: deviceNameKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? Host.current().localizedName ?? "Mac" : stored
+    }
+
+    static func saveDeviceName(_ value: String) {
+        defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: deviceNameKey)
+    }
+}
+
 @MainActor
 final class RemoteDashboardViewModel: ObservableObject {
-    @Published var baseURLText = "http://127.0.0.1:8000"
+    @Published var baseURLText = RemoteClientPreferences.loadBaseURL() {
+        didSet { RemoteClientPreferences.saveBaseURL(baseURLText) }
+    }
     @Published var tokenText = "" {
         didSet { tokenStore.save(tokenText) }
     }
     @Published var pairingCode = ""
-    @Published var deviceName = Host.current().localizedName ?? "Mac"
+    @Published var deviceName = RemoteClientPreferences.loadDeviceName() {
+        didSet { RemoteClientPreferences.saveDeviceName(deviceName) }
+    }
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
     @Published var powerConfig = RemotePowerConfigPayload()
@@ -92,6 +121,39 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteDashboardService(client: client)
     }
 
+    private var baseURLNeedsTailnetSuggestion: Bool {
+        let trimmed = baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.contains("127.0.0.1") || trimmed.contains("localhost")
+    }
+
+    func bootstrap() async {
+        setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
+        let snapshot = await TailscaleDiscovery.status()
+        localTailscale = snapshot
+        if baseURLNeedsTailnetSuggestion, let url = snapshot.suggestedBaseURLs.first {
+            baseURLText = url
+            setupProgress = "저장된 Base URL이 없어서 Windows Desktop 후보를 적용했습니다: \(url)"
+        }
+        await refresh()
+        if status != nil {
+            setupProgress = isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
+        } else if snapshot.running {
+            setupProgress = "Tailscale은 준비됐지만 Windows Remote Agent에 연결하지 못했습니다. Windows 앱의 서버 모드와 방화벽을 확인하세요."
+        } else {
+            setupProgress = "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 설정 점검을 실행하세요."
+        }
+    }
+
+    private func connectionGuidance(for error: Error) -> String {
+        let raw = error.localizedDescription
+        if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
+            return "페어링 토큰이 없거나 만료되었습니다. Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급하세요. (\(raw))"
+        }
+        if raw.localizedCaseInsensitiveContains("could not connect") || raw.localizedCaseInsensitiveContains("timed out") || raw.localizedCaseInsensitiveContains("서버") {
+            return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
+        }
+        return raw
+    }
 
     func runSetupAutomation() async {
         isLoading = true
@@ -133,8 +195,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
             message = setupProgress
         } catch {
-            setupProgress = error.localizedDescription
-            message = error.localizedDescription
+            let guidance = connectionGuidance(for: error)
+            setupProgress = guidance
+            message = guidance
         }
     }
 
@@ -155,7 +218,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             readiness = status?.readiness
             message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
         } catch {
-            message = error.localizedDescription
+            message = connectionGuidance(for: error)
         }
     }
 
@@ -202,7 +265,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개, 숏컷 \(shortcuts.count)개"
         } catch {
-            message = error.localizedDescription
+            let guidance = connectionGuidance(for: error)
+            message = guidance
+            setupProgress = guidance
         }
     }
 
@@ -213,7 +278,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         localTailscale = snapshot
         if let url = snapshot.suggestedBaseURLs.first {
             baseURLText = url
-            message = "Tailscale 확인/설치 후 후보를 Base URL로 적용했습니다: \(url)"
+            setupProgress = "Tailscale 후보를 Base URL로 적용했습니다: \(url)"
+            message = setupProgress
         } else {
             message = snapshot.message
         }

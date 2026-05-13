@@ -88,6 +88,14 @@ struct RemoteDashboardView: View {
                             Text("Windows 앱의 [설정 > 원격 설정]과 맞물려 Mac Tailscale, 서버 연결, 페어링, 전원 설정을 순서대로 점검합니다.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            SetupInstructionBlock(
+                                title: "Windows에서 먼저",
+                                lines: ["HomeworkHelper 실행", "설정 > 원격 설정에서 서버 모드 활성화", "페어링 코드 발급"]
+                            )
+                            SetupInstructionBlock(
+                                title: "이 Mac에서",
+                                lines: ["자동 설정 점검 실행", "코드 입력 후 페어링", "전원 설정 저장 및 테스트"]
+                            )
                             ForEach(Array(viewModel.setupChecklist.enumerated()), id: \.offset) { _, item in
                                 SetupChecklistRow(title: item.0, detail: item.1, ready: item.2)
                             }
@@ -441,7 +449,7 @@ struct RemoteDashboardView: View {
             }
             .padding()
         }
-        .task { await viewModel.refresh() }
+        .task { await viewModel.bootstrap() }
     }
 }
 
@@ -504,6 +512,27 @@ struct PowerButtonRow: View {
     }
 }
 
+
+
+struct SetupInstructionBlock: View {
+    let title: String
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.bold())
+            ForEach(lines, id: \.self) { line in
+                Text("• \(line)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
 
 struct SetupChecklistRow: View {
     let title: String

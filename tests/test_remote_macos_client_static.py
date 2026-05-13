@@ -185,6 +185,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
 
     assert "RemoteDashboardViewModel()" in app
+    assert "RemoteClientPreferences" in view_model
+    assert "UserDefaults.standard" in view_model
+    assert "func bootstrap() async" in view_model
     assert ".frame(minWidth: 1100, minHeight: 680)" in app
     assert "ScrollView {" in app
     assert "GroupBox(\"Remote Agent\")" in app
@@ -230,6 +233,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app
     assert "원격 설정 자동화" in app
+    assert "Windows에서 먼저" in app
+    assert "이 Mac에서" in app
+    assert "SetupInstructionBlock" in app
+    assert "viewModel.bootstrap()" in app
     assert "자동 설정 점검" in app
     assert "서버 Tailscale 확인/복구" in app
     assert "SetupChecklistRow" in app
@@ -238,4 +245,6 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "applySuggestedPowerHost" in view_model
     assert "serverTailscaleEnsure" in view_model
     assert "setupChecklist" in view_model
+    assert "connectionGuidance" in view_model
+    assert "저장된 Keychain 토큰으로 자동 연결했습니다." in view_model
     assert "SSH host 채우기" in app
