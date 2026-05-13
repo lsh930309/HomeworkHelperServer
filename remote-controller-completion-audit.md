@@ -33,6 +33,7 @@
 | 전원 adapter readiness preflight | `tools/check_remote_power_readiness.py`가 config/CLI/key path/support action을 명령 실행 없이 보고 | 부분 충족 | 현재 실제 SmartThings CLI, SSH key, 장비 side effect smoke blocker |
 | macOS SwiftUI 앱 | `remote_clients/macos/HomeworkHelperRemote`, `RemoteDashboardViewModel` 분리 및 `tools/smoke_macos_remote_viewmodel.py`의 ViewModel 기능 smoke | 충족 | 실제 SwiftUI 창 클릭 자동화는 미검증 |
 | macOS build | `swift build` 통합 verifier에서 passed | 충족 | 없음 |
+| macOS packaged app 실사용 | `dist/macos/HomeworkHelperRemote.app` 패키징 후 Windows 데스크탑 Remote Agent `http://100.109.140.97:8000`와 수동 페어링/새로고침/대시보드 표시 성공. 루트 스크린샷 3장으로 evidence 보존 | 충족 | UI layout polish 필요 |
 | macOS API client 실통신 | `tools/smoke_macos_remote_api_client.py` → Swift `RemoteAPIClient`가 real loopback server와 pairing/status/capabilities/token refresh/game-link 생성·조회/mobile session start·end/dashboard mobile metrics/beholder/devices 통신 | 충족 | 없음 |
 | macOS ViewModel 기능 smoke | `tools/smoke_macos_remote_viewmodel.py` → real loopback server와 production Swift ViewModel을 컴파일해 pairing/token 저장, refresh, power guard, game-link 생성, mobile session start/end, token refresh, device refresh를 검증 | 충족 | SwiftUI 창 클릭 자동화는 후속 |
 | macOS dashboard/Beholder/read-only 및 Android-PC 카드 | `RemoteDashboardSummary`, `RemoteBeholderIncident`, `RemoteAPIClient.dashboardSummary()/beholderIncidents()`, SwiftUI `플레이 요약`/`모바일 플레이`/`Beholder 알림`/`Android-PC 연결` 카드, macOS API smoke DTO decode, ViewModel smoke의 game-link/mobile-session 상태 전이 검증, Android-PC 안내문이 수동 세션/UsageStats sync 구현 상태와 일치함 | 충족 | SwiftUI 창 클릭 자동화는 후속 |

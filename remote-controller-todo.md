@@ -108,6 +108,12 @@ HomeworkHelper 기능을 macOS/Android 네이티브 리모트 컨트롤러에서
 
 ## 실사용 테스트 진입 전 남은 환경 의존 항목
 
+- [x] MacBook packaged macOS app에서 Windows 데스크탑 Remote Agent Tailscale URL `http://100.109.140.97:8000` 페어링/새로고침/대시보드 표시 수동 테스트
 - [ ] 실제 물리 Android 기기에서 APK install/launch, Usage Access 허용, pairing/Keystore/UsageStats smoke 재실행
 - [ ] 실제 Tailscale/LAN URL과 paired token으로 `tools/smoke_remote_controller_connectivity.py --expect-auth` 실행
 - [ ] 실제 SmartThings/SSH 설정이 준비된 환경에서 전원 side-effect smoke 별도 승인 후 실행
+
+## 후속 UI polish 항목
+
+- [ ] macOS packaged app 좌측 설정 패널과 우측 대시보드의 시각 계층/간격/스크롤 구조 정리
+- [ ] macOS 게임 실행/플레이 요약/Android-PC 연결 카드의 중첩 List 높이와 header alignment 정리

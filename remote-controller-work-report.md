@@ -18,6 +18,50 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS packaged app이 Windows Remote Agent 실사용 페어링에 성공한다
+
+### 작업 범위
+
+- 사용자가 패키징된 macOS 앱으로 Windows 데스크탑 Remote Agent에 실제 접속/페어링/새로고침을 수행했고 기능 동작이 성공했음을 확인했다.
+- 프로젝트 루트에 수동 테스트 스크린샷 3장을 evidence로 보존했다.
+- UI는 동작 가능하지만 레이아웃이 다소 거칠어 후속 polish 항목으로 남긴다.
+
+### 수동 테스트 evidence
+
+- `스크린샷 2026-05-13 오전 10.30.52(2).png`
+  - 튜토리얼과 패키징된 `HomeworkHelperRemote.app` 실행 상태, Base URL `http://100.109.140.97:8000`, token 저장, 게임 목록/플레이 요약 표시 확인
+- `스크린샷 2026-05-13 오전 10.31.02(2).png`
+  - packaged app에서 Tailscale Remote Agent 데이터가 로드되고 좌측 설정/상태 패널과 우측 대시보드가 함께 표시됨
+- `스크린샷 2026-05-13 오전 10.31.09.png`
+  - 앱 단독 캡처에서 게임 실행 목록, 플레이 요약, Android-PC 연결, 웹 숏컷 표시 확인
+
+### 자체 코드 리뷰 메모
+
+- 이번 항목은 코드 변경 없이 수동 실사용 결과 기록이다.
+- SwiftUI 레이아웃은 현재 기능 검증을 통과했지만, 시각적 계층/간격/스크롤 구조가 거칠어 제품 polish 전 별도 UI 정리가 필요하다.
+- Windows Remote Agent + MacBook Tailscale 경로의 핵심 기능 테스트가 성공했으므로, 다음 실사용 검증은 물리 Android 기기와 외부망/전원 side-effect다.
+
+### 테스트/검증 결과
+
+- 사용자 수동 테스트 → packaged macOS app에서 Windows Remote Agent 실제 기능 동작 성공
+- `git diff --check` → 통과 예정
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS packaged app 실사용 성공 evidence를 보존한다
+
+Constraint: 자동 smoke만으로는 Windows 데스크탑 Remote Agent와 실제 packaged macOS UI 동작 성공을 증명하기 부족했음
+Rejected: 스크린샷을 커밋 밖에만 보관 | 실사용 evidence는 후속 회귀 판단을 위해 repo에 남겨야 함
+Confidence: high
+Scope-risk: narrow
+Directive: 기능 성공 evidence와 별개로 macOS UI polish는 후속 작업으로 분리해 진행할 것
+Tested: packaged macOS app manual test against Windows Remote Agent via Tailscale; git diff --check
+Not-tested: 물리 Android 기기, 실제 Tailscale/LAN 외부망 장기 안정성, SmartThings/SSH 전원 side effect
+```
+
+---
+
 ## 2026-05-13 — macOS app 번들이 Tailscale HTTP Remote Agent를 허용한다
 
 ### 작업 범위
