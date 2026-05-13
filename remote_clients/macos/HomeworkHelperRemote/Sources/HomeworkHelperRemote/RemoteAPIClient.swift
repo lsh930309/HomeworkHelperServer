@@ -136,6 +136,15 @@ struct RemoteAPIClient {
         try await post("remote/tailscale/ensure", body: Data("{}".utf8))
     }
 
+    func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse {
+        try await get("remote/logging/config")
+    }
+
+    func saveRemoteLoggingConfig(enabled: Bool) async throws -> RemoteLoggingConfigResponse {
+        let body = try JSONEncoder().encode(["enabled": enabled])
+        return try await put("remote/logging/config", body: body)
+    }
+
     func devices() async throws -> [RemoteDevice] {
         let response: RemoteDevicesResponse = try await get("remote/devices")
         return response.devices
@@ -143,6 +152,10 @@ struct RemoteAPIClient {
 
     func revokeDevice(id: String) async throws -> RevokeDeviceResponse {
         try await delete("remote/devices/\(id)")
+    }
+
+    func purgeRevokedDevices() async throws -> PurgeDevicesResponse {
+        try await delete("remote/devices/revoked")
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {

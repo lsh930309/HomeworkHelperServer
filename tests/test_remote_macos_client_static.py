@@ -147,6 +147,8 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/power/smartthings/devices',
         'remote/pair/confirm',
         'remote/tokens/refresh',
+        'remote/logging/config',
+        'remote/devices/revoked',
         'remote/tailscale/ensure',
         'remote/devices',
         'remote/processes/\\(id)/launch',
@@ -262,6 +264,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "connectionGuidance" in view_model
     assert "hostConnectionState" in view_model
     assert "RemoteClientPreferences.loadPowerConfig" in view_model
+    assert "remoteDesktopLoggingEnabled" in view_model
+    assert "saveRemoteDesktopLogging" in view_model
+    assert "purgeRevokedDevices" in view_model
     assert "func localWake() async" in view_model
     assert "powerConfig.localWakeConfigured" in view_model
     assert "completePairingOnboarding" in view_model
@@ -277,6 +282,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "SmartThings 기기 확인" in app
     assert "LocalSSHKeyManager" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "LocalPowerWakeManager" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    assert "smartThingsCLICandidates" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "ssh-keygen" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "generateAndSendSSHKey" in view_model
@@ -286,3 +292,5 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "applySmartThingsDevice" in view_model
     assert "SmartThings device 후보" in app
     assert "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." in app
+    assert "원격 진단 로그를 바탕 화면에 저장" in app
+    assert "폐기된 기기 정리" in app

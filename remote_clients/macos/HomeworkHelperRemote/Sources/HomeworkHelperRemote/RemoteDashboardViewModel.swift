@@ -35,7 +35,10 @@ private actor RemoteDashboardService {
     }
     func refreshToken() async throws -> PairingConfirmResponse { try await client.refreshToken() }
     func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse { try await client.ensureServerTailscale() }
+    func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse { try await client.remoteLoggingConfig() }
+    func saveRemoteLoggingConfig(enabled: Bool) async throws -> RemoteLoggingConfigResponse { try await client.saveRemoteLoggingConfig(enabled: enabled) }
     func revokeDevice(id: String) async throws -> RevokeDeviceResponse { try await client.revokeDevice(id: id) }
+    func purgeRevokedDevices() async throws -> PurgeDevicesResponse { try await client.purgeRevokedDevices() }
 }
 
 
@@ -44,6 +47,7 @@ private enum RemoteClientPreferences {
     private static let baseURLKey = "remote.baseURL"
     private static let deviceNameKey = "remote.deviceName"
     private static let powerConfigKey = "remote.powerConfig"
+    private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -76,6 +80,41 @@ private enum RemoteClientPreferences {
             defaults.set(data, forKey: powerConfigKey)
         }
     }
+
+    static func loadDesktopLoggingEnabled() -> Bool {
+        defaults.bool(forKey: desktopLoggingEnabledKey)
+    }
+
+    static func saveDesktopLoggingEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: desktopLoggingEnabledKey)
+    }
+}
+
+private enum RemoteClientDesktopLogger {
+    static func logPath() -> String {
+        guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else {
+            return "HomeworkHelperRemoteClient.log"
+        }
+        return desktop.appendingPathComponent("HomeworkHelperRemoteClient.log").path
+    }
+
+    static func write(_ event: String, _ fields: [String: String] = [:]) {
+        let payload = (["event": event, "ts": String(Date().timeIntervalSince1970)]).merging(fields) { _, new in new }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: data, encoding: .utf8),
+              let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else { return }
+        let url = desktop.appendingPathComponent("HomeworkHelperRemoteClient.log")
+        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data((line + "\n").utf8))
+                try handle.close()
+            } catch {
+                try? handle.close()
+            }
+        }
+    }
 }
 
 @MainActor
@@ -104,6 +143,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var localTailscale: LocalTailscaleSnapshot?
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
     @Published var setupProgress = "원격 설정 준비 전입니다."
+    @Published var remoteDesktopLoggingEnabled = RemoteClientPreferences.loadDesktopLoggingEnabled()
+    @Published var remoteDesktopLoggingPath = RemoteClientDesktopLogger.logPath()
     @Published var pairingRecoveryMessage = ""
     @Published var hostConnectionState = "unknown"
     @Published var status: RemoteStatus?
@@ -159,6 +200,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         if baseURLNeedsTailnetSuggestion, let url = snapshot.suggestedBaseURLs.first {
             baseURLText = url
             setupProgress = "저장된 Base URL이 없어서 Windows Desktop 후보를 적용했습니다: \(url)"
+        }
+        if let logging = try? await service?.remoteLoggingConfig() {
+            if logging.enabled {
+                remoteDesktopLoggingEnabled = true
+                RemoteClientPreferences.saveDesktopLoggingEnabled(true)
+            }
+            remoteDesktopLoggingPath = logging.path
         }
         if isPaired {
             await recoverPairing(silent: true)
@@ -469,6 +517,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     func localWake() async {
         do {
             message = try await LocalPowerWakeManager.wake(config: powerConfig)
+            if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("power.local_wake", ["device_id": powerConfig.smartthingsDeviceID]) }
         } catch {
             message = error.localizedDescription
         }
@@ -479,8 +528,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard let service else { return }
         do {
             powerSetup = try await service.powerSetup()
-            if let first = powerSetup?.smartthingsCLICandidates.first, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                powerConfig.smartthingsCLIPath = first
+            if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
+                    powerConfig.smartthingsCLIPath = local
+                } else if let first = powerSetup?.smartthingsCLICandidates.first {
+                    powerConfig.smartthingsCLIPath = first
+                }
             }
             message = powerSetup?.message ?? "전원 준비 상태 확인 완료"
         } catch {
@@ -536,8 +589,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         setupProgress = "PIN 확인 완료: Tailscale, SSH key, SmartThings 전원 설정을 자동 점검합니다."
         serverTailscaleEnsure = try? await service.ensureServerTailscale()
         powerSetup = try? await service.powerSetup()
-        if let first = powerSetup?.smartthingsCLICandidates.first, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            powerConfig.smartthingsCLIPath = first
+        if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
+                powerConfig.smartthingsCLIPath = local
+            } else if let first = powerSetup?.smartthingsCLICandidates.first {
+                powerConfig.smartthingsCLIPath = first
+            }
         }
         if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let host = URL(string: baseURLText)?.host {
             powerConfig.sshHost = host
@@ -615,6 +672,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
             message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
+            if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("pairing.complete", ["device": response.name]) }
             await refresh(using: pairedService, includeDevices: true)
         } catch {
             message = error.localizedDescription
@@ -632,6 +690,40 @@ final class RemoteDashboardViewModel: ObservableObject {
             await refreshDevices()
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+
+    func saveRemoteDesktopLogging(enabled: Bool) async {
+        remoteDesktopLoggingEnabled = enabled
+        RemoteClientPreferences.saveDesktopLoggingEnabled(enabled)
+        let localPath = RemoteClientDesktopLogger.logPath()
+        do {
+            guard let service else {
+                remoteDesktopLoggingPath = localPath
+                message = enabled ? "Mac 클라이언트 진단 로그를 저장합니다: \(localPath)" : "원격 진단 로그 저장을 껐습니다."
+                if enabled { RemoteClientDesktopLogger.write("client.logging.enabled", ["host_log": "unavailable"]) }
+                return
+            }
+            let config = try await service.saveRemoteLoggingConfig(enabled: enabled)
+            remoteDesktopLoggingPath = "\(localPath) / host: \(config.path)"
+            message = enabled ? "원격 진단 로그를 저장합니다: \(remoteDesktopLoggingPath)" : "원격 진단 로그 저장을 껐습니다."
+            if enabled { RemoteClientDesktopLogger.write("client.logging.enabled", ["host_log": config.path]) }
+        } catch {
+            remoteDesktopLoggingPath = localPath
+            message = enabled ? "Mac 클라이언트 로그는 켰지만 host 로그 설정 동기화는 실패했습니다: \(connectionGuidance(for: error))" : "Mac 클라이언트 로그는 껐지만 host 로그 설정 동기화는 실패했습니다: \(connectionGuidance(for: error))"
+            if enabled { RemoteClientDesktopLogger.write("client.logging.enabled", ["host_log": "sync_failed"]) }
+        }
+    }
+
+    func purgeRevokedDevices() async {
+        guard let service else { return }
+        do {
+            let result = try await service.purgeRevokedDevices()
+            devices = try await service.devices()
+            message = "폐기된 기기 \(result.removed)개를 정리했습니다."
+        } catch {
+            message = connectionGuidance(for: error)
         }
     }
 

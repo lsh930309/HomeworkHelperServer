@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from src.core.tailscale import _hidden_subprocess_kwargs
+
 _PUBLIC_KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))\s+[A-Za-z0-9+/=]+(?:\s+.*)?$")
 
 
@@ -38,6 +40,7 @@ def _ssh_service_status(runner=None) -> dict[str, Any]:
     if not _is_windows():
         return {"available": False, "running": False, "start_type": "unsupported", "message": "Windows OpenSSH Server 상태는 Windows 호스트에서만 확인합니다."}
     runner = runner or subprocess.run
+    kwargs = _hidden_subprocess_kwargs() if runner is subprocess.run else {}
     try:
         result = runner(
             ["powershell", "-NoProfile", "-Command", "Get-Service sshd | Select-Object -Property Status,StartType | ConvertTo-Json -Compress"],
@@ -45,6 +48,7 @@ def _ssh_service_status(runner=None) -> dict[str, Any]:
             text=True,
             timeout=5,
             check=False,
+            **kwargs,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "running": False, "start_type": "unknown", "message": f"sshd 서비스 확인 실패: {exc}"}
@@ -63,6 +67,7 @@ def _firewall_status(runner=None) -> dict[str, Any]:
     if not _is_windows():
         return {"available": False, "enabled": False, "message": "Windows 방화벽 SSH 규칙은 Windows 호스트에서만 확인합니다."}
     runner = runner or subprocess.run
+    kwargs = _hidden_subprocess_kwargs() if runner is subprocess.run else {}
     try:
         result = runner(
             ["powershell", "-NoProfile", "-Command", "Get-NetFirewallRule -DisplayName '*OpenSSH*' -ErrorAction SilentlyContinue | Where-Object Enabled -eq True | Select-Object -First 1 -ExpandProperty DisplayName"],
@@ -70,6 +75,7 @@ def _firewall_status(runner=None) -> dict[str, Any]:
             text=True,
             timeout=5,
             check=False,
+            **kwargs,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "enabled": False, "message": f"방화벽 규칙 확인 실패: {exc}"}
@@ -88,7 +94,6 @@ def smartthings_cli_candidates() -> list[str]:
         if os.path.exists(path) and path not in candidates:
             candidates.append(path)
     return candidates
-
 
 
 def _parse_smartthings_devices(lines: list[str]) -> list[dict[str, str]]:

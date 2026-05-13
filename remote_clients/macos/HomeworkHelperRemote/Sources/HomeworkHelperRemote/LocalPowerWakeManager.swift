@@ -1,6 +1,15 @@
 import Foundation
 
 enum LocalPowerWakeManager {
+    static func smartThingsCLICandidates() -> [String] {
+        let paths = [
+            "/opt/homebrew/bin/smartthings",
+            "/usr/local/bin/smartthings",
+            NSString(string: "~/.npm-global/bin/smartthings").expandingTildeInPath
+        ]
+        return paths.filter { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
     static func wake(config: RemotePowerConfigPayload) async throws -> String {
         let cli = config.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let deviceID = config.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines)

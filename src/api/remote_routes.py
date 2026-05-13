@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
+from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
 from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
 from src.core.remote_power_setup import list_smartthings_devices, power_setup_status, register_public_key
 from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
@@ -81,6 +82,11 @@ class RemotePublicKeyRequest(BaseModel):
 
 class SmartThingsProbeRequest(BaseModel):
     cli_path: str | None = None
+
+
+class RemoteLoggingConfigRequest(BaseModel):
+    enabled: bool
+    path: str | None = None
 
 
 def _model_dump(model: Any) -> dict[str, Any]:
@@ -324,6 +330,10 @@ def create_remote_router(
             return method == "POST"
         if path.endswith("/remote/power/smartthings/devices"):
             return method == "POST"
+        if path.endswith("/remote/logging/config"):
+            return method in {"GET", "PUT"}
+        if path.endswith("/remote/devices/revoked"):
+            return method == "DELETE"
         if path.endswith("/remote/tailscale/ensure"):
             return method == "POST"
         return False
@@ -456,6 +466,7 @@ def create_remote_router(
         )
         if not device:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="페어링 코드가 올바르지 않거나 만료되었습니다.")
+        write_remote_log("pair.confirm", device_name=device.get("name"), platform=device.get("platform"))
         auditor.record(
             command="pair.confirm",
             accepted=True,
@@ -478,6 +489,13 @@ def create_remote_router(
     @router.get("/devices")
     def list_remote_devices():
         return {"devices": device_registry.list_devices()}
+
+    @router.delete("/devices/revoked")
+    def purge_revoked_remote_devices():
+        removed = device_registry.purge_revoked_devices()
+        write_remote_log("devices.purge_revoked", removed=removed)
+        auditor.record(command="device.purge_revoked", accepted=True, status="accepted", metadata={"removed": removed})
+        return {"removed": removed}
 
     @router.delete("/devices/{device_id}")
     def revoke_remote_device(device_id: str):
@@ -562,9 +580,20 @@ def create_remote_router(
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
         return _readiness_payload(power_status)
 
+    @router.get("/logging/config")
+    def remote_logging_config():
+        return load_remote_log_config()
+
+    @router.put("/logging/config")
+    def update_remote_logging_config(request: RemoteLoggingConfigRequest):
+        config = save_remote_log_config(request.enabled, request.path)
+        write_remote_log("logging.config", enabled=config.get("enabled"), path=config.get("path"))
+        return config
+
     @router.post("/tailscale/ensure")
     def remote_tailscale_ensure():
         result = ensure_tailscale_ready()
+        write_remote_log("tailscale.ensure", ready=result.ready, method=result.method, message=result.message)
         auditor.record(
             command="tailscale.ensure",
             accepted=bool(result.ready),
@@ -598,6 +627,7 @@ def create_remote_router(
     @router.post("/power/smartthings/devices")
     def remote_power_smartthings_devices(request: SmartThingsProbeRequest):
         result = list_smartthings_devices(request.cli_path)
+        write_remote_log("power.smartthings.devices", available=result.get("available"), cli_path=result.get("cli_path"), candidates=len(result.get("device_candidates") or []))
         auditor.record(
             command="power.smartthings.devices",
             accepted=bool(result.get("available")),

@@ -802,3 +802,25 @@ def test_remote_power_smartthings_probe_is_safe_when_cli_missing():
     assert response.json()["available"] is True
     assert response.json()["devices"] == []
     assert auditor.events[-1]["command"] == "power.smartthings.devices"
+
+
+def test_remote_logging_config_and_purge_revoked_devices():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
+
+    start = client.post("/remote/pair/start")
+    confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "Old", "platform": "macos"})
+    device_id = confirm.json()["id"]
+    token = confirm.json()["token"]
+    revoked = client.delete(f"/remote/devices/{device_id}", headers={"Authorization": f"Bearer {token}"})
+    config = client.put("/remote/logging/config", json={"enabled": True})
+    purge = client.delete("/remote/devices/revoked")
+    devices = client.get("/remote/devices")
+
+    assert revoked.status_code == 200
+    assert config.status_code == 200
+    assert config.json()["enabled"] is True
+    assert config.json()["path"].endswith("HomeworkHelperRemoteHost.log")
+    assert purge.status_code == 200
+    assert purge.json()["removed"] == 1
+    assert devices.json()["devices"] == []
+    assert auditor.events[-1]["command"] == "device.purge_revoked"

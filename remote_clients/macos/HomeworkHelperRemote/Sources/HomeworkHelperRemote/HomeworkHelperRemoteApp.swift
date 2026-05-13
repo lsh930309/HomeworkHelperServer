@@ -132,6 +132,16 @@ struct RemoteDashboardView: View {
                                 }
                                 .disabled(viewModel.isLoading || !viewModel.isPaired)
                             }
+                            Toggle("원격 진단 로그를 바탕 화면에 저장", isOn: Binding(
+                                get: { viewModel.remoteDesktopLoggingEnabled },
+                                set: { enabled in Task { await viewModel.saveRemoteDesktopLogging(enabled: enabled) } }
+                            ))
+                            if !viewModel.remoteDesktopLoggingPath.isEmpty {
+                                Text(viewModel.remoteDesktopLoggingPath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
                             Text(viewModel.setupProgress)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -304,6 +314,12 @@ struct RemoteDashboardView: View {
                                         Task { await viewModel.refreshDevices() }
                                     } label: {
                                         Label("디바이스 새로고침", systemImage: "person.2")
+                                    }
+                                    .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                                    Button {
+                                        Task { await viewModel.purgeRevokedDevices() }
+                                    } label: {
+                                        Label("폐기된 기기 정리", systemImage: "trash")
                                     }
                                     .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
                                     Button {

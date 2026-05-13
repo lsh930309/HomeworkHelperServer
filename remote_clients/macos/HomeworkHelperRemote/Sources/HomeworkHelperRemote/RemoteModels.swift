@@ -633,3 +633,13 @@ struct RevokeDeviceResponse: Decodable {
         case deviceID = "device_id"
     }
 }
+
+
+struct RemoteLoggingConfigResponse: Decodable {
+    let enabled: Bool
+    let path: String
+}
+
+struct PurgeDevicesResponse: Decodable {
+    let removed: Int
+}

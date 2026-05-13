@@ -61,6 +61,13 @@ class RemoteSettingsDialog(QDialog):
         layout.addWidget(self.remote_server_mode_checkbox)
         layout.addWidget(self.server_status_label)
         layout.addWidget(save_button)
+        self.remote_desktop_log_checkbox = QCheckBox("원격 진단 로그를 바탕 화면에 저장")
+        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/Tailscale/전원 설정 이벤트를 JSONL로 기록합니다.")
+        log_button = QPushButton("로그 설정 저장")
+        log_button.clicked.connect(self._save_remote_logging_config)
+        layout.addWidget(self.remote_desktop_log_checkbox)
+        layout.addWidget(log_button)
+        self._refresh_remote_logging_config()
         layout.addStretch(1)
         return widget
 
@@ -92,7 +99,10 @@ class RemoteSettingsDialog(QDialog):
         revoke_button = QPushButton("선택 기기 언페어링")
         revoke_button.clicked.connect(self._revoke_selected_device)
         buttons.addWidget(refresh_button)
+        purge_button = QPushButton("폐기된 기기 목록 정리")
+        purge_button.clicked.connect(self._purge_revoked_devices)
         buttons.addWidget(revoke_button)
+        buttons.addWidget(purge_button)
         buttons.addStretch(1)
         layout.addLayout(code_row)
         layout.addWidget(self.pairing_status_label)
@@ -172,6 +182,30 @@ class RemoteSettingsDialog(QDialog):
         layout.addRow(key_row)
         return widget
 
+
+    def _refresh_remote_logging_config(self):
+        try:
+            response = requests.get(f"{self.base_url}/remote/logging/config", timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+            self.remote_desktop_log_checkbox.setChecked(bool(payload.get("enabled")))
+            self.server_status_label.setText(f"원격 로그: {payload.get('path')}")
+        except requests.RequestException:
+            pass
+
+    def _save_remote_logging_config(self):
+        try:
+            response = requests.put(
+                f"{self.base_url}/remote/logging/config",
+                json={"enabled": self.remote_desktop_log_checkbox.isChecked()},
+                timeout=5,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            self.server_status_label.setText(f"원격 로그 설정 저장: {payload.get('path')}")
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "로그 설정 실패", str(exc))
+
     def _save_server_mode(self):
         updated = GlobalSettings.from_dict(self.data_manager.global_settings.to_dict())
         updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
@@ -227,6 +261,17 @@ class RemoteSettingsDialog(QDialog):
             self._refresh_devices()
         except requests.RequestException as exc:
             QMessageBox.warning(self, "언페어링 실패", str(exc))
+
+
+    def _purge_revoked_devices(self):
+        try:
+            response = requests.delete(f"{self.base_url}/remote/devices/revoked", timeout=5)
+            response.raise_for_status()
+            removed = response.json().get("removed", 0)
+            self.pairing_status_label.setText(f"폐기된 기기 {removed}개를 정리했습니다.")
+            self._refresh_devices()
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "기기 정리 실패", str(exc))
 
     def _refresh_tailscale(self):
         try:

@@ -134,6 +134,15 @@ class RemoteDeviceRegistry:
             self._write(state)
         return changed
 
+    def purge_revoked_devices(self) -> int:
+        state = self._read()
+        before = len(state.get("devices", []))
+        state["devices"] = [device for device in state.get("devices", []) if not device.get("revoked_at")]
+        removed = before - len(state["devices"])
+        if removed:
+            self._write(state)
+        return removed
+
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"schema_version": 1, "active_pairing": None, "devices": []}

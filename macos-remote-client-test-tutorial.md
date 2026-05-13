@@ -102,7 +102,17 @@ cd /Users/lsh930309/projects/HomeworkHelperServer
 
 ### 1.5 Windows 데스크탑에서 pairing code 발급
 
-pairing code는 Windows 데스크탑 로컬에서 발급한다.
+pairing code는 Windows 데스크탑 로컬에서 발급한다. 패키지 앱에서는 `설정 > 원격 설정 > 페어링` 탭에서 `페어링 코드 발급`을 누르면 된다.
+
+원격 자동화 문제를 재현/분석해야 하면 `설정 > 원격 설정 > 서버` 탭에서 `원격 진단 로그를 바탕 화면에 저장`을 켠다. 기본 로그 파일:
+
+```text
+%USERPROFILE%\Desktop\HomeworkHelperRemoteHost.log
+```
+
+과거에 언페어링한 기기 항목이 쌓였으면 `페어링` 탭의 `폐기된 기기 목록 정리`를 누른다.
+
+터미널이 있는 개발 실행에서는 아래 API로도 발급할 수 있다.
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/remote/pair/start
@@ -193,6 +203,13 @@ Windows 데스크탑에서 발급한 6자리 pairing code를 MacBook 앱의 `페
 - power config 저장
 
 Windows 쪽 `전원` 탭은 주 마법사가 아니라 authorized_keys 승인/상태 확인 fallback이다. 기본 흐름은 macOS 클라이언트가 주도한다.
+
+SmartThings CLI는 Mac 로컬 경로(`/opt/homebrew/bin/smartthings`, `/usr/local/bin/smartthings`, `~/.npm-global/bin/smartthings`)를 우선 후보로 사용한다. host가 꺼진 상태에서 wake를 수행해야 하므로, MacBook에 SmartThings CLI가 설치/로그인되어 있어야 offline wake fallback이 동작한다.
+
+원격 자동화 문제 분석이 필요하면 `원격 설정 자동화` 섹션에서 `원격 진단 로그를 바탕 화면에 저장`을 켠다.
+
+- Host 로그: UI에 표시되는 Windows Desktop `HomeworkHelperRemoteHost.log`
+- Client 로그: Mac Desktop `HomeworkHelperRemoteClient.log`
 
 ### 2.4 새로고침 및 readiness 확인
 
@@ -293,7 +310,9 @@ Windows 데스크탑:
 - [ ] TCP `8000` 접근 허용
 - [ ] `remote_power_config.json` import 또는 직접 설정 완료
 - [ ] 하단 readiness indicator에서 Power/Tailscale/Remote 상태 확인
-- [ ] `curl.exe -X POST http://127.0.0.1:8000/remote/pair/start`로 pairing code 발급
+- [ ] `설정 > 원격 설정 > 페어링`에서 pairing code 발급
+- [ ] 필요 시 `원격 진단 로그를 바탕 화면에 저장` ON
+- [ ] 필요 시 `폐기된 기기 목록 정리` 실행
 
 MacBook:
 
@@ -305,6 +324,8 @@ MacBook:
 - [ ] readiness dot/pill 표시 확인
 - [ ] token 갱신 테스트
 - [ ] 앱 재실행 후 token 유지 확인
+- [ ] 필요 시 `원격 진단 로그를 바탕 화면에 저장` ON
+- [ ] 필요 시 `폐기된 기기 정리` 실행
 - [ ] 게임/웹숏컷/플레이요약/Android-PC 연결/등록 디바이스 표시 확인
 
 ---
@@ -340,6 +361,7 @@ curl http://100.109.140.97:8000/remote/status
 1. pairing code가 만료되지 않았는지 확인한다. 기본 TTL은 300초다.
 2. Windows 데스크탑에서 pairing code를 다시 발급한다.
 3. MacBook 앱 Base URL이 Windows 데스크탑 주소인지 확인한다.
+4. 진단 로그를 켠 뒤 Windows Desktop의 `HomeworkHelperRemoteHost.log`와 Mac Desktop의 `HomeworkHelperRemoteClient.log`를 확인한다.
 
 ### 새로고침이 401로 실패
 
