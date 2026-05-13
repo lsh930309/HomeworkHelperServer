@@ -43,6 +43,7 @@ private enum RemoteClientPreferences {
     private static let defaults = UserDefaults.standard
     private static let baseURLKey = "remote.baseURL"
     private static let deviceNameKey = "remote.deviceName"
+    private static let powerConfigKey = "remote.powerConfig"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -61,6 +62,20 @@ private enum RemoteClientPreferences {
     static func saveDeviceName(_ value: String) {
         defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: deviceNameKey)
     }
+
+    static func loadPowerConfig() -> RemotePowerConfigPayload {
+        guard let data = defaults.data(forKey: powerConfigKey),
+              let config = try? JSONDecoder().decode(RemotePowerConfigPayload.self, from: data) else {
+            return RemotePowerConfigPayload()
+        }
+        return config
+    }
+
+    static func savePowerConfig(_ config: RemotePowerConfigPayload) {
+        if let data = try? JSONEncoder().encode(config) {
+            defaults.set(data, forKey: powerConfigKey)
+        }
+    }
 }
 
 @MainActor
@@ -77,7 +92,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
-    @Published var powerConfig = RemotePowerConfigPayload()
+    @Published var powerConfig = RemoteClientPreferences.loadPowerConfig() {
+        didSet { RemoteClientPreferences.savePowerConfig(powerConfig) }
+    }
     @Published var powerConfigResponse: RemotePowerConfigResponse?
     @Published var powerSetup: RemotePowerSetupResponse?
     @Published var localSSHKey: LocalSSHKeyPair?
@@ -239,7 +256,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             powerConfigResponse = try? await service.powerConfig()
             powerSetup = try? await service.powerSetup()
-            powerConfig = powerConfigResponse?.config ?? powerConfig
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
 
             if isPaired {
                 setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
@@ -319,7 +336,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             mobileSessions = try await service.activeMobileSessions()
             powerConfigResponse = try await service.powerConfig()
             powerSetup = try? await service.powerSetup()
-            powerConfig = powerConfigResponse?.config ?? RemotePowerConfigPayload()
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
             processes = try await service.processes()
             shortcuts = try await service.shortcuts()
             if includeDevices {
@@ -418,6 +435,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isPowerActionEnabled(_ action: String) -> Bool {
+        if action == "wake", powerConfig.localWakeConfigured { return true }
         guard let status else { return false }
         guard status.capabilities.powerControl, status.power?.configured == true else { return false }
         let supported = status.supportedPowerActions
@@ -429,12 +447,28 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다."
             return
         }
+        if action == "wake", hostConnectionState == "offline" {
+            await localWake()
+            return
+        }
         guard let client else { return }
         do {
             let service = RemoteDashboardService(client: client)
             let result = try await service.power(action: action)
             message = result.message
             await refresh()
+        } catch {
+            if action == "wake" {
+                await localWake()
+            } else {
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    func localWake() async {
+        do {
+            message = try await LocalPowerWakeManager.wake(config: powerConfig)
         } catch {
             message = error.localizedDescription
         }
@@ -542,7 +576,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             : "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다."
     }
 
-    func savePowerConfig() async {        guard let service else { return }
+    func savePowerConfig() async {
+        guard let service else { return }
         do {
             let response = try await service.savePowerConfig(powerConfig)
             powerConfigResponse = response
@@ -576,7 +611,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             readiness = response.onboarding?.readiness ?? readiness
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
             powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
-            powerConfig = powerConfigResponse?.config ?? powerConfig
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
             message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."

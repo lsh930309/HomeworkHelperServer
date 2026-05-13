@@ -235,6 +235,21 @@ struct RemoteSmartThingsDevicesResponse: Decodable {
     }
 }
 
+extension RemotePowerConfigPayload {
+    var hasAnyPowerSetting: Bool {
+        !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var localWakeConfigured: Bool {
+        !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 struct RemotePowerConfigResponse: Decodable {
     struct Readiness: Decodable {
         let wakeConfigured: Bool

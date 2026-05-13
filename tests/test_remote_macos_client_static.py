@@ -261,6 +261,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "setupChecklist" in view_model
     assert "connectionGuidance" in view_model
     assert "hostConnectionState" in view_model
+    assert "RemoteClientPreferences.loadPowerConfig" in view_model
+    assert "func localWake() async" in view_model
+    assert "powerConfig.localWakeConfigured" in view_model
     assert "completePairingOnboarding" in view_model
     assert "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다." in view_model
     assert "func recoverPairing" in view_model
@@ -273,6 +276,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "SSH key 생성/전송" in app
     assert "SmartThings 기기 확인" in app
     assert "LocalSSHKeyManager" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
+    assert "LocalPowerWakeManager" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "ssh-keygen" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "generateAndSendSSHKey" in view_model
     assert "probeSmartThingsDevices" in view_model
