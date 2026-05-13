@@ -18,6 +18,43 @@ main 기준점: `4052da3 새 GUI와 데이터 안전 경계를 main에 통합한
 
 ---
 
+## 2026-05-13 — macOS 설정 입력칸이 Form/sidebar 포커스 문제를 우회한다
+
+### 작업 범위
+
+- macOS 좌측 설정 패널을 `Form` 기반 sidebar에서 `ScrollView` + `GroupBox` + `VStack` 기반 일반 입력 패널로 재구성했다.
+- `NavigationSplitView` sidebar 폭을 최소 360px, 권장 420px로 더 넓혔다.
+- 상태 표시를 `LabeledContent` 대신 `SidebarInfoRow`로 바꿔 설정 패널 전체가 동일한 일반 SwiftUI view hierarchy에서 동작하게 했다.
+
+### 자체 코드 리뷰 메모
+
+- 기존 문제는 입력칸이 보이지만 수정 포커스가 제대로 먹지 않는 macOS `Form`/sidebar 조합 문제로 보고 우회했다.
+- 기능 로직과 ViewModel API 호출은 변경하지 않았다.
+- 메시지/상태 값은 복사 가능하도록 `textSelection(.enabled)`를 유지했다.
+
+### 테스트/검증 결과
+
+- `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py` → 5 passed
+- `./.venv/bin/python tools/smoke_macos_remote_viewmodel.py` → `macOS RemoteDashboardViewModel smoke passed: processes=1, game_links=1, devices=1`
+- `swift build` → passed
+- `git diff --check` → 통과
+
+### 커밋 예정 Korean Lore 메시지
+
+```text
+macOS 설정 입력칸이 Form sidebar 포커스 문제를 우회한다
+
+Constraint: 실제 macOS 앱에서 좌측 패널 입력칸이 보이지만 수정 포커스가 정상 동작하지 않았음
+Rejected: Form/sidebar 조합 유지 | macOS Form row focus 문제를 더 추적하기보다 일반 ScrollView 입력 패널이 실사용에 더 안전함
+Confidence: high
+Scope-risk: narrow
+Directive: 좌측 설정 입력은 Form이 아니라 일반 ScrollView/GroupBox 패널에 유지할 것
+Tested: ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py; ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py; swift build; git diff --check
+Not-tested: 실제 Windows Remote Agent와의 GUI 수동 페어링 재시도
+```
+
+---
+
 ## 2026-05-13 — macOS 좌측 설정 패널이 실사용 창에서 읽히도록 넓어진다
 
 ### 작업 범위

@@ -178,7 +178,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
 
     assert "RemoteDashboardViewModel()" in app
     assert ".frame(minWidth: 1100, minHeight: 680)" in app
-    assert ".navigationSplitViewColumnWidth(min: 340, ideal: 390, max: 480)" in app
+    assert "ScrollView {" in app
+    assert "GroupBox(\"Remote Agent\")" in app
+    assert ".navigationSplitViewColumnWidth(min: 360, ideal: 420, max: 520)" in app
+    assert "struct SidebarInfoRow: View" in app
     assert "http://windows-host-or-tailnet-ip:8000" in app
     assert "페어링 후 Keychain에 저장됩니다" in app
     assert "6자리 코드" in app

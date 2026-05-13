@@ -22,154 +22,178 @@ struct RemoteDashboardView: View {
 
     var body: some View {
         NavigationSplitView {
-            Form {
-                Section("Remote Agent") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Base URL")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("http://windows-host-or-tailnet-ip:8000", text: $viewModel.baseURLText)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Bearer token (선택)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        SecureField("페어링 후 Keychain에 저장됩니다", text: $viewModel.tokenText)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("디바이스 이름")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("MacBook", text: $viewModel.deviceName)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("페어링 코드")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        HStack {
-                            TextField("6자리 코드", text: $viewModel.pairingCode)
-                                .textFieldStyle(.roundedBorder)
-                            Button("페어링") {
-                                Task { await viewModel.confirmPairing() }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    GroupBox("Remote Agent") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Base URL")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("http://windows-host-or-tailnet-ip:8000", text: $viewModel.baseURLText)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .disabled(viewModel.isLoading)
-                        }
-                    }
-                    Button {
-                        Task { await viewModel.refresh() }
-                    } label: {
-                        Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(viewModel.isLoading)
-                    Text(viewModel.message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let status = viewModel.status {
-                    Section("상태") {
-                        LabeledContent("API", value: status.remoteAPIVersion)
-                        LabeledContent("게임", value: "\(status.counts.processes)")
-                        LabeledContent("숏컷", value: "\(status.counts.shortcuts)")
-                        LabeledContent("대시보드 요약", value: status.capabilities.dashboardSummary ? "사용 가능" : "미지원")
-                        LabeledContent("Beholder", value: status.capabilities.beholderIncidents ? "\(viewModel.beholderIncidents.count)건" : "미지원")
-                        LabeledContent("Android-PC 연결", value: status.capabilities.gameLinks ? "\(viewModel.gameLinks.count)개" : "미지원")
-                        LabeledContent("모바일 세션", value: status.capabilities.mobileSessions ? "\(viewModel.mobileSessions.count)개" : "미지원")
-                        LabeledContent("전원 제어", value: status.capabilities.powerControl ? "설정됨" : "미설정")
-                        if let power = status.power {
-                            LabeledContent("전원 상태", value: power.status ?? "unknown")
-                            LabeledContent("지원 명령", value: power.supportedActions.isEmpty ? "없음" : power.supportedActions.joined(separator: ", "))
-                            if let targetHost = power.targetHost, !targetHost.isEmpty {
-                                LabeledContent("대상", value: targetHost)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Bearer token (선택)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                SecureField("페어링 후 Keychain에 저장됩니다", text: $viewModel.tokenText)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                        }
-                    }
-
-                    Section("PC 전원") {
-                        if !status.capabilities.powerControl || status.power?.configured != true {
-                            Text("Remote Agent의 전원 제어 adapter가 설정되지 않아 전원 버튼을 비활성화했습니다.")
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("디바이스 이름")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("MacBook", text: $viewModel.deviceName)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("페어링 코드")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack {
+                                    TextField("6자리 코드", text: $viewModel.pairingCode)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button("페어링") {
+                                        Task { await viewModel.confirmPairing() }
+                                    }
+                                    .disabled(viewModel.isLoading)
+                                }
+                            }
+                            HStack {
+                                Button {
+                                    Task { await viewModel.refresh() }
+                                } label: {
+                                    Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
+                                }
+                                .disabled(viewModel.isLoading)
+                                Spacer()
+                            }
+                            Text(viewModel.message)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
                         }
-                        PowerButtonRow(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                        PowerButtonRow(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                        PowerButtonRow(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                        PowerButtonRow(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Section("전원 설정") {
-                        if let response = viewModel.powerConfigResponse {
-                            LabeledContent("설정 파일", value: response.configPath)
-                            LabeledContent("저장 상태", value: response.configExists ? "있음" : "없음")
-                            LabeledContent("지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
-                        }
-                        TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH host", text: $viewModel.powerConfig.sshHost)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH user", text: $viewModel.powerConfig.sshUser)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
-                            .textFieldStyle(.roundedBorder)
-                        Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
-                        Button("전원 설정 저장") {
-                            Task { await viewModel.savePowerConfig() }
-                        }
-                        Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Section("등록 디바이스") {
-                        Button {
-                            Task { await viewModel.refreshDevices() }
-                        } label: {
-                            Label("디바이스 새로고침", systemImage: "person.2")
-                        }
-                        .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-                        Button {
-                            Task { await viewModel.refreshToken() }
-                        } label: {
-                            Label("현재 토큰 갱신", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-
-                        ForEach(viewModel.devices) { device in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(device.name)
-                                    Text(device.platform ?? "unknown")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    if let tokenRefreshedAt = device.tokenRefreshedAt {
-                                        Text("refreshed: \(tokenRefreshedAt, specifier: "%.0f")")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                    if let status = viewModel.status {
+                        GroupBox("상태") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                SidebarInfoRow(label: "API", value: status.remoteAPIVersion)
+                                SidebarInfoRow(label: "게임", value: "\(status.counts.processes)")
+                                SidebarInfoRow(label: "숏컷", value: "\(status.counts.shortcuts)")
+                                SidebarInfoRow(label: "대시보드 요약", value: status.capabilities.dashboardSummary ? "사용 가능" : "미지원")
+                                SidebarInfoRow(label: "Beholder", value: status.capabilities.beholderIncidents ? "\(viewModel.beholderIncidents.count)건" : "미지원")
+                                SidebarInfoRow(label: "Android-PC 연결", value: status.capabilities.gameLinks ? "\(viewModel.gameLinks.count)개" : "미지원")
+                                SidebarInfoRow(label: "모바일 세션", value: status.capabilities.mobileSessions ? "\(viewModel.mobileSessions.count)개" : "미지원")
+                                SidebarInfoRow(label: "전원 제어", value: status.capabilities.powerControl ? "설정됨" : "미설정")
+                                if let power = status.power {
+                                    SidebarInfoRow(label: "전원 상태", value: power.status ?? "unknown")
+                                    SidebarInfoRow(label: "지원 명령", value: power.supportedActions.isEmpty ? "없음" : power.supportedActions.joined(separator: ", "))
+                                    if let targetHost = power.targetHost, !targetHost.isEmpty {
+                                        SidebarInfoRow(label: "대상", value: targetHost)
                                     }
-                                }
-                                Spacer()
-                                if device.revokedAt == nil {
-                                    Button("폐기") {
-                                        Task { await viewModel.revoke(device) }
-                                    }
-                                    .buttonStyle(.borderless)
-                                } else {
-                                    Text("폐기됨")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        GroupBox("PC 전원") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if !status.capabilities.powerControl || status.power?.configured != true {
+                                    Text("Remote Agent의 전원 제어 adapter가 설정되지 않아 전원 버튼을 비활성화했습니다.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                PowerButtonRow(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                                PowerButtonRow(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                                PowerButtonRow(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+                                PowerButtonRow(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        GroupBox("전원 설정") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let response = viewModel.powerConfigResponse {
+                                    SidebarInfoRow(label: "설정 파일", value: response.configPath)
+                                    SidebarInfoRow(label: "저장 상태", value: response.configExists ? "있음" : "없음")
+                                    SidebarInfoRow(label: "지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
+                                }
+                                TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("SSH host", text: $viewModel.powerConfig.sshHost)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("SSH user", text: $viewModel.powerConfig.sshUser)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
+                                    .textFieldStyle(.roundedBorder)
+                                Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
+                                Button("전원 설정 저장") {
+                                    Task { await viewModel.savePowerConfig() }
+                                }
+                                Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        GroupBox("등록 디바이스") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Button {
+                                        Task { await viewModel.refreshDevices() }
+                                    } label: {
+                                        Label("디바이스 새로고침", systemImage: "person.2")
+                                    }
+                                    .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                                    Button {
+                                        Task { await viewModel.refreshToken() }
+                                    } label: {
+                                        Label("현재 토큰 갱신", systemImage: "arrow.triangle.2.circlepath")
+                                    }
+                                    .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                                }
+                                ForEach(viewModel.devices) { device in
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(device.name)
+                                            Text(device.platform ?? "unknown")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            if let tokenRefreshedAt = device.tokenRefreshedAt {
+                                                Text("refreshed: \(tokenRefreshedAt, specifier: "%.0f")")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                        if device.revokedAt == nil {
+                                            Button("폐기") {
+                                                Task { await viewModel.revoke(device) }
+                                            }
+                                            .buttonStyle(.borderless)
+                                        } else {
+                                            Text("폐기됨")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Divider()
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
+                .padding(12)
             }
             .navigationTitle("HomeworkHelper")
-            .navigationSplitViewColumnWidth(min: 340, ideal: 390, max: 480)
+            .navigationSplitViewColumnWidth(min: 360, ideal: 420, max: 520)
         } detail: {
             VStack(alignment: .leading, spacing: 16) {
                 GroupBox("게임 실행") {
@@ -346,6 +370,23 @@ struct SummaryMetric: View {
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SidebarInfoRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
