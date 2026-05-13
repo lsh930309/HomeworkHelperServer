@@ -1108,7 +1108,7 @@ def test_dialog_settings_save_sends_only_actor_owned_fields(monkeypatch):
     assert "theme" not in seen_payloads[0]
 
 
-def test_global_settings_dialog_can_save_remote_server_mode(monkeypatch):
+def test_remote_settings_dialog_can_save_only_remote_server_mode(monkeypatch):
     from src.api.client import ApiClient
     from src.data.data_models import GlobalSettings
 
@@ -1136,10 +1136,11 @@ def test_global_settings_dialog_can_save_remote_server_mode(monkeypatch):
 
     monkeypatch.setattr(client_mod.requests, "patch", _patch)
 
-    settings = GlobalSettings(remote_server_mode_enabled=True)
-    assert client.save_global_settings(settings, actor="global_settings_dialog") is True
+    settings = GlobalSettings(remote_server_mode_enabled=True, theme="dark")
+    assert client.save_global_settings(settings, actor="remote_settings_dialog") is True
 
     assert seen_payloads[0]["remote_server_mode_enabled"] is True
+    assert "theme" not in seen_payloads[0]
     assert client.global_settings.remote_server_mode_enabled is True
 
 

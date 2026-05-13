@@ -22,7 +22,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSetting
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
-from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog
+from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog, RemoteSettingsDialog
 from src.gui.beholder_dialog import BeholderIncidentDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
@@ -839,21 +839,21 @@ class MainWindow(QMainWindow):
         restart_action = QAction("재시작(&R)", self)
         restart_action.setShortcut("Ctrl+R")
         restart_action.triggered.connect(self._restart_app)
-        self.remote_pairing_action = QAction("리모트 페어링 코드 발급(&P)", self)
-        self.remote_pairing_action.triggered.connect(self._open_remote_pairing_code_dialog)
         if fm:
             fm.addAction(restart_action)
-            fm.addAction(self.remote_pairing_action)
             fm.addSeparator()
             fm.addAction(ea) # 종료 액션
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
+        remote_settings_action = QAction("원격 설정...", self)
+        remote_settings_action.triggered.connect(self.open_remote_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
         sidebar_settings_action = QAction("사이드바 설정...", self)
         sidebar_settings_action.triggered.connect(self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 전역 설정 변경 액션
+            sm.addAction(remote_settings_action)
             sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
             sm.addSeparator()
             sm.addAction(sidebar_settings_action)
@@ -1148,6 +1148,12 @@ class MainWindow(QMainWindow):
                     status_bar.showMessage("시작 프로그램에 등록되어 있습니다.", 3000)
                 else:
                     status_bar.showMessage("시작 프로그램에 등록되어 있지 않습니다.", 3000)
+
+    def open_remote_settings_dialog(self):
+        """원격 설정 대화 상자를 엽니다."""
+        dlg = RemoteSettingsDialog(self.data_manager, self)
+        dlg.exec()
+        self._refresh_remote_readiness_indicators()
 
     def open_hoyolab_settings_dialog(self):
         """HoYoLab 인증 정보 설정 다이얼로그를 엽니다."""

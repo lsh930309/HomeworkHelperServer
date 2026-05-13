@@ -167,6 +167,8 @@ def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
         return set(SIDEBAR_SETTINGS_FIELDS)
     if actor == "global_settings_dialog":
         return set(GLOBAL_DIALOG_FIELDS)
+    if actor == "remote_settings_dialog":
+        return {"remote_server_mode_enabled"}
     if actor in {"settings_full_update", "settings_migration", "api_settings_put"}:
         return all_fields
     return set()

@@ -299,8 +299,22 @@ def create_remote_router(
             return True
         return bool(device_registry.validate_token(token, now=now()))
 
+    def _is_local_management_path(path: str, method: str) -> bool:
+        if path.endswith("/remote/readiness") or path.endswith("/remote/capabilities"):
+            return method == "GET"
+        if path.endswith("/remote/devices"):
+            return method == "GET"
+        if "/remote/devices/" in path:
+            return method == "DELETE"
+        if path.endswith("/remote/power/config"):
+            return method in {"GET", "PUT"}
+        if path.endswith("/remote/tailscale/ensure"):
+            return method == "POST"
+        return False
+
     def require_remote_auth(request: Request, authorization: str | None = Header(None)) -> None:
         path = request.url.path.rstrip("/")
+        method = request.method.upper()
         if path.endswith("/remote/pair/confirm"):
             return
         if path.endswith("/remote/pair/start") and (
@@ -308,6 +322,8 @@ def create_remote_router(
             or _is_temporary_pairing_allowed_request(request)
             or _is_valid_remote_token(authorization)
         ):
+            return
+        if _is_loopback_request(request) and _is_local_management_path(path, method):
             return
         if path.endswith("/remote/pair/start"):
             raise HTTPException(
@@ -400,6 +416,13 @@ def create_remote_router(
     @router.post("/pair/start")
     def start_remote_pairing():
         pairing = device_registry.start_pairing(now=now())
+        auditor.record(
+            command="pair.start",
+            accepted=True,
+            status="accepted",
+            target="remote_devices",
+            metadata={"expires_at": pairing["expires_at"], "ttl_seconds": device_registry.code_ttl_seconds},
+        )
         return {
             "code": pairing["code"],
             "expires_at": pairing["expires_at"],
@@ -417,6 +440,14 @@ def create_remote_router(
         )
         if not device:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="페어링 코드가 올바르지 않거나 만료되었습니다.")
+        auditor.record(
+            command="pair.confirm",
+            accepted=True,
+            status="accepted",
+            target_id=device.get("id"),
+            target_name=device.get("name"),
+            target=device.get("platform"),
+        )
         return device
 
     @router.get("/devices")
@@ -427,6 +458,12 @@ def create_remote_router(
     def revoke_remote_device(device_id: str):
         if not device_registry.revoke_device(device_id, now=now()):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="디바이스를 찾을 수 없습니다.")
+        auditor.record(
+            command="device.revoke",
+            accepted=True,
+            status="accepted",
+            target_id=device_id,
+        )
         return {"revoked": True, "device_id": device_id}
 
     @router.post("/tokens/refresh")

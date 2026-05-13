@@ -393,7 +393,7 @@ class ApiClient:
         try:
             payload = updated_settings.to_dict()
             request = requests.put
-            if actor in {"sidebar_settings_dialog", "global_settings_dialog"}:
+            if actor in {"sidebar_settings_dialog", "global_settings_dialog", "remote_settings_dialog"}:
                 owned_fields = beholder.allowed_settings_fields_for_actor(actor)
                 payload = {key: value for key, value in payload.items() if key in owned_fields}
                 request = requests.patch

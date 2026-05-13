@@ -600,7 +600,7 @@ def test_remote_api_force_auth_blocks_before_first_pairing_when_bound_externally
 
 
 def test_pairing_code_registers_device_token_and_revoke_blocks_it():
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
     initial = client.get("/remote/status")
     start = client.post("/remote/pair/start")
@@ -630,6 +630,11 @@ def test_pairing_code_registers_device_token_and_revoke_blocks_it():
     assert devices.json()["devices"][0]["id"] == device_id
     assert revoked.status_code == 200
     assert rejected_after_revoke.status_code == 401
+    assert [event["command"] for event in auditor.events if event["command"].startswith(("pair.", "device."))] == [
+        "pair.start",
+        "pair.confirm",
+        "device.revoke",
+    ]
 
 
 def test_device_token_refresh_rotates_bearer_token_and_audits_security_event():
@@ -666,6 +671,27 @@ def test_pairing_start_is_limited_to_loopback_or_authenticated_devices():
     assert response.status_code == 403
 
 
+def test_loopback_can_manage_remote_settings_after_pairing_without_bearer_token():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(client_address=("127.0.0.1", 50000))
+
+    start = client.post("/remote/pair/start")
+    confirm = client.post(
+        "/remote/pair/confirm",
+        json={"code": start.json()["code"], "device_name": "MacBook", "platform": "macos"},
+    )
+    device_id = confirm.json()["id"]
+
+    devices = client.get("/remote/devices")
+    readiness = client.get("/remote/readiness")
+    power_config = client.get("/remote/power/config")
+    revoked = client.delete(f"/remote/devices/{device_id}")
+
+    assert devices.status_code == 200
+    assert readiness.status_code == 200
+    assert power_config.status_code == 200
+    assert revoked.status_code == 200
+
+
 def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
@@ -678,6 +704,16 @@ def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     assert pairing.status_code == 200
     assert pairing.json()["code"].isdigit()
     assert protected_without_token.status_code == 401
+
+
+def test_remote_device_registry_migrates_legacy_file_to_schema_version(tmp_path):
+    path = tmp_path / "remote_devices.json"
+    path.write_text('{"active_pairing": null, "devices": []}', encoding="utf-8")
+    registry = RemoteDeviceRegistry(path=path)
+
+    registry.start_pairing(now=1778497000.0)
+
+    assert '"schema_version": 1' in path.read_text(encoding="utf-8")
 
 
 def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands():

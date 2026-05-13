@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup, QTabWidget, QTextEdit,
 )
 from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -19,6 +19,246 @@ from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons direc
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
+import requests
+
+
+class RemoteSettingsDialog(QDialog):
+    """Unified dialog for server-mode, pairing, device, Tailscale and power settings."""
+
+    def __init__(self, data_manager, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.data_manager = data_manager
+        self.base_url = str(getattr(data_manager, "base_url", "http://127.0.0.1:8000")).rstrip("/")
+        self.setWindowTitle("원격 설정")
+        self.setMinimumSize(720, 560)
+
+        root = QVBoxLayout(self)
+        tabs = QTabWidget()
+        root.addWidget(tabs)
+
+        tabs.addTab(self._build_server_tab(), "서버")
+        tabs.addTab(self._build_pairing_tab(), "페어링")
+        tabs.addTab(self._build_tailscale_tab(), "Tailscale")
+        tabs.addTab(self._build_power_tab(), "전원")
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.button_box.rejected.connect(self.reject)
+        root.addWidget(self.button_box)
+
+        self._refresh_devices()
+        self._refresh_tailscale()
+        self._refresh_power_config()
+
+    def _build_server_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.remote_server_mode_checkbox = QCheckBox("리모트 서버 모드로 시작 (0.0.0.0:8000 바인딩)")
+        self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
+        self.server_status_label = QLabel("변경 사항은 앱 재시작 후 적용됩니다.")
+        save_button = QPushButton("서버 모드 설정 저장")
+        save_button.clicked.connect(self._save_server_mode)
+        layout.addWidget(self.remote_server_mode_checkbox)
+        layout.addWidget(self.server_status_label)
+        layout.addWidget(save_button)
+        layout.addStretch(1)
+        return widget
+
+    def _build_pairing_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        code_row = QHBoxLayout()
+        self.pairing_code_edit = QLineEdit()
+        self.pairing_code_edit.setReadOnly(True)
+        self.pairing_code_edit.setPlaceholderText("페어링 코드를 발급하세요")
+        issue_button = QPushButton("페어링 코드 발급")
+        issue_button.clicked.connect(self._issue_pairing_code)
+        copy_button = QPushButton("복사")
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.pairing_code_edit.text()))
+        code_row.addWidget(self.pairing_code_edit)
+        code_row.addWidget(issue_button)
+        code_row.addWidget(copy_button)
+        self.pairing_status_label = QLabel("최초 페어링 성공 후에는 명시적 언페어링 전까지 token으로 자동 연결됩니다.")
+        self.devices_table = QTableWidget(0, 5)
+        self.devices_table.setHorizontalHeaderLabels(["ID", "이름", "플랫폼", "마지막 연결", "상태"])
+        self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        if self.devices_table.horizontalHeader():
+            self.devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        buttons = QHBoxLayout()
+        refresh_button = QPushButton("목록 새로고침")
+        refresh_button.clicked.connect(self._refresh_devices)
+        revoke_button = QPushButton("선택 기기 언페어링")
+        revoke_button.clicked.connect(self._revoke_selected_device)
+        buttons.addWidget(refresh_button)
+        buttons.addWidget(revoke_button)
+        buttons.addStretch(1)
+        layout.addLayout(code_row)
+        layout.addWidget(self.pairing_status_label)
+        layout.addWidget(self.devices_table)
+        layout.addLayout(buttons)
+        return widget
+
+    def _build_tailscale_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tailscale_health_text = QTextEdit()
+        self.tailscale_health_text.setReadOnly(True)
+        buttons = QHBoxLayout()
+        refresh_button = QPushButton("상태 확인")
+        refresh_button.clicked.connect(self._refresh_tailscale)
+        ensure_button = QPushButton("설치/실행 확인")
+        ensure_button.clicked.connect(self._ensure_tailscale)
+        buttons.addWidget(refresh_button)
+        buttons.addWidget(ensure_button)
+        buttons.addStretch(1)
+        layout.addWidget(self.tailscale_health_text)
+        layout.addLayout(buttons)
+        return widget
+
+    def _build_power_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        self.smartthings_device_id_edit = QLineEdit()
+        self.smartthings_cli_path_edit = QLineEdit()
+        self.ssh_host_edit = QLineEdit()
+        self.ssh_port_spin = QSpinBox()
+        self.ssh_port_spin.setRange(1, 65535)
+        self.ssh_user_edit = QLineEdit()
+        self.ssh_key_path_edit = QLineEdit()
+        self.power_status_label = QLabel("")
+        save_button = QPushButton("전원 설정 저장")
+        save_button.clicked.connect(self._save_power_config)
+        refresh_button = QPushButton("전원 설정 새로고침")
+        refresh_button.clicked.connect(self._refresh_power_config)
+        layout.addRow("SmartThings device id:", self.smartthings_device_id_edit)
+        layout.addRow("SmartThings CLI path:", self.smartthings_cli_path_edit)
+        layout.addRow("SSH host:", self.ssh_host_edit)
+        layout.addRow("SSH port:", self.ssh_port_spin)
+        layout.addRow("SSH user:", self.ssh_user_edit)
+        layout.addRow("SSH key path:", self.ssh_key_path_edit)
+        layout.addRow(self.power_status_label)
+        row = QHBoxLayout()
+        row.addWidget(save_button)
+        row.addWidget(refresh_button)
+        row.addStretch(1)
+        layout.addRow(row)
+        return widget
+
+    def _save_server_mode(self):
+        updated = GlobalSettings.from_dict(self.data_manager.global_settings.to_dict())
+        updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
+        if self.data_manager.save_global_settings(updated, actor="remote_settings_dialog"):
+            self.server_status_label.setText("저장되었습니다. 앱 재시작 후 API 바인딩에 적용됩니다.")
+        else:
+            QMessageBox.warning(self, "저장 실패", "리모트 서버 모드 설정 저장에 실패했습니다.")
+
+    def _issue_pairing_code(self):
+        try:
+            response = requests.post(f"{self.base_url}/remote/pair/start", timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+            self.pairing_code_edit.setText(str(payload.get("code") or ""))
+            self.pairing_status_label.setText(f"코드 발급 완료. 만료: {payload.get('expires_at')}")
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "페어링 코드 발급 실패", str(exc))
+
+    def _refresh_devices(self):
+        try:
+            response = requests.get(f"{self.base_url}/remote/devices", timeout=5)
+            response.raise_for_status()
+            devices = response.json().get("devices", [])
+        except requests.RequestException as exc:
+            self.pairing_status_label.setText(f"기기 목록 조회 실패: {exc}")
+            return
+        self.devices_table.setRowCount(0)
+        for device in devices:
+            row = self.devices_table.rowCount()
+            self.devices_table.insertRow(row)
+            values = [
+                device.get("id") or "",
+                device.get("name") or "",
+                device.get("platform") or "",
+                str(device.get("last_seen_at") or ""),
+                "revoked" if device.get("revoked_at") else "active",
+            ]
+            for col, value in enumerate(values):
+                self.devices_table.setItem(row, col, QTableWidgetItem(value))
+
+    def _revoke_selected_device(self):
+        row = self.devices_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "선택 필요", "언페어링할 기기를 선택하세요.")
+            return
+        item = self.devices_table.item(row, 0)
+        device_id = item.text() if item else ""
+        if not device_id:
+            return
+        try:
+            response = requests.delete(f"{self.base_url}/remote/devices/{device_id}", timeout=5)
+            response.raise_for_status()
+            self._refresh_devices()
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "언페어링 실패", str(exc))
+
+    def _refresh_tailscale(self):
+        try:
+            response = requests.get(f"{self.base_url}/remote/readiness", timeout=5)
+            response.raise_for_status()
+            tailscale = response.json().get("tailscale_readiness", {})
+            self.tailscale_health_text.setPlainText(
+                "Tailscale readiness\n"
+                f"- state: {tailscale.get('state')}\n"
+                f"- color: {tailscale.get('color')}\n"
+                f"- message: {tailscale.get('message')}\n"
+                f"- suggested_base_urls: {tailscale.get('suggested_base_urls')}\n"
+                f"- details: {tailscale.get('details')}\n"
+            )
+        except requests.RequestException as exc:
+            self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
+
+    def _ensure_tailscale(self):
+        try:
+            response = requests.post(f"{self.base_url}/remote/tailscale/ensure", timeout=30)
+            response.raise_for_status()
+            self.tailscale_health_text.setPlainText(str(response.json()))
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "Tailscale 확인 실패", str(exc))
+
+    def _refresh_power_config(self):
+        try:
+            response = requests.get(f"{self.base_url}/remote/power/config", timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            self.power_status_label.setText(f"전원 설정 조회 실패: {exc}")
+            return
+        config = payload.get("config") or {}
+        self.smartthings_device_id_edit.setText(str(config.get("smartthings_device_id") or ""))
+        self.smartthings_cli_path_edit.setText(str(config.get("smartthings_cli_path") or ""))
+        self.ssh_host_edit.setText(str(config.get("ssh_host") or ""))
+        self.ssh_port_spin.setValue(int(config.get("ssh_port") or 22))
+        self.ssh_user_edit.setText(str(config.get("ssh_user") or ""))
+        self.ssh_key_path_edit.setText(str(config.get("ssh_key_path") or ""))
+        readiness = payload.get("readiness") or {}
+        self.power_status_label.setText(f"지원 명령: {', '.join(readiness.get('supported_actions') or []) or '(없음)'}")
+
+    def _save_power_config(self):
+        payload = {
+            "smartthings_device_id": self.smartthings_device_id_edit.text(),
+            "smartthings_cli_path": self.smartthings_cli_path_edit.text(),
+            "ssh_host": self.ssh_host_edit.text(),
+            "ssh_port": self.ssh_port_spin.value(),
+            "ssh_user": self.ssh_user_edit.text(),
+            "ssh_key_path": self.ssh_key_path_edit.text(),
+            "status_timeout_seconds": 4.0,
+        }
+        try:
+            response = requests.put(f"{self.base_url}/remote/power/config", json=payload, timeout=5)
+            response.raise_for_status()
+            self.power_status_label.setText("전원 설정 저장 완료")
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "전원 설정 저장 실패", str(exc))
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """ QTableWidgetItem that allows numeric sorting. """

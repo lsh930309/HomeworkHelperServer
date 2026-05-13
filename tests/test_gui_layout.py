@@ -118,12 +118,20 @@ def test_global_settings_derives_sidebar_mode_from_legacy_bool():
     assert remote_enabled.remote_server_mode_enabled is True
 
 
-def test_main_window_file_menu_exposes_remote_pairing_code_action():
+def test_main_window_settings_menu_exposes_remote_settings_dialog():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+    dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
 
-    assert 'QAction("리모트 페어링 코드 발급(&P)", self)' in source
-    assert 'fm.addAction(self.remote_pairing_action)' in source
+    assert 'QAction("원격 설정...", self)' in source
+    assert "open_remote_settings_dialog" in source
+    assert "RemoteSettingsDialog" in source
+    assert 'QAction("리모트 페어링 코드 발급(&P)", self)' not in source
     assert '/remote/pair/start' in source
+    assert "class RemoteSettingsDialog" in dialog_source
+    assert "remote_server_mode_checkbox" in dialog_source
+    assert "devices_table" in dialog_source
+    assert "tailscale_health_text" in dialog_source
+    assert "smartthings_device_id_edit" in dialog_source
 
 
 def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():

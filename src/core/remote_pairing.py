@@ -136,16 +136,18 @@ class RemoteDeviceRegistry:
 
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():
-            return {"active_pairing": None, "devices": []}
+            return {"schema_version": 1, "active_pairing": None, "devices": []}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"active_pairing": None, "devices": []}
+            return {"schema_version": 1, "active_pairing": None, "devices": []}
+        data.setdefault("schema_version", 1)
         data.setdefault("active_pairing", None)
         data.setdefault("devices", [])
         return data
 
     def _write(self, state: dict[str, Any]) -> None:
+        state.setdefault("schema_version", 1)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
