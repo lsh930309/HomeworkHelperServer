@@ -83,6 +83,40 @@ struct RemoteDashboardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    GroupBox("원격 설정 자동화") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Windows 앱의 [설정 > 원격 설정]과 맞물려 Mac Tailscale, 서버 연결, 페어링, 전원 설정을 순서대로 점검합니다.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(Array(viewModel.setupChecklist.enumerated()), id: \.offset) { _, item in
+                                SetupChecklistRow(title: item.0, detail: item.1, ready: item.2)
+                            }
+                            HStack {
+                                Button {
+                                    Task { await viewModel.runSetupAutomation() }
+                                } label: {
+                                    Label("자동 설정 점검", systemImage: "wand.and.stars")
+                                }
+                                .disabled(viewModel.isLoading)
+                                Button {
+                                    Task { await viewModel.ensureServerTailscale() }
+                                } label: {
+                                    Label("서버 Tailscale 확인/복구", systemImage: "network.badge.shield.half.filled")
+                                }
+                                .disabled(viewModel.isLoading || !viewModel.isPaired)
+                            }
+                            Text(viewModel.setupProgress)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            if let serverTailscale = viewModel.serverTailscaleEnsure {
+                                SidebarInfoRow(label: "서버 Tailscale", value: serverTailscale.message)
+                                SidebarInfoRow(label: "서버 IP", value: serverTailscale.after.selfIPs.isEmpty ? "없음" : serverTailscale.after.selfIPs.joined(separator: ", "))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     GroupBox("Tailscale") {
                         VStack(alignment: .leading, spacing: 8) {
                             if let local = viewModel.localTailscale {
@@ -173,8 +207,13 @@ struct RemoteDashboardView: View {
                                 TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
                                     .textFieldStyle(.roundedBorder)
                                 Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
-                                Button("전원 설정 저장") {
-                                    Task { await viewModel.savePowerConfig() }
+                                HStack {
+                                    Button("SSH host 채우기") {
+                                        viewModel.applySuggestedPowerHost()
+                                    }
+                                    Button("전원 설정 저장") {
+                                        Task { await viewModel.savePowerConfig() }
+                                    }
                                 }
                                 Text("저장은 고정된 remote_power_config.json만 갱신하며 전원 명령은 실행하지 않습니다.")
                                     .font(.caption)
@@ -462,6 +501,29 @@ struct PowerButtonRow: View {
             Label(label, systemImage: systemImage)
         }
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
+    }
+}
+
+
+struct SetupChecklistRow: View {
+    let title: String
+    let detail: String
+    let ready: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ready ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.bold())
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

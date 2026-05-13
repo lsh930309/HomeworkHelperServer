@@ -31,6 +31,7 @@ private actor RemoteDashboardService {
         try await client.confirmPairing(code: code, deviceName: deviceName)
     }
     func refreshToken() async throws -> PairingConfirmResponse { try await client.refreshToken() }
+    func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse { try await client.ensureServerTailscale() }
     func revokeDevice(id: String) async throws -> RevokeDeviceResponse { try await client.revokeDevice(id: id) }
 }
 
@@ -48,6 +49,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var powerConfigResponse: RemotePowerConfigResponse?
     @Published var readiness: RemoteReadiness?
     @Published var localTailscale: LocalTailscaleSnapshot?
+    @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
+    @Published var setupProgress = "원격 설정 준비 전입니다."
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -58,6 +61,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var devices: [RemoteDevice] = []
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
+
+
+    var setupChecklist: [(String, String, Bool)] {
+        [
+            ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
+            ("2. Windows 서버", readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인", readiness?.serverModeReadiness.color == "green"),
+            ("3. 페어링", tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨", !tokenText.isEmpty),
+            ("4. 전원 관리", powerConfigResponse?.readiness.supportedActions.isEmpty == false ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "")" : "SmartThings/SSH 설정 저장 필요", powerConfigResponse?.readiness.supportedActions.isEmpty == false),
+            ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
+        ]
+    }
+
+    var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private let tokenStore: any RemoteTokenStore
 
@@ -74,6 +90,82 @@ final class RemoteDashboardViewModel: ObservableObject {
     private var service: RemoteDashboardService? {
         guard let client else { return nil }
         return RemoteDashboardService(client: client)
+    }
+
+
+    func runSetupAutomation() async {
+        isLoading = true
+        defer { isLoading = false }
+        setupProgress = "1/4 Mac Tailscale 확인 중..."
+        let local = await TailscaleDiscovery.ensureReady()
+        localTailscale = local
+        if let url = local.suggestedBaseURLs.first, baseURLText.contains("127.0.0.1") || baseURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            baseURLText = url
+        }
+
+        guard let client else {
+            setupProgress = "Base URL이 올바르지 않습니다."
+            message = setupProgress
+            return
+        }
+        let service = RemoteDashboardService(client: client)
+        do {
+            setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
+            status = try await service.status()
+            if let statusReadiness = status?.readiness {
+                readiness = statusReadiness
+            } else {
+                readiness = try? await service.readiness()
+            }
+            powerConfigResponse = try? await service.powerConfig()
+            powerConfig = powerConfigResponse?.config ?? powerConfig
+
+            if isPaired {
+                setupProgress = "3/4 등록 디바이스와 서버 Tailscale 확인 중..."
+                devices = (try? await service.devices()) ?? devices
+                serverTailscaleEnsure = try? await service.ensureServerTailscale()
+                status = try await service.status()
+                readiness = status?.readiness
+            } else {
+                setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
+            }
+
+            setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
+            message = setupProgress
+        } catch {
+            setupProgress = error.localizedDescription
+            message = error.localizedDescription
+        }
+    }
+
+    func ensureServerTailscale() async {
+        guard let service else {
+            message = "Remote Agent URL이 올바르지 않습니다."
+            return
+        }
+        guard isPaired else {
+            message = "서버 Tailscale 복구는 페어링 후 사용할 수 있습니다."
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            serverTailscaleEnsure = try await service.ensureServerTailscale()
+            status = try await service.status()
+            readiness = status?.readiness
+            message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func applySuggestedPowerHost() {
+        if let host = URL(string: baseURLText)?.host {
+            powerConfig.sshHost = host
+            message = "Base URL에서 SSH host를 채웠습니다. 사용자, 키 경로, SmartThings 값은 실제 전원 제어 환경에 맞게 입력하세요."
+        } else {
+            message = "Base URL에서 SSH host를 추출하지 못했습니다."
+        }
     }
 
     func refresh() async {

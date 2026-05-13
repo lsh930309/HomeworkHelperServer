@@ -45,6 +45,9 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteBeholderIncident",
         "RemoteBeholderIncidentsResponse",
         "RevokeDeviceResponse",
+        "RemoteTailscalePeer",
+        "RemoteTailscaleSnapshot",
+        "RemoteTailscaleEnsureResponse",
     ]:
         assert f"struct {model_name}" in models
 
@@ -137,6 +140,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/power/config',
         'remote/pair/confirm',
         'remote/tokens/refresh',
+        'remote/tailscale/ensure',
         'remote/devices',
         'remote/processes/\\(id)/launch',
         'remote/shortcuts/\\(id)/open',
@@ -153,6 +157,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
     assert 'func powerConfig() async throws -> RemotePowerConfigResponse' in client
     assert 'func savePowerConfig(_ config: RemotePowerConfigPayload)' in client
+    assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
     assert 'request(path: path, method: "PUT")' in client
     assert 'URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())' in client
     assert 'let path = http.url?.path ?? "unknown endpoint"' in client
@@ -224,3 +229,13 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "gameLinkAndroidPackage" in view_model
     assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app
+    assert "원격 설정 자동화" in app
+    assert "자동 설정 점검" in app
+    assert "서버 Tailscale 확인/복구" in app
+    assert "SetupChecklistRow" in app
+    assert "runSetupAutomation" in view_model
+    assert "ensureServerTailscale" in view_model
+    assert "applySuggestedPowerHost" in view_model
+    assert "serverTailscaleEnsure" in view_model
+    assert "setupChecklist" in view_model
+    assert "SSH host 채우기" in app

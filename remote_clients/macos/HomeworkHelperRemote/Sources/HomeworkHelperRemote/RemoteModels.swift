@@ -271,6 +271,66 @@ struct RemoteDevicesResponse: Decodable {
     let devices: [RemoteDevice]
 }
 
+struct RemoteTailscalePeer: Decodable, Identifiable {
+    let hostname: String
+    let dnsName: String
+    let ips: [String]
+    let online: Bool
+    let os: String
+    let primaryIPv4: String?
+
+    var id: String { "\(hostname)-\(primaryIPv4 ?? dnsName)" }
+
+    enum CodingKeys: String, CodingKey {
+        case hostname
+        case dnsName = "dns_name"
+        case ips
+        case online
+        case os
+        case primaryIPv4 = "primary_ipv4"
+    }
+}
+
+struct RemoteTailscaleSnapshot: Decodable {
+    let installed: Bool
+    let running: Bool
+    let backendState: String
+    let selfIPs: [String]
+    let selfHostname: String
+    let peers: [RemoteTailscalePeer]
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case installed
+        case running
+        case backendState = "backend_state"
+        case selfIPs = "self_ips"
+        case selfHostname = "self_hostname"
+        case peers
+        case message
+    }
+}
+
+struct RemoteTailscaleEnsureResponse: Decodable {
+    let ready: Bool
+    let installAttempted: Bool
+    let launchAttempted: Bool
+    let method: String
+    let message: String
+    let before: RemoteTailscaleSnapshot
+    let after: RemoteTailscaleSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case ready
+        case installAttempted = "install_attempted"
+        case launchAttempted = "launch_attempted"
+        case method
+        case message
+        case before
+        case after
+    }
+}
+
 struct RemoteCapabilitiesResponse: Decodable {
     let remoteAPIVersion: String
     let capabilities: RemoteStatus.Capabilities
