@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton, QInputDialog,
+    QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
@@ -733,6 +733,92 @@ class MainWindow(QMainWindow):
             vh.setHighlightSections(False)
         self.process_table.setCornerButtonEnabled(False)
 
+    def _remote_pairing_endpoint(self) -> str:
+        base_url = getattr(self.data_manager, "base_url", "http://127.0.0.1:8000")
+        return f"{str(base_url).rstrip('/')}/remote/pair/start"
+
+    def _request_remote_pairing_code(self) -> dict:
+        response = requests.post(self._remote_pairing_endpoint(), timeout=5)
+        response.raise_for_status()
+        return response.json()
+
+    def _open_remote_pairing_code_dialog(self):
+        try:
+            pairing = self._request_remote_pairing_code()
+        except requests.RequestException as exc:
+            QMessageBox.warning(
+                self,
+                "리모트 페어링 코드 발급 실패",
+                "로컬 서버에서 페어링 코드를 발급하지 못했습니다.\n\n"
+                f"요청 주소: {self._remote_pairing_endpoint()}\n"
+                f"오류: {exc}",
+            )
+            return
+
+        self._show_remote_pairing_code_dialog(pairing)
+
+    def _show_remote_pairing_code_dialog(self, pairing: dict):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("리모트 페어링 코드")
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(10)
+        layout.addWidget(QLabel("macOS/Android 리모트 클라이언트에서 아래 6자리 코드를 입력하세요."))
+
+        code_edit = QLineEdit(str(pairing.get("code") or ""))
+        code_edit.setReadOnly(True)
+        code_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        code_font = code_edit.font()
+        code_font.setPointSize(max(code_font.pointSize() + 8, 18))
+        code_font.setBold(True)
+        code_edit.setFont(code_font)
+        code_edit.selectAll()
+        layout.addWidget(code_edit)
+
+        info_label = QLabel()
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        buttons = QHBoxLayout()
+        copy_button = QPushButton("복사")
+        renew_button = QPushButton("다시 발급")
+        close_button = QPushButton("닫기")
+        buttons.addStretch(1)
+        buttons.addWidget(copy_button)
+        buttons.addWidget(renew_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+        def update_info(current: dict):
+            ttl = current.get("ttl_seconds") or 300
+            expires_at = current.get("expires_at") or ""
+            message = current.get("message") or "페어링 코드는 제한 시간 동안만 유효합니다."
+            info_label.setText(f"{message}\n유효 시간: 약 {int(ttl) // 60}분 / 만료: {expires_at}")
+
+        def copy_code():
+            clipboard = QApplication.clipboard()
+            if clipboard:
+                clipboard.setText(code_edit.text())
+            copy_button.setText("복사됨")
+            QTimer.singleShot(1200, lambda: copy_button.setText("복사"))
+
+        def renew_code():
+            try:
+                new_pairing = self._request_remote_pairing_code()
+            except requests.RequestException as exc:
+                QMessageBox.warning(dialog, "리모트 페어링 코드 재발급 실패", f"오류: {exc}")
+                return
+            code_edit.setText(str(new_pairing.get("code") or ""))
+            code_edit.selectAll()
+            update_info(new_pairing)
+
+        update_info(pairing)
+        copy_button.clicked.connect(copy_code)
+        renew_button.clicked.connect(renew_code)
+        close_button.clicked.connect(dialog.accept)
+        dialog.exec()
+
     def _create_menu_bar(self):
         mb = self.menuBar()
         if not mb:
@@ -752,8 +838,11 @@ class MainWindow(QMainWindow):
         restart_action = QAction("재시작(&R)", self)
         restart_action.setShortcut("Ctrl+R")
         restart_action.triggered.connect(self._restart_app)
+        self.remote_pairing_action = QAction("리모트 페어링 코드 발급(&P)", self)
+        self.remote_pairing_action.triggered.connect(self._open_remote_pairing_code_dialog)
         if fm:
             fm.addAction(restart_action)
+            fm.addAction(self.remote_pairing_action)
             fm.addSeparator()
             fm.addAction(ea) # 종료 액션
 

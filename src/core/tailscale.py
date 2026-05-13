@@ -6,10 +6,11 @@ import tempfile
 import threading
 import time
 import urllib.request
+import os
 import platform
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -65,13 +66,34 @@ class TailscaleSnapshot:
         }
 
 
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _windows_tailscale_candidates(environ: dict[str, str] | None = None) -> list[str]:
+    env = environ or os.environ
+    candidates: list[str] = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        base = env.get(env_name)
+        if base:
+            candidates.append(str(PureWindowsPath(base) / "Tailscale" / "tailscale.exe"))
+    candidates.extend([
+        r"C:\Program Files\Tailscale\tailscale.exe",
+        r"C:\Program Files (x86)\Tailscale\tailscale.exe",
+    ])
+    return _dedupe_preserve_order(candidates)
+
+
 def _tailscale_executable() -> str | None:
     candidates = ["tailscale"]
     if platform.system() == "Windows":
-        candidates.extend([
-            r"C:\\Program Files\\Tailscale\\tailscale.exe",
-            r"C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
-        ])
+        candidates.extend(_windows_tailscale_candidates())
     else:
         candidates.extend(["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale"])
     for candidate in candidates:
@@ -179,8 +201,16 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
             )
         )
     self_ips = _node_ips(self_node)
-    running = backend_state.lower() == "running" and bool(self_ips)
-    message = "tailscale 네트워크 사용 가능" if running else f"tailscale 상태: {backend_state}"
+    normalized_state = backend_state.lower()
+    running = normalized_state == "running" and bool(self_ips)
+    if running:
+        message = "tailscale 네트워크 사용 가능"
+    elif normalized_state == "unknown":
+        message = "tailscale CLI 응답에 BackendState가 없습니다. 로그인/서비스 상태를 확인하세요."
+    elif normalized_state in {"needslogin", "stopped", "nostate"}:
+        message = f"tailscale 상태: {backend_state}. 로그인 또는 서비스 실행이 필요합니다."
+    else:
+        message = f"tailscale 상태: {backend_state}"
     snapshot = TailscaleSnapshot(
         installed=True,
         running=running,

@@ -113,6 +113,14 @@ def test_global_settings_derives_sidebar_mode_from_legacy_bool():
     assert ranged.sidebar_handle_auto_hide is False
 
 
+def test_main_window_file_menu_exposes_remote_pairing_code_action():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+
+    assert 'QAction("리모트 페어링 코드 발급(&P)", self)' in source
+    assert 'fm.addAction(self.remote_pairing_action)' in source
+    assert '/remote/pair/start' in source
+
+
 def _stop_window(window, app):
     for attr in (
         "monitor_timer",
