@@ -168,6 +168,41 @@ def test_tailscale_status_running_without_self_ip_is_actionable(monkeypatch):
     assert 'Self IP' in snapshot.message
 
 
+def test_tailscale_status_falls_back_to_plain_status_output_when_json_is_invalid(monkeypatch):
+    import src.core.tailscale as tailscale
+
+    class Result:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ''
+
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        if args[-1] == '--json':
+            return Result('not-json')
+        return Result(
+            '100.109.140.97  lsh-desktop  lsh930309@  windows  -\n'
+            '100.114.138.46  macbook-air  lsh930309@  macOS    -\n'
+            '100.102.217.35  s25-ultra    lsh930309@  android  offline, last seen 7m ago\n'
+        )
+
+    monkeypatch.setattr(tailscale, '_STATUS_CACHE', None)
+    monkeypatch.setattr(tailscale, '_tailscale_executable', lambda: r'C:\Program Files\Tailscale\tailscale.exe')
+    monkeypatch.setattr(tailscale.subprocess, 'run', fake_run)
+
+    snapshot = tailscale.tailscale_status()
+
+    assert snapshot.ready is True
+    assert snapshot.self_ips == ('100.109.140.97',)
+    assert snapshot.self_hostname == 'lsh-desktop'
+    assert [peer.primary_ipv4() for peer in snapshot.peers] == ['100.109.140.97', '100.114.138.46', '100.102.217.35']
+    assert calls[0][-1] == '--json'
+    assert calls[1] == [r'C:\Program Files\Tailscale\tailscale.exe', 'status']
+
+
 def test_tailscale_status_cache_avoids_repeated_cli_poll(monkeypatch):
     import json
     import src.core.tailscale as tailscale

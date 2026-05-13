@@ -174,6 +174,41 @@ def _node_ips(item: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(ip) for ip in raw if ip)
 
 
+def _looks_like_tailscale_ip(value: str) -> bool:
+    return bool(re.match(r"^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$", value.strip()))
+
+
+def _parse_plain_status_output(output: str) -> TailscaleSnapshot | None:
+    peers: list[TailscalePeer] = []
+    self_ips: list[str] = []
+    self_hostname = ""
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 4 or not _looks_like_tailscale_ip(parts[0]):
+            continue
+        ip, hostname, _user, os_name = parts[:4]
+        online = "offline" not in line.lower()
+        peer = TailscalePeer(hostname=hostname, dns_name="", ips=(ip,), online=online, os=os_name)
+        peers.append(peer)
+        if not self_ips and online:
+            self_ips.append(ip)
+            self_hostname = hostname
+    if not peers:
+        return None
+    return TailscaleSnapshot(
+        installed=True,
+        running=bool(self_ips),
+        backend_state="Running" if self_ips else "unknown",
+        self_ips=tuple(self_ips),
+        self_hostname=self_hostname,
+        peers=tuple(peers),
+        message="tailscale 네트워크 사용 가능" if self_ips else "tailscale status 출력은 확인했지만 온라인 self IP를 찾지 못했습니다.",
+    )
+
+
 def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_seconds: float = 0.0) -> TailscaleSnapshot:
     global _STATUS_CACHE
     if cache_ttl_seconds > 0 and runner is None:
@@ -191,7 +226,7 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
         return snapshot
 
     try:
-        completed = _run_subprocess([exe, "status", "--json"], timeout_seconds=timeout_seconds, runner=runner)
+        completed = _run_subprocess([exe, "status", "--json"], timeout_seconds=max(timeout_seconds, 2.5), runner=runner)
     except (OSError, subprocess.TimeoutExpired) as exc:
         snapshot = TailscaleSnapshot(True, False, "error", (), "", (), f"tailscale status 실행 실패: {exc}")
         if cache_ttl_seconds > 0 and runner is None:
@@ -213,7 +248,14 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError:
-        snapshot = TailscaleSnapshot(True, False, "invalid_json", (), "", (), "tailscale status JSON을 해석하지 못했습니다.")
+        plain = None
+        try:
+            plain_completed = _run_subprocess([exe, "status"], timeout_seconds=max(timeout_seconds, 2.5), runner=runner)
+            if plain_completed.returncode == 0:
+                plain = _parse_plain_status_output(plain_completed.stdout or "")
+        except (OSError, subprocess.TimeoutExpired):
+            plain = None
+        snapshot = plain or TailscaleSnapshot(True, False, "invalid_json", (), "", (), "tailscale status JSON을 해석하지 못했습니다.")
         if cache_ttl_seconds > 0 and runner is None:
             with _STATUS_CACHE_LOCK:
                 _STATUS_CACHE = (time.monotonic(), snapshot)
