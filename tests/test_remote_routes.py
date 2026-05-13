@@ -666,6 +666,20 @@ def test_pairing_start_is_limited_to_loopback_or_authenticated_devices():
     assert response.status_code == 403
 
 
+def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        client_address=("100.114.138.46", 50000),
+        require_auth=True,
+    )
+
+    pairing = client.post("/remote/pair/start")
+    protected_without_token = client.get("/remote/devices")
+
+    assert pairing.status_code == 200
+    assert pairing.json()["code"].isdigit()
+    assert protected_without_token.status_code == 401
+
+
 def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands():
     commands: list[list[str]] = []
     config = RemotePowerConfig(

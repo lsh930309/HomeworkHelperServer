@@ -1108,6 +1108,41 @@ def test_dialog_settings_save_sends_only_actor_owned_fields(monkeypatch):
     assert "theme" not in seen_payloads[0]
 
 
+def test_global_settings_dialog_can_save_remote_server_mode(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.global_settings = GlobalSettings()
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    seen_payloads = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return GlobalSettings(remote_server_mode_enabled=True).to_dict()
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        seen_payloads.append(kwargs.get("json") or {})
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    settings = GlobalSettings(remote_server_mode_enabled=True)
+    assert client.save_global_settings(settings, actor="global_settings_dialog") is True
+
+    assert seen_payloads[0]["remote_server_mode_enabled"] is True
+    assert client.global_settings.remote_server_mode_enabled is True
+
+
 def test_settings_override_returns_after_first_consumed_guard(monkeypatch):
     from src.data import beholder as beholder_mod
 

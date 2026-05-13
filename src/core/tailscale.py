@@ -90,6 +90,34 @@ def _windows_tailscale_candidates(environ: dict[str, str] | None = None) -> list
     return _dedupe_preserve_order(candidates)
 
 
+def _tailscale_cli_from_windows_command() -> str | None:
+    commands = [
+        ["where", "tailscale"],
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "(Get-Command tailscale -ErrorAction SilentlyContinue).Source",
+        ],
+    ]
+    for command in commands:
+        try:
+            completed = _run_subprocess(command, timeout_seconds=1.5)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        for line in (completed.stdout or "").splitlines():
+            candidate = line.strip().strip('"')
+            if not candidate:
+                continue
+            if candidate.lower().endswith(("tailscale.exe", "tailscale")):
+                return candidate
+    return None
+
+
 def _tailscale_executable() -> str | None:
     candidates = ["tailscale"]
     if platform.system() == "Windows":
@@ -104,6 +132,8 @@ def _tailscale_executable() -> str | None:
             continue
         if Path(candidate).exists():
             return candidate
+    if platform.system() == "Windows":
+        return _tailscale_cli_from_windows_command()
     return None
 
 
@@ -171,7 +201,10 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
 
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
-        snapshot = TailscaleSnapshot(True, False, "error", (), "", (), detail or "tailscale status가 실패했습니다.")
+        message = f"tailscale status가 실패했습니다. returncode={completed.returncode}"
+        if detail:
+            message = f"{message}: {detail}"
+        snapshot = TailscaleSnapshot(True, False, "error", (), "", (), message)
         if cache_ttl_seconds > 0 and runner is None:
             with _STATUS_CACHE_LOCK:
                 _STATUS_CACHE = (time.monotonic(), snapshot)
@@ -205,6 +238,8 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
     running = normalized_state == "running" and bool(self_ips)
     if running:
         message = "tailscale 네트워크 사용 가능"
+    elif normalized_state == "running" and not self_ips:
+        message = "tailscale 상태는 Running이지만 Self IP가 없습니다. Tailscale 로그인/네트워크 상태를 확인하세요."
     elif normalized_state == "unknown":
         message = "tailscale CLI 응답에 BackendState가 없습니다. 로그인/서비스 상태를 확인하세요."
     elif normalized_state in {"needslogin", "stopped", "nostate"}:

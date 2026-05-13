@@ -107,6 +107,8 @@ class GlobalSettings(Base):
     obs_watch_output_dir = Column(Boolean, default=True)
     obs_recording_output_dir = Column(String, default="")
     recording_hold_threshold_ms = Column(Integer, default=800)
+    # Remote server mode
+    remote_server_mode_enabled = Column(Boolean, default=False)
 
 
 class ProcessSession(Base):

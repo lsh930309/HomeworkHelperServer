@@ -969,6 +969,10 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
         self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
         self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
+        self.remote_server_mode_checkbox = QCheckBox("리모트 서버 모드로 시작 (Tailscale/LAN 클라이언트 접속 허용)")
+        self.remote_server_mode_checkbox.setToolTip(
+            "다음 앱 실행부터 API 서버를 0.0.0.0:8000으로 열어 macOS/Android 리모트 클라이언트가 접속할 수 있게 합니다."
+        )
 
         # 테마 선택 (라디오 버튼)
         self.theme_system_rb = QRadioButton("시스템")
@@ -1011,6 +1015,7 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
         self.form_layout.addRow(self.run_on_startup_checkbox)
         self.form_layout.addRow(self.run_as_admin_checkbox)
+        self.form_layout.addRow(self.remote_server_mode_checkbox)
         self.form_layout.addRow(self.hide_on_game_checkbox)
         # 알림 설정 섹션
         self.form_layout.addRow(QLabel("알림 설정:"))
@@ -1126,6 +1131,7 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setValue(self.current_settings.cycle_deadline_advance_notify_hours)
         self.run_on_startup_checkbox.setChecked(self.current_settings.run_on_startup)
         self.run_as_admin_checkbox.setChecked(self.current_settings.run_as_admin)
+        self.remote_server_mode_checkbox.setChecked(getattr(self.current_settings, 'remote_server_mode_enabled', False))
         # 테마
         theme = getattr(self.current_settings, 'theme', 'system')
         if theme == 'light':
@@ -1157,6 +1163,7 @@ class GlobalSettingsDialog(QDialog):
         updated.run_on_startup = self.run_on_startup_checkbox.isChecked()
         updated.always_on_top = self.current_settings.always_on_top  # 메뉴바 체크박스로 관리
         updated.run_as_admin = self.run_as_admin_checkbox.isChecked()
+        updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
         updated.notify_on_mandatory_time = self.notify_on_mandatory_time_checkbox.isChecked()
         updated.notify_on_cycle_deadline = self.notify_on_cycle_deadline_checkbox.isChecked()
         updated.notify_on_sleep_correction = self.notify_on_sleep_correction_checkbox.isChecked()

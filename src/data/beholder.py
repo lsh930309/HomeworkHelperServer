@@ -44,7 +44,7 @@ WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
     "sidebar_enabled", "sidebar_mode", "sidebar_handle_auto_hide",
-    "screenshot_enabled", "recording_enabled",
+    "screenshot_enabled", "recording_enabled", "remote_server_mode_enabled",
 }
 SIDEBAR_SETTINGS_FIELDS = {
     "sidebar_enabled", "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
@@ -63,7 +63,7 @@ GLOBAL_DIALOG_FIELDS = {
     "cycle_deadline_advance_notify_hours", "run_on_startup", "always_on_top",
     "run_as_admin", "notify_on_mandatory_time", "notify_on_cycle_deadline",
     "notify_on_sleep_correction", "notify_on_daily_reset", "stamina_notify_enabled",
-    "stamina_notify_threshold", "theme", "hide_on_game",
+    "stamina_notify_threshold", "theme", "hide_on_game", "remote_server_mode_enabled",
 }
 PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
@@ -125,6 +125,7 @@ FIELD_LABELS: dict[str, str] = {
     "screenshot_gamepad_trigger": "게임패드 스크린샷 트리거",
     "screenshot_disable_gamebar": "Xbox Game Bar 비활성화",
     "recording_enabled": "녹화 사용",
+    "remote_server_mode_enabled": "리모트 서버 모드",
     "obs_host": "OBS 호스트",
     "obs_password": "OBS 비밀번호",
     "obs_exe_path": "OBS 실행 파일",

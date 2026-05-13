@@ -117,6 +117,8 @@ class GlobalSettingsSchema(BaseModel):
     obs_watch_output_dir: bool = True
     obs_recording_output_dir: str = ""
     recording_hold_threshold_ms: int = 800
+    # Remote server mode
+    remote_server_mode_enabled: bool = False
 
 
 class ProcessSessionCreate(BaseModel):

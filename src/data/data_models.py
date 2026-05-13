@@ -203,7 +203,9 @@ class GlobalSettings:
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
                  obs_recording_output_dir: str = "",
-                 recording_hold_threshold_ms: int = 800):
+                 recording_hold_threshold_ms: int = 800,
+                 # Remote server mode
+                 remote_server_mode_enabled: bool = False):
         """전역 설정 인스턴스를 초기화합니다."""
         self.sleep_start_time_str = sleep_start_time_str
         self.sleep_end_time_str = sleep_end_time_str
@@ -258,6 +260,8 @@ class GlobalSettings:
         self.obs_watch_output_dir = obs_watch_output_dir
         self.obs_recording_output_dir = obs_recording_output_dir
         self.recording_hold_threshold_ms = recording_hold_threshold_ms
+        # Remote server mode
+        self.remote_server_mode_enabled = remote_server_mode_enabled
 
     def to_dict(self) -> Dict:
         """JSON 저장을 위해 객체를 딕셔너리로 변환합니다."""
@@ -349,6 +353,8 @@ class GlobalSettings:
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
         data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))
         data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
+        # Remote server mode 하위 호환성
+        data['remote_server_mode_enabled'] = bool(data.get('remote_server_mode_enabled', False))
         return cls(**data)
     
 class WebShortcut:

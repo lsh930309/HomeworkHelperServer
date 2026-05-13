@@ -22,6 +22,14 @@ from src.data import beholder, crud, models, schemas
 
 
 REMOTE_API_VERSION = "0.1.9"
+TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
+
+
+def _temporary_pairing_allowed_ips() -> set[str]:
+    raw = os.environ.get("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS")
+    if raw is None:
+        raw = TEMPORARY_MACBOOK_TAILSCALE_IP
+    return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -279,6 +287,10 @@ def create_remote_router(
         host = request.client.host if request.client else ""
         return host in {"127.0.0.1", "::1", "localhost", "testclient"}
 
+    def _is_temporary_pairing_allowed_request(request: Request) -> bool:
+        host = request.client.host if request.client else ""
+        return host in _temporary_pairing_allowed_ips()
+
     def _is_valid_remote_token(authorization: str | None) -> bool:
         token = _bearer_token(authorization)
         if not token:
@@ -291,7 +303,11 @@ def create_remote_router(
         path = request.url.path.rstrip("/")
         if path.endswith("/remote/pair/confirm"):
             return
-        if path.endswith("/remote/pair/start") and (_is_loopback_request(request) or _is_valid_remote_token(authorization)):
+        if path.endswith("/remote/pair/start") and (
+            _is_loopback_request(request)
+            or _is_temporary_pairing_allowed_request(request)
+            or _is_valid_remote_token(authorization)
+        ):
             return
         if path.endswith("/remote/pair/start"):
             raise HTTPException(

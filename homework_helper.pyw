@@ -389,6 +389,21 @@ def run_server_main():
     except Exception as e:
         logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
 
+    def resolve_api_bind_host() -> str:
+        explicit_host = os.environ.get("HH_API_HOST")
+        if explicit_host:
+            return explicit_host
+        db = SessionLocal()
+        try:
+            settings = crud.get_settings(db)
+            if bool(getattr(settings, "remote_server_mode_enabled", False)):
+                return "0.0.0.0"
+        except Exception as e:
+            logger.error(f"리모트 서버 모드 설정 확인 실패: {e}", exc_info=True)
+        finally:
+            db.close()
+        return "127.0.0.1"
+
     # 주기적 WAL checkpoint 백그라운드 스레드
     def periodic_checkpoint(interval=60):
         """주기적으로 WAL checkpoint 수행"""
@@ -807,7 +822,7 @@ def run_server_main():
     app.include_router(dashboard_router)
     app.include_router(beholder_router)
 
-    api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
+    api_host = resolve_api_bind_host()
     api_port = int(os.environ.get("HH_API_PORT", "8000"))
     loopback_hosts = {"127.0.0.1", "localhost", "::1"}
     remote_require_auth = (

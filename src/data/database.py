@@ -143,6 +143,8 @@ def auto_migrate_database():
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
+        # Remote server mode
+        ("global_settings", "remote_server_mode_enabled", "INTEGER", "0"),
         # Beholder incident UX / resolution metadata
         ("beholder_incidents", "user_title", "TEXT", None),
         ("beholder_incidents", "user_summary", "TEXT", None),

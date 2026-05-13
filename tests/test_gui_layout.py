@@ -112,6 +112,11 @@ def test_global_settings_derives_sidebar_mode_from_legacy_bool():
     assert ranged.sidebar_trigger_y_end == 0.8
     assert ranged.sidebar_handle_auto_hide is False
 
+    remote_default = GlobalSettings.from_dict({})
+    assert remote_default.remote_server_mode_enabled is False
+    remote_enabled = GlobalSettings.from_dict({"remote_server_mode_enabled": True})
+    assert remote_enabled.remote_server_mode_enabled is True
+
 
 def test_main_window_file_menu_exposes_remote_pairing_code_action():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
@@ -119,6 +124,17 @@ def test_main_window_file_menu_exposes_remote_pairing_code_action():
     assert 'QAction("리모트 페어링 코드 발급(&P)", self)' in source
     assert 'fm.addAction(self.remote_pairing_action)' in source
     assert '/remote/pair/start' in source
+
+
+def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():
+    dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
+    launcher_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "remote_server_mode_checkbox" in dialog_source
+    assert "remote_server_mode_enabled" in dialog_source
+    assert "def resolve_api_bind_host" in launcher_source
+    assert '"0.0.0.0"' in launcher_source
+    assert "remote_server_mode_enabled" in launcher_source
 
 
 def _stop_window(window, app):

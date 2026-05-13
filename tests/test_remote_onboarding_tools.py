@@ -124,6 +124,50 @@ def test_tailscale_status_unknown_backend_has_actionable_message(monkeypatch):
     assert '로그인/서비스 상태' in snapshot.message
 
 
+def test_windows_tailscale_executable_falls_back_to_where_command(monkeypatch):
+    import src.core.tailscale as tailscale
+
+    class Result:
+        returncode = 0
+        stdout = r'C:\Users\Player\AppData\Local\Tailscale\tailscale.exe' + '\n'
+        stderr = ''
+
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return Result()
+
+    monkeypatch.setattr(tailscale.platform, 'system', lambda: 'Windows')
+    monkeypatch.setattr(tailscale.shutil, 'which', lambda _name: None)
+    monkeypatch.setattr(tailscale.Path, 'exists', lambda _self: False)
+    monkeypatch.setattr(tailscale, '_run_subprocess', fake_run)
+
+    assert tailscale._tailscale_executable() == r'C:\Users\Player\AppData\Local\Tailscale\tailscale.exe'
+    assert calls[0] == ['where', 'tailscale']
+
+
+def test_tailscale_status_running_without_self_ip_is_actionable(monkeypatch):
+    import json
+    import src.core.tailscale as tailscale
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({'BackendState': 'Running', 'Self': {}, 'Peer': {}})
+        stderr = ''
+
+    monkeypatch.setattr(tailscale, '_STATUS_CACHE', None)
+    monkeypatch.setattr(tailscale, '_tailscale_executable', lambda: '/usr/bin/tailscale')
+    monkeypatch.setattr(tailscale.subprocess, 'run', lambda *_args, **_kwargs: Result())
+
+    snapshot = tailscale.tailscale_status()
+
+    assert snapshot.installed is True
+    assert snapshot.running is False
+    assert snapshot.backend_state == 'Running'
+    assert 'Self IP' in snapshot.message
+
+
 def test_tailscale_status_cache_avoids_repeated_cli_poll(monkeypatch):
     import json
     import src.core.tailscale as tailscale

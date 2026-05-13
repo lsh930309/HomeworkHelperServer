@@ -427,11 +427,12 @@ class MainWindow(QMainWindow):
         api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
         externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
         has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
-        if externally_bound or has_token:
+        remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
+        if externally_bound or remote_server_mode_enabled or has_token:
             self._set_remote_readiness_indicator("remote", "green", "Remote API 외부/토큰 모드 준비됨")
         else:
             self._set_remote_readiness_indicator("remote", "yellow", "첫 페어링 전에는 로컬에서 pairing code를 발급하세요.")
-        server_ready = (externally_bound or has_token) and config.configured
+        server_ready = (externally_bound or remote_server_mode_enabled or has_token) and config.configured
         self._set_remote_readiness_indicator(
             "server",
             "green" if server_ready else "yellow",
@@ -1050,6 +1051,7 @@ class MainWindow(QMainWindow):
         # ApiClient는 설정을 저장할 때마다 내부의 global_settings 객체를 새로 교체하기 때문입니다.
         latest_settings = self.data_manager.global_settings
         previous_run_as_admin = latest_settings.run_as_admin  # 이전 설정 값 저장
+        previous_remote_server_mode = bool(getattr(latest_settings, "remote_server_mode_enabled", False))
 
         dlg = GlobalSettingsDialog(latest_settings, self) # 최신 설정으로 대화 상자 생성
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
@@ -1058,6 +1060,13 @@ class MainWindow(QMainWindow):
             if not self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog"):
                 QMessageBox.warning(self, "저장 실패", "전역 설정 저장이 차단되었거나 실패했습니다. 변경 사항은 적용하지 않습니다.")
                 return
+            if previous_remote_server_mode != bool(getattr(upd_gs, "remote_server_mode_enabled", False)):
+                QMessageBox.information(
+                    self,
+                    "재시작 필요",
+                    "리모트 서버 모드 설정이 변경되었습니다.\n\n"
+                    "API 서버 바인딩 주소를 적용하려면 앱을 재시작해주세요.",
+                )
 
             # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
             def _log_admin_debug(msg):
