@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
 import time
 import urllib.request
 import platform
@@ -11,6 +12,9 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
+
+_STATUS_CACHE_LOCK = threading.Lock()
+_STATUS_CACHE = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,36 @@ def _tailscale_executable() -> str | None:
     return None
 
 
+def _hidden_subprocess_kwargs() -> dict[str, Any]:
+    """Hide console windows when GUI-packaged Windows builds poll CLI tools."""
+    if platform.system() != "Windows":
+        return {}
+    kwargs: dict[str, Any] = {}
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    return kwargs
+
+
+def _run_subprocess(args: Sequence[str], *, timeout_seconds: float, runner=None):
+    kwargs = {
+        "text": True,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "timeout": timeout_seconds,
+        "check": False,
+    }
+    if runner is None:
+        kwargs.update(_hidden_subprocess_kwargs())
+    return (runner or subprocess.run)(list(args), **kwargs)
+
+
 def _node_ips(item: dict[str, Any]) -> tuple[str, ...]:
     raw = item.get("TailscaleIPs") or item.get("TailAddr") or []
     if isinstance(raw, str):
@@ -88,32 +122,47 @@ def _node_ips(item: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(ip) for ip in raw if ip)
 
 
-def tailscale_status(timeout_seconds: float = 1.5, runner=None) -> TailscaleSnapshot:
+def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_seconds: float = 0.0) -> TailscaleSnapshot:
+    global _STATUS_CACHE
+    if cache_ttl_seconds > 0 and runner is None:
+        now = time.monotonic()
+        with _STATUS_CACHE_LOCK:
+            if _STATUS_CACHE and now - _STATUS_CACHE[0] < cache_ttl_seconds:
+                return _STATUS_CACHE[1]
+
     exe = _tailscale_executable()
     if not exe:
-        return TailscaleSnapshot(False, False, "missing", (), "", (), "tailscale CLI를 찾지 못했습니다.")
+        snapshot = TailscaleSnapshot(False, False, "missing", (), "", (), "tailscale CLI를 찾지 못했습니다.")
+        if cache_ttl_seconds > 0 and runner is None:
+            with _STATUS_CACHE_LOCK:
+                _STATUS_CACHE = (time.monotonic(), snapshot)
+        return snapshot
 
-    run = runner or subprocess.run
     try:
-        completed = run(
-            [exe, "status", "--json"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        completed = _run_subprocess([exe, "status", "--json"], timeout_seconds=timeout_seconds, runner=runner)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return TailscaleSnapshot(True, False, "error", (), "", (), f"tailscale status 실행 실패: {exc}")
+        snapshot = TailscaleSnapshot(True, False, "error", (), "", (), f"tailscale status 실행 실패: {exc}")
+        if cache_ttl_seconds > 0 and runner is None:
+            with _STATUS_CACHE_LOCK:
+                _STATUS_CACHE = (time.monotonic(), snapshot)
+        return snapshot
 
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
-        return TailscaleSnapshot(True, False, "error", (), "", (), detail or "tailscale status가 실패했습니다.")
+        snapshot = TailscaleSnapshot(True, False, "error", (), "", (), detail or "tailscale status가 실패했습니다.")
+        if cache_ttl_seconds > 0 and runner is None:
+            with _STATUS_CACHE_LOCK:
+                _STATUS_CACHE = (time.monotonic(), snapshot)
+        return snapshot
 
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError:
-        return TailscaleSnapshot(True, False, "invalid_json", (), "", (), "tailscale status JSON을 해석하지 못했습니다.")
+        snapshot = TailscaleSnapshot(True, False, "invalid_json", (), "", (), "tailscale status JSON을 해석하지 못했습니다.")
+        if cache_ttl_seconds > 0 and runner is None:
+            with _STATUS_CACHE_LOCK:
+                _STATUS_CACHE = (time.monotonic(), snapshot)
+        return snapshot
 
     self_node = payload.get("Self") or {}
     backend_state = str(payload.get("BackendState") or "unknown")
@@ -132,7 +181,7 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None) -> TailscaleSnap
     self_ips = _node_ips(self_node)
     running = backend_state.lower() == "running" and bool(self_ips)
     message = "tailscale 네트워크 사용 가능" if running else f"tailscale 상태: {backend_state}"
-    return TailscaleSnapshot(
+    snapshot = TailscaleSnapshot(
         installed=True,
         running=running,
         backend_state=backend_state,
@@ -141,6 +190,10 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None) -> TailscaleSnap
         peers=tuple(peers),
         message=message,
     )
+    if cache_ttl_seconds > 0 and runner is None:
+        with _STATUS_CACHE_LOCK:
+            _STATUS_CACHE = (time.monotonic(), snapshot)
+    return snapshot
 
 
 def suggest_remote_base_urls(snapshot: TailscaleSnapshot, *, port: int = 8000, preferred_names: tuple[str, ...] = ()) -> list[str]:
@@ -183,16 +236,8 @@ class TailscaleEnsureResult:
 
 
 def _run_command(args: Sequence[str], timeout_seconds: float = 120.0, runner=None) -> bool:
-    run = runner or subprocess.run
     try:
-        completed = run(
-            list(args),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        completed = _run_subprocess(args, timeout_seconds=timeout_seconds, runner=runner)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return completed.returncode == 0

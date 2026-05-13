@@ -414,7 +414,7 @@ class MainWindow(QMainWindow):
             self._set_remote_readiness_indicator("power", "yellow", "전원 제어 설정이 아직 저장되지 않았습니다.")
 
         try:
-            snapshot = tailscale_status(timeout_seconds=0.8)
+            snapshot = tailscale_status(timeout_seconds=0.8, cache_ttl_seconds=30.0)
             if snapshot.ready:
                 self._set_remote_readiness_indicator("tailscale", "green", f"Tailscale IP: {', '.join(snapshot.self_ips)}")
             elif snapshot.installed:

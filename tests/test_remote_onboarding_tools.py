@@ -63,3 +63,50 @@ def test_ensure_tailscale_installs_then_rechecks(monkeypatch):
     assert result.launch_attempted is True
     assert result.method == 'mock-install+mock-launch'
     assert calls == {'install': 1, 'launch': 1, 'probe': 2}
+
+
+def test_windows_subprocess_kwargs_hide_console(monkeypatch):
+    import src.core.tailscale as tailscale
+
+    class StartupInfo:
+        def __init__(self):
+            self.dwFlags = 0
+            self.wShowWindow = 99
+
+    monkeypatch.setattr(tailscale.platform, 'system', lambda: 'Windows')
+    monkeypatch.setattr(tailscale.subprocess, 'STARTUPINFO', StartupInfo, raising=False)
+    monkeypatch.setattr(tailscale.subprocess, 'STARTF_USESHOWWINDOW', 1, raising=False)
+    monkeypatch.setattr(tailscale.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
+
+    kwargs = tailscale._hidden_subprocess_kwargs()
+
+    assert kwargs['creationflags'] == 0x08000000
+    assert kwargs['startupinfo'].dwFlags & 1
+    assert kwargs['startupinfo'].wShowWindow == 0
+
+
+def test_tailscale_status_cache_avoids_repeated_cli_poll(monkeypatch):
+    import json
+    import src.core.tailscale as tailscale
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({'BackendState': 'Running', 'Self': {'TailscaleIPs': ['100.114.138.46']}, 'Peer': {}})
+        stderr = ''
+
+    calls = {'run': 0}
+
+    def fake_run(args, **kwargs):
+        calls['run'] += 1
+        return Result()
+
+    monkeypatch.setattr(tailscale, '_STATUS_CACHE', None)
+    monkeypatch.setattr(tailscale, '_tailscale_executable', lambda: '/usr/bin/tailscale')
+    monkeypatch.setattr(tailscale.subprocess, 'run', fake_run)
+
+    first = tailscale.tailscale_status(cache_ttl_seconds=30)
+    second = tailscale.tailscale_status(cache_ttl_seconds=30)
+
+    assert first.ready is True
+    assert second.ready is True
+    assert calls['run'] == 1
