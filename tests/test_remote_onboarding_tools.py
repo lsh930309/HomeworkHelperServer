@@ -246,3 +246,30 @@ def test_smartthings_device_parser_extracts_candidate_ids():
             "raw": "d8f4f6b1-1111-2222-3333-444444444444 Bedroom Plug ONLINE",
         }
     ]
+
+
+def test_tailscale_status_unknown_json_falls_back_to_plain_status(monkeypatch):
+    from src.core import tailscale
+
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout='', stderr=''):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def runner(args, **kwargs):
+        calls.append(args)
+        if args[-1] == '--json':
+            return Result(stdout='{}')
+        return Result(stdout='100.109.140.97 lsh-desktop user windows\n100.114.138.46 macbook-air user macOS')
+
+    monkeypatch.setattr(tailscale, '_tailscale_executable', lambda: r'C:\Program Files\Tailscale\tailscale.exe')
+
+    snapshot = tailscale.tailscale_status(runner=runner)
+
+    assert snapshot.ready is True
+    assert snapshot.self_ips == ('100.109.140.97',)
+    assert calls[0] == [r'C:\Program Files\Tailscale\tailscale.exe', 'status', '--json']
+    assert calls[1] == [r'C:\Program Files\Tailscale\tailscale.exe', 'status']

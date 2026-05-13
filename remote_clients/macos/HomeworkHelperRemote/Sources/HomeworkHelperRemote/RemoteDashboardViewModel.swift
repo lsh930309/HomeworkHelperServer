@@ -88,6 +88,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
     @Published var setupProgress = "원격 설정 준비 전입니다."
     @Published var pairingRecoveryMessage = ""
+    @Published var hostConnectionState = "unknown"
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -103,7 +104,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     var setupChecklist: [(String, String, Bool)] {
         [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
-            ("2. Windows 서버", readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인", readiness?.serverModeReadiness.color == "green"),
+            ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, !tokenText.isEmpty && !pairingRecoveryMessage.contains("재페어링")),
             ("4. 전원 관리", powerConfigResponse?.readiness.supportedActions.isEmpty == false ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "")" : "SmartThings/SSH 설정 저장 필요", powerConfigResponse?.readiness.supportedActions.isEmpty == false),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
@@ -230,6 +231,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
             status = try await service.status()
+            hostConnectionState = "online"
             if let statusReadiness = status?.readiness {
                 readiness = statusReadiness
             } else {
@@ -305,6 +307,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
             status = try await service.status()
+            hostConnectionState = "online"
             if let statusReadiness = status?.readiness {
                 readiness = statusReadiness
             } else {
@@ -325,6 +328,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개, 숏컷 \(shortcuts.count)개"
         } catch {
             let guidance = connectionGuidance(for: error)
+            if guidance.contains("연결하지 못했습니다") { hostConnectionState = "offline" }
             message = guidance
             setupProgress = guidance
         }
@@ -493,8 +497,52 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = "SmartThings device id 후보를 적용했습니다. 전원 설정 저장을 누르세요: \(candidate.name)"
     }
 
-    func savePowerConfig() async {
-        guard let service else { return }
+
+    private func completePairingOnboarding(using service: RemoteDashboardService) async {
+        setupProgress = "PIN 확인 완료: Tailscale, SSH key, SmartThings 전원 설정을 자동 점검합니다."
+        serverTailscaleEnsure = try? await service.ensureServerTailscale()
+        powerSetup = try? await service.powerSetup()
+        if let first = powerSetup?.smartthingsCLICandidates.first, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            powerConfig.smartthingsCLIPath = first
+        }
+        if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let host = URL(string: baseURLText)?.host {
+            powerConfig.sshHost = host
+        }
+
+        do {
+            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? LocalSSHKeyManager.defaultPrivateKeyPath : powerConfig.sshKeyPath)
+            localSSHKey = key
+            powerConfig.sshKeyPath = key.privateKeyPath
+            _ = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
+        } catch {
+            setupProgress = "SSH key 자동 등록은 실패했습니다. Windows 원격 설정 또는 mac 전원 설정에서 다시 시도하세요: \(error.localizedDescription)"
+        }
+
+        if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            if let result = try? await service.smartThingsDevices(cliPath: powerConfig.smartthingsCLIPath) {
+                smartThingsDevices = result.devices
+                smartThingsDeviceCandidates = result.deviceCandidates
+                if result.deviceCandidates.count == 1 {
+                    powerConfig.smartthingsDeviceID = result.deviceCandidates[0].id
+                }
+            }
+        }
+
+        if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            if let saved = try? await service.savePowerConfig(powerConfig) {
+                powerConfigResponse = saved
+                powerConfig = saved.config
+            }
+        }
+        status = try? await service.status()
+        readiness = status?.readiness ?? readiness
+        hostConnectionState = status == nil ? hostConnectionState : "online"
+        setupProgress = smartThingsDeviceCandidates.count > 1
+            ? "PIN 설정 대부분 완료. SmartThings 후보가 여러 개라 wake 대상만 선택 후 저장하세요."
+            : "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다."
+    }
+
+    func savePowerConfig() async {        guard let service else { return }
         do {
             let response = try await service.savePowerConfig(powerConfig)
             powerConfigResponse = response
@@ -525,9 +573,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             tokenText = response.token
             pairingCode = ""
             pairingRecoveryMessage = "페어링 완료: \(response.name)"
-            setupProgress = "페어링 완료. 이후에는 Keychain 토큰으로 자동 연결합니다."
-            message = "'\(response.name)' 디바이스 페어링 완료. 토큰을 Keychain에 저장했습니다."
-            await refresh(using: RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token)), includeDevices: true)
+            readiness = response.onboarding?.readiness ?? readiness
+            powerSetup = response.onboarding?.powerSetup ?? powerSetup
+            powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
+            powerConfig = powerConfigResponse?.config ?? powerConfig
+            let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
+            await completePairingOnboarding(using: pairedService)
+            message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
+            await refresh(using: pairedService, includeDevices: true)
         } catch {
             message = error.localizedDescription
         }

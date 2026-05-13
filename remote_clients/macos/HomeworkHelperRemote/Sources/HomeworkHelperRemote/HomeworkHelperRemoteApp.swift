@@ -54,7 +54,7 @@ struct RemoteDashboardView: View {
                                 HStack {
                                     TextField("6자리 코드", text: $viewModel.pairingCode)
                                         .textFieldStyle(.roundedBorder)
-                                    Button("페어링") {
+                                    Button("페어링 및 자동 설정") {
                                         Task { await viewModel.confirmPairing() }
                                     }
                                     .disabled(viewModel.isLoading)
@@ -85,7 +85,7 @@ struct RemoteDashboardView: View {
 
                     GroupBox("원격 설정 자동화") {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Windows 앱의 [설정 > 원격 설정]과 맞물려 Mac Tailscale, 서버 연결, 페어링, 전원 설정을 순서대로 점검합니다.")
+                            Text("Windows에서 발급한 6자리 PIN을 한 번 입력하면 Mac이 Tailscale, SSH key, SmartThings 전원 설정을 가능한 범위까지 자동 완료합니다.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             SetupInstructionBlock(
@@ -98,6 +98,11 @@ struct RemoteDashboardView: View {
                             )
                             ForEach(Array(viewModel.setupChecklist.enumerated()), id: \.offset) { _, item in
                                 SetupChecklistRow(title: item.0, detail: item.1, ready: item.2)
+                            }
+                            if viewModel.hostConnectionState == "offline" {
+                                Text("호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다. wake 설정이 완료되어 있으면 PC 전원 > 켜기를 시도하세요.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                             HStack {
                                 Button {

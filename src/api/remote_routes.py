@@ -464,7 +464,16 @@ def create_remote_router(
             target_name=device.get("name"),
             target=device.get("platform"),
         )
-        return device
+        power_status = power_controller.status() if hasattr(power_controller, "status") else {}
+        config = RemotePowerConfig.load(power_config_path)
+        response = dict(device)
+        response["onboarding"] = {
+            "readiness": _readiness_payload(power_status),
+            "power_config": _power_config_payload(config, power_config_path, power_config_path.exists()),
+            "power_setup": power_setup_status(),
+            "message": "페어링 완료. 클라이언트에서 SSH key, Tailscale, SmartThings 전원 설정을 이어서 자동 점검할 수 있습니다.",
+        }
+        return response
 
     @router.get("/devices")
     def list_remote_devices():

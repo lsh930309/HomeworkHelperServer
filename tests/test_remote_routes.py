@@ -647,6 +647,8 @@ def test_device_token_refresh_rotates_bearer_token_and_audits_security_event():
     )
     old_token = confirm.json()["token"]
     device_id = confirm.json()["id"]
+    assert "onboarding" in confirm.json()
+    assert "power_setup" in confirm.json()["onboarding"]
     refresh = client.post("/remote/tokens/refresh", headers={"Authorization": f"Bearer {old_token}"})
     new_token = refresh.json()["token"]
     old_rejected = client.get("/remote/status", headers={"Authorization": f"Bearer {old_token}"})

@@ -206,6 +206,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "http://windows-host-or-tailnet-ip:8000" in app
     assert "페어링 후 Keychain에 저장됩니다" in app
     assert "6자리 코드" in app
+    assert "페어링 및 자동 설정" in app
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
@@ -243,6 +244,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app
     assert "원격 설정 자동화" in app
+    assert "6자리 PIN" in app
     assert "Windows에서 먼저" in app
     assert "이 Mac에서" in app
     assert "SetupInstructionBlock" in app
@@ -258,6 +260,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "serverTailscaleEnsure" in view_model
     assert "setupChecklist" in view_model
     assert "connectionGuidance" in view_model
+    assert "hostConnectionState" in view_model
+    assert "completePairingOnboarding" in view_model
+    assert "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다." in view_model
     assert "func recoverPairing" in view_model
     assert "func clearLocalPairing" in view_model
     assert "pairingRecoveryMessage" in view_model
@@ -275,3 +280,4 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "smartThingsDeviceCandidates" in view_model
     assert "applySmartThingsDevice" in view_model
     assert "SmartThings device 후보" in app
+    assert "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." in app

@@ -209,6 +209,16 @@ def _parse_plain_status_output(output: str) -> TailscaleSnapshot | None:
     )
 
 
+
+def _plain_status_snapshot(exe: str, timeout_seconds: float, runner=None) -> TailscaleSnapshot | None:
+    try:
+        plain_completed = _run_subprocess([exe, "status"], timeout_seconds=max(timeout_seconds, 2.5), runner=runner)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if plain_completed.returncode != 0:
+        return None
+    return _parse_plain_status_output(plain_completed.stdout or "")
+
 def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_seconds: float = 0.0) -> TailscaleSnapshot:
     global _STATUS_CACHE
     if cache_ttl_seconds > 0 and runner is None:
@@ -248,13 +258,7 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
     try:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError:
-        plain = None
-        try:
-            plain_completed = _run_subprocess([exe, "status"], timeout_seconds=max(timeout_seconds, 2.5), runner=runner)
-            if plain_completed.returncode == 0:
-                plain = _parse_plain_status_output(plain_completed.stdout or "")
-        except (OSError, subprocess.TimeoutExpired):
-            plain = None
+        plain = _plain_status_snapshot(exe, timeout_seconds, runner=runner)
         snapshot = plain or TailscaleSnapshot(True, False, "invalid_json", (), "", (), "tailscale status JSON을 해석하지 못했습니다.")
         if cache_ttl_seconds > 0 and runner is None:
             with _STATUS_CACHE_LOCK:
@@ -277,6 +281,13 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
         )
     self_ips = _node_ips(self_node)
     normalized_state = backend_state.lower()
+    if normalized_state == "unknown" and not self_ips:
+        plain = _plain_status_snapshot(exe, timeout_seconds, runner=runner)
+        if plain and plain.ready:
+            if cache_ttl_seconds > 0 and runner is None:
+                with _STATUS_CACHE_LOCK:
+                    _STATUS_CACHE = (time.monotonic(), plain)
+            return plain
     running = normalized_state == "running" and bool(self_ips)
     if running:
         message = "tailscale 네트워크 사용 가능"

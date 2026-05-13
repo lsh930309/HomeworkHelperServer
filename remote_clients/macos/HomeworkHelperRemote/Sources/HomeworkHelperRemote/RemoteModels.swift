@@ -321,11 +321,26 @@ struct RemoteCommandResult: Decodable {
     }
 }
 
+struct RemoteOnboardingBundle: Decodable {
+    let readiness: RemoteReadiness?
+    let powerConfig: RemotePowerConfigResponse?
+    let powerSetup: RemotePowerSetupResponse?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case readiness
+        case powerConfig = "power_config"
+        case powerSetup = "power_setup"
+        case message
+    }
+}
+
 struct PairingConfirmResponse: Decodable {
     let id: String
     let name: String
     let platform: String?
     let token: String
+    let onboarding: RemoteOnboardingBundle?
 }
 
 struct RemoteDevice: Decodable, Identifiable {
