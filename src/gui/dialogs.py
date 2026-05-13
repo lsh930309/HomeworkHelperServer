@@ -283,13 +283,13 @@ class RemoteSettingsDialog(QDialog):
         firewall = payload.get("firewall") or {}
         smartthings = payload.get("smartthings_cli_candidates") or []
         self.power_setup_text.setPlainText(
-            "전원 관리 준비 마법사\n"
+            "전원 상태/승인 패널\n"
             f"- host: {payload.get('host_platform')} / user: {payload.get('user')}\n"
             f"- authorized_keys: {payload.get('authorized_keys_path')} (exists={payload.get('authorized_keys_exists')})\n"
             f"- OpenSSH Server: running={ssh_service.get('running')} start_type={ssh_service.get('start_type')} message={ssh_service.get('message')}\n"
             f"- Firewall: enabled={firewall.get('enabled')} message={firewall.get('message')}\n"
             f"- SmartThings CLI candidates: {smartthings or '(없음)'}\n"
-            "OpenSSH 설치/방화벽 활성화는 Windows 권한 상승이 필요하므로 명시적으로 수동 승인 후 진행하세요."
+            "기본 설정은 mac 클라이언트의 6자리 PIN 흐름이 주도합니다. 이 패널은 Windows 권한 확인/SSH key 승인용 fallback입니다."
         )
         if smartthings and not self.smartthings_cli_path_edit.text().strip():
             self.smartthings_cli_path_edit.setText(str(smartthings[0]))

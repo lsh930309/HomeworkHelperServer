@@ -137,6 +137,8 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "/remote/power/ssh-key" in dialog_source
     assert "/remote/power/smartthings/devices" in dialog_source
     assert "SSH public key 승인/등록" in dialog_source
+    assert "전원 상태/승인 패널" in dialog_source
+    assert "mac 클라이언트의 6자리 PIN 흐름" in dialog_source
     assert "smartthings_device_combo" in dialog_source
     assert "선택 device id 적용" in dialog_source
 
