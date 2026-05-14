@@ -252,6 +252,18 @@ extension RemotePowerConfigPayload {
         return copy
     }
 
+    func preservingLocalWake(from local: RemotePowerConfigPayload) -> RemotePowerConfigPayload {
+        var copy = self
+        if copy.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           LocalPowerWakeManager.isLocalSmartThingsCLIPath(local.smartthingsCLIPath) {
+            copy.smartthingsCLIPath = local.smartthingsCLIPath
+        }
+        if copy.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.smartthingsDeviceID = local.smartthingsDeviceID
+        }
+        return copy
+    }
+
     var localWakeConfigured: Bool {
         !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

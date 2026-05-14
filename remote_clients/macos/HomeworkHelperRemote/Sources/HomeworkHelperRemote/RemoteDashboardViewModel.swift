@@ -188,6 +188,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteDashboardService(client: client)
     }
 
+    private func applyHostPowerConfig(_ config: RemotePowerConfigPayload) {
+        powerConfig = config.preservingLocalWake(from: powerConfig)
+    }
+
     private var baseURLNeedsTailnetSuggestion: Bool {
         let trimmed = baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty || trimmed.contains("127.0.0.1") || trimmed.contains("localhost")
@@ -304,7 +308,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             powerConfigResponse = try? await service.powerConfig()
             powerSetup = try? await service.powerSetup()
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
 
             if isPaired {
                 setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
@@ -384,7 +388,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             mobileSessions = try await service.activeMobileSessions()
             powerConfigResponse = try await service.powerConfig()
             powerSetup = try? await service.powerSetup()
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             processes = try await service.processes()
             shortcuts = try await service.shortcuts()
             if includeDevices {
@@ -495,7 +499,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다."
             return
         }
-        if action == "wake", hostConnectionState == "offline" {
+        if action == "wake", powerConfig.localWakeConfigured {
             await localWake()
             return
         }
@@ -692,7 +696,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             readiness = response.onboarding?.readiness ?? readiness
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
             powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { powerConfig = config }
+            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
             message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."

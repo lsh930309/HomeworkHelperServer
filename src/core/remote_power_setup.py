@@ -55,7 +55,23 @@ def _ssh_service_status(runner=None) -> dict[str, Any]:
         return {"available": False, "running": False, "start_type": "unknown", "message": f"sshd 서비스 확인 실패: {exc}"}
     if result.returncode != 0:
         return {"available": False, "running": False, "start_type": "missing", "message": "OpenSSH Server(sshd)가 설치되어 있지 않거나 서비스 조회에 실패했습니다."}
-    output = (result.stdout or "").strip().lower()
+    raw_output = (result.stdout or "").strip()
+    try:
+        payload = json.loads(raw_output)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        status_value = str(payload.get("Status") or payload.get("status") or "").lower()
+        start_value = str(payload.get("StartType") or payload.get("starttype") or payload.get("StartType".lower()) or "").lower()
+        running = status_value in {"4", "running"}
+        start_type = "automatic" if start_value in {"2", "automatic"} else "manual" if start_value in {"3", "manual"} else "disabled" if start_value in {"4", "disabled"} else "unknown"
+        return {
+            "available": True,
+            "running": running,
+            "start_type": start_type,
+            "message": f"sshd status={status_value or 'unknown'} start_type={start_value or 'unknown'}",
+        }
+    output = raw_output.lower()
     return {
         "available": True,
         "running": "running" in output,

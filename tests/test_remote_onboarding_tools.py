@@ -274,6 +274,23 @@ def test_smartthings_device_probe_marks_cli_failure_unavailable():
     assert "실행 실패" in result["message"]
 
 
+def test_windows_ssh_service_status_parses_numeric_powershell_json(monkeypatch):
+    from src.core import remote_power_setup
+
+    class Result:
+        returncode = 0
+        stdout = '{"Status":4,"StartType":2}'
+        stderr = ""
+
+    monkeypatch.setattr(remote_power_setup.platform, "system", lambda: "Windows")
+
+    status = remote_power_setup._ssh_service_status(runner=lambda *_args, **_kwargs: Result())
+
+    assert status["available"] is True
+    assert status["running"] is True
+    assert status["start_type"] == "automatic"
+
+
 def test_windows_power_config_sanitizes_mac_smartthings_cli_path(monkeypatch):
     from src.core import remote_power
 
