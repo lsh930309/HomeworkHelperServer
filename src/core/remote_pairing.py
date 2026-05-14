@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.data.database import data_dir
+from src.core.remote_local_store import remote_store
 
 
 def _sha256(value: str) -> str:
@@ -20,7 +20,7 @@ def _sha256(value: str) -> str:
 class RemoteDeviceRegistry:
     """File-backed pairing and device-token registry for remote clients."""
 
-    path: Path = field(default_factory=lambda: Path(data_dir) / "remote_devices.json")
+    path: Path = field(default_factory=lambda: remote_store().path("remote_devices.json"))
     code_ttl_seconds: int = 300
 
     def start_pairing(self, *, now: float | None = None) -> dict[str, Any]:
@@ -144,12 +144,16 @@ class RemoteDeviceRegistry:
         return removed
 
     def _read(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {"schema_version": 1, "active_pairing": None, "devices": []}
+        default = {"schema_version": 1, "active_pairing": None, "devices": []}
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if self.path.parent == remote_store().root:
+                data = remote_store().read_json(self.path.name, default)
+            elif self.path.exists():
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            else:
+                data = default
         except (OSError, json.JSONDecodeError):
-            return {"schema_version": 1, "active_pairing": None, "devices": []}
+            data = default
         data.setdefault("schema_version", 1)
         data.setdefault("active_pairing", None)
         data.setdefault("devices", [])
@@ -157,6 +161,9 @@ class RemoteDeviceRegistry:
 
     def _write(self, state: dict[str, Any]) -> None:
         state.setdefault("schema_version", 1)
+        if self.path.parent == remote_store().root:
+            remote_store().write_json(self.path.name, state)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 

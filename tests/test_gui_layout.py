@@ -143,6 +143,19 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "선택 device id 적용" in dialog_source
 
 
+def test_main_window_uses_icon_only_remote_readiness_indicators():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+
+    assert "showMessage(" not in source
+    assert '("beholder", "●")' in source
+    assert '("remote", "●")' in source
+    assert '("admin", "●")' in source
+    assert "remoteReadiness_server" not in source
+    assert "remoteReadiness_power" not in source
+    assert "remoteReadiness_tailscale" not in source
+    assert "QGraphicsDropShadowEffect" in source
+
+
 def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():
     dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
     launcher_source = Path("homework_helper.pyw").read_text(encoding="utf-8")

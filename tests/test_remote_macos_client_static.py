@@ -202,13 +202,18 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "func bootstrap() async" in view_model
     assert ".frame(minWidth: 1100, minHeight: 680)" in app
     assert "ScrollView {" in app
-    assert "GroupBox(\"Remote Agent\")" in app
-    assert ".navigationSplitViewColumnWidth(min: 360, ideal: 420, max: 520)" in app
+    assert "GroupBox(\"연결\")" in app
+    assert ".navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 340)" in app
     assert "struct SidebarInfoRow: View" in app
-    assert "http://windows-host-or-tailnet-ip:8000" in app
-    assert "페어링 후 Keychain에 저장됩니다" in app
+    assert "http://windows-tailnet-ip:8000" in app
+    assert "페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다." in app
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
+    assert "showingAdvancedSettings" in app
+    assert "AdvancedRemoteSettingsView" in app
+    assert "GameProgressView" in app
+    assert "RemoteProcessRow" in app
+    assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
@@ -218,7 +223,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "!viewModel.isPowerActionEnabled(action)" in app
     assert "전원 제어 adapter가 설정되지" in view_model
     assert "지원 명령" in app
-    assert "전원 상태" in app
+    assert "PC 전원" in app
     assert "전원 설정" in app
     assert "전원 설정 저장" in app
     assert "Tailscale 찾기" in app
@@ -234,7 +239,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app
     assert "Android-PC 연결" in app
-    assert "모바일 세션은 수동 시작/종료와 Android UsageStats sync 흐름에 사용됩니다." in app
+    assert "Android 클라이언트가 준비될 때 사용할 매핑입니다." in app
     assert "모바일 세션 sync는 후속 단계에서 연결합니다." not in app
     assert "gameLinks" in view_model
     assert "mobileSessions" in view_model
@@ -245,17 +250,14 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "gameLinkAndroidPackage" in view_model
     assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app
-    assert "원격 설정 자동화" in app
-    assert "6자리 PIN" in app
-    assert "Windows에서 먼저" in app
-    assert "이 Mac에서" in app
+    assert "기기 관리" in app
+    assert "페어링/접속" in app
     assert "SetupInstructionBlock" in app
     assert "viewModel.bootstrap()" in app
     assert "자동 설정 점검" in app
     assert "서버 Tailscale 확인/복구" in app
     assert "페어링 토큰 복구" in app
     assert "로컬 토큰 삭제" in app
-    assert "SetupChecklistRow" in app
     assert "runSetupAutomation" in view_model
     assert "ensureServerTailscale" in view_model
     assert "applySuggestedPowerHost" in view_model
@@ -305,6 +307,6 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "smartThingsDeviceCandidates" in view_model
     assert "applySmartThingsDevice" in view_model
     assert "SmartThings device 후보" in app
-    assert "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." in app
+    assert "기본 화면에서는 숨깁니다." in app
     assert "원격 진단 로그를 바탕 화면에 저장" in app
     assert "폐기된 기기 정리" in app

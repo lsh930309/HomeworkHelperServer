@@ -131,6 +131,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["mobile_sessions"] is True
     assert body["capabilities"]["power_config"] is True
     assert body["capabilities"]["power_control"] is False
+    assert body["capabilities"]["local_store_health"] is True
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
     assert body["power"]["configured"] is False
@@ -304,6 +305,15 @@ def test_remote_readiness_reports_tailscale_and_power_sections():
     assert body["power_readiness"]["color"] == "green"
     assert body["remote_connectivity"]["color"] == "green"
     assert set(body) >= {"beholder_health", "remote_connectivity", "server_mode_readiness", "power_readiness", "tailscale_readiness"}
+
+
+def test_remote_local_store_health_endpoint_reports_manifest_integrity():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
+
+    body = client.get("/remote/local-store/health").json()
+
+    assert body["ok"] is True
+    assert "files" in body["manifest"]
 
 def test_remote_power_config_can_be_saved_without_sending_power_commands(tmp_path):
     config_path = tmp_path / "remote_power_config.json"
@@ -825,3 +835,43 @@ def test_remote_logging_config_and_purge_revoked_devices():
     assert purge.json()["removed"] == 1
     assert devices.json()["devices"] == []
     assert auditor.events[-1]["command"] == "device.purge_revoked"
+
+
+def test_remote_processes_include_progress_payload():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="game-progress",
+                name="Game Progress",
+                monitoring_path="/game.exe",
+                launch_path="/game.url",
+                last_played_timestamp=1778497000.0 - (12 * 3600),
+                user_cycle_hours=24,
+            ),
+            models.Process(
+                id="game-stamina",
+                name="Game Stamina",
+                monitoring_path="/stamina.exe",
+                launch_path="/stamina.url",
+                stamina_tracking_enabled=True,
+                hoyolab_game_id="genshin",
+                stamina_current=80,
+                stamina_max=200,
+            ),
+        ]
+    )
+
+    body = client.get("/remote/processes").json()
+    cycle = next(item for item in body if item["id"] == "game-progress")["progress"]
+    stamina = next(item for item in body if item["id"] == "game-stamina")["progress"]
+
+    assert cycle["kind"] == "cycle"
+    assert 49.0 <= cycle["percentage"] <= 51.0
+    assert stamina == {
+        "kind": "stamina",
+        "percentage": 40.0,
+        "display_text": "80/200",
+        "stamina_current": 80,
+        "stamina_max": 200,
+        "hoyolab_game_id": "genshin",
+    }

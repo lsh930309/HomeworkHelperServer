@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, Sequence
 
-from src.data.database import data_dir
+from src.core.remote_local_store import remote_store
 
 
 PowerAction = Literal["wake", "shutdown", "sleep", "restart"]
@@ -78,7 +78,7 @@ class RemotePowerConfig:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RemotePowerConfig":
-        path = path or Path(data_dir) / "remote_power_config.json"
+        path = path or remote_store().path("remote_power_config.json")
         data: dict[str, object] = {}
         if path.exists():
             try:

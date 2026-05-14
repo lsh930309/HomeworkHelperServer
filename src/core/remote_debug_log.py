@@ -7,9 +7,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src.data.database import data_dir
+from src.core.remote_local_store import remote_store
 
-CONFIG_PATH = Path(data_dir) / "remote_debug_logging.json"
+CONFIG_PATH = remote_store().path("remote_debug_logging.json")
 
 
 def desktop_log_path(filename: str = "HomeworkHelperRemoteHost.log") -> Path:
@@ -42,7 +42,7 @@ def load_config() -> dict[str, Any]:
 def save_config(enabled: bool, path: str | None = None) -> dict[str, Any]:
     payload = {"enabled": bool(enabled), "path": str(path or desktop_log_path())}
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    remote_store().write_json("remote_debug_logging.json", payload)
     return payload
 
 

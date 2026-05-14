@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
 from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
@@ -355,31 +356,35 @@ class MainWindow(QMainWindow):
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
-        # statusBar()가 None이 아닌지 확인 후 메시지 설정
-        status_bar = self.statusBar()
-        if status_bar:
-            status_bar.showMessage("준비 완료.", 5000) # 상태 표시줄 메시지
+        self._record_status_event("준비 완료.")
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
 
 
 
+    def _record_status_event(self, message: str, *_args: object) -> None:
+        """Keep legacy transient UI messages out of the persistent indicator bar."""
+        logger.info("UI status event: %s", message)
+
     def _setup_remote_readiness_indicators(self) -> None:
-        """Add compact remote-server readiness dots to the persistent status bar."""
+        """Add textless, compact readiness indicators to the persistent status bar."""
         status_bar = self.statusBar()
         if status_bar is None:
             return
-        for key, label in [
-            ("beholder", "Beholder"),
-            ("remote", "Remote"),
-            ("server", "Server"),
-            ("power", "Power"),
-            ("tailscale", "Tailscale"),
+        status_bar.setStyleSheet("QStatusBar::item { border: 0px; }")
+        for key, glyph in [
+            ("beholder", "●"),
+            ("remote", "●"),
+            ("admin", "●"),
         ]:
-            widget = QLabel(f"● {label}", self)
+            widget = QLabel(glyph, self)
             widget.setObjectName(f"remoteReadiness_{key}")
+            widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            widget.setFixedWidth(24)
             widget.setToolTip("원격 제어 준비 상태를 확인 중입니다.")
-            widget.setStyleSheet("color: #808080; padding: 0 4px;")
+            widget.setStyleSheet(
+                f"QLabel#{widget.objectName()} {{ color: #808080; background: transparent; border: 0px; padding: 0px; }}"
+            )
             status_bar.addPermanentWidget(widget)
             self._remote_readiness_indicator_labels[key] = widget
 
@@ -388,12 +393,30 @@ class MainWindow(QMainWindow):
         if widget is None:
             return
         palette = {
-            "green": "#22c55e",
-            "yellow": "#eab308",
-            "red": "#ef4444",
-            "gray": "#808080",
+            "green": ("#22c55e", "rgba(34, 197, 94, 45)", "rgba(34, 197, 94, 125)"),
+            "yellow": ("#eab308", "rgba(234, 179, 8, 42)", "rgba(234, 179, 8, 120)"),
+            "red": ("#ef4444", "rgba(239, 68, 68, 45)", "rgba(239, 68, 68, 125)"),
+            "gray": ("#808080", "rgba(128, 128, 128, 22)", "rgba(128, 128, 128, 55)"),
         }
-        widget.setStyleSheet(f"color: {palette.get(color, palette['gray'])}; padding: 0 4px;")
+        foreground, background, border = palette.get(color, palette["gray"])
+        widget.setStyleSheet(
+            f"""
+            QLabel#{widget.objectName()} {{
+                color: {foreground};
+                background-color: {background};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 0px;
+                font-size: 13px;
+                font-weight: 900;
+            }}
+            """
+        )
+        glow = QGraphicsDropShadowEffect(widget)
+        glow.setBlurRadius(14 if color != "gray" else 6)
+        glow.setColor(QColor(foreground))
+        glow.setOffset(0, 0)
+        widget.setGraphicsEffect(glow)
         widget.setToolTip(message)
 
     def _refresh_remote_readiness_indicators(self) -> None:
@@ -408,35 +431,41 @@ class MainWindow(QMainWindow):
             self._set_remote_readiness_indicator("beholder", "red", f"Beholder 상태 확인 실패: {exc}")
 
         config = RemotePowerConfig.load()
-        if config.configured:
-            self._set_remote_readiness_indicator("power", "green", "전원 제어 설정이 저장되어 있습니다.")
-        else:
-            self._set_remote_readiness_indicator("power", "yellow", "전원 제어 설정이 아직 저장되지 않았습니다.")
-
+        tailscale_message = "Tailscale 상태 미확인"
+        tailscale_ready = False
+        tailscale_installed = False
         try:
             snapshot = tailscale_status(timeout_seconds=0.8, cache_ttl_seconds=30.0)
-            if snapshot.ready:
-                self._set_remote_readiness_indicator("tailscale", "green", f"Tailscale IP: {', '.join(snapshot.self_ips)}")
-            elif snapshot.installed:
-                self._set_remote_readiness_indicator("tailscale", "yellow", snapshot.message)
-            else:
-                self._set_remote_readiness_indicator("tailscale", "yellow", "tailscale CLI를 찾지 못했습니다.")
+            tailscale_ready = snapshot.ready
+            tailscale_installed = snapshot.installed
+            tailscale_message = f"Tailscale IP: {', '.join(snapshot.self_ips)}" if snapshot.ready else snapshot.message
         except Exception as exc:
-            self._set_remote_readiness_indicator("tailscale", "red", f"Tailscale 상태 확인 실패: {exc}")
+            tailscale_message = f"Tailscale 상태 확인 실패: {exc}"
 
         api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
         externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
         has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
         remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
-        if externally_bound or remote_server_mode_enabled or has_token:
-            self._set_remote_readiness_indicator("remote", "green", "Remote API 외부/토큰 모드 준비됨")
+        remote_exposed = externally_bound or remote_server_mode_enabled or has_token
+        remote_ready = remote_exposed and config.configured and tailscale_ready
+        if remote_ready:
+            remote_color = "green"
+            remote_message = f"Remote ready · {tailscale_message} · power profile saved"
+        elif remote_exposed or config.configured or tailscale_installed:
+            remote_color = "yellow"
+            remote_message = (
+                f"Remote 준비 중 · exposed={remote_exposed} · power={config.configured} · "
+                f"tailscale={tailscale_message}"
+            )
         else:
-            self._set_remote_readiness_indicator("remote", "yellow", "첫 페어링 전에는 로컬에서 pairing code를 발급하세요.")
-        server_ready = (externally_bound or remote_server_mode_enabled or has_token) and config.configured
+            remote_color = "gray"
+            remote_message = "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요."
+        self._set_remote_readiness_indicator("remote", remote_color, remote_message)
+
         self._set_remote_readiness_indicator(
-            "server",
-            "green" if server_ready else "yellow",
-            "서버 모드 준비됨" if server_ready else "Remote API 노출, 페어링, 전원/Tailscale 설정을 확인하세요.",
+            "admin",
+            "green" if is_admin() else "gray",
+            "관리자 권한으로 실행 중입니다." if is_admin() else "일반 사용자 권한으로 실행 중입니다.",
         )
 
     def _poll_beholder_incidents(self):
@@ -1102,7 +1131,7 @@ class MainWindow(QMainWindow):
                         self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
                         status_bar = self.statusBar()
                         if status_bar:
-                            status_bar.showMessage("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
+                            self._record_status_event("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
                         return
                 elif not upd_gs.run_as_admin and is_admin():
                     # 관리자 → 일반: 일반 권한으로 재시작
@@ -1119,7 +1148,7 @@ class MainWindow(QMainWindow):
                     else:
                         status_bar = self.statusBar()
                         if status_bar:
-                            status_bar.showMessage("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
+                            self._record_status_event("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
             else:
                 _log_admin_debug("권한 설정 변경 없음 - 조건문 통과하지 않음")
 
@@ -1134,7 +1163,7 @@ class MainWindow(QMainWindow):
 
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage("전역 설정 저장됨.", 3000) # 상태 표시줄 메시지
+                self._record_status_event("전역 설정 저장됨.", 3000) # 상태 표시줄 메시지
             self.apply_startup_setting() # 시작 프로그램 설정 적용
             self.populate_process_list() # 전체 테이블 새로고침 (전역 설정 변경)
             self._refresh_web_button_states() # 웹 버튼 상태 새로고침 (전역 설정 변경이 웹 버튼에 영향을 줄 수 있는 경우)
@@ -1145,9 +1174,9 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 if current_status:
-                    status_bar.showMessage("시작 프로그램에 등록되어 있습니다.", 3000)
+                    self._record_status_event("시작 프로그램에 등록되어 있습니다.", 3000)
                 else:
-                    status_bar.showMessage("시작 프로그램에 등록되어 있지 않습니다.", 3000)
+                    self._record_status_event("시작 프로그램에 등록되어 있지 않습니다.", 3000)
 
     def open_remote_settings_dialog(self):
         """원격 설정 대화 상자를 엽니다."""
@@ -1167,10 +1196,10 @@ class MainWindow(QMainWindow):
         status_bar = self.statusBar()
         if set_startup_shortcut(run): # 바로가기 설정 시도
             if status_bar:
-                status_bar.showMessage(f"시작 시 자동 실행: {'활성' if run else '비활성'}", 3000)
+                self._record_status_event(f"시작 시 자동 실행: {'활성' if run else '비활성'}", 3000)
         else:
             if status_bar:
-                status_bar.showMessage("자동 실행 설정 중 문제 발생 가능.", 3000)
+                self._record_status_event("자동 실행 설정 중 문제 발생 가능.", 3000)
 
     def run_process_monitor_check(self):
         """실행 중인 프로세스를 확인하고 상태 변경 시 테이블을 새로고침합니다."""
@@ -1184,7 +1213,7 @@ class MainWindow(QMainWindow):
         if monitor_result.changed:
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage("프로세스 상태 변경 감지됨.", 2000)
+                self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only() # 상태 컬럼만 업데이트
 
         # 사이드바/게임 모드는 ProcessMonitor의 시작·종료 이벤트 외에도
@@ -1221,7 +1250,7 @@ class MainWindow(QMainWindow):
                 self.tray_manager.handle_minimize_event() # 창을 트레이로 숨김
                 status_bar = self.statusBar()
                 if status_bar:
-                    status_bar.showMessage("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
+                    self._record_status_event("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
             if hasattr(self, '_sidebar_controller') and running_process is not None:
                 self._sidebar_controller.activate_for_game(
                     running_process,
@@ -1244,7 +1273,7 @@ class MainWindow(QMainWindow):
                 self.activate_and_show() # 창을 다시 표시
                 status_bar = self.statusBar()
                 if status_bar:
-                    status_bar.showMessage("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
+                    self._record_status_event("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
 
     def run_scheduler_check(self):
         """스케줄러 검사를 실행하고 상태 변경이 있을 때만 테이블을 업데이트합니다."""
@@ -1328,7 +1357,7 @@ class MainWindow(QMainWindow):
         if has_changes:
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage("프로세스 상태 업데이트됨.", 2000)
+                self._record_status_event("프로세스 상태 업데이트됨.", 2000)
 
     def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
         """앱 아이콘을 아이콘 전용 셀 중앙에 배치하는 라벨을 생성합니다."""
@@ -1485,7 +1514,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                     status_bar = self.statusBar()
                     if status_bar:
-                        status_bar.showMessage(f"'{upd_p.name}' 수정 완료.", 3000)
+                        self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
                 else: QMessageBox.warning(self, "오류", "프로세스 수정 실패.")
 
     def handle_delete_action_for_row(self, pid:str): # 게임 삭제
@@ -1504,7 +1533,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                 status_bar = self.statusBar()
                 if status_bar:
-                    status_bar.showMessage(f"'{p_del.name}' 삭제 완료.", 3000)
+                    self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
             else: QMessageBox.warning(self, "오류", "프로세스 삭제 실패.")
 
     def handle_launch_button_in_row(self, pid:str): # 게임 실행
@@ -1544,13 +1573,13 @@ class MainWindow(QMainWindow):
         if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(f"'{p_launch.name}' 실행 시도.", 3000)
+                self._record_status_event(f"'{p_launch.name}' 실행 시도.", 3000)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
+                self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
 
     def _launch_with_specific_path(self, pid: str, use_shortcut: bool):
         """특정 경로로 프로세스 실행 (우클릭 메뉴용)"""
@@ -1566,12 +1595,12 @@ class MainWindow(QMainWindow):
             status_bar = self.statusBar()
             if status_bar:
                 path_type = "바로가기" if use_shortcut else "직접 실행"
-                status_bar.showMessage(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
+                self._record_status_event(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
             self.update_process_statuses_only()
         else:
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(f"'{p_launch.name}' 실행 실패.", 3000)
+                self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
 
     def _set_launch_preference(self, pid: str, preference: str):
         """기본 실행 방식을 영구 저장"""
@@ -1586,7 +1615,7 @@ class MainWindow(QMainWindow):
         if current_pref == preference:
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
+                self._record_status_event(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
             return
 
         updated_data = p.to_dict() if hasattr(p, "to_dict") else p.__dict__.copy()
@@ -1597,7 +1626,7 @@ class MainWindow(QMainWindow):
             self.populate_process_list()
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(
+                self._record_status_event(
                     f"기본 실행 방식이 '{('바로가기 선호' if preference == 'shortcut' else '프로세스 선호')}'로 저장되었습니다.",
                     4000
                 )
@@ -1663,7 +1692,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
                 status_bar = self.statusBar()
                 if status_bar:
-                    status_bar.showMessage(f"'{new_p.name}' 추가 완료.", 3000)
+                    self._record_status_event(f"'{new_p.name}' 추가 완료.", 3000)
 
     # --- 웹 바로 가기 버튼 관련 메소드들 ---
     def _clear_layout(self, layout: QHBoxLayout):
@@ -1860,7 +1889,7 @@ class MainWindow(QMainWindow):
                     self._adjust_window_width_for_web_buttons() # 창 너비 조절
                     status_bar = self.statusBar()
                     if status_bar:
-                        status_bar.showMessage(f"웹 바로 가기 '{new_shortcut.name}' 추가됨.", 3000)
+                        self._record_status_event(f"웹 바로 가기 '{new_shortcut.name}' 추가됨.", 3000)
                 else:
                     QMessageBox.warning(self, "추가 실패", "웹 바로 가기 추가에 실패했습니다.")
 
@@ -1905,7 +1934,7 @@ class MainWindow(QMainWindow):
                     self._adjust_window_width_for_web_buttons() # 창 너비 조절
                     status_bar = self.statusBar()
                     if status_bar:
-                        status_bar.showMessage(f"웹 바로 가기 '{updated_shortcut.name}' 수정됨.", 3000)
+                        self._record_status_event(f"웹 바로 가기 '{updated_shortcut.name}' 수정됨.", 3000)
                 else:
                     QMessageBox.warning(self, "수정 실패", "웹 바로 가기 수정에 실패했습니다.")
 
@@ -1927,7 +1956,7 @@ class MainWindow(QMainWindow):
                 self._adjust_window_width_for_web_buttons() # 창 너비 조절
                 status_bar = self.statusBar()
                 if status_bar:
-                    status_bar.showMessage(f"웹 바로 가기 '{shortcut_to_delete.name}' 삭제됨.", 3000)
+                    self._record_status_event(f"웹 바로 가기 '{shortcut_to_delete.name}' 삭제됨.", 3000)
             else:
                 QMessageBox.warning(self, "삭제 실패", "웹 바로 가기 삭제에 실패했습니다.")
 

@@ -4,6 +4,7 @@ import os
 import platform
 import time
 import webbrowser
+import datetime
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
@@ -18,8 +19,10 @@ from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
 from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
 from src.core.remote_power_setup import list_smartthings_devices, power_setup_status, register_public_key
+from src.core.process_progress import calculate_process_progress
 from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
+from src.core.remote_local_store import remote_store
 from src.data import beholder, crud, models, schemas
 
 
@@ -97,10 +100,13 @@ def _model_dump(model: Any) -> dict[str, Any]:
     return dict(model)
 
 
-def _serialize_process(process: Any) -> dict[str, Any]:
+def _serialize_process(process: Any, *, current_dt: datetime.datetime | None = None) -> dict[str, Any]:
     if hasattr(schemas.ProcessSchema, "model_validate"):
-        return _model_dump(schemas.ProcessSchema.model_validate(process))
-    return _model_dump(schemas.ProcessSchema.from_orm(process))
+        payload = _model_dump(schemas.ProcessSchema.model_validate(process))
+    else:
+        payload = _model_dump(schemas.ProcessSchema.from_orm(process))
+    payload["progress"] = calculate_process_progress(process, current_dt=current_dt)
+    return payload
 
 
 def _serialize_shortcut(shortcut: Any) -> dict[str, Any]:
@@ -288,7 +294,7 @@ def create_remote_router(
     device_registry = device_registry or RemoteDeviceRegistry()
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
     now = now or time.time
-    power_config_path = power_config_path or Path(data_dir) / "remote_power_config.json"
+    power_config_path = power_config_path or remote_store().path("remote_power_config.json")
     tailscale_probe = tailscale_probe or tailscale_status
 
     def _bearer_token(authorization: str | None) -> str | None:
@@ -383,6 +389,7 @@ def create_remote_router(
             "pairing": True,
             "tailscale_discovery": True,
             "readiness": True,
+            "local_store_health": True,
         }
 
     def _readiness_payload(power_status: dict[str, Any], *, active_beholder_incidents: int | None = None) -> dict[str, Any]:
@@ -589,6 +596,13 @@ def create_remote_router(
         config = save_remote_log_config(request.enabled, request.path)
         write_remote_log("logging.config", enabled=config.get("enabled"), path=config.get("path"))
         return config
+
+    @router.get("/local-store/health")
+    def remote_local_store_health():
+        report = remote_store().integrity_report()
+        if not report.get("ok"):
+            write_remote_log("local_store.integrity", **report)
+        return report
 
     @router.post("/tailscale/ensure")
     def remote_tailscale_ensure():
@@ -822,7 +836,8 @@ def create_remote_router(
 
     @router.get("/processes")
     def list_remote_processes(db: Session = Depends(get_db_dependency)):
-        return [_serialize_process(process) for process in crud.get_processes(db)]
+        current_dt = datetime.datetime.fromtimestamp(now())
+        return [_serialize_process(process, current_dt=current_dt) for process in crud.get_processes(db)]
 
     @router.post("/processes/{process_id}/launch", response_model=RemoteCommandResult)
     def launch_remote_process(

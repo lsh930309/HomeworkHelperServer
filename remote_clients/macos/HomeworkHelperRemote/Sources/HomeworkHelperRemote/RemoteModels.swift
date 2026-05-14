@@ -313,6 +313,24 @@ struct RemotePowerConfigResponse: Decodable {
 }
 
 struct RemoteProcess: Decodable, Identifiable {
+    struct Progress: Decodable {
+        let kind: String
+        let percentage: Double
+        let displayText: String
+        let staminaCurrent: Int?
+        let staminaMax: Int?
+        let hoyolabGameID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case percentage
+            case displayText = "display_text"
+            case staminaCurrent = "stamina_current"
+            case staminaMax = "stamina_max"
+            case hoyolabGameID = "hoyolab_game_id"
+        }
+    }
+
     let processID: String?
     let name: String
     let monitoringPath: String?
@@ -321,6 +339,7 @@ struct RemoteProcess: Decodable, Identifiable {
     let lastPlayedTimestamp: Double?
     let staminaCurrent: Int?
     let staminaMax: Int?
+    let progress: Progress?
 
     var id: String { processID ?? name }
 
@@ -333,6 +352,7 @@ struct RemoteProcess: Decodable, Identifiable {
         case lastPlayedTimestamp = "last_played_timestamp"
         case staminaCurrent = "stamina_current"
         case staminaMax = "stamina_max"
+        case progress
     }
 }
 
