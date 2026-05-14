@@ -249,10 +249,6 @@ extension RemotePowerConfigPayload {
         if LocalPowerWakeManager.isLocalSmartThingsCLIPath(copy.smartthingsCLIPath) {
             copy.smartthingsCLIPath = ""
         }
-        if copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/") ||
-            copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("~") {
-            copy.sshKeyPath = ""
-        }
         return copy
     }
 

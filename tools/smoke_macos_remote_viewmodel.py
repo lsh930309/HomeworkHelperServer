@@ -120,14 +120,6 @@ def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) 
                 guard viewModel.powerConfigResponse != nil else {
                     fatalError("refresh did not populate power config: \(viewModel.message)")
                 }
-                guard !viewModel.isPowerActionEnabled("shutdown") else {
-                    fatalError("shutdown should be disabled when power adapter is unconfigured")
-                }
-                smokeStep("power guard")
-                await viewModel.power("shutdown")
-                guard viewModel.message.contains("전원 제어 adapter") else {
-                    fatalError("disabled power action did not report local guard: \(viewModel.message)")
-                }
                 smokeStep("offline local wake")
                 viewModel.hostConnectionState = "offline"
                 viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"

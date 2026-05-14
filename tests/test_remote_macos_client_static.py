@@ -289,6 +289,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "preservingLocalWake" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "localSSHConfigured" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "applyHostPowerConfig" in view_model
+    assert "fillDefaultSSHFields" in view_model
+    assert "powerSetup?.user" in view_model
+    assert "LocalSSHKeyManager.defaultPrivateKeyPath" in view_model
     assert 'if action == "wake", powerConfig.localWakeConfigured' in view_model
     assert "LocalSSHPowerManager" in _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
     assert "power.local_ssh" in view_model

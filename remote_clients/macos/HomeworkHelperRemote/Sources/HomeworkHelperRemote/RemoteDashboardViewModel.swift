@@ -192,6 +192,17 @@ final class RemoteDashboardViewModel: ObservableObject {
         powerConfig = config.preservingLocalWake(from: powerConfig)
     }
 
+    private func fillDefaultSSHFields() {
+        if powerConfig.sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let hostUser = powerSetup?.user.trimmingCharacters(in: .whitespacesAndNewlines),
+           !hostUser.isEmpty {
+            powerConfig.sshUser = hostUser
+        }
+        if powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            powerConfig.sshKeyPath = LocalSSHKeyManager.defaultPrivateKeyPath
+        }
+    }
+
     private var baseURLNeedsTailnetSuggestion: Bool {
         let trimmed = baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty || trimmed.contains("127.0.0.1") || trimmed.contains("localhost")
@@ -309,6 +320,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerConfigResponse = try? await service.powerConfig()
             powerSetup = try? await service.powerSetup()
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
+            fillDefaultSSHFields()
 
             if isPaired {
                 setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
@@ -389,6 +401,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerConfigResponse = try await service.powerConfig()
             powerSetup = try? await service.powerSetup()
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
+            fillDefaultSSHFields()
             processes = try await service.processes()
             shortcuts = try await service.shortcuts()
             if includeDevices {
@@ -558,6 +571,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                     powerConfig.smartthingsCLIPath = first
                 }
             }
+            fillDefaultSSHFields()
             message = powerSetup?.message ?? "전원 준비 상태 확인 완료"
         } catch {
             message = connectionGuidance(for: error)
@@ -634,6 +648,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let host = URL(string: baseURLText)?.host {
             powerConfig.sshHost = host
         }
+        fillDefaultSSHFields()
 
         do {
             let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? LocalSSHKeyManager.defaultPrivateKeyPath : powerConfig.sshKeyPath)
@@ -716,6 +731,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
             powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
+            fillDefaultSSHFields()
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
             message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
