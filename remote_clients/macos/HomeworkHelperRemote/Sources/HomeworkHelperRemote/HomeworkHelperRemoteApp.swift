@@ -1,24 +1,87 @@
 import SwiftUI
+import AppKit
 
-@main
-struct HomeworkHelperRemoteApp: App {
-    var body: some Scene {
-        WindowGroup {
-            RemoteDashboardView()
-                .frame(minWidth: 1100, minHeight: 680)
+@MainActor
+enum RemoteSharedModel {
+    static let viewModel = RemoteDashboardViewModel()
+}
+
+@MainActor
+final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private var statusItem: NSStatusItem?
+    private let popover = NSPopover()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        configureStatusItem()
+        Task {
+            await RemoteSharedModel.viewModel.bootstrap()
         }
-        MenuBarExtra("HomeworkHelper", systemImage: "house.circle") {
-            Button("대시보드 열기") {
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            Divider()
-            Button("종료") { NSApp.terminate(nil) }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Self.showMainWindow()
+        return true
+    }
+
+    private func configureStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage(systemSymbolName: "gamecontroller.fill", accessibilityDescription: "HomeworkHelper Remote")
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        statusItem = item
+
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = NSHostingController(rootView: MenuBarPopoverView(viewModel: RemoteSharedModel.viewModel))
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.clickCount == 2 {
+            popover.performClose(sender)
+            Self.showMainWindow()
+            return
+        }
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        }
+    }
+
+    static func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if NSApp.windows.isEmpty {
+            NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
+        }
+        for window in NSApp.windows {
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
         }
     }
 }
 
+@main
+struct HomeworkHelperRemoteApp: App {
+    @NSApplicationDelegateAdaptor(RemoteAppDelegate.self) private var appDelegate
+    @StateObject private var viewModel = RemoteSharedModel.viewModel
+
+    var body: some Scene {
+        WindowGroup {
+            RemoteDashboardView(viewModel: viewModel)
+                .frame(width: 980, height: 620)
+                .background(RemoteWindowAccessor())
+        }
+        .windowResizability(.contentSize)
+    }
+}
+
 struct RemoteDashboardView: View {
-    @StateObject private var viewModel = RemoteDashboardViewModel()
+    @ObservedObject var viewModel: RemoteDashboardViewModel
     @State private var showingAdvancedSettings = false
 
     var body: some View {
@@ -32,12 +95,17 @@ struct RemoteDashboardView: View {
                     HeaderStatusView(viewModel: viewModel)
 
                     GroupBox("게임") {
-                        List(viewModel.processes) { process in
-                            RemoteProcessRow(process: process) {
-                                Task { await viewModel.launch(process) }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(viewModel.processes) { process in
+                                    RemoteGameCard(process: process, viewModel: viewModel) {
+                                        Task { await viewModel.launch(process) }
+                                    }
+                                }
                             }
+                            .padding(.vertical, 4)
                         }
-                        .frame(minHeight: 260)
+                        .frame(height: 170)
                     }
 
                     if let summary = viewModel.dashboardSummary {
@@ -46,22 +114,6 @@ struct RemoteDashboardView: View {
 
                     if !viewModel.beholderIncidents.isEmpty {
                         BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
-                    }
-
-                    GroupBox("웹 숏컷") {
-                        List(viewModel.shortcuts) { shortcut in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(shortcut.name).font(.headline)
-                                    Text(shortcut.url).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button("열기") {
-                                    Task { await viewModel.open(shortcut) }
-                                }
-                            }
-                        }
-                        .frame(minHeight: 160)
                     }
                 }
                 .padding()
@@ -116,12 +168,6 @@ struct RemoteSidebarView: View {
                                 Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
                             }
                             .disabled(viewModel.isLoading)
-                            Button {
-                                Task { await viewModel.discoverTailscale() }
-                            } label: {
-                                Label("탐색", systemImage: "network")
-                            }
-                            .disabled(viewModel.isLoading)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -147,10 +193,12 @@ struct RemoteSidebarView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        PowerButtonRow(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                        PowerButtonRow(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                        PowerButtonRow(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                        PowerButtonRow(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                        HStack(spacing: 8) {
+                            PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                            PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                            PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+                            PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -189,25 +237,95 @@ struct HeaderStatusView: View {
     }
 }
 
-struct RemoteProcessRow: View {
+struct RemoteGameCard: View {
     let process: RemoteProcess
+    @ObservedObject var viewModel: RemoteDashboardViewModel
     let launch: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(process.name).font(.headline)
-                Text(process.preferredLaunchType ?? "shortcut")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let progress = process.progress {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                GameIconView(process: process, viewModel: viewModel)
+                    .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(process.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(process.statusText ?? (process.isRunning ? "실행 중" : "대기"))
+                        .font(.caption2)
+                        .foregroundStyle(process.isRunning ? .green : .secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Circle()
+                    .fill(process.playedToday ? Color.green : Color.secondary.opacity(0.28))
+                    .frame(width: 8, height: 8)
+                    .help(process.playedToday ? "오늘 실행됨" : "오늘 미실행")
+            }
+
+            if let progress = process.progress {
+                HStack(spacing: 5) {
+                    if progress.kind == "stamina" {
+                        Image(systemName: "bolt.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                    }
                     GameProgressView(progress: progress)
                 }
+            } else {
+                Spacer(minLength: 18)
             }
-            Spacer()
-            Button("실행", action: launch)
+
+            Spacer(minLength: 0)
+            Button(action: launch) {
+                Label("실행", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.small)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .frame(width: 180, height: 150, alignment: .topLeading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(process.isRunning ? Color.green.opacity(0.55) : Color.secondary.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+struct GameIconView: View {
+    let process: RemoteProcess
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        Group {
+            if let cached = viewModel.cachedIconURL(for: process), let image = NSImage(contentsOf: cached) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else if let remote = viewModel.remoteIconURL(for: process) {
+                AsyncImage(url: remote) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFit()
+                    default:
+                        fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var fallback: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.18))
+            Text(String(process.name.prefix(1)))
+                .font(.headline.bold())
+        }
     }
 }
 
@@ -217,10 +335,66 @@ struct GameProgressView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
+                .controlSize(.small)
             Text(progress.displayText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+    }
+}
+
+struct MenuBarGameRow: View {
+    let process: RemoteProcess
+
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(process.isRunning ? Color.green : Color.secondary.opacity(0.35))
+                .frame(width: 7, height: 7)
+            Text(process.name)
+                .lineLimit(1)
+            Spacer()
+            Text(process.progress?.displayText ?? (process.statusText ?? "대기"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
+struct MenuBarPopoverView: View {
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("HomeworkHelper")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(viewModel.processes.prefix(5)) { process in
+                    MenuBarGameRow(process: process)
+                }
+                if viewModel.processes.isEmpty {
+                    Text("캐시된 게임 상태가 없습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 8) {
+                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                PowerSquareButton(action: "restart", label: "재시동", systemImage: "arrow.clockwise", viewModel: viewModel)
+                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+            }
+            Divider()
+            HStack {
+                Button("창 열기") { RemoteAppDelegate.showMainWindow() }
+                Button("새로고침") { Task { await viewModel.refresh() } }
+                Button("종료") { NSApp.terminate(nil) }
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
     }
 }
 
@@ -324,6 +498,10 @@ struct AdvancedRemoteSettingsView: View {
                             get: { viewModel.remoteDesktopLoggingEnabled },
                             set: { enabled in Task { await viewModel.saveRemoteDesktopLogging(enabled: enabled) } }
                         ))
+                        Toggle("로그인 시 실행", isOn: Binding(
+                            get: { viewModel.launchAtLoginEnabled },
+                            set: { enabled in viewModel.setLaunchAtLogin(enabled) }
+                        ))
                         Text(viewModel.setupProgress)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -334,7 +512,7 @@ struct AdvancedRemoteSettingsView: View {
 
                 GroupBox("Tailscale") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Button("Tailscale 찾기") { Task { await viewModel.discoverTailscale() } }
+                        Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
                         if let local = viewModel.localTailscale {
                             SidebarInfoRow(label: "로컬 상태", value: local.message)
                             if !local.selfIPs.isEmpty {
@@ -518,7 +696,7 @@ struct SidebarInfoRow: View {
     }
 }
 
-struct PowerButtonRow: View {
+struct PowerSquareButton: View {
     let action: String
     let label: String
     let systemImage: String
@@ -528,8 +706,17 @@ struct PowerButtonRow: View {
         Button {
             Task { await viewModel.power(action) }
         } label: {
-            Label(label, systemImage: systemImage)
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(label)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(width: 52, height: 52)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.bordered)
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
     }
 }

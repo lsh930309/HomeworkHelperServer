@@ -92,6 +92,10 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
+        'iconURL = "icon_url"',
+        'isRunning = "is_running"',
+        'playedToday = "played_today"',
+        'statusText = "status_text"',
         'targetID = "target_id"',
         'targetName = "target_name"',
         'createdAt = "created_at"',
@@ -200,7 +204,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model
     assert "func bootstrap() async" in view_model
-    assert ".frame(minWidth: 1100, minHeight: 680)" in app
+    assert ".frame(width: 980, height: 620)" in app
+    assert ".windowResizability(.contentSize)" in app
+    assert "RemoteWindowAccessor" in app
     assert "ScrollView {" in app
     assert "GroupBox(\"연결\")" in app
     assert ".navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 340)" in app
@@ -212,8 +218,14 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "showingAdvancedSettings" in app
     assert "AdvancedRemoteSettingsView" in app
     assert "GameProgressView" in app
-    assert "RemoteProcessRow" in app
+    assert "RemoteGameCard" in app
+    assert "GameIconView" in app
+    assert "ScrollView(.horizontal, showsIndicators: false)" in app
     assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
+    assert "RemoteClientCache.loadProcesses" in view_model
+    assert "RemoteClientCache.saveProcesses" in view_model
+    assert "RemoteClientCache.cacheIcons" in view_model
+    assert "func startMirroring()" in view_model
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
@@ -224,9 +236,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "전원 제어 adapter가 설정되지" in view_model
     assert "지원 명령" in app
     assert "PC 전원" in app
+    assert "PowerSquareButton" in app
     assert "전원 설정" in app
     assert "전원 설정 저장" in app
-    assert "Tailscale 찾기" in app
+    assert "Tailscale 서버/호스트 탐색" in app
+    assert 'Label("탐색", systemImage: "network")' not in app
     assert "ensureReady" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     assert "pkgs.tailscale.com/stable/?v=latest" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     assert "ReadinessPill" in app
@@ -310,3 +324,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "기본 화면에서는 숨깁니다." in app
     assert "원격 진단 로그를 바탕 화면에 저장" in app
     assert "폐기된 기기 정리" in app
+    assert "NSStatusItem" in app
+    assert "MenuBarPopoverView" in app
+    assert "gamecontroller.fill" in app
+    assert "로그인 시 실행" in app
+    assert "RemoteLoginItemManager" in view_model

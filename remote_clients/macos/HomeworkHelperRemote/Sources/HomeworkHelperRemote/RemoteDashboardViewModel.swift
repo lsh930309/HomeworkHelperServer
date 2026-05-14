@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftUI
 
 private actor RemoteDashboardService {
@@ -19,7 +20,6 @@ private actor RemoteDashboardService {
     func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
     func smartThingsDevices(cliPath: String?) async throws -> RemoteSmartThingsDevicesResponse { try await client.smartThingsDevices(cliPath: cliPath) }
     func processes() async throws -> [RemoteProcess] { try await client.processes() }
-    func shortcuts() async throws -> [RemoteShortcut] { try await client.shortcuts() }
     func devices() async throws -> [RemoteDevice] { try await client.devices() }
     func startMobileSession(gameLinkID: String) async throws -> RemoteMobileSession { try await client.startMobileSession(gameLinkID: gameLinkID) }
     func endMobileSession(sessionID: String) async throws -> RemoteMobileSession { try await client.endMobileSession(sessionID: sessionID) }
@@ -27,7 +27,6 @@ private actor RemoteDashboardService {
         try await client.createGameLink(processID: processID, androidPackageName: androidPackageName)
     }
     func launchProcess(id: String) async throws -> RemoteCommandResult { try await client.launchProcess(id: id) }
-    func openShortcut(id: String) async throws -> RemoteCommandResult { try await client.openShortcut(id: id) }
     func power(action: String) async throws -> RemoteCommandResult { try await client.power(action: action) }
     func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse { try await client.savePowerConfig(config) }
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
@@ -152,9 +151,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
     @Published var gameLinks: [RemoteGameLink] = []
     @Published var mobileSessions: [RemoteMobileSession] = []
-    @Published var processes: [RemoteProcess] = []
-    @Published var shortcuts: [RemoteShortcut] = []
+    @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses()
     @Published var devices: [RemoteDevice] = []
+    @Published var launchAtLoginEnabled = RemoteLoginItemManager.isEnabled
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
 
@@ -172,10 +171,15 @@ final class RemoteDashboardViewModel: ObservableObject {
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private let tokenStore: any RemoteTokenStore
+    private var mirrorTask: Task<Void, Never>?
 
     init(tokenStore: any RemoteTokenStore = KeychainTokenStore()) {
         self.tokenStore = tokenStore
         tokenText = tokenStore.load()
+    }
+
+    deinit {
+        mirrorTask?.cancel()
     }
 
     private var client: RemoteAPIClient? {
@@ -209,6 +213,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func bootstrap() async {
+        startMirroring()
         setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
         let snapshot = await TailscaleDiscovery.status()
         localTailscale = snapshot
@@ -236,6 +241,38 @@ final class RemoteDashboardViewModel: ObservableObject {
         } else {
             setupProgress = "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 설정 점검을 실행하세요."
         }
+    }
+
+    func startMirroring() {
+        guard mirrorTask == nil else { return }
+        mirrorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let seconds: UInt64 = await MainActor.run { NSApp.isActive ? 15 : 60 }
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                await self?.mirrorRemoteState()
+            }
+        }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try RemoteLoginItemManager.setEnabled(enabled)
+            launchAtLoginEnabled = RemoteLoginItemManager.isEnabled
+            message = launchAtLoginEnabled ? "로그인 시 실행을 활성화했습니다." : "로그인 시 실행을 비활성화했습니다."
+        } catch {
+            launchAtLoginEnabled = RemoteLoginItemManager.isEnabled
+            message = "로그인 시 실행 설정 실패: \(error.localizedDescription)"
+        }
+    }
+
+    func cachedIconURL(for process: RemoteProcess) -> URL? {
+        RemoteClientCache.cachedIconURL(for: process)
+    }
+
+    func remoteIconURL(for process: RemoteProcess) -> URL? {
+        guard let client else { return nil }
+        return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL)
     }
 
     private func connectionGuidance(for error: Error) -> String {
@@ -380,6 +417,29 @@ final class RemoteDashboardViewModel: ObservableObject {
         await refresh(using: RemoteDashboardService(client: client), includeDevices: !tokenText.isEmpty)
     }
 
+    private func mirrorRemoteState() async {
+        guard let client else { return }
+        let service = RemoteDashboardService(client: client)
+        do {
+            status = try await service.status()
+            hostConnectionState = "online"
+            if let statusReadiness = status?.readiness {
+                readiness = statusReadiness
+            } else {
+                readiness = try? await service.readiness()
+            }
+            processes = try await service.processes()
+            RemoteClientCache.saveProcesses(processes)
+            await RemoteClientCache.cacheIcons(for: processes, baseURL: client.baseURL)
+        } catch {
+            if processes.isEmpty {
+                processes = RemoteClientCache.loadProcesses()
+            }
+            hostConnectionState = "offline"
+            message = connectionGuidance(for: error)
+        }
+    }
+
     private func refresh(using service: RemoteDashboardService, includeDevices: Bool) async {
         isLoading = true
         defer { isLoading = false }
@@ -403,14 +463,20 @@ final class RemoteDashboardViewModel: ObservableObject {
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             fillDefaultSSHFields()
             processes = try await service.processes()
-            shortcuts = try await service.shortcuts()
+            RemoteClientCache.saveProcesses(processes)
+            if let client {
+                await RemoteClientCache.cacheIcons(for: processes, baseURL: client.baseURL)
+            }
             if includeDevices {
                 devices = try await service.devices()
             }
-            message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개, 숏컷 \(shortcuts.count)개"
+            message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개"
         } catch {
             let guidance = connectionGuidance(for: error)
             if guidance.contains("연결하지 못했습니다") { hostConnectionState = "offline" }
+            if processes.isEmpty {
+                processes = RemoteClientCache.loadProcesses()
+            }
             message = guidance
             setupProgress = guidance
         }
@@ -483,16 +549,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard let service else { return }
         do {
             let result = try await service.launchProcess(id: process.id)
-            message = result.message
-        } catch {
-            message = error.localizedDescription
-        }
-    }
-
-    func open(_ shortcut: RemoteShortcut) async {
-        guard let service else { return }
-        do {
-            let result = try await service.openShortcut(id: shortcut.id)
             message = result.message
         } catch {
             message = error.localizedDescription

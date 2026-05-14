@@ -8,6 +8,7 @@ import datetime
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
@@ -100,12 +101,25 @@ def _model_dump(model: Any) -> dict[str, Any]:
     return dict(model)
 
 
-def _serialize_process(process: Any, *, current_dt: datetime.datetime | None = None) -> dict[str, Any]:
+def _serialize_process(
+    process: Any,
+    *,
+    current_dt: datetime.datetime | None = None,
+    running_process_ids: set[str] | None = None,
+    played_today_process_ids: set[str] | None = None,
+) -> dict[str, Any]:
     if hasattr(schemas.ProcessSchema, "model_validate"):
         payload = _model_dump(schemas.ProcessSchema.model_validate(process))
     else:
         payload = _model_dump(schemas.ProcessSchema.from_orm(process))
     payload["progress"] = calculate_process_progress(process, current_dt=current_dt)
+    process_id = str(payload.get("id") or getattr(process, "id", "") or "")
+    running_process_ids = running_process_ids or set()
+    played_today_process_ids = played_today_process_ids or set()
+    payload["icon_url"] = f"/api/dashboard/icons/{quote(process_id, safe='')}?size=128" if process_id else None
+    payload["is_running"] = process_id in running_process_ids
+    payload["played_today"] = process_id in played_today_process_ids
+    payload["status_text"] = "실행 중" if payload["is_running"] else ("오늘 실행" if payload["played_today"] else "대기")
     return payload
 
 
@@ -837,7 +851,45 @@ def create_remote_router(
     @router.get("/processes")
     def list_remote_processes(db: Session = Depends(get_db_dependency)):
         current_dt = datetime.datetime.fromtimestamp(now())
-        return [_serialize_process(process, current_dt=current_dt) for process in crud.get_processes(db)]
+        start_of_day = current_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        current_ts = current_dt.timestamp()
+        running_process_ids = {
+            row[0]
+            for row in db.query(models.ProcessSession.process_id)
+            .filter(models.ProcessSession.end_timestamp.is_(None))
+            .distinct()
+            .all()
+            if row[0]
+        }
+        played_today_process_ids = {
+            row[0]
+            for row in db.query(models.ProcessSession.process_id)
+            .filter(
+                models.ProcessSession.start_timestamp <= current_ts,
+                (
+                    (models.ProcessSession.end_timestamp.is_(None) & (models.ProcessSession.start_timestamp >= start_of_day))
+                    | (models.ProcessSession.end_timestamp >= start_of_day)
+                ),
+            )
+            .distinct()
+            .all()
+            if row[0]
+        }
+        played_today_process_ids.update(running_process_ids)
+        processes = list(crud.get_processes(db))
+        for process in processes:
+            last_played = getattr(process, "last_played_timestamp", None)
+            if last_played is not None and float(last_played) >= start_of_day:
+                played_today_process_ids.add(process.id)
+        return [
+            _serialize_process(
+                process,
+                current_dt=current_dt,
+                running_process_ids=running_process_ids,
+                played_today_process_ids=played_today_process_ids,
+            )
+            for process in processes
+        ]
 
     @router.post("/processes/{process_id}/launch", response_model=RemoteCommandResult)
     def launch_remote_process(

@@ -875,3 +875,36 @@ def test_remote_processes_include_progress_payload():
         "stamina_max": 200,
         "hoyolab_game_id": "genshin",
     }
+
+
+def test_remote_processes_include_card_state_payload():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(id="running-game", name="Running Game", monitoring_path="/run.exe", launch_path="/run.url"),
+            models.Process(id="today-game", name="Today Game", monitoring_path="/today.exe", launch_path="/today.url", last_played_timestamp=1778497000.0 - 60),
+            models.Process(id="idle-game", name="Idle Game", monitoring_path="/idle.exe", launch_path="/idle.url"),
+        ],
+        sessions=[
+            models.ProcessSession(
+                process_id="running-game",
+                process_name="Running Game",
+                start_timestamp=1778497000.0 - 120,
+                end_timestamp=None,
+            )
+        ],
+    )
+
+    body = client.get("/remote/processes").json()
+    running = next(item for item in body if item["id"] == "running-game")
+    today = next(item for item in body if item["id"] == "today-game")
+    idle = next(item for item in body if item["id"] == "idle-game")
+
+    assert running["icon_url"] == "/api/dashboard/icons/running-game?size=128"
+    assert running["is_running"] is True
+    assert running["played_today"] is True
+    assert running["status_text"] == "실행 중"
+    assert today["is_running"] is False
+    assert today["played_today"] is True
+    assert today["status_text"] == "오늘 실행"
+    assert idle["played_today"] is False
+    assert idle["status_text"] == "대기"

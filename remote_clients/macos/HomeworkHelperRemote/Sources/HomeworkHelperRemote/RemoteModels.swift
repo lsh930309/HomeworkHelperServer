@@ -312,8 +312,8 @@ struct RemotePowerConfigResponse: Decodable {
     }
 }
 
-struct RemoteProcess: Decodable, Identifiable {
-    struct Progress: Decodable {
+struct RemoteProcess: Codable, Identifiable {
+    struct Progress: Codable {
         let kind: String
         let percentage: Double
         let displayText: String
@@ -340,6 +340,10 @@ struct RemoteProcess: Decodable, Identifiable {
     let staminaCurrent: Int?
     let staminaMax: Int?
     let progress: Progress?
+    let iconURL: String?
+    let isRunning: Bool
+    let playedToday: Bool
+    let statusText: String?
 
     var id: String { processID ?? name }
 
@@ -353,6 +357,27 @@ struct RemoteProcess: Decodable, Identifiable {
         case staminaCurrent = "stamina_current"
         case staminaMax = "stamina_max"
         case progress
+        case iconURL = "icon_url"
+        case isRunning = "is_running"
+        case playedToday = "played_today"
+        case statusText = "status_text"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        processID = try container.decodeIfPresent(String.self, forKey: .processID)
+        name = try container.decode(String.self, forKey: .name)
+        monitoringPath = try container.decodeIfPresent(String.self, forKey: .monitoringPath)
+        launchPath = try container.decodeIfPresent(String.self, forKey: .launchPath)
+        preferredLaunchType = try container.decodeIfPresent(String.self, forKey: .preferredLaunchType)
+        lastPlayedTimestamp = try container.decodeIfPresent(Double.self, forKey: .lastPlayedTimestamp)
+        staminaCurrent = try container.decodeIfPresent(Int.self, forKey: .staminaCurrent)
+        staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
+        progress = try container.decodeIfPresent(Progress.self, forKey: .progress)
+        iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
+        isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning) ?? false
+        playedToday = try container.decodeIfPresent(Bool.self, forKey: .playedToday) ?? false
+        statusText = try container.decodeIfPresent(String.self, forKey: .statusText)
     }
 }
 

@@ -32,6 +32,8 @@ LOCAL_SSH_KEY_MANAGER = MACOS_SOURCE_DIR / "LocalSSHKeyManager.swift"
 LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
 LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
+REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
+REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
 
 
@@ -117,6 +119,9 @@ def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) 
                 guard viewModel.processes.contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not populate seeded process list: \(viewModel.message)")
                 }
+                guard RemoteClientCache.loadProcesses().contains(where: { $0.id == "smoke-game" }) else {
+                    fatalError("refresh did not write process snapshot cache")
+                }
                 guard viewModel.powerConfigResponse != nil else {
                     fatalError("refresh did not populate power config: \(viewModel.message)")
                 }
@@ -183,6 +188,8 @@ def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, smartthings_c
         str(LOCAL_POWER_WAKE_MANAGER),
         str(LOCAL_SSH_POWER_MANAGER),
         str(TAILSCALE_DISCOVERY),
+        str(REMOTE_CLIENT_CACHE),
+        str(REMOTE_LOGIN_ITEM_MANAGER),
         str(REMOTE_VIEW_MODEL),
         str(smoke_source),
         "-o",
