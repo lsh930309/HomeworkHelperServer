@@ -7,6 +7,13 @@ enum LocalPowerWakeManager {
         let stderr: String
     }
 
+    private struct SmartThingsJSONDevice: Decodable {
+        let deviceId: String?
+        let id: String?
+        let name: String?
+        let label: String?
+    }
+
     static func smartThingsCLICandidates() -> [String] {
         let paths = [
             "/opt/homebrew/bin/smartthings",
@@ -71,7 +78,17 @@ enum LocalPowerWakeManager {
     }
 
     private static func parseSmartThingsDevices(_ lines: [String]) -> [RemoteSmartThingsDeviceCandidate] {
-        lines.compactMap { line in
+        let joined = lines.joined(separator: "\n")
+        if let data = joined.data(using: .utf8),
+           let jsonDevices = try? JSONDecoder().decode([SmartThingsJSONDevice].self, from: data) {
+            return jsonDevices.compactMap { item in
+                let id = (item.deviceId ?? item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return nil }
+                let name = (item.label ?? item.name ?? id).trimmingCharacters(in: .whitespacesAndNewlines)
+                return RemoteSmartThingsDeviceCandidate(id: id, name: name.isEmpty ? id : name, raw: id)
+            }
+        }
+        return lines.compactMap { line in
             let lowered = line.lowercased()
             if line.isEmpty || lowered.hasPrefix("id ") || line.contains("----") { return nil }
             let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)

@@ -244,6 +244,14 @@ extension RemotePowerConfigPayload {
         || !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    func hostSafeForRemoteSave() -> RemotePowerConfigPayload {
+        var copy = self
+        if LocalPowerWakeManager.isLocalSmartThingsCLIPath(copy.smartthingsCLIPath) {
+            copy.smartthingsCLIPath = ""
+        }
+        return copy
+    }
+
     var localWakeConfigured: Bool {
         !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

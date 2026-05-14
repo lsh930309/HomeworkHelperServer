@@ -662,7 +662,7 @@ def create_remote_router(
 
         config = RemotePowerConfig(
             smartthings_device_id=request.smartthings_device_id.strip(),
-            smartthings_cli_path=request.smartthings_cli_path.strip(),
+            smartthings_cli_path=RemotePowerConfig.sanitize_smartthings_cli_path(request.smartthings_cli_path),
             ssh_host=request.ssh_host.strip(),
             ssh_port=int(request.ssh_port or 22),
             ssh_user=request.ssh_user.strip(),

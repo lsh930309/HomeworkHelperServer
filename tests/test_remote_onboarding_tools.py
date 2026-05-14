@@ -248,6 +248,22 @@ def test_smartthings_device_parser_extracts_candidate_ids():
     ]
 
 
+def test_smartthings_device_parser_extracts_json_output():
+    from src.core.remote_power_setup import _parse_smartthings_devices
+
+    devices = _parse_smartthings_devices([
+        '[',
+        '  {"deviceId": "145ad447-9969-4ee7-bda0-1760430d9be1", "name": "vWOL.v1", "label": "PC 켜기"},',
+        '  {"deviceId": "1693383e-f46b-4e90-ba3b-1d0aca9c27bf", "name": "Samjin Wi-Fi Smart Plug", "label": "PC 플러그"}',
+        ']',
+    ])
+
+    assert [(device["id"], device["name"]) for device in devices] == [
+        ("145ad447-9969-4ee7-bda0-1760430d9be1", "PC 켜기"),
+        ("1693383e-f46b-4e90-ba3b-1d0aca9c27bf", "PC 플러그"),
+    ]
+
+
 def test_smartthings_device_probe_marks_cli_failure_unavailable():
     from src.core.remote_power_setup import list_smartthings_devices
 
@@ -256,6 +272,15 @@ def test_smartthings_device_probe_marks_cli_failure_unavailable():
     assert result["available"] is False
     assert result["device_candidates"] == []
     assert "실행 실패" in result["message"]
+
+
+def test_windows_power_config_sanitizes_mac_smartthings_cli_path(monkeypatch):
+    from src.core import remote_power
+
+    monkeypatch.setattr(remote_power.platform, "system", lambda: "Windows")
+
+    assert remote_power.RemotePowerConfig.sanitize_smartthings_cli_path("/opt/homebrew/bin/smartthings") == ""
+    assert remote_power.RemotePowerConfig.sanitize_smartthings_cli_path(r"C:\Program Files\SmartThings\smartthings.exe")
 
 
 def test_tailscale_status_unknown_json_falls_back_to_plain_status(monkeypatch):

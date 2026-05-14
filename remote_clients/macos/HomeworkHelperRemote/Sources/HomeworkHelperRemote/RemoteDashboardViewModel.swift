@@ -644,10 +644,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
         }
 
-        if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            if let saved = try? await service.savePowerConfig(powerConfig) {
+        let hostPowerConfig = powerConfig.hostSafeForRemoteSave()
+        if hostPowerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || hostPowerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            if let saved = try? await service.savePowerConfig(hostPowerConfig) {
                 powerConfigResponse = saved
-                powerConfig = saved.config
             }
         }
         status = try? await service.status()
@@ -661,13 +661,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     func savePowerConfig() async {
         guard let service else { return }
         do {
-            let response = try await service.savePowerConfig(powerConfig)
+            let response = try await service.savePowerConfig(powerConfig.hostSafeForRemoteSave())
             powerConfigResponse = response
-            powerConfig = response.config
             status = try await service.status()
             readiness = status?.readiness
             let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
-            message = "전원 설정을 저장했습니다. 지원 명령: \(supportedActions)"
+            message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions)"
         } catch {
             message = error.localizedDescription
         }

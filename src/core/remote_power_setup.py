@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import platform
 import re
@@ -97,6 +98,24 @@ def smartthings_cli_candidates() -> list[str]:
 
 
 def _parse_smartthings_devices(lines: list[str]) -> list[dict[str, str]]:
+    joined = "\n".join(lines).strip()
+    if joined.startswith("["):
+        try:
+            payload = json.loads(joined)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, list):
+            devices: list[dict[str, str]] = []
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                device_id = str(item.get("deviceId") or item.get("id") or "").strip()
+                if not device_id:
+                    continue
+                name = str(item.get("label") or item.get("name") or device_id).strip()
+                devices.append({"id": device_id, "name": name, "raw": json.dumps(item, ensure_ascii=False, sort_keys=True)})
+            return devices
+
     devices: list[dict[str, str]] = []
     for line in lines:
         lowered = line.lower()

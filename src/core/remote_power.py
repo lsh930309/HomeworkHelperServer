@@ -69,6 +69,13 @@ class RemotePowerConfig:
     ssh_key_path: str = ""
     status_timeout_seconds: float = 4.0
 
+    @staticmethod
+    def sanitize_smartthings_cli_path(path: str) -> str:
+        value = str(path or "").strip()
+        if platform.system().lower() == "windows" and value.startswith("/"):
+            return ""
+        return value
+
     @classmethod
     def load(cls, path: Path | None = None) -> "RemotePowerConfig":
         path = path or Path(data_dir) / "remote_power_config.json"
@@ -94,7 +101,7 @@ class RemotePowerConfig:
 
         return cls(
             smartthings_device_id=str(data.get("smartthings_device_id") or ""),
-            smartthings_cli_path=str(data.get("smartthings_cli_path") or ""),
+            smartthings_cli_path=cls.sanitize_smartthings_cli_path(str(data.get("smartthings_cli_path") or "")),
             ssh_host=str(data.get("ssh_host") or ""),
             ssh_port=int(data.get("ssh_port") or 22),
             ssh_user=str(data.get("ssh_user") or ""),
