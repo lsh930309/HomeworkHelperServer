@@ -287,8 +287,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "SmartThingsJSONDevice" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "hostSafeForRemoteSave" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "preservingLocalWake" in _read(SOURCE_ROOT / "RemoteModels.swift")
+    assert "localSSHConfigured" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "applyHostPowerConfig" in view_model
     assert 'if action == "wake", powerConfig.localWakeConfigured' in view_model
+    assert "LocalSSHPowerManager" in _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
+    assert "power.local_ssh" in view_model
     assert "power.smartthings.local_devices" in view_model
     assert "LocalPowerWakeManager.isLocalSmartThingsCLIPath" in view_model
     assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")

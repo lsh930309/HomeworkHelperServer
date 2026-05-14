@@ -488,6 +488,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func isPowerActionEnabled(_ action: String) -> Bool {
         if action == "wake", powerConfig.localWakeConfigured { return true }
+        if ["shutdown", "sleep", "restart"].contains(action), powerConfig.localSSHConfigured { return true }
         guard let status else { return false }
         guard status.capabilities.powerControl, status.power?.configured == true else { return false }
         let supported = status.supportedPowerActions
@@ -501,6 +502,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         if action == "wake", powerConfig.localWakeConfigured {
             await localWake()
+            return
+        }
+        if ["shutdown", "sleep", "restart"].contains(action), powerConfig.localSSHConfigured {
+            await localSSH(action)
             return
         }
         guard let client else { return }
@@ -524,6 +529,20 @@ final class RemoteDashboardViewModel: ObservableObject {
             if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("power.local_wake", ["device_id": powerConfig.smartthingsDeviceID]) }
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    func localSSH(_ action: String) async {
+        do {
+            message = try await LocalSSHPowerManager.run(action: action, config: powerConfig)
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted"])
+            }
+        } catch {
+            message = error.localizedDescription
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "failed", "message": error.localizedDescription])
+            }
         }
     }
 

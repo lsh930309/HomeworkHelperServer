@@ -30,6 +30,7 @@ REMOTE_API_CLIENT = MACOS_SOURCE_DIR / "RemoteAPIClient.swift"
 KEYCHAIN_TOKEN_STORE = MACOS_SOURCE_DIR / "KeychainTokenStore.swift"
 LOCAL_SSH_KEY_MANAGER = MACOS_SOURCE_DIR / "LocalSSHKeyManager.swift"
 LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
+LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
 
@@ -188,6 +189,7 @@ def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, smartthings_c
         str(KEYCHAIN_TOKEN_STORE),
         str(LOCAL_SSH_KEY_MANAGER),
         str(LOCAL_POWER_WAKE_MANAGER),
+        str(LOCAL_SSH_POWER_MANAGER),
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_VIEW_MODEL),
         str(smoke_source),

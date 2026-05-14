@@ -249,6 +249,10 @@ extension RemotePowerConfigPayload {
         if LocalPowerWakeManager.isLocalSmartThingsCLIPath(copy.smartthingsCLIPath) {
             copy.smartthingsCLIPath = ""
         }
+        if copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/") ||
+            copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("~") {
+            copy.sshKeyPath = ""
+        }
         return copy
     }
 
@@ -261,12 +265,28 @@ extension RemotePowerConfigPayload {
         if copy.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             copy.smartthingsDeviceID = local.smartthingsDeviceID
         }
+        if copy.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.sshHost = local.sshHost
+        }
+        if copy.sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.sshUser = local.sshUser
+        }
+        if copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.sshKeyPath = local.sshKeyPath
+        }
         return copy
     }
 
     var localWakeConfigured: Bool {
         !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var localSSHConfigured: Bool {
+        !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && sshPort > 0
     }
 }
 
