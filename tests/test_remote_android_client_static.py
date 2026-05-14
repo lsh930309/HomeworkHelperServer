@@ -220,7 +220,7 @@ def test_android_usage_stats_ui_can_query_recent_foreground_app():
 def test_android_docs_pin_current_sdk_build_and_device_blocker():
     readme = _read(ANDROID_ROOT / "README.md")
     guide = _read(Path("docs/remote-controller/setup-guide.md"))
-    todo = _read(Path("remote-controller-todo.md"))
+    todo = _read(Path("docs/remote/archive/remote-controller-todo.md"))
 
     assert "Android SDK license" in readme
     assert "BUILD SUCCESSFUL" in readme
