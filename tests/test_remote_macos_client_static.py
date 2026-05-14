@@ -283,6 +283,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "LocalSSHKeyManager" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "LocalPowerWakeManager" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "smartThingsCLICandidates" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    assert "probeDevices" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    assert "power.smartthings.local_devices" in view_model
+    assert "LocalPowerWakeManager.isLocalSmartThingsCLIPath" in view_model
     assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     assert "ssh-keygen" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "generateAndSendSSHKey" in view_model

@@ -627,7 +627,15 @@ def create_remote_router(
     @router.post("/power/smartthings/devices")
     def remote_power_smartthings_devices(request: SmartThingsProbeRequest):
         result = list_smartthings_devices(request.cli_path)
-        write_remote_log("power.smartthings.devices", available=result.get("available"), cli_path=result.get("cli_path"), candidates=len(result.get("device_candidates") or []))
+        write_remote_log(
+            "power.smartthings.devices",
+            available=result.get("available"),
+            cli_path=result.get("cli_path"),
+            candidates=len(result.get("device_candidates") or []),
+            return_code=result.get("return_code"),
+            stdout_line_count=result.get("stdout_line_count"),
+            message=result.get("message"),
+        )
         auditor.record(
             command="power.smartthings.devices",
             accepted=bool(result.get("available")),

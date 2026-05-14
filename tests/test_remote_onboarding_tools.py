@@ -248,6 +248,16 @@ def test_smartthings_device_parser_extracts_candidate_ids():
     ]
 
 
+def test_smartthings_device_probe_marks_cli_failure_unavailable():
+    from src.core.remote_power_setup import list_smartthings_devices
+
+    result = list_smartthings_devices("/missing/smartthings")
+
+    assert result["available"] is False
+    assert result["device_candidates"] == []
+    assert "실행 실패" in result["message"]
+
+
 def test_tailscale_status_unknown_json_falls_back_to_plain_status(monkeypatch):
     from src.core import tailscale
 

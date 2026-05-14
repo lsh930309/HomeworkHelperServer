@@ -567,7 +567,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     func probeSmartThingsDevices() async {
         guard let service else { return }
         do {
-            let result = try await service.smartThingsDevices(cliPath: powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : powerConfig.smartthingsCLIPath)
+            let cliPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result: RemoteSmartThingsDevicesResponse
+            if LocalPowerWakeManager.isLocalSmartThingsCLIPath(cliPath) {
+                result = await LocalPowerWakeManager.probeDevices(cliPath: cliPath)
+                if remoteDesktopLoggingEnabled {
+                    RemoteClientDesktopLogger.write(
+                        "power.smartthings.local_devices",
+                        ["available": String(result.available), "cli_path": result.cliPath ?? "", "candidates": String(result.deviceCandidates.count), "message": result.message]
+                    )
+                }
+            } else {
+                result = try await service.smartThingsDevices(cliPath: cliPath.isEmpty ? nil : cliPath)
+            }
             smartThingsDevices = result.devices
             smartThingsDeviceCandidates = result.deviceCandidates
             if let cliPath = result.cliPath, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -609,8 +621,21 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = "SSH key 자동 등록은 실패했습니다. Windows 원격 설정 또는 mac 전원 설정에서 다시 시도하세요: \(error.localizedDescription)"
         }
 
-        if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            if let result = try? await service.smartThingsDevices(cliPath: powerConfig.smartthingsCLIPath) {
+        let smartThingsCLIPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if smartThingsCLIPath.isEmpty == false {
+            let result: RemoteSmartThingsDevicesResponse?
+            if LocalPowerWakeManager.isLocalSmartThingsCLIPath(smartThingsCLIPath) {
+                result = await LocalPowerWakeManager.probeDevices(cliPath: smartThingsCLIPath)
+                if let result, remoteDesktopLoggingEnabled {
+                    RemoteClientDesktopLogger.write(
+                        "power.smartthings.local_devices",
+                        ["available": String(result.available), "cli_path": result.cliPath ?? "", "candidates": String(result.deviceCandidates.count), "message": result.message]
+                    )
+                }
+            } else {
+                result = try? await service.smartThingsDevices(cliPath: smartThingsCLIPath)
+            }
+            if let result {
                 smartThingsDevices = result.devices
                 smartThingsDeviceCandidates = result.deviceCandidates
                 if result.deviceCandidates.count == 1 {

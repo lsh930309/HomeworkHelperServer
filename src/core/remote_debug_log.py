@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,16 @@ CONFIG_PATH = Path(data_dir) / "remote_debug_logging.json"
 
 
 def desktop_log_path(filename: str = "HomeworkHelperRemoteHost.log") -> Path:
+    if platform.system().lower() == "windows":
+        candidates = [
+            Path(os.environ.get("USERPROFILE") or str(Path.home())) / "Desktop",
+            Path(os.environ.get("ONEDRIVE") or "") / "Desktop" if os.environ.get("ONEDRIVE") else None,
+            Path(os.environ.get("OneDriveConsumer") or "") / "Desktop" if os.environ.get("OneDriveConsumer") else None,
+        ]
+        for candidate in candidates:
+            if candidate and candidate.exists():
+                return candidate / filename
+        return (Path(os.environ.get("USERPROFILE") or str(Path.home())) / "Desktop") / filename
     desktop = Path.home() / "Desktop"
     return (desktop if desktop.exists() else Path.home()) / filename
 

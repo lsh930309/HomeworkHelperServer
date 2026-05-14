@@ -799,9 +799,10 @@ def test_remote_power_smartthings_probe_is_safe_when_cli_missing():
     response = client.post("/remote/power/smartthings/devices", json={"cli_path": "/missing/smartthings"})
 
     assert response.status_code == 200
-    assert response.json()["available"] is True
+    assert response.json()["available"] is False
     assert response.json()["devices"] == []
     assert auditor.events[-1]["command"] == "power.smartthings.devices"
+    assert auditor.events[-1]["accepted"] is False
 
 
 def test_remote_logging_config_and_purge_revoked_devices():
