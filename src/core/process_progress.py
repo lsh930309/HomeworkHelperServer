@@ -31,6 +31,8 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
         cycle = float(cycle_hours)
         percentage = max(0.0, min((elapsed_hours / cycle) * 100.0, 100.0)) if cycle > 0 else 0.0
         remaining_hours = max(cycle - elapsed_hours, 0.0)
+        remaining_seconds = int(remaining_hours * 3600)
+        ready_at = (current_dt + datetime.timedelta(seconds=remaining_seconds)).timestamp()
         if remaining_hours >= 24:
             days = int(remaining_hours // 24)
             hours = int(remaining_hours % 24)
@@ -39,6 +41,12 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
             display = f"{int(remaining_hours)}시간"
         else:
             display = f"{int(remaining_hours * 60)}분"
-        return {"kind": "cycle", "percentage": percentage, "display_text": display}
+        return {
+            "kind": "cycle",
+            "percentage": percentage,
+            "display_text": display,
+            "remaining_seconds": remaining_seconds,
+            "ready_at": ready_at,
+        }
     except Exception:
         return {"kind": "none", "percentage": 0.0, "display_text": "계산 오류"}

@@ -922,6 +922,8 @@ def test_remote_processes_include_progress_payload():
 
     assert cycle["kind"] == "cycle"
     assert 49.0 <= cycle["percentage"] <= 51.0
+    assert 43100 <= cycle["remaining_seconds"] <= 43300
+    assert isinstance(cycle["ready_at"], float)
     assert stamina == {
         "kind": "stamina",
         "percentage": 40.0,

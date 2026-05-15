@@ -50,6 +50,7 @@ private enum RemoteClientPreferences {
     private static let loginLaunchShowsWindowKey = "remote.loginLaunchShowsWindow"
     private static let menuBarIconSymbolKey = "remote.menuBarIconSymbol"
     private static let showPlaySummaryKey = "remote.showPlaySummary"
+    private static let cycleProgressDisplayModeKey = "remote.cycleProgressDisplayMode"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -115,11 +116,34 @@ private enum RemoteClientPreferences {
     static func saveShowPlaySummary(_ enabled: Bool) {
         defaults.set(enabled, forKey: showPlaySummaryKey)
     }
+
+    static func loadCycleProgressDisplayMode() -> CycleProgressDisplayMode {
+        let stored = defaults.string(forKey: cycleProgressDisplayModeKey) ?? ""
+        return CycleProgressDisplayMode(rawValue: stored) ?? .remaining
+    }
+
+    static func saveCycleProgressDisplayMode(_ mode: CycleProgressDisplayMode) {
+        defaults.set(mode.rawValue, forKey: cycleProgressDisplayModeKey)
+    }
 }
 
 enum RemoteMenuBarIconChoice {
     static let defaultSymbol = "gamecontroller.fill"
     static let symbols = ["gamecontroller.fill", "sparkles", "bolt.circle.fill", "desktopcomputer", "menubar.rectangle"]
+}
+
+enum CycleProgressDisplayMode: String, CaseIterable, Identifiable {
+    case remaining
+    case readyAt
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .remaining: return "잔여 시간"
+        case .readyAt: return "완료 예정 시각"
+        }
+    }
 }
 
 private enum RemoteClientDesktopLogger {
@@ -202,6 +226,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var showPlaySummary = RemoteClientPreferences.loadShowPlaySummary() {
         didSet { RemoteClientPreferences.saveShowPlaySummary(showPlaySummary) }
+    }
+    @Published var cycleProgressDisplayMode = RemoteClientPreferences.loadCycleProgressDisplayMode() {
+        didSet { RemoteClientPreferences.saveCycleProgressDisplayMode(cycleProgressDisplayMode) }
     }
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
@@ -357,12 +384,28 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
+    func progressDisplayText(_ progress: RemoteProcess.Progress) -> String {
+        guard progress.kind == "cycle", cycleProgressDisplayMode == .readyAt, let readyAt = progress.readyAt else {
+            return progress.displayText
+        }
+        return "\(Self.formatCycleReadyAt(readyAt)) 완료"
+    }
+
     func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
         RemoteClientCache.displayIconImage(for: process, preferredSize: preferredSize, displayPointSize: displayPointSize)
     }
 
     func displayResourceIconImage(for process: RemoteProcess, preferredSize: Int = 128, displayPointSize: CGFloat) -> NSImage? {
         RemoteClientCache.displayResourceIconImage(for: process, preferredSize: preferredSize, displayPointSize: displayPointSize)
+    }
+
+    private static func formatCycleReadyAt(_ timestamp: Double) -> String {
+        let date = Date(timeIntervalSince1970: timestamp)
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = calendar.isDateInToday(date) ? "HH:mm" : "M/d HH:mm"
+        return formatter.string(from: date)
     }
 
     private func connectionGuidance(for error: Error) -> String {

@@ -3,6 +3,8 @@ import AppKit
 
 extension Notification.Name {
     static let homeworkHelperRemoteMainWindowWillShow = Notification.Name("HomeworkHelperRemoteMainWindowWillShow")
+    static let homeworkHelperRemoteToggleSidebar = Notification.Name("HomeworkHelperRemoteToggleSidebar")
+    static let homeworkHelperRemoteRefreshRequested = Notification.Name("HomeworkHelperRemoteRefreshRequested")
 }
 
 @MainActor
@@ -89,6 +91,20 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
     }
 
+    static func hideMainWindow() {
+        mainWindows().forEach { $0.orderOut(nil) }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    static func openSettingsWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            return
+        }
+        NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+    }
+
     private static func mainWindows() -> [NSWindow] {
         NSApp.windows.filter { window in
             (window.identifier?.rawValue == "HomeworkHelperRemoteMainWindow"
@@ -109,6 +125,35 @@ struct HomeworkHelperRemoteApp: App {
             RemoteDashboardView(viewModel: viewModel)
         }
         .windowResizability(.contentSize)
+        .commands {
+            CommandMenu("원격") {
+                Button("새로고침") {
+                    Task { await viewModel.refresh() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                Button("패널 표시/숨김") {
+                    NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("창 열기") {
+                    RemoteAppDelegate.showMainWindow()
+                }
+
+                Button("창 숨기기") {
+                    RemoteAppDelegate.hideMainWindow()
+                }
+                .keyboardShortcut("w", modifiers: .command)
+
+                Button("설정…") {
+                    RemoteAppDelegate.openSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
 
         Settings {
             RemoteSettingsView(viewModel: viewModel)
@@ -132,30 +177,34 @@ struct RemoteDashboardView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                RemoteSidebarView(viewModel: viewModel)
-                    .frame(width: RemoteWindowLayout.sidebarWidth)
-                Divider()
-                    .frame(width: RemoteWindowLayout.dividerWidth)
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
-
-                    GameSectionView(viewModel: viewModel)
-
-                    if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
-                        PlaySummaryView(summary: summary)
-                    }
-
-                    if !viewModel.beholderIncidents.isEmpty {
-                        BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
-                    }
+        ZStack {
+            RemoteGlassBackground()
+                .ignoresSafeArea()
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    RemoteSidebarView(viewModel: viewModel)
+                        .frame(width: RemoteWindowLayout.sidebarWidth)
+                    Divider()
+                        .frame(width: RemoteWindowLayout.dividerWidth)
                 }
-                .padding(16)
-                .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
+
+                        GameSectionView(viewModel: viewModel)
+
+                        if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
+                            PlaySummaryView(summary: summary)
+                        }
+
+                        if !viewModel.beholderIncidents.isEmpty {
+                            BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
+                        }
+                    }
+                    .padding(16)
+                    .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+                }
             }
         }
         .frame(width: targetSize.width, height: targetSize.height)
@@ -170,6 +219,15 @@ struct RemoteDashboardView: View {
         .onAppear { sidebarVisible = false }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)) { _ in
             sidebarVisible = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteToggleSidebar)) { _ in
+            sidebarVisible.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteRefreshRequested)) { _ in
+            Task { await viewModel.refresh() }
+        }
+        .onExitCommand {
+            RemoteAppDelegate.hideMainWindow()
         }
         .task { await viewModel.bootstrap() }
     }
@@ -372,9 +430,6 @@ struct HeaderStatusView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("HomeworkHelper Remote")
                         .font(.title.bold())
-                    Text("게임 실행, 진행률, 전원 제어를 빠르게 확인합니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
@@ -429,7 +484,7 @@ struct RemoteGameCard: View {
                 HStack(spacing: 5) {
                     ResourceIconView(process: process, viewModel: viewModel)
                         .frame(width: 14, height: 14)
-                    GameProgressView(progress: progress)
+                    GameProgressView(progress: progress, viewModel: viewModel)
                 }
             } else {
                 Text("진행률 없음")
@@ -536,12 +591,13 @@ struct ResourceIconView: View {
 
 struct GameProgressView: View {
     let progress: RemoteProcess.Progress
+    @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                 .controlSize(.small)
-            Text(progress.displayText)
+            Text(viewModel.progressDisplayText(progress))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -581,7 +637,7 @@ struct MenuBarGameRow: View {
                             .frame(width: 12, height: 12)
                         ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                             .controlSize(.mini)
-                        Text(progress.displayText)
+                        Text(viewModel.progressDisplayText(progress))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -733,205 +789,254 @@ struct RemoteSettingsView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
+        TabView {
+            settingsConnectionTab
+                .tabItem { Label("연결", systemImage: "link") }
+            settingsPowerTab
+                .tabItem { Label("전원", systemImage: "bolt") }
+            settingsDevicesTab
+                .tabItem { Label("기기", systemImage: "display.2") }
+            settingsAndroidTab
+                .tabItem { Label("Android", systemImage: "app.connected.to.app.below.fill") }
+            settingsAppTab
+                .tabItem { Label("앱", systemImage: "gearshape") }
+        }
+        .padding()
+    }
+
+    private var settingsConnectionTab: some View {
+        SettingsTabScrollView {
+            GroupBox("연결/페어링") {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Base URL", text: $viewModel.baseURLText)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("Bearer token", text: $viewModel.tokenText)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("디바이스 이름", text: $viewModel.deviceName)
+                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        TextField("6자리 코드", text: $viewModel.pairingCode)
+                            .textFieldStyle(.roundedBorder)
+                        Button("페어링 및 자동 설정") {
+                            Task { await viewModel.confirmPairing() }
+                        }
+                        .disabled(viewModel.isLoading)
+                    }
+                    HStack {
+                        Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
+                        Button("서버 Tailscale 확인/복구") { Task { await viewModel.ensureServerTailscale() } }
+                            .disabled(viewModel.isLoading || !viewModel.isPaired)
+                        Button("페어링 토큰 복구") { Task { await viewModel.recoverPairing() } }
+                            .disabled(viewModel.isLoading || !viewModel.isPaired)
+                        Button(role: .destructive) { viewModel.clearLocalPairing() } label: { Text("로컬 토큰 삭제") }
+                            .disabled(viewModel.isLoading || !viewModel.isPaired)
+                    }
+                    Toggle("원격 진단 로그를 바탕 화면에 저장", isOn: Binding(
+                        get: { viewModel.remoteDesktopLoggingEnabled },
+                        set: { enabled in Task { await viewModel.saveRemoteDesktopLogging(enabled: enabled) } }
+                    ))
+                    Text(viewModel.setupProgress)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Tailscale") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
+                    if let local = viewModel.localTailscale {
+                        SidebarInfoRow(label: "로컬 상태", value: local.message)
+                        if !local.selfIPs.isEmpty {
+                            SidebarInfoRow(label: "이 Mac", value: local.selfIPs.joined(separator: ", "))
+                        }
+                        ForEach(local.suggestedBaseURLs, id: \.self) { url in
+                            Button(url) { viewModel.applySuggestedBaseURL(url) }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                    if let serverTailscale = viewModel.serverTailscaleEnsure {
+                        SidebarInfoRow(label: "서버 Tailscale", value: serverTailscale.message)
+                        SidebarInfoRow(label: "서버 IP", value: serverTailscale.after.selfIPs.isEmpty ? "없음" : serverTailscale.after.selfIPs.joined(separator: ", "))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var settingsPowerTab: some View {
+        SettingsTabScrollView {
+            GroupBox("전원/SSH/SmartThings") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let response = viewModel.powerConfigResponse {
+                        SidebarInfoRow(label: "설정 파일", value: response.configPath)
+                        SidebarInfoRow(label: "저장 상태", value: response.configExists ? "있음" : "없음")
+                        SidebarInfoRow(label: "지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
+                    }
+                    TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("SSH host", text: $viewModel.powerConfig.sshHost)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("SSH user", text: $viewModel.powerConfig.sshUser)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
+                        .textFieldStyle(.roundedBorder)
+                    Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
+                    HStack {
+                        Button("SSH host 채우기") { viewModel.applySuggestedPowerHost() }
+                        Button("준비 상태 확인") { Task { await viewModel.refreshPowerSetup() } }
+                        Button("SSH key 생성/전송") { Task { await viewModel.generateAndSendSSHKey() } }
+                            .disabled(!viewModel.isPaired || viewModel.isLoading)
+                        Button("SmartThings 기기 확인") { Task { await viewModel.probeSmartThingsDevices() } }
+                        Button("전원 설정 저장") { Task { await viewModel.savePowerConfig() } }
+                    }
+                    if let setup = viewModel.powerSetup {
+                        SetupInstructionBlock(
+                            title: "Windows 전원 준비",
+                            lines: [
+                                "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
+                                "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
+                                "authorized_keys: \(setup.authorizedKeysPath)",
+                                "SmartThings CLI: \(setup.smartthingsCLICandidates.first ?? "감지 안 됨")"
+                            ]
+                        )
+                    }
+                    if let key = viewModel.localSSHKey {
+                        SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
+                    }
+                    if !viewModel.smartThingsDeviceCandidates.isEmpty {
+                        Text("SmartThings device 후보").font(.caption.bold())
+                        ForEach(viewModel.smartThingsDeviceCandidates.prefix(5)) { candidate in
+                            Button("\(candidate.name) · \(candidate.id)") {
+                                viewModel.applySmartThingsDevice(candidate)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var settingsDevicesTab: some View {
+        SettingsTabScrollView {
+            GroupBox("기기 관리") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("디바이스 새로고침") { Task { await viewModel.refreshDevices() } }
+                            .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                        Button("폐기된 기기 정리") { Task { await viewModel.purgeRevokedDevices() } }
+                            .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                        Button("현재 토큰 갱신") { Task { await viewModel.refreshToken() } }
+                            .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
+                    }
+                    ForEach(viewModel.devices) { device in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(device.name)
+                                Text(device.platform ?? "unknown")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if device.revokedAt == nil {
+                                Button("폐기") { Task { await viewModel.revoke(device) } }
+                                    .buttonStyle(.borderless)
+                            } else {
+                                Text("폐기됨").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Divider()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var settingsAndroidTab: some View {
+        SettingsTabScrollView {
+            GroupBox("Android-PC 연결") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Android 클라이언트가 준비될 때 사용할 매핑입니다. 기본 화면에서는 숨깁니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        TextField("PC process ID", text: $viewModel.gameLinkProcessID)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Android package", text: $viewModel.gameLinkAndroidPackage)
+                            .textFieldStyle(.roundedBorder)
+                        Button("연결 저장") { Task { await viewModel.createGameLink() } }
+                            .disabled(viewModel.gameLinkProcessID.isEmpty || viewModel.gameLinkAndroidPackage.isEmpty)
+                    }
+                    ForEach(viewModel.gameLinks) { link in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(link.pcDisplayName ?? link.pcProcessID).font(.headline)
+                                Text(link.androidPackageName).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if let session = viewModel.activeMobileSession(for: link) {
+                                Button("모바일 종료") { Task { await viewModel.endMobileSession(session) } }
+                            } else {
+                                Button("모바일 시작") { Task { await viewModel.startMobileSession(link) } }
+                            }
+                        }
+                        Divider()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var settingsAppTab: some View {
+        SettingsTabScrollView {
+            GroupBox("앱 동작") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("로그인 시 실행", isOn: Binding(
+                        get: { viewModel.launchAtLoginEnabled },
+                        set: { enabled in viewModel.setLaunchAtLogin(enabled) }
+                    ))
+                    Toggle("로그인 자동 실행 시 창 표시", isOn: $viewModel.loginLaunchShowsWindow)
+                    Toggle("플레이 요약 표시", isOn: $viewModel.showPlaySummary)
+                    Picker("비 HoYoLab 진행률 표시", selection: $viewModel.cycleProgressDisplayMode) {
+                        ForEach(CycleProgressDisplayMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
+                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
+                            Label(symbol, systemImage: symbol).tag(symbol)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("내장 SF Symbols 중 하나를 메뉴바 아이콘으로 사용합니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+struct SettingsTabScrollView<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                GroupBox("연결/페어링") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Base URL", text: $viewModel.baseURLText)
-                            .textFieldStyle(.roundedBorder)
-                        SecureField("Bearer token", text: $viewModel.tokenText)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("디바이스 이름", text: $viewModel.deviceName)
-                            .textFieldStyle(.roundedBorder)
-                        HStack {
-                            TextField("6자리 코드", text: $viewModel.pairingCode)
-                                .textFieldStyle(.roundedBorder)
-                            Button("페어링 및 자동 설정") {
-                                Task { await viewModel.confirmPairing() }
-                            }
-                            .disabled(viewModel.isLoading)
-                        }
-                        HStack {
-                            Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
-                            Button("서버 Tailscale 확인/복구") { Task { await viewModel.ensureServerTailscale() } }
-                                .disabled(viewModel.isLoading || !viewModel.isPaired)
-                            Button("페어링 토큰 복구") { Task { await viewModel.recoverPairing() } }
-                                .disabled(viewModel.isLoading || !viewModel.isPaired)
-                            Button(role: .destructive) { viewModel.clearLocalPairing() } label: { Text("로컬 토큰 삭제") }
-                                .disabled(viewModel.isLoading || !viewModel.isPaired)
-                        }
-                        Toggle("원격 진단 로그를 바탕 화면에 저장", isOn: Binding(
-                            get: { viewModel.remoteDesktopLoggingEnabled },
-                            set: { enabled in Task { await viewModel.saveRemoteDesktopLogging(enabled: enabled) } }
-                        ))
-                        Text(viewModel.setupProgress)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("Tailscale") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
-                        if let local = viewModel.localTailscale {
-                            SidebarInfoRow(label: "로컬 상태", value: local.message)
-                            if !local.selfIPs.isEmpty {
-                                SidebarInfoRow(label: "이 Mac", value: local.selfIPs.joined(separator: ", "))
-                            }
-                            ForEach(local.suggestedBaseURLs, id: \.self) { url in
-                                Button(url) { viewModel.applySuggestedBaseURL(url) }
-                                    .buttonStyle(.borderless)
-                            }
-                        }
-                        if let serverTailscale = viewModel.serverTailscaleEnsure {
-                            SidebarInfoRow(label: "서버 Tailscale", value: serverTailscale.message)
-                            SidebarInfoRow(label: "서버 IP", value: serverTailscale.after.selfIPs.isEmpty ? "없음" : serverTailscale.after.selfIPs.joined(separator: ", "))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("전원/SSH/SmartThings") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let response = viewModel.powerConfigResponse {
-                            SidebarInfoRow(label: "설정 파일", value: response.configPath)
-                            SidebarInfoRow(label: "저장 상태", value: response.configExists ? "있음" : "없음")
-                            SidebarInfoRow(label: "지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
-                        }
-                        TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH host", text: $viewModel.powerConfig.sshHost)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH user", text: $viewModel.powerConfig.sshUser)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
-                            .textFieldStyle(.roundedBorder)
-                        Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
-                        HStack {
-                            Button("SSH host 채우기") { viewModel.applySuggestedPowerHost() }
-                            Button("준비 상태 확인") { Task { await viewModel.refreshPowerSetup() } }
-                            Button("SSH key 생성/전송") { Task { await viewModel.generateAndSendSSHKey() } }
-                                .disabled(!viewModel.isPaired || viewModel.isLoading)
-                            Button("SmartThings 기기 확인") { Task { await viewModel.probeSmartThingsDevices() } }
-                            Button("전원 설정 저장") { Task { await viewModel.savePowerConfig() } }
-                        }
-                        if let setup = viewModel.powerSetup {
-                            SetupInstructionBlock(
-                                title: "Windows 전원 준비",
-                                lines: [
-                                    "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
-                                    "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
-                                    "authorized_keys: \(setup.authorizedKeysPath)",
-                                    "SmartThings CLI: \(setup.smartthingsCLICandidates.first ?? "감지 안 됨")"
-                                ]
-                            )
-                        }
-                        if let key = viewModel.localSSHKey {
-                            SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
-                        }
-                        if !viewModel.smartThingsDeviceCandidates.isEmpty {
-                            Text("SmartThings device 후보").font(.caption.bold())
-                            ForEach(viewModel.smartThingsDeviceCandidates.prefix(5)) { candidate in
-                                Button("\(candidate.name) · \(candidate.id)") {
-                                    viewModel.applySmartThingsDevice(candidate)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("기기 관리") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Button("디바이스 새로고침") { Task { await viewModel.refreshDevices() } }
-                                .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-                            Button("폐기된 기기 정리") { Task { await viewModel.purgeRevokedDevices() } }
-                                .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-                            Button("현재 토큰 갱신") { Task { await viewModel.refreshToken() } }
-                                .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-                        }
-                        ForEach(viewModel.devices) { device in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(device.name)
-                                    Text(device.platform ?? "unknown")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if device.revokedAt == nil {
-                                    Button("폐기") { Task { await viewModel.revoke(device) } }
-                                        .buttonStyle(.borderless)
-                                } else {
-                                    Text("폐기됨").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Divider()
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("Android-PC 연결") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Android 클라이언트가 준비될 때 사용할 매핑입니다. 기본 화면에서는 숨깁니다.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        HStack {
-                            TextField("PC process ID", text: $viewModel.gameLinkProcessID)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Android package", text: $viewModel.gameLinkAndroidPackage)
-                                .textFieldStyle(.roundedBorder)
-                            Button("연결 저장") { Task { await viewModel.createGameLink() } }
-                                .disabled(viewModel.gameLinkProcessID.isEmpty || viewModel.gameLinkAndroidPackage.isEmpty)
-                        }
-                        ForEach(viewModel.gameLinks) { link in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(link.pcDisplayName ?? link.pcProcessID).font(.headline)
-                                    Text(link.androidPackageName).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if let session = viewModel.activeMobileSession(for: link) {
-                                    Button("모바일 종료") { Task { await viewModel.endMobileSession(session) } }
-                                } else {
-                                    Button("모바일 시작") { Task { await viewModel.startMobileSession(link) } }
-                                }
-                            }
-                            Divider()
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("앱 동작") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("로그인 시 실행", isOn: Binding(
-                            get: { viewModel.launchAtLoginEnabled },
-                            set: { enabled in viewModel.setLaunchAtLogin(enabled) }
-                        ))
-                        Toggle("로그인 자동 실행 시 창 표시", isOn: $viewModel.loginLaunchShowsWindow)
-                        Toggle("플레이 요약 표시", isOn: $viewModel.showPlaySummary)
-                        Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
-                            ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
-                                Label(symbol, systemImage: symbol).tag(symbol)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        Text("내장 SF Symbols 중 하나를 메뉴바 아이콘으로 사용합니다.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                content
             }
-            .padding()
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 }

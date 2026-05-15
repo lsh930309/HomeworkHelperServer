@@ -97,6 +97,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'iconURL = "icon_url"',
         'iconURLs = "icon_urls"',
         'resourceIconURLs = "resource_icon_urls"',
+        'remainingSeconds = "remaining_seconds"',
+        'readyAt = "ready_at"',
         'isRunning = "is_running"',
         'playedToday = "played_today"',
         'statusText = "status_text"',
@@ -217,6 +219,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
     assert "RemoteWindowAccessor" in app
+    assert "RemoteGlassBackground" in app
+    assert "NSVisualEffectView" in window_accessor
+    assert "window.isOpaque = false" in window_accessor
     assert "ScrollView {" in app
     assert "GroupBox(\"연결\")" in app
     assert "NavigationSplitView" not in app
@@ -232,6 +237,12 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "페어링 및 자동 설정" in app
     assert "Settings {" in app
     assert "RemoteSettingsView" in app
+    assert "TabView" in app
+    assert 'Label("연결", systemImage: "link")' in app
+    assert 'Label("전원", systemImage: "bolt")' in app
+    assert 'Label("기기", systemImage: "display.2")' in app
+    assert 'Label("Android", systemImage: "app.connected.to.app.below.fill")' in app
+    assert 'Label("앱", systemImage: "gearshape")' in app
     assert "struct SettingsOpenButton: View" in app
     assert "SettingsLink" in app
     assert 'Selector(("showSettingsWindow:"))' in app
@@ -299,8 +310,23 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "플레이 요약 표시" in app
     assert "showPlaySummary" in view_model
     assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
-    assert "static let compactWindowHeight: CGFloat = 372" in window_accessor
+    assert "static let compactWindowHeight: CGFloat = 312" in window_accessor
     assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
+    assert "게임 실행, 진행률, 전원 제어를 빠르게 확인합니다." not in app
+    assert "homeworkHelperRemoteToggleSidebar" in app
+    assert "homeworkHelperRemoteRefreshRequested" in app
+    assert ".onExitCommand" in app
+    assert "hideMainWindow()" in app
+    assert "CommandMenu(\"원격\")" in app
+    assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
+    assert ".keyboardShortcut(\"s\", modifiers: [.command, .shift])" in app
+    assert ".keyboardShortcut(\"w\", modifiers: .command)" in app
+    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
+    assert "비 HoYoLab 진행률 표시" in app
+    assert "CycleProgressDisplayMode" in view_model
+    assert "cycleProgressDisplayMode" in view_model
+    assert "progressDisplayText" in view_model
+    assert "viewModel.progressDisplayText(progress)" in app
     assert "dashboardSummary" in view_model
     assert "모바일 플레이" in app
     assert "mobileMetrics" in app

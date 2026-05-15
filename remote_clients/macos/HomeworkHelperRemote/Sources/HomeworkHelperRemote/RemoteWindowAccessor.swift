@@ -9,7 +9,7 @@ enum RemoteWindowLayout {
     static let gameCardHeight: CGFloat = 126
     static let gameCardSpacing: CGFloat = 12
     static let minWindowWidth: CGFloat = 720
-    static let compactWindowHeight: CGFloat = 372
+    static let compactWindowHeight: CGFloat = 312
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -39,7 +39,7 @@ enum RemoteWindowLayout {
         let maxSize = maxWindowSize()
         let sidebar = sidebarVisible ? sidebarWidth + dividerWidth : 0
         let rawWidth = sidebar + mainContentWidth(cardCount: cardCount)
-        let baseHeight: CGFloat = 372
+        let baseHeight: CGFloat = 312
         let summaryHeight: CGFloat = hasSummary ? 116 : 0
         let incidentHeight: CGFloat = hasIncidents ? 92 : 0
         let rawHeight = baseHeight + summaryHeight + incidentHeight
@@ -87,5 +87,26 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.delegate = RemoteWindowDelegate.shared
         window.title = "HomeworkHelper Remote"
         window.identifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteMainWindow")
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = true
+    }
+}
+
+struct RemoteGlassBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.isEmphasized = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = .hudWindow
+        nsView.blendingMode = .behindWindow
+        nsView.state = .active
+        nsView.isEmphasized = true
     }
 }
