@@ -120,7 +120,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.10"
+    assert body["remote_api_version"] == "0.1.11"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -908,6 +908,12 @@ def test_remote_processes_include_progress_payload():
         "stamina_max": 200,
         "hoyolab_game_id": "genshin",
         "resource_icon_url": "/api/dashboard/resource-icons/game-stamina?size=32",
+        "resource_icon_urls": {
+            "32": "/api/dashboard/resource-icons/game-stamina?size=32",
+            "64": "/api/dashboard/resource-icons/game-stamina?size=64",
+            "128": "/api/dashboard/resource-icons/game-stamina?size=128",
+            "256": "/api/dashboard/resource-icons/game-stamina?size=256",
+        },
     }
 
 
@@ -934,6 +940,12 @@ def test_remote_processes_include_card_state_payload():
     idle = next(item for item in body if item["id"] == "idle-game")
 
     assert running["icon_url"] == "/api/dashboard/icons/running-game?size=128&format=png"
+    assert running["icon_urls"] == {
+        "32": "/api/dashboard/icons/running-game?size=32&format=png",
+        "64": "/api/dashboard/icons/running-game?size=64&format=png",
+        "128": "/api/dashboard/icons/running-game?size=128&format=png",
+        "256": "/api/dashboard/icons/running-game?size=256&format=png",
+    }
     assert running["is_running"] is True
     assert running["played_today"] is True
     assert running["status_text"] == "실행 중"
@@ -942,3 +954,34 @@ def test_remote_processes_include_card_state_payload():
     assert today["status_text"] == "오늘 실행"
     assert idle["played_today"] is False
     assert idle["status_text"] == "대기"
+
+
+def test_remote_status_revision_changes_for_mirrored_state_changes():
+    base_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(id="revision-game", name="Revision Game", monitoring_path="/game.exe", launch_path="/game.url"),
+        ],
+    )
+    changed_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(id="revision-game", name="Revision Game", monitoring_path="/game.exe", launch_path="/game.url"),
+        ],
+        sessions=[
+            models.ProcessSession(
+                process_id="revision-game",
+                process_name="Revision Game",
+                start_timestamp=1778496900.0,
+                end_timestamp=None,
+            )
+        ],
+    )
+
+    base_status = base_client.get("/remote/status").json()
+    changed_status = changed_client.get("/remote/status").json()
+    capabilities = changed_client.get("/remote/capabilities").json()
+
+    assert base_status["state_revision"]
+    assert changed_status["state_revision"]
+    assert base_status["state_revision"] != changed_status["state_revision"]
+    assert changed_status["updated_at"] == 1778496900.0
+    assert capabilities["state_revision"] == changed_status["state_revision"]

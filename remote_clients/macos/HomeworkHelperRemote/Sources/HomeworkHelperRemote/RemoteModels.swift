@@ -58,6 +58,8 @@ struct RemoteStatus: Decodable {
     let app: String
     let remoteAPIVersion: String
     let serverTime: Double
+    let stateRevision: String?
+    let updatedAt: Double?
     let counts: Counts
     let capabilities: Capabilities
     let power: Power?
@@ -71,6 +73,8 @@ struct RemoteStatus: Decodable {
         case app
         case remoteAPIVersion = "remote_api_version"
         case serverTime = "server_time"
+        case stateRevision = "state_revision"
+        case updatedAt = "updated_at"
         case counts
         case capabilities
         case power
@@ -321,6 +325,7 @@ struct RemoteProcess: Codable, Identifiable {
         let staminaMax: Int?
         let hoyolabGameID: String?
         let resourceIconURL: String?
+        let resourceIconURLs: [String: String]?
 
         enum CodingKeys: String, CodingKey {
             case kind
@@ -330,6 +335,7 @@ struct RemoteProcess: Codable, Identifiable {
             case staminaMax = "stamina_max"
             case hoyolabGameID = "hoyolab_game_id"
             case resourceIconURL = "resource_icon_url"
+            case resourceIconURLs = "resource_icon_urls"
         }
     }
 
@@ -343,6 +349,7 @@ struct RemoteProcess: Codable, Identifiable {
     let staminaMax: Int?
     let progress: Progress?
     let iconURL: String?
+    let iconURLs: [String: String]?
     let isRunning: Bool
     let playedToday: Bool
     let statusText: String?
@@ -360,6 +367,7 @@ struct RemoteProcess: Codable, Identifiable {
         case staminaMax = "stamina_max"
         case progress
         case iconURL = "icon_url"
+        case iconURLs = "icon_urls"
         case isRunning = "is_running"
         case playedToday = "played_today"
         case statusText = "status_text"
@@ -377,6 +385,7 @@ struct RemoteProcess: Codable, Identifiable {
         staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
         progress = try container.decodeIfPresent(Progress.self, forKey: .progress)
         iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
+        iconURLs = try container.decodeIfPresent([String: String].self, forKey: .iconURLs)
         isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning) ?? false
         playedToday = try container.decodeIfPresent(Bool.self, forKey: .playedToday) ?? false
         statusText = try container.decodeIfPresent(String.self, forKey: .statusText)
@@ -527,11 +536,15 @@ struct RemoteTailscaleEnsureResponse: Decodable {
 
 struct RemoteCapabilitiesResponse: Decodable {
     let remoteAPIVersion: String
+    let stateRevision: String?
+    let updatedAt: Double?
     let capabilities: RemoteStatus.Capabilities
     let power: RemoteStatus.Power?
 
     enum CodingKeys: String, CodingKey {
         case remoteAPIVersion = "remote_api_version"
+        case stateRevision = "state_revision"
+        case updatedAt = "updated_at"
         case capabilities
         case power
     }

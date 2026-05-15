@@ -89,10 +89,14 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'sshConfigured = "ssh_configured"',
         'remoteAPIVersion = "remote_api_version"',
         'serverTime = "server_time"',
+        'stateRevision = "state_revision"',
+        'updatedAt = "updated_at"',
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
         'iconURL = "icon_url"',
+        'iconURLs = "icon_urls"',
+        'resourceIconURLs = "resource_icon_urls"',
         'isRunning = "is_running"',
         'playedToday = "played_today"',
         'statusText = "status_text"',
@@ -221,7 +225,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다." in app
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
-    assert "showingAdvancedSettings" in app
+    assert "Settings {" in app
+    assert "RemoteSettingsView" in app
+    assert 'Selector(("showSettingsWindow:"))' in app
     assert "AdvancedRemoteSettingsView" in app
     assert "GameProgressView" in app
     assert "RemoteGameCard" in app
@@ -239,6 +245,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
     assert "func startMirroring()" in view_model
+    assert "latestStatus.stateRevision != lastStateRevision" in view_model
+    assert "return NSApp.isActive ? 5 : 15" in view_model
+    assert "if self.consecutiveMirrorFailures > 0 { return 60 }" in view_model
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
@@ -251,6 +260,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "PC 전원" in app
     assert "PowerSquareButton" in app
     assert "전원 설정" in app
+    assert "전원/SSH/SmartThings" in app
     assert "전원 설정 저장" in app
     assert "Tailscale 서버/호스트 탐색" in app
     assert 'Label("탐색", systemImage: "network")' not in app
@@ -278,7 +288,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "func refreshToken() async" in view_model
     assert "현재 토큰 갱신" in app
     assert "기기 관리" in app
-    assert "페어링/접속" in app
+    assert "연결/페어링" in app
     assert "SetupInstructionBlock" in app
     assert "viewModel.bootstrap()" in app
     assert "자동 설정 점검" in app
@@ -340,6 +350,17 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "폐기된 기기 정리" in app
     assert "NSStatusItem" in app
     assert "MenuBarPopoverView" in app
-    assert "gamecontroller.fill" in app
+    assert "gamecontroller.fill" in view_model
     assert "로그인 시 실행" in app
+    assert "로그인 자동 실행 시 창 표시" in app
+    assert "메뉴바 아이콘" in app
+    assert "RemoteMenuBarIconChoice" in view_model
+    assert "NSApp.currentEvent?.clickCount" not in app
+    assert "popover.performClose(nil)" in app
+    assert "HomeworkHelperRemoteMainWindow" in _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
+    assert "HostStatusPill" in app
+    assert 'Label("창 열기", systemImage: "macwindow")' in app
+    assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app
+    assert 'Label("앱 종료", systemImage: "power")' in app
+    assert "외 \\(viewModel.processes.count - 5)개" in app
     assert "RemoteLoginItemManager" in view_model

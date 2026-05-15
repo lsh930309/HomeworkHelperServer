@@ -47,6 +47,8 @@ private enum RemoteClientPreferences {
     private static let deviceNameKey = "remote.deviceName"
     private static let powerConfigKey = "remote.powerConfig"
     private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
+    private static let loginLaunchShowsWindowKey = "remote.loginLaunchShowsWindow"
+    private static let menuBarIconSymbolKey = "remote.menuBarIconSymbol"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -87,6 +89,28 @@ private enum RemoteClientPreferences {
     static func saveDesktopLoggingEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: desktopLoggingEnabledKey)
     }
+
+    static func loadLoginLaunchShowsWindow() -> Bool {
+        defaults.object(forKey: loginLaunchShowsWindowKey) as? Bool ?? true
+    }
+
+    static func saveLoginLaunchShowsWindow(_ enabled: Bool) {
+        defaults.set(enabled, forKey: loginLaunchShowsWindowKey)
+    }
+
+    static func loadMenuBarIconSymbol() -> String {
+        let stored = defaults.string(forKey: menuBarIconSymbolKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return RemoteMenuBarIconChoice.symbols.contains(stored) ? stored : RemoteMenuBarIconChoice.defaultSymbol
+    }
+
+    static func saveMenuBarIconSymbol(_ symbol: String) {
+        defaults.set(symbol, forKey: menuBarIconSymbolKey)
+    }
+}
+
+enum RemoteMenuBarIconChoice {
+    static let defaultSymbol = "gamecontroller.fill"
+    static let symbols = ["gamecontroller.fill", "sparkles", "bolt.circle.fill", "desktopcomputer", "menubar.rectangle"]
 }
 
 private enum RemoteClientDesktopLogger {
@@ -154,6 +178,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses()
     @Published var devices: [RemoteDevice] = []
     @Published var launchAtLoginEnabled = RemoteLoginItemManager.isEnabled
+    @Published var loginLaunchShowsWindow = RemoteClientPreferences.loadLoginLaunchShowsWindow() {
+        didSet { RemoteClientPreferences.saveLoginLaunchShowsWindow(loginLaunchShowsWindow) }
+    }
+    @Published var menuBarIconSymbol = RemoteClientPreferences.loadMenuBarIconSymbol() {
+        didSet {
+            if !RemoteMenuBarIconChoice.symbols.contains(menuBarIconSymbol) {
+                menuBarIconSymbol = RemoteMenuBarIconChoice.defaultSymbol
+                return
+            }
+            RemoteClientPreferences.saveMenuBarIconSymbol(menuBarIconSymbol)
+            NotificationCenter.default.post(name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"), object: menuBarIconSymbol)
+        }
+    }
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
 
@@ -170,8 +207,26 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    var hostStatusLabel: String {
+        if isLoading { return "동기화 중" }
+        if !isPaired { return "페어링 해제됨" }
+        if hostConnectionState == "offline" { return "오프라인/꺼져 있음" }
+        return "페어링됨"
+    }
+
+    var hostStatusColor: Color {
+        switch hostStatusLabel {
+        case "페어링됨": return .green
+        case "동기화 중": return .blue
+        case "오프라인/꺼져 있음": return .orange
+        default: return .secondary
+        }
+    }
+
     private let tokenStore: any RemoteTokenStore
     private var mirrorTask: Task<Void, Never>?
+    private var lastStateRevision: String?
+    private var consecutiveMirrorFailures = 0
 
     init(tokenStore: any RemoteTokenStore = KeychainTokenStore()) {
         self.tokenStore = tokenStore
@@ -247,7 +302,11 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard mirrorTask == nil else { return }
         mirrorTask = Task { [weak self] in
             while !Task.isCancelled {
-                let seconds: UInt64 = await MainActor.run { NSApp.isActive ? 15 : 60 }
+                let seconds: UInt64 = await MainActor.run {
+                    guard let self else { return 15 }
+                    if self.consecutiveMirrorFailures > 0 { return 60 }
+                    return NSApp.isActive ? 5 : 15
+                }
                 try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 guard !Task.isCancelled else { break }
                 await self?.mirrorRemoteState()
@@ -266,22 +325,22 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func cachedIconURL(for process: RemoteProcess) -> URL? {
-        RemoteClientCache.cachedIconURL(for: process)
+    func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
+        RemoteClientCache.cachedIconURL(for: process, preferredSize: preferredSize)
     }
 
-    func cachedResourceIconURL(for process: RemoteProcess) -> URL? {
-        RemoteClientCache.cachedResourceIconURL(for: process)
+    func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 32) -> URL? {
+        RemoteClientCache.cachedResourceIconURL(for: process, preferredSize: preferredSize)
     }
 
-    func remoteIconURL(for process: RemoteProcess) -> URL? {
+    func remoteIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
         guard let client else { return nil }
-        return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL)
+        return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
-    func remoteResourceIconURL(for process: RemoteProcess) -> URL? {
+    func remoteResourceIconURL(for process: RemoteProcess, preferredSize: Int = 32) -> URL? {
         guard let client else { return nil }
-        return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL)
+        return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
     private func connectionGuidance(for error: Error) -> String {
@@ -430,13 +489,32 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
         do {
-            status = try await service.status()
+            let latestStatus = try await service.status()
+            status = latestStatus
             hostConnectionState = "online"
-            if let statusReadiness = status?.readiness {
+            consecutiveMirrorFailures = 0
+            if let statusReadiness = latestStatus.readiness {
                 readiness = statusReadiness
             } else {
                 readiness = try? await service.readiness()
             }
+            guard latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else { return }
+            lastStateRevision = latestStatus.stateRevision
+            await syncRemotePayloads(using: service, client: client)
+        } catch {
+            if processes.isEmpty {
+                processes = RemoteClientCache.loadProcesses()
+            }
+            consecutiveMirrorFailures += 1
+            hostConnectionState = "offline"
+            message = connectionGuidance(for: error)
+        }
+    }
+
+    private func syncRemotePayloads(using service: RemoteDashboardService, client: RemoteAPIClient) async {
+        do {
+            dashboardSummary = try await service.dashboardSummary()
+            beholderIncidents = try await service.beholderIncidents()
             processes = try await service.processes()
             RemoteClientCache.saveProcesses(processes)
             await RemoteClientCache.cacheIcons(for: processes, baseURL: client.baseURL)
@@ -444,7 +522,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             if processes.isEmpty {
                 processes = RemoteClientCache.loadProcesses()
             }
-            hostConnectionState = "offline"
             message = connectionGuidance(for: error)
         }
     }
@@ -457,6 +534,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
             status = try await service.status()
+            lastStateRevision = status?.stateRevision
+            consecutiveMirrorFailures = 0
             hostConnectionState = "online"
             if let statusReadiness = status?.readiness {
                 readiness = statusReadiness

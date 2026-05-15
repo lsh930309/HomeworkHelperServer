@@ -85,5 +85,6 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
         window.title = "HomeworkHelper Remote"
+        window.identifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteMainWindow")
     }
 }

@@ -5,6 +5,7 @@ import platform
 import time
 import webbrowser
 import datetime
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -29,8 +30,9 @@ from src.data import beholder, crud, models, schemas
 from src.utils.game_preset_manager import GamePresetManager
 
 
-REMOTE_API_VERSION = "0.1.10"
+REMOTE_API_VERSION = "0.1.11"
 TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
+REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
 
 
 def _temporary_pairing_allowed_ips() -> set[str]:
@@ -120,13 +122,31 @@ def _serialize_process(
         progress = payload.get("progress")
         if isinstance(progress, dict):
             progress["resource_icon_url"] = f"/api/dashboard/resource-icons/{quote(process_id, safe='')}?size=32"
+            progress["resource_icon_urls"] = _resource_icon_urls(process_id)
     running_process_ids = running_process_ids or set()
     played_today_process_ids = played_today_process_ids or set()
     payload["icon_url"] = f"/api/dashboard/icons/{quote(process_id, safe='')}?size=128&format=png" if process_id else None
+    payload["icon_urls"] = _process_icon_urls(process_id) if process_id else {}
     payload["is_running"] = process_id in running_process_ids
     payload["played_today"] = process_id in played_today_process_ids
     payload["status_text"] = "실행 중" if payload["is_running"] else ("오늘 실행" if payload["played_today"] else "대기")
     return payload
+
+
+def _process_icon_urls(process_id: str) -> dict[str, str]:
+    quoted = quote(process_id, safe="")
+    return {
+        str(size): f"/api/dashboard/icons/{quoted}?size={size}&format=png"
+        for size in REMOTE_ICON_VARIANT_SIZES
+    }
+
+
+def _resource_icon_urls(process_id: str) -> dict[str, str]:
+    quoted = quote(process_id, safe="")
+    return {
+        str(size): f"/api/dashboard/resource-icons/{quoted}?size={size}"
+        for size in REMOTE_ICON_VARIANT_SIZES
+    }
 
 
 def _serialize_shortcut(shortcut: Any) -> dict[str, Any]:
@@ -507,6 +527,127 @@ def create_remote_router(
             },
         }
 
+    def _state_fingerprint(db: Session, power_status: dict[str, Any]) -> dict[str, Any]:
+        """Small, stable fingerprint for native-client revision-aware polling."""
+
+        process_rows = []
+        max_updated_at = 0.0
+        for process in crud.get_processes(db):
+            last_played = getattr(process, "last_played_timestamp", None)
+            stamina_updated = getattr(process, "stamina_updated_at", None)
+            for candidate in (last_played, stamina_updated):
+                if candidate is not None:
+                    max_updated_at = max(max_updated_at, float(candidate))
+            process_rows.append(
+                {
+                    "id": getattr(process, "id", None),
+                    "name": getattr(process, "name", None),
+                    "monitoring_path": getattr(process, "monitoring_path", None),
+                    "launch_path": getattr(process, "launch_path", None),
+                    "preferred_launch_type": getattr(process, "preferred_launch_type", None),
+                    "last_played_timestamp": last_played,
+                    "user_cycle_hours": getattr(process, "user_cycle_hours", None),
+                    "user_preset_id": getattr(process, "user_preset_id", None),
+                    "stamina_tracking_enabled": getattr(process, "stamina_tracking_enabled", None),
+                    "hoyolab_game_id": getattr(process, "hoyolab_game_id", None),
+                    "stamina_current": getattr(process, "stamina_current", None),
+                    "stamina_max": getattr(process, "stamina_max", None),
+                    "stamina_updated_at": stamina_updated,
+                }
+            )
+
+        active_sessions = []
+        for session in db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).all():
+            start = getattr(session, "start_timestamp", None)
+            if start is not None:
+                max_updated_at = max(max_updated_at, float(start))
+            active_sessions.append(
+                {
+                    "process_id": getattr(session, "process_id", None),
+                    "process_name": getattr(session, "process_name", None),
+                    "start_timestamp": start,
+                    "heartbeat_timestamp": getattr(session, "heartbeat_timestamp", None),
+                    "session_status": getattr(session, "session_status", None),
+                }
+            )
+
+        game_link_rows = []
+        try:
+            for link in crud.get_game_platform_links(db):
+                updated = getattr(link, "updated_at", None)
+                if updated is not None:
+                    max_updated_at = max(max_updated_at, float(updated))
+                game_link_rows.append(
+                    {
+                        "id": getattr(link, "id", None),
+                        "pc_process_id": getattr(link, "pc_process_id", None),
+                        "android_package_name": getattr(link, "android_package_name", None),
+                        "sync_strategy": getattr(link, "sync_strategy", None),
+                        "updated_at": updated,
+                    }
+                )
+        except Exception:
+            game_link_rows = []
+
+        mobile_rows = []
+        try:
+            for session in crud.get_active_mobile_game_sessions(db):
+                start = getattr(session, "started_at", None)
+                if start is not None:
+                    max_updated_at = max(max_updated_at, float(start))
+                mobile_rows.append(
+                    {
+                        "id": getattr(session, "id", None),
+                        "game_link_id": getattr(session, "game_link_id", None),
+                        "pc_process_id": getattr(session, "pc_process_id", None),
+                        "status": getattr(session, "status", None),
+                        "started_at": start,
+                    }
+                )
+        except Exception:
+            mobile_rows = []
+
+        incident_rows = []
+        try:
+            for incident in beholder.active_incidents(db):
+                created = getattr(incident, "created_at", None)
+                if created is not None:
+                    max_updated_at = max(max_updated_at, float(created))
+                incident_rows.append(
+                    {
+                        "id": getattr(incident, "id", None),
+                        "severity": getattr(incident, "severity", None),
+                        "status": getattr(incident, "status", None),
+                        "risk_score": getattr(incident, "risk_score", None),
+                        "created_at": created,
+                    }
+                )
+        except Exception:
+            incident_rows = []
+
+        return {
+            "remote_api_version": REMOTE_API_VERSION,
+            "processes": sorted(process_rows, key=lambda row: str(row.get("id") or "")),
+            "active_sessions": sorted(active_sessions, key=lambda row: (str(row.get("process_id") or ""), float(row.get("start_timestamp") or 0))),
+            "game_links": sorted(game_link_rows, key=lambda row: str(row.get("id") or "")),
+            "mobile_sessions": sorted(mobile_rows, key=lambda row: str(row.get("id") or "")),
+            "beholder_incidents": sorted(incident_rows, key=lambda row: str(row.get("id") or "")),
+            "power": {
+                "configured": bool(power_status.get("configured")),
+                "status": power_status.get("status"),
+                "supported_actions": power_status.get("supported_actions") or [],
+            },
+            "updated_at": max_updated_at,
+        }
+
+    def _state_revision_payload(db: Session, power_status: dict[str, Any]) -> dict[str, Any]:
+        fingerprint = _state_fingerprint(db, power_status)
+        canonical = json.dumps(fingerprint, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return {
+            "state_revision": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
+            "updated_at": fingerprint["updated_at"] or None,
+        }
+
     @router.post("/pair/start")
     def start_remote_pairing():
         pairing = device_registry.start_pairing(now=now())
@@ -614,10 +755,12 @@ def create_remote_router(
             active_count = 0
 
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
+        revision_payload = _state_revision_payload(db, power_status)
         return {
             "app": "HomeworkHelper",
             "remote_api_version": REMOTE_API_VERSION,
             "server_time": now(),
+            **revision_payload,
             "host": {
                 "platform": platform.system() or "unknown",
                 "release": platform.release(),
@@ -634,10 +777,12 @@ def create_remote_router(
         }
 
     @router.get("/capabilities")
-    def remote_capabilities():
+    def remote_capabilities(db: Session = Depends(get_db_dependency)):
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
+        revision_payload = _state_revision_payload(db, power_status)
         return {
             "remote_api_version": REMOTE_API_VERSION,
+            **revision_payload,
             "capabilities": _remote_capabilities(power_status),
             "power": power_status,
             "readiness": _readiness_payload(power_status),

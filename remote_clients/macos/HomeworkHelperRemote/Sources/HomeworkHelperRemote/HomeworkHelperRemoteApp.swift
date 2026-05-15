@@ -12,10 +12,21 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(shouldHideMainWindowForLoginLaunch ? .accessory : .regular)
         configureStatusItem()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuBarIconDidChange(_:)),
+            name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"),
+            object: nil
+        )
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
+        }
+        if shouldHideMainWindowForLoginLaunch {
+            DispatchQueue.main.async {
+                Self.mainWindows().forEach { $0.orderOut(nil) }
+            }
         }
     }
 
@@ -24,13 +35,21 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        popover.performClose(nil)
         Self.showMainWindow()
         return true
     }
 
+    private var shouldHideMainWindowForLoginLaunch: Bool {
+        RemoteLoginItemManager.isEnabled
+        && !RemoteSharedModel.viewModel.loginLaunchShowsWindow
+        && (ProcessInfo.processInfo.environment["LaunchServicesLaunchReason"] == "LoginItems"
+            || ProcessInfo.processInfo.arguments.contains("--launched-at-login"))
+    }
+
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "gamecontroller.fill", accessibilityDescription: "HomeworkHelper Remote")
+        item.button?.image = NSImage(systemSymbolName: RemoteSharedModel.viewModel.menuBarIconSymbol, accessibilityDescription: "HomeworkHelper Remote")
         item.button?.target = self
         item.button?.action = #selector(statusItemClicked(_:))
         statusItem = item
@@ -41,11 +60,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        if NSApp.currentEvent?.clickCount == 2 {
-            popover.performClose(sender)
-            Self.showMainWindow()
-            return
-        }
         if popover.isShown {
             popover.performClose(sender)
         } else {
@@ -53,15 +67,29 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
     }
 
+    @objc private func menuBarIconDidChange(_ notification: Notification) {
+        let symbol = notification.object as? String ?? RemoteMenuBarIconChoice.defaultSymbol
+        statusItem?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "HomeworkHelper Remote")
+    }
+
     static func showMainWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        if NSApp.windows.isEmpty {
+        if mainWindows().isEmpty {
             NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
         }
-        for window in NSApp.windows {
+        for window in mainWindows() {
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
+        }
+    }
+
+    private static func mainWindows() -> [NSWindow] {
+        NSApp.windows.filter { window in
+            (window.identifier?.rawValue == "HomeworkHelperRemoteMainWindow"
+            || window.title == "HomeworkHelper Remote")
+            && String(describing: type(of: window)).contains("Popover") == false
+            && window.isReleasedWhenClosed == false
         }
     }
 }
@@ -76,12 +104,16 @@ struct HomeworkHelperRemoteApp: App {
             RemoteDashboardView(viewModel: viewModel)
         }
         .windowResizability(.contentSize)
+
+        Settings {
+            RemoteSettingsView(viewModel: viewModel)
+                .frame(minWidth: 620, minHeight: 720)
+        }
     }
 }
 
 struct RemoteDashboardView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @State private var showingAdvancedSettings = false
     @State private var sidebarVisible = true
 
     private var targetSize: CGSize {
@@ -96,7 +128,7 @@ struct RemoteDashboardView: View {
     var body: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                RemoteSidebarView(viewModel: viewModel, showingAdvancedSettings: $showingAdvancedSettings)
+                RemoteSidebarView(viewModel: viewModel)
                     .frame(width: RemoteWindowLayout.sidebarWidth)
                 Divider()
                     .frame(width: RemoteWindowLayout.dividerWidth)
@@ -129,10 +161,6 @@ struct RemoteDashboardView: View {
                 hasIncidents: !viewModel.beholderIncidents.isEmpty
             )
         )
-        .sheet(isPresented: $showingAdvancedSettings) {
-            AdvancedRemoteSettingsView(viewModel: viewModel)
-                .frame(minWidth: 620, minHeight: 720)
-        }
         .task { await viewModel.bootstrap() }
     }
 }
@@ -216,7 +244,6 @@ struct DraggableHorizontalScrollView<Content: View>: NSViewRepresentable {
 
 struct RemoteSidebarView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @Binding var showingAdvancedSettings: Bool
 
     var body: some View {
         ScrollView {
@@ -276,13 +303,14 @@ struct RemoteSidebarView: View {
                 }
 
                 Button {
-                    showingAdvancedSettings = true
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 } label: {
-                    Label("고급 원격 설정", systemImage: "slider.horizontal.3")
+                    Label("설정 열기", systemImage: "gearshape")
                 }
                 .buttonStyle(.bordered)
             }
-            .padding(10)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
         }
     }
 }
@@ -379,14 +407,15 @@ struct RemoteGameCard: View {
 struct GameIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
+    var preferredSize: Int = 128
 
     var body: some View {
         Group {
-            if let cached = viewModel.cachedIconURL(for: process), let image = NSImage(contentsOf: cached) {
+            if let cached = viewModel.cachedIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-            } else if let remote = viewModel.remoteIconURL(for: process) {
+            } else if let remote = viewModel.remoteIconURL(for: process, preferredSize: preferredSize) {
                 AsyncImage(url: remote) { phase in
                     switch phase {
                     case .success(let image):
@@ -415,14 +444,15 @@ struct GameIconView: View {
 struct ResourceIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
+    var preferredSize: Int = 32
 
     var body: some View {
         Group {
-            if let cached = viewModel.cachedResourceIconURL(for: process), let image = NSImage(contentsOf: cached) {
+            if let cached = viewModel.cachedResourceIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-            } else if let remote = viewModel.remoteResourceIconURL(for: process) {
+            } else if let remote = viewModel.remoteResourceIconURL(for: process, preferredSize: preferredSize) {
                 AsyncImage(url: remote) { phase in
                     switch phase {
                     case .success(let image): image.resizable().scaledToFit()
@@ -459,20 +489,61 @@ struct GameProgressView: View {
 
 struct MenuBarGameRow: View {
     let process: RemoteProcess
+    @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        HStack {
-            Circle()
-                .fill(process.isRunning ? Color.green : Color.secondary.opacity(0.35))
-                .frame(width: 7, height: 7)
-            Text(process.name)
-                .lineLimit(1)
-            Spacer()
-            Text(process.progress?.displayText ?? (process.statusText ?? "대기"))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        HStack(alignment: .center, spacing: 8) {
+            GameIconView(process: process, viewModel: viewModel, preferredSize: 64)
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Text(process.name)
+                        .font(.caption.bold())
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(process.isRunning ? Color.green : Color.secondary.opacity(0.35))
+                            .frame(width: 6, height: 6)
+                        Circle()
+                            .fill(process.playedToday ? Color.blue : Color.secondary.opacity(0.25))
+                            .frame(width: 6, height: 6)
+                    }
+                    .help("\(process.isRunning ? "실행 중" : "대기") · \(process.playedToday ? "오늘 실행" : "오늘 미실행")")
+                }
+                if let progress = process.progress {
+                    HStack(spacing: 5) {
+                        ResourceIconView(process: process, viewModel: viewModel, preferredSize: 32)
+                            .frame(width: 12, height: 12)
+                        ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
+                            .controlSize(.mini)
+                        Text(progress.displayText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(process.statusText ?? "대기")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct HostStatusPill: View {
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        Text(viewModel.hostStatusLabel)
+            .font(.caption2.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(viewModel.hostStatusColor)
+            .background(viewModel.hostStatusColor.opacity(0.14), in: Capsule())
     }
 }
 
@@ -481,11 +552,20 @@ struct MenuBarPopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("HomeworkHelper")
-                .font(.headline)
+            HStack {
+                Text("HomeworkHelper")
+                    .font(.headline)
+                Spacer()
+                HostStatusPill(viewModel: viewModel)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(viewModel.processes.prefix(5)) { process in
-                    MenuBarGameRow(process: process)
+                    MenuBarGameRow(process: process, viewModel: viewModel)
+                }
+                if viewModel.processes.count > 5 {
+                    Text("외 \(viewModel.processes.count - 5)개")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
                 if viewModel.processes.isEmpty {
                     Text("캐시된 게임 상태가 없습니다.")
@@ -500,10 +580,19 @@ struct MenuBarPopoverView: View {
                 PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
             }
             Divider()
-            HStack {
-                Button("창 열기") { RemoteAppDelegate.showMainWindow() }
-                Button("새로고침") { Task { await viewModel.refresh() } }
-                Button("종료") { NSApp.terminate(nil) }
+            HStack(spacing: 0) {
+                Button { RemoteAppDelegate.showMainWindow() } label: {
+                    Label("창 열기", systemImage: "macwindow")
+                        .frame(maxWidth: .infinity)
+                }
+                Button { Task { await viewModel.refresh() } } label: {
+                    Label("새로고침", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                Button { NSApp.terminate(nil) } label: {
+                    Label("앱 종료", systemImage: "power")
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
         .padding(14)
@@ -576,13 +665,13 @@ struct BeholderIncidentSummaryView: View {
     }
 }
 
-struct AdvancedRemoteSettingsView: View {
+struct RemoteSettingsView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                GroupBox("페어링/접속") {
+                GroupBox("연결/페어링") {
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("Base URL", text: $viewModel.baseURLText)
                             .textFieldStyle(.roundedBorder)
@@ -610,10 +699,6 @@ struct AdvancedRemoteSettingsView: View {
                         Toggle("원격 진단 로그를 바탕 화면에 저장", isOn: Binding(
                             get: { viewModel.remoteDesktopLoggingEnabled },
                             set: { enabled in Task { await viewModel.saveRemoteDesktopLogging(enabled: enabled) } }
-                        ))
-                        Toggle("로그인 시 실행", isOn: Binding(
-                            get: { viewModel.launchAtLoginEnabled },
-                            set: { enabled in viewModel.setLaunchAtLogin(enabled) }
                         ))
                         Text(viewModel.setupProgress)
                             .font(.caption)
@@ -644,7 +729,7 @@ struct AdvancedRemoteSettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("전원 설정") {
+                GroupBox("전원/SSH/SmartThings") {
                     VStack(alignment: .leading, spacing: 8) {
                         if let response = viewModel.powerConfigResponse {
                             SidebarInfoRow(label: "설정 파일", value: response.configPath)
@@ -760,11 +845,33 @@ struct AdvancedRemoteSettingsView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                GroupBox("앱 동작") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("로그인 시 실행", isOn: Binding(
+                            get: { viewModel.launchAtLoginEnabled },
+                            set: { enabled in viewModel.setLaunchAtLogin(enabled) }
+                        ))
+                        Toggle("로그인 자동 실행 시 창 표시", isOn: $viewModel.loginLaunchShowsWindow)
+                        Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
+                            ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
+                                Label(symbol, systemImage: symbol).tag(symbol)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Text("내장 SF Symbols 중 하나를 메뉴바 아이콘으로 사용합니다.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             .padding()
         }
     }
 }
+
+typealias AdvancedRemoteSettingsView = RemoteSettingsView
 
 private func formatDuration(_ seconds: Double) -> String {
     let minutes = Int(seconds / 60)
