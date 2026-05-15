@@ -131,3 +131,35 @@
     - full display: `could not create image from display`
     - window: `could not create image from window`
   - 따라서 새 PNG 이미지는 생성하지 못했고, 대신 `./artifacts/gui-loop-*-process.txt`, `./artifacts/gui-loop-*-windows.txt`, `./artifacts/gui-loop-*-screencapture.err`를 남겼다.
+
+## Issue 5 — 화면 기록 권한 부여 후 GUI polish Ralph-loop 재개
+
+- 상태: 코드 대응 및 자동 스크린샷 판정 완료
+- 발생 시점: 사용자가 IDE 앱에 화면 기록 권한을 부여한 뒤 재개한 GUI 품질 검수
+- 기준 스크린샷:
+  - `artifacts/gui-loop-20260516-000308.png` — 수정 전 기준: 큰 창, 넓은 상단/titlebar 영역, glass wrapper에 갇힌 sidebar, 과도한 card/summary 여백.
+  - `artifacts/gui-loop-20260516-000552.png` — 1차 compact pass: sidebar와 게임 card는 개선됐지만 play summary 하단이 잘림.
+  - `artifacts/gui-loop-20260516-000753.png` — play summary compact pass: 요약 잘림 해소, 다만 상단 safe-area 여백이 아직 큼.
+  - `artifacts/gui-loop-20260516-001041.png` — 3차 pass: titlebar safe-area를 content가 침범하도록 조정해 상단 불투명/빈 영역을 줄이고 전체 레이아웃을 고정 compact window에 맞춤.
+  - `artifacts/gui-loop-20260516-001239.png` — 최종 package build 15 재확인: 테스트/패키징 이후 동일 레이아웃이 유지됨.
+- 증상:
+  - 창 전체가 실제 정보량 대비 넓고 높게 느껴짐.
+  - sidebar가 Apple original sidebar라기보다 별도 glass card처럼 보여 앱 전체 구조가 무거움.
+  - sidebar 전원 버튼이 작은 square grid라 native macOS control 느낌이 약함.
+  - 게임 section과 play summary section이 동일한 content 폭을 쓰더라도 내부 spacing 때문에 compact하게 느껴지지 않음.
+  - titlebar/safe-area가 여전히 불투명한 상단 띠처럼 보여 Liquid Glass shell과 분리되어 보임.
+- 조치:
+  - `RemoteWindowLayout`의 sidebar, game card, content padding, glass inset/halo, compact height 값을 줄여 고정 window footprint를 축소함.
+  - sidebar의 `remoteGlass(.section)` wrapper를 제거하고, native split-view에 가까운 plain sidebar + divider 구조로 회귀함.
+  - sidebar 전원 버튼을 `Grid` + `.buttonStyle(.bordered)` 기반 `SidebarPowerButton`으로 바꿔 label+SF Symbol이 있는 macOS 기본 control 형태에 가깝게 정리함.
+  - main content padding과 `RemoteGlassGroupBox` padding/spacing/corner radius를 줄여 게임 section과 play summary의 체감 밀도를 높임.
+  - game card width/height/icon 크기와 horizontal viewport 높이를 줄여 4개 card가 한 화면에 더 compact하게 들어오도록 조정함.
+  - play summary를 4개 metric + 단일 mobile 자연어 row로 압축해 작은 높이에서도 잘리지 않게 함.
+  - root dashboard에 아주 약한 highlight overlay를 추가하고, content HStack에 top safe-area ignore를 적용해 titlebar 영역과 glass content가 더 자연스럽게 이어지게 함.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_build_release.py -q` 통과.
+  - `/tmp/hh-remote-ralph/HomeworkHelperRemote.app` 임시 package build 15를 실행하고 `artifacts/gui-loop-20260516-001239.png`를 직접 시각 확인함.
+- 남은 확인:
+  - full-native macOS 26 Liquid Glass API 전환은 별도 계획서(`macos26-liquid-glass-upgrade-plan.md`)의 다음 단계로 유지한다.
+  - 현재 단계는 AppKit `NSVisualEffectView`/glass compatibility 기반 polish이며, Apple 최신 native Liquid Glass와 완전히 동일한 시각 언어는 의도적으로 목표에서 제외했다.

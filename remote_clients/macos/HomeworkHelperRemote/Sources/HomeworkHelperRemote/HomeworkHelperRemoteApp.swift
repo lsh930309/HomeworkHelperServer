@@ -307,6 +307,8 @@ struct RemoteDashboardView: View {
             ZStack {
                 RemoteAppKitLiquidGlassBackground()
                     .ignoresSafeArea()
+                Color.white.opacity(0.018)
+                    .ignoresSafeArea()
                 RemoteWindowHitTestShield()
                     .ignoresSafeArea()
                 HStack(spacing: 0) {
@@ -330,12 +332,13 @@ struct RemoteDashboardView: View {
                             BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
                         }
                     }
-                    .padding(16)
+                    .padding(12)
                     .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                 }
-                .padding(.top, RemoteWindowLayout.titlebarReserveHeight)
+                .padding(.top, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
                 .padding(.horizontal, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
                 .padding(.bottom, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
+                .ignoresSafeArea(.container, edges: .top)
             }
             .contentShape(Rectangle())
             .background(Color.black.opacity(0.001))
@@ -391,7 +394,7 @@ struct GameSectionView: View {
             }
             .frame(
                 width: RemoteWindowLayout.gameViewportWidth(cardCount: viewModel.processes.count),
-                height: RemoteWindowLayout.gameCardHeight + 10
+                height: RemoteWindowLayout.gameCardHeight + 6
             )
             .clipped()
         } label: {
@@ -470,22 +473,23 @@ struct RemoteSidebarView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             sidebarConnectionSection
-            Divider().opacity(0.45)
+            Divider().opacity(0.35)
             sidebarPowerSection
-            Divider().opacity(0.45)
+            Divider().opacity(0.35)
             sidebarAppSection
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.leading, 20)
+        .padding(.trailing, 16)
+        .padding(.top, 24)
+        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .remoteGlass(.section)
     }
 
     private var sidebarConnectionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("연결")
                 .font(.headline)
             if viewModel.isPaired {
@@ -519,7 +523,7 @@ struct RemoteSidebarView: View {
     }
 
     private var sidebarPowerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("PC 전원")
                 .font(.headline)
             if viewModel.status?.power?.configured != true {
@@ -528,11 +532,15 @@ struct RemoteSidebarView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-            HStack(spacing: 5) {
-                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    SidebarPowerButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                    SidebarPowerButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                }
+                GridRow {
+                    SidebarPowerButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+                    SidebarPowerButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -543,6 +551,7 @@ struct RemoteSidebarView: View {
             Text("앱")
                 .font(.headline)
             SettingsOpenButton()
+                .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -615,7 +624,7 @@ struct RemoteGameCard: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 GameIconView(process: process, viewModel: viewModel)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 30, height: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(process.name)
                         .font(.headline)
@@ -653,7 +662,7 @@ struct RemoteGameCard: View {
             .buttonStyle(.glassProminent)
             .controlSize(.small)
         }
-        .padding(10)
+        .padding(9)
         .frame(width: RemoteWindowLayout.gameCardWidth, height: RemoteWindowLayout.gameCardHeight, alignment: .topLeading)
         .remoteGlass(.card, interactive: true)
         .overlay(
@@ -884,37 +893,42 @@ struct PlaySummaryView: View {
 
     var body: some View {
         RemoteGlassGroupBox("플레이 요약") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("\(summary.range.start) ~ \(summary.range.end)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(summary.range.start) ~ \(summary.range.end)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    if let topGame = summary.metrics.topGame {
+                        Text("Top: \(topGame.displayName) · \(formatDuration(topGame.totalSeconds)) · \(topGame.sessionCount)회")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                HStack(spacing: 12) {
                     SummaryMetric(label: "총 플레이", value: formatDuration(summary.metrics.totalSeconds))
                     SummaryMetric(label: "일평균", value: formatDuration(summary.metrics.dailyAverageSeconds))
                     SummaryMetric(label: "세션", value: "\(summary.metrics.sessionCount)")
                     SummaryMetric(label: "플레이 일수", value: "\(summary.metrics.playedDays)")
                 }
-                if let topGame = summary.metrics.topGame {
-                    Text("Top: \(topGame.displayName) · \(formatDuration(topGame.totalSeconds)) · \(topGame.sessionCount)회")
+
+                if let mobile = summary.mobileMetrics {
+                    Divider().opacity(0.45)
+                    Text("모바일 \(formatDuration(mobile.totalSeconds)) · 세션 \(mobile.sessionCount) · 활성 \(mobile.activeSessionCount)" + mobileTopSuffix(mobile))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-                if let mobile = summary.mobileMetrics {
-                    Divider()
-                    HStack {
-                        SummaryMetric(label: "모바일 플레이", value: formatDuration(mobile.totalSeconds))
-                        SummaryMetric(label: "모바일 세션", value: "\(mobile.sessionCount)")
-                        SummaryMetric(label: "활성 모바일", value: "\(mobile.activeSessionCount)")
-                    }
-                    if let topMobileGame = mobile.topGame {
-                        Text("Mobile Top: \(topMobileGame.displayName) · \(topMobileGame.androidPackageName) · \(formatDuration(topMobileGame.totalSeconds))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func mobileTopSuffix(_ mobile: RemoteDashboardSummary.MobileMetrics) -> String {
+        guard let topMobileGame = mobile.topGame else { return "" }
+        return " · Top: \(topMobileGame.displayName)"
     }
 }
 
@@ -1246,6 +1260,27 @@ struct SidebarInfoRow: View {
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+struct SidebarPowerButton: View {
+    let action: String
+    let label: String
+    let systemImage: String
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        Button {
+            Task { await viewModel.power(action) }
+        } label: {
+            Label(label, systemImage: systemImage)
+                .font(.caption)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
     }
 }
 

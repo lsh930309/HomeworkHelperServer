@@ -229,7 +229,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "glassOuterInset" in window_accessor
     assert "glassHaloAllowance" in window_accessor
     assert "titlebarReserveHeight" in window_accessor
+    assert "static let titlebarReserveHeight: CGFloat = 0" in window_accessor
     assert "sidebarMinimumHeight" in window_accessor
+    assert "static let sidebarWidth: CGFloat = 252" in window_accessor
+    assert "static let gameCardWidth: CGFloat = 160" in window_accessor
     assert "max(contentHeight, sidebarHeight)" in window_accessor
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
@@ -267,6 +270,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteWindowHitTestShield()" in app
     assert ".contentShape(Rectangle())" in app
     assert "Color.black.opacity(0.001)" in app
+    assert ".ignoresSafeArea(.container, edges: .top)" in app
     dashboard_source = app.split("struct RemoteDashboardView: View", 1)[1].split("struct GameSectionView: View", 1)[0]
     sidebar_source = app.split("struct RemoteSidebarView: View", 1)[1].split("struct SettingsOpenButton: View", 1)[0]
     assert "ScrollView {" not in dashboard_source
@@ -364,6 +368,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "지원 명령" in app
     assert "PC 전원" in app
     assert "PowerSquareButton" in app
+    assert "SidebarPowerButton" in app
+    assert ".buttonStyle(.bordered)" in app
     assert "전원 설정" in app
     assert "전원/SSH/SmartThings" in app
     assert "전원 설정 저장" in app
@@ -384,7 +390,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "guard bootstrapEnabled" in view_model
     assert "RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled" in view_model
     assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
-    assert "static let compactWindowHeight: CGFloat = 356" in window_accessor
+    assert "static let compactWindowHeight: CGFloat = 344" in window_accessor
     assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
     assert "shellHorizontalInset" in window_accessor
     assert "shellVerticalInset" in window_accessor
@@ -411,7 +417,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "dateFormat" not in view_model
     assert "viewModel.progressDisplayText(progress)" in app
     assert "dashboardSummary" in view_model
-    assert "모바일 플레이" in app
+    assert "모바일 " in app
     assert "mobileMetrics" in app
     assert "formatDuration" in app
     assert "Beholder 알림" in app

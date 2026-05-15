@@ -242,3 +242,37 @@
   - 테스트 방법: full display와 specific window ID 대상으로 `screencapture` 실행.
   - 테스트 결과: 실패 — `could not create image from display`, `could not create image from window`.
   - 통과 판정 근거: 미통과. 앱 실행과 창 1개 생성은 확인했지만, 현재 Codex/macOS 세션의 화면 캡처 권한 또는 display session 제약으로 PNG 생성은 불가했다.
+
+---
+
+## 9. 2026-05-16 GUI polish Ralph-loop 검증 기록
+
+- [x] 화면 기록 권한 기반 자동 PNG 캡처
+  - 테스트 방법: 임시 packaged app을 `--ui-test-show-window --ui-test-show-sidebar --ui-test-show-summary --ui-test-no-external-state`로 실행하고 `screencapture -x artifacts/gui-loop-*.png`를 수행한 뒤 이미지를 직접 판독.
+  - 테스트 결과: `artifacts/gui-loop-20260516-000308.png`, `artifacts/gui-loop-20260516-000552.png`, `artifacts/gui-loop-20260516-000753.png`, `artifacts/gui-loop-20260516-001041.png`, `artifacts/gui-loop-20260516-001239.png` 생성 및 시각 확인 완료.
+  - 통과 판정 근거: 이전 세션 blocker였던 `could not create image from display/window`가 해소됐고, loop별 시각 증거가 프로젝트 루트 `./artifacts`에 남았다.
+
+- [x] sidebar Apple-original 방향 회귀
+  - 테스트 방법: 최종 스크린샷에서 sidebar가 독립 glass card wrapper 없이 plain sidebar와 vertical divider로 보이는지 확인하고, 정적 테스트에서 `SidebarPowerButton` 및 `.buttonStyle(.bordered)` marker를 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: sidebar wrapper 제거로 좌측 panel이 native split-view에 가까워졌고, 전원 control은 label+symbol이 있는 bordered button grid로 바뀌어 square icon-only 느낌을 줄였다.
+
+- [x] 고정 레이아웃 compactness와 section 폭 정렬
+  - 테스트 방법: 최종 스크린샷에서 게임 section과 play summary section의 left/right edge가 같은 main content grid에 맞는지 확인하고, `RemoteWindowLayout.mainContentWidth/cardViewportWidth` 기반 산식과 static test marker를 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: content padding, card width/spacing, section padding이 줄었고 play summary는 동일한 main content width 안에서 하단 clipping 없이 표시된다.
+
+- [x] play summary clipping 제거
+  - 테스트 방법: `artifacts/gui-loop-20260516-000552.png`에서 보이던 하단 잘림을 기준으로 compact summary pass 후 `artifacts/gui-loop-20260516-000753.png` 및 최종 이미지를 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: mobile metrics를 한 줄 자연어 row로 접고 `summaryHeight`를 실제 compact content에 맞춰 조정해 섹션 하단 border와 텍스트가 잘리지 않는다.
+
+- [x] titlebar/top safe-area 여백 축소
+  - 테스트 방법: `RemoteWindowLayout.titlebarReserveHeight = 0`, `.fullSizeContentView`, `titlebarAppearsTransparent`, `.ignoresSafeArea(.container, edges: .top)` marker를 확인하고 최종 스크린샷에서 traffic light 주변과 content top gap을 시각 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: 별도 opaque titlebar reserve를 제거하고 content shell이 titlebar safe-area 위쪽까지 확장되어 이전보다 상단의 무의미한 검은 띠가 줄었다.
+
+- [x] 기존 GUI 검수 no-external-state 회귀 방지
+  - 테스트 방법: package build 15를 `--ui-test-no-external-state`로 실행하여 Keychain/password prompt 없이 sample snapshot으로 표시되는지 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: 최종 GUI loop가 암호 프롬프트 없이 진행됐고, 테스트용 샘플 데이터가 표시된 스크린샷이 생성됐다.

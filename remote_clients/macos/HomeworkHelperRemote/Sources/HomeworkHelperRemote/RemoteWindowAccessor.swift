@@ -2,18 +2,18 @@ import AppKit
 import SwiftUI
 
 enum RemoteWindowLayout {
-    static let sidebarWidth: CGFloat = 278
+    static let sidebarWidth: CGFloat = 252
     static let dividerWidth: CGFloat = 1
-    static let horizontalPadding: CGFloat = 32
-    static let glassOuterInset: CGFloat = 14
-    static let glassHaloAllowance: CGFloat = 8
-    static let titlebarReserveHeight: CGFloat = 18
-    static let gameCardWidth: CGFloat = 180
-    static let gameCardHeight: CGFloat = 126
-    static let gameCardSpacing: CGFloat = 12
+    static let horizontalPadding: CGFloat = 24
+    static let glassOuterInset: CGFloat = 10
+    static let glassHaloAllowance: CGFloat = 6
+    static let titlebarReserveHeight: CGFloat = 0
+    static let gameCardWidth: CGFloat = 160
+    static let gameCardHeight: CGFloat = 114
+    static let gameCardSpacing: CGFloat = 10
     static let minWindowWidth: CGFloat = 720
-    static let compactWindowHeight: CGFloat = 356
-    static let sidebarMinimumHeight: CGFloat = 404
+    static let compactWindowHeight: CGFloat = 344
+    static let sidebarMinimumHeight: CGFloat = 344
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -44,9 +44,9 @@ enum RemoteWindowLayout {
         let sidebar = sidebarVisible ? sidebarWidth + dividerWidth : 0
         let shellHorizontalInset = (glassOuterInset + glassHaloAllowance) * 2
         let rawWidth = sidebar + mainContentWidth(cardCount: cardCount) + shellHorizontalInset
-        let baseHeight: CGFloat = 312
-        let summaryHeight: CGFloat = hasSummary ? 116 : 0
-        let incidentHeight: CGFloat = hasIncidents ? 92 : 0
+        let baseHeight: CGFloat = 284
+        let summaryHeight: CGFloat = hasSummary ? 92 : 0
+        let incidentHeight: CGFloat = hasIncidents ? 84 : 0
         let contentHeight = baseHeight + summaryHeight + incidentHeight
         let sidebarHeight = sidebarVisible ? sidebarMinimumHeight : 0
         let shellVerticalInset = titlebarReserveHeight + glassOuterInset + glassHaloAllowance
