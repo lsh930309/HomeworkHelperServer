@@ -231,6 +231,8 @@ struct RemoteDashboardView: View {
             ZStack {
                 RemoteAppKitLiquidGlassBackground()
                     .ignoresSafeArea()
+                RemoteWindowHitTestShield()
+                    .ignoresSafeArea()
                 HStack(spacing: 0) {
                     if sidebarVisible {
                         RemoteSidebarView(viewModel: viewModel)
@@ -256,8 +258,14 @@ struct RemoteDashboardView: View {
                         .padding(16)
                         .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                     }
+                    .scrollClipDisabled()
                 }
+                .padding(.top, RemoteWindowLayout.titlebarReserveHeight)
+                .padding(.horizontal, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
+                .padding(.bottom, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
             }
+            .contentShape(Rectangle())
+            .background(Color.black.opacity(0.001))
         }
         .frame(width: targetSize.width, height: targetSize.height)
         .buttonStyle(.glass)

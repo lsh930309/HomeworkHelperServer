@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum RemoteGlassMetrics {
-    static let windowCornerRadius: CGFloat = 24
+    static let windowCornerRadius: CGFloat = 0
     static let sectionCornerRadius: CGFloat = 18
     static let cardCornerRadius: CGFloat = 16
     static let pillCornerRadius: CGFloat = 999
@@ -82,12 +82,32 @@ struct RemoteGlassGroupBox<Label: View, Content: View>: View {
     }
 }
 
+final class RemoteHitTestShieldView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+}
+
+struct RemoteWindowHitTestShield: NSViewRepresentable {
+    func makeNSView(context: Context) -> RemoteHitTestShieldView {
+        let view = RemoteHitTestShieldView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        return view
+    }
+
+    func updateNSView(_ nsView: RemoteHitTestShieldView, context: Context) {}
+}
+
 struct RemoteAppKitLiquidGlassBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSGlassEffectContainerView {
         let container = NSGlassEffectContainerView()
         let glass = NSGlassEffectView()
         glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
-        glass.clipsToBounds = true
+        glass.clipsToBounds = false
         glass.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(glass)
         NSLayoutConstraint.activate([
@@ -102,7 +122,7 @@ struct RemoteAppKitLiquidGlassBackground: NSViewRepresentable {
     func updateNSView(_ container: NSGlassEffectContainerView, context: Context) {
         for glass in container.subviews.compactMap({ $0 as? NSGlassEffectView }) {
             glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
-            glass.clipsToBounds = true
+            glass.clipsToBounds = false
         }
     }
 }

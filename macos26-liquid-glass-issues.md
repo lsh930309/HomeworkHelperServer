@@ -37,3 +37,32 @@
   - Popover status pill 즉시 반영 체감
   - 아이콘 렌더링 품질 체감
   - 전원 버튼 실제 wake/sleep/restart/shutdown 수행
+
+---
+
+## Issue 2 — image copy 6 기준 glass 테두리 잘림과 click/scroll-through
+
+- 상태: 코드 대응 완료, 수동 검수 필요
+- 발생 시점: macOS 26 Liquid Glass 전환 빌드 실기기 검수
+- 증상:
+  - 일부 섹션 glass 테두리가 창 경계에서 잘림.
+  - 앱 창 내부 빈 영역 클릭/스크롤이 뒤에 있는 창으로 전달됨.
+  - 창 native 테두리와 root glass 테두리가 모서리에서 이중으로 보임.
+  - titlebar 영역에 Liquid Glass 비침 효과가 충분히 적용되지 않음.
+- 원인 추정:
+  - 투명 window + full glass background 구조에서 빈 영역을 소비하는 hit-test view가 없었음.
+  - content가 window bounds에 너무 붙어 glass halo/border가 clipping됨.
+  - `NSGlassEffectView` 자체 corner radius와 native rounded window corner가 겹쳐 보임.
+  - titlebar를 일반 titlebar로 남겨 native title 영역과 Liquid Glass shell이 분리되어 보임.
+- 조치:
+  - `RemoteWindowHitTestShield` / `RemoteHitTestShieldView`를 추가해 window 내부 빈 영역 hit-test를 소비하도록 함.
+  - `RemoteWindowLayout`에 `glassOuterInset`, `glassHaloAllowance`, `titlebarReserveHeight`를 추가하고 content size 계산에 반영함.
+  - dashboard content를 titlebar reserve + glass-safe inset 안쪽에 배치함.
+  - window style에 `.fullSizeContentView`, `titleVisibility = .hidden`, `isMovableByWindowBackground = true`를 적용함.
+  - AppKit root `NSGlassEffectView` corner radius를 0으로 두어 native window corner와 내부 glass border가 중복되지 않게 함.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python -m pytest -q tests/test_remote_macos_client_static.py` 통과.
+- 남은 확인:
+  - 실제 앱에서 빈 영역 click-through/scroll-through가 사라졌는지 수동 검수 필요.
+  - titlebar/traffic light 주변 glass 시각 품질 수동 검수 필요.

@@ -221,6 +221,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteAppDelegate.prepareMainWindow(window)" in window_accessor
     assert "NSScreen.main?.visibleFrame" in window_accessor
     assert "compactWindowHeight" in window_accessor
+    assert "glassOuterInset" in window_accessor
+    assert "glassHaloAllowance" in window_accessor
+    assert "titlebarReserveHeight" in window_accessor
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
     assert "Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier)" in app
@@ -244,6 +247,15 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
     assert "window.isOpaque = false" in window_accessor
+    assert "window.styleMask.insert(.fullSizeContentView)" in window_accessor
+    assert "window.titleVisibility = .hidden" in window_accessor
+    assert "window.isMovableByWindowBackground = true" in window_accessor
+    assert "RemoteWindowHitTestShield" in liquid_glass
+    assert "RemoteHitTestShieldView" in liquid_glass
+    assert "bounds.contains(point) ? self : nil" in liquid_glass
+    assert "RemoteWindowHitTestShield()" in app
+    assert ".contentShape(Rectangle())" in app
+    assert "Color.black.opacity(0.001)" in app
     assert "ScrollView {" in app
     assert "RemoteGlassGroupBox(\"연결\")" in app
     assert "NavigationSplitView" not in app
@@ -332,8 +344,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "플레이 요약 표시" in app
     assert "showPlaySummary" in view_model
     assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
-    assert "static let compactWindowHeight: CGFloat = 312" in window_accessor
+    assert "static let compactWindowHeight: CGFloat = 390" in window_accessor
     assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
+    assert "shellHorizontalInset" in window_accessor
+    assert "shellVerticalInset" in window_accessor
     assert "게임 실행, 진행률, 전원 제어를 빠르게 확인합니다." not in app
     assert "homeworkHelperRemoteToggleSidebar" in app
     assert "homeworkHelperRemoteRefreshRequested" in app

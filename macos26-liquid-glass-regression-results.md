@@ -165,3 +165,27 @@
 - 수동 GUI 검수: 보류 항목 있음
 
 최종 결론: 코드와 자동 회귀 기준에서는 Liquid Glass 전환이 완료되었으나, 실제 시각 품질 및 실기기 interaction은 사용자의 빌드 검수로 추가 확인이 필요하다.
+
+---
+
+## 6. image copy 6 피드백 대응 검증 기록
+
+- [x] 섹션 테두리 잘림 대응
+  - 테스트 방법: `RemoteWindowLayout`에 glass-safe inset/titlebar reserve/halo allowance가 content size에 포함되는지 정적 확인하고 Swift build 수행.
+  - 테스트 결과: `glassOuterInset`, `glassHaloAllowance`, `titlebarReserveHeight`, `shellHorizontalInset`, `shellVerticalInset` 추가. Swift build 통과.
+  - 통과 판정 근거: content가 창 경계에 붙지 않도록 window size와 내부 padding이 함께 조정됐고, 정적 테스트가 관련 marker를 검증한다. 실제 시각 품질은 수동 검수 필요.
+
+- [x] click-through / scroll-through 대응
+  - 테스트 방법: `RemoteWindowHitTestShield`와 `RemoteHitTestShieldView.hitTest` 구현을 정적 확인하고 Swift build 수행.
+  - 테스트 결과: window bounds 내부 hit-test를 shield view가 소비하도록 구현. Swift build 통과.
+  - 통과 판정 근거: 빈 영역에서 뒤 창으로 이벤트가 통과하던 원인을 차단하는 전용 AppKit hit-test layer가 root ZStack에 추가됐다. 실제 이벤트 체감은 수동 검수 필요.
+
+- [x] 창 테두리와 glass 테두리 중복 대응
+  - 테스트 방법: AppKit root `NSGlassEffectView` corner radius와 window shell 설정을 정적 확인.
+  - 테스트 결과: root glass background corner radius를 0으로 변경하고 window native rounded corner에 맡김.
+  - 통과 판정 근거: 내부 root glass border/radius와 native window corner가 이중으로 겹칠 가능성을 제거했다. 실제 모서리 시각 품질은 수동 검수 필요.
+
+- [x] titlebar Liquid Glass 대응
+  - 테스트 방법: `RemoteWindowAccessor` 정적 확인 및 Swift build 수행.
+  - 테스트 결과: `.fullSizeContentView`, `titlebarAppearsTransparent`, `titleVisibility = .hidden`, `isMovableByWindowBackground = true` 적용.
+  - 통과 판정 근거: native title text를 숨기고 content/glass가 titlebar 영역까지 확장될 수 있는 window shell로 전환했다. 실제 traffic light 주변 비침은 수동 검수 필요.

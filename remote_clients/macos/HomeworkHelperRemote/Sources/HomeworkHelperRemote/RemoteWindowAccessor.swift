@@ -5,11 +5,14 @@ enum RemoteWindowLayout {
     static let sidebarWidth: CGFloat = 278
     static let dividerWidth: CGFloat = 1
     static let horizontalPadding: CGFloat = 32
+    static let glassOuterInset: CGFloat = 14
+    static let glassHaloAllowance: CGFloat = 8
+    static let titlebarReserveHeight: CGFloat = 56
     static let gameCardWidth: CGFloat = 180
     static let gameCardHeight: CGFloat = 126
     static let gameCardSpacing: CGFloat = 12
     static let minWindowWidth: CGFloat = 720
-    static let compactWindowHeight: CGFloat = 312
+    static let compactWindowHeight: CGFloat = 390
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -38,11 +41,13 @@ enum RemoteWindowLayout {
     static func contentSize(cardCount: Int, sidebarVisible: Bool, hasSummary: Bool, hasIncidents: Bool) -> CGSize {
         let maxSize = maxWindowSize()
         let sidebar = sidebarVisible ? sidebarWidth + dividerWidth : 0
-        let rawWidth = sidebar + mainContentWidth(cardCount: cardCount)
+        let shellHorizontalInset = (glassOuterInset + glassHaloAllowance) * 2
+        let rawWidth = sidebar + mainContentWidth(cardCount: cardCount) + shellHorizontalInset
         let baseHeight: CGFloat = 312
         let summaryHeight: CGFloat = hasSummary ? 116 : 0
         let incidentHeight: CGFloat = hasIncidents ? 92 : 0
-        let rawHeight = baseHeight + summaryHeight + incidentHeight
+        let shellVerticalInset = titlebarReserveHeight + glassOuterInset + glassHaloAllowance
+        let rawHeight = baseHeight + summaryHeight + incidentHeight + shellVerticalInset
         return CGSize(
             width: min(maxSize.width, max(minWindowWidth, rawWidth)),
             height: min(maxSize.height, max(compactWindowHeight, rawHeight))
@@ -83,6 +88,7 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.minSize = size
         window.maxSize = maxSize
         window.setContentSize(size)
+        window.styleMask.insert(.fullSizeContentView)
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
         window.title = RemoteAppDelegate.mainWindowTitle
@@ -90,6 +96,8 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         RemoteAppDelegate.prepareMainWindow(window)
     }
 }
