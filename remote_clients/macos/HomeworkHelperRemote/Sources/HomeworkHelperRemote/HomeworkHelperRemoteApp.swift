@@ -227,37 +227,40 @@ struct RemoteDashboardView: View {
     }
 
     var body: some View {
-        ZStack {
-            RemoteGlassBackground()
-                .ignoresSafeArea()
-            HStack(spacing: 0) {
-                if sidebarVisible {
-                    RemoteSidebarView(viewModel: viewModel)
-                        .frame(width: RemoteWindowLayout.sidebarWidth)
-                    Divider()
-                        .frame(width: RemoteWindowLayout.dividerWidth)
-                }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
-
-                        GameSectionView(viewModel: viewModel)
-
-                        if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
-                            PlaySummaryView(summary: summary)
-                        }
-
-                        if !viewModel.beholderIncidents.isEmpty {
-                            BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
-                        }
+        GlassEffectContainer(spacing: 10) {
+            ZStack {
+                RemoteAppKitLiquidGlassBackground()
+                    .ignoresSafeArea()
+                HStack(spacing: 0) {
+                    if sidebarVisible {
+                        RemoteSidebarView(viewModel: viewModel)
+                            .frame(width: RemoteWindowLayout.sidebarWidth)
+                        Divider()
+                            .frame(width: RemoteWindowLayout.dividerWidth)
                     }
-                    .padding(16)
-                    .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
+
+                            GameSectionView(viewModel: viewModel)
+
+                            if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
+                                PlaySummaryView(summary: summary)
+                            }
+
+                            if !viewModel.beholderIncidents.isEmpty {
+                                BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
+                            }
+                        }
+                        .padding(16)
+                        .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+                    }
                 }
             }
         }
         .frame(width: targetSize.width, height: targetSize.height)
+        .buttonStyle(.glass)
         .background(
             RemoteWindowAccessor(
                 cardCount: viewModel.processes.count,
@@ -287,7 +290,7 @@ struct GameSectionView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        GroupBox {
+        RemoteGlassGroupBox {
             DraggableHorizontalScrollView {
                 HStack(spacing: RemoteWindowLayout.gameCardSpacing) {
                     ForEach(viewModel.processes) { process in
@@ -314,7 +317,7 @@ struct GameSectionView: View {
                     Label("새로고침", systemImage: "arrow.clockwise")
                         .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.glass)
                 .controlSize(.small)
                 .help("새로고침")
                 .disabled(viewModel.isLoading)
@@ -382,7 +385,7 @@ struct RemoteSidebarView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                GroupBox("연결") {
+                RemoteGlassGroupBox("연결") {
                     VStack(alignment: .leading, spacing: 8) {
                         if viewModel.isPaired {
                             SidebarInfoRow(label: "서버", value: viewModel.baseURLText)
@@ -413,7 +416,7 @@ struct RemoteSidebarView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("PC 전원") {
+                RemoteGlassGroupBox("PC 전원") {
                     VStack(alignment: .leading, spacing: 8) {
                         if viewModel.status?.power?.configured != true {
                             Text("전원 제어 설정 전입니다. 고급 설정에서 최초 1회만 설정하세요.")
@@ -430,7 +433,7 @@ struct RemoteSidebarView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("앱") {
+                RemoteGlassGroupBox("앱") {
                     HStack {
                         SettingsOpenButton()
                         Spacer(minLength: 0)
@@ -458,7 +461,7 @@ struct SettingsOpenButton: View {
                 }
             }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
     }
 
     private func openSettingsWindowFallback() {
@@ -487,6 +490,7 @@ struct HeaderStatusView: View {
                 } label: {
                     Label(sidebarVisible ? "패널 숨기기" : "패널 보기", systemImage: sidebarVisible ? "sidebar.left" : "sidebar.leading")
                 }
+                .buttonStyle(.glass)
                 .controlSize(.small)
             }
             if let readiness = viewModel.readiness {
@@ -546,11 +550,12 @@ struct RemoteGameCard: View {
                 Label("실행", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.glassProminent)
             .controlSize(.small)
         }
         .padding(10)
         .frame(width: RemoteWindowLayout.gameCardWidth, height: RemoteWindowLayout.gameCardHeight, alignment: .topLeading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .remoteGlass(.card, interactive: true)
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(process.isRunning ? Color.green.opacity(0.55) : Color.secondary.opacity(0.16), lineWidth: 1)
@@ -713,7 +718,7 @@ struct HostStatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(viewModel.hostStatusColor)
-            .background(viewModel.hostStatusColor.opacity(0.14), in: Capsule())
+            .remoteGlass(.pill, tint: viewModel.hostStatusColor.opacity(0.20))
     }
 }
 
@@ -721,52 +726,56 @@ struct MenuBarPopoverView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("HomeworkHelper")
-                    .font(.headline)
-                Spacer()
-                HostStatusPill(viewModel: viewModel)
+        GlassEffectContainer(spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("HomeworkHelper")
+                        .font(.headline)
+                    Spacer()
+                    HostStatusPill(viewModel: viewModel)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(viewModel.processes.prefix(5)) { process in
+                        MenuBarGameRow(process: process, viewModel: viewModel)
+                    }
+                    if viewModel.processes.count > 5 {
+                        Text("외 \(viewModel.processes.count - 5)개")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if viewModel.processes.isEmpty {
+                        Text("캐시된 게임 상태가 없습니다.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack(spacing: 8) {
+                    PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                    PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                    PowerSquareButton(action: "restart", label: "재시동", systemImage: "arrow.clockwise", viewModel: viewModel)
+                    PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                }
+                Divider()
+                HStack(spacing: 8) {
+                    Button { RemoteAppDelegate.showMainWindow() } label: {
+                        Label("창 열기", systemImage: "macwindow")
+                            .frame(maxWidth: .infinity)
+                    }
+                    Button { Task { await viewModel.refresh() } } label: {
+                        Label("새로고침", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    Button { NSApp.terminate(nil) } label: {
+                        Label("앱 종료", systemImage: "power")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
             }
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(viewModel.processes.prefix(5)) { process in
-                    MenuBarGameRow(process: process, viewModel: viewModel)
-                }
-                if viewModel.processes.count > 5 {
-                    Text("외 \(viewModel.processes.count - 5)개")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if viewModel.processes.isEmpty {
-                    Text("캐시된 게임 상태가 없습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            HStack(spacing: 8) {
-                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                PowerSquareButton(action: "restart", label: "재시동", systemImage: "arrow.clockwise", viewModel: viewModel)
-                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
-            }
-            Divider()
-            HStack(spacing: 8) {
-                Button { RemoteAppDelegate.showMainWindow() } label: {
-                    Label("창 열기", systemImage: "macwindow")
-                        .frame(maxWidth: .infinity)
-                }
-                Button { Task { await viewModel.refresh() } } label: {
-                    Label("새로고침", systemImage: "arrow.clockwise")
-                        .frame(maxWidth: .infinity)
-                }
-                Button { NSApp.terminate(nil) } label: {
-                    Label("앱 종료", systemImage: "power")
-                        .frame(maxWidth: .infinity)
-                }
-            }
+            .padding(14)
+            .remoteGlass(.popover)
+            .buttonStyle(.glass)
+            .frame(width: 360)
         }
-        .padding(14)
-        .frame(width: 360)
     }
 }
 
@@ -774,7 +783,7 @@ struct PlaySummaryView: View {
     let summary: RemoteDashboardSummary
 
     var body: some View {
-        GroupBox("플레이 요약") {
+        RemoteGlassGroupBox("플레이 요약") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(summary.range.start) ~ \(summary.range.end)")
                     .font(.caption)
@@ -813,7 +822,7 @@ struct BeholderIncidentSummaryView: View {
     let incidents: [RemoteBeholderIncident]
 
     var body: some View {
-        GroupBox("Beholder 알림") {
+        RemoteGlassGroupBox("Beholder 알림") {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(incidents.prefix(3)) { incident in
                     VStack(alignment: .leading, spacing: 4) {
@@ -839,8 +848,9 @@ struct RemoteSettingsView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        TabView {
-            settingsConnectionTab
+        GlassEffectContainer(spacing: 12) {
+            TabView {
+                settingsConnectionTab
                 .tabItem { Label("연결", systemImage: "link") }
             settingsPowerTab
                 .tabItem { Label("전원", systemImage: "bolt") }
@@ -848,15 +858,18 @@ struct RemoteSettingsView: View {
                 .tabItem { Label("기기", systemImage: "display.2") }
             settingsAndroidTab
                 .tabItem { Label("Android", systemImage: "app.connected.to.app.below.fill") }
-            settingsAppTab
-                .tabItem { Label("앱", systemImage: "gearshape") }
+                settingsAppTab
+                    .tabItem { Label("앱", systemImage: "gearshape") }
+            }
+            .remoteGlass(.settings)
         }
         .padding()
+        .buttonStyle(.glass)
     }
 
     private var settingsConnectionTab: some View {
         SettingsTabScrollView {
-            GroupBox("연결/페어링") {
+            RemoteGlassGroupBox("연결/페어링") {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Base URL", text: $viewModel.baseURLText)
                         .textFieldStyle(.roundedBorder)
@@ -893,7 +906,7 @@ struct RemoteSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox("Tailscale") {
+            RemoteGlassGroupBox("Tailscale") {
                 VStack(alignment: .leading, spacing: 8) {
                     Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
                     if let local = viewModel.localTailscale {
@@ -903,7 +916,7 @@ struct RemoteSettingsView: View {
                         }
                         ForEach(local.suggestedBaseURLs, id: \.self) { url in
                             Button(url) { viewModel.applySuggestedBaseURL(url) }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.glass)
                         }
                     }
                     if let serverTailscale = viewModel.serverTailscaleEnsure {
@@ -918,7 +931,7 @@ struct RemoteSettingsView: View {
 
     private var settingsPowerTab: some View {
         SettingsTabScrollView {
-            GroupBox("전원/SSH/SmartThings") {
+            RemoteGlassGroupBox("전원/SSH/SmartThings") {
                 VStack(alignment: .leading, spacing: 8) {
                     if let response = viewModel.powerConfigResponse {
                         SidebarInfoRow(label: "설정 파일", value: response.configPath)
@@ -964,7 +977,7 @@ struct RemoteSettingsView: View {
                             Button("\(candidate.name) · \(candidate.id)") {
                                 viewModel.applySmartThingsDevice(candidate)
                             }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(.glass)
                         }
                     }
                 }
@@ -975,7 +988,7 @@ struct RemoteSettingsView: View {
 
     private var settingsDevicesTab: some View {
         SettingsTabScrollView {
-            GroupBox("기기 관리") {
+            RemoteGlassGroupBox("기기 관리") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Button("디바이스 새로고침") { Task { await viewModel.refreshDevices() } }
@@ -996,7 +1009,7 @@ struct RemoteSettingsView: View {
                             Spacer()
                             if device.revokedAt == nil {
                                 Button("폐기") { Task { await viewModel.revoke(device) } }
-                                    .buttonStyle(.borderless)
+                                    .buttonStyle(.glass)
                             } else {
                                 Text("폐기됨").font(.caption).foregroundStyle(.secondary)
                             }
@@ -1011,7 +1024,7 @@ struct RemoteSettingsView: View {
 
     private var settingsAndroidTab: some View {
         SettingsTabScrollView {
-            GroupBox("Android-PC 연결") {
+            RemoteGlassGroupBox("Android-PC 연결") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Android 클라이언트가 준비될 때 사용할 매핑입니다. 기본 화면에서는 숨깁니다.")
                         .font(.caption)
@@ -1047,7 +1060,7 @@ struct RemoteSettingsView: View {
 
     private var settingsAppTab: some View {
         SettingsTabScrollView {
-            GroupBox("앱 동작") {
+            RemoteGlassGroupBox("앱 동작") {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle("로그인 시 실행", isOn: Binding(
                         get: { viewModel.launchAtLoginEnabled },
@@ -1156,7 +1169,7 @@ struct PowerSquareButton: View {
             .frame(width: 52, height: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
     }
 }
@@ -1179,7 +1192,7 @@ struct SetupInstructionBlock: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .remoteGlass(.section)
     }
 }
 
@@ -1239,7 +1252,7 @@ struct ReadinessPill: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.thinMaterial, in: Capsule())
+        .remoteGlass(.pill)
         .help(section.message)
     }
 }

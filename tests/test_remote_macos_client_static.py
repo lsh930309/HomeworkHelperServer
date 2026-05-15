@@ -14,7 +14,8 @@ def test_macos_package_keeps_native_swiftui_executable_contract():
     app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
 
     assert 'name: "HomeworkHelperRemote"' in package
-    assert 'platforms: [.macOS(.v13)]' in package
+    assert 'platforms: [.macOS("26.0")]' in package
+    assert '.macOS(.v13)' not in package
     assert '.executableTarget(' in package
     assert 'path: "Sources/HomeworkHelperRemote"' in package
     assert 'import SwiftUI' in app
@@ -212,6 +213,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "UserDefaults.standard" in view_model
     assert "func bootstrap() async" in view_model
     window_accessor = _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
+    liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
     assert "RemoteWindowLayout.contentSize" in app
     assert "RemoteWindowLayout.maxWindowSize" in window_accessor
     assert "RemoteAppDelegate.mainWindowTitle" in window_accessor
@@ -232,11 +234,18 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "deduplicateMainWindows(preferred: window)" in app
     assert "typeName.contains(\"Popover\") == false" in app
     assert "RemoteWindowAccessor" in app
-    assert "RemoteGlassBackground" in app
-    assert "NSVisualEffectView" in window_accessor
+    assert "RemoteAppKitLiquidGlassBackground" in app
+    assert "RemoteGlassBackground" not in app
+    assert "NSVisualEffectView" not in window_accessor
+    assert "NSGlassEffectView" in liquid_glass
+    assert "NSGlassEffectContainerView" in liquid_glass
+    assert "glassEffect" in liquid_glass
+    assert "GlassEffectContainer" in app
+    assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
+    assert ".thinMaterial" not in app
     assert "window.isOpaque = false" in window_accessor
     assert "ScrollView {" in app
-    assert "GroupBox(\"연결\")" in app
+    assert "RemoteGlassGroupBox(\"연결\")" in app
     assert "NavigationSplitView" not in app
     assert "@State private var sidebarVisible = false" in app
     assert ".homeworkHelperRemoteMainWindowWillShow" in app
