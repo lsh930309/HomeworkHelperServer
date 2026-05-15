@@ -110,7 +110,10 @@ private enum RemoteClientPreferences {
     }
 
     static func loadShowPlaySummary() -> Bool {
-        defaults.object(forKey: showPlaySummaryKey) as? Bool ?? true
+        if RemoteUITestFlags.showSummary {
+            return true
+        }
+        return defaults.object(forKey: showPlaySummaryKey) as? Bool ?? true
     }
 
     static func saveShowPlaySummary(_ enabled: Bool) {
@@ -210,7 +213,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var mobileSessions: [RemoteMobileSession] = []
     @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses()
     @Published var devices: [RemoteDevice] = []
-    @Published var launchAtLoginEnabled = RemoteLoginItemManager.isEnabled
+    @Published var launchAtLoginEnabled = RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled
     @Published var loginLaunchShowsWindow = RemoteClientPreferences.loadLoginLaunchShowsWindow() {
         didSet { RemoteClientPreferences.saveLoginLaunchShowsWindow(loginLaunchShowsWindow) }
     }
@@ -265,17 +268,112 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private let tokenStore: any RemoteTokenStore
+    private let bootstrapEnabled: Bool
     private var mirrorTask: Task<Void, Never>?
     private var lastStateRevision: String?
     private var consecutiveMirrorFailures = 0
 
-    init(tokenStore: any RemoteTokenStore = KeychainTokenStore()) {
+    init(tokenStore: any RemoteTokenStore = KeychainTokenStore(), bootstrapEnabled: Bool = true) {
         self.tokenStore = tokenStore
-        tokenText = tokenStore.load()
+        self.bootstrapEnabled = bootstrapEnabled
+        tokenText = bootstrapEnabled ? tokenStore.load() : "ui-test-token"
+        if !bootstrapEnabled {
+            applyUITestSnapshot()
+        }
     }
 
     deinit {
         mirrorTask?.cancel()
+    }
+
+    private func applyUITestSnapshot() {
+        tokenText = "ui-test-token"
+        hostConnectionState = "online"
+        pairingRecoveryMessage = ""
+        message = "GUI 검수 모드: 외부 상태 접근 없이 샘플 데이터를 표시합니다."
+        setupProgress = "GUI 검수 모드입니다. Keychain, 네트워크, Tailscale 자동 점검을 건너뜁니다."
+        let readySection = RemoteReadiness.Section(
+            state: "ready",
+            color: "green",
+            message: "GUI 검수용 준비됨",
+            activeIncidents: 0,
+            authRequired: false,
+            supportedActions: ["wake", "sleep", "restart", "shutdown"],
+            suggestedBaseURLs: [],
+            details: nil
+        )
+        readiness = RemoteReadiness(
+            beholderHealth: readySection,
+            remoteConnectivity: readySection,
+            serverModeReadiness: readySection,
+            powerReadiness: readySection,
+            tailscaleReadiness: readySection
+        )
+        status = RemoteStatus(
+            app: "HomeworkHelper",
+            remoteAPIVersion: "ui-test",
+            serverTime: Date().timeIntervalSince1970,
+            stateRevision: "ui-test",
+            updatedAt: Date().timeIntervalSince1970,
+            counts: RemoteStatus.Counts(processes: 4, shortcuts: 0, activeSessions: 0),
+            capabilities: RemoteStatus.Capabilities(
+                processLaunch: true,
+                shortcutOpen: true,
+                dashboardSummary: true,
+                beholderIncidents: true,
+                gameLinks: true,
+                mobileSessions: true,
+                powerConfig: true,
+                powerControl: true,
+                beholder: true,
+                authRequired: true,
+                pairing: true
+            ),
+            power: RemoteStatus.Power(
+                configured: true,
+                status: "ready",
+                supportedActions: ["wake", "sleep", "restart", "shutdown"],
+                targetHost: "ui-test-host"
+            ),
+            readiness: readiness
+        )
+        processes = Self.uiTestProcesses()
+        dashboardSummary = RemoteDashboardSummary(
+            range: RemoteDashboardSummary.Range(start: "ui-test", end: "ui-test"),
+            metrics: RemoteDashboardSummary.Metrics(
+                totalSeconds: 13200,
+                dailyAverageSeconds: 3600,
+                playedDays: 4,
+                sessionCount: 7,
+                topGame: RemoteDashboardSummary.Game(displayName: "명조: 워더링 웨이브", totalSeconds: 5400, sessionCount: 2)
+            ),
+            mobileMetrics: RemoteDashboardSummary.MobileMetrics(
+                totalSeconds: 2400,
+                activeSeconds: 1200,
+                sessionCount: 2,
+                activeSessionCount: 0,
+                sourceBreakdown: ["android": 2],
+                topGame: RemoteDashboardSummary.MobileMetrics.Game(
+                    displayName: "붕괴: 스타레일",
+                    androidPackageName: "com.HoYoverse.hkrpgoversea",
+                    totalSeconds: 2400,
+                    sessionCount: 2,
+                    activeSessionCount: 0
+                )
+            )
+        )
+    }
+
+    private static func uiTestProcesses() -> [RemoteProcess] {
+        let json = """
+        [
+          {"id":"ww","name":"명조: 워더링 웨이브","monitoring_path":null,"launch_path":null,"preferred_launch_type":"process","last_played_timestamp":null,"stamina_current":120,"stamina_max":240,"progress":{"kind":"stamina","percentage":50,"display_text":"내일 낮 12시 완료","stamina_current":120,"stamina_max":240,"hoyolab_game_id":null,"resource_icon_url":null,"resource_icon_urls":null,"remaining_seconds":36000,"ready_at":1893500000},"icon_url":null,"icon_urls":null,"is_running":false,"played_today":true,"status_text":"오늘 실행"},
+          {"id":"nikke","name":"승리의 여신: 니케","monitoring_path":null,"launch_path":null,"preferred_launch_type":"process","last_played_timestamp":null,"stamina_current":160,"stamina_max":240,"progress":{"kind":"stamina","percentage":66,"display_text":"내일 낮 12시 완료","stamina_current":160,"stamina_max":240,"hoyolab_game_id":null,"resource_icon_url":null,"resource_icon_urls":null,"remaining_seconds":28800,"ready_at":1893500000},"icon_url":null,"icon_urls":null,"is_running":false,"played_today":true,"status_text":"오늘 실행"},
+          {"id":"zzz","name":"젠레스 존 제로","monitoring_path":null,"launch_path":null,"preferred_launch_type":"process","last_played_timestamp":null,"stamina_current":44,"stamina_max":240,"progress":{"kind":"stamina","percentage":18,"display_text":"44/240","stamina_current":44,"stamina_max":240,"hoyolab_game_id":null,"resource_icon_url":null,"resource_icon_urls":null,"remaining_seconds":72000,"ready_at":1893500000},"icon_url":null,"icon_urls":null,"is_running":false,"played_today":false,"status_text":"대기"},
+          {"id":"hsr","name":"붕괴: 스타레일","monitoring_path":null,"launch_path":null,"preferred_launch_type":"process","last_played_timestamp":null,"stamina_current":37,"stamina_max":300,"progress":{"kind":"stamina","percentage":12,"display_text":"37/300","stamina_current":37,"stamina_max":300,"hoyolab_game_id":null,"resource_icon_url":null,"resource_icon_urls":null,"remaining_seconds":84000,"ready_at":1893500000},"icon_url":null,"icon_urls":null,"is_running":true,"played_today":true,"status_text":"실행 중"}
+        ]
+        """
+        return (try? JSONDecoder().decode([RemoteProcess].self, from: Data(json.utf8))) ?? []
     }
 
     private var client: RemoteAPIClient? {
@@ -309,6 +407,10 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func bootstrap() async {
+        guard bootstrapEnabled else {
+            applyUITestSnapshot()
+            return
+        }
         startMirroring()
         setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
         let snapshot = await TailscaleDiscovery.status()
@@ -340,7 +442,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func startMirroring() {
-        guard mirrorTask == nil else { return }
+        guard bootstrapEnabled, mirrorTask == nil else { return }
         mirrorTask = Task { [weak self] in
             while !Task.isCancelled {
                 let seconds: UInt64 = await MainActor.run {
@@ -572,6 +674,10 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func refresh() async {
+        guard bootstrapEnabled else {
+            applyUITestSnapshot()
+            return
+        }
         guard let client else {
             message = "Remote Agent URL이 올바르지 않습니다."
             return

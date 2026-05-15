@@ -189,3 +189,56 @@
   - 테스트 방법: `RemoteWindowAccessor` 정적 확인 및 Swift build 수행.
   - 테스트 결과: `.fullSizeContentView`, `titlebarAppearsTransparent`, `titleVisibility = .hidden`, `isMovableByWindowBackground = true` 적용.
   - 통과 판정 근거: native title text를 숨기고 content/glass가 titlebar 영역까지 확장될 수 있는 window shell로 전환했다. 실제 traffic light 주변 비침은 수동 검수 필요.
+
+---
+
+## 7. image copy 7 Ralph-loop 대응 검증 기록
+
+- [x] dashboard vertical scroll 제거
+  - 테스트 방법: macOS 정적 테스트에서 `RemoteDashboardView` 범위에 `ScrollView {` 및 `.scrollClipDisabled`가 없는지 확인하고 Swift build 수행.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: 메인 dashboard는 고정 `VStack` 레이아웃으로 전환됐고, horizontal game card scroll만 별도 `DraggableHorizontalScrollView`로 유지됐다.
+
+- [x] sidebar overflow/clipping 완화
+  - 테스트 방법: macOS 정적 테스트에서 `RemoteSidebarView` 범위의 `ScrollView` 부재, native-style `sidebarConnectionSection/sidebarPowerSection/sidebarAppSection`, nested `RemoteGlassGroupBox` 부재, `sidebarMinimumHeight` 기반 window height 산식을 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: sidebar는 단일 section 구조로 줄었고, 펼침 상태의 최소 높이가 window content size에 반영되어 하단 설정 버튼이 잘릴 위험을 줄였다.
+
+- [x] titlebar 과도 여백 축소
+  - 테스트 방법: `RemoteWindowAccessor.swift`에서 `titlebarReserveHeight`가 18pt로 줄었고 frame-level glass background가 유지되는지 확인한 뒤 Swift build 수행.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: 기존 56pt reserve로 생기던 넓은 불투명 상단 영역을 줄이고 full-size transparent titlebar 계약은 유지했다.
+
+- [x] 암호 없는 GUI 검수 루프 기반 추가
+  - 테스트 방법: release packaging을 `/tmp/hh-remote-ralph`에 수행하고 hidden UI-test launch arguments marker 및 package plist `LSMinimumSystemVersion=26.0`을 테스트로 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: `/Applications` 설치 없이 임시 app bundle을 실행할 수 있고, `--ui-test-show-window/sidebar/summary`로 수동 조작 없이 검수 상태를 요청할 수 있다. 일반 실행의 sidebar hidden-by-default는 `if !Self.showsSidebarForUITest` guard로 유지된다.
+
+- [ ] 자동 스크린샷 기반 시각 판정
+  - 테스트 방법: `screencapture -x /tmp/hh-remote-ralph/artifacts/iteration-*.png` 실행.
+  - 테스트 결과: 실패 — `could not create image from display`; CoreGraphics window metadata query도 `count=0`.
+  - 통과 판정 근거: 미통과. 코드/패키지 실행 검증은 완료했지만 현재 Codex GUI 세션의 display/window observation 제약 때문에 새 화면을 직접 판독하지 못했다.
+
+---
+
+## 8. GUI 검수 no-external-state 모드 검증 기록
+
+- [x] GUI 검수 모드에서 Keychain 암호 프롬프트 회피
+  - 테스트 방법: 정적 테스트에서 `RemoteUITestFlags.skipExternalState`, `InMemoryTokenStore(initialToken: "ui-test-token")`, `bootstrapEnabled: !RemoteUITestFlags.skipExternalState`, `guard bootstrapEnabled` marker를 확인하고 Swift build 수행.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: `--ui-test-*` 실행에서는 `KeychainTokenStore`를 쓰지 않고 샘플 snapshot을 표시하므로 GUI 품질 검수에 불필요한 Keychain/네트워크 접근을 차단한다.
+
+- [x] GUI 검수 모드에서도 메인 창 1개 유지
+  - 테스트 방법: 임시 packaged app을 `--ui-test-show-window --ui-test-show-sidebar --ui-test-show-summary --ui-test-no-external-state`로 실행하고 CoreGraphics window metadata를 `./artifacts/gui-loop-20260515-232134-windows.txt`에 기록.
+  - 테스트 결과: `mainWindowLikeCount=1`.
+  - 통과 판정 근거: UI test 모드에서 일반 SwiftUI Window를 1x1 placeholder로 축소하고 검수용 dashboard NSWindow만 main-like window로 남겨 중복 생성을 제거했다.
+
+- [x] GUI loop artifact 저장 위치
+  - 테스트 방법: GUI loop command가 `mkdir -p artifacts` 후 process/window/screencapture 결과를 `./artifacts/gui-loop-*`에 저장하는지 확인.
+  - 테스트 결과: 통과. `artifacts/gui-loop-20260515-233038-*` 파일 생성.
+  - 통과 판정 근거: 사용자가 요청한 프로젝트 루트 `./artifacts`에 loop별 증거 파일이 남는다. PNG 캡처는 현재 세션 권한 문제로 생성 실패했다.
+
+- [ ] 자동 PNG 스크린샷
+  - 테스트 방법: full display와 specific window ID 대상으로 `screencapture` 실행.
+  - 테스트 결과: 실패 — `could not create image from display`, `could not create image from window`.
+  - 통과 판정 근거: 미통과. 앱 실행과 창 1개 생성은 확인했지만, 현재 Codex/macOS 세션의 화면 캡처 권한 또는 display session 제약으로 PNG 생성은 불가했다.

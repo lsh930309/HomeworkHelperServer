@@ -7,12 +7,13 @@ enum RemoteWindowLayout {
     static let horizontalPadding: CGFloat = 32
     static let glassOuterInset: CGFloat = 14
     static let glassHaloAllowance: CGFloat = 8
-    static let titlebarReserveHeight: CGFloat = 56
+    static let titlebarReserveHeight: CGFloat = 18
     static let gameCardWidth: CGFloat = 180
     static let gameCardHeight: CGFloat = 126
     static let gameCardSpacing: CGFloat = 12
     static let minWindowWidth: CGFloat = 720
-    static let compactWindowHeight: CGFloat = 390
+    static let compactWindowHeight: CGFloat = 356
+    static let sidebarMinimumHeight: CGFloat = 404
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -46,8 +47,10 @@ enum RemoteWindowLayout {
         let baseHeight: CGFloat = 312
         let summaryHeight: CGFloat = hasSummary ? 116 : 0
         let incidentHeight: CGFloat = hasIncidents ? 92 : 0
+        let contentHeight = baseHeight + summaryHeight + incidentHeight
+        let sidebarHeight = sidebarVisible ? sidebarMinimumHeight : 0
         let shellVerticalInset = titlebarReserveHeight + glassOuterInset + glassHaloAllowance
-        let rawHeight = baseHeight + summaryHeight + incidentHeight + shellVerticalInset
+        let rawHeight = max(contentHeight, sidebarHeight) + shellVerticalInset
         return CGSize(
             width: min(maxSize.width, max(minWindowWidth, rawWidth)),
             height: min(maxSize.height, max(compactWindowHeight, rawHeight))
@@ -98,6 +101,25 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        installFrameGlassBackground(in: window)
         RemoteAppDelegate.prepareMainWindow(window)
+    }
+
+    private func installFrameGlassBackground(in window: NSWindow) {
+        guard let frameView = window.contentView?.superview else { return }
+        let backgroundIdentifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteFrameGlassBackground")
+        if frameView.subviews.contains(where: { $0.identifier == backgroundIdentifier }) { return }
+        let glass = NSGlassEffectView()
+        glass.identifier = backgroundIdentifier
+        glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
+        glass.clipsToBounds = false
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        frameView.addSubview(glass, positioned: .below, relativeTo: window.contentView)
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: frameView.leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
+            glass.topAnchor.constraint(equalTo: frameView.topAnchor),
+            glass.bottomAnchor.constraint(equalTo: frameView.bottomAnchor),
+        ])
     }
 }

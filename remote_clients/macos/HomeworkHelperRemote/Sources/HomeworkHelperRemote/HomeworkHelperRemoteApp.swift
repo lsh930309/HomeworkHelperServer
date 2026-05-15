@@ -9,7 +9,16 @@ extension Notification.Name {
 
 @MainActor
 enum RemoteSharedModel {
-    static let viewModel = RemoteDashboardViewModel()
+    private static var tokenStore: any RemoteTokenStore {
+        RemoteUITestFlags.skipExternalState
+            ? InMemoryTokenStore(initialToken: "ui-test-token")
+            : KeychainTokenStore()
+    }
+
+    static let viewModel = RemoteDashboardViewModel(
+        tokenStore: tokenStore,
+        bootstrapEnabled: !RemoteUITestFlags.skipExternalState
+    )
 }
 
 @MainActor
@@ -18,6 +27,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     static let mainWindowTitle = "HomeworkHelper Remote"
 
     private static var isOpeningMainWindow = false
+    private static var uiTestMainWindow: NSWindow?
 
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
@@ -34,7 +44,11 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
         }
-        if shouldHideMainWindowForLoginLaunch {
+        if RemoteUITestFlags.showWindow {
+            DispatchQueue.main.async {
+                Self.showUITestMainWindow()
+            }
+        } else if shouldHideMainWindowForLoginLaunch {
             DispatchQueue.main.async {
                 Self.mainWindows().forEach { $0.orderOut(nil) }
             }
@@ -52,7 +66,8 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private var shouldHideMainWindowForLoginLaunch: Bool {
-        RemoteLoginItemManager.isEnabled
+        guard !RemoteUITestFlags.skipExternalState else { return false }
+        return RemoteLoginItemManager.isEnabled
         && !RemoteSharedModel.viewModel.loginLaunchShowsWindow
         && (ProcessInfo.processInfo.environment["LaunchServicesLaunchReason"] == "LoginItems"
             || ProcessInfo.processInfo.arguments.contains("--launched-at-login"))
@@ -92,12 +107,64 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             focusMainWindow(window)
             return
         }
+        if RemoteUITestFlags.showWindow {
+            showUITestMainWindow()
+            return
+        }
         guard !isOpeningMainWindow else { return }
         isOpeningMainWindow = true
         NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
         DispatchQueue.main.async {
             isOpeningMainWindow = false
             if let window = deduplicateMainWindows() {
+                focusMainWindow(window)
+            }
+        }
+    }
+
+
+
+    static func showUITestMainWindow() {
+        if let window = uiTestMainWindow {
+            focusMainWindow(window)
+            settleUITestWindows(preferred: window)
+            return
+        }
+
+        let initialSize = RemoteWindowLayout.contentSize(
+            cardCount: max(1, RemoteSharedModel.viewModel.processes.count),
+            sidebarVisible: true,
+            hasSummary: RemoteSharedModel.viewModel.showPlaySummary && RemoteSharedModel.viewModel.dashboardSummary != nil,
+            hasIncidents: !RemoteSharedModel.viewModel.beholderIncidents.isEmpty
+        )
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: initialSize),
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: RemoteDashboardView(viewModel: RemoteSharedModel.viewModel))
+        prepareMainWindow(window)
+        window.center()
+        uiTestMainWindow = window
+        focusMainWindow(window)
+        settleUITestWindows(preferred: window)
+    }
+
+    private static func settleUITestWindows(preferred window: NSWindow) {
+        for delay in [0.2, 1.0, 2.0, 3.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                for candidate in NSApp.windows where candidate !== window {
+                    let typeName = String(describing: type(of: candidate))
+                    guard typeName.contains("Popover") == false,
+                          candidate.frame.width > 100,
+                          candidate.frame.height > 100 else {
+                        continue
+                    }
+                    candidate.orderOut(nil)
+                }
+                _ = deduplicateMainWindows(preferred: window)
                 focusMainWindow(window)
             }
         }
@@ -165,7 +232,12 @@ struct HomeworkHelperRemoteApp: App {
 
     var body: some Scene {
         Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier) {
-            RemoteDashboardView(viewModel: viewModel)
+            if RemoteUITestFlags.showWindow {
+                Color.clear
+                    .frame(width: 1, height: 1)
+            } else {
+                RemoteDashboardView(viewModel: viewModel)
+            }
         }
         .windowResizability(.contentSize)
         .commands {
@@ -214,7 +286,11 @@ struct HomeworkHelperRemoteApp: App {
 
 struct RemoteDashboardView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @State private var sidebarVisible = false
+    @State private var sidebarVisible = RemoteDashboardView.showsSidebarForUITest
+
+    private static var showsSidebarForUITest: Bool {
+        RemoteUITestFlags.showSidebar
+    }
 
     private var targetSize: CGSize {
         let hasVisibleSummary = viewModel.showPlaySummary && viewModel.dashboardSummary != nil
@@ -241,24 +317,21 @@ struct RemoteDashboardView: View {
                             .frame(width: RemoteWindowLayout.dividerWidth)
                     }
 
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
 
-                            GameSectionView(viewModel: viewModel)
+                        GameSectionView(viewModel: viewModel)
 
-                            if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
-                                PlaySummaryView(summary: summary)
-                            }
-
-                            if !viewModel.beholderIncidents.isEmpty {
-                                BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
-                            }
+                        if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
+                            PlaySummaryView(summary: summary)
                         }
-                        .padding(16)
-                        .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+
+                        if !viewModel.beholderIncidents.isEmpty {
+                            BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
+                        }
                     }
-                    .scrollClipDisabled()
+                    .padding(16)
+                    .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                 }
                 .padding(.top, RemoteWindowLayout.titlebarReserveHeight)
                 .padding(.horizontal, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
@@ -277,9 +350,15 @@ struct RemoteDashboardView: View {
                 hasIncidents: !viewModel.beholderIncidents.isEmpty
             )
         )
-        .onAppear { sidebarVisible = false }
+        .onAppear {
+            if !Self.showsSidebarForUITest {
+                sidebarVisible = false
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)) { _ in
-            sidebarVisible = false
+            if !Self.showsSidebarForUITest {
+                sidebarVisible = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteToggleSidebar)) { _ in
             sidebarVisible.toggle()
@@ -391,68 +470,81 @@ struct RemoteSidebarView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                RemoteGlassGroupBox("연결") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if viewModel.isPaired {
-                            SidebarInfoRow(label: "서버", value: viewModel.baseURLText)
-                            SidebarInfoRow(label: "디바이스", value: viewModel.deviceName)
-                            Text(viewModel.message)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        } else {
-                            TextField("http://windows-tailnet-ip:8000", text: $viewModel.baseURLText)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("MacBook", text: $viewModel.deviceName)
-                                .textFieldStyle(.roundedBorder)
-                            HStack {
-                                TextField("6자리 페어링 코드", text: $viewModel.pairingCode)
-                                    .textFieldStyle(.roundedBorder)
-                                Button("페어링") {
-                                    Task { await viewModel.confirmPairing() }
-                                }
-                                .disabled(viewModel.isLoading)
-                            }
-                            Text("페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                RemoteGlassGroupBox("PC 전원") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if viewModel.status?.power?.configured != true {
-                            Text("전원 제어 설정 전입니다. 고급 설정에서 최초 1회만 설정하세요.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        HStack(spacing: 6) {
-                            PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                            PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                            PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                            PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                RemoteGlassGroupBox("앱") {
-                    HStack {
-                        SettingsOpenButton()
-                        Spacer(minLength: 0)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+        VStack(alignment: .leading, spacing: 14) {
+            sidebarConnectionSection
+            Divider().opacity(0.45)
+            sidebarPowerSection
+            Divider().opacity(0.45)
+            sidebarAppSection
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .remoteGlass(.section)
+    }
+
+    private var sidebarConnectionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("연결")
+                .font(.headline)
+            if viewModel.isPaired {
+                SidebarInfoRow(label: "서버", value: viewModel.baseURLText)
+                SidebarInfoRow(label: "디바이스", value: viewModel.deviceName)
+                Text(viewModel.message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                TextField("http://windows-tailnet-ip:8000", text: $viewModel.baseURLText)
+                    .textFieldStyle(.roundedBorder)
+                TextField("MacBook", text: $viewModel.deviceName)
+                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 6) {
+                    TextField("6자리 코드", text: $viewModel.pairingCode)
+                        .textFieldStyle(.roundedBorder)
+                    Button("페어링") {
+                        Task { await viewModel.confirmPairing() }
+                    }
+                    .disabled(viewModel.isLoading)
+                }
+                Text("페어링 후 토큰/기기 관리는 설정에서 관리합니다.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var sidebarPowerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PC 전원")
+                .font(.headline)
+            if viewModel.status?.power?.configured != true {
+                Text("전원 제어 설정 전입니다. 최초 1회만 설정하세요.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            HStack(spacing: 5) {
+                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var sidebarAppSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("앱")
+                .font(.headline)
+            SettingsOpenButton()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1174,7 +1266,7 @@ struct PowerSquareButton: View {
                     .font(.caption2)
                     .lineLimit(1)
             }
-            .frame(width: 52, height: 52)
+            .frame(width: 48, height: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.glass)

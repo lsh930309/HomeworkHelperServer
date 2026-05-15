@@ -95,4 +95,5 @@ def test_macos_packager_plist_accepts_build_versions():
     assert plist["CFBundleShortVersionString"] == "1.2.3"
     assert plist["CFBundleVersion"] == "45"
     assert plist["CFBundlePackageType"] == "APPL"
+    assert plist["LSMinimumSystemVersion"] == "26.0"
     assert plist["NSHighResolutionCapable"] is True

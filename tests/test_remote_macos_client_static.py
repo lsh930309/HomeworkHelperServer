@@ -202,13 +202,18 @@ def test_macos_keychain_store_uses_service_and_account_boundaries():
     assert 'SecItemDelete' in keychain
     assert 'protocol RemoteTokenStore' in keychain
     assert 'struct KeychainTokenStore: RemoteTokenStore' in keychain
+    assert 'final class InMemoryTokenStore: RemoteTokenStore' in keychain
 
 
 def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
     view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
+    ui_test_flags = _read(SOURCE_ROOT / "RemoteUITestFlags.swift")
 
-    assert "RemoteDashboardViewModel()" in app
+    assert "RemoteDashboardViewModel(" in app
+    assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
+    assert "guard !RemoteUITestFlags.skipExternalState else { return false }" in app
+    assert 'InMemoryTokenStore(initialToken: "ui-test-token")' in app
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model
     assert "func bootstrap() async" in view_model
@@ -224,9 +229,13 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "glassOuterInset" in window_accessor
     assert "glassHaloAllowance" in window_accessor
     assert "titlebarReserveHeight" in window_accessor
+    assert "sidebarMinimumHeight" in window_accessor
+    assert "max(contentHeight, sidebarHeight)" in window_accessor
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
     assert "Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier)" in app
+    assert "Color.clear" in app
+    assert ".frame(width: 1, height: 1)" in app
     assert "WindowGroup(" not in app
     assert "static let mainWindowIdentifier = \"HomeworkHelperRemoteMainWindow\"" in app
     assert "static let mainWindowTitle = \"HomeworkHelper Remote\"" in app
@@ -250,23 +259,47 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "window.styleMask.insert(.fullSizeContentView)" in window_accessor
     assert "window.titleVisibility = .hidden" in window_accessor
     assert "window.isMovableByWindowBackground = true" in window_accessor
+    assert "HomeworkHelperRemoteFrameGlassBackground" in window_accessor
+    assert "frameView.addSubview(glass, positioned: .below, relativeTo: window.contentView)" in window_accessor
     assert "RemoteWindowHitTestShield" in liquid_glass
     assert "RemoteHitTestShieldView" in liquid_glass
     assert "bounds.contains(point) ? self : nil" in liquid_glass
     assert "RemoteWindowHitTestShield()" in app
     assert ".contentShape(Rectangle())" in app
     assert "Color.black.opacity(0.001)" in app
-    assert "ScrollView {" in app
-    assert "RemoteGlassGroupBox(\"연결\")" in app
+    dashboard_source = app.split("struct RemoteDashboardView: View", 1)[1].split("struct GameSectionView: View", 1)[0]
+    sidebar_source = app.split("struct RemoteSidebarView: View", 1)[1].split("struct SettingsOpenButton: View", 1)[0]
+    assert "ScrollView {" not in dashboard_source
+    assert "ScrollView {" not in sidebar_source
+    assert ".scrollClipDisabled" not in dashboard_source
+    assert "sidebarConnectionSection" in sidebar_source
+    assert "sidebarPowerSection" in sidebar_source
+    assert "sidebarAppSection" in sidebar_source
+    assert "RemoteGlassGroupBox(\"연결\")" not in sidebar_source
+    assert "RemoteGlassGroupBox(\"PC 전원\")" not in sidebar_source
+    assert "RemoteGlassGroupBox(\"앱\")" not in sidebar_source
+    assert "Text(\"연결\")" in sidebar_source
     assert "NavigationSplitView" not in app
-    assert "@State private var sidebarVisible = false" in app
+    assert "@State private var sidebarVisible = RemoteDashboardView.showsSidebarForUITest" in app
+    assert "--ui-test-show-sidebar" in ui_test_flags
+    assert "HH_REMOTE_SHOW_SIDEBAR" in ui_test_flags
+    assert "--ui-test-show-window" in ui_test_flags
+    assert "HH_REMOTE_SHOW_WINDOW" in ui_test_flags
+    assert "--ui-test-no-external-state" in ui_test_flags
+    assert "HH_REMOTE_NO_EXTERNAL_STATE" in ui_test_flags
+    assert "Self.showUITestMainWindow()" in app
+    assert "showUITestMainWindow" in app
+    assert "uiTestMainWindow" in app
+    assert "settleUITestWindows" in app
+    assert "candidate.orderOut(nil)" in app
+    assert "NSHostingView(rootView: RemoteDashboardView" in app
     assert ".homeworkHelperRemoteMainWindowWillShow" in app
-    assert ".onAppear { sidebarVisible = false }" in app
+    assert "if !Self.showsSidebarForUITest" in app
     assert "NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)" in app
     assert "sidebarVisible.toggle()" in app
     assert "struct SidebarInfoRow: View" in app
     assert "http://windows-tailnet-ip:8000" in app
-    assert "페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다." in app
+    assert "페어링 후 토큰/기기 관리는 설정에서 관리합니다." in app
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
     assert "Settings {" in app
@@ -343,8 +376,15 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "플레이 요약" in app
     assert "플레이 요약 표시" in app
     assert "showPlaySummary" in view_model
+    assert "--ui-test-show-summary" in ui_test_flags
+    assert "HH_REMOTE_SHOW_SUMMARY" in ui_test_flags
+    assert "RemoteUITestFlags.showSummary" in view_model
+    assert "applyUITestSnapshot" in view_model
+    assert "startMirroring()" in view_model
+    assert "guard bootstrapEnabled" in view_model
+    assert "RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled" in view_model
     assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
-    assert "static let compactWindowHeight: CGFloat = 390" in window_accessor
+    assert "static let compactWindowHeight: CGFloat = 356" in window_accessor
     assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
     assert "shellHorizontalInset" in window_accessor
     assert "shellVerticalInset" in window_accessor

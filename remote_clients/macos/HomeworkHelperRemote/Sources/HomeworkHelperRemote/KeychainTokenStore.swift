@@ -49,3 +49,24 @@ struct KeychainTokenStore: RemoteTokenStore {
         ]
     }
 }
+
+
+final class InMemoryTokenStore: RemoteTokenStore {
+    private var token: String
+
+    init(initialToken: String = "") {
+        self.token = initialToken
+    }
+
+    func load() -> String {
+        token
+    }
+
+    func save(_ token: String) {
+        self.token = token
+    }
+
+    func delete() {
+        token = ""
+    }
+}

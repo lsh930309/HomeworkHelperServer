@@ -54,7 +54,7 @@ def _info_plist(version: str = "0.1.0", build: str = "1") -> dict[str, object]:
         "CFBundleShortVersionString": version,
         "CFBundleVersion": str(build),
         "LSApplicationCategoryType": "public.app-category.productivity",
-        "LSMinimumSystemVersion": "13.0",
+        "LSMinimumSystemVersion": "26.0",
         "NSAppTransportSecurity": {
             # Remote Agent is intentionally exposed on a private LAN/Tailscale
             # HTTP endpoint during local remote-control testing. Pairing +
