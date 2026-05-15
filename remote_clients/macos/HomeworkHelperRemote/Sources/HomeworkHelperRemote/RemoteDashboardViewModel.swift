@@ -402,10 +402,37 @@ final class RemoteDashboardViewModel: ObservableObject {
     private static func formatCycleReadyAt(_ timestamp: Double) -> String {
         let date = Date(timeIntervalSince1970: timestamp)
         let calendar = Calendar.current
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = calendar.isDateInToday(date) ? "HH:mm" : "M/d HH:mm"
-        return formatter.string(from: date)
+        let startOfToday = calendar.startOfDay(for: Date())
+        let startOfTarget = calendar.startOfDay(for: date)
+        let dayDelta = calendar.dateComponents([.day], from: startOfToday, to: startOfTarget).day ?? 0
+        let dayText: String
+        switch dayDelta {
+        case -1:
+            dayText = "어제"
+        case 0:
+            dayText = "오늘"
+        case 1:
+            dayText = "내일"
+        case ..<(-1):
+            dayText = "\(abs(dayDelta))일 전"
+        default:
+            dayText = "\(dayDelta)일 후"
+        }
+
+        let hour = calendar.component(.hour, from: date)
+        let period: String
+        switch hour {
+        case 5...10:
+            period = "아침"
+        case 11...16:
+            period = "낮"
+        case 17...20:
+            period = "저녁"
+        default:
+            period = "밤"
+        }
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return "\(dayText) \(period) \(displayHour)시"
     }
 
     private func connectionGuidance(for error: Error) -> String {

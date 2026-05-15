@@ -148,10 +148,17 @@ struct HomeworkHelperRemoteApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
 
-                Button("설정…") {
-                    RemoteAppDelegate.openSettingsWindow()
+                if #available(macOS 14.0, *) {
+                    SettingsLink {
+                        Text("설정…")
+                    }
+                    .keyboardShortcut(",", modifiers: .command)
+                } else {
+                    Button("설정…") {
+                        RemoteAppDelegate.openSettingsWindow()
+                    }
+                    .keyboardShortcut(",", modifiers: .command)
                 }
-                .keyboardShortcut(",", modifiers: .command)
             }
         }
 

@@ -318,6 +318,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert ".onExitCommand" in app
     assert "hideMainWindow()" in app
     assert "CommandMenu(\"원격\")" in app
+    command_menu_source = app.split("CommandMenu(\"원격\")", 1)[1].split("Settings {", 1)[0]
+    assert "if #available(macOS 14.0, *)" in command_menu_source
+    assert "SettingsLink" in command_menu_source
+    assert command_menu_source.index("SettingsLink") < command_menu_source.index("RemoteAppDelegate.openSettingsWindow()")
     assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
     assert ".keyboardShortcut(\"s\", modifiers: [.command, .shift])" in app
     assert ".keyboardShortcut(\"w\", modifiers: .command)" in app
@@ -326,6 +330,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "CycleProgressDisplayMode" in view_model
     assert "cycleProgressDisplayMode" in view_model
     assert "progressDisplayText" in view_model
+    for marker in ["어제", "오늘", "내일", "일 전", "일 후", "아침", "낮", "저녁", "밤"]:
+        assert marker in view_model
+    assert "dateFormat" not in view_model
     assert "viewModel.progressDisplayText(progress)" in app
     assert "dashboardSummary" in view_model
     assert "모바일 플레이" in app
