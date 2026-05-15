@@ -256,8 +256,18 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert 'private static let iconCacheVersion = "v3_pixels"' in cache
     assert "validatedCachedURL" in cache
     assert "decodedPixelDimension(data) >= preferredSize" in cache
+    assert "displayThumbnailImage" in cache
+    assert "displayScale()" in cache
+    assert "icon.diagnostic" in cache
+    assert "display_point_size" in cache
     assert "let preferredSize = 256" in cache
     assert "let preferredSize = 128" in cache
+    assert "func displayIconImage" in view_model
+    assert "func displayResourceIconImage" in view_model
+    assert "viewModel.displayIconImage" in app
+    assert "viewModel.displayResourceIconImage" in app
+    assert "displaySize: 24" in app
+    assert "displaySize: 12" in app
     assert "RemoteClientCache.loadProcesses" in view_model
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
@@ -332,6 +342,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "powerConfig.localWakeConfigured" in view_model
     assert "completePairingOnboarding" in view_model
     assert "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다." in view_model
+    confirm_pairing_source = view_model.split("func confirmPairing() async", 1)[1].split("func refreshToken() async", 1)[0]
+    assert 'pairingRecoveryMessage = ""' in confirm_pairing_source
+    assert 'pairingRecoveryMessage = "페어링 완료' not in confirm_pairing_source
+    assert "message = \"'\\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다.\"" in confirm_pairing_source
     assert "func recoverPairing" in view_model
     recover_pairing_source = view_model.split("func recoverPairing", 1)[1].split("func clearLocalPairing", 1)[0]
     assert "refreshToken()" not in recover_pairing_source

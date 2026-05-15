@@ -22,6 +22,10 @@ struct RemoteClientCache {
         return directory
     }
 
+    private static var iconDiagnosticsURL: URL {
+        cacheDirectory.appendingPathComponent("icon-diagnostics.log")
+    }
+
     static func loadProcesses() -> [RemoteProcess] {
         guard let data = try? Data(contentsOf: processSnapshotURL) else { return [] }
         return (try? JSONDecoder().decode([RemoteProcess].self, from: data)) ?? []
@@ -42,6 +46,38 @@ struct RemoteClientCache {
         return validatedCachedURL(url, minimumPixelSize: preferredSize)
     }
 
+    static func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
+        guard let sourceURL = cachedIconURL(for: process, preferredSize: preferredSize) else { return nil }
+        let scale = displayScale()
+        let pixelSize = max(1, Int(ceil(displayPointSize * scale)))
+        let thumbnailURL = displayIconFileURL(for: process, preferredSize: preferredSize, pixelSize: pixelSize)
+        return displayThumbnailImage(
+            sourceURL: sourceURL,
+            thumbnailURL: thumbnailURL,
+            displayPointSize: displayPointSize,
+            pixelSize: pixelSize,
+            scale: scale,
+            kind: "game",
+            processID: process.id
+        )
+    }
+
+    static func displayResourceIconImage(for process: RemoteProcess, preferredSize: Int = 128, displayPointSize: CGFloat) -> NSImage? {
+        guard let sourceURL = cachedResourceIconURL(for: process, preferredSize: preferredSize) else { return nil }
+        let scale = displayScale()
+        let pixelSize = max(1, Int(ceil(displayPointSize * scale)))
+        let thumbnailURL = displayResourceIconFileURL(for: process, preferredSize: preferredSize, pixelSize: pixelSize)
+        return displayThumbnailImage(
+            sourceURL: sourceURL,
+            thumbnailURL: thumbnailURL,
+            displayPointSize: displayPointSize,
+            pixelSize: pixelSize,
+            scale: scale,
+            kind: "resource",
+            processID: process.id
+        )
+    }
+
     static func cacheIcons(for processes: [RemoteProcess], baseURL: URL) async {
         for process in processes {
             let preferredSize = 256
@@ -52,7 +88,9 @@ struct RemoteClientCache {
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
                 guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("image/png") else { continue }
                 guard decodedPixelDimension(data) >= preferredSize else { continue }
-                try data.write(to: iconFileURL(for: process, preferredSize: preferredSize), options: [.atomic])
+                let destination = iconFileURL(for: process, preferredSize: preferredSize)
+                try data.write(to: destination, options: [.atomic])
+                logIconDiagnostic(kind: "game.download", processID: process.id, sourceURL: source.absoluteString, cachedPath: destination.path, pixelSize: decodedPixelDimension(data), displayPointSize: nil, scale: nil)
             } catch {
                 continue
             }
@@ -66,7 +104,9 @@ struct RemoteClientCache {
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
                 guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("image/png") else { continue }
                 guard decodedPixelDimension(data) >= preferredSize else { continue }
-                try data.write(to: resourceIconFileURL(for: process, preferredSize: preferredSize), options: [.atomic])
+                let destination = resourceIconFileURL(for: process, preferredSize: preferredSize)
+                try data.write(to: destination, options: [.atomic])
+                logIconDiagnostic(kind: "resource.download", processID: process.id, sourceURL: source.absoluteString, cachedPath: destination.path, pixelSize: decodedPixelDimension(data), displayPointSize: nil, scale: nil)
             } catch {
                 continue
             }
@@ -115,6 +155,16 @@ struct RemoteClientCache {
         return iconDirectory.appendingPathComponent("\(safeID)_resource_\(iconCacheVersion)_\(preferredSize).png")
     }
 
+    private static func displayIconFileURL(for process: RemoteProcess, preferredSize: Int, pixelSize: Int) -> URL {
+        let safeID = process.id.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression)
+        return iconDirectory.appendingPathComponent("\(safeID)_display_\(iconCacheVersion)_\(preferredSize)_\(pixelSize).png")
+    }
+
+    private static func displayResourceIconFileURL(for process: RemoteProcess, preferredSize: Int, pixelSize: Int) -> URL {
+        let safeID = process.id.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression)
+        return iconDirectory.appendingPathComponent("\(safeID)_resource_display_\(iconCacheVersion)_\(preferredSize)_\(pixelSize).png")
+    }
+
     private static func validatedCachedURL(_ url: URL, minimumPixelSize: Int) -> URL? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let image = NSImage(contentsOf: url), pixelDimension(image) >= minimumPixelSize else {
@@ -133,5 +183,104 @@ struct RemoteClientCache {
         let representationMax = image.representations.map { max($0.pixelsWide, $0.pixelsHigh) }.max() ?? 0
         let pointMax = Int(max(image.size.width, image.size.height))
         return max(representationMax, pointMax)
+    }
+
+    private static func displayScale() -> CGFloat {
+        NSScreen.main?.backingScaleFactor ?? 2
+    }
+
+    private static func displayThumbnailImage(
+        sourceURL: URL,
+        thumbnailURL: URL,
+        displayPointSize: CGFloat,
+        pixelSize: Int,
+        scale: CGFloat,
+        kind: String,
+        processID: String
+    ) -> NSImage? {
+        if let cached = validatedCachedURL(thumbnailURL, minimumPixelSize: pixelSize),
+           let image = NSImage(contentsOf: cached) {
+            image.size = NSSize(width: displayPointSize, height: displayPointSize)
+            return image
+        }
+        guard let source = NSImage(contentsOf: sourceURL),
+              let thumbnail = renderThumbnail(from: source, displayPointSize: displayPointSize, pixelSize: pixelSize),
+              let data = thumbnail.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: data),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            logIconDiagnostic(kind: "\(kind).display_thumbnail_failed", processID: processID, sourceURL: sourceURL.absoluteString, cachedPath: thumbnailURL.path, pixelSize: pixelSize, displayPointSize: displayPointSize, scale: scale)
+            return nil
+        }
+        try? png.write(to: thumbnailURL, options: [.atomic])
+        logIconDiagnostic(kind: "\(kind).display_thumbnail", processID: processID, sourceURL: sourceURL.absoluteString, cachedPath: thumbnailURL.path, pixelSize: pixelSize, displayPointSize: displayPointSize, scale: scale)
+        return thumbnail
+    }
+
+    private static func renderThumbnail(from source: NSImage, displayPointSize: CGFloat, pixelSize: Int) -> NSImage? {
+        guard pixelSize > 0, displayPointSize > 0 else { return nil }
+        let pointSize = NSSize(width: displayPointSize, height: displayPointSize)
+        guard let representation = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelSize,
+            pixelsHigh: pixelSize,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        representation.size = pointSize
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        guard let context = NSGraphicsContext(bitmapImageRep: representation) else { return nil }
+        context.imageInterpolation = .high
+        NSGraphicsContext.current = context
+        source.draw(in: aspectFitRect(sourceSize: source.size, targetSize: pointSize), from: .zero, operation: .copy, fraction: 1.0)
+        let image = NSImage(size: pointSize)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    private static func aspectFitRect(sourceSize: NSSize, targetSize: NSSize) -> NSRect {
+        guard sourceSize.width > 0, sourceSize.height > 0 else {
+            return NSRect(origin: .zero, size: targetSize)
+        }
+        let scale = min(targetSize.width / sourceSize.width, targetSize.height / sourceSize.height)
+        let size = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        return NSRect(
+            x: (targetSize.width - size.width) / 2,
+            y: (targetSize.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func logIconDiagnostic(kind: String, processID: String, sourceURL: String, cachedPath: String, pixelSize: Int, displayPointSize: CGFloat?, scale: CGFloat?) {
+        let fields: [String: String] = [
+            "event": "icon.diagnostic",
+            "kind": kind,
+            "process_id": processID,
+            "source_url": sourceURL,
+            "cached_path": cachedPath,
+            "pixel_size": String(pixelSize),
+            "display_point_size": displayPointSize.map { String(Double($0)) } ?? "",
+            "scale": scale.map { String(Double($0)) } ?? "",
+            "ts": String(Date().timeIntervalSince1970),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: fields),
+              let line = String(data: data, encoding: .utf8) else { return }
+        if !FileManager.default.fileExists(atPath: iconDiagnosticsURL.path) {
+            FileManager.default.createFile(atPath: iconDiagnosticsURL.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: iconDiagnosticsURL) else { return }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((line + "\n").utf8))
+            try handle.close()
+        } catch {
+            try? handle.close()
+        }
     }
 }

@@ -457,13 +457,13 @@ struct GameIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
     var preferredSize: Int = 256
+    var displaySize: CGFloat = 34
 
     var body: some View {
         Group {
-            if let cached = viewModel.cachedIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
+            if let image = viewModel.displayIconImage(for: process, preferredSize: preferredSize, displayPointSize: displaySize) {
                 Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
+                    .interpolation(.none)
                     .antialiased(true)
                     .scaledToFit()
             } else if let remote = viewModel.remoteIconURL(for: process, preferredSize: preferredSize) {
@@ -499,14 +499,14 @@ struct GameIconView: View {
 struct ResourceIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    var preferredSize: Int = 64
+    var preferredSize: Int = 128
+    var displaySize: CGFloat = 14
 
     var body: some View {
         Group {
-            if let cached = viewModel.cachedResourceIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
+            if let image = viewModel.displayResourceIconImage(for: process, preferredSize: preferredSize, displayPointSize: displaySize) {
                 Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
+                    .interpolation(.none)
                     .antialiased(true)
                     .scaledToFit()
             } else if let remote = viewModel.remoteResourceIconURL(for: process, preferredSize: preferredSize) {
@@ -555,7 +555,7 @@ struct MenuBarGameRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            GameIconView(process: process, viewModel: viewModel, preferredSize: 256)
+            GameIconView(process: process, viewModel: viewModel, preferredSize: 256, displaySize: 24)
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
@@ -577,7 +577,7 @@ struct MenuBarGameRow: View {
                 }
                 if let progress = process.progress {
                     HStack(spacing: 5) {
-                        ResourceIconView(process: process, viewModel: viewModel, preferredSize: 128)
+                        ResourceIconView(process: process, viewModel: viewModel, preferredSize: 128, displaySize: 12)
                             .frame(width: 12, height: 12)
                         ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                             .controlSize(.mini)

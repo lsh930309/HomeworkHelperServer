@@ -357,6 +357,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
+    func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
+        RemoteClientCache.displayIconImage(for: process, preferredSize: preferredSize, displayPointSize: displayPointSize)
+    }
+
+    func displayResourceIconImage(for process: RemoteProcess, preferredSize: Int = 128, displayPointSize: CGFloat) -> NSImage? {
+        RemoteClientCache.displayResourceIconImage(for: process, preferredSize: preferredSize, displayPointSize: displayPointSize)
+    }
+
     private func connectionGuidance(for error: Error) -> String {
         let raw = error.localizedDescription
         if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
@@ -890,7 +898,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             let response = try await service.confirmPairing(code: pairingCode, deviceName: deviceName)
             tokenText = response.token
             pairingCode = ""
-            pairingRecoveryMessage = "페어링 완료: \(response.name)"
+            pairingRecoveryMessage = ""
             readiness = response.onboarding?.readiness ?? readiness
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
             powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
