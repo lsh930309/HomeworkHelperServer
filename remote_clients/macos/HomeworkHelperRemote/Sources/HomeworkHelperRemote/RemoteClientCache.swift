@@ -2,6 +2,7 @@ import Foundation
 
 struct RemoteClientCache {
     private static let appDirectoryName = "HomeworkHelperRemote"
+    private static let iconCacheVersion = "v2"
 
     static var cacheDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -30,19 +31,19 @@ struct RemoteClientCache {
         try? data.write(to: processSnapshotURL, options: [.atomic])
     }
 
-    static func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
+    static func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 256) -> URL? {
         let url = iconFileURL(for: process, preferredSize: preferredSize)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    static func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 32) -> URL? {
+    static func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
         let url = resourceIconFileURL(for: process, preferredSize: preferredSize)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     static func cacheIcons(for processes: [RemoteProcess], baseURL: URL) async {
         for process in processes {
-            let preferredSize = 128
+            let preferredSize = 256
             guard cachedIconURL(for: process, preferredSize: preferredSize) == nil,
                   let source = remoteIconURL(for: process, baseURL: baseURL, preferredSize: preferredSize) else { continue }
             do {
@@ -55,7 +56,7 @@ struct RemoteClientCache {
             }
         }
         for process in processes {
-            let preferredSize = 32
+            let preferredSize = 64
             guard cachedResourceIconURL(for: process, preferredSize: preferredSize) == nil,
                   let source = remoteResourceIconURL(for: process, baseURL: baseURL, preferredSize: preferredSize) else { continue }
             do {
@@ -69,7 +70,7 @@ struct RemoteClientCache {
         }
     }
 
-    static func remoteIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 128) -> URL? {
+    static func remoteIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 256) -> URL? {
         guard let raw = bestURL(from: process.iconURLs, preferredSize: preferredSize) ?? process.iconURL, !raw.isEmpty else { return nil }
         if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
@@ -80,7 +81,7 @@ struct RemoteClientCache {
         return components.url
     }
 
-    static func remoteResourceIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 32) -> URL? {
+    static func remoteResourceIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 64) -> URL? {
         guard let raw = bestURL(from: process.progress?.resourceIconURLs, preferredSize: preferredSize) ?? process.progress?.resourceIconURL, !raw.isEmpty else { return nil }
         if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
@@ -103,11 +104,11 @@ struct RemoteClientCache {
 
     private static func iconFileURL(for process: RemoteProcess, preferredSize: Int) -> URL {
         let safeID = process.id.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression)
-        return iconDirectory.appendingPathComponent("\(safeID)_\(preferredSize).png")
+        return iconDirectory.appendingPathComponent("\(safeID)_\(iconCacheVersion)_\(preferredSize).png")
     }
 
     private static func resourceIconFileURL(for process: RemoteProcess, preferredSize: Int) -> URL {
         let safeID = process.id.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression)
-        return iconDirectory.appendingPathComponent("\(safeID)_resource_\(preferredSize).png")
+        return iconDirectory.appendingPathComponent("\(safeID)_resource_\(iconCacheVersion)_\(preferredSize).png")
     }
 }

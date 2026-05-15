@@ -219,6 +219,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "ScrollView {" in app
     assert "GroupBox(\"연결\")" in app
     assert "NavigationSplitView" not in app
+    assert "@State private var sidebarVisible = false" in app
+    assert ".homeworkHelperRemoteMainWindowWillShow" in app
+    assert ".onAppear { sidebarVisible = false }" in app
+    assert "NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)" in app
     assert "sidebarVisible.toggle()" in app
     assert "struct SidebarInfoRow: View" in app
     assert "http://windows-tailnet-ip:8000" in app
@@ -238,9 +242,16 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "gameViewportWidth(cardCount:" in app
     assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
     assert "GroupBox(\"상태\")" not in app
+    assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app
+    assert ".labelStyle(.iconOnly)" in app
+    assert "Label(viewModel.isLoading ? \"연결 중...\" : \"새로고침\", systemImage: \"arrow.clockwise\")" not in app
     assert "ResourceIconView" in app
     assert "resourceIconURL" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "cachedResourceIconURL" in _read(SOURCE_ROOT / "RemoteClientCache.swift")
+    cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
+    assert 'private static let iconCacheVersion = "v2"' in cache
+    assert "let preferredSize = 256" in cache
+    assert "let preferredSize = 64" in cache
     assert "RemoteClientCache.loadProcesses" in view_model
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
@@ -269,6 +280,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "ReadinessPill" in app
     assert "savePowerConfig" in view_model
     assert "플레이 요약" in app
+    assert "플레이 요약 표시" in app
+    assert "showPlaySummary" in view_model
+    assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
     assert "dashboardSummary" in view_model
     assert "모바일 플레이" in app
     assert "mobileMetrics" in app
@@ -350,6 +364,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "폐기된 기기 정리" in app
     assert "NSStatusItem" in app
     assert "MenuBarPopoverView" in app
+    assert ".interpolation(.high)" in app
+    assert ".antialiased(true)" in app
+    assert ".minimumScaleFactor(0.68)" in app
+    assert ".allowsTightening(true)" in app
     assert "gamecontroller.fill" in view_model
     assert "로그인 시 실행" in app
     assert "로그인 자동 실행 시 창 표시" in app
@@ -362,5 +380,6 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert 'Label("창 열기", systemImage: "macwindow")' in app
     assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app
     assert 'Label("앱 종료", systemImage: "power")' in app
+    assert "HStack(spacing: 8)" in app
     assert "외 \\(viewModel.processes.count - 5)개" in app
     assert "RemoteLoginItemManager" in view_model

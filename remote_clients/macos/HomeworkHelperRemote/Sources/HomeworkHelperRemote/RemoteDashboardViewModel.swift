@@ -49,6 +49,7 @@ private enum RemoteClientPreferences {
     private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
     private static let loginLaunchShowsWindowKey = "remote.loginLaunchShowsWindow"
     private static let menuBarIconSymbolKey = "remote.menuBarIconSymbol"
+    private static let showPlaySummaryKey = "remote.showPlaySummary"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -105,6 +106,14 @@ private enum RemoteClientPreferences {
 
     static func saveMenuBarIconSymbol(_ symbol: String) {
         defaults.set(symbol, forKey: menuBarIconSymbolKey)
+    }
+
+    static func loadShowPlaySummary() -> Bool {
+        defaults.object(forKey: showPlaySummaryKey) as? Bool ?? true
+    }
+
+    static func saveShowPlaySummary(_ enabled: Bool) {
+        defaults.set(enabled, forKey: showPlaySummaryKey)
     }
 }
 
@@ -190,6 +199,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             RemoteClientPreferences.saveMenuBarIconSymbol(menuBarIconSymbol)
             NotificationCenter.default.post(name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"), object: menuBarIconSymbol)
         }
+    }
+    @Published var showPlaySummary = RemoteClientPreferences.loadShowPlaySummary() {
+        didSet { RemoteClientPreferences.saveShowPlaySummary(showPlaySummary) }
     }
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
@@ -325,20 +337,20 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
+    func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 256) -> URL? {
         RemoteClientCache.cachedIconURL(for: process, preferredSize: preferredSize)
     }
 
-    func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 32) -> URL? {
+    func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
         RemoteClientCache.cachedResourceIconURL(for: process, preferredSize: preferredSize)
     }
 
-    func remoteIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
+    func remoteIconURL(for process: RemoteProcess, preferredSize: Int = 256) -> URL? {
         guard let client else { return nil }
         return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
-    func remoteResourceIconURL(for process: RemoteProcess, preferredSize: Int = 32) -> URL? {
+    func remoteResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
         guard let client else { return nil }
         return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }

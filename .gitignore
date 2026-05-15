@@ -90,6 +90,7 @@ src/screenshot/_method.txt
 *.temp
 artifacts/
 local-artifacts/
+*.png
 
 # ===========================
 # 코드 서명 인증서

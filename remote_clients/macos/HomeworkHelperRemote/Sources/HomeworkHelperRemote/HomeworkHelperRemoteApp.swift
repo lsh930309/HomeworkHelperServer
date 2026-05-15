@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 
+extension Notification.Name {
+    static let homeworkHelperRemoteMainWindowWillShow = Notification.Name("HomeworkHelperRemoteMainWindowWillShow")
+}
+
 @MainActor
 enum RemoteSharedModel {
     static let viewModel = RemoteDashboardViewModel()
@@ -75,6 +79,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     static func showMainWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .homeworkHelperRemoteMainWindowWillShow, object: nil)
         if mainWindows().isEmpty {
             NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
         }
@@ -114,13 +119,14 @@ struct HomeworkHelperRemoteApp: App {
 
 struct RemoteDashboardView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @State private var sidebarVisible = true
+    @State private var sidebarVisible = false
 
     private var targetSize: CGSize {
-        RemoteWindowLayout.contentSize(
+        let hasVisibleSummary = viewModel.showPlaySummary && viewModel.dashboardSummary != nil
+        return RemoteWindowLayout.contentSize(
             cardCount: viewModel.processes.count,
             sidebarVisible: sidebarVisible,
-            hasSummary: viewModel.dashboardSummary != nil,
+            hasSummary: hasVisibleSummary,
             hasIncidents: !viewModel.beholderIncidents.isEmpty
         )
     }
@@ -140,7 +146,7 @@ struct RemoteDashboardView: View {
 
                     GameSectionView(viewModel: viewModel)
 
-                    if let summary = viewModel.dashboardSummary {
+                    if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
                         PlaySummaryView(summary: summary)
                     }
 
@@ -157,10 +163,14 @@ struct RemoteDashboardView: View {
             RemoteWindowAccessor(
                 cardCount: viewModel.processes.count,
                 sidebarVisible: sidebarVisible,
-                hasSummary: viewModel.dashboardSummary != nil,
+                hasSummary: viewModel.showPlaySummary && viewModel.dashboardSummary != nil,
                 hasIncidents: !viewModel.beholderIncidents.isEmpty
             )
         )
+        .onAppear { sidebarVisible = false }
+        .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)) { _ in
+            sidebarVisible = false
+        }
         .task { await viewModel.bootstrap() }
     }
 }
@@ -169,7 +179,7 @@ struct GameSectionView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        GroupBox("게임") {
+        GroupBox {
             DraggableHorizontalScrollView {
                 HStack(spacing: RemoteWindowLayout.gameCardSpacing) {
                     ForEach(viewModel.processes) { process in
@@ -186,6 +196,22 @@ struct GameSectionView: View {
                 height: RemoteWindowLayout.gameCardHeight + 10
             )
             .clipped()
+        } label: {
+            HStack {
+                Text("게임")
+                Spacer()
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Label("새로고침", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("새로고침")
+                .disabled(viewModel.isLoading)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -275,12 +301,6 @@ struct RemoteSidebarView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        Button {
-                            Task { await viewModel.refresh() }
-                        } label: {
-                            Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(viewModel.isLoading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -309,8 +329,9 @@ struct RemoteSidebarView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -364,6 +385,8 @@ struct RemoteGameCard: View {
                     Text(process.name)
                         .font(.headline)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.68)
+                        .allowsTightening(true)
                     Text(process.statusText ?? (process.isRunning ? "실행 중" : "대기"))
                         .font(.caption2)
                         .foregroundStyle(process.isRunning ? .green : .secondary)
@@ -407,19 +430,25 @@ struct RemoteGameCard: View {
 struct GameIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    var preferredSize: Int = 128
+    var preferredSize: Int = 256
 
     var body: some View {
         Group {
             if let cached = viewModel.cachedIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
                 Image(nsImage: image)
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .scaledToFit()
             } else if let remote = viewModel.remoteIconURL(for: process, preferredSize: preferredSize) {
                 AsyncImage(url: remote) { phase in
                     switch phase {
                     case .success(let image):
-                        image.resizable().scaledToFit()
+                        image
+                            .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
+                            .scaledToFit()
                     default:
                         fallback
                     }
@@ -444,18 +473,25 @@ struct GameIconView: View {
 struct ResourceIconView: View {
     let process: RemoteProcess
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    var preferredSize: Int = 32
+    var preferredSize: Int = 64
 
     var body: some View {
         Group {
             if let cached = viewModel.cachedResourceIconURL(for: process, preferredSize: preferredSize), let image = NSImage(contentsOf: cached) {
                 Image(nsImage: image)
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .scaledToFit()
             } else if let remote = viewModel.remoteResourceIconURL(for: process, preferredSize: preferredSize) {
                 AsyncImage(url: remote) { phase in
                     switch phase {
-                    case .success(let image): image.resizable().scaledToFit()
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
+                            .scaledToFit()
                     default: fallback
                     }
                 }
@@ -500,6 +536,8 @@ struct MenuBarGameRow: View {
                     Text(process.name)
                         .font(.caption.bold())
                         .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .allowsTightening(true)
                     Spacer(minLength: 4)
                     HStack(spacing: 3) {
                         Circle()
@@ -580,7 +618,7 @@ struct MenuBarPopoverView: View {
                 PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
             }
             Divider()
-            HStack(spacing: 0) {
+            HStack(spacing: 8) {
                 Button { RemoteAppDelegate.showMainWindow() } label: {
                     Label("창 열기", systemImage: "macwindow")
                         .frame(maxWidth: .infinity)
@@ -853,6 +891,7 @@ struct RemoteSettingsView: View {
                             set: { enabled in viewModel.setLaunchAtLogin(enabled) }
                         ))
                         Toggle("로그인 자동 실행 시 창 표시", isOn: $viewModel.loginLaunchShowsWindow)
+                        Toggle("플레이 요약 표시", isOn: $viewModel.showPlaySummary)
                         Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
                             ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
                                 Label(symbol, systemImage: symbol).tag(symbol)
