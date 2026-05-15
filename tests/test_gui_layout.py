@@ -366,6 +366,53 @@ def test_sidebar_activates_when_running_cache_already_exists_without_monitor_cha
         _stop_window(window, app)
 
 
+def test_game_mode_hide_keeps_qt_application_alive(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    data_manager = _FakeApiClient([process])
+    data_manager.global_settings.hide_on_game = True
+    window = main_window.MainWindow(data_manager)
+    hide_reasons = []
+
+    class _TrayProbe:
+        def hide_window_to_tray(self, reason):
+            hide_reasons.append(reason)
+            window.hide()
+
+        def is_tray_icon_visible(self):
+            return True
+
+        def handle_window_close_event(self, event):
+            event.ignore()
+            self.hide_window_to_tray("window_close")
+
+    try:
+        # Simulate a regressed/alternate startup path where the QApplication
+        # default would quit when the host window is hidden after game launch.
+        app.setQuitOnLastWindowClosed(True)
+        window.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, True)
+        window.tray_manager = _TrayProbe()
+        window._sidebar_controller = _Noop()
+        window._is_game_mode_active = False
+        window.process_monitor.active_monitored_processes[process.id] = {
+            "pid": 4321,
+            "exe": process.monitoring_path,
+            "start_time_approx": 100.0,
+            "session_id": 1,
+        }
+        window.process_monitor.check_and_update_statuses = lambda: ProcessMonitorTickResult(changed=False)
+
+        window.run_process_monitor_check()
+
+        assert hide_reasons == ["game_started"]
+        assert app.quitOnLastWindowClosed() is False
+        assert window.testAttribute(Qt.WidgetAttribute.WA_QuitOnClose) is False
+        assert window._is_game_mode_active is True
+    finally:
+        _stop_window(window, app)
+
+
 def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_disabled(monkeypatch):
     _qapp()
     import src.gui.sidebar.sidebar_controller as controller_module

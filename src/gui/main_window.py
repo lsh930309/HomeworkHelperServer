@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         self.preset_manager = GamePresetManager()
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
+        self._ensure_background_survival_mode()
 
         # 창 크기: 테이블/버튼 실제 sizeHint를 기반으로 동적으로 최적화합니다.
         self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
@@ -361,6 +362,24 @@ class MainWindow(QMainWindow):
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
 
+
+
+    def _ensure_background_survival_mode(self):
+        """게임 감지/닫기 버튼으로 창만 숨겨도 Qt 앱 프로세스가 종료되지 않게 고정합니다."""
+        app_instance = QApplication.instance()
+        if app_instance:
+            app_instance.setQuitOnLastWindowClosed(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+
+    def _hide_main_window_to_tray(self, reason: str):
+        """게임 모드 등에서 종료 절차를 타지 않고 메인 창만 안전하게 숨깁니다."""
+        self._ensure_background_survival_mode()
+        tray_manager = getattr(self, "tray_manager", None)
+        hide_to_tray = getattr(tray_manager, "hide_window_to_tray", None)
+        if callable(hide_to_tray):
+            hide_to_tray(reason)
+            return
+        self.hide()
 
 
     def _record_status_event(self, message: str, *_args: object) -> None:
@@ -579,7 +598,7 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             if self.windowState() & Qt.WindowState.WindowMinimized: # 창이 최소화 상태로 변경될 때
                 if hasattr(self, 'tray_manager') and self.tray_manager.is_tray_icon_visible(): # 트레이 아이콘이 보이는 경우
-                    self.tray_manager.handle_minimize_event() # 트레이 관리자에게 최소화 처리 위임
+                    self._hide_main_window_to_tray("window_minimized")
 
         # 창 활성화 시 geometry 복원 및 타이머 재시작 (절전 복귀 대응)
         elif event.type() == QEvent.Type.ActivationChange:
@@ -1248,7 +1267,7 @@ class MainWindow(QMainWindow):
             # 게임이 실행되었고, 아직 게임 모드가 활성화되지 않았다면
             self._is_game_mode_active = True
             if hide_enabled:
-                self.tray_manager.handle_minimize_event() # 창을 트레이로 숨김
+                self._hide_main_window_to_tray("game_started")
                 status_bar = self.statusBar()
                 if status_bar:
                     self._record_status_event("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
@@ -2072,7 +2091,7 @@ class MainWindow(QMainWindow):
             self.tray_manager.handle_window_close_event(event) # 트레이 관리자에게 이벤트 처리 위임
         else: # 트레이 관리자 없으면 기본 동작 (숨기기)
             event.ignore()
-            self.hide()
+            self._hide_main_window_to_tray("window_close_no_tray")
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
