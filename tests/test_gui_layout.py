@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import MethodType, SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -411,6 +412,49 @@ def test_game_mode_hide_keeps_qt_application_alive(monkeypatch, tmp_path):
         assert window._is_game_mode_active is True
     finally:
         _stop_window(window, app)
+
+
+def test_default_volume_retry_does_not_crash_when_audio_session_is_late(monkeypatch):
+    _qapp()
+    import src.gui.main_window as main_window
+
+    process = ManagedProcess(
+        id="game",
+        name="Running Game",
+        monitoring_path="game.exe",
+        launch_path="game.exe",
+        default_volume=50,
+        default_muted=False,
+    )
+    probe = SimpleNamespace(
+        _volume_applied_pids={},
+        _volume_retry_tokens={},
+        _mute_retry_tokens={},
+        data_manager=SimpleNamespace(managed_processes=[process]),
+    )
+    probe._get_active_pid = lambda process_id: 4321
+    probe._sync_default_volume_state = MethodType(main_window.MainWindow._sync_default_volume_state, probe)
+    scheduled = []
+
+    def fail_volume(_pid, _level):
+        return False
+
+    def fail_mute(_pid, _muted):
+        raise RuntimeError("late audio session")
+
+    monkeypatch.setattr(main_window.audio_control, "set_app_volume", fail_volume)
+    monkeypatch.setattr(main_window.audio_control, "set_mute", fail_mute)
+    monkeypatch.setattr(
+        main_window.QTimer,
+        "singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+
+    probe._sync_default_volume_state(process, 4321)
+
+    assert [delay for delay, _callback in scheduled] == [500, 1000]
+    assert probe._volume_retry_tokens == {"game": 1}
+    assert probe._mute_retry_tokens == {"game": 1}
 
 
 def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_disabled(monkeypatch):

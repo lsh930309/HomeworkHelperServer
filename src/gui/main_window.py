@@ -2343,6 +2343,21 @@ class MainWindow(QMainWindow):
         process_id = process.id
         default_volume = getattr(process, "default_volume", None)
         already_applied = self._volume_applied_pids.get(process.id) == pid
+
+        def safe_set_app_volume(target_pid: int, volume_percent: int) -> bool:
+            try:
+                return audio_control.set_app_volume(target_pid, volume_percent / 100.0)
+            except Exception:
+                logger.exception("기본 볼륨 적용 중 예외 발생: process_id=%s pid=%s", process_id, target_pid)
+                return False
+
+        def safe_set_mute(target_pid: int, muted: bool) -> bool:
+            try:
+                return audio_control.set_mute(target_pid, muted)
+            except Exception:
+                logger.exception("기본 음소거 적용 중 예외 발생: process_id=%s pid=%s", process_id, target_pid)
+                return False
+
         if not already_applied and default_volume is not None:
             volume_token = self._volume_retry_tokens.get(process_id, 0) + 1
             self._volume_retry_tokens[process_id] = volume_token
@@ -2368,7 +2383,7 @@ class MainWindow(QMainWindow):
                 current_volume = get_current_default_volume()
                 if current_volume is None or current_volume != volume_percent:
                     return
-                if audio_control.set_app_volume(target_pid, volume_percent / 100.0):
+                if safe_set_app_volume(target_pid, volume_percent):
                     self._volume_applied_pids[process_id] = target_pid
                     return
                 if not delays:
@@ -2386,8 +2401,7 @@ class MainWindow(QMainWindow):
         default_muted = getattr(process, "default_muted", False)
         retry_token = self._mute_retry_tokens.get(process_id, 0) + 1
         self._mute_retry_tokens[process_id] = retry_token
-        if not audio_control.set_mute(pid, default_muted):
-            from PyQt6.QtCore import QTimer
+        if not safe_set_mute(pid, default_muted):
             remaining_delays = [1000, 3000, 5000]
 
             def get_current_default_muted() -> Optional[bool]:
@@ -2409,7 +2423,7 @@ class MainWindow(QMainWindow):
                 current_muted = get_current_default_muted()
                 if current_muted is None or current_muted != muted:
                     return
-                if audio_control.set_mute(target_pid, muted) or not delays:
+                if safe_set_mute(target_pid, muted) or not delays:
                     return
                 next_delay = delays[0]
                 QTimer.singleShot(
