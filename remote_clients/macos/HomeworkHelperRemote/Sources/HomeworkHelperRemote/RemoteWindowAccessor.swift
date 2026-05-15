@@ -1,16 +1,70 @@
 import AppKit
 import SwiftUI
 
+enum RemoteWindowLayout {
+    static let sidebarWidth: CGFloat = 278
+    static let dividerWidth: CGFloat = 1
+    static let horizontalPadding: CGFloat = 32
+    static let gameCardWidth: CGFloat = 180
+    static let gameCardHeight: CGFloat = 126
+    static let gameCardSpacing: CGFloat = 12
+    static let minWindowSize = CGSize(width: 720, height: 460)
+    static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
+
+    static func maxWindowSize() -> CGSize {
+        guard let frame = NSScreen.main?.visibleFrame else { return fallbackMaxWindowSize }
+        return CGSize(
+            width: min(fallbackMaxWindowSize.width, max(minWindowSize.width, frame.width - 24)),
+            height: min(fallbackMaxWindowSize.height, max(minWindowSize.height, frame.height - 24))
+        )
+    }
+
+    static func gameViewportWidth(cardCount: Int) -> CGFloat {
+        let visibleCards = max(1, min(cardCount, 4))
+        let cards = CGFloat(visibleCards)
+        return cards * gameCardWidth + max(0, cards - 1) * gameCardSpacing
+    }
+
+    static func gameContentWidth(cardCount: Int) -> CGFloat {
+        let cards = CGFloat(max(1, cardCount))
+        return cards * gameCardWidth + max(0, cards - 1) * gameCardSpacing
+    }
+
+    static func mainContentWidth(cardCount: Int) -> CGFloat {
+        gameViewportWidth(cardCount: cardCount) + horizontalPadding
+    }
+
+    static func contentSize(cardCount: Int, sidebarVisible: Bool, hasSummary: Bool, hasIncidents: Bool) -> CGSize {
+        let maxSize = maxWindowSize()
+        let sidebar = sidebarVisible ? sidebarWidth + dividerWidth : 0
+        let rawWidth = sidebar + mainContentWidth(cardCount: cardCount)
+        let baseHeight: CGFloat = 372
+        let summaryHeight: CGFloat = hasSummary ? 116 : 0
+        let incidentHeight: CGFloat = hasIncidents ? 92 : 0
+        let rawHeight = baseHeight + summaryHeight + incidentHeight
+        return CGSize(
+            width: min(maxSize.width, max(minWindowSize.width, rawWidth)),
+            height: min(maxSize.height, max(minWindowSize.height, rawHeight))
+        )
+    }
+}
+
 final class RemoteWindowDelegate: NSObject, NSWindowDelegate {
     static let shared = RemoteWindowDelegate()
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
         return false
     }
 }
 
 struct RemoteWindowAccessor: NSViewRepresentable {
+    let cardCount: Int
+    let sidebarVisible: Bool
+    let hasSummary: Bool
+    let hasIncidents: Bool
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { configure(window: view.window) }
@@ -23,9 +77,11 @@ struct RemoteWindowAccessor: NSViewRepresentable {
 
     private func configure(window: NSWindow?) {
         guard let window else { return }
-        window.setContentSize(NSSize(width: 980, height: 620))
-        window.minSize = NSSize(width: 980, height: 620)
-        window.maxSize = NSSize(width: 980, height: 620)
+        let size = RemoteWindowLayout.contentSize(cardCount: cardCount, sidebarVisible: sidebarVisible, hasSummary: hasSummary, hasIncidents: hasIncidents)
+        let maxSize = RemoteWindowLayout.maxWindowSize()
+        window.minSize = RemoteWindowLayout.minWindowSize
+        window.maxSize = maxSize
+        window.setContentSize(size)
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
         window.title = "HomeworkHelper Remote"

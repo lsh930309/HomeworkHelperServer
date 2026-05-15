@@ -54,6 +54,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     static func showMainWindow() {
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         if NSApp.windows.isEmpty {
             NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
@@ -73,8 +74,6 @@ struct HomeworkHelperRemoteApp: App {
     var body: some Scene {
         WindowGroup {
             RemoteDashboardView(viewModel: viewModel)
-                .frame(width: 980, height: 620)
-                .background(RemoteWindowAccessor())
         }
         .windowResizability(.contentSize)
     }
@@ -83,30 +82,31 @@ struct HomeworkHelperRemoteApp: App {
 struct RemoteDashboardView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
     @State private var showingAdvancedSettings = false
+    @State private var sidebarVisible = true
+
+    private var targetSize: CGSize {
+        RemoteWindowLayout.contentSize(
+            cardCount: viewModel.processes.count,
+            sidebarVisible: sidebarVisible,
+            hasSummary: viewModel.dashboardSummary != nil,
+            hasIncidents: !viewModel.beholderIncidents.isEmpty
+        )
+    }
 
     var body: some View {
-        NavigationSplitView {
-            RemoteSidebarView(viewModel: viewModel, showingAdvancedSettings: $showingAdvancedSettings)
-                .navigationTitle("HomeworkHelper")
-                .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 340)
-        } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HeaderStatusView(viewModel: viewModel)
+        HStack(spacing: 0) {
+            if sidebarVisible {
+                RemoteSidebarView(viewModel: viewModel, showingAdvancedSettings: $showingAdvancedSettings)
+                    .frame(width: RemoteWindowLayout.sidebarWidth)
+                Divider()
+                    .frame(width: RemoteWindowLayout.dividerWidth)
+            }
 
-                    GroupBox("게임") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(viewModel.processes) { process in
-                                    RemoteGameCard(process: process, viewModel: viewModel) {
-                                        Task { await viewModel.launch(process) }
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .frame(height: 170)
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
+
+                    GameSectionView(viewModel: viewModel)
 
                     if let summary = viewModel.dashboardSummary {
                         PlaySummaryView(summary: summary)
@@ -116,14 +116,101 @@ struct RemoteDashboardView: View {
                         BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
                     }
                 }
-                .padding()
+                .padding(16)
+                .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
             }
         }
+        .frame(width: targetSize.width, height: targetSize.height)
+        .background(
+            RemoteWindowAccessor(
+                cardCount: viewModel.processes.count,
+                sidebarVisible: sidebarVisible,
+                hasSummary: viewModel.dashboardSummary != nil,
+                hasIncidents: !viewModel.beholderIncidents.isEmpty
+            )
+        )
         .sheet(isPresented: $showingAdvancedSettings) {
             AdvancedRemoteSettingsView(viewModel: viewModel)
                 .frame(minWidth: 620, minHeight: 720)
         }
         .task { await viewModel.bootstrap() }
+    }
+}
+
+struct GameSectionView: View {
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        GroupBox("게임") {
+            DraggableHorizontalScrollView {
+                HStack(spacing: RemoteWindowLayout.gameCardSpacing) {
+                    ForEach(viewModel.processes) { process in
+                        RemoteGameCard(process: process, viewModel: viewModel) {
+                            Task { await viewModel.launch(process) }
+                        }
+                    }
+                }
+                .frame(width: RemoteWindowLayout.gameContentWidth(cardCount: viewModel.processes.count), alignment: .leading)
+                .padding(.vertical, 2)
+            }
+            .frame(
+                width: RemoteWindowLayout.gameViewportWidth(cardCount: viewModel.processes.count),
+                height: RemoteWindowLayout.gameCardHeight + 10
+            )
+            .clipped()
+        }
+    }
+}
+
+final class InvisibleHorizontalNSScrollView: NSScrollView {
+    private var lastDragLocation: NSPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        lastDragLocation = convert(event.locationInWindow, from: nil)
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let lastDragLocation else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let current = convert(event.locationInWindow, from: nil)
+        let dx = lastDragLocation.x - current.x
+        var origin = contentView.bounds.origin
+        let documentWidth = documentView?.bounds.width ?? 0
+        origin.x = max(0, min(origin.x + dx, max(0, documentWidth - contentView.bounds.width)))
+        contentView.scroll(to: origin)
+        reflectScrolledClipView(contentView)
+        self.lastDragLocation = current
+    }
+}
+
+struct DraggableHorizontalScrollView<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> InvisibleHorizontalNSScrollView {
+        let scrollView = InvisibleHorizontalNSScrollView()
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.documentView = NSHostingView(rootView: content)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: InvisibleHorizontalNSScrollView, context: Context) {
+        if let hosting = scrollView.documentView as? NSHostingView<Content> {
+            hosting.rootView = content
+            hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        } else {
+            scrollView.documentView = NSHostingView(rootView: content)
+        }
     }
 }
 
@@ -133,14 +220,14 @@ struct RemoteSidebarView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 GroupBox("연결") {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         if viewModel.isPaired {
                             SidebarInfoRow(label: "서버", value: viewModel.baseURLText)
                             SidebarInfoRow(label: "디바이스", value: viewModel.deviceName)
                             Text(viewModel.message)
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                         } else {
@@ -157,43 +244,28 @@ struct RemoteSidebarView: View {
                                 .disabled(viewModel.isLoading)
                             }
                             Text("페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다.")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
 
-                        HStack {
-                            Button {
-                                Task { await viewModel.refresh() }
-                            } label: {
-                                Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
-                            }
-                            .disabled(viewModel.isLoading)
+                        Button {
+                            Task { await viewModel.refresh() }
+                        } label: {
+                            Label(viewModel.isLoading ? "연결 중..." : "새로고침", systemImage: "arrow.clockwise")
                         }
+                        .disabled(viewModel.isLoading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let readiness = viewModel.readiness {
-                    GroupBox("상태") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ReadinessDotRow(title: "Beholder", section: readiness.beholderHealth)
-                            ReadinessDotRow(title: "Remote", section: readiness.remoteConnectivity)
-                            ReadinessDotRow(title: "Server", section: readiness.serverModeReadiness)
-                            ReadinessDotRow(title: "Power", section: readiness.powerReadiness)
-                            ReadinessDotRow(title: "Tailscale", section: readiness.tailscaleReadiness)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
                 }
 
                 GroupBox("PC 전원") {
                     VStack(alignment: .leading, spacing: 8) {
                         if viewModel.status?.power?.configured != true {
                             Text("전원 제어 설정 전입니다. 고급 설정에서 최초 1회만 설정하세요.")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
                             PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
                             PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
@@ -210,22 +282,35 @@ struct RemoteSidebarView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            .padding(12)
+            .padding(10)
         }
     }
 }
 
 struct HeaderStatusView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
+    @Binding var sidebarVisible: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("HomeworkHelper Remote")
-                .font(.largeTitle.bold())
-            Text("게임 실행, 진행률, 전원 제어만 기본 화면에 남기고 페어링/진단 관리는 고급 설정으로 숨겼습니다.")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("HomeworkHelper Remote")
+                        .font(.title.bold())
+                    Text("게임 실행, 진행률, 전원 제어를 빠르게 확인합니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    sidebarVisible.toggle()
+                } label: {
+                    Label(sidebarVisible ? "패널 숨기기" : "패널 보기", systemImage: sidebarVisible ? "sidebar.left" : "sidebar.leading")
+                }
+                .controlSize(.small)
+            }
             if let readiness = viewModel.readiness {
-                HStack {
+                HStack(spacing: 6) {
                     ReadinessPill(title: "Beholder", section: readiness.beholderHealth)
                     ReadinessPill(title: "Remote", section: readiness.remoteConnectivity)
                     ReadinessPill(title: "Server", section: readiness.serverModeReadiness)
@@ -243,11 +328,11 @@ struct RemoteGameCard: View {
     let launch: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 GameIconView(process: process, viewModel: viewModel)
-                    .frame(width: 36, height: 36)
-                VStack(alignment: .leading, spacing: 2) {
+                    .frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 1) {
                     Text(process.name)
                         .font(.headline)
                         .lineLimit(1)
@@ -265,26 +350,24 @@ struct RemoteGameCard: View {
 
             if let progress = process.progress {
                 HStack(spacing: 5) {
-                    if progress.kind == "stamina" {
-                        Image(systemName: "bolt.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.yellow)
-                    }
+                    ResourceIconView(process: process, viewModel: viewModel)
+                        .frame(width: 14, height: 14)
                     GameProgressView(progress: progress)
                 }
             } else {
-                Spacer(minLength: 18)
+                Text("진행률 없음")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 0)
             Button(action: launch) {
                 Label("실행", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.small)
         }
-        .padding(12)
-        .frame(width: 180, height: 150, alignment: .topLeading)
+        .padding(10)
+        .frame(width: RemoteWindowLayout.gameCardWidth, height: RemoteWindowLayout.gameCardHeight, alignment: .topLeading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
@@ -329,11 +412,41 @@ struct GameIconView: View {
     }
 }
 
+struct ResourceIconView: View {
+    let process: RemoteProcess
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        Group {
+            if let cached = viewModel.cachedResourceIconURL(for: process), let image = NSImage(contentsOf: cached) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else if let remote = viewModel.remoteResourceIconURL(for: process) {
+                AsyncImage(url: remote) { phase in
+                    switch phase {
+                    case .success(let image): image.resizable().scaledToFit()
+                    default: fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+    }
+
+    private var fallback: some View {
+        Image(systemName: process.progress?.kind == "stamina" ? "bolt.fill" : "clock")
+            .font(.caption2)
+            .foregroundStyle(process.progress?.kind == "stamina" ? .yellow : .secondary)
+    }
+}
+
 struct GameProgressView: View {
     let progress: RemoteProcess.Progress
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                 .controlSize(.small)
             Text(progress.displayText)

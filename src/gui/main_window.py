@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
         self._mute_retry_tokens: dict[str, int] = {}
+        self._volume_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
         self._beholder_restore_runtime_suspended = False
 
@@ -2316,18 +2317,53 @@ class MainWindow(QMainWindow):
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
         if not pid:
             self._volume_applied_pids.pop(process.id, None)
+            self._volume_retry_tokens.pop(process.id, None)
             self._mute_retry_tokens.pop(process.id, None)
             return
 
+        process_id = process.id
         default_volume = getattr(process, "default_volume", None)
         already_applied = self._volume_applied_pids.get(process.id) == pid
         if not already_applied and default_volume is not None:
-            if audio_control.set_app_volume(pid, default_volume / 100.0):
-                self._volume_applied_pids[process.id] = pid
+            volume_token = self._volume_retry_tokens.get(process_id, 0) + 1
+            self._volume_retry_tokens[process_id] = volume_token
+            target_volume = max(0, min(100, int(default_volume)))
+
+            def get_current_default_volume() -> Optional[int]:
+                for managed in getattr(self.data_manager, "managed_processes", []):
+                    if managed.id == process_id:
+                        current = getattr(managed, "default_volume", None)
+                        return None if current is None else max(0, min(100, int(current)))
+                return None
+
+            def try_set_volume(
+                target_pid: int,
+                volume_percent: int,
+                delays: list[int],
+                token: int,
+            ) -> None:
+                if self._volume_retry_tokens.get(process_id) != token:
+                    return
+                if self._get_active_pid(process_id) != target_pid:
+                    return
+                current_volume = get_current_default_volume()
+                if current_volume is None or current_volume != volume_percent:
+                    return
+                if audio_control.set_app_volume(target_pid, volume_percent / 100.0):
+                    self._volume_applied_pids[process_id] = target_pid
+                    return
+                if not delays:
+                    return
+                next_delay = delays[0]
+                QTimer.singleShot(
+                    next_delay,
+                    lambda p=target_pid, v=volume_percent, d=delays[1:], t=token: try_set_volume(p, v, d, t),
+                )
+
+            try_set_volume(pid, target_volume, [500, 1000, 3000, 5000], volume_token)
 
         # default_muted 적용 (default_volume 미설정이어도 항상 적용)
         # 게임 시작 직후 오디오 세션이 없을 수 있으므로 실패 시 재시도
-        process_id = process.id
         default_muted = getattr(process, "default_muted", False)
         retry_token = self._mute_retry_tokens.get(process_id, 0) + 1
         self._mute_retry_tokens[process_id] = retry_token

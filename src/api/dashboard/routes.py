@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 import os
 import re
@@ -12,13 +13,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from sqlalchemy import func
 from contextlib import contextmanager
 
 from src.data import models
-from .icons import extract_icon_from_exe, generate_fallback_svg, get_color_for_game, get_icon_for_size, safe_icon_cache_key
+from src.utils.game_preset_manager import GamePresetManager
+from src.utils.icon_helper import resolve_preset_icon_path
+from .icons import extract_icon_from_exe, fallback_png_bytes, generate_fallback_svg, get_color_for_game, get_icon_for_size, safe_icon_cache_key
 from .settings import load_settings, save_settings
 
 router = APIRouter()
@@ -805,11 +808,15 @@ def get_calendar_data(year: int = Query(...), month: int = Query(..., ge=0, le=1
 
 
 @router.get("/api/dashboard/icons/{process_id}")
-def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256)):
+def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256), format: str = Query(default="svg")):
     """Game icon API: PNG cache with SVG fallback."""
     with _dashboard_db_session() as db:
         process = db.query(models.Process).filter(models.Process.id == process_id).first()
         if not process:
+            if format == "png":
+                fallback = fallback_png_bytes("?", size)
+                if fallback is not None:
+                    return Response(content=fallback, media_type="image/png")
             return Response(content=generate_fallback_svg("?", "#6366f1"), media_type="image/svg+xml")
         name = process.name
         exe_path = process.monitoring_path or process.launch_path
@@ -822,4 +829,40 @@ def get_game_icon(process_id: str, size: int = Query(default=64, ge=1, le=256)):
             icon_path = get_icon_for_size(cache_key, size)
             if icon_path:
                 return FileResponse(str(icon_path), media_type="image/png")
+        if format == "png":
+            fallback = fallback_png_bytes(name, size)
+            if fallback is not None:
+                return Response(content=fallback, media_type="image/png")
         return Response(content=generate_fallback_svg(name, get_color_for_game(name)), media_type="image/svg+xml")
+
+
+def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
+    if not preset_id:
+        return None
+    for path in (GamePresetManager.SYSTEM_PRESET_FILE, GamePresetManager.USER_PRESET_FILE):
+        try:
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for preset in payload.get("presets", []):
+            if preset.get("id") == preset_id:
+                return preset
+    return None
+
+
+@router.get("/api/dashboard/resource-icons/{process_id}")
+def get_resource_icon(process_id: str, size: int = Query(default=32, ge=1, le=256)):
+    """Resource/stamina icon API for native clients."""
+    with _dashboard_db_session() as db:
+        process = db.query(models.Process).filter(models.Process.id == process_id).first()
+        if not process:
+            raise HTTPException(status_code=404, detail="process not found")
+        preset = _read_preset_by_id(getattr(process, "user_preset_id", None))
+        if not preset:
+            raise HTTPException(status_code=404, detail="preset not found")
+        icon_path = resolve_preset_icon_path(str(preset.get("icon_path") or ""), str(preset.get("icon_type") or "system"))
+        if not icon_path:
+            raise HTTPException(status_code=404, detail="resource icon not found")
+        return FileResponse(icon_path, media_type="image/png")

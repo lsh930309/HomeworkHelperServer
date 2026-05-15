@@ -320,6 +320,7 @@ struct RemoteProcess: Codable, Identifiable {
         let staminaCurrent: Int?
         let staminaMax: Int?
         let hoyolabGameID: String?
+        let resourceIconURL: String?
 
         enum CodingKeys: String, CodingKey {
             case kind
@@ -328,6 +329,7 @@ struct RemoteProcess: Codable, Identifiable {
             case staminaCurrent = "stamina_current"
             case staminaMax = "stamina_max"
             case hoyolabGameID = "hoyolab_game_id"
+            case resourceIconURL = "resource_icon_url"
         }
     }
 

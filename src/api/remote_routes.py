@@ -5,6 +5,7 @@ import platform
 import time
 import webbrowser
 import datetime
+import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
@@ -25,6 +26,7 @@ from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls,
 from src.data.database import data_dir
 from src.core.remote_local_store import remote_store
 from src.data import beholder, crud, models, schemas
+from src.utils.game_preset_manager import GamePresetManager
 
 
 REMOTE_API_VERSION = "0.1.10"
@@ -114,9 +116,13 @@ def _serialize_process(
         payload = _model_dump(schemas.ProcessSchema.from_orm(process))
     payload["progress"] = calculate_process_progress(process, current_dt=current_dt)
     process_id = str(payload.get("id") or getattr(process, "id", "") or "")
+    if process_id and getattr(process, "user_preset_id", None):
+        progress = payload.get("progress")
+        if isinstance(progress, dict):
+            progress["resource_icon_url"] = f"/api/dashboard/resource-icons/{quote(process_id, safe='')}?size=32"
     running_process_ids = running_process_ids or set()
     played_today_process_ids = played_today_process_ids or set()
-    payload["icon_url"] = f"/api/dashboard/icons/{quote(process_id, safe='')}?size=128" if process_id else None
+    payload["icon_url"] = f"/api/dashboard/icons/{quote(process_id, safe='')}?size=128&format=png" if process_id else None
     payload["is_running"] = process_id in running_process_ids
     payload["played_today"] = process_id in played_today_process_ids
     payload["status_text"] = "실행 중" if payload["is_running"] else ("오늘 실행" if payload["played_today"] else "대기")
@@ -259,6 +265,49 @@ def _save_power_config(path: Path, config: RemotePowerConfig) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
+    if not preset_id:
+        return None
+    candidates = [GamePresetManager.SYSTEM_PRESET_FILE, GamePresetManager.USER_PRESET_FILE]
+    for path in candidates:
+        try:
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for preset in payload.get("presets", []):
+            if preset.get("id") == preset_id:
+                return preset
+    return None
+
+
+def _resolve_launcher_path(process: Any) -> str | None:
+    """Mirror the PyQt launcher's preset-based launcher preference."""
+    preset = _read_preset_by_id(getattr(process, "user_preset_id", None))
+    patterns = preset.get("launcher_patterns") if preset else None
+    if not patterns:
+        return None
+
+    base_candidates = [
+        getattr(process, "launch_path", None),
+        getattr(process, "monitoring_path", None),
+    ]
+    seen_dirs: set[str] = set()
+    for candidate in base_candidates:
+        if not candidate:
+            continue
+        base_dir = os.path.dirname(str(candidate))
+        if not base_dir or base_dir in seen_dirs:
+            continue
+        seen_dirs.add(base_dir)
+        for pattern in patterns:
+            launcher_path = os.path.join(base_dir, str(pattern))
+            if os.path.exists(launcher_path):
+                return launcher_path
+    return None
+
+
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
     """Resolve the same launch preference used by the PyQt main window.
 
@@ -273,9 +322,7 @@ def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> t
     if mode == "shortcut":
         return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
     if mode == "launcher":
-        # Remote MVP does not yet depend on preset-manager path discovery.  Keep
-        # the semantic mode and safely fall back to the stored launch paths.
-        return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
+        return (_resolve_launcher_path(process) or getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
     return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), "auto")
 
 

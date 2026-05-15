@@ -270,9 +270,18 @@ final class RemoteDashboardViewModel: ObservableObject {
         RemoteClientCache.cachedIconURL(for: process)
     }
 
+    func cachedResourceIconURL(for process: RemoteProcess) -> URL? {
+        RemoteClientCache.cachedResourceIconURL(for: process)
+    }
+
     func remoteIconURL(for process: RemoteProcess) -> URL? {
         guard let client else { return nil }
         return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL)
+    }
+
+    func remoteResourceIconURL(for process: RemoteProcess) -> URL? {
+        guard let client else { return nil }
+        return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL)
     }
 
     private func connectionGuidance(for error: Error) -> String {
@@ -550,6 +559,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let result = try await service.launchProcess(id: process.id)
             message = result.message
+            await refresh()
         } catch {
             message = error.localizedDescription
         }
@@ -568,6 +578,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard isPowerActionEnabled(action) else {
             message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다."
             return
+        }
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write("power.click", ["action": action])
         }
         if action == "wake", powerConfig.localWakeConfigured {
             await localWake()

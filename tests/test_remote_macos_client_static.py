@@ -155,13 +155,14 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/devices/revoked',
         'remote/tailscale/ensure',
         'remote/devices',
-        'remote/processes/\\(id)/launch',
+        'remote/processes/\\(pathSegment(id))/launch',
         'remote/shortcuts/\\(id)/open',
         'remote/devices/\\(id)',
     ]:
         assert endpoint in client
 
     assert 'request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization")' in client
+    assert "private func pathSegment(_ value: String)" in client
     assert 'request.setValue("application/json", forHTTPHeaderField: "Content-Type")' in client
     assert 'func gameLinks() async throws -> [RemoteGameLink]' in client
     assert 'func createGameLink(processID: String, androidPackageName: String' in client
@@ -204,12 +205,17 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model
     assert "func bootstrap() async" in view_model
-    assert ".frame(width: 980, height: 620)" in app
+    window_accessor = _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
+    assert "RemoteWindowLayout.contentSize" in app
+    assert "RemoteWindowLayout.maxWindowSize" in window_accessor
+    assert "NSScreen.main?.visibleFrame" in window_accessor
+    assert "RemoteWindowLayout.minWindowSize" in window_accessor
     assert ".windowResizability(.contentSize)" in app
     assert "RemoteWindowAccessor" in app
     assert "ScrollView {" in app
     assert "GroupBox(\"연결\")" in app
-    assert ".navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 340)" in app
+    assert "NavigationSplitView" not in app
+    assert "sidebarVisible.toggle()" in app
     assert "struct SidebarInfoRow: View" in app
     assert "http://windows-tailnet-ip:8000" in app
     assert "페어링 후에는 토큰/기기 관리 항목을 기본 화면에서 숨깁니다." in app
@@ -220,8 +226,15 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "GameProgressView" in app
     assert "RemoteGameCard" in app
     assert "GameIconView" in app
-    assert "ScrollView(.horizontal, showsIndicators: false)" in app
+    assert "DraggableHorizontalScrollView" in app
+    assert "hasHorizontalScroller = false" in app
+    assert "mouseDragged" in app
+    assert "gameViewportWidth(cardCount:" in app
     assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
+    assert "GroupBox(\"상태\")" not in app
+    assert "ResourceIconView" in app
+    assert "resourceIconURL" in _read(SOURCE_ROOT / "RemoteModels.swift")
+    assert "cachedResourceIconURL" in _read(SOURCE_ROOT / "RemoteClientCache.swift")
     assert "RemoteClientCache.loadProcesses" in view_model
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
@@ -311,6 +324,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert 'if action == "wake", powerConfig.localWakeConfigured' in view_model
     assert "LocalSSHPowerManager" in _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
     assert "power.local_ssh" in view_model
+    assert "power.click" in view_model
     assert "power.smartthings.local_devices" in view_model
     assert "LocalPowerWakeManager.isLocalSmartThingsCLIPath" in view_model
     assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")

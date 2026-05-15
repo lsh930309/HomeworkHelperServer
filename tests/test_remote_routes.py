@@ -557,6 +557,38 @@ def test_remote_launch_can_request_direct_mode_without_mutating_process_preferen
     assert auditor.events[-1]["metadata"] == {"mode": "direct"}
 
 
+def test_remote_launch_launcher_mode_uses_preset_launcher_pattern(tmp_path):
+    game_dir = tmp_path / "StarRail"
+    game_dir.mkdir()
+    launcher_path = game_dir / "launcher.exe"
+    launcher_path.write_text("", encoding="utf-8")
+    game_path = game_dir / "StarRail.exe"
+    game_path.write_text("", encoding="utf-8")
+    shortcut_path = game_dir / "StarRail.url"
+    shortcut_path.write_text("", encoding="utf-8")
+    client, launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="starrail",
+                name="Star Rail",
+                monitoring_path=str(game_path),
+                launch_path=str(shortcut_path),
+                preferred_launch_type="launcher",
+                user_preset_id="honkai_starrail",
+            )
+        ]
+    )
+
+    response = client.post("/remote/processes/starrail/launch", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["command"] == "process.launch.launcher"
+    assert body["target"] == str(launcher_path)
+    assert launcher.targets == [str(launcher_path)]
+    assert auditor.events[-1]["metadata"] == {"mode": "launcher"}
+
+
 def test_remote_shortcut_open_delegates_to_native_opener_and_records_command_result():
     client, _launcher, opened_urls, auditor, _registry = _client_with_seed(
         shortcuts=[models.WebShortcut(id="web-a", name="Web A", url="https://example.com")]
@@ -857,6 +889,7 @@ def test_remote_processes_include_progress_payload():
                 hoyolab_game_id="genshin",
                 stamina_current=80,
                 stamina_max=200,
+                user_preset_id="honkai_starrail",
             ),
         ]
     )
@@ -874,6 +907,7 @@ def test_remote_processes_include_progress_payload():
         "stamina_current": 80,
         "stamina_max": 200,
         "hoyolab_game_id": "genshin",
+        "resource_icon_url": "/api/dashboard/resource-icons/game-stamina?size=32",
     }
 
 
@@ -899,7 +933,7 @@ def test_remote_processes_include_card_state_payload():
     today = next(item for item in body if item["id"] == "today-game")
     idle = next(item for item in body if item["id"] == "idle-game")
 
-    assert running["icon_url"] == "/api/dashboard/icons/running-game?size=128"
+    assert running["icon_url"] == "/api/dashboard/icons/running-game?size=128&format=png"
     assert running["is_running"] is True
     assert running["played_today"] is True
     assert running["status_text"] == "실행 중"

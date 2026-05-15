@@ -232,6 +232,31 @@ def test_dashboard_icon_endpoint_uses_safe_cache_key(monkeypatch):
     assert seen_cache_keys[0] != unsafe_id
 
 
+def test_dashboard_icon_endpoint_can_return_png_fallback(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[models.Process(id="pid-fallback", name="Fallback", monitoring_path=None, launch_path=None)],
+    )
+
+    response = client.get("/api/dashboard/icons/pid-fallback?size=64&format=png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG")
+
+
+def test_dashboard_resource_icon_endpoint_serves_preset_icon(monkeypatch):
+    client = _client_with_seed(
+        monkeypatch,
+        processes=[models.Process(id="pid-resource", name="Resource", user_preset_id="honkai_starrail")],
+    )
+
+    response = client.get("/api/dashboard/resource-icons/pid-resource?size=32")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+
+
 def test_game_key_filter_includes_all_process_ids_in_group(monkeypatch):
     client = _client_with_seed(
         monkeypatch,

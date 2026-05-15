@@ -9,6 +9,12 @@ struct RemoteAPIClient {
         baseURL.appendingPathComponent(path)
     }
 
+    private func pathSegment(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
     func status() async throws -> RemoteStatus {
         try await get("remote/status")
     }
@@ -79,7 +85,7 @@ struct RemoteAPIClient {
         if let mode {
             body = try JSONEncoder().encode(["mode": mode])
         }
-        return try await post("remote/processes/\(id)/launch", body: body)
+        return try await post("remote/processes/\(pathSegment(id))/launch", body: body)
     }
 
     func openShortcut(id: String) async throws -> RemoteCommandResult {
