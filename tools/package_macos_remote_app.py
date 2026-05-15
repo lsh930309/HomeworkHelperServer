@@ -41,7 +41,7 @@ def _run(command: list[str], *, cwd: Path) -> None:
         print(completed.stdout.rstrip())
 
 
-def _info_plist() -> dict[str, object]:
+def _info_plist(version: str = "0.1.0", build: str = "1") -> dict[str, object]:
     return {
         "CFBundleDevelopmentRegion": "ko",
         "CFBundleDisplayName": "HomeworkHelper Remote",
@@ -51,8 +51,8 @@ def _info_plist() -> dict[str, object]:
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "HomeworkHelperRemote",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": str(build),
         "LSApplicationCategoryType": "public.app-category.productivity",
         "LSMinimumSystemVersion": "13.0",
         "NSAppTransportSecurity": {
@@ -81,8 +81,11 @@ def _copy_icon(resources: Path) -> None:
     shutil.rmtree(iconset, ignore_errors=True)
 
 
-def package_app(output_dir: Path) -> Path:
-    _run(["swift", "build", "-c", "release"], cwd=MACOS_ROOT)
+def package_app(output_dir: Path, *, version: str = "0.1.0", build: str = "1", jobs: int | None = None) -> Path:
+    swift_command = ["swift", "build", "-c", "release"]
+    if jobs and jobs > 0:
+        swift_command.extend(["--jobs", str(jobs)])
+    _run(swift_command, cwd=MACOS_ROOT)
     if not EXECUTABLE.exists():
         raise FileNotFoundError(f"Swift release executable missing: {EXECUTABLE}")
 
@@ -103,17 +106,20 @@ def package_app(output_dir: Path) -> Path:
     except Exception as exc:
         print(f"warning: app icon generation skipped: {exc}")
     with (contents / "Info.plist").open("wb") as file:
-        plistlib.dump(_info_plist(), file, sort_keys=True)
+        plistlib.dump(_info_plist(version, str(build)), file, sort_keys=True)
     return app
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Package HomeworkHelperRemote as a macOS .app bundle.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--build", default="1")
+    parser.add_argument("--jobs", type=int, default=None)
     args = parser.parse_args(argv)
 
     try:
-        app = package_app(args.output_dir)
+        app = package_app(args.output_dir, version=args.version, build=args.build, jobs=args.jobs)
     except Exception as exc:
         print(f"macOS app packaging failed: {exc}", file=sys.stderr)
         return 1

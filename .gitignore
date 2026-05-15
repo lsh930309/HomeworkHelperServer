@@ -24,6 +24,7 @@ env/
 .env.*.local
 **/.env
 **/server/.env
+build.version.json
 
 # ===========================
 # PyInstaller 빌드 산출물

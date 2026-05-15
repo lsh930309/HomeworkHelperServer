@@ -16,6 +16,9 @@ import re
 import threading
 import queue
 import traceback
+import json
+import platform
+import argparse
 from pathlib import Path
 from datetime import datetime
 try:
@@ -34,6 +37,8 @@ RELEASE_DIR = PROJECT_ROOT / "release"
 ARCHIVES_DIR = RELEASE_DIR / "archives"
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
+VERSION_CONFIG_FILE = PROJECT_ROOT / "build.version.json"
+VERSION_CONFIG_EXAMPLE_FILE = PROJECT_ROOT / "build.version.example.json"
 DASHBOARD_FRONTEND_DIR = PROJECT_ROOT / "src" / "api" / "dashboard" / "frontend"
 DASHBOARD_STATIC_BUILD_DIR = BUILD_DIR / "dashboard-static"
 DASHBOARD_CACHE_DIR = BUILD_DIR / "dashboard-cache"
@@ -44,8 +49,11 @@ APP_FOLDER = DIST_DIR / APP_NAME
 
 INNO_SETUP_PATH = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
 INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
+MACOS_PACKAGE_TOOL = PROJECT_ROOT / "tools" / "package_macos_remote_app.py"
+MACOS_APP_NAME = "HomeworkHelperRemote.app"
+MACOS_APP_BUNDLE = DIST_DIR / "macos" / MACOS_APP_NAME
 
-VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)\.(\d{12})')
+VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)_g([0-9a-fA-F]+|unknown)(?:_dirty)?')
 
 # 코드 서명
 CERT_DIR = PROJECT_ROOT / "certs"
@@ -55,6 +63,137 @@ CERT_THUMBPRINT_FILE = CERT_DIR / ".thumbprint"
 # 폰트 경로
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NEXONLv1GothicOTFBold.otf"
 # ================================================
+
+
+class BuildConfigError(RuntimeError):
+    """Raised when local build configuration is missing or invalid."""
+
+
+def select_build_target(system_name: str | None = None) -> str:
+    """Return the release target for the current OS."""
+    system_name = system_name or platform.system()
+    if system_name == "Windows":
+        return "windows-host"
+    if system_name == "Darwin":
+        return "macos-client"
+    raise BuildConfigError(f"지원하지 않는 빌드 환경입니다: {system_name or 'unknown'}")
+
+
+def load_version_config(path: Path = VERSION_CONFIG_FILE) -> dict:
+    """Load untracked local version data shared by all platform targets."""
+    if not path.exists():
+        raise BuildConfigError(
+            f"{path.name} 파일이 없습니다. {VERSION_CONFIG_EXAMPLE_FILE.name}을 복사해 환경별 버전을 설정하세요."
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BuildConfigError(f"{path.name} JSON 형식이 올바르지 않습니다: {exc}") from exc
+    if payload.get("schema") != 1 or not isinstance(payload.get("targets"), dict):
+        raise BuildConfigError(f"{path.name} schema=1 및 targets 객체가 필요합니다.")
+    return payload
+
+
+def parse_semver(version: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(version or "").strip())
+    if not match:
+        raise BuildConfigError(f"버전은 X.Y.Z 형식이어야 합니다: {version!r}")
+    return tuple(int(part) for part in match.groups())
+
+
+def target_version_payload(config: dict, target: str) -> dict:
+    payload = (config.get("targets") or {}).get(target)
+    if not isinstance(payload, dict):
+        raise BuildConfigError(f"{target} 버전 정보가 build.version.json에 없습니다.")
+    major, minor, patch = parse_semver(str(payload.get("version") or ""))
+    try:
+        build_number = int(payload.get("build", 1))
+    except (TypeError, ValueError) as exc:
+        raise BuildConfigError(f"{target}.build는 정수여야 합니다.") from exc
+    if build_number < 1:
+        raise BuildConfigError(f"{target}.build는 1 이상이어야 합니다.")
+    return {"major": major, "minor": minor, "patch": patch, "build": build_number}
+
+
+def git_short_hash(length: int = 7, runner=subprocess.run) -> str:
+    try:
+        result = runner(
+            ["git", "rev-parse", f"--short={length}", "HEAD"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:
+        return "unknown"
+    value = (result.stdout or "").strip()
+    return value or "unknown"
+
+
+def git_worktree_dirty(runner=subprocess.run) -> bool:
+    try:
+        result = runner(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:
+        return False
+    return bool((result.stdout or "").strip())
+
+
+def determine_parallel_jobs(cpu_count: int | None = None) -> int:
+    cpu_count = cpu_count or os.cpu_count() or 1
+    return max(1, min(int(cpu_count), 12))
+
+
+def make_version_info(target: str, config: dict, *, git_hash: str | None = None, dirty: bool | None = None) -> dict:
+    version = target_version_payload(config, target)
+    git_hash = git_hash or git_short_hash()
+    dirty = git_worktree_dirty() if dirty is None else dirty
+    semver = f"{version['major']}.{version['minor']}.{version['patch']}"
+    release_id = f"v{semver}_g{git_hash}" + ("_dirty" if dirty else "")
+    return {
+        **version,
+        "target": target,
+        "version": semver,
+        "git_hash": git_hash,
+        "dirty": dirty,
+        "string": release_id,
+        "jobs": determine_parallel_jobs(),
+    }
+
+
+def release_filename(prefix: str, version_info: dict, suffix: str, extension: str) -> str:
+    suffix_part = f"_{suffix}" if suffix else ""
+    return f"{prefix}_{version_info['string']}{suffix_part}.{extension}"
+
+
+class ConsoleBuildProgress:
+    """Small console fallback for non-GUI build environments."""
+    def __init__(self, version_info, *_args, **_kwargs):
+        self.version_info = version_info
+
+    def log(self, message="", style=None, update_last_line=False):
+        print(message)
+
+    def log_section(self, title):
+        self.log("\n" + "=" * 70)
+        self.log(title)
+        self.log("=" * 70)
+
+    def set_status(self, status):
+        self.log(f"[상태] {status}")
+
+    def set_progress(self, _value):
+        return None
+
+    def show_complete(self, success=True, auto_close_delay=0):
+        self.log("✓ 빌드 완료" if success else "✗ 빌드 실패")
 
 
 def load_custom_font():
@@ -539,8 +678,8 @@ def archive_old_files(gui, _new_version):
     date_folder = datetime.now().strftime("%y-%m-%d")
     files_to_archive = []
 
-    for file_path in RELEASE_DIR.glob("HomeworkHelper_v*"):
-        if file_path.is_file() and file_path.suffix in ['.exe', '.zip']:
+    for file_path in RELEASE_DIR.glob("HomeworkHelper*_v*"):
+        if file_path.is_file() and file_path.suffix.lower() in ['.exe', '.zip', '.pkg']:
             files_to_archive.append(file_path)
 
     if not files_to_archive:
@@ -549,9 +688,9 @@ def archive_old_files(gui, _new_version):
 
     archived_count = 0
     for file_path in files_to_archive:
-        if file_path.suffix == '.exe':
+        if file_path.suffix.lower() in {'.exe', '.pkg'}:
             archive_subdir = ARCHIVES_DIR / "installer" / date_folder
-        elif file_path.suffix == '.zip':
+        elif file_path.suffix.lower() == '.zip':
             archive_subdir = ARCHIVES_DIR / "portable" / date_folder
         else:
             continue
@@ -583,6 +722,27 @@ def clean_build_artifacts(gui):
             gui.log(f"  (없음: {folder.name}/)")
 
     gui.set_progress(20)
+
+
+def cleanup_intermediate_artifacts(gui, *, deep_clean: bool = False):
+    """빌드 종료 후 최종 release 산출물을 제외한 중간 산출물을 정리."""
+    gui.log_section("중간 산출물 정리")
+    for folder in [DIST_DIR, BUILD_DIR]:
+        if folder.exists():
+            try:
+                shutil.rmtree(folder)
+                gui.log(f"  ✓ 삭제: {folder.relative_to(PROJECT_ROOT)}/", 'success')
+            except Exception as e:
+                gui.log(f"  ⚠ 삭제 실패 ({folder.name}): {e}", 'warning')
+    if deep_clean:
+        swift_build = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / ".build"
+        for folder in [swift_build]:
+            if folder.exists():
+                try:
+                    shutil.rmtree(folder)
+                    gui.log(f"  ✓ deep-clean 삭제: {folder.relative_to(PROJECT_ROOT)}/", 'success')
+                except Exception as e:
+                    gui.log(f"  ⚠ deep-clean 실패 ({folder.name}): {e}", 'warning')
 
 
 def ensure_release_dir(gui):
@@ -866,7 +1026,7 @@ def create_zip_distribution(gui, version_info):
         return False
 
     ensure_release_dir(gui)
-    zip_filename = f"HomeworkHelper_{version_info['string']}_Portable.zip"
+    zip_filename = release_filename("HomeworkHelper", version_info, "Portable", "zip")
     zip_path = RELEASE_DIR / zip_filename
 
     try:
@@ -901,28 +1061,18 @@ def create_zip_distribution(gui, version_info):
         return False
 
 
-def update_installer_script_version(version_info):
-    """installer.iss 파일의 버전 정보 업데이트"""
-    if not INSTALLER_SCRIPT.exists():
-        return False
+def windows_installer_output_base(version_info):
+    return f"HomeworkHelper_{version_info['string']}_Setup"
 
-    try:
-        with open(INSTALLER_SCRIPT, 'r', encoding='utf-8') as f:
-            content = f.read()
 
-        version_string = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
-        content = re.sub(
-            r'(#define MyAppVersion\s+")[^"]+(")',
-            rf'\g<1>{version_string}\g<2>',
-            content
-        )
-
-        with open(INSTALLER_SCRIPT, 'w', encoding='utf-8') as f:
-            f.write(content)
-
-        return True
-    except Exception as e:
-        return False
+def create_inno_setup_command(version_info):
+    """Build an ISCC command without mutating installer.iss."""
+    return [
+        str(INNO_SETUP_PATH),
+        str(INSTALLER_SCRIPT),
+        f"/DMyAppVersion={version_info['version']}",
+        f"/DMyAppOutputBaseFilename={windows_installer_output_base(version_info)}",
+    ]
 
 
 def create_installer(gui, version_info):
@@ -946,9 +1096,7 @@ def create_installer(gui, version_info):
         gui.log(f"✗ 배포 폴더 없음: {APP_FOLDER}", 'error')
         return False
 
-    update_installer_script_version(version_info)
-
-    cmd = [str(INNO_SETUP_PATH), str(INSTALLER_SCRIPT)]
+    cmd = create_inno_setup_command(version_info)
     gui.log(f"인스톨러 명령: {' '.join(cmd)}\n")
 
     try:
@@ -1003,19 +1151,13 @@ def create_installer(gui, version_info):
 
         gui.log("\n✓ 인스톨러 생성 성공!", 'success')
 
-        # 파일명 변경
-        base_version = f"{version_info['major']}.{version_info['minor']}.{version_info['patch']}"
-        expected_filename = f"HomeworkHelper_Setup_v{base_version}.exe"
+        expected_filename = f"{windows_installer_output_base(version_info)}.exe"
         generated_file = RELEASE_DIR / expected_filename
 
         if generated_file.exists():
-            new_name = f"HomeworkHelper_{version_info['string']}_Setup.exe"
-            dest = RELEASE_DIR / new_name
-            shutil.move(str(generated_file), str(dest))
-
-            size_mb = dest.stat().st_size / (1024 * 1024)
-            gui.log(f"  인스톨러: {new_name} ({size_mb:.2f} MB)")
-            gui.log(f"  저장 위치: {dest}")
+            size_mb = generated_file.stat().st_size / (1024 * 1024)
+            gui.log(f"  인스톨러: {expected_filename} ({size_mb:.2f} MB)")
+            gui.log(f"  저장 위치: {generated_file}")
         else:
             gui.log(f"✗ 생성된 인스톨러 파일을 찾을 수 없습니다: {expected_filename}", 'error')
             return False
@@ -1025,6 +1167,118 @@ def create_installer(gui, version_info):
     except subprocess.CalledProcessError as e:
         gui.log(f"\n✗ 인스톨러 생성 실패: {e}", 'error')
         return False
+
+
+def macos_pkg_path(version_info):
+    return RELEASE_DIR / f"HomeworkHelperRemote_{version_info['string']}.pkg"
+
+
+def create_pkgbuild_command(app_bundle: Path, pkg_path: Path):
+    return [
+        "pkgbuild",
+        "--component",
+        str(app_bundle),
+        "--install-location",
+        "/Applications",
+        str(pkg_path),
+    ]
+
+
+def build_macos_remote_app(gui, version_info):
+    """Build the Swift macOS remote client and package it as a .app bundle."""
+    gui.log_section("macOS Remote Client 앱 번들 생성")
+    gui.set_status("Swift release 빌드 및 .app 생성 중...")
+    gui.set_progress(25)
+
+    ensure_release_dir(gui)
+    if not MACOS_PACKAGE_TOOL.exists():
+        gui.log(f"✗ macOS 패키징 도구 없음: {MACOS_PACKAGE_TOOL}", 'error')
+        return False
+
+    output_dir = DIST_DIR / "macos"
+    cmd = [
+        sys.executable,
+        str(MACOS_PACKAGE_TOOL),
+        "--output-dir",
+        str(output_dir),
+        "--version",
+        version_info["version"],
+        "--build",
+        str(version_info["build"]),
+        "--jobs",
+        str(version_info["jobs"]),
+    ]
+    gui.log(f"앱 번들 명령: {' '.join(cmd)}\n")
+    try:
+        process = subprocess.run(
+            cmd,
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception as e:
+        gui.log(f"✗ macOS 앱 번들 명령 실행 실패: {e}", 'error')
+        return False
+    if process.stdout:
+        for line in process.stdout.splitlines():
+            if line.strip():
+                gui.log(f"  {line}")
+    if process.returncode != 0:
+        gui.log(f"✗ macOS 앱 번들 생성 실패 (exit={process.returncode})", 'error')
+        return False
+    if not MACOS_APP_BUNDLE.exists():
+        gui.log(f"✗ 앱 번들을 찾을 수 없습니다: {MACOS_APP_BUNDLE}", 'error')
+        return False
+    gui.set_progress(70)
+    return True
+
+
+def create_macos_pkg(gui, version_info):
+    """Create a macOS .pkg installer in release/."""
+    gui.log_section("macOS PKG 인스톨러 생성")
+    gui.set_status("pkgbuild 실행 중...")
+    gui.set_progress(75)
+
+    if not shutil.which("pkgbuild"):
+        gui.log("✗ pkgbuild를 찾을 수 없습니다. Xcode Command Line Tools가 필요합니다.", 'error')
+        return False
+    if not MACOS_APP_BUNDLE.exists():
+        gui.log(f"✗ 앱 번들 없음: {MACOS_APP_BUNDLE}", 'error')
+        return False
+    pkg_path = macos_pkg_path(version_info)
+    if pkg_path.exists():
+        pkg_path.unlink()
+    cmd = create_pkgbuild_command(MACOS_APP_BUNDLE, pkg_path)
+    gui.log(f"PKG 명령: {' '.join(cmd)}\n")
+    try:
+        process = subprocess.run(
+            cmd,
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception as e:
+        gui.log(f"✗ pkgbuild 실행 실패: {e}", 'error')
+        return False
+    if process.stdout:
+        for line in process.stdout.splitlines():
+            if line.strip():
+                gui.log(f"  {line}")
+    if process.returncode != 0:
+        gui.log(f"✗ pkgbuild 실패 (exit={process.returncode})", 'error')
+        return False
+    size_mb = pkg_path.stat().st_size / (1024 * 1024)
+    gui.log(f"✓ PKG 생성 완료: {pkg_path.name} ({size_mb:.2f} MB)", 'success')
+    gui.set_progress(95)
+    return True
 
 
 def print_summary(gui, version_info):
@@ -1054,63 +1308,87 @@ def print_summary(gui, version_info):
         gui.log(f"  [Portable] {zip_file.name} ({size_mb:.2f} MB)", 'success')
         has_files = True
 
+    # macOS PKG
+    for pkg_file in RELEASE_DIR.glob(f"*{version_info['string']}*.pkg"):
+        size_mb = pkg_file.stat().st_size / (1024 * 1024)
+        gui.log(f"  [macOS PKG] {pkg_file.name} ({size_mb:.2f} MB)", 'success')
+        has_files = True
+
     if not has_files:
         gui.log("  (파일 없음)")
 
     gui.log("-" * 70)
     gui.log(f"\n배포 경로: {RELEASE_DIR.absolute()}")
     gui.log("\n사용 방법:")
-    gui.log("  1. 설치 프로그램: *Setup*.exe 실행")
-    gui.log("  2. Portable 버전: *.zip 압축 해제 후 실행")
+    gui.log("  1. Windows 설치 프로그램: *Setup*.exe 실행")
+    gui.log("  2. Windows Portable 버전: *.zip 압축 해제 후 실행")
+    gui.log("  3. macOS Remote Client: *.pkg 실행")
 
 
-def run_build_process(gui, version_info):
+def run_windows_build(gui, version_info) -> int:
+    if not build_dashboard_frontend(gui):
+        return 0
+    if not build_with_pyinstaller(gui):
+        return 0
+    gui.set_progress(62)
+    if not sign_build_artifacts(gui, version_info):
+        gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
+        return 0
+
+    success_count = 0
+    if create_zip_distribution(gui, version_info):
+        success_count += 1
+
+    if create_installer(gui, version_info):
+        success_count += 1
+        setup_files = list(RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"))
+        if setup_files:
+            gui.set_progress(96)
+            if not sign_build_artifacts(gui, version_info, target_files=setup_files):
+                gui.log("\n✗ 인스톨러 코드 서명 실패로 빌드를 중단합니다.", 'error')
+                return 0
+    return success_count
+
+
+def run_macos_build(gui, version_info) -> int:
+    if not build_macos_remote_app(gui, version_info):
+        return 0
+    return 1 if create_macos_pkg(gui, version_info) else 0
+
+
+def open_release_folder(gui):
+    try:
+        if platform.system() == "Windows":
+            subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
+        elif platform.system() == "Darwin":
+            subprocess.Popen(['open', str(RELEASE_DIR.absolute())])
+        else:
+            return False
+        gui.log("\n✓ release 폴더를 열었습니다", 'success')
+        return True
+    except Exception as e:
+        gui.log(f"\n⚠ release 폴더 열기 실패: {e}", 'warning')
+        return False
+
+
+def run_build_process(gui, version_info, *, deep_clean: bool = False):
     """빌드 프로세스 실행 (별도 스레드)"""
-    def build():
-        try:
-            # 1. 아카이빙
-            archive_old_files(gui, version_info)
+    build_result = {"success": False}
 
-            # 2. 정리
+    def build():
+        success = False
+        try:
+            archive_old_files(gui, version_info)
             clean_build_artifacts(gui)
 
-            # 3. 대시보드 프론트엔드 빌드
-            if not build_dashboard_frontend(gui):
-                gui.show_complete(False, auto_close_delay=0)
-                return
+            target = version_info.get("target")
+            if target == "windows-host":
+                success_count = run_windows_build(gui, version_info)
+            elif target == "macos-client":
+                success_count = run_macos_build(gui, version_info)
+            else:
+                raise BuildConfigError(f"지원하지 않는 빌드 타깃입니다: {target}")
 
-            # 4. PyInstaller 빌드
-            if not build_with_pyinstaller(gui):
-                gui.show_complete(False, auto_close_delay=0)
-                return
-
-            # 4. 메인 exe 코드 서명
-            gui.set_progress(62)
-            if not sign_build_artifacts(gui, version_info):
-                gui.log("\n✗ 코드 서명 실패로 빌드를 중단합니다.", 'error')
-                gui.show_complete(False, auto_close_delay=0)
-                return
-
-
-            # 5. ZIP 생성
-            success_count = 0
-            if create_zip_distribution(gui, version_info):
-                success_count += 1
-
-            # 6. 인스톨러 생성
-            if create_installer(gui, version_info):
-                success_count += 1
-
-                # 7. 인스톨러 exe 코드 서명
-                setup_files = list(RELEASE_DIR.glob(f"*{version_info['string']}*Setup*.exe"))
-                if setup_files:
-                    gui.set_progress(96)
-                    if not sign_build_artifacts(gui, version_info, target_files=setup_files):
-                        gui.log("\n✗ 인스톨러 코드 서명 실패로 빌드를 중단합니다.", 'error')
-                        gui.show_complete(False, auto_close_delay=0)
-                        return
-
-            # 8. 결과 요약
             print_summary(gui, version_info)
 
             if success_count == 0:
@@ -1118,64 +1396,96 @@ def run_build_process(gui, version_info):
                 gui.show_complete(False, auto_close_delay=0)
                 return
 
-            # 7. release 폴더 열기
-            folder_opened = False
-            try:
-                subprocess.Popen(['explorer', str(RELEASE_DIR.absolute())])
-                gui.log("\n✓ release 폴더를 열었습니다", 'success')
-                folder_opened = True
-            except Exception as e:
-                gui.log(f"\n⚠ release 폴더 열기 실패: {e}", 'warning')
-
-            # 8. 완료 (폴더 열기 성공 시만 자동 종료)
-            if folder_opened:
-                gui.show_complete(True, auto_close_delay=3000)  # 3초 후 자동 종료
-            else:
-                gui.show_complete(True, auto_close_delay=0)  # 수동 종료
+            success = True
+            build_result["success"] = True
+            folder_opened = open_release_folder(gui)
+            gui.show_complete(True, auto_close_delay=3000 if folder_opened else 0)
 
         except Exception as e:
             gui.log(f"\n✗ 예상치 못한 오류: {e}", 'error')
             gui.log(traceback.format_exc(), 'error')
             gui.show_complete(False, auto_close_delay=0)
+        finally:
+            cleanup_intermediate_artifacts(gui, deep_clean=deep_clean)
 
     # 빌드 스레드 시작
     build_thread = threading.Thread(target=build, daemon=True)
+    build_thread.build_result = build_result
     build_thread.start()
+    return build_thread
 
 
-def main():
-    """메인 함수"""
-    # 커스텀 폰트 로딩
+def parse_args(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(description="HomeworkHelper platform-aware release builder.")
+    parser.add_argument(
+        "--target",
+        choices=("windows-host", "macos-client"),
+        default=None,
+        help="빌드 타깃을 강제 지정합니다. 기본값은 현재 OS 자동 감지입니다.",
+    )
+    parser.add_argument(
+        "--version-file",
+        type=Path,
+        default=VERSION_CONFIG_FILE,
+        help="환경별 버전 정보를 담은 JSON 파일 경로입니다.",
+    )
+    parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        help="tkinter GUI 대신 콘솔 진행 로그를 사용합니다.",
+    )
+    parser.add_argument(
+        "--deep-clean",
+        action="store_true",
+        help="빌드 후 Swift .build 같은 플랫폼별 캐시까지 정리합니다.",
+    )
+    return parser.parse_args(argv)
+
+
+def validate_target_inputs(target: str):
+    if target == "windows-host" and not SPEC_FILE.exists():
+        raise BuildConfigError(f"{SPEC_FILE.name} 파일을 찾을 수 없습니다.")
+    if target == "macos-client" and platform.system() != "Darwin":
+        raise BuildConfigError("macos-client 빌드는 macOS 환경에서만 실행할 수 있습니다.")
+
+
+def create_progress_ui(version_info: dict, *, no_gui: bool):
+    if no_gui or tk is None:
+        return ConsoleBuildProgress(version_info), False
     font_family = load_custom_font()
+    theme = ThemeColors(is_dark_mode())
+    return BuildProgressGUI(version_info, theme, font_family), True
 
-    # 다크 모드 감지
-    dark_mode = is_dark_mode()
-    theme = ThemeColors(dark_mode)
 
-    # .spec 파일 존재 확인
-    if not SPEC_FILE.exists():
-        print(f"[오류] {SPEC_FILE.name} 파일을 찾을 수 없습니다.")
+def main(argv: list[str] | None = None):
+    """메인 함수"""
+    args = parse_args(argv)
+    # 커스텀 폰트 로딩
+    try:
+        target = args.target or select_build_target()
+        validate_target_inputs(target)
+        version_config = load_version_config(args.version_file)
+        version_info = make_version_info(target, version_config)
+    except BuildConfigError as exc:
+        print(f"[오류] {exc}")
         return 1
 
-    # 1. 최신 버전 확인
-    latest_version = get_latest_version()
+    build_gui, has_gui = create_progress_ui(version_info, no_gui=args.no_gui)
+    build_gui.log_section("빌드 설정")
+    build_gui.log(f"타깃: {version_info['target']}")
+    build_gui.log(f"버전: {version_info['version']} (build {version_info['build']})")
+    build_gui.log(f"릴리스 ID: {version_info['string']}")
+    build_gui.log(f"병렬 작업 수: {version_info['jobs']}")
+    if version_info["dirty"]:
+        build_gui.log("⚠ 작업 트리에 커밋되지 않은 변경이 있어 릴리스 ID에 _dirty가 붙었습니다.", 'warning')
 
-    # 2. 버전 선택 GUI
-    version_selector = VersionSelectorGUI(latest_version, theme, font_family)
-    version_info = version_selector.show()
+    build_thread = run_build_process(build_gui, version_info, deep_clean=args.deep_clean)
 
-    if version_info is None:
-        print("[취소] 빌드를 중단합니다.")
-        return 1
-
-    # 3. 빌드 진행 GUI
-    build_gui = BuildProgressGUI(version_info, theme, font_family)
-
-    # 4. 빌드 프로세스 시작
-    run_build_process(build_gui, version_info)
-
-    # GUI 실행
-    build_gui.root.mainloop()
+    if has_gui:
+        build_gui.root.mainloop()
+    else:
+        build_thread.join()
+        return 0 if build_thread.build_result.get("success") else 1
 
     return 0
 
