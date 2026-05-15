@@ -214,10 +214,23 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     window_accessor = _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
     assert "RemoteWindowLayout.contentSize" in app
     assert "RemoteWindowLayout.maxWindowSize" in window_accessor
+    assert "RemoteAppDelegate.mainWindowTitle" in window_accessor
+    assert "RemoteAppDelegate.mainWindowIdentifier" in window_accessor
+    assert "RemoteAppDelegate.prepareMainWindow(window)" in window_accessor
     assert "NSScreen.main?.visibleFrame" in window_accessor
     assert "compactWindowHeight" in window_accessor
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
+    assert "Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier)" in app
+    assert "WindowGroup(" not in app
+    assert "static let mainWindowIdentifier = \"HomeworkHelperRemoteMainWindow\"" in app
+    assert "static let mainWindowTitle = \"HomeworkHelper Remote\"" in app
+    assert "private static var isOpeningMainWindow = false" in app
+    assert "func deduplicateMainWindows" in app
+    assert "func prepareMainWindow" in app
+    assert "guard !isOpeningMainWindow else { return }" in app
+    assert "deduplicateMainWindows(preferred: window)" in app
+    assert "typeName.contains(\"Popover\") == false" in app
     assert "RemoteWindowAccessor" in app
     assert "RemoteGlassBackground" in app
     assert "NSVisualEffectView" in window_accessor
@@ -434,7 +447,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteMenuBarIconChoice" in view_model
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
-    assert "HomeworkHelperRemoteMainWindow" in _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
+    assert "NSApp.sendAction(Selector((\"showMainWindow:\")), to: nil, from: nil)" in app
+    assert "window.orderOut(nil)" in app
+    assert ".close()" not in app
+    assert "HomeworkHelperRemoteMainWindow" in app
     assert "HostStatusPill" in app
     assert 'Label("창 열기", systemImage: "macwindow")' in app
     assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app

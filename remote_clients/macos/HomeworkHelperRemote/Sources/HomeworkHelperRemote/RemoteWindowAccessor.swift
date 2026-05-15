@@ -85,11 +85,12 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.setContentSize(size)
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
-        window.title = "HomeworkHelper Remote"
-        window.identifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteMainWindow")
+        window.title = RemoteAppDelegate.mainWindowTitle
+        window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.mainWindowIdentifier)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
+        RemoteAppDelegate.prepareMainWindow(window)
     }
 }
 

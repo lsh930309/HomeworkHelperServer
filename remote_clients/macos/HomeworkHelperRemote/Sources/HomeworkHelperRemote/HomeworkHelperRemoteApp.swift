@@ -14,6 +14,11 @@ enum RemoteSharedModel {
 
 @MainActor
 final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    static let mainWindowIdentifier = "HomeworkHelperRemoteMainWindow"
+    static let mainWindowTitle = "HomeworkHelper Remote"
+
+    private static var isOpeningMainWindow = false
+
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
 
@@ -82,13 +87,46 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .homeworkHelperRemoteMainWindowWillShow, object: nil)
-        if mainWindows().isEmpty {
-            NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
+        if let window = deduplicateMainWindows() {
+            isOpeningMainWindow = false
+            focusMainWindow(window)
+            return
         }
-        for window in mainWindows() {
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
+        guard !isOpeningMainWindow else { return }
+        isOpeningMainWindow = true
+        NSApp.sendAction(Selector(("showMainWindow:")), to: nil, from: nil)
+        DispatchQueue.main.async {
+            isOpeningMainWindow = false
+            if let window = deduplicateMainWindows() {
+                focusMainWindow(window)
+            }
         }
+    }
+
+    static func deduplicateMainWindows(preferred preferredWindow: NSWindow? = nil) -> NSWindow? {
+        let candidates = mainWindows()
+        guard !candidates.isEmpty else { return nil }
+        let keeper = preferredWindow.flatMap { preferred in
+            candidates.first { $0 === preferred }
+        } ?? candidates.first(where: { $0.isKeyWindow })
+            ?? candidates.first(where: { $0.isVisible })
+            ?? candidates[0]
+        for window in candidates where window !== keeper {
+            window.orderOut(nil)
+        }
+        return keeper
+    }
+
+    static func prepareMainWindow(_ window: NSWindow) {
+        window.title = mainWindowTitle
+        window.identifier = NSUserInterfaceItemIdentifier(mainWindowIdentifier)
+        isOpeningMainWindow = false
+        _ = deduplicateMainWindows(preferred: window)
+    }
+
+    private static func focusMainWindow(_ window: NSWindow) {
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     static func hideMainWindow() {
@@ -106,12 +144,17 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private static func mainWindows() -> [NSWindow] {
-        NSApp.windows.filter { window in
-            (window.identifier?.rawValue == "HomeworkHelperRemoteMainWindow"
-            || window.title == "HomeworkHelper Remote")
-            && String(describing: type(of: window)).contains("Popover") == false
-            && window.isReleasedWhenClosed == false
+        NSApp.windows.filter(isMainWindowCandidate)
+    }
+
+    private static func isMainWindowCandidate(_ window: NSWindow) -> Bool {
+        let typeName = String(describing: type(of: window))
+        guard typeName.contains("Popover") == false,
+              window.isReleasedWhenClosed == false else {
+            return false
         }
+        return window.identifier?.rawValue == mainWindowIdentifier
+            || window.title == mainWindowTitle
     }
 }
 
@@ -121,7 +164,7 @@ struct HomeworkHelperRemoteApp: App {
     @StateObject private var viewModel = RemoteSharedModel.viewModel
 
     var body: some Scene {
-        WindowGroup {
+        Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier) {
             RemoteDashboardView(viewModel: viewModel)
         }
         .windowResizability(.contentSize)
