@@ -10,6 +10,7 @@ import os
 import re
 import unicodedata
 from collections import defaultdict
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -852,6 +853,28 @@ def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _preset_icon_response(icon_path: str, requested_size: int) -> Response | FileResponse:
+    """Return a native-client PNG resource icon at the requested pixel size."""
+    requested_size = max(1, min(256, int(requested_size or 32)))
+    try:
+        from PIL import Image
+
+        with Image.open(icon_path) as image:
+            image.load()
+            if image.mode != "RGBA":
+                image = image.convert("RGBA")
+            current_size = max(image.size)
+            if current_size != requested_size:
+                resampling_filter = getattr(Image, "Resampling", Image)
+                resampling = resampling_filter.LANCZOS if current_size > requested_size else resampling_filter.BICUBIC
+                image = image.resize((requested_size, requested_size), resampling)
+            output = BytesIO()
+            image.save(output, format="PNG", optimize=True)
+            return Response(content=output.getvalue(), media_type="image/png")
+    except Exception:
+        return FileResponse(icon_path, media_type="image/png")
+
+
 @router.get("/api/dashboard/resource-icons/{process_id}")
 def get_resource_icon(process_id: str, size: int = Query(default=32, ge=1, le=256)):
     """Resource/stamina icon API for native clients."""
@@ -865,4 +888,4 @@ def get_resource_icon(process_id: str, size: int = Query(default=32, ge=1, le=25
         icon_path = resolve_preset_icon_path(str(preset.get("icon_path") or ""), str(preset.get("icon_type") or "system"))
         if not icon_path:
             raise HTTPException(status_code=404, detail="resource icon not found")
-        return FileResponse(icon_path, media_type="image/png")
+        return _preset_icon_response(icon_path, size)

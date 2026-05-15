@@ -322,17 +322,43 @@ struct RemoteSidebarView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                } label: {
-                    Label("설정 열기", systemImage: "gearshape")
+                GroupBox("앱") {
+                    HStack {
+                        SettingsOpenButton()
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.bordered)
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+    }
+}
+
+struct SettingsOpenButton: View {
+    var body: some View {
+        Group {
+            if #available(macOS 14.0, *) {
+                SettingsLink {
+                    Label("설정 열기", systemImage: "gearshape")
+                }
+            } else {
+                Button(action: openSettingsWindowFallback) {
+                    Label("설정 열기", systemImage: "gearshape")
+                }
+            }
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private func openSettingsWindowFallback() {
+        NSApp.activate(ignoringOtherApps: true)
+        if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            return
+        }
+        NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
     }
 }
 
@@ -529,7 +555,7 @@ struct MenuBarGameRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            GameIconView(process: process, viewModel: viewModel, preferredSize: 64)
+            GameIconView(process: process, viewModel: viewModel, preferredSize: 256)
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
@@ -551,7 +577,7 @@ struct MenuBarGameRow: View {
                 }
                 if let progress = process.progress {
                     HStack(spacing: 5) {
-                        ResourceIconView(process: process, viewModel: viewModel, preferredSize: 32)
+                        ResourceIconView(process: process, viewModel: viewModel, preferredSize: 128)
                             .frame(width: 12, height: 12)
                         ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                             .controlSize(.mini)

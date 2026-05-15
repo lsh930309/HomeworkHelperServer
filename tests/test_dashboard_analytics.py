@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import struct
 from pathlib import Path
 
 os.environ["HOME"] = "/tmp/homeworkhelper-tests"
@@ -251,10 +252,11 @@ def test_dashboard_resource_icon_endpoint_serves_preset_icon(monkeypatch):
         processes=[models.Process(id="pid-resource", name="Resource", user_preset_id="honkai_starrail")],
     )
 
-    response = client.get("/api/dashboard/resource-icons/pid-resource?size=32")
+    response = client.get("/api/dashboard/resource-icons/pid-resource?size=128")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
+    assert min(struct.unpack(">II", response.content[16:24])) >= 128
 
 
 def test_game_key_filter_includes_all_process_ids_in_group(monkeypatch):

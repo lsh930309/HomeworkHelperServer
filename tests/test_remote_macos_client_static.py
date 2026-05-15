@@ -213,7 +213,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteWindowLayout.contentSize" in app
     assert "RemoteWindowLayout.maxWindowSize" in window_accessor
     assert "NSScreen.main?.visibleFrame" in window_accessor
-    assert "RemoteWindowLayout.minWindowSize" in window_accessor
+    assert "compactWindowHeight" in window_accessor
+    assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
     assert "RemoteWindowAccessor" in app
     assert "ScrollView {" in app
@@ -231,7 +232,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "페어링 및 자동 설정" in app
     assert "Settings {" in app
     assert "RemoteSettingsView" in app
+    assert "struct SettingsOpenButton: View" in app
+    assert "SettingsLink" in app
     assert 'Selector(("showSettingsWindow:"))' in app
+    assert 'Selector(("showPreferencesWindow:"))' in app
     assert "AdvancedRemoteSettingsView" in app
     assert "GameProgressView" in app
     assert "RemoteGameCard" in app
@@ -249,9 +253,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "resourceIconURL" in _read(SOURCE_ROOT / "RemoteModels.swift")
     assert "cachedResourceIconURL" in _read(SOURCE_ROOT / "RemoteClientCache.swift")
     cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
-    assert 'private static let iconCacheVersion = "v2"' in cache
+    assert 'private static let iconCacheVersion = "v3_pixels"' in cache
+    assert "validatedCachedURL" in cache
+    assert "decodedPixelDimension(data) >= preferredSize" in cache
     assert "let preferredSize = 256" in cache
-    assert "let preferredSize = 64" in cache
+    assert "let preferredSize = 128" in cache
     assert "RemoteClientCache.loadProcesses" in view_model
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
@@ -283,6 +289,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "플레이 요약 표시" in app
     assert "showPlaySummary" in view_model
     assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
+    assert "static let compactWindowHeight: CGFloat = 372" in window_accessor
+    assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
     assert "dashboardSummary" in view_model
     assert "모바일 플레이" in app
     assert "mobileMetrics" in app
@@ -325,6 +333,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "completePairingOnboarding" in view_model
     assert "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다." in view_model
     assert "func recoverPairing" in view_model
+    recover_pairing_source = view_model.split("func recoverPairing", 1)[1].split("func clearLocalPairing", 1)[0]
+    assert "refreshToken()" not in recover_pairing_source
+    assert 'tokenText = ""' not in recover_pairing_source
+    assert "저장된 토큰 확인에 실패했습니다" in recover_pairing_source
     assert "func clearLocalPairing" in view_model
     assert "pairingRecoveryMessage" in view_model
     assert "저장된 Keychain 토큰으로 자동 연결했습니다." in view_model

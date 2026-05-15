@@ -1,8 +1,9 @@
+import AppKit
 import Foundation
 
 struct RemoteClientCache {
     private static let appDirectoryName = "HomeworkHelperRemote"
-    private static let iconCacheVersion = "v2"
+    private static let iconCacheVersion = "v3_pixels"
 
     static var cacheDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -33,12 +34,12 @@ struct RemoteClientCache {
 
     static func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 256) -> URL? {
         let url = iconFileURL(for: process, preferredSize: preferredSize)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return validatedCachedURL(url, minimumPixelSize: preferredSize)
     }
 
-    static func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
+    static func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
         let url = resourceIconFileURL(for: process, preferredSize: preferredSize)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return validatedCachedURL(url, minimumPixelSize: preferredSize)
     }
 
     static func cacheIcons(for processes: [RemoteProcess], baseURL: URL) async {
@@ -50,19 +51,21 @@ struct RemoteClientCache {
                 let (data, response) = try await URLSession.shared.data(from: source)
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
                 guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("image/png") else { continue }
+                guard decodedPixelDimension(data) >= preferredSize else { continue }
                 try data.write(to: iconFileURL(for: process, preferredSize: preferredSize), options: [.atomic])
             } catch {
                 continue
             }
         }
         for process in processes {
-            let preferredSize = 64
+            let preferredSize = 128
             guard cachedResourceIconURL(for: process, preferredSize: preferredSize) == nil,
                   let source = remoteResourceIconURL(for: process, baseURL: baseURL, preferredSize: preferredSize) else { continue }
             do {
                 let (data, response) = try await URLSession.shared.data(from: source)
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
                 guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("image/png") else { continue }
+                guard decodedPixelDimension(data) >= preferredSize else { continue }
                 try data.write(to: resourceIconFileURL(for: process, preferredSize: preferredSize), options: [.atomic])
             } catch {
                 continue
@@ -81,7 +84,7 @@ struct RemoteClientCache {
         return components.url
     }
 
-    static func remoteResourceIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 64) -> URL? {
+    static func remoteResourceIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 128) -> URL? {
         guard let raw = bestURL(from: process.progress?.resourceIconURLs, preferredSize: preferredSize) ?? process.progress?.resourceIconURL, !raw.isEmpty else { return nil }
         if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
@@ -110,5 +113,25 @@ struct RemoteClientCache {
     private static func resourceIconFileURL(for process: RemoteProcess, preferredSize: Int) -> URL {
         let safeID = process.id.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression)
         return iconDirectory.appendingPathComponent("\(safeID)_resource_\(iconCacheVersion)_\(preferredSize).png")
+    }
+
+    private static func validatedCachedURL(_ url: URL, minimumPixelSize: Int) -> URL? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let image = NSImage(contentsOf: url), pixelDimension(image) >= minimumPixelSize else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return url
+    }
+
+    private static func decodedPixelDimension(_ data: Data) -> Int {
+        guard let image = NSImage(data: data) else { return 0 }
+        return pixelDimension(image)
+    }
+
+    private static func pixelDimension(_ image: NSImage) -> Int {
+        let representationMax = image.representations.map { max($0.pixelsWide, $0.pixelsHigh) }.max() ?? 0
+        let pointMax = Int(max(image.size.width, image.size.height))
+        return max(representationMax, pointMax)
     }
 }

@@ -8,14 +8,15 @@ enum RemoteWindowLayout {
     static let gameCardWidth: CGFloat = 180
     static let gameCardHeight: CGFloat = 126
     static let gameCardSpacing: CGFloat = 12
-    static let minWindowSize = CGSize(width: 720, height: 460)
+    static let minWindowWidth: CGFloat = 720
+    static let compactWindowHeight: CGFloat = 372
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
         guard let frame = NSScreen.main?.visibleFrame else { return fallbackMaxWindowSize }
         return CGSize(
-            width: min(fallbackMaxWindowSize.width, max(minWindowSize.width, frame.width - 24)),
-            height: min(fallbackMaxWindowSize.height, max(minWindowSize.height, frame.height - 24))
+            width: min(fallbackMaxWindowSize.width, max(minWindowWidth, frame.width - 24)),
+            height: min(fallbackMaxWindowSize.height, max(compactWindowHeight, frame.height - 24))
         )
     }
 
@@ -43,8 +44,8 @@ enum RemoteWindowLayout {
         let incidentHeight: CGFloat = hasIncidents ? 92 : 0
         let rawHeight = baseHeight + summaryHeight + incidentHeight
         return CGSize(
-            width: min(maxSize.width, max(minWindowSize.width, rawWidth)),
-            height: min(maxSize.height, max(minWindowSize.height, rawHeight))
+            width: min(maxSize.width, max(minWindowWidth, rawWidth)),
+            height: min(maxSize.height, max(compactWindowHeight, rawHeight))
         )
     }
 }
@@ -79,7 +80,7 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         guard let window else { return }
         let size = RemoteWindowLayout.contentSize(cardCount: cardCount, sidebarVisible: sidebarVisible, hasSummary: hasSummary, hasIncidents: hasIncidents)
         let maxSize = RemoteWindowLayout.maxWindowSize()
-        window.minSize = RemoteWindowLayout.minWindowSize
+        window.minSize = size
         window.maxSize = maxSize
         window.setContentSize(size)
         window.styleMask.remove(.resizable)

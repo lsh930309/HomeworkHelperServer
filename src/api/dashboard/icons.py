@@ -85,7 +85,7 @@ def ensure_cache_dir():
 def get_cached_icon_path(process_id: str, size: int = None) -> Path:
     """캐시된 아이콘 경로 반환 (버전 포함)"""
     # 아이콘 추출 방식 변경 시 버전 업데이트하여 캐시 무효화
-    version = "v5_multires"
+    version = "v6_jumbo"
     cache_key = safe_icon_cache_key(process_id)
 
     if size is None:

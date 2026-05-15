@@ -760,6 +760,28 @@ def test_remote_device_registry_migrates_legacy_file_to_schema_version(tmp_path)
     assert '"schema_version": 1' in path.read_text(encoding="utf-8")
 
 
+def test_remote_device_token_survives_registry_reload_without_refresh(tmp_path):
+    path = tmp_path / "remote_devices.json"
+    registry = RemoteDeviceRegistry(path=path)
+    pairing = registry.start_pairing(now=1778497000.0)
+    confirmed = registry.confirm_pairing(
+        code=pairing["code"],
+        device_name="MacBook",
+        platform="macos",
+        now=1778497001.0,
+    )
+
+    assert confirmed is not None
+    token = confirmed["token"]
+    reloaded = RemoteDeviceRegistry(path=path)
+    validated = reloaded.validate_token(token, now=1778497010.0)
+
+    assert validated is not None
+    assert validated["id"] == confirmed["id"]
+    assert validated["last_seen_at"] == 1778497010.0
+    assert reloaded.validate_token(token, now=1778497020.0) is not None
+
+
 def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands():
     commands: list[list[str]] = []
     config = RemotePowerConfig(

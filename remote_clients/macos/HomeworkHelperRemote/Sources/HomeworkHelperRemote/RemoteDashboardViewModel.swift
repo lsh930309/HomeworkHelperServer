@@ -208,10 +208,11 @@ final class RemoteDashboardViewModel: ObservableObject {
 
 
     var setupChecklist: [(String, String, Bool)] {
-        [
+        let pairingHealthy = !tokenText.isEmpty && pairingRecoveryMessage.isEmpty
+        return [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
-            ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, !tokenText.isEmpty && !pairingRecoveryMessage.contains("재페어링")),
+            ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
             ("4. 전원 관리", powerConfigResponse?.readiness.supportedActions.isEmpty == false ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "")" : "SmartThings/SSH 설정 저장 필요", powerConfigResponse?.readiness.supportedActions.isEmpty == false),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
@@ -222,6 +223,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     var hostStatusLabel: String {
         if isLoading { return "동기화 중" }
         if !isPaired { return "페어링 해제됨" }
+        if !pairingRecoveryMessage.isEmpty { return "페어링 확인 필요" }
         if hostConnectionState == "offline" { return "오프라인/꺼져 있음" }
         return "페어링됨"
     }
@@ -341,7 +343,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         RemoteClientCache.cachedIconURL(for: process, preferredSize: preferredSize)
     }
 
-    func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
+    func cachedResourceIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
         RemoteClientCache.cachedResourceIconURL(for: process, preferredSize: preferredSize)
     }
 
@@ -350,7 +352,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteClientCache.remoteIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
-    func remoteResourceIconURL(for process: RemoteProcess, preferredSize: Int = 64) -> URL? {
+    func remoteResourceIconURL(for process: RemoteProcess, preferredSize: Int = 128) -> URL? {
         guard let client else { return nil }
         return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
@@ -377,20 +379,22 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         defer { if !silent { isLoading = false } }
         do {
-            let refreshed = try await service?.refreshToken()
-            if let refreshed {
-                tokenText = refreshed.token
-                pairingRecoveryMessage = "토큰 갱신 완료: \(refreshed.name)"
-                setupProgress = "저장된 페어링을 확인하고 Keychain 토큰을 갱신했습니다."
-                devices = (try? await service?.devices()) ?? devices
+            let latestStatus = try await service?.status()
+            if let latestStatus {
+                status = latestStatus
+                hostConnectionState = "online"
+                pairingRecoveryMessage = ""
+                setupProgress = "저장된 Keychain 토큰으로 페어링을 확인했습니다."
+                if let statusReadiness = latestStatus.readiness {
+                    readiness = statusReadiness
+                }
             }
+            devices = (try? await service?.devices()) ?? devices
         } catch {
             let guidance = connectionGuidance(for: error)
             if guidance.contains("페어링 토큰") || guidance.contains("HTTP 401") || guidance.contains("HTTP 403") {
-                tokenText = ""
-                devices = []
-                pairingRecoveryMessage = "저장된 토큰이 만료/폐기되었습니다. 재페어링이 필요합니다."
-                setupProgress = "Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급해 입력하세요."
+                pairingRecoveryMessage = "저장된 토큰 확인에 실패했습니다. 로컬 토큰은 보존했으니 호스트 앱 재실행 후 자동 복구를 다시 시도하세요."
+                setupProgress = pairingRecoveryMessage
             } else {
                 pairingRecoveryMessage = guidance
                 setupProgress = guidance
