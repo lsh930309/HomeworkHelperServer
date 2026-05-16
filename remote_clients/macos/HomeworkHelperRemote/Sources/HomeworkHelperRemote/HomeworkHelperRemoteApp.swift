@@ -286,6 +286,7 @@ struct HomeworkHelperRemoteApp: App {
         }
         .windowResizability(.contentSize)
         .commands {
+            SidebarCommands()
             CommandMenu("원격") {
                 Button("새로고침") {
                     Task { await viewModel.refresh() }
@@ -331,10 +332,18 @@ struct HomeworkHelperRemoteApp: App {
 
 struct RemoteDashboardView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @State private var sidebarVisible = RemoteDashboardView.showsSidebarForUITest
+    @State private var columnVisibility = RemoteDashboardView.initialColumnVisibility
 
     private static var showsSidebarForUITest: Bool {
         RemoteUITestFlags.showSidebar
+    }
+
+    private static var initialColumnVisibility: NavigationSplitViewVisibility {
+        showsSidebarForUITest ? .all : .detailOnly
+    }
+
+    private var sidebarVisible: Bool {
+        columnVisibility != .detailOnly
     }
 
     private var targetSize: CGSize {
@@ -354,38 +363,22 @@ struct RemoteDashboardView: View {
                     .ignoresSafeArea()
                 RemoteWindowHitTestShield()
                     .ignoresSafeArea()
-                HStack(alignment: .top, spacing: 0) {
-                    if sidebarVisible {
-                        RemoteSidebarView(viewModel: viewModel)
-                            .frame(width: RemoteWindowLayout.sidebarWidth)
-                        Divider()
-                            .frame(width: RemoteWindowLayout.dividerWidth)
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        HeaderStatusView(viewModel: viewModel)
-
-                        GameSectionView(viewModel: viewModel)
-
-                        if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
-                            PlaySummaryView(summary: summary)
-                        }
-
-                        if !viewModel.beholderIncidents.isEmpty {
-                            BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
-                        }
-                    }
-                    .padding(.top, RemoteWindowLayout.titlebarContentInset)
-                    .padding(.horizontal, RemoteWindowLayout.mainContentInset)
-                    .padding(.bottom, RemoteWindowLayout.mainContentInset)
-                        .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    RemoteSidebarView(viewModel: viewModel)
+                        .navigationSplitViewColumnWidth(RemoteWindowLayout.sidebarWidth)
+                } detail: {
+                    dashboardDetail
+                }
+                .navigationSplitViewStyle(.balanced)
+                .toolbar {
+                    DefaultToolbarItem(kind: .sidebarToggle, placement: .navigation)
                 }
             }
             .contentShape(Rectangle())
             .background(Color.black.opacity(0.001))
         }
         .frame(width: targetSize.width, height: targetSize.height)
-        .buttonStyle(.glass)
+        .containerBackground(.clear, for: .window)
         .background(
             RemoteWindowAccessor(
                 cardCount: viewModel.processes.count,
@@ -395,17 +388,13 @@ struct RemoteDashboardView: View {
             )
         )
         .onAppear {
-            if !Self.showsSidebarForUITest {
-                sidebarVisible = false
-            }
+            resetSidebarVisibilityForPresentation()
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)) { _ in
-            if !Self.showsSidebarForUITest {
-                sidebarVisible = false
-            }
+            resetSidebarVisibilityForPresentation()
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteToggleSidebar)) { _ in
-            sidebarVisible.toggle()
+            toggleSidebarVisibility()
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteRefreshRequested)) { _ in
             Task { await viewModel.refresh() }
@@ -414,6 +403,36 @@ struct RemoteDashboardView: View {
             RemoteAppDelegate.hideMainWindow()
         }
         .task { await viewModel.bootstrap() }
+    }
+
+    private var dashboardDetail: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HeaderStatusView(viewModel: viewModel)
+
+            GameSectionView(viewModel: viewModel)
+
+            if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
+                PlaySummaryView(summary: summary)
+            }
+
+            if !viewModel.beholderIncidents.isEmpty {
+                BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
+            }
+        }
+        .padding(.top, RemoteWindowLayout.titlebarContentInset)
+        .padding(.horizontal, RemoteWindowLayout.mainContentInset)
+        .padding(.bottom, RemoteWindowLayout.mainContentInset)
+        .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.clear)
+    }
+
+    private func resetSidebarVisibilityForPresentation() {
+        columnVisibility = Self.initialColumnVisibility
+    }
+
+    private func toggleSidebarVisibility() {
+        columnVisibility = sidebarVisible ? .detailOnly : .all
     }
 }
 
@@ -514,32 +533,33 @@ struct RemoteSidebarView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sidebarConnectionSection
-            Divider().opacity(0.35)
-            sidebarPowerSection
-            Divider().opacity(0.35)
-            sidebarAppSection
+        List {
+            Section("연결") {
+                sidebarConnectionSection
+            }
+            Section("PC 전원") {
+                sidebarPowerSection
+            }
+            Section("앱") {
+                SettingsOpenButton(useGlass: false)
+            }
         }
-        .padding(.horizontal, RemoteWindowLayout.sidebarInset)
-        .padding(.top, 58)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 
     private var sidebarConnectionSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("연결")
-                .font(.headline)
+        Group {
             if viewModel.isPaired {
-                SidebarInfoRow(label: "서버", value: viewModel.baseURLText)
-                SidebarInfoRow(label: "디바이스", value: viewModel.deviceName)
+                SidebarInfoRow(label: "서버", value: viewModel.baseURLText, systemImage: "server.rack")
+                SidebarInfoRow(label: "디바이스", value: viewModel.deviceName, systemImage: "macbook")
                 Text(viewModel.message)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    .padding(.vertical, 2)
             } else {
                 TextField("http://windows-tailnet-ip:8000", text: $viewModel.baseURLText)
                     .textFieldStyle(.roundedBorder)
@@ -558,43 +578,39 @@ struct RemoteSidebarView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sidebarPowerSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("PC 전원")
-                .font(.headline)
+        Group {
             if viewModel.status?.power?.configured != true {
                 Text("전원 제어 설정 전입니다. 최초 1회만 설정하세요.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-            HStack(spacing: 6) {
-                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
-            }
-            .fixedSize(horizontal: true, vertical: true)
+            SidebarPowerButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+            SidebarPowerButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+            SidebarPowerButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+            SidebarPowerButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var sidebarAppSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("앱")
-                .font(.headline)
-            SettingsOpenButton()
-                .controlSize(.small)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 struct SettingsOpenButton: View {
+    var useGlass = true
+
     var body: some View {
+        if useGlass {
+            content
+                .buttonStyle(.glass)
+        } else {
+            content
+                .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         Group {
             if #available(macOS 14.0, *) {
                 SettingsLink {
@@ -606,7 +622,6 @@ struct SettingsOpenButton: View {
                 }
             }
         }
-        .buttonStyle(.glass)
     }
 
     private func openSettingsWindowFallback() {
@@ -1312,15 +1327,22 @@ struct SummaryMetric: View {
 struct SidebarInfoRow: View {
     let label: String
     let value: String
+    var systemImage = "info.circle"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: systemImage)
+                .frame(width: 16)
                 .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1339,9 +1361,9 @@ struct SidebarPowerButton: View {
         } label: {
             Label(label, systemImage: systemImage)
                 .font(.caption)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
         .controlSize(.small)
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
     }

@@ -271,9 +271,10 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "window.titleVisibility = .hidden" in window_accessor
     assert "window.titlebarSeparatorStyle = .none" in window_accessor
     assert "window.isMovableByWindowBackground = true" in window_accessor
-    assert "HomeworkHelperRemoteSidebarToggleOverlay" in window_accessor
-    assert "RemoteSidebarToggleTarget" in window_accessor
-    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar" in window_accessor
+    assert "window.toolbarStyle = .unified" in window_accessor
+    assert "HomeworkHelperRemoteSidebarToggleOverlay" not in window_accessor
+    assert "RemoteSidebarToggleTarget" not in window_accessor
+    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar" in app
     assert "HomeworkHelperRemoteFrameGlassBackground" not in window_accessor
     assert "RemoteWindowHitTestShield" in liquid_glass
     assert "RemoteHitTestShieldView" in liquid_glass
@@ -283,6 +284,13 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Color.black.opacity(0.001)" in app
     assert "titlebarContentInset" in window_accessor
     assert ".padding(.top, RemoteWindowLayout.titlebarContentInset)" in app
+    assert "NavigationSplitView(columnVisibility: $columnVisibility)" in app
+    assert ".navigationSplitViewColumnWidth(RemoteWindowLayout.sidebarWidth)" in app
+    assert ".navigationSplitViewStyle(.balanced)" in app
+    assert "DefaultToolbarItem(kind: .sidebarToggle, placement: .navigation)" in app
+    assert "SidebarCommands()" in app
+    assert ".containerBackground(.clear, for: .window)" in app
+    assert ".listStyle(.sidebar)" in app
     assert "RemoteSidebarView(viewModel: viewModel, sidebarVisible:" not in app
     assert "SidebarChromeRow" not in app
     assert "SidebarToggleChromeButton" not in app
@@ -297,13 +305,14 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert ".scrollClipDisabled" not in dashboard_source
     assert "sidebarConnectionSection" in sidebar_source
     assert "sidebarPowerSection" in sidebar_source
-    assert "sidebarAppSection" in sidebar_source
+    assert "sidebarAppSection" not in sidebar_source
     assert "RemoteGlassGroupBox(\"연결\")" not in sidebar_source
     assert "RemoteGlassGroupBox(\"PC 전원\")" not in sidebar_source
     assert "RemoteGlassGroupBox(\"앱\")" not in sidebar_source
-    assert "Text(\"연결\")" in sidebar_source
-    assert "NavigationSplitView" not in app
-    assert "@State private var sidebarVisible = RemoteDashboardView.showsSidebarForUITest" in app
+    assert 'Section("연결")' in sidebar_source
+    assert 'Section("PC 전원")' in sidebar_source
+    assert 'Section("앱")' in sidebar_source
+    assert "@State private var columnVisibility = RemoteDashboardView.initialColumnVisibility" in app
     assert "--ui-test-show-sidebar" in ui_test_flags
     assert "HH_REMOTE_SHOW_SIDEBAR" in ui_test_flags
     assert "--ui-test-show-window" in ui_test_flags
@@ -321,9 +330,9 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "candidate.orderOut(nil)" in app
     assert "NSHostingView(rootView: RemoteDashboardView" in app
     assert ".homeworkHelperRemoteMainWindowWillShow" in app
-    assert "if !Self.showsSidebarForUITest" in app
+    assert "resetSidebarVisibilityForPresentation()" in app
     assert "NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)" in app
-    assert "sidebarVisible.toggle()" in app
+    assert "toggleSidebarVisibility()" in app
     assert "struct SidebarInfoRow: View" in app
     assert "http://windows-tailnet-ip:8000" in app
     assert "페어링 후 토큰/기기 관리는 설정에서 관리합니다." in app
@@ -393,8 +402,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "PowerSquareButton" in app
     assert "MenuBarPowerButton" in app
     assert "MenuBarFooterButton" in app
-    assert "PowerSquareButton(action: \"wake\"" in app
-    assert ".fixedSize(horizontal: true, vertical: true)" in app
+    assert "SidebarPowerButton(action: \"wake\"" in app
+    assert ".buttonStyle(.plain)" in app
     assert "전원 설정" in app
     assert "전원/SSH/SmartThings" in app
     assert "전원 설정 저장" in app

@@ -467,3 +467,34 @@
   - 테스트 방법: 최종 visible/hidden 캡처에서 게임 section 우측 카드, 플레이 요약 section 우측/하단, vertical scrollbar 부재를 직접 확인.
   - 테스트 결과: `artifacts/gui-qa-visible-20260516-121437.png`, `artifacts/gui-qa-hidden-20260516-121437.png` 모두 section 폭이 유지되고 하단 텍스트가 표시된다.
   - 통과 판정 근거: sidebar toggle 구조 변경이 이전에 해결한 section alignment와 summary clipping을 재발시키지 않았다.
+
+---
+
+## 11. Native NavigationSplitView/sidebar 전환 회귀 검증 기록
+
+작성일: 2026-05-16
+
+- [x] Native split-view shell 전환
+  - 테스트 방법: `RemoteDashboardView`가 `NavigationSplitView(columnVisibility:)`를 사용하고, 수동 `HStack` sidebar overlay가 제거됐는지 정적 테스트로 확인.
+  - 테스트 결과: targeted pytest 통과.
+  - 통과 판정 근거: visible/hidden state가 native split-view column visibility로 관리된다.
+
+- [x] Native source-list sidebar 구조
+  - 테스트 방법: `RemoteSidebarView`가 `List` + `.listStyle(.sidebar)` + `Section("연결"/"PC 전원"/"앱")`로 구성됐는지 확인하고 최종 visible 캡처를 직접 확인.
+  - 테스트 결과: `artifacts/gui-native-visible-20260516-195446.png`에서 sidebar가 Finder/사진 계열 source-list 구조로 표시된다.
+  - 통과 판정 근거: custom glass card/sidebar wrapper 대신 native list row hierarchy를 사용한다.
+
+- [x] Sidebar toggle continuity
+  - 테스트 방법: visible/hidden 패키지 앱 캡처를 같은 loop에서 생성해 titlebar/sidebar toggle 위치 흐름을 비교.
+  - 테스트 결과: `artifacts/gui-native-visible-20260516-195446.png`, `artifacts/gui-native-hidden-20260516-195446.png`에서 native sidebar toggle이 유지된다.
+  - 통과 판정 근거: manual overlay button이 제거되어 상태별 버튼 디자인 차이와 수동 좌표 drift가 사라졌다.
+
+- [x] Titlebar translucency regression
+  - 테스트 방법: 패키지된 `.app` build 29를 직접 실행하고 titlebar가 불투명 단색으로 보이는지 확인.
+  - 테스트 결과: 최종 visible/hidden 캡처에서 titlebar가 content glass와 이어지는 translucent surface로 표시된다.
+  - 통과 판정 근거: root glass button style 전파를 제거하고 `window.toolbarStyle = .unified`로 조정했다.
+
+- [x] 기존 기능/레이아웃 보존
+  - 테스트 방법: targeted pytest, Swift build, 패키지 앱 캡처에서 게임 section, refresh, summary, sidebar hidden default, window sizing을 확인.
+  - 테스트 결과: 게임/플레이 요약 폭 정렬과 summary 하단 표시가 유지되고, sidebar 전환 후에도 4번째 card가 잘리지 않는다.
+  - 통과 판정 근거: main content 산식과 popover 컴포넌트는 유지하면서 shell/sidebar 구조만 native로 교체했다.

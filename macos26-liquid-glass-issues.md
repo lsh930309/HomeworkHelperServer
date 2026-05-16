@@ -359,3 +359,40 @@
   - visible hide control이 sidebar chrome 오른쪽에 icon-only 형태로 표시된다.
   - 게임/플레이 요약 section 폭은 유지되고, 4번째 card 및 summary 하단 텍스트 잘림은 보이지 않는다.
   - Popover는 이전 합격 상태를 유지하기 위해 변경하지 않았다.
+
+---
+
+## Issue 10 — Native NavigationSplitView sidebar 전환 및 titlebar 불투명 회귀 대응
+
+- 상태: 코드 대응 및 Ralph-loop 캡처 검수 완료
+- 발생 시점: 최종 캡처 2종에서 sidebar visible/hidden 사이 위치 연속성이 부족하고, 버튼 디자인이 순정 macOS sidebar/toolbar와 다르며, 설치된 패키지 앱의 titlebar가 불투명하게 보인다는 검수 피드백 후
+- 기준 이미지:
+  - 기존 문제 캡처: `artifacts/gui-qa-visible-20260516-121437.png`, `artifacts/gui-qa-hidden-20260516-121437.png`
+  - reference: `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`, `sidebar_reference.png`
+  - 1차 native loop: `artifacts/gui-native-visible-20260516-193313.png`, `artifacts/gui-native-hidden-20260516-193313.png`
+  - 2차 native loop: `artifacts/gui-native-visible-20260516-194109.png`, `artifacts/gui-native-hidden-20260516-194109.png`
+  - 3차 native loop: `artifacts/gui-native-visible-20260516-194815.png`, `artifacts/gui-native-hidden-20260516-194815.png`
+  - 최종 native loop: `artifacts/gui-native-visible-20260516-195446.png`, `artifacts/gui-native-hidden-20260516-195446.png`
+- 증상:
+  - 수동 `HomeworkHelperRemoteSidebarToggleOverlay`는 visible/hidden 상태에서 위치와 크기가 이어지지 않고, 순정 toolbar/sidebar button처럼 보이지 않았다.
+  - sidebar body가 custom `VStack + glass/button` 조합이라 Finder/사진 앱의 source-list 구조와 달랐다.
+  - root `.buttonStyle(.glass)`가 toolbar item에도 전파되어 titlebar control이 검은 pill처럼 보이는 문제가 발생했다.
+  - `.unifiedCompact` toolbar style은 titlebar control 주변에 불필요한 compact artifact가 남아 보였다.
+- 조치:
+  - 메인 shell을 `NavigationSplitView(columnVisibility:)`로 전환하고, sidebar state는 `.all`/`.detailOnly`로 관리하게 했다.
+  - sidebar를 `List { Section(...) }` + `.listStyle(.sidebar)`로 재구성해 native source-list 구조로 바꿨다.
+  - 수동 AppKit sidebar overlay와 `RemoteSidebarToggleTarget`을 제거하고 `DefaultToolbarItem(kind: .sidebarToggle, placement: .navigation)`에 맡겼다.
+  - root `.buttonStyle(.glass)`를 제거해 toolbar/sidebar list controls가 native style을 유지하게 했다.
+  - window `toolbarStyle`은 `.unified`로 조정해 설치된 패키지 앱에서도 titlebar와 content glass가 더 자연스럽게 이어지게 했다.
+  - sidebar 전원 제어는 가로 버튼 묶음 대신 source-list row 형태의 세로 action으로 변경해 sidebar bounds를 침범하지 않게 했다.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_build_release.py -q` 통과.
+  - `/tmp/hh-remote-native/HomeworkHelperRemote.app` build 29를 실제 실행하고 다른 창을 숨긴 뒤 최종 캡처 2종을 직접 확인:
+    - `artifacts/gui-native-visible-20260516-195446.png`
+    - `artifacts/gui-native-hidden-20260516-195446.png`
+- 판정:
+  - sidebar toggle은 visible/hidden 모두 native titlebar/sidebar control 흐름으로 표시된다.
+  - sidebar는 custom card/button panel이 아니라 native source-list 형태로 표시된다.
+  - titlebar는 패키지 앱 실행 캡처에서 불투명 단색이 아니라 window/content glass와 이어지는 translucent surface로 보인다.
+  - 게임/플레이 요약 폭 정렬, 4번째 card 표시, summary 하단 텍스트 표시, popover 합격 범위는 유지된다.
