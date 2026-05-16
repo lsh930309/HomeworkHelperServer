@@ -441,3 +441,29 @@
   - 테스트 방법: latest visible/hidden capture에서 section 폭, 4번째 game card, summary bottom line, outer frame을 확인.
   - 테스트 결과: 게임/플레이 요약 폭 정렬과 summary 하단 표시가 유지되고, popover 합격 영역은 변경하지 않았다.
   - 통과 판정 근거: 변경 범위를 sidebar toggle 중복 제거와 static contract 갱신으로 제한했다.
+
+---
+
+## 10. 재개 후 Apple sidebar/titlebar guidance 반영 검증 기록
+
+작성일: 2026-05-16
+
+- [x] SwiftUI content 내부 sidebar toggle 제거
+  - 테스트 방법: `RemoteDashboardView`와 `RemoteSidebarView`에서 `SidebarChromeRow`/`SidebarToggleChromeButton`이 제거됐는지 정적 테스트로 확인.
+  - 테스트 결과: targeted pytest에서 해당 문자열 부재 계약이 통과했다.
+  - 통과 판정 근거: sidebar 표시/숨김 control이 content layout을 밀거나 header/title과 겹치는 구조를 제거했다.
+
+- [x] AppKit titlebar/frame overlay 단일화
+  - 테스트 방법: `RemoteWindowAccessor`가 `HomeworkHelperRemoteSidebarToggleOverlay`를 설치하고 `RemoteSidebarToggleTarget`으로 `.homeworkHelperRemoteToggleSidebar`를 post하는지 확인.
+  - 테스트 결과: 정적 테스트 통과 및 최종 GUI 캡처에서 visible/hidden 양쪽 toggle 표시 확인.
+  - 통과 판정 근거: 버튼 배치가 SwiftUI 본문이 아니라 window chrome 계층에서 수행되어 reference형 sidebar control에 더 가깝다.
+
+- [x] hidden reveal button z-order 회귀 방지
+  - 테스트 방법: 1차 캡처 `artifacts/gui-qa-hidden-20260516-121010.png`에서 reveal button 부재를 확인한 뒤, overlay `.above`/`zPosition` 보정 후 `artifacts/gui-qa-hidden-20260516-121437.png`를 재촬영.
+  - 테스트 결과: 최종 hidden 캡처에서 traffic-light 오른쪽에 icon-only reveal button이 표시된다.
+  - 통과 판정 근거: 실제 앱 실행/화면 캡처로 AppKit subview ordering 문제가 해결됐음을 확인했다.
+
+- [x] main GUI section 폭/하단 clipping 유지
+  - 테스트 방법: 최종 visible/hidden 캡처에서 게임 section 우측 카드, 플레이 요약 section 우측/하단, vertical scrollbar 부재를 직접 확인.
+  - 테스트 결과: `artifacts/gui-qa-visible-20260516-121437.png`, `artifacts/gui-qa-hidden-20260516-121437.png` 모두 section 폭이 유지되고 하단 텍스트가 표시된다.
+  - 통과 판정 근거: sidebar toggle 구조 변경이 이전에 해결한 section alignment와 summary clipping을 재발시키지 않았다.

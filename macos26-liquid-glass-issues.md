@@ -324,3 +324,38 @@
   - latest visible/hidden capture에서 sidebar button은 각각 1개만 표시된다.
   - 게임 section과 플레이 요약 section의 폭 정렬, 4번째 card 표시, summary 하단 텍스트 표시가 유지된다.
   - popover는 합격 상태를 유지하기 위해 변경하지 않았다.
+
+---
+
+## Issue 9 — Apple 표준 sidebar/titlebar guidance 재확인 후 overlay z-order 마감
+
+- 상태: 재개 후 추가 Ralph-loop 2회 수행, 코드 대응 및 직접 캡처 판정 완료
+- 발생 시점: 작업 중단 후 재개 요청과 함께 sidebar 관련 요소를 Apple 표준 guidance/빌트인 앱 구조에 더 가깝게 맞추라는 요청을 받은 뒤
+- 공식 참고:
+  - Apple HIG Sidebars: sidebar는 현재 앱 계층을 탐색/제어하는 보조 surface이며, content를 침범하지 않는 독립 영역이어야 한다.
+  - Apple HIG Toolbars: view 표시/숨김 같은 현재 window-level control은 content 내부 버튼보다 titlebar/toolbar chrome에 두는 것이 자연스럽다.
+  - AppKit `NSTitlebarAccessoryViewController`: titlebar/toolbar area에 accessory view를 배치하는 공식 표면을 제공한다. 이번 단계에서는 동일한 배치 원칙을 유지하되, reference와 x-position을 맞추기 위해 window frame overlay를 사용하고 z-order를 명시적으로 고정했다.
+- 기준 이미지:
+  - 오류 표시 기준: `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`
+  - reference: `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`, `sidebar_reference.png`
+  - 재개 후 검수 캡처:
+    - 1차: `artifacts/gui-qa-visible-20260516-121010.png`, `artifacts/gui-qa-hidden-20260516-121010.png`
+    - 최종: `artifacts/gui-qa-visible-20260516-121437.png`, `artifacts/gui-qa-hidden-20260516-121437.png`
+- 증상:
+  - SwiftUI content 내부 sidebar toggle은 hidden 상태에서 title/header와 z-order가 섞이기 쉬워 reference형 titlebar control로 보기 어려웠다.
+  - 1차 재개 loop에서 hidden reveal control이 실제 titlebar에서 보이지 않아, overlay가 AppKit frame/titlebar subview stack 아래로 밀릴 수 있음이 확인됐다.
+- 조치:
+  - SwiftUI 본문 내부 `SidebarChromeRow`/`SidebarToggleChromeButton`을 제거하고, sidebar toggle은 `RemoteWindowAccessor`의 AppKit overlay 한 경로로 단일화했다.
+  - overlay를 frame view에 추가할 때 `.above` 위치와 높은 `zPosition`을 부여해 titlebar/hosted SwiftUI content 뒤로 숨지 않게 했다.
+  - sidebar body는 titlebar accessory 영역과 겹치지 않도록 top padding만 유지하고, visible/hidden 양쪽 toggle 배치는 AppKit overlay가 담당한다.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python tools/package_macos_remote_app.py --output-dir /tmp/hh-remote-ralph --version 0.2.0 --build 25 --jobs 4` 통과.
+  - 다른 창을 숨긴 뒤 실제 `.app`을 실행하고 최종 캡처 2종을 직접 확인:
+    - `artifacts/gui-qa-visible-20260516-121437.png`
+    - `artifacts/gui-qa-hidden-20260516-121437.png`
+- 판정:
+  - hidden reveal control이 traffic-light 오른쪽 titlebar 영역에 보이며 제목을 침범하지 않는다.
+  - visible hide control이 sidebar chrome 오른쪽에 icon-only 형태로 표시된다.
+  - 게임/플레이 요약 section 폭은 유지되고, 4번째 card 및 summary 하단 텍스트 잘림은 보이지 않는다.
+  - Popover는 이전 합격 상태를 유지하기 위해 변경하지 않았다.
