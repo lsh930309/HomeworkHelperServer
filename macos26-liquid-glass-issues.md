@@ -163,3 +163,35 @@
 - 남은 확인:
   - full-native macOS 26 Liquid Glass API 전환은 별도 계획서(`macos26-liquid-glass-upgrade-plan.md`)의 다음 단계로 유지한다.
   - 현재 단계는 AppKit `NSVisualEffectView`/glass compatibility 기반 polish이며, Apple 최신 native Liquid Glass와 완전히 동일한 시각 언어는 의도적으로 목표에서 제외했다.
+
+## Issue 6 — image copy 8/9 기준 titlebar 착시, 표준 sidebar, 자동 창 크기 재정렬
+
+- 상태: 코드 대응 및 단독 배경 자동 스크린샷 판정 완료
+- 발생 시점: `image copy 8.png`, `image copy 9.png`, 사용자 제공 표준 sidebar 참고 이미지 검수 후
+- 기준 스크린샷:
+  - `image copy 8.png` — 색상 박스로 titlebar 단색 영역, 불필요한 main/sidebar 여백, power button 디자인 파괴 지점 표시.
+  - `image copy 9.png` — sidebar hidden 상태에서 titlebar/상단 여백, main section alignment 문제 표시.
+  - `artifacts/gui-loop-20260516-085259.png` — borderless 전환 1차 결과: titlebar strip 제거는 성공했지만 power button이 너무 크고 inactive window처럼 보임.
+  - `artifacts/gui-loop-20260516-085548.png` — 2차 pass: 단독 배경에서 titlebar strip 제거, 표준 sidebar chrome, content-width alignment, 기존 blue launch button 복구를 확인.
+  - `artifacts/gui-loop-20260516-090236.png` — 최종 build 18: sidebar/hidden 상태 공용 traffic controls 반영 후 최종 visual 확인.
+- 증상:
+  - 이전 검수는 IDE의 어두운 배경 때문에 titlebar가 투명하게 보인다는 착시가 있었음.
+  - 실제 단독 배경에서는 native titlebar 영역이 단색 strip처럼 분리되어 보였음.
+  - compact plain sidebar는 사용자가 원하는 표준 sidebar UX/Image #1과 거리가 있었음.
+  - 2x2 sidebar power button은 기존 4-button compact row 디자인을 파괴했음.
+  - 창 크기는 content를 모두 덮어야 하지만 게임 horizontal scroll 외 vertical scroll은 없어야 함.
+- 조치:
+  - main window를 borderless glass shell로 전환하고, sidebar 상단에 custom traffic-light chrome을 배치해 titlebar 단색 strip을 제거함.
+  - `RemoteMainWindow` subclass를 추가해 borderless UI-test window도 key/main window가 되도록 보장함.
+  - window/content corner radius를 native widget에 가까운 큰 rounded glass shell로 맞춤.
+  - sidebar width와 game card 크기를 d69 계열 기준으로 되돌려 기존 정보 밀도와 card 균형을 복구함.
+  - sidebar power control을 기존 compact 4-button row로 복구하고 fixed-size 처리해 glass button style이 폭을 임의 확장하지 못하게 함.
+  - main content inset, header/game/summary section height 상수를 명시해 content 기반 자동 window sizing 기준을 재정렬함.
+  - 캡처 루프는 `osascript`로 다른 창을 숨긴 뒤 단독 배경에서 수행하도록 바꿈.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_build_release.py -q` 통과.
+  - `/tmp/hh-remote-ralph/HomeworkHelperRemote.app` build 18을 단독 배경에서 실행하고 `artifacts/gui-loop-20260516-090236.png`를 직접 시각 확인함.
+- 남은 확인:
+  - full-native macOS 26 Liquid Glass API로의 더 깊은 전환은 별도 계획서 후속 단계로 유지한다.
+  - 실제 실서버 데이터에서 게임 수/문구가 더 많아지는 경우의 최대 화면 높이 fallback은 추가 수동 검수가 필요하다.

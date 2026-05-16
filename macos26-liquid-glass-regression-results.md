@@ -276,3 +276,32 @@
   - 테스트 방법: package build 15를 `--ui-test-no-external-state`로 실행하여 Keychain/password prompt 없이 sample snapshot으로 표시되는지 확인.
   - 테스트 결과: 통과.
   - 통과 판정 근거: 최종 GUI loop가 암호 프롬프트 없이 진행됐고, 테스트용 샘플 데이터가 표시된 스크린샷이 생성됐다.
+
+---
+
+## 10. image copy 8/9 및 표준 sidebar 재정렬 검증 기록
+
+- [x] titlebar 단색 strip 제거
+  - 테스트 방법: 다른 창을 숨긴 단독 배경에서 GUI loop를 실행하고 최종 스크린샷을 판독.
+  - 테스트 결과: `artifacts/gui-loop-20260516-090236.png`에서 native titlebar strip 없이 custom traffic-light chrome이 glass shell 내부에 표시됨.
+  - 통과 판정 근거: 어두운 IDE 배경 착시 없이도 상단 영역이 별도 단색 titlebar가 아니라 app glass surface 일부로 이어진다.
+
+- [x] 표준 sidebar 방향 전환
+  - 테스트 방법: sidebar visible UI-test 상태에서 Image #1의 기준인 상단 traffic-light chrome + 독립 sidebar panel + divider 구조를 시각 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: sidebar는 별도 card wrapper가 아니라 window shell 내부의 왼쪽 column으로 정리됐고, 상단에 macOS chrome control과 panel icon이 배치됐다.
+
+- [x] 기존 power button 디자인 복구
+  - 테스트 방법: `image copy 8.png`의 빨간 영역과 비교해 2x2 expanded button이 아닌 4개 compact button row가 표시되는지 확인.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: `PowerSquareButton` row를 복원하고 `.fixedSize`로 glass style의 과확장을 막았다.
+
+- [x] section alignment 및 자동 창 크기
+  - 테스트 방법: 최종 스크린샷에서 game section과 play summary section의 leading/trailing이 동일 grid에 맞는지 확인하고, static test에서 explicit layout constants와 vertical ScrollView 부재를 검증.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: main content inset과 section width가 공통 산식을 사용하며, game horizontal scroll 외 메인/sidebar vertical ScrollView가 없다.
+
+- [x] no-external-state GUI loop 유지
+  - 테스트 방법: build 18 app을 `--ui-test-show-window --ui-test-show-sidebar --ui-test-show-summary --ui-test-no-external-state`로 실행.
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: Keychain/password prompt 없이 sample snapshot이 표시됐고 `artifacts/gui-loop-20260516-090236.png`가 생성됐다.

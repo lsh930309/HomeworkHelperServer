@@ -1,19 +1,32 @@
 import AppKit
 import SwiftUI
 
+final class RemoteMainWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 enum RemoteWindowLayout {
-    static let sidebarWidth: CGFloat = 252
+    static let sidebarWidth: CGFloat = 278
     static let dividerWidth: CGFloat = 1
-    static let horizontalPadding: CGFloat = 24
-    static let glassOuterInset: CGFloat = 10
-    static let glassHaloAllowance: CGFloat = 6
+    static let mainContentInset: CGFloat = 18
+    static let sidebarInset: CGFloat = 22
+    static let horizontalPadding: CGFloat = mainContentInset * 2
+    static let glassOuterInset: CGFloat = 0
+    static let glassHaloAllowance: CGFloat = 0
     static let titlebarReserveHeight: CGFloat = 0
-    static let gameCardWidth: CGFloat = 160
-    static let gameCardHeight: CGFloat = 114
-    static let gameCardSpacing: CGFloat = 10
+    static let windowCornerRadius: CGFloat = 28
+    static let sidebarChromeHeight: CGFloat = 40
+    static let headerHeight: CGFloat = 72
+    static let gameSectionHeight: CGFloat = 160
+    static let summarySectionHeight: CGFloat = 118
+    static let incidentSectionHeight: CGFloat = 92
+    static let gameCardWidth: CGFloat = 180
+    static let gameCardHeight: CGFloat = 126
+    static let gameCardSpacing: CGFloat = 12
     static let minWindowWidth: CGFloat = 720
-    static let compactWindowHeight: CGFloat = 344
-    static let sidebarMinimumHeight: CGFloat = 344
+    static let compactWindowHeight: CGFloat = 326
+    static let sidebarMinimumHeight: CGFloat = 326
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -44,9 +57,10 @@ enum RemoteWindowLayout {
         let sidebar = sidebarVisible ? sidebarWidth + dividerWidth : 0
         let shellHorizontalInset = (glassOuterInset + glassHaloAllowance) * 2
         let rawWidth = sidebar + mainContentWidth(cardCount: cardCount) + shellHorizontalInset
-        let baseHeight: CGFloat = 284
-        let summaryHeight: CGFloat = hasSummary ? 92 : 0
-        let incidentHeight: CGFloat = hasIncidents ? 84 : 0
+        let contentSpacing: CGFloat = 12
+        let baseHeight = (mainContentInset * 2) + headerHeight + contentSpacing + gameSectionHeight
+        let summaryHeight = hasSummary ? contentSpacing + summarySectionHeight : 0
+        let incidentHeight = hasIncidents ? contentSpacing + incidentSectionHeight : 0
         let contentHeight = baseHeight + summaryHeight + incidentHeight
         let sidebarHeight = sidebarVisible ? sidebarMinimumHeight : 0
         let shellVerticalInset = titlebarReserveHeight + glassOuterInset + glassHaloAllowance
@@ -91,16 +105,18 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.minSize = size
         window.maxSize = maxSize
         window.setContentSize(size)
-        window.styleMask.insert(.fullSizeContentView)
+        window.styleMask = [.borderless]
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
         window.title = RemoteAppDelegate.mainWindowTitle
         window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.mainWindowIdentifier)
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
+        window.hasShadow = true
         window.isMovableByWindowBackground = true
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.cornerRadius = RemoteWindowLayout.windowCornerRadius
+        window.contentView?.layer?.masksToBounds = true
         installFrameGlassBackground(in: window)
         RemoteAppDelegate.prepareMainWindow(window)
     }
@@ -111,7 +127,7 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         if frameView.subviews.contains(where: { $0.identifier == backgroundIdentifier }) { return }
         let glass = NSGlassEffectView()
         glass.identifier = backgroundIdentifier
-        glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
+        glass.cornerRadius = RemoteWindowLayout.windowCornerRadius
         glass.clipsToBounds = false
         glass.translatesAutoresizingMaskIntoConstraints = false
         frameView.addSubview(glass, positioned: .below, relativeTo: window.contentView)

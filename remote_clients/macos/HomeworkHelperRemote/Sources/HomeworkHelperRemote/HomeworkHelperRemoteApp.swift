@@ -137,9 +137,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             hasSummary: RemoteSharedModel.viewModel.showPlaySummary && RemoteSharedModel.viewModel.dashboardSummary != nil,
             hasIncidents: !RemoteSharedModel.viewModel.beholderIncidents.isEmpty
         )
-        let window = NSWindow(
+        let window = RemoteMainWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -307,8 +307,6 @@ struct RemoteDashboardView: View {
             ZStack {
                 RemoteAppKitLiquidGlassBackground()
                     .ignoresSafeArea()
-                Color.white.opacity(0.018)
-                    .ignoresSafeArea()
                 RemoteWindowHitTestShield()
                     .ignoresSafeArea()
                 HStack(spacing: 0) {
@@ -332,14 +330,11 @@ struct RemoteDashboardView: View {
                             BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
                         }
                     }
-                    .padding(12)
+                    .padding(RemoteWindowLayout.mainContentInset)
                     .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                 }
-                .padding(.top, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
-                .padding(.horizontal, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
-                .padding(.bottom, RemoteWindowLayout.glassOuterInset + RemoteWindowLayout.glassHaloAllowance)
-                .ignoresSafeArea(.container, edges: .top)
             }
+            .clipShape(RoundedRectangle(cornerRadius: RemoteWindowLayout.windowCornerRadius, style: .continuous))
             .contentShape(Rectangle())
             .background(Color.black.opacity(0.001))
         }
@@ -474,17 +469,16 @@ struct RemoteSidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            SidebarChromeRow()
             sidebarConnectionSection
             Divider().opacity(0.35)
             sidebarPowerSection
             Divider().opacity(0.35)
             sidebarAppSection
-            Spacer(minLength: 0)
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 16)
-        .padding(.top, 24)
-        .padding(.bottom, 16)
+        .padding(.horizontal, RemoteWindowLayout.sidebarInset)
+        .padding(.top, 18)
+        .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -532,16 +526,13 @@ struct RemoteSidebarView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
-                GridRow {
-                    SidebarPowerButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                    SidebarPowerButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                }
-                GridRow {
-                    SidebarPowerButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
-                    SidebarPowerButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
-                }
+            HStack(spacing: 6) {
+                PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                PowerSquareButton(action: "restart", label: "재시작", systemImage: "arrow.clockwise", viewModel: viewModel)
+                PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
             }
+            .fixedSize(horizontal: true, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -554,6 +545,51 @@ struct RemoteSidebarView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SidebarChromeRow: View {
+    var body: some View {
+        HStack(alignment: .center) {
+            WindowTrafficButtons()
+            Spacer()
+            Image(systemName: "sidebar.left")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .frame(height: RemoteWindowLayout.sidebarChromeHeight, alignment: .top)
+    }
+}
+
+struct WindowTrafficButtons: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            WindowChromeButton(color: .red, accessibilityLabel: "창 닫기") {
+                RemoteAppDelegate.hideMainWindow()
+            }
+            WindowChromeButton(color: .yellow, accessibilityLabel: "창 최소화") {
+                NSApp.keyWindow?.miniaturize(nil)
+            }
+            WindowChromeButton(color: .green, accessibilityLabel: "창 확대") {
+                NSApp.keyWindow?.zoom(nil)
+            }
+        }
+    }
+}
+
+struct WindowChromeButton: View {
+    let color: Color
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(color)
+                .frame(width: 14, height: 14)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -589,6 +625,10 @@ struct HeaderStatusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
+                if !sidebarVisible {
+                    WindowTrafficButtons()
+                        .padding(.trailing, 8)
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("HomeworkHelper Remote")
                         .font(.title.bold())
@@ -602,6 +642,7 @@ struct HeaderStatusView: View {
                 .buttonStyle(.glass)
                 .controlSize(.small)
             }
+            .frame(height: 34, alignment: .center)
             if let readiness = viewModel.readiness {
                 HStack(spacing: 6) {
                     ReadinessPill(title: "Beholder", section: readiness.beholderHealth)
@@ -612,6 +653,7 @@ struct HeaderStatusView: View {
                 }
             }
         }
+        .frame(height: RemoteWindowLayout.headerHeight, alignment: .top)
     }
 }
 
@@ -1306,6 +1348,8 @@ struct PowerSquareButton: View {
         }
         .buttonStyle(.glass)
         .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
+        .frame(width: 48, height: 48)
+        .fixedSize()
     }
 }
 

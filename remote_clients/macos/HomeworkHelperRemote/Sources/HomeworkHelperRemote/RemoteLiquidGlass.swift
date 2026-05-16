@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 enum RemoteGlassMetrics {
-    static let windowCornerRadius: CGFloat = 0
-    static let sectionCornerRadius: CGFloat = 16
-    static let cardCornerRadius: CGFloat = 14
+    static let windowCornerRadius: CGFloat = RemoteWindowLayout.windowCornerRadius
+    static let sectionCornerRadius: CGFloat = 20
+    static let cardCornerRadius: CGFloat = 16
     static let pillCornerRadius: CGFloat = 999
     static let buttonCornerRadius: CGFloat = 12
 }
@@ -76,7 +76,7 @@ struct RemoteGlassGroupBox<Label: View, Content: View>: View {
                 .font(.headline)
             content
         }
-        .padding(10)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .remoteGlass(.section)
     }
