@@ -221,7 +221,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
     assert "RemoteWindowLayout.contentSize" in app
     assert "RemoteWindowLayout.maxWindowSize" in window_accessor
-    assert "RemoteAppDelegate.mainWindowTitle" in window_accessor
+    assert "window.title = \"\"" in window_accessor
     assert "RemoteAppDelegate.mainWindowIdentifier" in window_accessor
     assert "RemoteAppDelegate.prepareMainWindow(window)" in window_accessor
     assert "NSScreen.main?.visibleFrame" in window_accessor
@@ -259,20 +259,21 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
     assert "window.isOpaque = false" in window_accessor
-    assert "window.styleMask = [.borderless]" in window_accessor
-    assert "final class RemoteMainWindow" in window_accessor
-    assert "override var canBecomeKey: Bool { true }" in window_accessor
+    assert "window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]" in window_accessor
+    assert "window.titlebarAppearsTransparent = true" in window_accessor
+    assert "window.titleVisibility = .hidden" in window_accessor
     assert "window.isMovableByWindowBackground = true" in window_accessor
-    assert "HomeworkHelperRemoteFrameGlassBackground" in window_accessor
-    assert "frameView.addSubview(glass, positioned: .below, relativeTo: window.contentView)" in window_accessor
+    assert "HomeworkHelperRemoteFrameGlassBackground" not in window_accessor
     assert "RemoteWindowHitTestShield" in liquid_glass
     assert "RemoteHitTestShieldView" in liquid_glass
     assert "bounds.contains(point) ? self : nil" in liquid_glass
     assert "RemoteWindowHitTestShield()" in app
     assert ".contentShape(Rectangle())" in app
     assert "Color.black.opacity(0.001)" in app
-    assert "SidebarChromeRow" in app
-    assert "WindowChromeButton" in app
+    assert "titlebarContentInset" in window_accessor
+    assert ".padding(.top, RemoteWindowLayout.titlebarContentInset)" in app
+    assert "SidebarChromeRow" not in app
+    assert "WindowChromeButton" not in app
     dashboard_source = app.split("struct RemoteDashboardView: View", 1)[1].split("struct GameSectionView: View", 1)[0]
     sidebar_source = app.split("struct RemoteSidebarView: View", 1)[1].split("struct SettingsOpenButton: View", 1)[0]
     assert "ScrollView {" not in dashboard_source
@@ -293,10 +294,14 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "HH_REMOTE_SHOW_WINDOW" in ui_test_flags
     assert "--ui-test-no-external-state" in ui_test_flags
     assert "HH_REMOTE_NO_EXTERNAL_STATE" in ui_test_flags
+    assert "--ui-test-show-popover" in ui_test_flags
+    assert "HH_REMOTE_SHOW_POPOVER" in ui_test_flags
+    assert "showUITestPopoverWindow" in app
     assert "Self.showUITestMainWindow()" in app
     assert "showUITestMainWindow" in app
     assert "uiTestMainWindow" in app
     assert "settleUITestWindows" in app
+    assert "settleUITestPopoverWindow" in app
     assert "candidate.orderOut(nil)" in app
     assert "NSHostingView(rootView: RemoteDashboardView" in app
     assert ".homeworkHelperRemoteMainWindowWillShow" in app
@@ -370,7 +375,8 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "지원 명령" in app
     assert "PC 전원" in app
     assert "PowerSquareButton" in app
-    assert "SidebarPowerButton" in app
+    assert "MenuBarPowerButton" in app
+    assert "MenuBarFooterButton" in app
     assert "PowerSquareButton(action: \"wake\"" in app
     assert ".fixedSize(horizontal: true, vertical: true)" in app
     assert "전원 설정" in app
@@ -524,9 +530,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert ".close()" not in app
     assert "HomeworkHelperRemoteMainWindow" in app
     assert "HostStatusPill" in app
-    assert 'Label("창 열기", systemImage: "macwindow")' in app
-    assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app
-    assert 'Label("앱 종료", systemImage: "power")' in app
+    assert 'MenuBarFooterButton(title: "창 열기", systemImage: "macwindow")' in app
+    assert 'MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise")' in app
+    assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
     assert "HStack(spacing: 8)" in app
+    assert ".frame(height: 30)" in app
+    assert ".frame(height: 34)" in app
     assert "외 \\(viewModel.processes.count - 5)개" in app
     assert "RemoteLoginItemManager" in view_model

@@ -1,11 +1,6 @@
 import AppKit
 import SwiftUI
 
-final class RemoteMainWindow: NSWindow {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
 enum RemoteWindowLayout {
     static let sidebarWidth: CGFloat = 278
     static let dividerWidth: CGFloat = 1
@@ -15,8 +10,8 @@ enum RemoteWindowLayout {
     static let glassOuterInset: CGFloat = 0
     static let glassHaloAllowance: CGFloat = 0
     static let titlebarReserveHeight: CGFloat = 0
+    static let titlebarContentInset: CGFloat = 28
     static let windowCornerRadius: CGFloat = 28
-    static let sidebarChromeHeight: CGFloat = 40
     static let headerHeight: CGFloat = 72
     static let gameSectionHeight: CGFloat = 160
     static let summarySectionHeight: CGFloat = 118
@@ -26,7 +21,7 @@ enum RemoteWindowLayout {
     static let gameCardSpacing: CGFloat = 12
     static let minWindowWidth: CGFloat = 720
     static let compactWindowHeight: CGFloat = 326
-    static let sidebarMinimumHeight: CGFloat = 326
+    static let sidebarMinimumHeight: CGFloat = 386
     static let fallbackMaxWindowSize = CGSize(width: 1180, height: 720)
 
     static func maxWindowSize() -> CGSize {
@@ -58,12 +53,12 @@ enum RemoteWindowLayout {
         let shellHorizontalInset = (glassOuterInset + glassHaloAllowance) * 2
         let rawWidth = sidebar + mainContentWidth(cardCount: cardCount) + shellHorizontalInset
         let contentSpacing: CGFloat = 12
-        let baseHeight = (mainContentInset * 2) + headerHeight + contentSpacing + gameSectionHeight
+        let baseHeight = mainContentInset + headerHeight + contentSpacing + gameSectionHeight
         let summaryHeight = hasSummary ? contentSpacing + summarySectionHeight : 0
         let incidentHeight = hasIncidents ? contentSpacing + incidentSectionHeight : 0
         let contentHeight = baseHeight + summaryHeight + incidentHeight
         let sidebarHeight = sidebarVisible ? sidebarMinimumHeight : 0
-        let shellVerticalInset = titlebarReserveHeight + glassOuterInset + glassHaloAllowance
+        let shellVerticalInset = titlebarContentInset + titlebarReserveHeight + glassOuterInset + glassHaloAllowance
         let rawHeight = max(contentHeight, sidebarHeight) + shellVerticalInset
         return CGSize(
             width: min(maxSize.width, max(minWindowWidth, rawWidth)),
@@ -105,37 +100,17 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.minSize = size
         window.maxSize = maxSize
         window.setContentSize(size)
-        window.styleMask = [.borderless]
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
         window.styleMask.remove(.resizable)
         window.delegate = RemoteWindowDelegate.shared
-        window.title = RemoteAppDelegate.mainWindowTitle
+        window.title = ""
         window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.mainWindowIdentifier)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.contentView?.wantsLayer = true
-        window.contentView?.layer?.cornerRadius = RemoteWindowLayout.windowCornerRadius
-        window.contentView?.layer?.masksToBounds = true
-        installFrameGlassBackground(in: window)
         RemoteAppDelegate.prepareMainWindow(window)
-    }
-
-    private func installFrameGlassBackground(in window: NSWindow) {
-        guard let frameView = window.contentView?.superview else { return }
-        let backgroundIdentifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteFrameGlassBackground")
-        if frameView.subviews.contains(where: { $0.identifier == backgroundIdentifier }) { return }
-        let glass = NSGlassEffectView()
-        glass.identifier = backgroundIdentifier
-        glass.cornerRadius = RemoteWindowLayout.windowCornerRadius
-        glass.clipsToBounds = false
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        frameView.addSubview(glass, positioned: .below, relativeTo: window.contentView)
-        NSLayoutConstraint.activate([
-            glass.leadingAnchor.constraint(equalTo: frameView.leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: frameView.trailingAnchor),
-            glass.topAnchor.constraint(equalTo: frameView.topAnchor),
-            glass.bottomAnchor.constraint(equalTo: frameView.bottomAnchor),
-        ])
     }
 }

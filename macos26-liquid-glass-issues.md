@@ -195,3 +195,44 @@
 - 남은 확인:
   - full-native macOS 26 Liquid Glass API로의 더 깊은 전환은 별도 계획서 후속 단계로 유지한다.
   - 실제 실서버 데이터에서 게임 수/문구가 더 많아지는 경우의 최대 화면 높이 fallback은 추가 수동 검수가 필요하다.
+
+---
+
+## Issue 7 — image copy 10 기준 낮은 QA 기준, native titlebar 텍스트, popover 검수 격리/정렬
+
+- 상태: 코드 대응 및 신규 자동 스크린샷 3종 재검수 완료
+- 발생 시점: `image copy 10.png` 및 직전 GUI QA 결과 재평가 후
+- 기준 스크린샷:
+  - `artifacts/gui-qa-visible-20260516-100559.png` — traffic light는 살아났지만 native titlebar에 `HomeworkHelper Remote` 텍스트가 남고, 상단 content reserve가 큼.
+  - `artifacts/gui-qa-hidden-20260516-100559.png` — sidebar hidden 상태에서도 native titlebar 텍스트/상단 여백이 남음.
+  - `artifacts/gui-qa-popover-20260516-100559.png` — popover 단독 검수는 가능했지만, popover 전용 window 격리/버튼 높이 계약이 정적으로 고정되어 있지 않았음.
+  - `artifacts/gui-qa-visible-20260516-101858.png` — 수정 후 sidebar visible 상태 재검수.
+  - `artifacts/gui-qa-hidden-20260516-101858.png` — 수정 후 sidebar hidden 상태 재검수.
+  - `artifacts/gui-qa-popover-20260516-101858.png` — 수정 후 popover 단독 상태 재검수.
+- 증상:
+  - [합격] 기준을 “빌드/정적 테스트 통과”에 과도하게 의존하면, 실제 화면에서 보이는 titlebar text, traffic-light 주변 여백, 버튼 정렬 같은 product-level UX 회귀를 놓칠 수 있음.
+  - macOS native `.titled + .fullSizeContentView`로 회귀하면서 traffic light clipping은 해결됐지만, window title text가 상단 chrome에 표시되어 liquid glass surface와 정보 hierarchy가 중복됨.
+  - popover QA 모드는 SwiftUI placeholder/default window가 늦게 나타나는 경우를 반복적으로 닫는 방어가 부족했고, 하단 3버튼과 전원 버튼 row의 높이/폭 계약이 구조적으로 분리되어 있지 않았음.
+- 조치:
+  - main window title은 window identifier로만 추적하고, 실제 `NSWindow.title`은 빈 문자열로 설정해 native titlebar 텍스트를 제거함.
+  - `titlebarContentInset`을 42pt에서 28pt로 축소해 traffic light 안전 영역은 유지하면서 상단 무의미 여백을 줄임.
+  - popover UI-test window에 `settleUITestPopoverWindow` 반복 정리 루프를 추가해 늦게 뜨는 main/placeholder window를 지속적으로 숨김.
+  - popover 전원 row는 30pt, footer row는 34pt 높이로 고정하고 `MenuBarFooterButton`을 별도 컴포넌트로 분리해 main sidebar power button 변경이 popover footer alignment를 다시 깨지 않게 함.
+  - 정적 테스트를 “title hidden + native traffic light + no custom chrome + popover QA isolation + footer button component” 계약으로 갱신함.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_build_release.py -q` 통과 (`13 passed`).
+  - `./.venv/bin/python tools/package_macos_remote_app.py --output-dir /tmp/hh-remote-ralph --version 0.2.0 --build 21 --jobs 4` 통과.
+  - 단독 배경 GUI 캡처 3종 생성 및 직접 확인:
+    - `artifacts/gui-qa-visible-20260516-101858.png`
+    - `artifacts/gui-qa-hidden-20260516-101858.png`
+    - `artifacts/gui-qa-popover-20260516-101858.png`
+- 판정:
+  - 이전 캡처에서 보이던 native titlebar text는 제거됨.
+  - traffic light는 잘리지 않고 native 위치에 남음.
+  - dashboard vertical scroll은 보이지 않으며, 게임 목록의 invisible horizontal scroll만 남음.
+  - sidebar visible/hidden 모두 content clipping은 보이지 않음.
+  - popover는 main window 없이 단독으로 캡처되며, power row/footer row의 버튼 간격과 높이가 일관됨.
+- 남은 주의:
+  - 이 단계는 “현재 NSGlassEffect/SwiftUI glass 기반 GUI를 d69 계열 layout에 최대한 맞추는 안정화”이며, macOS 26 full-native Liquid Glass API 전체 전환의 pixel-diff < 1% 목표는 별도 migration 단계에서 다시 판정해야 한다.
+  - 실제 사용 데이터에서 게임명이 더 길거나 incident section이 추가되는 경우는 같은 GUI QA 3종 캡처 루프를 다시 실행해 확인해야 한다.

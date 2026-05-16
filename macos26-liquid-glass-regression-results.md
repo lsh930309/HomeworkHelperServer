@@ -305,3 +305,60 @@
   - 테스트 방법: build 18 app을 `--ui-test-show-window --ui-test-show-sidebar --ui-test-show-summary --ui-test-no-external-state`로 실행.
   - 테스트 결과: 통과.
   - 통과 판정 근거: Keychain/password prompt 없이 sample snapshot이 표시됐고 `artifacts/gui-loop-20260516-090236.png`가 생성됐다.
+
+---
+
+## 8. product-level GUI QA 기준 상향 및 image copy 10 후속 검증 기록
+
+작성일: 2026-05-16
+
+### 8.1 합격 기준 재정의
+
+이번 항목부터 GUI 품질 판정은 다음 조건을 모두 만족해야 “통과”로 기록한다.
+
+- [x] 빌드/정적 테스트만으로 GUI 품질을 통과 처리하지 않는다.
+  - 테스트 방법: 실제 패키지 `.app`을 실행하고 sidebar visible, sidebar hidden, popover 단독 3종 스크린샷을 매번 `artifacts/`에 저장한다.
+  - 테스트 결과: `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`, `artifacts/gui-qa-popover-20260516-101858.png` 생성.
+  - 통과 판정 근거: 세 캡처를 직접 확인해 traffic light, titlebar, sidebar, section alignment, popover footer alignment를 별도로 판정했다.
+
+- [x] native traffic light는 잘리거나 custom clone으로 대체되지 않아야 한다.
+  - 테스트 방법: `RemoteWindowAccessor`가 native `.titled/.fullSizeContentView`를 사용하고 `SidebarChromeRow`/`WindowChromeButton` custom chrome이 없는지 정적 확인. 실제 visible/hidden 캡처에서 좌상단 traffic light 확인.
+  - 테스트 결과: 정적 테스트 통과, 최신 캡처 2종에서 traffic light 3개가 모두 안전하게 표시됨.
+  - 통과 판정 근거: custom traffic light로 인한 clipping 회귀를 제거했고, native window control이 창 모서리 안쪽에 위치한다.
+
+- [x] titlebar에는 중복 window title text가 없어야 한다.
+  - 테스트 방법: `RemoteWindowAccessor`와 `prepareMainWindow`가 `window.title = ""`를 적용하는지 정적 확인. 최신 캡처에서 상단 title text 부재 확인.
+  - 테스트 결과: 정적 테스트 통과, `gui-qa-visible-20260516-101858.png`/`gui-qa-hidden-20260516-101858.png`에서 native titlebar title text가 보이지 않음.
+  - 통과 판정 근거: 앱 내부 header의 `HomeworkHelper Remote`만 정보 hierarchy를 담당하고 native chrome에는 중복 텍스트가 없다.
+
+- [x] dashboard는 게임 horizontal invisible scroll 외 vertical scroll이 없어야 한다.
+  - 테스트 방법: `RemoteDashboardView`와 `RemoteSidebarView` 범위에 vertical `ScrollView`가 없는지 정적 확인. 최신 visible/hidden 캡처에서 content clipping/vertical scrollbar 부재 확인.
+  - 테스트 결과: 정적 테스트 통과, 최신 캡처에서 vertical scrollbar가 보이지 않음.
+  - 통과 판정 근거: 창 크기는 content size 산식으로 결정되고, 세로 overflow를 ScrollView로 숨기지 않는다.
+
+- [x] sidebar visible/hidden 양쪽 모두 content가 잘리지 않아야 한다.
+  - 테스트 방법: sidebar visible 캡처에서 설정 버튼/전원 버튼/연결 섹션 확인, hidden 캡처에서 game + summary section 확인.
+  - 테스트 결과: `gui-qa-visible-20260516-101858.png`에서 sidebar 하단 설정 버튼이 잘리지 않고, `gui-qa-hidden-20260516-101858.png`에서 play summary 하단 텍스트가 창 안에 들어옴.
+  - 통과 판정 근거: `sidebarMinimumHeight`, `titlebarContentInset`, section height 산식이 현재 샘플 데이터 전체를 포함한다.
+
+- [x] popover는 main window 없이 단독 검수 가능해야 하며 footer 버튼 정렬이 보존되어야 한다.
+  - 테스트 방법: `--ui-test-show-popover`로 popover 전용 window를 띄우고 `settleUITestPopoverWindow`가 다른 large window를 반복적으로 `orderOut`하는지 확인. 최신 popover 캡처에서 main window 부재/버튼 row 정렬 확인.
+  - 테스트 결과: `gui-qa-popover-20260516-101858.png`에서 main window 없이 popover만 표시됨. power row/footer row가 각각 고정 높이와 동일 spacing을 사용함.
+  - 통과 판정 근거: popover QA가 main dashboard 상태에 오염되지 않고, `MenuBarFooterButton` 분리로 footer alignment가 main/sidebar 컴포넌트 변경에 종속되지 않는다.
+
+### 8.2 자동 검증
+
+- [x] Swift build
+  - 테스트 방법: `swift build --package-path remote_clients/macos/HomeworkHelperRemote`
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: native titled glass shell, title hiding, popover QA window, footer component 변경이 모두 컴파일됨.
+
+- [x] targeted pytest
+  - 테스트 방법: `./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_build_release.py -q`
+  - 테스트 결과: `13 passed`.
+  - 통과 판정 근거: macOS static GUI contract와 packaging contract가 함께 통과함.
+
+- [x] release packaging smoke
+  - 테스트 방법: `./.venv/bin/python tools/package_macos_remote_app.py --output-dir /tmp/hh-remote-ralph --version 0.2.0 --build 21 --jobs 4`
+  - 테스트 결과: 통과.
+  - 통과 판정 근거: 실제 검수용 `.app` bundle 생성과 icon resource packaging이 정상 완료됨.

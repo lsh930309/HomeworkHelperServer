@@ -28,6 +28,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private static var isOpeningMainWindow = false
     private static var uiTestMainWindow: NSWindow?
+    private static var uiTestPopoverWindow: NSWindow?
 
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
@@ -44,7 +45,11 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
         }
-        if RemoteUITestFlags.showWindow {
+        if RemoteUITestFlags.showPopover {
+            DispatchQueue.main.async {
+                Self.showUITestPopoverWindow()
+            }
+        } else if RemoteUITestFlags.showWindow {
             DispatchQueue.main.async {
                 Self.showUITestMainWindow()
             }
@@ -137,9 +142,9 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             hasSummary: RemoteSharedModel.viewModel.showPlaySummary && RemoteSharedModel.viewModel.dashboardSummary != nil,
             hasIncidents: !RemoteSharedModel.viewModel.beholderIncidents.isEmpty
         )
-        let window = RemoteMainWindow(
+        let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),
-            styleMask: [.borderless],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -150,6 +155,46 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         uiTestMainWindow = window
         focusMainWindow(window)
         settleUITestWindows(preferred: window)
+    }
+
+    static func showUITestPopoverWindow() {
+        if let window = uiTestPopoverWindow {
+            focusMainWindow(window)
+            settleUITestPopoverWindow(preferred: window)
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: CGSize(width: 392, height: 500)),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.contentView = NSHostingView(rootView: MenuBarPopoverView(viewModel: RemoteSharedModel.viewModel))
+        window.center()
+        uiTestPopoverWindow = window
+        focusMainWindow(window)
+        settleUITestPopoverWindow(preferred: window)
+    }
+
+    private static func settleUITestPopoverWindow(preferred window: NSWindow) {
+        for delay in [0.0, 0.2, 0.8, 1.6, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                for candidate in NSApp.windows where candidate !== window {
+                    let typeName = String(describing: type(of: candidate))
+                    guard typeName.contains("Popover") == false,
+                          candidate.frame.width > 100,
+                          candidate.frame.height > 100 else {
+                        continue
+                    }
+                    candidate.orderOut(nil)
+                }
+                focusMainWindow(window)
+            }
+        }
     }
 
     private static func settleUITestWindows(preferred window: NSWindow) {
@@ -185,7 +230,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     static func prepareMainWindow(_ window: NSWindow) {
-        window.title = mainWindowTitle
+        window.title = ""
         window.identifier = NSUserInterfaceItemIdentifier(mainWindowIdentifier)
         isOpeningMainWindow = false
         _ = deduplicateMainWindows(preferred: window)
@@ -232,7 +277,7 @@ struct HomeworkHelperRemoteApp: App {
 
     var body: some Scene {
         Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier) {
-            if RemoteUITestFlags.showWindow {
+            if RemoteUITestFlags.showWindow || RemoteUITestFlags.showPopover {
                 Color.clear
                     .frame(width: 1, height: 1)
             } else {
@@ -309,7 +354,7 @@ struct RemoteDashboardView: View {
                     .ignoresSafeArea()
                 RemoteWindowHitTestShield()
                     .ignoresSafeArea()
-                HStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
                     if sidebarVisible {
                         RemoteSidebarView(viewModel: viewModel)
                             .frame(width: RemoteWindowLayout.sidebarWidth)
@@ -330,11 +375,12 @@ struct RemoteDashboardView: View {
                             BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
                         }
                     }
-                    .padding(RemoteWindowLayout.mainContentInset)
+                    .padding(.horizontal, RemoteWindowLayout.mainContentInset)
+                    .padding(.bottom, RemoteWindowLayout.mainContentInset)
                     .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                 }
+                .padding(.top, RemoteWindowLayout.titlebarContentInset)
             }
-            .clipShape(RoundedRectangle(cornerRadius: RemoteWindowLayout.windowCornerRadius, style: .continuous))
             .contentShape(Rectangle())
             .background(Color.black.opacity(0.001))
         }
@@ -469,7 +515,6 @@ struct RemoteSidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SidebarChromeRow()
             sidebarConnectionSection
             Divider().opacity(0.35)
             sidebarPowerSection
@@ -477,7 +522,6 @@ struct RemoteSidebarView: View {
             sidebarAppSection
         }
         .padding(.horizontal, RemoteWindowLayout.sidebarInset)
-        .padding(.top, 18)
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -548,51 +592,6 @@ struct RemoteSidebarView: View {
     }
 }
 
-struct SidebarChromeRow: View {
-    var body: some View {
-        HStack(alignment: .center) {
-            WindowTrafficButtons()
-            Spacer()
-            Image(systemName: "sidebar.left")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
-        .frame(height: RemoteWindowLayout.sidebarChromeHeight, alignment: .top)
-    }
-}
-
-struct WindowTrafficButtons: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            WindowChromeButton(color: .red, accessibilityLabel: "창 닫기") {
-                RemoteAppDelegate.hideMainWindow()
-            }
-            WindowChromeButton(color: .yellow, accessibilityLabel: "창 최소화") {
-                NSApp.keyWindow?.miniaturize(nil)
-            }
-            WindowChromeButton(color: .green, accessibilityLabel: "창 확대") {
-                NSApp.keyWindow?.zoom(nil)
-            }
-        }
-    }
-}
-
-struct WindowChromeButton: View {
-    let color: Color
-    let accessibilityLabel: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Circle()
-                .fill(color)
-                .frame(width: 14, height: 14)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
-    }
-}
-
 struct SettingsOpenButton: View {
     var body: some View {
         Group {
@@ -625,10 +624,6 @@ struct HeaderStatusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
-                if !sidebarVisible {
-                    WindowTrafficButtons()
-                        .padding(.trailing, 8)
-                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("HomeworkHelper Remote")
                         .font(.title.bold())
@@ -901,32 +896,67 @@ struct MenuBarPopoverView: View {
                     }
                 }
                 HStack(spacing: 8) {
-                    PowerSquareButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
-                    PowerSquareButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
-                    PowerSquareButton(action: "restart", label: "재시동", systemImage: "arrow.clockwise", viewModel: viewModel)
-                    PowerSquareButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
+                    MenuBarPowerButton(action: "wake", label: "켜기", systemImage: "power", viewModel: viewModel)
+                    MenuBarPowerButton(action: "sleep", label: "절전", systemImage: "moon.fill", viewModel: viewModel)
+                    MenuBarPowerButton(action: "restart", label: "재시동", systemImage: "arrow.clockwise", viewModel: viewModel)
+                    MenuBarPowerButton(action: "shutdown", label: "끄기", systemImage: "power.circle", viewModel: viewModel)
                 }
+                .frame(height: 30)
                 Divider()
                 HStack(spacing: 8) {
-                    Button { RemoteAppDelegate.showMainWindow() } label: {
-                        Label("창 열기", systemImage: "macwindow")
-                            .frame(maxWidth: .infinity)
+                    MenuBarFooterButton(title: "창 열기", systemImage: "macwindow") {
+                        RemoteAppDelegate.showMainWindow()
                     }
-                    Button { Task { await viewModel.refresh() } } label: {
-                        Label("새로고침", systemImage: "arrow.clockwise")
-                            .frame(maxWidth: .infinity)
+                    MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise") {
+                        Task { await viewModel.refresh() }
                     }
-                    Button { NSApp.terminate(nil) } label: {
-                        Label("앱 종료", systemImage: "power")
-                            .frame(maxWidth: .infinity)
+                    MenuBarFooterButton(title: "앱 종료", systemImage: "power") {
+                        NSApp.terminate(nil)
                     }
                 }
+                .frame(height: 34)
             }
             .padding(14)
             .remoteGlass(.popover)
             .buttonStyle(.glass)
             .frame(width: 360)
         }
+    }
+}
+
+struct MenuBarPowerButton: View {
+    let action: String
+    let label: String
+    let systemImage: String
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        Button {
+            Task { await viewModel.power(action) }
+        } label: {
+            Label(label, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .frame(maxWidth: .infinity, minHeight: 28)
+        }
+        .controlSize(.small)
+        .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
+        .help(label)
+    }
+}
+
+struct MenuBarFooterButton: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 30)
+        }
+        .controlSize(.small)
+        .foregroundStyle(.primary)
     }
 }
 
