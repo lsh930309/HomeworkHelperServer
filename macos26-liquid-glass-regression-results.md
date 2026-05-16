@@ -362,3 +362,82 @@
   - 테스트 방법: `./.venv/bin/python tools/package_macos_remote_app.py --output-dir /tmp/hh-remote-ralph --version 0.2.0 --build 21 --jobs 4`
   - 테스트 결과: 통과.
   - 통과 판정 근거: 실제 검수용 `.app` bundle 생성과 icon resource packaging이 정상 완료됨.
+
+---
+
+## 9. main GUI 최종 polish Ralph-loop 결과
+
+작성일: 2026-05-16
+
+- [x] 오류 표시 기준 이미지 확인
+  - 테스트 방법: 사용자가 표시한 오류 기준이 프로젝트 루트 이미지가 아니라 `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`임을 확인하고 기준으로 삼음.
+  - 테스트 결과: 확인 완료.
+  - 통과 판정 근거: 수정 전/후 비교 대상을 artifacts 내 캡처로 고정했다.
+
+- [x] sidebar reference 반영
+  - 테스트 방법: `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`, `sidebar_reference.png`를 직접 확인하고 sidebar toggle 배치를 조정.
+  - 테스트 결과: visible 상태는 sidebar chrome 우측 icon-only hide button, hidden 상태는 titlebar 좌측 icon-only reveal button으로 변경.
+  - 통과 판정 근거: 우상단 텍스트형 panel button이 제거되고 reference와 같은 icon-only 동작 구조가 됐다.
+
+- [x] 게임/플레이 요약 폭 정렬
+  - 테스트 방법: `mainColumnWidth(cardCount:)` 공통 산식을 도입하고 최종 캡처를 확인.
+  - 테스트 결과: `artifacts/gui-qa-visible-20260516-113650.png`, `artifacts/gui-qa-hidden-20260516-113650.png`에서 section 좌우 끝이 정렬됨.
+  - 통과 판정 근거: game viewport에 section padding을 포함한 window width 산식을 사용한다.
+
+- [x] 플레이 요약 하단 잘림 해소
+  - 테스트 방법: summary section height/window height 산식을 보정하고 최종 캡처 확인.
+  - 테스트 결과: 최종 visible/hidden 캡처 모두 mobile summary text가 창 안에 표시됨.
+  - 통과 판정 근거: vertical scroll 없이 content가 모두 들어간다.
+
+- [x] Ralph-loop 수행
+  - 테스트 방법: 수정 후 매회 다른 창 최소화 → 앱 실행 → `artifacts/` 캡처 저장 → 직접 시각 확인 → 재수정 루프 수행.
+  - 테스트 결과: 3회 반복 후 최종 캡처 `gui-qa-visible-20260516-113650.png`, `gui-qa-hidden-20260516-113650.png` 확보.
+  - 통과 판정 근거: 사용자가 요청한 수정/캡처/시각 피드백 루프를 따랐다.
+
+---
+
+## 9. sidebar reference visible/hidden 반영 후 Ralph-loop 검증 기록
+
+작성일: 2026-05-16
+
+- [x] sidebar visible 기준 반영
+  - 테스트 방법: `sidebar_reference_visible.png`를 기준으로 visible 상태를 실행하고 `artifacts/gui-qa-visible-20260516-114537.png`를 직접 확인.
+  - 테스트 결과: sidebar hide control이 우상단 텍스트 버튼이 아니라 sidebar chrome의 icon-only control로 이동했다.
+  - 통과 판정 근거: reference처럼 traffic light row와 같은 window chrome 영역에서 sidebar control이 보이며, main header 우상단에는 더 이상 패널 텍스트 버튼이 없다.
+
+- [x] sidebar hidden 기준 반영
+  - 테스트 방법: `sidebar_reference_hidden.png`를 기준으로 hidden 상태를 실행하고 `artifacts/gui-qa-hidden-20260516-114537.png`를 직접 확인.
+  - 테스트 결과: reveal control이 traffic light 오른쪽 titlebar 영역에 배치되고 title text를 침범하지 않는다.
+  - 통과 판정 근거: hidden 상태에서도 버튼이 본문 header 위에 떠서 제목을 가리는 문제가 사라졌다.
+
+- [x] 게임/플레이 요약 폭 정렬
+  - 테스트 방법: `RemoteWindowLayout.mainColumnWidth`/`sectionInset` 정적 계약과 최신 visible/hidden 캡처를 확인.
+  - 테스트 결과: 두 section은 같은 main column 산식을 사용하고, 최신 캡처에서 오른쪽 끝 정렬과 4번째 카드 표시가 안정적이다.
+  - 통과 판정 근거: width 산식이 분리되어 다시 어긋나는 회귀 위험을 줄였다.
+
+- [x] 플레이 요약 하단 잘림 해소
+  - 테스트 방법: 최신 visible/hidden 캡처에서 summary 하단 line을 확인.
+  - 테스트 결과: `모바일 40분...` 하단 텍스트가 창 안에서 온전히 표시된다.
+  - 통과 판정 근거: `summarySectionHeight`와 window height 산식을 보정했다.
+
+- [x] 모서리 이중 외곽선 완화
+  - 테스트 방법: root `NSGlassEffectView` corner radius 0 계약과 최신 캡처 모서리를 확인.
+  - 테스트 결과: native window frame과 root glass rounded border가 동시에 겹치는 현상이 완화됐다.
+  - 통과 판정 근거: root glass는 배경만 담당하고, 외곽 rounding은 native window frame에 맡긴다.
+
+### 9.1 sidebar toggle 중복 제거 최종 확인
+
+- [x] visible 상태 sidebar chrome button 단일화
+  - 테스트 방법: `/tmp/hh-remote-ralph/HomeworkHelperRemote.app` build 26을 `--ui-test-show-window --ui-test-show-sidebar --ui-test-show-summary`로 실행하고 다른 창을 최소화한 뒤 `artifacts/gui-qa-visible-20260516-120939.png`를 직접 확인.
+  - 테스트 결과: sidebar 우상단 titlebar/frame 영역에 icon-only sidebar button이 1개만 표시된다.
+  - 통과 판정 근거: SwiftUI content overlay를 제거하고 AppKit overlay만 유지해 reference형 window chrome control로 단일화했다.
+
+- [x] hidden 상태 reveal button 단일화
+  - 테스트 방법: 같은 build 26을 `--ui-test-show-window --ui-test-show-summary`로 실행하고 `artifacts/gui-qa-hidden-20260516-120939.png`를 직접 확인.
+  - 테스트 결과: traffic light 오른쪽 titlebar 영역에 reveal button이 1개만 표시되며 제목 텍스트와 겹치지 않는다.
+  - 통과 판정 근거: sidebar hidden overlay가 SwiftUI 본문과 AppKit frame에 중복 설치되지 않는다.
+
+- [x] 최종 main GUI visual contract 유지
+  - 테스트 방법: latest visible/hidden capture에서 section 폭, 4번째 game card, summary bottom line, outer frame을 확인.
+  - 테스트 결과: 게임/플레이 요약 폭 정렬과 summary 하단 표시가 유지되고, popover 합격 영역은 변경하지 않았다.
+  - 통과 판정 근거: 변경 범위를 sidebar toggle 중복 제거와 static contract 갱신으로 제한했다.

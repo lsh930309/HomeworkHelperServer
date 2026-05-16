@@ -236,3 +236,91 @@
 - 남은 주의:
   - 이 단계는 “현재 NSGlassEffect/SwiftUI glass 기반 GUI를 d69 계열 layout에 최대한 맞추는 안정화”이며, macOS 26 full-native Liquid Glass API 전체 전환의 pixel-diff < 1% 목표는 별도 migration 단계에서 다시 판정해야 한다.
   - 실제 사용 데이터에서 게임명이 더 길거나 incident section이 추가되는 경우는 같은 GUI QA 3종 캡처 루프를 다시 실행해 확인해야 한다.
+
+---
+
+## Issue 8 — main GUI 최종 polish: width alignment, summary clipping, sidebar reference toggle
+
+- 상태: Ralph-loop 3회 반복 후 코드 대응 및 캡처 검수 완료
+- 발생 시점: 사용자가 `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`에 표시한 오류와 `sidebar_reference_visible.png`/`sidebar_reference_hidden.png` reference 전달 후
+- 기준 이미지:
+  - 오류 표시 기준: `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`
+  - reference 기준: `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`, `sidebar_reference.png`
+  - 수정 후 검수 캡처:
+    - 1차: `artifacts/gui-qa-visible-20260516-112243.png`, `artifacts/gui-qa-hidden-20260516-112243.png`
+    - 2차: `artifacts/gui-qa-visible-20260516-113115.png`, `artifacts/gui-qa-hidden-20260516-113115.png`
+    - 최종: `artifacts/gui-qa-visible-20260516-113650.png`, `artifacts/gui-qa-hidden-20260516-113650.png`
+- 증상:
+  - root glass와 native window frame이 동시에 rounded outer line을 만들어 모서리에 이중 외곽선처럼 보임.
+  - `게임` section 내부 viewport 폭이 section padding을 고려하지 않아 4번째 card/right button이 잘림.
+  - window height 산식이 실제 `RemoteGlassGroupBox` intrinsic height보다 작아 `플레이 요약` 하단 텍스트가 잘림.
+  - 우상단 텍스트형 `[패널 보기/숨기기]` 버튼이 reference의 sidebar chrome 구조와 맞지 않음.
+- 조치:
+  - root `NSGlassEffectView`의 `cornerRadius`를 0으로 고정해 outer rounded outline은 native window frame 한 곳에서만 나오도록 조정함.
+  - `RemoteWindowLayout.sectionInset`, `mainColumnWidth(cardCount:)`를 추가해 `게임`과 `플레이 요약`이 같은 outer width를 공유하게 함.
+  - `gameSectionHeight`와 `summarySectionHeight`를 실제 group intrinsic height에 맞게 늘려 vertical scroll 없이 content를 모두 포함하게 함.
+  - sidebar visible 상태에는 `SidebarChromeRow` 우측 icon-only toggle을, hidden 상태에는 titlebar 좌측 icon-only reveal toggle을 배치함.
+  - toggle button은 `.buttonStyle(.glass)` 기본 최소 크기 대신 plain button + 작은 native glass surface로 고정해 reference에 가까운 크기로 줄임.
+- 검증:
+  - 1차 Ralph-loop: 폭/높이 문제는 개선됐지만 toggle button이 너무 크고 낮게 배치됨.
+  - 2차 Ralph-loop: 위치는 개선됐지만 `.glass` 기본 button 크기 때문에 hidden 상태에서 title과 겹침.
+  - 3차 Ralph-loop: `artifacts/gui-qa-visible-20260516-113650.png`, `artifacts/gui-qa-hidden-20260516-113650.png` 직접 확인.
+- 판정:
+  - `게임`과 `플레이 요약` section의 좌우 끝이 정렬됨.
+  - 4번째 game card/right edge 및 실행 버튼이 잘리지 않음.
+  - `플레이 요약` 하단 mobile summary text가 잘리지 않음.
+  - 우상단 text toggle이 사라지고 reference형 icon-only sidebar control로 대체됨.
+  - popover는 합격 상태를 유지하기 위해 변경하지 않음.
+
+---
+
+## Issue 8 — sidebar reference visible/hidden 기준 titlebar toggle, section 폭, summary 하단 잘림 마감
+
+- 상태: Ralph-loop 2회 수행 후 코드 대응 및 직접 캡처 판정 완료
+- 발생 시점: 사용자가 `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`를 추가하고, 기존 오류 표시 이미지가 `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`임을 재확인한 뒤
+- 공식 참고:
+  - Apple HIG Sidebars: sidebar는 Liquid Glass layer 위에 떠 있는 navigation surface로 다뤄야 한다.
+  - Apple HIG Toolbars: sidebar 표시/숨김처럼 현재 view를 제어하는 요소는 toolbar/titlebar leading side에 배치하는 것이 자연스럽다.
+  - AppKit `NSTitlebarAccessoryViewController`: titlebar/toolbar 영역에 custom accessory view를 배치하는 공식 표면을 제공한다. 이번 구현은 같은 의도에 맞춰 titlebar/frame 영역의 작은 AppKit overlay로 sidebar toggle을 window chrome에 붙였다.
+- 기준 스크린샷:
+  - 수정 전 오류 표시: `artifacts/gui-qa-visible-20260516-101858.png`, `artifacts/gui-qa-hidden-20260516-101858.png`
+  - reference: `sidebar_reference_visible.png`, `sidebar_reference_hidden.png`, `sidebar_reference.png`
+  - 1차 loop: `artifacts/gui-qa-visible-20260516-112243.png`, `artifacts/gui-qa-hidden-20260516-112243.png`
+  - 2차 loop: `artifacts/gui-qa-visible-20260516-114537.png`, `artifacts/gui-qa-hidden-20260516-114537.png`
+- 증상:
+  - 1차 loop에서 section 폭/하단 잘림은 개선됐지만 SwiftUI content 내부 sidebar button이 reference보다 너무 크고 낮았으며, hidden 상태에서는 제목을 침범했다.
+  - 게임 section과 플레이 요약 section은 동일 width 기준을 명시하지 않아 향후 padding 변경 시 다시 어긋날 위험이 있었다.
+  - root glass corner radius와 native window corner가 동시에 outline을 만들며 모서리 이중 외곽선이 보였다.
+- 조치:
+  - `RemoteWindowLayout.mainColumnWidth`와 `sectionInset`을 도입해 게임 section과 플레이 요약 section의 outer width 기준을 단일화함.
+  - game/summary section height와 window content height 산식을 보정해 4번째 카드 우측 잘림과 summary 하단 잘림을 해소함.
+  - root `NSGlassEffectView` corner radius를 0으로 두어 native window frame과 glass background가 각각 외곽선을 그리지 않게 함.
+  - SwiftUI 본문 안의 텍스트형/큰 sidebar toggle을 제거하고, `HomeworkHelperRemoteSidebarToggleOverlay` AppKit overlay를 window frame/titlebar 영역에 설치함.
+  - visible 상태는 sidebar 오른쪽 위, hidden 상태는 traffic light 오른쪽에 icon-only sidebar button이 오도록 위치를 분리함.
+- 검증:
+  - `swift build --package-path remote_clients/macos/HomeworkHelperRemote` 통과.
+  - `/tmp/hh-remote-ralph/HomeworkHelperRemote.app` build 23을 실행하고 다른 창을 최소화한 뒤 visible/hidden 캡처를 생성함.
+  - 직접 시각 확인:
+    - `artifacts/gui-qa-visible-20260516-114537.png`: sidebar toggle이 sidebar chrome 오른쪽 위에 있으며, 게임/플레이 요약 폭과 우측 카드 잘림이 개선됨.
+    - `artifacts/gui-qa-hidden-20260516-114537.png`: reveal toggle이 traffic light 오른쪽 titlebar 영역에 있고 제목을 침범하지 않음.
+- 판정:
+  - Popover는 이전 합격 상태 유지.
+  - 메인 visible/hidden 모두 기존에 표시된 게임 우측 잘림, 플레이 요약 하단 잘림, 우상단 텍스트형 panel button 문제는 해결됨.
+  - 모서리 외곽선은 native frame 중심으로 정리됐으며, 내부 section/card outline은 유지됨.
+
+### Issue 8 follow-up — sidebar toggle 중복 제거 최종 확인
+
+- 상태: AppKit titlebar overlay만 남기고 SwiftUI content overlay 제거 후 최종 캡처 검수 완료
+- 기준 캡처:
+  - `artifacts/gui-qa-visible-20260516-120939.png`
+  - `artifacts/gui-qa-hidden-20260516-120939.png`
+- 추가 증상:
+  - 이전 final 후보 hidden capture에서 SwiftUI overlay button과 AppKit frame overlay button이 동시에 남아 sidebar icon이 이중으로 보일 수 있었다.
+- 조치:
+  - sidebar 표시/숨김 control은 `HomeworkHelperRemoteSidebarToggleOverlay` AppKit overlay 한 곳에서만 담당하도록 정리했다.
+  - SwiftUI 내부 `SidebarChromeRow`/`SidebarToggleChromeButton`과 hidden overlay를 제거했다.
+  - visible sidebar content 시작 offset은 유지해 traffic light/titlebar 영역과 본문이 겹치지 않도록 했다.
+- 판정:
+  - latest visible/hidden capture에서 sidebar button은 각각 1개만 표시된다.
+  - 게임 section과 플레이 요약 section의 폭 정렬, 4번째 card 표시, summary 하단 텍스트 표시가 유지된다.
+  - popover는 합격 상태를 유지하기 위해 변경하지 않았다.

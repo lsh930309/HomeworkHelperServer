@@ -106,7 +106,7 @@ struct RemoteAppKitLiquidGlassBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSGlassEffectContainerView {
         let container = NSGlassEffectContainerView()
         let glass = NSGlassEffectView()
-        glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
+        glass.cornerRadius = 0
         glass.clipsToBounds = false
         glass.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(glass)
@@ -121,7 +121,7 @@ struct RemoteAppKitLiquidGlassBackground: NSViewRepresentable {
 
     func updateNSView(_ container: NSGlassEffectContainerView, context: Context) {
         for glass in container.subviews.compactMap({ $0 as? NSGlassEffectView }) {
-            glass.cornerRadius = RemoteGlassMetrics.windowCornerRadius
+            glass.cornerRadius = 0
             glass.clipsToBounds = false
         }
     }

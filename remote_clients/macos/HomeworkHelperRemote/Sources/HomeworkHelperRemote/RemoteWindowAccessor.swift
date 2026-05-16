@@ -6,6 +6,7 @@ enum RemoteWindowLayout {
     static let dividerWidth: CGFloat = 1
     static let mainContentInset: CGFloat = 18
     static let sidebarInset: CGFloat = 22
+    static let sectionInset: CGFloat = 14
     static let horizontalPadding: CGFloat = mainContentInset * 2
     static let glassOuterInset: CGFloat = 0
     static let glassHaloAllowance: CGFloat = 0
@@ -13,8 +14,8 @@ enum RemoteWindowLayout {
     static let titlebarContentInset: CGFloat = 28
     static let windowCornerRadius: CGFloat = 28
     static let headerHeight: CGFloat = 72
-    static let gameSectionHeight: CGFloat = 160
-    static let summarySectionHeight: CGFloat = 118
+    static let gameSectionHeight: CGFloat = 192
+    static let summarySectionHeight: CGFloat = 154
     static let incidentSectionHeight: CGFloat = 92
     static let gameCardWidth: CGFloat = 180
     static let gameCardHeight: CGFloat = 126
@@ -43,8 +44,12 @@ enum RemoteWindowLayout {
         return cards * gameCardWidth + max(0, cards - 1) * gameCardSpacing
     }
 
+    static func mainColumnWidth(cardCount: Int) -> CGFloat {
+        gameViewportWidth(cardCount: cardCount) + (sectionInset * 2)
+    }
+
     static func mainContentWidth(cardCount: Int) -> CGFloat {
-        gameViewportWidth(cardCount: cardCount) + horizontalPadding
+        mainColumnWidth(cardCount: cardCount) + horizontalPadding
     }
 
     static func contentSize(cardCount: Int, sidebarVisible: Bool, hasSummary: Bool, hasIncidents: Bool) -> CGSize {
@@ -65,6 +70,7 @@ enum RemoteWindowLayout {
             height: min(maxSize.height, max(compactWindowHeight, rawHeight))
         )
     }
+
 }
 
 final class RemoteWindowDelegate: NSObject, NSWindowDelegate {
@@ -110,7 +116,64 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         window.hasShadow = true
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
+        installSidebarToggleOverlay(in: window, sidebarVisible: sidebarVisible)
         RemoteAppDelegate.prepareMainWindow(window)
+    }
+
+    private func installSidebarToggleOverlay(in window: NSWindow, sidebarVisible: Bool) {
+        guard let frameView = window.contentView?.superview else { return }
+        let overlayIdentifier = NSUserInterfaceItemIdentifier("HomeworkHelperRemoteSidebarToggleOverlay")
+        frameView.subviews
+            .filter { $0.identifier == overlayIdentifier }
+            .forEach { $0.removeFromSuperview() }
+
+        let buttonSize: CGFloat = sidebarVisible ? 34 : 44
+        let leading: CGFloat = sidebarVisible
+            ? RemoteWindowLayout.sidebarWidth - RemoteWindowLayout.sidebarInset - buttonSize
+            : 92
+        let top: CGFloat = sidebarVisible ? 11 : 9
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: sidebarVisible ? "패널 숨기기" : "패널 보기") ?? NSImage(),
+            target: RemoteSidebarToggleTarget.shared,
+            action: #selector(RemoteSidebarToggleTarget.toggleSidebar)
+        )
+        button.imagePosition = .imageOnly
+        button.bezelStyle = .regularSquare
+        button.isBordered = true
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.toolTip = sidebarVisible ? "패널 숨기기" : "패널 보기"
+        button.contentTintColor = .labelColor
+        button.wantsLayer = true
+        button.layer?.cornerRadius = buttonSize / 2
+        button.layer?.masksToBounds = true
+
+        let overlay = NSView()
+        overlay.identifier = overlayIdentifier
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.wantsLayer = true
+        overlay.layer?.zPosition = 1_000
+        overlay.addSubview(button)
+        frameView.addSubview(overlay, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: frameView.leadingAnchor, constant: leading),
+            overlay.topAnchor.constraint(equalTo: frameView.topAnchor, constant: top),
+            overlay.widthAnchor.constraint(equalToConstant: buttonSize),
+            overlay.heightAnchor.constraint(equalToConstant: buttonSize),
+            button.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            button.topAnchor.constraint(equalTo: overlay.topAnchor),
+            button.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+        ])
+    }
+}
+
+final class RemoteSidebarToggleTarget: NSObject {
+    static let shared = RemoteSidebarToggleTarget()
+
+    @objc func toggleSidebar() {
+        NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar, object: nil)
     }
 }

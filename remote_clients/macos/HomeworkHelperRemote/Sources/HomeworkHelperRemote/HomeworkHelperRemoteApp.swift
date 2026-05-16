@@ -363,7 +363,7 @@ struct RemoteDashboardView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        HeaderStatusView(viewModel: viewModel, sidebarVisible: $sidebarVisible)
+                        HeaderStatusView(viewModel: viewModel)
 
                         GameSectionView(viewModel: viewModel)
 
@@ -375,11 +375,11 @@ struct RemoteDashboardView: View {
                             BeholderIncidentSummaryView(incidents: viewModel.beholderIncidents)
                         }
                     }
+                    .padding(.top, RemoteWindowLayout.titlebarContentInset)
                     .padding(.horizontal, RemoteWindowLayout.mainContentInset)
                     .padding(.bottom, RemoteWindowLayout.mainContentInset)
-                    .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
+                        .frame(width: RemoteWindowLayout.mainContentWidth(cardCount: viewModel.processes.count), alignment: .topLeading)
                 }
-                .padding(.top, RemoteWindowLayout.titlebarContentInset)
             }
             .contentShape(Rectangle())
             .background(Color.black.opacity(0.001))
@@ -522,6 +522,7 @@ struct RemoteSidebarView: View {
             sidebarAppSection
         }
         .padding(.horizontal, RemoteWindowLayout.sidebarInset)
+        .padding(.top, 58)
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -619,23 +620,13 @@ struct SettingsOpenButton: View {
 
 struct HeaderStatusView: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
-    @Binding var sidebarVisible: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("HomeworkHelper Remote")
-                        .font(.title.bold())
-                }
-                Spacer()
-                Button {
-                    sidebarVisible.toggle()
-                } label: {
-                    Label(sidebarVisible ? "패널 숨기기" : "패널 보기", systemImage: sidebarVisible ? "sidebar.left" : "sidebar.leading")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                Text("HomeworkHelper Remote")
+                    .font(.title.bold())
+                Spacer(minLength: 0)
             }
             .frame(height: 34, alignment: .center)
             if let readiness = viewModel.readiness {

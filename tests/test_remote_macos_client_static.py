@@ -233,6 +233,12 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "sidebarMinimumHeight" in window_accessor
     assert "static let sidebarWidth: CGFloat = 278" in window_accessor
     assert "static let gameCardWidth: CGFloat = 180" in window_accessor
+    assert "static let sectionInset: CGFloat = 14" in window_accessor
+    assert "static func mainColumnWidth" in window_accessor
+    assert "gameViewportWidth(cardCount: cardCount) + (sectionInset * 2)" in window_accessor
+    assert "mainColumnWidth(cardCount: cardCount) + horizontalPadding" in window_accessor
+    assert "static let gameSectionHeight: CGFloat = 192" in window_accessor
+    assert "static let summarySectionHeight: CGFloat = 154" in window_accessor
     assert "max(contentHeight, sidebarHeight)" in window_accessor
     assert "window.minSize = size" in window_accessor
     assert ".windowResizability(.contentSize)" in app
@@ -254,6 +260,7 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "NSVisualEffectView" not in window_accessor
     assert "NSGlassEffectView" in liquid_glass
     assert "NSGlassEffectContainerView" in liquid_glass
+    assert "glass.cornerRadius = 0" in liquid_glass
     assert "glassEffect" in liquid_glass
     assert "GlassEffectContainer" in app
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
@@ -262,7 +269,11 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]" in window_accessor
     assert "window.titlebarAppearsTransparent = true" in window_accessor
     assert "window.titleVisibility = .hidden" in window_accessor
+    assert "window.titlebarSeparatorStyle = .none" in window_accessor
     assert "window.isMovableByWindowBackground = true" in window_accessor
+    assert "HomeworkHelperRemoteSidebarToggleOverlay" in window_accessor
+    assert "RemoteSidebarToggleTarget" in window_accessor
+    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar" in window_accessor
     assert "HomeworkHelperRemoteFrameGlassBackground" not in window_accessor
     assert "RemoteWindowHitTestShield" in liquid_glass
     assert "RemoteHitTestShieldView" in liquid_glass
@@ -272,7 +283,12 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "Color.black.opacity(0.001)" in app
     assert "titlebarContentInset" in window_accessor
     assert ".padding(.top, RemoteWindowLayout.titlebarContentInset)" in app
+    assert "RemoteSidebarView(viewModel: viewModel, sidebarVisible:" not in app
     assert "SidebarChromeRow" not in app
+    assert "SidebarToggleChromeButton" not in app
+    assert "variant: .visibleHide" not in app
+    assert "variant: .hiddenReveal" not in app
+    assert 'Label(sidebarVisible ? "패널 숨기기" : "패널 보기"' not in app
     assert "WindowChromeButton" not in app
     dashboard_source = app.split("struct RemoteDashboardView: View", 1)[1].split("struct GameSectionView: View", 1)[0]
     sidebar_source = app.split("struct RemoteSidebarView: View", 1)[1].split("struct SettingsOpenButton: View", 1)[0]
