@@ -227,6 +227,25 @@ def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "RemoteReadiness" in models
     assert "RemoteLoggingConfigResponse" in models
     assert "RemotePowerSetupResponse" in models
+    assert "updateSystemDarkMode" in sources
+    assert "systemThemeLabel" in sources
+    assert "snapshotStaleReason" in sources
+    assert "baseUrlError" in sources
+    assert "applySuggestedBaseUrl" in sources
+    assert "validateBaseUrl" in sources
+    assert "toUserMessage" in sources
+    assert "headerStatusColor" in sources
+    assert "headerStatusLabel" in sources
+    assert "StaleSnapshotBanner" in sources
+    assert "listState.scrollToItem(0)" in sources
+    assert "시스템 테마" in sources
+    assert "Remote Agent URL은 http:// 또는 https://로 시작해야 합니다." in sources
+    assert "마지막 성공 데이터 표시 중" in sources
+    assert "isLoopbackBaseUrl" in sources
+    assert "looksLikeLoopbackUrl" in sources
+    assert "ADB reverse/로컬 테스트용" in sources
+    assert "PC 활성 세션" in sources
+    assert "활성 모바일 세션" in sources
 
 
 def test_android_usage_stats_ui_can_query_recent_foreground_app():

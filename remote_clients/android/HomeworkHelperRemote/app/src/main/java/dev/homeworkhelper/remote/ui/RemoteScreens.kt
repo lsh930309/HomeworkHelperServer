@@ -3,6 +3,7 @@ package dev.homeworkhelper.remote.ui
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
@@ -49,6 +51,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import dev.homeworkhelper.remote.ReadinessSection
 import dev.homeworkhelper.remote.RemoteAppState
 import dev.homeworkhelper.remote.RemoteAppViewModel
@@ -65,6 +70,14 @@ import dev.homeworkhelper.remote.formatDuration
 @Composable
 fun RemoteApp(viewModel: RemoteAppViewModel) {
     val state = viewModel.state
+    val darkTheme = isSystemInDarkTheme()
+    val listState = rememberLazyListState()
+    LaunchedEffect(darkTheme) {
+        viewModel.updateSystemDarkMode(darkTheme)
+    }
+    LaunchedEffect(state.selectedTab) {
+        listState.scrollToItem(0)
+    }
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -80,8 +93,10 @@ fun RemoteApp(viewModel: RemoteAppViewModel) {
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
                 .padding(padding)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -89,6 +104,9 @@ fun RemoteApp(viewModel: RemoteAppViewModel) {
             item { HeaderCard(state, viewModel) }
             if (state.offline || state.authRejected || state.partialErrors.isNotEmpty()) {
                 item { DiagnosticBanner(state) }
+            }
+            if (state.snapshotIsStale) {
+                item { StaleSnapshotBanner(state) }
             }
             when (state.selectedTab) {
                 RemoteTab.DASHBOARD -> {
@@ -115,13 +133,14 @@ fun RemoteApp(viewModel: RemoteAppViewModel) {
                     }
                 }
                 RemoteTab.LINKS -> {
-                    item { AndroidPcLinkForm(state, viewModel) }
-                    item { UsageStatsCard(state, viewModel) }
                     if (state.gameLinks.isEmpty()) {
-                        item { EmptyCard("Android-PC 연결", "PC process ID와 Android package name을 연결하면 모바일 플레이 세션을 기록할 수 있습니다.") }
+                        item { EmptyCard("연결된 앱 없음", "PC process ID와 Android package name을 연결하면 모바일 플레이 세션을 기록할 수 있습니다.") }
                     } else {
+                        item { SectionTitle("연결된 앱") }
                         items(state.gameLinks, key = { it.id }) { link -> GameLinkCard(link, viewModel) }
                     }
+                    item { UsageStatsCard(state, viewModel) }
+                    item { AndroidPcLinkForm(state, viewModel) }
                 }
                 RemoteTab.SETTINGS -> {
                     item { SettingsCard(state, viewModel) }
@@ -149,12 +168,18 @@ private fun HeaderCard(state: RemoteAppState, viewModel: RemoteAppViewModel) {
                     contentAlignment = Alignment.Center,
                 ) { Text("HH", color = MaterialTheme.colorScheme.onPrimaryContainer) }
                 Column(Modifier.weight(1f)) {
-                    Text("HomeworkHelper Remote", style = MaterialTheme.typography.headlineSmall)
+                    Text("HomeworkHelper Remote", style = MaterialTheme.typography.titleLarge)
                     Text("Tailscale-first Android client", style = MaterialTheme.typography.bodySmall)
                 }
-                StatusDot(if (state.isLoading) "yellow" else state.readiness?.tailscaleReadiness?.color ?: "gray")
+                StatusDot(headerStatusColor(state))
             }
             Text(state.message, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${headerStatusLabel(state)} · 시스템 ${state.systemThemeLabel} 모드 추적 중" +
+                    if (state.lastSyncedAtMillis > 0L) " · 마지막 동기화 ${formatClock(state.lastSyncedAtMillis)}" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { viewModel.refresh() }, enabled = !state.isLoading) { Text("새로고침") }
                 OutlinedButton(onClick = { viewModel.openTailscale() }) { Text(if (state.tailscaleInstalled) "Tailscale 열기" else "Tailscale 설치") }
@@ -167,12 +192,28 @@ private fun HeaderCard(state: RemoteAppState, viewModel: RemoteAppViewModel) {
 @Composable
 private fun DiagnosticBanner(state: RemoteAppState) {
     val text = when {
+        state.baseUrlError.isNotBlank() -> state.baseUrlError
         state.authRejected -> "인증이 거부되었습니다. 토큰 갱신 또는 pairing code로 복구하세요."
+        state.offline && looksLikeLoopbackUrl(state.baseUrl) -> "현재 URL은 ADB reverse/로컬 테스트용입니다. 실사용은 Tailscale 추천 URL을 적용하거나 adb reverse를 다시 연결하세요."
         state.offline -> "Remote Agent에 닿지 않습니다. Tailscale 연결, URL, 서버 실행 상태를 확인하세요."
         else -> "일부 API가 실패했습니다: ${state.partialErrors.take(2).joinToString(" / ")}"
     }
     Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
         Text(text, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+    }
+}
+
+@Composable
+private fun StaleSnapshotBanner(state: RemoteAppState) {
+    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("마지막 성공 데이터 표시 중", color = MaterialTheme.colorScheme.onTertiaryContainer)
+            Text(
+                state.snapshotStaleReason,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -185,6 +226,12 @@ private fun ConnectionCard(state: RemoteAppState, viewModel: RemoteAppViewModel)
                 value = state.baseUrl,
                 onValueChange = viewModel::updateBaseUrl,
                 label = { Text("Remote Agent URL") },
+                isError = state.baseUrlError.isNotBlank(),
+                supportingText = if (state.baseUrlError.isNotBlank()) {
+                    { Text(state.baseUrlError) }
+                } else {
+                    { Text("Tailscale IP 또는 Remote Agent 주소를 입력하세요.") }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -234,7 +281,7 @@ private fun ReadinessCard(state: RemoteAppState, viewModel: RemoteAppViewModel) 
             } else {
                 ReadinessRow("Tailscale", readiness.tailscaleReadiness)
                 readiness.tailscaleReadiness.suggestedBaseUrls.firstOrNull()?.let { suggested ->
-                    AssistChip(onClick = { viewModel.updateBaseUrl(suggested) }, label = { Text("추천 URL 적용: $suggested") })
+                    AssistChip(onClick = { viewModel.applySuggestedBaseUrl(suggested) }, label = { Text("추천 URL 적용: $suggested") })
                 }
                 ReadinessRow("Remote 인증", readiness.remoteConnectivity)
                 ReadinessRow("서버 모드", readiness.serverModeReadiness)
@@ -242,8 +289,8 @@ private fun ReadinessCard(state: RemoteAppState, viewModel: RemoteAppViewModel) 
                 ReadinessRow("Beholder", readiness.beholderHealth)
             }
             state.status?.let { current ->
-                Text("API ${current.apiVersion} · 게임 ${current.processCount}개 / 숏컷 ${current.shortcutCount}개 / 활성 세션 ${current.activeSessionCount}개")
-                Text("Android-PC 연결: ${if (current.gameLinks) "${state.gameLinks.size}개" else "미지원"} · 모바일 세션: ${if (current.mobileSessions) "${state.mobileSessions.size}개" else "미지원"}")
+                Text("API ${current.apiVersion} · 게임 ${current.processCount}개 / 숏컷 ${current.shortcutCount}개 / PC 활성 세션 ${current.activeSessionCount}개")
+                Text("Android-PC 연결: ${if (current.gameLinks) "${state.gameLinks.size}개" else "미지원"} · 활성 모바일 세션: ${if (current.mobileSessions) "${state.mobileSessions.size}개" else "미지원"}")
             }
         }
     }
@@ -272,10 +319,14 @@ private fun PowerQuickActionsCard(state: RemoteAppState, viewModel: RemoteAppVie
                 Text("전원 상태: ${power.status} · 지원 명령: ${if (power.supportedActions.isEmpty()) "전체" else power.supportedActions.joinToString(", ")}")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { viewModel.powerCommand("wake") }, enabled = viewModel.isPowerActionEnabled("wake")) { Text("켜기") }
-                Button(onClick = { viewModel.powerCommand("sleep") }, enabled = viewModel.isPowerActionEnabled("sleep")) { Text("절전") }
-                Button(onClick = { viewModel.powerCommand("restart") }, enabled = viewModel.isPowerActionEnabled("restart")) { Text("재시작") }
-                Button(onClick = { viewModel.powerCommand("shutdown") }, enabled = viewModel.isPowerActionEnabled("shutdown")) { Text("끄기") }
+                if (power == null || power.configured.not()) {
+                    OutlinedButton(onClick = { viewModel.updateSelectedTab(RemoteTab.SETTINGS) }) { Text("전원 설정 열기") }
+                } else {
+                    Button(onClick = { viewModel.powerCommand("wake") }, enabled = viewModel.isPowerActionEnabled("wake")) { Text("켜기") }
+                    Button(onClick = { viewModel.powerCommand("sleep") }, enabled = viewModel.isPowerActionEnabled("sleep")) { Text("절전") }
+                    Button(onClick = { viewModel.powerCommand("restart") }, enabled = viewModel.isPowerActionEnabled("restart")) { Text("재시작") }
+                    Button(onClick = { viewModel.powerCommand("shutdown") }, enabled = viewModel.isPowerActionEnabled("shutdown")) { Text("끄기") }
+                }
             }
         }
     }
@@ -379,7 +430,7 @@ private fun ShortcutCard(shortcut: RemoteShortcut, viewModel: RemoteAppViewModel
 private fun AndroidPcLinkForm(state: RemoteAppState, viewModel: RemoteAppViewModel) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Android-PC 연결", style = MaterialTheme.typography.titleMedium)
+            Text("새 Android-PC 연결 추가", style = MaterialTheme.typography.titleMedium)
             Text("PC process와 Android package를 연결하면 같은 대시보드에 모바일 세션이 기록됩니다.")
             OutlinedTextField(
                 value = state.gameLinkProcessId,
@@ -415,6 +466,8 @@ private fun UsageStatsCard(state: RemoteAppState, viewModel: RemoteAppViewModel)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { viewModel.launchAndroidPackage() }) { Text("앱 실행") }
                 OutlinedButton(onClick = { viewModel.openUsageAccessSettings() }) { Text("Usage 권한") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { viewModel.syncUsageStatsSessions() }, enabled = state.gameLinks.isNotEmpty()) { Text("Usage 동기화") }
                 OutlinedButton(onClick = { viewModel.probeRecentUsage() }) { Text("최근 앱") }
             }
@@ -432,8 +485,10 @@ private fun GameLinkCard(link: RemoteGameLink, viewModel: RemoteAppViewModel) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(link.pcDisplayName.ifBlank { link.pcProcessId }, style = MaterialTheme.typography.titleSmall)
                 Text(link.androidPackageName, style = MaterialTheme.typography.bodySmall)
-                Text("sync: ${link.syncStrategy}", style = MaterialTheme.typography.bodySmall)
-                if (link.platformAccountHint.isNotBlank()) Text(link.platformAccountHint, style = MaterialTheme.typography.bodySmall)
+                Text("동기화: ${link.syncStrategy.ifBlank { "manual" }}", style = MaterialTheme.typography.bodySmall)
+                if (link.platformAccountHint.isNotBlank() && link.platformAccountHint != "null") {
+                    Text(link.platformAccountHint, style = MaterialTheme.typography.bodySmall)
+                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { viewModel.launchAndroidPackage(link.androidPackageName) }) { Text("Android 실행") }
@@ -452,6 +507,7 @@ private fun SettingsCard(state: RemoteAppState, viewModel: RemoteAppViewModel) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("앱 설정", style = MaterialTheme.typography.titleMedium)
+            Text("시스템 테마: ${state.systemThemeLabel} · 앱 색상과 상태바가 자동으로 따라갑니다.", style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("플레이 요약 표시", modifier = Modifier.weight(1f))
                 Switch(checked = state.showPlaySummary, onCheckedChange = viewModel::updateShowPlaySummary)
@@ -494,7 +550,10 @@ private fun PowerSettingsCard(state: RemoteAppState, viewModel: RemoteAppViewMod
                 if (setup.message.isNotBlank()) Text(setup.message, style = MaterialTheme.typography.bodySmall)
             }
             state.powerConfigResponse?.let { response ->
-                Text("설정 파일: ${response.configPath}")
+                Text("설정 파일: ${fileName(response.configPath).ifBlank { "remote_power_config.json" }}")
+                if (response.configPath.isNotBlank()) {
+                    Text("경로: ${response.configPath}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Text("지원 명령: ${if (response.supportedActions.isEmpty()) "없음" else response.supportedActions.joinToString(", ")}")
             }
             PowerField("SmartThings device id", state.powerConfig.smartthingsDeviceId) { viewModel.updatePowerConfig(state.powerConfig.copy(smartthingsDeviceId = it)) }
@@ -619,6 +678,34 @@ private fun StatusDot(color: String) {
             .background(statusColor(color), CircleShape),
     )
 }
+
+private fun headerStatusColor(state: RemoteAppState): String = when {
+    state.isLoading -> "yellow"
+    state.authRejected -> "red"
+    state.offline || state.baseUrlError.isNotBlank() -> "red"
+    state.snapshotIsStale || state.partialErrors.isNotEmpty() -> "yellow"
+    state.status != null -> "green"
+    else -> state.readiness?.tailscaleReadiness?.color ?: "gray"
+}
+
+private fun headerStatusLabel(state: RemoteAppState): String = when {
+    state.isLoading -> "동기화 중"
+    state.authRejected -> "인증 확인 필요"
+    state.offline || state.baseUrlError.isNotBlank() -> "연결 확인 필요"
+    state.snapshotIsStale -> "마지막 스냅샷"
+    state.partialErrors.isNotEmpty() -> "부분 동기화"
+    state.status != null -> "동기화 정상"
+    else -> "대기"
+}
+
+private fun formatClock(epochMillis: Long): String =
+    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMillis))
+
+private fun fileName(path: String): String =
+    path.replace('\\', '/').substringAfterLast('/')
+
+private fun looksLikeLoopbackUrl(value: String): Boolean =
+    value.contains("127.0.0.1") || value.contains("localhost", ignoreCase = true) || value.contains("10.0.2.2")
 
 @Composable
 private fun statusColor(color: String): Color = when (color) {

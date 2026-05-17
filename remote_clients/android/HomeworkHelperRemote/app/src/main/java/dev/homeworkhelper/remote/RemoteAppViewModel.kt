@@ -10,12 +10,16 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.net.MalformedURLException
+import java.net.SocketTimeoutException
+import java.net.URL
+import java.net.UnknownHostException
 
 enum class RemoteTab(val label: String, val symbol: String) {
-    DASHBOARD("홈", "◆"),
-    LIBRARY("게임", "◈"),
-    LINKS("연결", "◎"),
-    SETTINGS("설정", "◇"),
+    DASHBOARD("홈", "⌂"),
+    LIBRARY("게임", "▶"),
+    LINKS("연결", "⛓"),
+    SETTINGS("설정", "⚙"),
 }
 
 data class RemoteAppState(
@@ -26,8 +30,13 @@ data class RemoteAppState(
     val selectedTab: RemoteTab = RemoteTab.DASHBOARD,
     val isLoading: Boolean = false,
     val message: String = "Remote Agent에 연결하세요.",
+    val baseUrlError: String = "",
     val offline: Boolean = false,
     val authRejected: Boolean = false,
+    val snapshotStaleReason: String = "",
+    val lastSuccessfulBaseUrl: String = "",
+    val lastSyncedAtMillis: Long = 0L,
+    val systemDarkMode: Boolean = false,
     val status: RemoteStatus? = null,
     val capabilities: RemoteCapabilities? = null,
     val readiness: RemoteReadiness? = null,
@@ -57,6 +66,9 @@ data class RemoteAppState(
     val iconCacheRevision: Int = 0,
 ) {
     val tokenPresent: Boolean get() = token.isNotBlank()
+    val hasSnapshot: Boolean get() = status != null
+    val snapshotIsStale: Boolean get() = snapshotStaleReason.isNotBlank()
+    val systemThemeLabel: String get() = if (systemDarkMode) "다크" else "라이트"
 }
 
 data class UsageSyncResult(
@@ -101,7 +113,22 @@ class RemoteAppViewModel(
         )
     }
 
-    fun updateBaseUrl(value: String) { state = state.copy(baseUrl = value) }
+    fun updateBaseUrl(value: String) {
+        val validation = validateBaseUrl(value)
+        val normalizedNew = normalizedBaseUrlOrNull(value)
+        val normalizedLast = normalizedBaseUrlOrNull(state.lastSuccessfulBaseUrl)
+        val staleReason = if (
+            state.hasSnapshot &&
+            normalizedNew != null &&
+            normalizedLast != null &&
+            normalizedNew != normalizedLast
+        ) {
+            "서버 URL이 변경되어 현재 목록은 ${state.lastSuccessfulBaseUrl}에서 받은 마지막 스냅샷입니다."
+        } else {
+            state.snapshotStaleReason
+        }
+        state = state.copy(baseUrl = value, baseUrlError = validation.orEmpty(), snapshotStaleReason = staleReason)
+    }
     fun updateToken(value: String) { state = state.copy(token = value) }
     fun updateDeviceName(value: String) { state = state.copy(deviceName = value) }
     fun updatePairingCode(value: String) { state = state.copy(pairingCode = value.filter(Char::isDigit).take(6)) }
@@ -111,6 +138,9 @@ class RemoteAppViewModel(
     fun updateGameLinkPackageName(value: String) { state = state.copy(gameLinkPackageName = value) }
     fun updateSshPublicKey(value: String) { state = state.copy(sshPublicKey = value) }
     fun updateShowPlaySummary(value: Boolean) { state = state.copy(showPlaySummary = value) }
+    fun updateSystemDarkMode(value: Boolean) {
+        if (state.systemDarkMode != value) state = state.copy(systemDarkMode = value)
+    }
     fun updateRefreshInterval(value: String) {
         state = state.copy(refreshIntervalSeconds = (value.toIntOrNull() ?: state.refreshIntervalSeconds).coerceIn(1, 60))
     }
@@ -118,6 +148,10 @@ class RemoteAppViewModel(
     fun updatePowerConfig(config: RemotePowerConfigPayload) { state = state.copy(powerConfig = config) }
 
     fun saveConnection(nextMessage: String = "설정을 저장했습니다.") {
+        validateCurrentBaseUrl()?.let { validation ->
+            state = state.copy(baseUrlError = validation, message = validation)
+            return
+        }
         persistConnection()
         state = state.copy(message = nextMessage)
     }
@@ -133,14 +167,45 @@ class RemoteAppViewModel(
         state = state.copy(token = "", authRejected = false, message = "로컬 토큰을 삭제했습니다.")
     }
 
+    fun applySuggestedBaseUrl(baseUrl: String) {
+        val validation = validateBaseUrl(baseUrl)
+        if (validation != null) {
+            state = state.copy(baseUrlError = validation, message = validation)
+            return
+        }
+        val changedFromSnapshot = state.hasSnapshot &&
+            normalizedBaseUrlOrNull(baseUrl) != normalizedBaseUrlOrNull(state.lastSuccessfulBaseUrl)
+        state = state.copy(
+            baseUrl = normalizedBaseUrlOrNull(baseUrl) ?: baseUrl,
+            baseUrlError = "",
+            snapshotStaleReason = if (changedFromSnapshot) {
+                "추천 URL을 적용했습니다. 새로고침 전까지 기존 데이터는 이전 서버 스냅샷입니다."
+            } else {
+                state.snapshotStaleReason
+            },
+            message = if (state.tokenPresent) {
+                "추천 URL을 적용했습니다. 서버가 바뀐 경우 pairing code로 다시 인증하세요."
+            } else {
+                "추천 URL을 적용했습니다. pairing code로 인증하세요."
+            },
+        )
+    }
+
     fun refresh(includeDevices: Boolean = state.tokenPresent) {
         val current = state
-        if (current.baseUrl.isBlank()) {
-            state = current.copy(message = "Remote Agent URL을 입력하세요.")
+        val validation = validateBaseUrl(current.baseUrl)
+        if (validation != null) {
+            state = current.copy(
+                baseUrlError = validation,
+                offline = true,
+                authRejected = false,
+                message = validation,
+                snapshotStaleReason = staleReasonForFailure(current),
+            )
             return
         }
         scope.launch {
-            state = state.copy(isLoading = true, offline = false, authRejected = false)
+            state = state.copy(isLoading = true, baseUrlError = "", offline = false, authRejected = false)
             runCatching {
                 withContext(Dispatchers.IO) {
                     repository.fetchSnapshot(current.baseUrl, current.token, includeDevices)
@@ -168,14 +233,21 @@ class RemoteAppViewModel(
                     usageAccessGranted = androidIntegration.hasUsageAccess(),
                     tailscaleInstalled = androidIntegration.isTailscaleInstalled(),
                     partialErrors = snapshot.partialErrors,
+                    snapshotStaleReason = "",
+                    lastSuccessfulBaseUrl = normalizedBaseUrlOrNull(current.baseUrl) ?: current.baseUrl.trim(),
+                    lastSyncedAtMillis = System.currentTimeMillis(),
                     message = refreshMessage(snapshot),
                 )
             }.onFailure { failure ->
+                val friendly = failure.toUserMessage(current)
                 state = state.copy(
                     isLoading = false,
                     offline = !failure.isAuthFailure(),
                     authRejected = failure.isAuthFailure(),
-                    message = failure.message ?: "연결 실패",
+                    usageAccessGranted = androidIntegration.hasUsageAccess(),
+                    tailscaleInstalled = androidIntegration.isTailscaleInstalled(),
+                    snapshotStaleReason = staleReasonForFailure(state),
+                    message = friendly,
                 )
             }
         }
@@ -207,6 +279,10 @@ class RemoteAppViewModel(
 
     fun savePowerConfig() {
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching {
@@ -219,12 +295,16 @@ class RemoteAppViewModel(
                     message = "전원 설정을 저장했습니다. 지원 명령: ${if (response.supportedActions.isEmpty()) "없음" else response.supportedActions.joinToString(", ")}",
                 )
                 refresh(includeDevices = state.tokenPresent)
-            }.onFailure { state = state.copy(isLoading = false, message = it.message ?: "전원 설정 저장 실패") }
+            }.onFailure { state = state.copy(isLoading = false, message = it.toUserMessage(current)) }
         }
     }
 
     fun confirmPairing() {
         val current = state
+        validateCurrentBaseUrl()?.let { validation ->
+            state = current.copy(baseUrlError = validation, message = validation)
+            return
+        }
         if (current.pairingCode.length != 6) {
             state = current.copy(message = "6자리 pairing code를 입력하세요.")
             return
@@ -240,12 +320,16 @@ class RemoteAppViewModel(
                 persistConnection()
                 state = state.copy(message = "${paired.deviceName} 페어링 완료")
                 refresh(includeDevices = true)
-            }.onFailure { state = state.copy(isLoading = false, authRejected = it.isAuthFailure(), message = it.message ?: "페어링 실패") }
+            }.onFailure { state = state.copy(isLoading = false, authRejected = it.isAuthFailure(), message = it.toUserMessage(current)) }
         }
     }
 
     fun refreshToken() {
         val current = state
+        validateCurrentBaseUrl()?.let { validation ->
+            state = current.copy(baseUrlError = validation, message = validation)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching { withContext(Dispatchers.IO) { repository.refreshToken(current.baseUrl, current.token) } }
@@ -255,7 +339,7 @@ class RemoteAppViewModel(
                     state = state.copy(message = "${refreshed.deviceName} 토큰을 갱신했습니다.")
                     refresh(includeDevices = true)
                 }
-                .onFailure { state = state.copy(isLoading = false, authRejected = it.isAuthFailure(), message = it.message ?: "토큰 갱신 실패") }
+                .onFailure { state = state.copy(isLoading = false, authRejected = it.isAuthFailure(), message = it.toUserMessage(current)) }
         }
     }
 
@@ -300,6 +384,10 @@ class RemoteAppViewModel(
             return
         }
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching {
@@ -339,7 +427,7 @@ class RemoteAppViewModel(
                     },
                 )
                 refresh(includeDevices = state.tokenPresent)
-            }.onFailure { state = state.copy(isLoading = false, message = it.message ?: "UsageStats 세션 동기화 실패") }
+            }.onFailure { state = state.copy(isLoading = false, message = it.toUserMessage(current)) }
         }
     }
 
@@ -356,6 +444,10 @@ class RemoteAppViewModel(
     fun createGameLink() {
         val processId = state.gameLinkProcessId.trim()
         val packageName = state.gameLinkPackageName.trim()
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         if (processId.isBlank() || packageName.isBlank()) {
             state = state.copy(message = "PC process ID와 Android package name을 입력하세요.")
             return
@@ -397,25 +489,33 @@ class RemoteAppViewModel(
 
     fun saveRemoteLogging(enabled: Boolean) {
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching {
                 withContext(Dispatchers.IO) { repository.saveRemoteLogging(current.baseUrl, current.token, enabled) }
             }.onSuccess { config ->
                 state = state.copy(isLoading = false, loggingConfig = config, message = if (config.enabled) "Remote diagnostic logging을 켰습니다." else "Remote diagnostic logging을 껐습니다.")
-            }.onFailure { state = state.copy(isLoading = false, message = it.message ?: "로깅 설정 실패") }
+            }.onFailure { state = state.copy(isLoading = false, message = it.toUserMessage(current)) }
         }
     }
 
     fun probeSmartThingsDevices() {
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching {
                 withContext(Dispatchers.IO) { repository.smartThingsDevices(current.baseUrl, current.token, current.powerConfig.smartthingsCliPath) }
             }.onSuccess { response ->
                 state = state.copy(isLoading = false, smartThingsProbe = response, message = response.message.ifBlank { "SmartThings device ${response.deviceCandidates.size}개를 확인했습니다." })
-            }.onFailure { state = state.copy(isLoading = false, message = it.message ?: "SmartThings device 확인 실패") }
+            }.onFailure { state = state.copy(isLoading = false, message = it.toUserMessage(current)) }
         }
     }
 
@@ -426,6 +526,10 @@ class RemoteAppViewModel(
             return
         }
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching {
@@ -433,12 +537,16 @@ class RemoteAppViewModel(
             }.onSuccess { response ->
                 state = state.copy(isLoading = false, sshPublicKey = "", message = response.message.ifBlank { "SSH public key 등록 상태를 확인했습니다." })
                 refresh(includeDevices = state.tokenPresent)
-            }.onFailure { state = state.copy(isLoading = false, message = it.message ?: "SSH key 등록 실패") }
+            }.onFailure { state = state.copy(isLoading = false, message = it.toUserMessage(current)) }
         }
     }
 
     private fun command(refreshAfter: Boolean = false, block: RemoteAppState.() -> RemoteCommandResult) {
         val current = state
+        validateCurrentBaseUrl()?.let {
+            state = state.copy(baseUrlError = it, message = it)
+            return
+        }
         scope.launch {
             state = state.copy(isLoading = true)
             runCatching { withContext(Dispatchers.IO) { current.block() } }
@@ -446,12 +554,22 @@ class RemoteAppViewModel(
                     state = state.copy(isLoading = false, message = result.message.ifBlank { result.status })
                     if (refreshAfter) refresh(includeDevices = state.tokenPresent)
                 }
-                .onFailure { state = state.copy(isLoading = false, authRejected = it.isAuthFailure(), offline = !it.isAuthFailure(), message = it.message ?: "명령 실패") }
+                .onFailure {
+                    state = state.copy(
+                        isLoading = false,
+                        authRejected = it.isAuthFailure(),
+                        offline = !it.isAuthFailure(),
+                        snapshotStaleReason = staleReasonForFailure(state),
+                        message = it.toUserMessage(current),
+                    )
+                }
         }
     }
 
+    private fun validateCurrentBaseUrl(): String? = validateBaseUrl(state.baseUrl)
+
     private fun persistConnection() {
-        preferences.saveConnection(state.baseUrl, state.deviceName)
+        preferences.saveConnection(normalizedBaseUrlOrNull(state.baseUrl) ?: state.baseUrl.trim(), state.deviceName)
         tokenStore.saveToken(state.token)
         preferences.clearLegacyToken()
     }
@@ -462,6 +580,73 @@ class RemoteAppViewModel(
 }
 
 private fun Throwable.isAuthFailure(): Boolean = message?.contains("HTTP 401") == true
+
+private fun Throwable.toUserMessage(state: RemoteAppState): String {
+    val raw = message.orEmpty()
+    return when {
+        isAuthFailure() -> {
+            if (
+                state.lastSuccessfulBaseUrl.isNotBlank() &&
+                normalizedBaseUrlOrNull(state.baseUrl) != normalizedBaseUrlOrNull(state.lastSuccessfulBaseUrl)
+            ) {
+                "현재 토큰이 이 서버에서 거부되었습니다. Tailscale URL을 바꿨다면 pairing code로 다시 페어링하세요."
+            } else {
+                "인증이 거부되었습니다. 토큰 갱신 또는 pairing code로 복구하세요."
+            }
+        }
+        raw.contains("unknown protocol", ignoreCase = true) -> "Remote Agent URL은 http:// 또는 https://로 시작해야 합니다."
+        this is MalformedURLException -> "Remote Agent URL 형식을 확인하세요. 예: http://100.x.y.z:8000"
+        this is UnknownHostException -> "호스트 이름을 찾지 못했습니다. Tailscale 주소와 네트워크 상태를 확인하세요."
+        this is SocketTimeoutException -> "서버 응답 시간이 초과되었습니다. Remote Agent 실행 상태와 Tailscale 연결을 확인하세요."
+        isLoopbackBaseUrl(state.baseUrl) && (
+            raw.contains("Failed to connect", ignoreCase = true) ||
+                raw.contains("Connection refused", ignoreCase = true)
+            ) -> {
+            "현재 URL은 ADB reverse/로컬 테스트용입니다. 실사용은 Tailscale 추천 URL을 적용하거나 adb reverse를 다시 연결하세요."
+        }
+        raw.contains("Failed to connect", ignoreCase = true) ||
+            raw.contains("Connection refused", ignoreCase = true) -> {
+            "Remote Agent에 연결하지 못했습니다. 현재 URL(${state.baseUrl})과 서버 실행 상태를 확인하세요."
+        }
+        raw.isBlank() -> "명령을 완료하지 못했습니다. 연결 상태를 확인하세요."
+        else -> raw.take(140)
+    }
+}
+
+private fun staleReasonForFailure(state: RemoteAppState): String =
+    if (state.hasSnapshot) {
+        "새로고침에 실패했습니다. 화면의 목록과 요약은 마지막 성공 동기화 데이터입니다."
+    } else {
+        state.snapshotStaleReason
+    }
+
+private fun validateBaseUrl(value: String): String? {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return "Remote Agent URL을 입력하세요."
+    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+        return "Remote Agent URL은 http:// 또는 https://로 시작해야 합니다."
+    }
+    return runCatching {
+        val url = URL(trimmed)
+        if (url.host.isNullOrBlank()) "Remote Agent URL에 host가 필요합니다." else null
+    }.getOrElse { "Remote Agent URL 형식을 확인하세요. 예: http://100.x.y.z:8000" }
+}
+
+private fun normalizedBaseUrlOrNull(value: String): String? =
+    runCatching {
+        val url = URL(value.trim())
+        val protocol = url.protocol.lowercase()
+        val host = url.host.lowercase()
+        if ((protocol != "http" && protocol != "https") || host.isBlank()) return@runCatching null
+        val port = if (url.port > 0) ":${url.port}" else ""
+        "$protocol://$host$port${url.path.trimEnd('/')}"
+    }.getOrNull()
+
+private fun isLoopbackBaseUrl(value: String): Boolean =
+    runCatching {
+        val host = URL(value.trim()).host.lowercase()
+        host == "127.0.0.1" || host == "localhost" || host == "10.0.2.2"
+    }.getOrDefault(false)
 
 fun formatDuration(seconds: Double): String {
     val minutes = (seconds / 60).toInt()
