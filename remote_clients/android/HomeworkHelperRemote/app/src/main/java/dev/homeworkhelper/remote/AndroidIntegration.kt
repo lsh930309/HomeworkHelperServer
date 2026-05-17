@@ -41,10 +41,15 @@ class AndroidIntegration(private val context: Context) {
 
     fun isTailscaleInstalled(): Boolean = isPackageLaunchable(TAILSCALE_PACKAGE)
 
-    fun openTailscaleOrStore(): Boolean {
-        if (launchPackage(TAILSCALE_PACKAGE)) return true
-        return openUrl("market://details?id=$TAILSCALE_PACKAGE") ||
+    fun openTailscale(): Boolean = launchPackage(TAILSCALE_PACKAGE)
+
+    fun openTailscaleInstallPage(): Boolean =
+        openUrl("market://details?id=$TAILSCALE_PACKAGE") ||
             openUrl("https://play.google.com/store/apps/details?id=$TAILSCALE_PACKAGE")
+
+    fun openTailscaleOrStore(): Boolean {
+        if (openTailscale()) return true
+        return openTailscaleInstallPage()
     }
 
     fun openUrl(url: String): Boolean {
@@ -72,6 +77,13 @@ class AndroidIntegration(private val context: Context) {
 
     fun openUsageAccessSettings() {
         context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.parse("package:${context.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
     }
 
     fun recentForegroundApp(lookbackMillis: Long = DEFAULT_USAGE_LOOKBACK_MILLIS): AndroidUsageSnapshot? {

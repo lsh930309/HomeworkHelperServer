@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 class RemoteApiClient(
     private val baseUrl: String,
@@ -11,8 +12,8 @@ class RemoteApiClient(
 ) {
     fun status(): RemoteStatus {
         val json = JSONObject(get("remote/status"))
-        val counts = json.getJSONObject("counts")
-        val capabilities = json.getJSONObject("capabilities")
+        val counts = json.optJSONObject("counts") ?: JSONObject()
+        val capabilities = json.optJSONObject("capabilities") ?: JSONObject()
         val power = json.optJSONObject("power")
         return RemoteStatus(
             apiVersion = json.optString("remote_api_version"),
@@ -27,20 +28,16 @@ class RemoteApiClient(
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
-            power = power?.let {
-                RemotePowerStatus(
-                    configured = it.optBoolean("configured"),
-                    status = it.optString("status", "unknown"),
-                    supportedActions = it.optJSONArray("supported_actions")?.toStringSet().orEmpty(),
-                    targetHost = it.optString("target_host"),
-                )
-            },
+            tailscaleDiscovery = capabilities.optBoolean("tailscale_discovery"),
+            readiness = capabilities.optBoolean("readiness"),
+            localStoreHealth = capabilities.optBoolean("local_store_health"),
+            power = power?.toRemotePowerStatus(),
         )
     }
 
     fun capabilities(): RemoteCapabilities {
         val json = JSONObject(get("remote/capabilities"))
-        val capabilities = json.getJSONObject("capabilities")
+        val capabilities = json.optJSONObject("capabilities") ?: JSONObject()
         return RemoteCapabilities(
             apiVersion = json.optString("remote_api_version"),
             processLaunch = capabilities.optBoolean("process_launch"),
@@ -53,12 +50,43 @@ class RemoteApiClient(
             powerControl = capabilities.optBoolean("power_control"),
             authRequired = capabilities.optBoolean("auth_required"),
             pairing = capabilities.optBoolean("pairing"),
+            tailscaleDiscovery = capabilities.optBoolean("tailscale_discovery"),
+            readiness = capabilities.optBoolean("readiness"),
+            localStoreHealth = capabilities.optBoolean("local_store_health"),
         )
+    }
+
+    fun readiness(): RemoteReadiness = JSONObject(get("remote/readiness")).toRemoteReadiness()
+
+    fun remoteLoggingConfig(): RemoteLoggingConfigResponse = JSONObject(get("remote/logging/config")).toRemoteLoggingConfig()
+
+    fun saveRemoteLoggingConfig(enabled: Boolean, path: String = ""): RemoteLoggingConfigResponse {
+        val body = JSONObject().put("enabled", enabled)
+        if (path.isNotBlank()) body.put("path", path)
+        return JSONObject(put("remote/logging/config", body.toString())).toRemoteLoggingConfig()
+    }
+
+    fun ensureServerTailscale(): RemoteTailscaleEnsureResponse =
+        JSONObject(post("remote/tailscale/ensure", "{}")).toRemoteTailscaleEnsureResponse()
+
+    fun powerSetup(): RemotePowerSetupResponse = JSONObject(get("remote/power/setup")).toRemotePowerSetupResponse()
+
+    fun registerPowerSshKey(publicKey: String, label: String = "HomeworkHelper Android Remote"): RemoteSSHKeyRegistrationResponse {
+        val body = JSONObject()
+            .put("public_key", publicKey)
+            .put("label", label)
+            .toString()
+        return JSONObject(post("remote/power/ssh-key", body)).toRemoteSSHKeyRegistrationResponse()
+    }
+
+    fun smartThingsDevices(cliPath: String = ""): RemoteSmartThingsDevicesResponse {
+        val body = JSONObject().put("cli_path", cliPath.ifBlank { JSONObject.NULL }).toString()
+        return JSONObject(post("remote/power/smartthings/devices", body)).toRemoteSmartThingsDevicesResponse()
     }
 
     fun beholderIncidents(): List<RemoteBeholderIncident> {
         val json = JSONObject(get("remote/beholder/incidents"))
-        return json.getJSONArray("incidents").mapObjects { item ->
+        return json.optJSONArray("incidents")?.mapObjects { item ->
             RemoteBeholderIncident(
                 id = item.optInt("id"),
                 severity = item.optString("severity"),
@@ -68,13 +96,13 @@ class RemoteApiClient(
                 riskScore = item.optInt("risk_score"),
                 riskLabels = item.optJSONArray("risk_labels")?.toStringList().orEmpty(),
             )
-        }
+        }.orEmpty()
     }
 
     fun dashboardSummary(): RemoteDashboardSummary {
         val json = JSONObject(get("remote/dashboard/summary"))
-        val range = json.getJSONObject("range")
-        val metrics = json.getJSONObject("metrics")
+        val range = json.optJSONObject("range") ?: JSONObject()
+        val metrics = json.optJSONObject("metrics") ?: JSONObject()
         val topGame = metrics.optJSONObject("top_game")
         val mobileMetrics = json.optJSONObject("mobile_metrics")
         val mobileTopGame = mobileMetrics?.optJSONObject("top_game")
@@ -99,19 +127,7 @@ class RemoteApiClient(
 
     fun gameLinks(): List<RemoteGameLink> {
         val json = JSONObject(get("remote/game-links"))
-        return json.getJSONArray("links").mapObjects { item ->
-            RemoteGameLink(
-                id = item.optString("id"),
-                pcProcessId = item.optString("pc_process_id"),
-                pcDisplayName = item.optString("pc_display_name"),
-                androidPackageName = item.optString("android_package_name"),
-                androidLaunchIntentUri = item.optString("android_launch_intent_uri"),
-                androidStoreUrl = item.optString("android_store_url"),
-                platformAccountHint = item.optString("platform_account_hint"),
-                hoyolabGameId = item.optString("hoyolab_game_id"),
-                syncStrategy = item.optString("sync_strategy", "manual"),
-            )
-        }
+        return json.optJSONArray("links")?.mapObjects { item -> item.toGameLink() }.orEmpty()
     }
 
     fun createGameLink(processId: String, androidPackageName: String, syncStrategy: String = "manual"): RemoteGameLink {
@@ -120,24 +136,12 @@ class RemoteApiClient(
             .put("android_package_name", androidPackageName)
             .put("sync_strategy", syncStrategy)
             .toString()
-        val item = JSONObject(post("remote/game-links", body))
-        return RemoteGameLink(
-            id = item.optString("id"),
-            pcProcessId = item.optString("pc_process_id"),
-            pcDisplayName = item.optString("pc_display_name"),
-            androidPackageName = item.optString("android_package_name"),
-            androidLaunchIntentUri = item.optString("android_launch_intent_uri"),
-            androidStoreUrl = item.optString("android_store_url"),
-            platformAccountHint = item.optString("platform_account_hint"),
-            hoyolabGameId = item.optString("hoyolab_game_id"),
-            syncStrategy = item.optString("sync_strategy", "manual"),
-        )
+        return JSONObject(post("remote/game-links", body)).toGameLink()
     }
-
 
     fun activeMobileSessions(): List<RemoteMobileSession> {
         val json = JSONObject(get("remote/mobile-sessions/active"))
-        return json.getJSONArray("sessions").mapObjects { item -> item.toMobileSession() }
+        return json.optJSONArray("sessions")?.mapObjects { item -> item.toMobileSession() }.orEmpty()
     }
 
     fun powerConfig(): RemotePowerConfigResponse = JSONObject(get("remote/power/config")).toPowerConfigResponse()
@@ -170,15 +174,7 @@ class RemoteApiClient(
         return JSONObject(post("remote/mobile-sessions/end", body)).toMobileSession()
     }
 
-    fun processes(): List<RemoteProcess> = JSONArray(get("remote/processes")).mapObjects { item ->
-        RemoteProcess(
-            id = item.optString("id"),
-            name = item.optString("name"),
-            preferredLaunchType = item.optString("preferred_launch_type", "shortcut"),
-            monitoringPath = item.optString("monitoring_path"),
-            launchPath = item.optString("launch_path"),
-        )
-    }
+    fun processes(): List<RemoteProcess> = JSONArray(get("remote/processes")).mapObjects { item -> item.toRemoteProcess() }
 
     fun shortcuts(): List<RemoteShortcut> = JSONArray(get("remote/shortcuts")).mapObjects { item ->
         RemoteShortcut(
@@ -188,9 +184,9 @@ class RemoteApiClient(
         )
     }
 
-    fun launchProcess(id: String): RemoteCommandResult = command(post("remote/processes/$id/launch", "{}"))
+    fun launchProcess(id: String): RemoteCommandResult = command(post("remote/processes/${pathSegment(id)}/launch", "{}"))
 
-    fun openShortcut(id: String): RemoteCommandResult = command(post("remote/shortcuts/$id/open", "{}"))
+    fun openShortcut(id: String): RemoteCommandResult = command(post("remote/shortcuts/${pathSegment(id)}/open", "{}"))
 
     fun power(action: String): RemoteCommandResult = command(post("remote/power/$action", "{}"))
 
@@ -201,38 +197,26 @@ class RemoteApiClient(
             .put("platform", "android")
             .toString()
         val json = JSONObject(post("remote/pair/confirm", body))
-        return PairingResult(
-            id = json.optString("id"),
-            deviceName = json.optString("name", json.optString("device_name")),
-            platform = json.optString("platform"),
-            token = json.optString("token"),
-        )
+        return json.toPairingResult()
     }
 
-    fun refreshToken(): PairingResult {
-        val json = JSONObject(post("remote/tokens/refresh", "{}"))
-        return PairingResult(
-            id = json.optString("id"),
-            deviceName = json.optString("name", json.optString("device_name")),
-            platform = json.optString("platform"),
-            token = json.optString("token"),
-        )
-    }
+    fun refreshToken(): PairingResult = JSONObject(post("remote/tokens/refresh", "{}")).toPairingResult()
 
     fun devices(): List<RemoteDevice> {
         val json = JSONObject(get("remote/devices"))
-        return json.getJSONArray("devices").mapObjects { item ->
-            RemoteDevice(
-                id = item.optString("id"),
-                deviceName = item.optString("name", item.optString("device_name")),
-                platform = item.optString("platform"),
-                tokenRefreshedAt = item.optString("token_refreshed_at"),
-                revokedAt = item.optString("revoked_at"),
-            )
-        }
+        return json.optJSONArray("devices")?.mapObjects { item -> item.toRemoteDevice() }.orEmpty()
     }
 
-    fun revokeDevice(id: String): Boolean = JSONObject(delete("remote/devices/$id")).optBoolean("revoked")
+    fun revokeDevice(id: String): RevokeDeviceResponse {
+        val json = JSONObject(delete("remote/devices/${pathSegment(id)}"))
+        return RevokeDeviceResponse(
+            revoked = json.optBoolean("revoked"),
+            deviceId = json.optString("device_id"),
+        )
+    }
+
+    fun purgeRevokedDevices(): PurgeDevicesResponse =
+        PurgeDevicesResponse(removed = JSONObject(delete("remote/devices/revoked")).optInt("removed"))
 
     private fun command(body: String): RemoteCommandResult {
         val json = JSONObject(body)
@@ -277,7 +261,119 @@ class RemoteApiClient(
         }
         return text
     }
+
+    private fun pathSegment(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 }
+
+private fun JSONObject.toRemotePowerStatus(): RemotePowerStatus = RemotePowerStatus(
+    configured = optBoolean("configured"),
+    status = optString("status", "unknown"),
+    supportedActions = optJSONArray("supported_actions")?.toStringSet().orEmpty(),
+    targetHost = optString("target_host"),
+)
+
+private fun JSONObject.toRemoteReadiness(): RemoteReadiness = RemoteReadiness(
+    beholderHealth = optJSONObject("beholder_health").toReadinessSection(),
+    remoteConnectivity = optJSONObject("remote_connectivity").toReadinessSection(),
+    serverModeReadiness = optJSONObject("server_mode_readiness").toReadinessSection(),
+    powerReadiness = optJSONObject("power_readiness").toReadinessSection(),
+    tailscaleReadiness = optJSONObject("tailscale_readiness").toReadinessSection(),
+)
+
+private fun JSONObject?.toReadinessSection(): ReadinessSection {
+    val json = this ?: JSONObject()
+    return ReadinessSection(
+        state = json.optString("state", "unknown"),
+        color = json.optString("color", "gray"),
+        message = json.optString("message", "상태 미확인"),
+        activeIncidents = json.optInt("active_incidents"),
+        authRequired = json.optBoolean("auth_required"),
+        supportedActions = json.optJSONArray("supported_actions")?.toStringList().orEmpty(),
+        suggestedBaseUrls = json.optJSONArray("suggested_base_urls")?.toStringList().orEmpty(),
+        tailscaleDetails = json.optJSONObject("details")?.toTailscaleDetails(),
+    )
+}
+
+private fun JSONObject.toTailscaleDetails(): TailscaleDetails = TailscaleDetails(
+    installed = optBoolean("installed"),
+    running = optBoolean("running"),
+    backendState = optString("backend_state", "unknown"),
+    selfIps = optJSONArray("self_ips")?.toStringList().orEmpty(),
+    selfHostname = optString("self_hostname"),
+    message = optString("message"),
+)
+
+private fun JSONObject.toRemoteLoggingConfig(): RemoteLoggingConfigResponse = RemoteLoggingConfigResponse(
+    enabled = optBoolean("enabled"),
+    path = optString("path"),
+)
+
+private fun JSONObject.toRemoteTailscaleEnsureResponse(): RemoteTailscaleEnsureResponse = RemoteTailscaleEnsureResponse(
+    ready = optBoolean("ready"),
+    method = optString("method"),
+    message = optString("message"),
+    installAttempted = optBoolean("install_attempted"),
+    launchAttempted = optBoolean("launch_attempted"),
+)
+
+private fun JSONObject.toRemotePowerSetupResponse(): RemotePowerSetupResponse {
+    val ssh = optJSONObject("ssh_service") ?: JSONObject()
+    val firewall = optJSONObject("firewall") ?: JSONObject()
+    return RemotePowerSetupResponse(
+        hostPlatform = optString("host_platform"),
+        user = optString("user"),
+        authorizedKeysPath = optString("authorized_keys_path"),
+        authorizedKeysExists = optBoolean("authorized_keys_exists"),
+        sshService = RemotePowerSetupService(
+            available = ssh.optBoolean("available"),
+            running = ssh.optBoolean("running"),
+            startType = ssh.optString("start_type"),
+            message = ssh.optString("message"),
+        ),
+        firewall = RemotePowerSetupFirewall(
+            available = firewall.optBoolean("available"),
+            enabled = firewall.optBoolean("enabled"),
+            message = firewall.optString("message"),
+        ),
+        smartthingsCliCandidates = optJSONArray("smartthings_cli_candidates")?.toStringList().orEmpty(),
+        smartthingsReady = optBoolean("smartthings_ready"),
+        message = optString("message"),
+    )
+}
+
+private fun JSONObject.toRemoteSSHKeyRegistrationResponse(): RemoteSSHKeyRegistrationResponse = RemoteSSHKeyRegistrationResponse(
+    registered = optBoolean("registered"),
+    alreadyPresent = optBoolean("already_present"),
+    authorizedKeysPath = optString("authorized_keys_path"),
+    message = optString("message"),
+)
+
+private fun JSONObject.toRemoteSmartThingsDevicesResponse(): RemoteSmartThingsDevicesResponse = RemoteSmartThingsDevicesResponse(
+    available = optBoolean("available"),
+    devices = optJSONArray("devices")?.toStringList().orEmpty(),
+    deviceCandidates = optJSONArray("device_candidates")?.mapObjects { candidate ->
+        RemoteSmartThingsDeviceCandidate(
+            id = candidate.optString("id"),
+            name = candidate.optString("name"),
+            raw = candidate.optString("raw"),
+        )
+    }.orEmpty(),
+    message = optString("message"),
+    cliPath = optString("cli_path"),
+)
+
+private fun JSONObject.toGameLink(): RemoteGameLink = RemoteGameLink(
+    id = optString("id"),
+    pcProcessId = optString("pc_process_id"),
+    pcDisplayName = optString("pc_display_name"),
+    androidPackageName = optString("android_package_name"),
+    androidLaunchIntentUri = optString("android_launch_intent_uri"),
+    androidStoreUrl = optString("android_store_url"),
+    platformAccountHint = optString("platform_account_hint"),
+    hoyolabGameId = optString("hoyolab_game_id"),
+    syncStrategy = optString("sync_strategy", "manual"),
+)
 
 private fun JSONObject.toMobileSession(): RemoteMobileSession = RemoteMobileSession(
     id = optString("id"),
@@ -293,8 +389,8 @@ private fun JSONObject.toMobileSession(): RemoteMobileSession = RemoteMobileSess
 )
 
 private fun JSONObject.toPowerConfigResponse(): RemotePowerConfigResponse {
-    val config = getJSONObject("config")
-    val readiness = getJSONObject("readiness")
+    val config = optJSONObject("config") ?: JSONObject()
+    val readiness = optJSONObject("readiness") ?: JSONObject()
     return RemotePowerConfigResponse(
         configPath = optString("config_path"),
         configExists = optBoolean("config_exists"),
@@ -313,12 +409,59 @@ private fun JSONObject.toPowerConfigResponse(): RemotePowerConfigResponse {
     )
 }
 
-private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> = buildList {
-    for (index in 0 until length()) {
-        add(transform(getJSONObject(index)))
-    }
+private fun JSONObject.toRemoteProcess(): RemoteProcess {
+    val progressJson = optJSONObject("progress")
+    return RemoteProcess(
+        id = optString("id"),
+        name = optString("name"),
+        preferredLaunchType = optString("preferred_launch_type", "shortcut"),
+        monitoringPath = optString("monitoring_path"),
+        launchPath = optString("launch_path"),
+        lastPlayedTimestamp = optDouble("last_played_timestamp"),
+        staminaCurrent = optInt("stamina_current"),
+        staminaMax = optInt("stamina_max"),
+        iconUrl = optString("icon_url"),
+        iconUrls = optJSONObject("icon_urls")?.toStringMap().orEmpty(),
+        isRunning = optBoolean("is_running"),
+        playedToday = optBoolean("played_today"),
+        statusText = optString("status_text"),
+        progress = progressJson?.let { progress ->
+            RemoteProcessProgress(
+                kind = progress.optString("kind"),
+                percentage = progress.optDouble("percentage"),
+                displayText = progress.optString("display_text"),
+                staminaCurrent = progress.optInt("stamina_current"),
+                staminaMax = progress.optInt("stamina_max"),
+                hoyolabGameId = progress.optString("hoyolab_game_id"),
+                resourceIconUrl = progress.optString("resource_icon_url"),
+                resourceIconUrls = progress.optJSONObject("resource_icon_urls")?.toStringMap().orEmpty(),
+                remainingSeconds = progress.optInt("remaining_seconds"),
+                readyAt = progress.optDouble("ready_at"),
+            )
+        },
+    )
 }
 
+private fun JSONObject.toPairingResult(): PairingResult = PairingResult(
+    id = optString("id"),
+    deviceName = optString("name", optString("device_name")),
+    platform = optString("platform"),
+    token = optString("token"),
+)
+
+private fun JSONObject.toRemoteDevice(): RemoteDevice = RemoteDevice(
+    id = optString("id"),
+    deviceName = optString("name", optString("device_name")),
+    platform = optString("platform"),
+    tokenRefreshedAt = optString("token_refreshed_at"),
+    revokedAt = optString("revoked_at"),
+)
+
+private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> = buildList {
+    for (index in 0 until length()) {
+        optJSONObject(index)?.let { add(transform(it)) }
+    }
+}
 
 private fun JSONArray.toStringSet(): Set<String> = buildSet {
     for (index in 0 until length()) {
@@ -329,5 +472,13 @@ private fun JSONArray.toStringSet(): Set<String> = buildSet {
 private fun JSONArray.toStringList(): List<String> = buildList {
     for (index in 0 until length()) {
         optString(index).takeIf { it.isNotBlank() }?.let { add(it) }
+    }
+}
+
+private fun JSONObject.toStringMap(): Map<String, String> = buildMap {
+    val iterator = keys()
+    while (iterator.hasNext()) {
+        val key = iterator.next()
+        optString(key).takeIf { it.isNotBlank() }?.let { put(key, it) }
     }
 }

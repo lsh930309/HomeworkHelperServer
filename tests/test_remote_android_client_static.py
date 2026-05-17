@@ -10,6 +10,10 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _android_sources() -> str:
+    return "\n".join(path.read_text(encoding="utf-8") for path in MAIN_SRC.rglob("*.kt"))
+
+
 def test_android_project_contains_reproducible_compose_build_contract():
     assert (ANDROID_ROOT / "settings.gradle.kts").exists()
     assert (ANDROID_ROOT / "gradlew").exists()
@@ -26,6 +30,19 @@ def test_android_project_contains_reproducible_compose_build_contract():
     assert 'implementation("androidx.activity:activity-compose:1.12.0")' in app_build
     assert 'implementation("androidx.compose.material3:material3")' in app_build
     assert "gradle-9.5.0-bin.zip" in wrapper
+
+    for source_file in [
+        "MainActivity.kt",
+        "RemoteAppViewModel.kt",
+        "RemoteRepository.kt",
+        "RemoteApiClient.kt",
+        "RemoteModels.kt",
+        "AndroidTokenStore.kt",
+        "RemotePreferences.kt",
+        "AndroidIntegration.kt",
+        "ui/RemoteScreens.kt",
+    ]:
+        assert (MAIN_SRC / source_file).exists()
 
 
 def test_android_manifest_declares_remote_and_mobile_runtime_permissions():
@@ -61,13 +78,20 @@ def test_android_api_client_tracks_remote_agent_contract():
         "remote/pair/confirm",
         "remote/tokens/refresh",
         "remote/devices",
-        "remote/processes/$id/launch",
-        "remote/shortcuts/$id/open",
+        "remote/devices/revoked",
+        "remote/readiness",
+        "remote/logging/config",
+        "remote/tailscale/ensure",
+        "remote/power/setup",
+        "remote/power/ssh-key",
+        "remote/power/smartthings/devices",
+        "remote/processes/${pathSegment(id)}/launch",
+        "remote/shortcuts/${pathSegment(id)}/open",
     ]:
         assert endpoint in api_client
 
     assert 'setRequestProperty("Authorization", "Bearer $bearerToken")' in api_client
-    assert 'optString("name", item.optString("device_name"))' in api_client
+    assert 'deviceName = optString("name", optString("device_name"))' in api_client
     assert "data class RemoteStatus" in models
     assert "data class RemoteCapabilities" in models
     assert "data class RemoteDashboardSummary" in models
@@ -92,7 +116,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'processLaunch = capabilities.optBoolean("process_launch")' in api_client
     assert 'fun refreshToken(): PairingResult' in api_client
     assert 'post("remote/tokens/refresh", "{}")' in api_client
-    assert 'item.optString("token_refreshed_at")' in api_client
+    assert 'tokenRefreshedAt = optString("token_refreshed_at")' in api_client
     assert 'fun dashboardSummary(): RemoteDashboardSummary' in api_client
     assert 'fun gameLinks(): List<RemoteGameLink>' in api_client
     assert 'fun createGameLink(processId: String, androidPackageName: String' in api_client
@@ -100,11 +124,11 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'body.put("started_at", startedAtSeconds)' in api_client
     assert 'fun endMobileSession(sessionId: String)' in api_client
     assert 'fun activeMobileSessions(): List<RemoteMobileSession>' in api_client
-    assert 'json.getJSONArray("links")' in api_client
-    assert 'item.optString("android_package_name")' in api_client
+    assert 'json.optJSONArray("links")' in api_client
+    assert 'androidPackageName = optString("android_package_name")' in api_client
     assert 'fun beholderIncidents(): List<RemoteBeholderIncident>' in api_client
-    assert 'item.optString("user_title")' in api_client
-    assert 'item.optJSONArray("risk_labels")?.toStringList().orEmpty()' in api_client
+    assert 'userTitle = item.optString("user_title")' in api_client
+    assert 'riskLabels = item.optJSONArray("risk_labels")?.toStringList().orEmpty()' in api_client
     assert 'metrics.optDouble("daily_average_seconds")' in api_client
     assert 'metrics.optJSONObject("top_game")' in api_client
     assert 'json.optJSONObject("mobile_metrics")' in api_client
@@ -112,7 +136,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'mobileMetrics?.optInt("active_session_count")' in api_client
     assert 'mobileTopGame?.optString("android_package_name")' in api_client
     assert 'optJSONArray("supported_actions")?.toStringSet().orEmpty()' in api_client
-    assert 'targetHost = it.optString("target_host")' in api_client
+    assert 'targetHost = optString("target_host")' in api_client
     assert 'fun powerConfig(): RemotePowerConfigResponse' in api_client
     assert 'fun savePowerConfig(config: RemotePowerConfigPayload)' in api_client
     assert 'put("remote/power/config", body)' in api_client
@@ -123,6 +147,7 @@ def test_android_token_storage_uses_keystore_not_plaintext_preferences():
     token_store = _read(MAIN_SRC / "AndroidTokenStore.kt")
     preferences = _read(MAIN_SRC / "RemotePreferences.kt")
     main_activity = _read(MAIN_SRC / "MainActivity.kt")
+    sources = _android_sources()
 
     assert "AndroidKeyStore" in token_store
     assert "KeyGenParameterSpec" in token_store
@@ -136,9 +161,9 @@ def test_android_token_storage_uses_keystore_not_plaintext_preferences():
     assert "clearLegacyToken()" in preferences
     assert "putString(KEY_LEGACY_TOKEN" not in preferences
     assert "AndroidTokenStore(context)" in main_activity
-    assert "tokenStore.saveToken(token)" in main_activity
-    assert "preferences.clearLegacyToken()" in main_activity
-    assert "토큰 삭제" in main_activity
+    assert "tokenStore.saveToken(state.token)" in sources
+    assert "preferences.clearLegacyToken()" in sources
+    assert "토큰 삭제" in sources
 
 
 def test_android_local_integration_covers_intent_and_usage_access_boundaries():
@@ -155,62 +180,69 @@ def test_android_local_integration_covers_intent_and_usage_access_boundaries():
     assert "UsageEvents.Event.MOVE_TO_FOREGROUND" in integration
     assert "UsageEvents.Event.ACTIVITY_RESUMED" in integration
     assert "recentForegroundApp" in integration
+    assert "TAILSCALE_PACKAGE" in integration
+    assert "com.tailscale.ipn" in integration
+    assert "openTailscaleInstallPage" in integration
+    assert "ACTION_APPLICATION_DETAILS_SETTINGS" in integration
 
 
 def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
-    main_activity = _read(MAIN_SRC / "MainActivity.kt")
+    sources = _android_sources()
     models = _read(MAIN_SRC / "RemoteModels.kt")
 
     assert "fun isPowerActionEnabled(action: String): Boolean" in models
     assert "!powerControl || !currentPower.configured" in models
     assert "currentPower.supportedActions.contains(action)" in models
-    assert "fun powerCommand(action: String)" in main_activity
-    assert "status?.isPowerActionEnabled(action) == true" in main_activity
-    assert "전원 제어 adapter가 설정되지" in main_activity
-    assert 'enabled = isPowerActionEnabled("wake")' in main_activity
-    assert 'enabled = isPowerActionEnabled("sleep")' in main_activity
-    assert 'enabled = isPowerActionEnabled("restart")' in main_activity
-    assert 'enabled = isPowerActionEnabled("shutdown")' in main_activity
-    assert "지원 명령" in main_activity
-    assert "전원 상태" in main_activity
-    assert "전원 설정" in main_activity
-    assert "전원 설정 저장" in main_activity
-    assert "fun savePowerConfig()" in main_activity
-    assert "플레이 요약" in main_activity
-    assert "dashboardSummary" in main_activity
-    assert "모바일 플레이" in main_activity
+    assert "fun powerCommand(action: String)" in sources
+    assert "state.status?.isPowerActionEnabled(action) == true" in sources
+    assert "전원 제어 adapter가 설정되지" in sources
+    assert 'enabled = viewModel.isPowerActionEnabled("wake")' in sources
+    assert 'enabled = viewModel.isPowerActionEnabled("sleep")' in sources
+    assert 'enabled = viewModel.isPowerActionEnabled("restart")' in sources
+    assert 'enabled = viewModel.isPowerActionEnabled("shutdown")' in sources
+    assert "지원 명령" in sources
+    assert "전원 상태" in sources
+    assert "전원 설정" in sources
+    assert "전원 설정 저장" in sources
+    assert "fun savePowerConfig()" in sources
+    assert "플레이 요약" in sources
+    assert "dashboardSummary" in sources
+    assert "모바일 플레이" in sources
     assert "mobileSessionCount" in models
-    assert "Beholder 알림" in main_activity
-    assert "beholderIncidents" in main_activity
-    assert "Android-PC 연결" in main_activity
-    assert "gameLinks" in main_activity
-    assert "Android 실행" in main_activity
-    assert "모바일 시작" in main_activity
-    assert "모바일 종료" in main_activity
-    assert "fun startMobileSession(link: RemoteGameLink)" in main_activity
-    assert "fun endMobileSession(session: RemoteMobileSession)" in main_activity
-    assert "fun createGameLink()" in main_activity
-    assert "Android-PC 연결 저장" in main_activity
-    assert "gameLinkPackageName" in main_activity
-    assert "fun refreshToken()" in main_activity
-    assert "토큰 갱신" in main_activity
-    assert "formatDuration" in main_activity
+    assert "Beholder 알림" in sources
+    assert "beholderIncidents" in sources
+    assert "Android-PC 연결" in sources
+    assert "gameLinks" in sources
+    assert "Android 실행" in sources
+    assert "모바일 시작" in sources
+    assert "모바일 종료" in sources
+    assert "fun startMobileSession(link: RemoteGameLink)" in sources
+    assert "fun endMobileSession(session: RemoteMobileSession)" in sources
+    assert "fun createGameLink()" in sources
+    assert "Android-PC 연결 저장" in sources
+    assert "gameLinkPackageName" in sources
+    assert "fun refreshToken()" in sources
+    assert "토큰 갱신" in sources
+    assert "formatDuration" in sources
+    assert "RemoteReadiness" in models
+    assert "RemoteLoggingConfigResponse" in models
+    assert "RemotePowerSetupResponse" in models
 
 
 def test_android_usage_stats_ui_can_query_recent_foreground_app():
-    main_activity = _read(MAIN_SRC / "MainActivity.kt")
+    sources = _android_sources()
     integration = _read(MAIN_SRC / "AndroidIntegration.kt")
 
-    assert "var recentUsage by remember" in main_activity
-    assert "androidIntegration.recentForegroundApp()" in main_activity
-    assert "fun syncUsageStatsSessions()" in main_activity
-    assert "activeUsageStatsMobileSessions()" in main_activity
-    assert 'source = "usage_stats"' in main_activity
-    assert "UsageSyncResult" in main_activity
-    assert "Usage 동기화" in main_activity
-    assert "최근 앱" in main_activity
-    assert "최근 전면 앱" in main_activity
-    assert "Usage Access 권한이 없거나 최근 전면 앱을 찾지 못했습니다." in main_activity
+    assert "recentUsage: AndroidUsageSnapshot?" in sources
+    assert "androidIntegration.recentForegroundApp()" in sources
+    assert "fun syncUsageStatsSessions()" in sources
+    assert "activeUsageStatsMobileSessions()" in sources
+    assert 'source = "usage_stats"' in sources
+    assert "UsageSyncResult" in sources
+    assert "Usage 동기화" in sources
+    assert "최근 앱" in sources
+    assert "최근 전면 앱" in sources
+    assert "Usage Access 권한이 없거나 최근 전면 앱을 찾지 못했습니다." in sources
     assert "DEFAULT_USAGE_LOOKBACK_MILLIS" in integration
     assert "Context.USAGE_STATS_SERVICE" in integration
     assert "events.hasNextEvent()" in integration

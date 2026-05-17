@@ -1,7 +1,7 @@
 # Android Remote Client Full-Parity Design
 
 Last refreshed: 2026-05-17
-Status: Active design for completing the Android client from the existing Kotlin/Compose baseline
+Status: Active design plus implemented Android rebuild baseline
 
 ## 1. Goal
 
@@ -31,28 +31,29 @@ Observed baseline:
 - Build: Android Gradle Plugin 8.13.0, Kotlin 2.2.21, Compose BOM 2026.03.00, Gradle wrapper 9.5.0.
 - Runtime package: `dev.homeworkhelper.remote`, minSdk 26, targetSdk 36.
 - Storage: `RemotePreferences` for non-secret settings, `AndroidTokenStore` for Android Keystore AES/GCM token storage.
-- API: `RemoteApiClient` covers status, capabilities, dashboard summary, Beholder incidents, game-links, mobile sessions, processes, shortcuts, power config/control, pairing, token refresh, and devices.
-- Platform integration: `AndroidIntegration` handles package launch intent, Usage Access settings, appop check, and recent foreground app query.
-- UI: `MainActivity.kt` contains a single Compose screen with connection, pairing, status, power, Android local launch, dashboard, Beholder, Android-PC links, process, shortcut, and device sections.
+- API: `RemoteApiClient` covers status, capabilities, readiness, Tailscale ensure, diagnostic logging config, dashboard summary, Beholder incidents, game-links, mobile sessions, processes with icon/progress metadata, shortcuts, power setup/config/control, pairing, token refresh, devices, and revoked-device cleanup.
+- Platform integration: `AndroidIntegration` handles package launch intent, Tailscale app/store deep links, Android app settings, Usage Access settings, appop check, and recent foreground app query.
+- Architecture: `MainActivity.kt` now hosts `RemoteAppViewModel`, `RemoteRepository`, and `ui/RemoteScreens.kt` so state, API orchestration, and Material 3 sections are separated.
+- UI: bottom tabs cover Dashboard, Library, Android-PC links, and Settings. Cards surface Tailscale/readiness, auth/offline recovery, dashboard metrics, Beholder alerts, process progress, shortcuts, UsageStats sync, device management, power setup/config, logging, and persisted display settings.
 
-This is functional as a vertical slice, but the UI/state architecture is still prototype-shaped. Full parity should harden it without changing the host API contract.
+This is the implemented rebuild baseline. Remaining work should now focus on runtime polish, optional icon caching, and the Stage 2 physical-device gate rather than another structural rewrite.
 
 ## 3. Full-parity matrix
 
 | Capability | macOS baseline | Android full-parity target | Current Android state | Required work |
 | --- | --- | --- | --- | --- |
-| Pairing/token | Keychain token, pair, refresh, revoke, clear local token, auto setup messaging | Keystore token, pair, refresh, revoke, clear local token, recovery messaging | Mostly present | Add recovery/status UX and separate token/device screens |
-| Host readiness | Status, capabilities, readiness, Tailscale ensure, setup progress | Same information with Android-native status cards | Partial status/capability display | Add readiness endpoint display and clearer auth/offline states |
-| Process control | Process list with icons/progress and PC launch | Process list with icons/progress and PC launch | Basic process list and launch | Add icon/resource cache, progress display, and disabled/error states |
+| Pairing/token | Keychain token, pair, refresh, revoke, clear local token, auto setup messaging | Keystore token, pair, refresh, revoke, clear local token, recovery messaging | Present in Settings/connection cards | Runtime polish after Stage 2 |
+| Host readiness | Status, capabilities, readiness, Tailscale ensure, setup progress | Same information with Android-native status cards | Present with Tailscale/auth/offline cards | Runtime polish after Stage 2 |
+| Process control | Process list with icons/progress and PC launch | Process list with icons/progress and PC launch | Progress/status metadata displayed; network icon cache deferred | Add optional icon/resource cache after runtime QA |
 | Web shortcuts | List and open host shortcuts | Same | Present | Add empty/error/loading states |
 | Dashboard | Play summary and mobile metrics | Same | Present | Improve visual hierarchy and refresh states |
 | Beholder | Read-only incident card | Same | Present | Add severity styling and empty state |
 | Android-PC links | Create link, manual mobile start/end | Create link, Android package launch, manual start/end, link management | Present | Add edit/delete affordance if host API supports it later; keep create-only until then |
 | UsageStats sync | N/A as a macOS platform feature; Android-specific extension is already in shared data model | Permission-guided automatic start/end based on foreground package | Present as manual sync button | Add persistent periodic/manual sync policy and explicit permission diagnostics |
-| Power config/control | SSH/SmartThings setup helpers and capability-gated buttons | Capability-gated buttons, config save, setup/readiness display | Basic config/control present | Add setup/readiness display and safer validation copy |
-| Tailscale/connectivity | Discovery and server ensure helpers | URL entry plus connectivity check; Tailscale app deep link/instructions if needed | Basic URL entry only | Add connectivity diagnostics without requiring new dependency |
-| Diagnostic logging | Toggle host/client desktop logging | Toggle host logging and Android local log export/share | Host logging config not surfaced well | Add log toggle and local share/export design |
-| App settings | Login item, summary toggle, poll interval, progress mode, popover transparency, menu-bar icon | Summary toggle, refresh interval, progress mode, theme/system settings, clear cache | Not separated | Add Settings screen and persist non-secret preferences |
+| Power config/control | SSH/SmartThings setup helpers and capability-gated buttons | Capability-gated buttons, config save, setup/readiness display | Present with setup, SmartThings probe, SSH key registration, and gating | Runtime validation on physical device |
+| Tailscale/connectivity | Discovery and server ensure helpers | URL entry plus connectivity check; Tailscale app deep link/instructions if needed | Present with suggested URL, local app/store deep link, and host ensure action | Runtime validation on physical device |
+| Diagnostic logging | Toggle host/client desktop logging | Toggle host logging and Android local log export/share | Host logging toggle surfaced; local export deferred | Add local export only if needed |
+| App settings | Login item, summary toggle, poll interval, progress mode, popover transparency, menu-bar icon | Summary toggle, refresh interval, progress mode, theme/system settings, clear cache | Present in Settings with persisted non-secret preferences | Theme/cache polish later |
 | Verification | Swift build, API/ViewModel smoke, static tests | Two-stage automated workflow: internal device-free gate, then physical-device gate | Static/build/APK checks and adb/e2e scripts exist | Keep `tools/verify_android_internal.py` and `tools/verify_android_device.py` as the required entry points |
 
 ## 4. Target architecture
@@ -132,11 +133,11 @@ Use Material 3 and keep the first release simple:
 ## 7. Implementation sequence
 
 1. Lock current behavior with static tests for existing API endpoints, Keystore markers, UsageStats markers, and Compose labels.
-2. Extract `RemoteAppViewModel`, `RemoteRepository`, and Compose section components without changing visible behavior.
-3. Add readiness/auth/offline state handling and clearer connection recovery messages.
-4. Add icon/resource cache and progress display parity for process cards.
-5. Split screens/tabs and add Settings/device/power/logging controls.
-6. Harden UsageStats sync policy and diagnostics.
+2. Done: extract `RemoteAppViewModel`, `RemoteRepository`, and Compose section components without changing the Remote Agent API contract.
+3. Done: add readiness/auth/offline state handling and clearer connection recovery messages.
+4. Partially done: show process progress/status metadata; add network icon/resource caching only if runtime QA proves it is needed.
+5. Done: split screens/tabs and add Settings/device/power/logging controls.
+6. Done for manual flow: harden UsageStats sync policy and diagnostics; validate on a physical device in Stage 2.
 7. Keep verification as a two-stage workflow: run internal tests first, then run the physical-device script after connecting a USB-debuggable Android device. Emulator e2e remains optional, not the default release gate.
 
 ## 8. Verification workflow

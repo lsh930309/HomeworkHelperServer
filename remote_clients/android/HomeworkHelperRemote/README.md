@@ -1,19 +1,21 @@
 # HomeworkHelper Remote Android
 
-Kotlin + Jetpack Compose 기반 Android 네이티브 리모트 클라이언트입니다. macOS Remote Client에서 검증한 Remote Agent API 계약을 Android로 전파한 현재 baseline이며, 다음 단계의 목표는 `docs/remote/android-client-design.md`의 Full-parity 설계를 따라 제품 수준으로 다듬는 것입니다.
+Kotlin + Jetpack Compose 기반 Android 네이티브 리모트 클라이언트입니다. macOS Remote Client에서 검증한 Remote Agent API 계약을 Android로 전파했고, `docs/remote/android-client-design.md`의 Full-parity 설계를 따라 ViewModel/Repository/Material 3 tab 구조로 재구축했습니다.
 
 ## 현재 범위
 
 - Remote Agent URL / device name 저장
 - Bearer token Android Keystore AES/GCM 암호화 저장 및 legacy plaintext preference migration
 - `/remote/pair/confirm` pairing code 입력, `/remote/tokens/refresh` token 갱신, `/remote/devices` 조회/폐기
-- `/remote/status`, `/remote/capabilities`, `/remote/processes`, `/remote/shortcuts` 조회
+- `/remote/status`, `/remote/capabilities`, `/remote/readiness`, `/remote/processes`, `/remote/shortcuts` 조회
 - `/remote/dashboard/summary` 기반 플레이 요약/모바일 플레이 집계 카드
 - `/remote/beholder/incidents` 기반 Beholder read-only 알림 카드
-- PC 게임 실행, 웹 숏컷 열기, 전원 설정 저장 및 capability-gated 전원 명령 호출
+- Tailscale 앱/스토어 deep link, host `/remote/tailscale/ensure`, suggested base URL 기반 Tailscale-first 연결 보조
+- PC 게임 실행, process progress/status 표시, 웹 숏컷 열기, 전원 setup/config 저장 및 capability-gated 전원 명령 호출
 - `/remote/game-links` 기반 PC process와 Android package mapping 생성/조회
 - Android package name launcher intent 실행
 - `PACKAGE_USAGE_STATS` 선언, Usage Access 설정 화면 진입, 최근 전면 앱 조회, game-link 기반 `usage_stats` 모바일 세션 sync
+- `/remote/logging/config` host diagnostic logging toggle, device revoke/purge, SmartThings probe, SSH key registration 보조
 - Android 11+ package visibility 대응 launcher intent `<queries>` 선언
 
 ## 빌드
@@ -102,12 +104,10 @@ Android 실기기를 USB 디버깅으로 연결한 뒤 실행합니다.
 
 ## Full-parity 후속 작업
 
-자세한 설계는 `docs/remote/android-client-design.md`를 기준으로 합니다.
+자세한 설계는 `docs/remote/android-client-design.md`를 기준으로 합니다. 현재 구조 재구축과 내부 테스트 게이트는 완료되었습니다.
 
-우선순위:
+남은 우선순위:
 
-1. `MainActivity.kt`의 prototype state/UI를 `RemoteAppViewModel`, repository, Compose section/tab 구조로 분리.
-2. readiness/auth/offline 상태와 pairing/token recovery UX 보강.
-3. process/resource icon cache와 progress display parity 추가.
-4. Settings/device/power/logging 화면을 macOS 기능 범위에 맞춰 정리.
-5. UsageStats sync 정책과 physical-device smoke를 release gate로 고정.
+1. `tools/verify_android_device.py`로 실기기 Stage 2를 실행해 pairing, Keystore persistence, UsageStats sync, adb reverse 흐름을 확인.
+2. 런타임 QA 결과에 따라 process/resource icon cache와 세부 visual polish를 추가.
+3. Android local log export/share가 실제 필요해질 때 token-safe export만 추가.

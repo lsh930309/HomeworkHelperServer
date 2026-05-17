@@ -49,7 +49,9 @@ data class ReadinessSection(
     val supportedActions: List<String> = emptyList(),
     val suggestedBaseUrls: List<String> = emptyList(),
     val tailscaleDetails: TailscaleDetails? = null,
-)
+) {
+    val isOk: Boolean get() = state == "ok" || color == "green"
+}
 
 data class TailscaleDetails(
     val installed: Boolean = false,
@@ -68,7 +70,11 @@ data class RemotePowerConfigPayload(
     val sshUser: String = "",
     val sshKeyPath: String = "",
     val statusTimeoutSeconds: Double = 4.0,
-)
+) {
+    val hasAnyPowerSetting: Boolean
+        get() = smartthingsDeviceId.isNotBlank() || smartthingsCliPath.isNotBlank() ||
+            sshHost.isNotBlank() || sshUser.isNotBlank() || sshKeyPath.isNotBlank()
+}
 
 data class RemotePowerConfigResponse(
     val configPath: String,
@@ -79,15 +85,35 @@ data class RemotePowerConfigResponse(
     val supportedActions: Set<String>,
 )
 
+data class RemotePowerSetupService(
+    val available: Boolean = false,
+    val running: Boolean = false,
+    val startType: String = "",
+    val message: String = "",
+)
+
+data class RemotePowerSetupFirewall(
+    val available: Boolean = false,
+    val enabled: Boolean = false,
+    val message: String = "",
+)
+
 data class RemotePowerSetupResponse(
     val hostPlatform: String = "",
     val user: String = "",
     val authorizedKeysPath: String = "",
     val authorizedKeysExists: Boolean = false,
-    val sshServiceRunning: Boolean = false,
-    val firewallEnabled: Boolean = false,
+    val sshService: RemotePowerSetupService = RemotePowerSetupService(),
+    val firewall: RemotePowerSetupFirewall = RemotePowerSetupFirewall(),
     val smartthingsCliCandidates: List<String> = emptyList(),
     val smartthingsReady: Boolean = false,
+    val message: String = "",
+)
+
+data class RemoteSSHKeyRegistrationResponse(
+    val registered: Boolean = false,
+    val alreadyPresent: Boolean = false,
+    val authorizedKeysPath: String = "",
     val message: String = "",
 )
 
@@ -141,7 +167,11 @@ data class RemoteProcess(
     val preferredLaunchType: String,
     val monitoringPath: String,
     val launchPath: String,
+    val lastPlayedTimestamp: Double = 0.0,
+    val staminaCurrent: Int = 0,
+    val staminaMax: Int = 0,
     val iconUrl: String = "",
+    val iconUrls: Map<String, String> = emptyMap(),
     val isRunning: Boolean = false,
     val playedToday: Boolean = false,
     val statusText: String = "",
@@ -154,8 +184,11 @@ data class RemoteProcessProgress(
     val displayText: String,
     val staminaCurrent: Int = 0,
     val staminaMax: Int = 0,
+    val hoyolabGameId: String = "",
     val resourceIconUrl: String = "",
+    val resourceIconUrls: Map<String, String> = emptyMap(),
     val remainingSeconds: Int = 0,
+    val readyAt: Double = 0.0,
 )
 
 data class RemoteShortcut(
@@ -237,6 +270,11 @@ data class RemoteDevice(
     val platform: String,
     val tokenRefreshedAt: String,
     val revokedAt: String,
+)
+
+data class RevokeDeviceResponse(
+    val revoked: Boolean,
+    val deviceId: String,
 )
 
 data class PurgeDevicesResponse(
