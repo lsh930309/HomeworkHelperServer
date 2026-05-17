@@ -380,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
             _adb(adb, device, "shell", "input", "keyevent", "BACK")
             _tap_text(adb, device, "페어링 완료")
             _wait_text_contains(adb, device, "동기화 완료", timeout=30)
+            _tap_text(adb, device, "연결", timeout=20, scroll=False)
             _wait_text_contains(adb, device, "Android-PC 연결", timeout=20, scroll=True)
 
             _tap_text(adb, device, "모바일 시작", timeout=20, scroll=True)
