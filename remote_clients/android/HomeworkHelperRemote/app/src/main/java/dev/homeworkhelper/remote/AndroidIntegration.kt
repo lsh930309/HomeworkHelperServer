@@ -5,10 +5,13 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
+
+private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
 
 data class AndroidUsageSnapshot(
     val packageName: String,
@@ -31,6 +34,29 @@ class AndroidIntegration(private val context: Context) {
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(launchIntent)
         return true
+    }
+
+    fun isPackageLaunchable(packageName: String): Boolean =
+        context.packageManager.getLaunchIntentForPackage(packageName.trim()) != null
+
+    fun isTailscaleInstalled(): Boolean = isPackageLaunchable(TAILSCALE_PACKAGE)
+
+    fun openTailscaleOrStore(): Boolean {
+        if (launchPackage(TAILSCALE_PACKAGE)) return true
+        return openUrl("market://details?id=$TAILSCALE_PACKAGE") ||
+            openUrl("https://play.google.com/store/apps/details?id=$TAILSCALE_PACKAGE")
+    }
+
+    fun openUrl(url: String): Boolean {
+        return runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        }.getOrElse {
+            toast("열 수 없습니다: $url")
+            false
+        }
     }
 
     fun hasUsageAccess(): Boolean {
