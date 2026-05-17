@@ -523,7 +523,10 @@ enum RemotePopoverLayout {
     static let gameIconSize: CGFloat = 34
     static let gameTileCornerRadius: CGFloat = 10
     static let gameNameFontSize: CGFloat = 18
-    static let progressBadgeWidth: CGFloat = 132
+    static let progressBadgeWidth: CGFloat = 132 * 0.90
+    static let progressMeterHeight: CGFloat = 12
+    static let todayBadgeWidth: CGFloat = 16
+    static let statusBadgeSpacing: CGFloat = 4
     static let headerHeight: CGFloat = 28
     static let powerHeight: CGFloat = 54
     static let footerHeight: CGFloat = 34
@@ -534,7 +537,8 @@ enum RemotePopoverLayout {
     static func contentWidth(processes: [RemoteProcess]) -> CGFloat {
         let longestNameCount = processes.map { $0.name.count }.max() ?? 0
         let estimatedNameWidth = min(CGFloat(longestNameCount) * 13.0, 260)
-        let rowChromeWidth = gameIconSize + 8 + progressBadgeWidth + gameIconSize + 34
+        let progressStatusClusterWidth = progressBadgeWidth + statusBadgeSpacing + todayBadgeWidth
+        let rowChromeWidth = gameIconSize + 8 + progressStatusClusterWidth + gameIconSize + 34
         let visibleWidth = (NSScreen.main?.visibleFrame.width ?? 760) - 80
         let desired = max(minWidth, rowChromeWidth + max(172, estimatedNameWidth))
         return min(maxWidth, max(minWidth, min(desired, visibleWidth)))
@@ -547,6 +551,66 @@ enum RemotePopoverLayout {
         let incidents = incidentCount > 0 ? RemoteWindowLayout.incidentSectionHeight + 8 : 0
         let height = verticalPadding + headerHeight + verticalSpacing + (rows * rowHeight) + pairing + summary + incidents + powerHeight + footerHeight
         return CGSize(width: contentWidth(processes: processes), height: max(240, height))
+    }
+}
+
+private enum MenuBarProgressVisuals {
+    static func clampedPercentage(_ percentage: Double) -> Double {
+        min(max(percentage, 0), 100)
+    }
+
+    static func percentageText(_ percentage: Double) -> String {
+        "\(Int(clampedPercentage(percentage).rounded()))%"
+    }
+
+    static func progressTone(percentage: Double) -> Color {
+        let clamped = clampedPercentage(percentage)
+        if clamped <= 50 {
+            return interpolatedColor(from: (0x44, 0xcc, 0x44), to: (0xff, 0xcc, 0x00), fraction: clamped / 50)
+        }
+        if clamped <= 80 {
+            return interpolatedColor(from: (0xff, 0xcc, 0x00), to: (0xff, 0x88, 0x00), fraction: (clamped - 50) / 30)
+        }
+        return interpolatedColor(from: (0xff, 0x88, 0x00), to: (0xff, 0x44, 0x44), fraction: (clamped - 80) / 20)
+    }
+
+    private static func interpolatedColor(from start: (Int, Int, Int), to end: (Int, Int, Int), fraction: Double) -> Color {
+        let f = min(max(fraction, 0), 1)
+        let red = Double(start.0) + (Double(end.0) - Double(start.0)) * f
+        let green = Double(start.1) + (Double(end.1) - Double(start.1)) * f
+        let blue = Double(start.2) + (Double(end.2) - Double(start.2)) * f
+        return Color(red: red / 255, green: green / 255, blue: blue / 255)
+    }
+}
+
+private struct MenuBarHoverTintModifier: ViewModifier {
+    let disabled: Bool
+    let tint: Color
+
+    @State private var isHovered = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        Group {
+            if isHovered && !disabled {
+                content.tint(tint)
+            } else {
+                content
+            }
+        }
+        .onHover { hovering in
+            guard !disabled else { return }
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+}
+
+private extension View {
+    func menuBarHoverTint(disabled: Bool = false, tint: Color = .accentColor) -> some View {
+        modifier(MenuBarHoverTintModifier(disabled: disabled, tint: tint))
     }
 }
 
@@ -565,19 +629,18 @@ struct MenuBarGameRow: View {
                         .font(.system(size: RemotePopoverLayout.gameNameFontSize, weight: .bold, design: .rounded))
                         .lineLimit(1)
                         .allowsTightening(true)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(3)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
                     Spacer(minLength: 4)
-                    MenuBarGameStatusBadges(process: process)
+                    MenuBarGameStatusBadges(process: process, progress: process.progress, viewModel: viewModel)
+                        .layoutPriority(2)
                         .help("\(process.isRunning ? "실행 중" : "대기") · \(process.playedToday ? "오늘 실행" : "오늘 미실행")")
                 }
                 if let progress = process.progress {
                     HStack(spacing: 5) {
                         ResourceIconView(process: process, viewModel: viewModel, preferredSize: 128, displaySize: 12)
                             .frame(width: 12, height: 12)
-                        ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
-                            .controlSize(.mini)
-                        MenuBarProgressBadge(progress: progress, viewModel: viewModel)
+                        MenuBarProgressMeter(progress: progress)
                     }
                 } else {
                     Text(process.statusText ?? "대기")
@@ -597,14 +660,18 @@ struct MenuBarLaunchButton: View {
     let launch: () -> Void
     let disabled: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
+        let active = isHovered && !disabled
+
         Button(action: launch) {
             ZStack {
                 RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
-                    .fill(disabled ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(0.86))
+                    .fill(disabled ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(active ? 1.0 : 0.86))
                     .overlay(
                         RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
-                            .stroke(Color.white.opacity(disabled ? 0.08 : 0.26), lineWidth: 0.8)
+                            .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.42 : 0.26), lineWidth: 0.8)
                     )
                 Image(systemName: "play.fill")
                     .font(.system(size: 13, weight: .bold))
@@ -616,8 +683,47 @@ struct MenuBarLaunchButton: View {
         .frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)
         .clipShape(RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous))
+        .onHover { hovering in
+            guard !disabled else { return }
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help("실행")
         .disabled(disabled)
+    }
+}
+
+struct MenuBarProgressMeter: View {
+    let progress: RemoteProcess.Progress
+
+    private var fraction: CGFloat {
+        CGFloat(MenuBarProgressVisuals.clampedPercentage(progress.percentage) / 100)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.14))
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.72))
+                    .frame(width: proxy.size.width * fraction)
+                Text(MenuBarProgressVisuals.percentageText(progress.percentage))
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .shadow(color: Color.black.opacity(0.38), radius: 1, y: 0.5)
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: RemotePopoverLayout.progressMeterHeight)
+        .clipShape(Capsule())
+        .remoteGlass(.pill, tint: Color.accentColor.opacity(0.08))
+        .accessibilityLabel("진행률 \(MenuBarProgressVisuals.percentageText(progress.percentage))")
+        .help(MenuBarProgressVisuals.percentageText(progress.percentage))
     }
 }
 
@@ -626,7 +732,7 @@ struct MenuBarProgressBadge: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     private var tone: Color {
-        progressTone(percentage: progress.percentage)
+        MenuBarProgressVisuals.progressTone(percentage: progress.percentage)
     }
 
     var body: some View {
@@ -637,38 +743,21 @@ struct MenuBarProgressBadge: View {
             .minimumScaleFactor(0.72)
             .allowsTightening(true)
             .multilineTextAlignment(.center)
-            .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
+            .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
             .remoteGlass(.pill, tint: tone.opacity(0.15))
             .help(viewModel.progressDisplayText(progress))
-    }
-
-    private func progressTone(percentage: Double) -> Color {
-        let clamped = min(max(percentage, 0), 100)
-        if clamped <= 50 {
-            return interpolatedColor(from: (0x44, 0xcc, 0x44), to: (0xff, 0xcc, 0x00), fraction: clamped / 50)
-        }
-        if clamped <= 80 {
-            return interpolatedColor(from: (0xff, 0xcc, 0x00), to: (0xff, 0x88, 0x00), fraction: (clamped - 50) / 30)
-        }
-        return interpolatedColor(from: (0xff, 0x88, 0x00), to: (0xff, 0x44, 0x44), fraction: (clamped - 80) / 20)
-    }
-
-    private func interpolatedColor(from start: (Int, Int, Int), to end: (Int, Int, Int), fraction: Double) -> Color {
-        let f = min(max(fraction, 0), 1)
-        let red = Double(start.0) + (Double(end.0) - Double(start.0)) * f
-        let green = Double(start.1) + (Double(end.1) - Double(start.1)) * f
-        let blue = Double(start.2) + (Double(end.2) - Double(start.2)) * f
-        return Color(red: red / 255, green: green / 255, blue: blue / 255)
     }
 }
 
 struct MenuBarGameStatusBadges: View {
     let process: RemoteProcess
+    let progress: RemoteProcess.Progress?
+    @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: RemotePopoverLayout.statusBadgeSpacing) {
             if process.isRunning {
                 Text("실행 중")
                     .font(.caption2.bold())
@@ -677,11 +766,16 @@ struct MenuBarGameStatusBadges: View {
                     .padding(.vertical, 2)
                     .remoteGlass(.pill, tint: Color.green.opacity(0.18))
             }
+            if let progress {
+                MenuBarProgressBadge(progress: progress, viewModel: viewModel)
+            }
             Label("오늘", systemImage: process.playedToday ? "checkmark.circle.fill" : "circle")
                 .labelStyle(.iconOnly)
                 .font(.caption2)
                 .foregroundStyle(process.playedToday ? .blue : .secondary.opacity(0.55))
+                .frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -731,6 +825,7 @@ struct MenuBarPopoverView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.glassProminent)
+                    .menuBarHoverTint()
                     .controlSize(.small)
                 }
                 if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
@@ -761,7 +856,7 @@ struct MenuBarPopoverView: View {
                 .frame(height: 34)
             }
             .padding(14)
-            .remoteGlass(.popover, tint: Color.white.opacity(0.035))
+            .remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)
             .buttonStyle(.glass)
             .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.processes) - 20)
         }
@@ -775,6 +870,8 @@ struct MenuBarPowerButton: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
+        let disabled = viewModel.isLoading || !viewModel.isPowerActionEnabled(action)
+
         Button {
             Task { await viewModel.power(action) }
         } label: {
@@ -789,7 +886,8 @@ struct MenuBarPowerButton: View {
             .frame(maxWidth: .infinity, minHeight: 46)
         }
         .controlSize(.small)
-        .disabled(viewModel.isLoading || !viewModel.isPowerActionEnabled(action))
+        .menuBarHoverTint(disabled: disabled)
+        .disabled(disabled)
         .help(label)
     }
 }
@@ -807,6 +905,7 @@ struct MenuBarFooterButton: View {
         }
         .controlSize(.small)
         .foregroundStyle(.primary)
+        .menuBarHoverTint()
     }
 }
 
@@ -1179,6 +1278,15 @@ struct RemoteSettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    Picker("Popover 투명도", selection: $viewModel.popoverGlassTransparency) {
+                        ForEach(RemotePopoverGlassTransparency.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(viewModel.popoverGlassTransparency.description)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
                         ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
                             Label(symbol, systemImage: symbol).tag(symbol)

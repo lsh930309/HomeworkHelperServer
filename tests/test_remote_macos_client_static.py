@@ -264,6 +264,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "NSGlassEffectView" in liquid_glass
     assert "NSGlassEffectContainerView" in liquid_glass
     assert "glassEffect" in liquid_glass
+    assert "enum RemotePopoverGlassTransparency" in liquid_glass
+    assert "case standard" in liquid_glass
+    assert "case high" in liquid_glass
+    assert "return Glass.regular" in liquid_glass
+    assert "return Glass.clear" in liquid_glass
+    assert "variant: Glass? = nil" in liquid_glass
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
 
@@ -272,7 +278,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let maxWidth: CGFloat = 560" in app
     assert "static let gameIconSize: CGFloat = 34" in app
     assert "static let gameTileCornerRadius: CGFloat = 10" in app
-    assert "static let progressBadgeWidth: CGFloat = 132" in app
+    assert "static let progressBadgeWidth: CGFloat = 132 * 0.90" in app
+    assert "static let progressMeterHeight: CGFloat = 12" in app
+    assert "static let todayBadgeWidth: CGFloat = 16" in app
+    assert "static let statusBadgeSpacing: CGFloat = 4" in app
+    assert "let progressStatusClusterWidth = progressBadgeWidth + statusBadgeSpacing + todayBadgeWidth" in app
     assert "static func contentWidth(processes: [RemoteProcess])" in app
     assert "ForEach(viewModel.processes)" in app
     assert "viewModel.processes.prefix(5)" not in app
@@ -283,14 +293,30 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'Image(systemName: "play.fill")' in app
     assert ".frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)" in app
     assert ".buttonStyle(.plain)" in app
+    assert "MenuBarHoverTintModifier" in app
+    assert ".menuBarHoverTint()" in app
     assert "MenuBarGameStatusBadges" in app
     assert "MenuBarProgressBadge" in app
-    assert "progressTone(percentage: progress.percentage)" in app
+    assert "MenuBarProgressMeter(progress: progress)" in app
+    row_source = app.split("struct MenuBarGameRow", 1)[1].split("struct MenuBarLaunchButton", 1)[0]
+    assert "ProgressView(" not in row_source
+    assert ".truncationMode(.tail)" in row_source
+    progress_meter_source = app.split("struct MenuBarProgressMeter", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
+    assert "progressTone" not in progress_meter_source
+    assert "Color.accentColor.opacity(0.72)" in progress_meter_source
+    assert "Color.accentColor.opacity(0.08)" in progress_meter_source
+    progress_badge_source = app.split("struct MenuBarProgressBadge", 1)[1].split("struct MenuBarGameStatusBadges", 1)[0]
+    assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in progress_badge_source
+    assert "Text(MenuBarProgressVisuals.percentageText(progress.percentage))" in app
+    assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in app
     assert "(0x44, 0xcc, 0x44)" in app
     assert "(0xff, 0x44, 0x44)" in app
     assert 'Text("실행 중")' in app
     assert 'checkmark.circle.fill' in app
     assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in app
+    assert ".frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)" in app
+    assert ".fixedSize(horizontal: true, vertical: false)" in app
+    assert "MenuBarProgressBadge(progress: progress, viewModel: viewModel)" in app
     assert 'Label("페어링 필요 · 설정 열기", systemImage: "link.badge.plus")' in app
     assert 'MenuBarPowerButton(action: "wake", label: "전원 켜기"' in app
     assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
@@ -329,6 +355,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "mirrorPollIntervalSecondsKey" in view_model
     assert "loadMirrorPollIntervalSeconds" in view_model
     assert "saveMirrorPollIntervalSeconds" in view_model
+    assert "popoverGlassTransparencyKey" in view_model
+    assert "remote.popoverGlassTransparency" in view_model
+    assert "loadPopoverGlassTransparency" in view_model
+    assert "savePopoverGlassTransparency" in view_model
+    assert "@Published var popoverGlassTransparency" in view_model
+    assert 'Picker("Popover 투명도", selection: $viewModel.popoverGlassTransparency)' in app
+    assert "ForEach(RemotePopoverGlassTransparency.allCases)" in app
+    assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
     assert "RemoteHostAvailabilityState" in view_model
     assert "hostAvailabilityState" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
@@ -358,6 +392,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "로그인 자동 실행 시 창 표시" in app
     assert "플레이 요약 표시" in app
     assert "비 HoYoLab 진행률 표시" in app
+    assert "Popover 투명도" in app
     assert "메뉴바 아이콘" in app
 
     assert "RemoteClientPreferences" in view_model

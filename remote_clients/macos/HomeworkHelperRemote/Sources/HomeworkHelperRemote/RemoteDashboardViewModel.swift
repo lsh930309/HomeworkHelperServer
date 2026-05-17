@@ -52,6 +52,7 @@ private enum RemoteClientPreferences {
     private static let showPlaySummaryKey = "remote.showPlaySummary"
     private static let cycleProgressDisplayModeKey = "remote.cycleProgressDisplayMode"
     private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
+    private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -128,6 +129,15 @@ private enum RemoteClientPreferences {
 
     static func saveCycleProgressDisplayMode(_ mode: CycleProgressDisplayMode) {
         defaults.set(mode.rawValue, forKey: cycleProgressDisplayModeKey)
+    }
+
+    static func loadPopoverGlassTransparency() -> RemotePopoverGlassTransparency {
+        let stored = defaults.string(forKey: popoverGlassTransparencyKey) ?? ""
+        return RemotePopoverGlassTransparency(rawValue: stored) ?? .standard
+    }
+
+    static func savePopoverGlassTransparency(_ transparency: RemotePopoverGlassTransparency) {
+        defaults.set(transparency.rawValue, forKey: popoverGlassTransparencyKey)
     }
 
     static func loadMirrorPollIntervalSeconds() -> Int {
@@ -295,6 +305,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var cycleProgressDisplayMode = RemoteClientPreferences.loadCycleProgressDisplayMode() {
         didSet { RemoteClientPreferences.saveCycleProgressDisplayMode(cycleProgressDisplayMode) }
+    }
+    @Published var popoverGlassTransparency = RemoteClientPreferences.loadPopoverGlassTransparency() {
+        didSet { RemoteClientPreferences.savePopoverGlassTransparency(popoverGlassTransparency) }
     }
     @Published var mirrorPollIntervalSeconds = RemoteClientPreferences.loadMirrorPollIntervalSeconds() {
         didSet {
