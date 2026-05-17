@@ -12,6 +12,7 @@ def _read(path: Path) -> str:
 def test_macos_package_keeps_native_swiftui_executable_contract():
     package = _read(MACOS_ROOT / "Package.swift")
     app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
+    packager = _read(Path("tools/package_macos_remote_app.py"))
 
     assert 'name: "HomeworkHelperRemote"' in package
     assert 'platforms: [.macOS("26.0")]' in package
@@ -21,6 +22,7 @@ def test_macos_package_keeps_native_swiftui_executable_contract():
     assert 'import SwiftUI' in app
     assert '@main' in app
     assert 'struct HomeworkHelperRemoteApp: App' in app
+    assert '"LSUIElement": True' in packager
 
 
 def test_macos_models_track_remote_agent_snake_case_contract():
@@ -77,6 +79,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
         'targetHost = "target_host"',
+        'case state',
         'smartthingsDeviceID = "smartthings_device_id"',
         'smartthingsCLIPath = "smartthings_cli_path"',
         'sshHost = "ssh_host"',
@@ -205,190 +208,164 @@ def test_macos_keychain_store_uses_service_and_account_boundaries():
     assert 'final class InMemoryTokenStore: RemoteTokenStore' in keychain
 
 
-def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
+def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
     view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
     ui_test_flags = _read(SOURCE_ROOT / "RemoteUITestFlags.swift")
+    window_accessor = _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
+    liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
+    models = _read(SOURCE_ROOT / "RemoteModels.swift")
+    cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
 
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
-    assert "guard !RemoteUITestFlags.skipExternalState else { return false }" in app
     assert 'InMemoryTokenStore(initialToken: "ui-test-token")' in app
-    assert "RemoteClientPreferences" in view_model
-    assert "UserDefaults.standard" in view_model
-    assert "func bootstrap() async" in view_model
-    window_accessor = _read(SOURCE_ROOT / "RemoteWindowAccessor.swift")
-    liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
-    assert "RemoteWindowLayout.contentSize" in app
-    assert "RemoteWindowLayout.maxWindowSize" in window_accessor
-    assert "window.title = \"\"" in window_accessor
-    assert "RemoteAppDelegate.mainWindowIdentifier" in window_accessor
-    assert "RemoteAppDelegate.prepareMainWindow(window)" in window_accessor
-    assert "NSScreen.main?.visibleFrame" in window_accessor
-    assert "compactWindowHeight" in window_accessor
-    assert "glassOuterInset" in window_accessor
-    assert "glassHaloAllowance" in window_accessor
-    assert "titlebarReserveHeight" in window_accessor
-    assert "static let titlebarReserveHeight: CGFloat = 0" in window_accessor
-    assert "sidebarMinimumHeight" in window_accessor
-    assert "static let sidebarWidth: CGFloat = 278" in window_accessor
-    assert "static let gameCardWidth: CGFloat = 180" in window_accessor
-    assert "static let sectionInset: CGFloat = 14" in window_accessor
-    assert "static func mainColumnWidth" in window_accessor
-    assert "gameViewportWidth(cardCount: cardCount) + (sectionInset * 2)" in window_accessor
-    assert "mainColumnWidth(cardCount: cardCount) + horizontalPadding" in window_accessor
-    assert "static let gameSectionHeight: CGFloat = 192" in window_accessor
-    assert "static let summarySectionHeight: CGFloat = 154" in window_accessor
-    assert "max(contentHeight, sidebarHeight)" in window_accessor
-    assert "window.minSize = size" in window_accessor
-    assert ".windowResizability(.contentSize)" in app
-    assert "Window(RemoteAppDelegate.mainWindowTitle, id: RemoteAppDelegate.mainWindowIdentifier)" in app
-    assert "Color.clear" in app
-    assert ".frame(width: 1, height: 1)" in app
-    assert "WindowGroup(" not in app
-    assert "static let mainWindowIdentifier = \"HomeworkHelperRemoteMainWindow\"" in app
-    assert "static let mainWindowTitle = \"HomeworkHelper Remote\"" in app
-    assert "private static var isOpeningMainWindow = false" in app
-    assert "func deduplicateMainWindows" in app
-    assert "func prepareMainWindow" in app
-    assert "guard !isOpeningMainWindow else { return }" in app
-    assert "deduplicateMainWindows(preferred: window)" in app
-    assert "typeName.contains(\"Popover\") == false" in app
-    assert "RemoteWindowAccessor" in app
-    assert "RemoteAppKitLiquidGlassBackground" in app
+    assert "NSStatusItem" in app
+    assert "statusItem(withLength: NSStatusItem.squareLength)" in app
+    assert "statusItemClicked(_ sender: Any?)" in app
+    assert "sendAction(on: [.leftMouseDown])" in app
+    assert "installStatusItemClickMonitor()" in app
+    assert "event.window === button.window" in app
+    assert "clickStatusItemForUITest()" in app
+    assert "NSApp.activate(ignoringOtherApps: true)" in app
+    assert "NSPopover" in app
+    assert "RemoteMenuBarPopoverPanel" not in app
+    assert "MenuBarPopoverView" in app
+    assert "RemoteAppDelegate.showPrimaryInterface" not in app  # reopen is delegate-owned, not menu-owned
+    assert "showPopoverFromStatusItem()" in app
+    assert "popover.contentSize = currentPopoverContentSize()" in app
+    assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
+    assert "popover.behavior = .transient" in app
+    assert "RemotePlaceholderWindowAccessor" in app
+    assert "schedulePlaceholderHide()" in app
+    assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
+    scene_source = app.split("var body: some Scene", 1)[1].split("Settings {", 1)[0]
+    assert "RemoteDashboardView(viewModel" not in scene_source
+    assert "SidebarCommands()" not in scene_source
+    assert "homeworkHelperRemoteToggleSidebar" not in scene_source
+    assert "showMainWindow:" not in app
+    assert "창 열기" not in app
+    assert "창 숨기기" not in app
+    assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
+    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
+    assert "RemoteAppDelegate.openSettingsWindow()" in app
+    assert "RemoteSettingsOpenBridge" in app
+    assert "@Environment(\\.openSettings)" in app
+    assert "homeworkHelperRemoteOpenSettings" in app
+    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings" in app
+    assert "openSettings()" in app
+    assert 'Selector(("showSettingsWindow:"))' in app
+    assert 'Selector(("showPreferencesWindow:"))' in app
+
+    assert "GlassEffectContainer" in app
+    assert "RemoteAppKitLiquidGlassBackground" in liquid_glass
     assert "RemoteGlassBackground" not in app
     assert "NSVisualEffectView" not in window_accessor
     assert "NSGlassEffectView" in liquid_glass
     assert "NSGlassEffectContainerView" in liquid_glass
-    assert "glass.cornerRadius = 0" in liquid_glass
     assert "glassEffect" in liquid_glass
-    assert "GlassEffectContainer" in app
     assert "GroupBox(" not in app.replace("RemoteGlassGroupBox", "")
     assert ".thinMaterial" not in app
-    assert "window.isOpaque = false" in window_accessor
-    assert "window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]" in window_accessor
-    assert "window.titlebarAppearsTransparent = true" in window_accessor
-    assert "window.titleVisibility = .hidden" in window_accessor
-    assert "window.titlebarSeparatorStyle = .none" in window_accessor
-    assert "window.isMovableByWindowBackground = true" in window_accessor
-    assert "window.toolbarStyle = .unified" in window_accessor
-    assert "HomeworkHelperRemoteSidebarToggleOverlay" not in window_accessor
-    assert "RemoteSidebarToggleTarget" not in window_accessor
-    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteToggleSidebar" in app
-    assert "HomeworkHelperRemoteFrameGlassBackground" not in window_accessor
-    assert "RemoteWindowHitTestShield" in liquid_glass
-    assert "RemoteHitTestShieldView" in liquid_glass
-    assert "bounds.contains(point) ? self : nil" in liquid_glass
-    assert "RemoteWindowHitTestShield()" in app
-    assert ".contentShape(Rectangle())" in app
-    assert "Color.black.opacity(0.001)" in app
-    assert "titlebarContentInset" in window_accessor
-    assert ".padding(.top, RemoteWindowLayout.titlebarContentInset)" in app
-    assert "NavigationSplitView(columnVisibility: $columnVisibility)" in app
-    assert ".navigationSplitViewColumnWidth(RemoteWindowLayout.sidebarWidth)" in app
-    assert ".navigationSplitViewStyle(.balanced)" in app
-    assert "DefaultToolbarItem(kind: .sidebarToggle, placement: .navigation)" in app
-    assert "SidebarCommands()" in app
-    assert ".containerBackground(.clear, for: .window)" in app
-    assert ".listStyle(.sidebar)" in app
-    assert "RemoteSidebarView(viewModel: viewModel, sidebarVisible:" not in app
-    assert "SidebarChromeRow" not in app
-    assert "SidebarToggleChromeButton" not in app
-    assert "variant: .visibleHide" not in app
-    assert "variant: .hiddenReveal" not in app
-    assert 'Label(sidebarVisible ? "패널 숨기기" : "패널 보기"' not in app
-    assert "WindowChromeButton" not in app
-    dashboard_source = app.split("struct RemoteDashboardView: View", 1)[1].split("struct GameSectionView: View", 1)[0]
-    sidebar_source = app.split("struct RemoteSidebarView: View", 1)[1].split("struct SettingsOpenButton: View", 1)[0]
-    assert "ScrollView {" not in dashboard_source
-    assert "ScrollView {" not in sidebar_source
-    assert ".scrollClipDisabled" not in dashboard_source
-    assert "sidebarConnectionSection" in sidebar_source
-    assert "sidebarPowerSection" in sidebar_source
-    assert "sidebarAppSection" not in sidebar_source
-    assert "RemoteGlassGroupBox(\"연결\")" not in sidebar_source
-    assert "RemoteGlassGroupBox(\"PC 전원\")" not in sidebar_source
-    assert "RemoteGlassGroupBox(\"앱\")" not in sidebar_source
-    assert 'Section("연결")' in sidebar_source
-    assert 'Section("PC 전원")' in sidebar_source
-    assert 'Section("앱")' in sidebar_source
-    assert "@State private var columnVisibility = RemoteDashboardView.initialColumnVisibility" in app
-    assert "--ui-test-show-sidebar" in ui_test_flags
-    assert "HH_REMOTE_SHOW_SIDEBAR" in ui_test_flags
-    assert "--ui-test-show-window" in ui_test_flags
-    assert "HH_REMOTE_SHOW_WINDOW" in ui_test_flags
-    assert "--ui-test-no-external-state" in ui_test_flags
-    assert "HH_REMOTE_NO_EXTERNAL_STATE" in ui_test_flags
-    assert "--ui-test-show-popover" in ui_test_flags
-    assert "HH_REMOTE_SHOW_POPOVER" in ui_test_flags
-    assert "showUITestPopoverWindow" in app
-    assert "Self.showUITestMainWindow()" in app
-    assert "showUITestMainWindow" in app
-    assert "uiTestMainWindow" in app
-    assert "settleUITestWindows" in app
-    assert "settleUITestPopoverWindow" in app
-    assert "candidate.orderOut(nil)" in app
-    assert "NSHostingView(rootView: RemoteDashboardView" in app
-    assert ".homeworkHelperRemoteMainWindowWillShow" in app
-    assert "resetSidebarVisibilityForPresentation()" in app
-    assert "NotificationCenter.default.publisher(for: .homeworkHelperRemoteMainWindowWillShow)" in app
-    assert "toggleSidebarVisibility()" in app
-    assert "struct SidebarInfoRow: View" in app
-    assert "http://windows-tailnet-ip:8000" in app
-    assert "페어링 후 토큰/기기 관리는 설정에서 관리합니다." in app
-    assert "6자리 코드" in app
-    assert "페어링 및 자동 설정" in app
+
+    assert "RemotePopoverLayout" in app
+    assert "static let minWidth: CGFloat = 380" in app
+    assert "static let maxWidth: CGFloat = 560" in app
+    assert "static let gameIconSize: CGFloat = 34" in app
+    assert "static let gameTileCornerRadius: CGFloat = 10" in app
+    assert "static let progressBadgeWidth: CGFloat = 132" in app
+    assert "static func contentWidth(processes: [RemoteProcess])" in app
+    assert "ForEach(viewModel.processes)" in app
+    assert "viewModel.processes.prefix(5)" not in app
+    assert "외 \\(viewModel.processes.count - 5)개" not in app
+    assert "MenuBarGameRow(process: process, viewModel: viewModel)" in app
+    assert "Task { await viewModel.launch(process) }" in app
+    assert "MenuBarLaunchButton" in app
+    assert 'Image(systemName: "play.fill")' in app
+    assert ".frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)" in app
+    assert ".buttonStyle(.plain)" in app
+    assert "MenuBarGameStatusBadges" in app
+    assert "MenuBarProgressBadge" in app
+    assert "progressTone(percentage: progress.percentage)" in app
+    assert "(0x44, 0xcc, 0x44)" in app
+    assert "(0xff, 0x44, 0x44)" in app
+    assert 'Text("실행 중")' in app
+    assert 'checkmark.circle.fill' in app
+    assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in app
+    assert 'Label("페어링 필요 · 설정 열기", systemImage: "link.badge.plus")' in app
+    assert 'MenuBarPowerButton(action: "wake", label: "전원 켜기"' in app
+    assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
+    assert 'MenuBarFooterButton(title: "설정", systemImage: "gearshape")' in app
+    assert 'MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise")' in app
+    assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
+    assert ".labelStyle(.iconOnly)" in app  # still used where icon-only is intentional
+
     assert "Settings {" in app
     assert "RemoteSettingsView" in app
-    assert "TabView" in app
+    assert "RemoteSettingsTab" in app
+    assert "TabView(selection: $selectedTab)" in app
     assert 'Label("연결", systemImage: "link")' in app
     assert 'Label("전원", systemImage: "bolt")' in app
     assert 'Label("기기", systemImage: "display.2")' in app
     assert 'Label("Android", systemImage: "app.connected.to.app.below.fill")' in app
     assert 'Label("앱", systemImage: "gearshape")' in app
-    assert "struct SettingsOpenButton: View" in app
-    assert "SettingsLink" in app
-    assert 'Selector(("showSettingsWindow:"))' in app
-    assert 'Selector(("showPreferencesWindow:"))' in app
-    assert "AdvancedRemoteSettingsView" in app
-    assert "GameProgressView" in app
-    assert "RemoteGameCard" in app
-    assert "GameIconView" in app
-    assert "DraggableHorizontalScrollView" in app
-    assert "hasHorizontalScroller = false" in app
-    assert "mouseDragged" in app
-    assert "gameViewportWidth(cardCount:" in app
-    assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
-    assert "GroupBox(\"상태\")" not in app
-    assert 'Label("새로고침", systemImage: "arrow.clockwise")' in app
-    assert ".labelStyle(.iconOnly)" in app
-    assert "Label(viewModel.isLoading ? \"연결 중...\" : \"새로고침\", systemImage: \"arrow.clockwise\")" not in app
-    assert "ResourceIconView" in app
-    assert "resourceIconURL" in _read(SOURCE_ROOT / "RemoteModels.swift")
-    assert "cachedResourceIconURL" in _read(SOURCE_ROOT / "RemoteClientCache.swift")
-    cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
-    assert 'private static let iconCacheVersion = "v3_pixels"' in cache
-    assert "validatedCachedURL" in cache
-    assert "decodedPixelDimension(data) >= preferredSize" in cache
-    assert "displayThumbnailImage" in cache
-    assert "displayScale()" in cache
-    assert "icon.diagnostic" in cache
-    assert "display_point_size" in cache
-    assert "let preferredSize = 256" in cache
-    assert "let preferredSize = 128" in cache
-    assert "func displayIconImage" in view_model
-    assert "func displayResourceIconImage" in view_model
-    assert "viewModel.displayIconImage" in app
-    assert "viewModel.displayResourceIconImage" in app
-    assert "displaySize: 24" in app
-    assert "displaySize: 12" in app
-    assert "RemoteClientCache.loadProcesses" in view_model
-    assert "RemoteClientCache.saveProcesses" in view_model
-    assert "RemoteClientCache.cacheIcons" in view_model
+    assert "RemoteSettingsContentSizePreferenceKey" in app
+    assert "RemoteSettingsLayout" in app
+    assert "RemoteSettingsSection" in app
+    assert "static let contentWidth: CGFloat = 392" in app
+    assert "static let maxWindowWidth: CGFloat = 480" in app
+    assert "measured.width * 1.06" in app
+    assert "measured.height * 1.10" in app
+    assert "SettingsActionGrid" in app
+    assert ".padding(RemoteSettingsLayout.tabPadding)" in app
+    assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
+    assert "RemoteSettingsKeyboardShortcutBridge" in app
+    assert "event.keyCode == 53" in window_accessor
+    assert "isCommandReturn" in window_accessor
+    assert "!self.isEditingText(in: window)" in window_accessor
+    assert "상태 동기화 주기" in app
+    assert "$viewModel.mirrorPollIntervalSeconds" in app
+    assert "in: 1...60" in app
+    assert "기본값은 5초" in app
+    assert "mirrorPollIntervalSecondsKey" in view_model
+    assert "loadMirrorPollIntervalSeconds" in view_model
+    assert "saveMirrorPollIntervalSeconds" in view_model
+    assert "RemoteHostAvailabilityState" in view_model
+    assert "hostAvailabilityState" in view_model
+    assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
+    assert "Self.wakeReconnectSchedule" in view_model
+    assert "Array(repeating: UInt64(1), count: 15)" in view_model
+    assert "Array(repeating: UInt64(2), count: 15)" in view_model
+    assert "Array(repeating: UInt64(5), count: 24)" in view_model
+    assert "beginPowerTransition(for: action)" in view_model
+    assert "setHostAvailability(.offlineExpected)" in view_model
+    assert "authRejected" in view_model
+    assert "return NSApp.isActive ? 5 : 15" not in view_model
+
+    assert "연결/페어링" in app
+    assert "6자리 코드" in app
+    assert "페어링 및 자동 설정" in app
+    assert "자동 설정 점검" in app
+    assert "서버 Tailscale 확인/복구" in app
+    assert "페어링 토큰 복구" in app
+    assert "로컬 토큰 삭제" in app
+    assert "Tailscale 서버/호스트 탐색" in app
+    assert "전원/SSH/SmartThings" in app
+    assert "전원 설정 저장" in app
+    assert "기기 관리" in app
+    assert "현재 토큰 갱신" in app
+    assert "Android-PC 연결" in app
+    assert "로그인 시 실행" in app
+    assert "로그인 자동 실행 시 창 표시" in app
+    assert "플레이 요약 표시" in app
+    assert "비 HoYoLab 진행률 표시" in app
+    assert "메뉴바 아이콘" in app
+
+    assert "RemoteClientPreferences" in view_model
+    assert "UserDefaults.standard" in view_model
+    assert "func bootstrap() async" in view_model
     assert "func startMirroring()" in view_model
     assert "latestStatus.stateRevision != lastStateRevision" in view_model
-    assert "return NSApp.isActive ? 5 : 15" in view_model
-    assert "if self.consecutiveMirrorFailures > 0 { return 60 }" in view_model
+    assert "handleRemoteFailure(error)" in view_model
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
@@ -396,170 +373,66 @@ def test_macos_power_ui_uses_remote_power_capabilities_to_disable_actions():
     assert "status.power?.configured == true" in view_model
     assert "status.supportedPowerActions" in view_model
     assert "!viewModel.isPowerActionEnabled(action)" in app
-    assert "전원 제어 adapter가 설정되지" in view_model
-    assert "지원 명령" in app
-    assert "PC 전원" in app
-    assert "PowerSquareButton" in app
-    assert "MenuBarPowerButton" in app
-    assert "MenuBarFooterButton" in app
-    assert "SidebarPowerButton(action: \"wake\"" in app
-    assert ".buttonStyle(.plain)" in app
-    assert "전원 설정" in app
-    assert "전원/SSH/SmartThings" in app
-    assert "전원 설정 저장" in app
-    assert "Tailscale 서버/호스트 탐색" in app
-    assert 'Label("탐색", systemImage: "network")' not in app
-    assert "ensureReady" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
-    assert "pkgs.tailscale.com/stable/?v=latest" in _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
-    assert "ReadinessPill" in app
-    assert "savePowerConfig" in view_model
-    assert "플레이 요약" in app
-    assert "플레이 요약 표시" in app
-    assert "showPlaySummary" in view_model
-    assert "--ui-test-show-summary" in ui_test_flags
-    assert "HH_REMOTE_SHOW_SUMMARY" in ui_test_flags
-    assert "RemoteUITestFlags.showSummary" in view_model
-    assert "applyUITestSnapshot" in view_model
-    assert "startMirroring()" in view_model
-    assert "guard bootstrapEnabled" in view_model
-    assert "RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled" in view_model
-    assert "viewModel.showPlaySummary && viewModel.dashboardSummary != nil" in app
-    assert "static let compactWindowHeight: CGFloat = 326" in window_accessor
-    assert "height: min(maxSize.height, max(compactWindowHeight, rawHeight))" in window_accessor
-    assert "shellHorizontalInset" in window_accessor
-    assert "shellVerticalInset" in window_accessor
-    assert "게임 실행, 진행률, 전원 제어를 빠르게 확인합니다." not in app
-    assert "homeworkHelperRemoteToggleSidebar" in app
-    assert "homeworkHelperRemoteRefreshRequested" in app
-    assert ".onExitCommand" in app
-    assert "hideMainWindow()" in app
-    assert "CommandMenu(\"원격\")" in app
-    command_menu_source = app.split("CommandMenu(\"원격\")", 1)[1].split("Settings {", 1)[0]
-    assert "if #available(macOS 14.0, *)" in command_menu_source
-    assert "SettingsLink" in command_menu_source
-    assert command_menu_source.index("SettingsLink") < command_menu_source.index("RemoteAppDelegate.openSettingsWindow()")
-    assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
-    assert ".keyboardShortcut(\"s\", modifiers: [.command, .shift])" in app
-    assert ".keyboardShortcut(\"w\", modifiers: .command)" in app
-    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
-    assert "비 HoYoLab 진행률 표시" in app
+    assert "func launch(_ process: RemoteProcess) async" in view_model
+    assert "func power(_ action: String) async" in view_model
+    assert "func confirmPairing() async" in view_model
+    assert "func recoverPairing" in view_model
+    assert "func refreshToken() async" in view_model
+    assert "func saveRemoteDesktopLogging" in view_model
+    assert "runSetupAutomation" in view_model
+    assert "ensureServerTailscale" in view_model
+    assert "applySuggestedPowerHost" in view_model
+    assert "generateAndSendSSHKey" in view_model
+    assert "probeSmartThingsDevices" in view_model
+    assert "refreshPowerSetup" in view_model
+    assert "applySmartThingsDevice" in view_model
+
+    assert "GameProgressView" in app
+    assert "GameIconView" in app
+    assert "ResourceIconView" in app
+    assert "ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)" in app
+    assert "resourceIconURL" in models
+    assert "cachedResourceIconURL" in cache
+    assert 'private static let iconCacheVersion = "v3_pixels"' in cache
+    assert "validatedCachedURL" in cache
+    assert "decodedPixelDimension(data) >= preferredSize" in cache
+    assert "displayThumbnailImage" in cache
+    assert "displayScale()" in cache
+    assert "func displayIconImage" in view_model
+    assert "func displayResourceIconImage" in view_model
+    assert "viewModel.displayIconImage" in app
+    assert "viewModel.displayResourceIconImage" in app
+    assert "RemoteClientCache.loadProcesses" in view_model
+    assert "RemoteClientCache.saveProcesses" in view_model
+    assert "RemoteClientCache.cacheIcons" in view_model
     assert "CycleProgressDisplayMode" in view_model
-    assert "cycleProgressDisplayMode" in view_model
     assert "progressDisplayText" in view_model
     for marker in ["어제", "오늘", "내일", "일 전", "일 후", "아침", "낮", "저녁", "밤"]:
         assert marker in view_model
-    assert "dateFormat" not in view_model
-    assert "viewModel.progressDisplayText(progress)" in app
+
     assert "dashboardSummary" in view_model
-    assert "모바일 " in app
     assert "mobileMetrics" in app
     assert "formatDuration" in app
     assert "Beholder 알림" in app
     assert "beholderIncidents" in app
-    assert "Android-PC 연결" in app
-    assert "Android 클라이언트가 준비될 때 사용할 매핑입니다." in app
-    assert "모바일 세션 sync는 후속 단계에서 연결합니다." not in app
     assert "gameLinks" in view_model
     assert "mobileSessions" in view_model
     assert "func startMobileSession(_ link: RemoteGameLink) async" in view_model
     assert "func endMobileSession(_ session: RemoteMobileSession) async" in view_model
     assert "func createGameLink() async" in view_model
-    assert "연결 저장" in app
-    assert "gameLinkAndroidPackage" in view_model
-    assert "func refreshToken() async" in view_model
-    assert "현재 토큰 갱신" in app
-    assert "기기 관리" in app
-    assert "연결/페어링" in app
-    assert "SetupInstructionBlock" in app
-    assert "viewModel.bootstrap()" in app
-    assert "자동 설정 점검" in app
-    assert "서버 Tailscale 확인/복구" in app
-    assert "페어링 토큰 복구" in app
-    assert "로컬 토큰 삭제" in app
-    assert "runSetupAutomation" in view_model
-    assert "ensureServerTailscale" in view_model
-    assert "applySuggestedPowerHost" in view_model
-    assert "serverTailscaleEnsure" in view_model
-    assert "setupChecklist" in view_model
-    assert "connectionGuidance" in view_model
-    assert "hostConnectionState" in view_model
-    assert "RemoteClientPreferences.loadPowerConfig" in view_model
-    assert "remoteDesktopLoggingEnabled" in view_model
-    assert "saveRemoteDesktopLogging" in view_model
-    assert "purgeRevokedDevices" in view_model
-    assert "func localWake() async" in view_model
-    assert "powerConfig.localWakeConfigured" in view_model
-    assert "completePairingOnboarding" in view_model
-    assert "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다." in view_model
-    confirm_pairing_source = view_model.split("func confirmPairing() async", 1)[1].split("func refreshToken() async", 1)[0]
-    assert 'pairingRecoveryMessage = ""' in confirm_pairing_source
-    assert 'pairingRecoveryMessage = "페어링 완료' not in confirm_pairing_source
-    assert "message = \"'\\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다.\"" in confirm_pairing_source
-    assert "func recoverPairing" in view_model
-    recover_pairing_source = view_model.split("func recoverPairing", 1)[1].split("func clearLocalPairing", 1)[0]
-    assert "refreshToken()" not in recover_pairing_source
-    assert 'tokenText = ""' not in recover_pairing_source
-    assert "저장된 토큰 확인에 실패했습니다" in recover_pairing_source
-    assert "func clearLocalPairing" in view_model
-    assert "pairingRecoveryMessage" in view_model
-    assert "저장된 Keychain 토큰으로 자동 연결했습니다." in view_model
-    assert "SSH host 채우기" in app
-    assert "Windows 전원 준비" in app
-    assert "준비 상태 확인" in app
-    assert "SSH key 생성/전송" in app
-    assert "SmartThings 기기 확인" in app
-    assert "LocalSSHKeyManager" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
-    assert "LocalPowerWakeManager" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
-    assert "smartThingsCLICandidates" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
-    assert "probeDevices" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
-    assert "SmartThingsJSONDevice" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
-    assert "hostSafeForRemoteSave" in _read(SOURCE_ROOT / "RemoteModels.swift")
-    assert "preservingLocalWake" in _read(SOURCE_ROOT / "RemoteModels.swift")
-    assert "localSSHConfigured" in _read(SOURCE_ROOT / "RemoteModels.swift")
-    assert "applyHostPowerConfig" in view_model
-    assert "fillDefaultSSHFields" in view_model
-    assert "powerSetup?.user" in view_model
-    assert "LocalSSHKeyManager.defaultPrivateKeyPath" in view_model
-    assert 'if action == "wake", powerConfig.localWakeConfigured' in view_model
-    assert "LocalSSHPowerManager" in _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
-    assert "power.local_ssh" in view_model
-    assert "power.click" in view_model
-    assert "power.smartthings.local_devices" in view_model
-    assert "LocalPowerWakeManager.isLocalSmartThingsCLIPath" in view_model
-    assert "devices:commands" in _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
-    assert "ssh-keygen" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
-    assert "generateAndSendSSHKey" in view_model
-    assert "probeSmartThingsDevices" in view_model
-    assert "refreshPowerSetup" in view_model
-    assert "smartThingsDeviceCandidates" in view_model
-    assert "applySmartThingsDevice" in view_model
-    assert "SmartThings device 후보" in app
-    assert "기본 화면에서는 숨깁니다." in app
-    assert "원격 진단 로그를 바탕 화면에 저장" in app
-    assert "폐기된 기기 정리" in app
-    assert "NSStatusItem" in app
-    assert "MenuBarPopoverView" in app
-    assert ".interpolation(.high)" in app
-    assert ".antialiased(true)" in app
-    assert ".minimumScaleFactor(0.68)" in app
-    assert ".allowsTightening(true)" in app
-    assert "gamecontroller.fill" in view_model
-    assert "로그인 시 실행" in app
-    assert "로그인 자동 실행 시 창 표시" in app
-    assert "메뉴바 아이콘" in app
+    assert "RemoteLoginItemManager" in view_model
     assert "RemoteMenuBarIconChoice" in view_model
+    assert "gamecontroller.fill" in view_model
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
-    assert "NSApp.sendAction(Selector((\"showMainWindow:\")), to: nil, from: nil)" in app
     assert "window.orderOut(nil)" in app
     assert ".close()" not in app
-    assert "HomeworkHelperRemoteMainWindow" in app
-    assert "HostStatusPill" in app
-    assert 'MenuBarFooterButton(title: "창 열기", systemImage: "macwindow")' in app
-    assert 'MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise")' in app
-    assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
-    assert "HStack(spacing: 8)" in app
-    assert ".frame(height: 30)" in app
-    assert ".frame(height: 34)" in app
-    assert "외 \\(viewModel.processes.count - 5)개" in app
-    assert "RemoteLoginItemManager" in view_model
+    assert "--ui-test-show-popover" in ui_test_flags
+    assert "HH_REMOTE_SHOW_POPOVER" in ui_test_flags
+    assert "--ui-test-click-status-item" in ui_test_flags
+    assert "HH_REMOTE_CLICK_STATUS_ITEM" in ui_test_flags
+    assert "--ui-test-open-settings" in ui_test_flags
+    assert "HH_REMOTE_OPEN_SETTINGS" in ui_test_flags
+    assert "showUITestPopoverWindow" in app
+    assert "--ui-test-no-external-state" in ui_test_flags
+    assert "HH_REMOTE_NO_EXTERNAL_STATE" in ui_test_flags

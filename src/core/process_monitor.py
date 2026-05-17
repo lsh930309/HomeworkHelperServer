@@ -27,6 +27,7 @@ class ProcessesDataPort(Protocol):
     managed_processes: list[ManagedProcess]
     def update_process(self, updated_process: ManagedProcess) -> bool: ...
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool: ...
+    def update_process_stamina(self, process_id: str, stamina_current: int, stamina_max: int, stamina_updated_at: float) -> bool: ...
     def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Any: ...
     def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Any: ...
     def get_last_session(self, process_id: str) -> Any: ...
@@ -147,6 +148,23 @@ class ProcessMonitor:
         except ImportError:
             logger.warning("HoYoLab 서비스를 로드할 수 없습니다.")
             return None
+
+    def _persist_stamina_state(self, process: ManagedProcess) -> bool:
+        """Persist only HoYoLab stamina fields when a full runtime patch is unnecessary."""
+        if (
+            process.stamina_current is None
+            or process.stamina_max is None
+            or process.stamina_updated_at is None
+        ):
+            return True
+        if hasattr(self.data_manager, "update_process_stamina"):
+            return self.data_manager.update_process_stamina(
+                process.id,
+                process.stamina_current,
+                process.stamina_max,
+                process.stamina_updated_at,
+            )
+        return self.data_manager.update_process_runtime_state(process)
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
         """실행 파일 경로를 비교 가능한 절대 경로 형태로 정규화합니다."""
@@ -397,7 +415,7 @@ class ProcessMonitor:
                 process.stamina_current = actual_current
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = stamina.updated_at.timestamp()
-                self.data_manager.update_process_runtime_state(process)
+                self._persist_stamina_state(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
                 return
@@ -446,7 +464,7 @@ class ProcessMonitor:
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
             process.stamina_updated_at = stamina.updated_at.timestamp()
-            self.data_manager.update_process_runtime_state(process)
+            self._persist_stamina_state(process)
             _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 
         except Exception as e:

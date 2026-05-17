@@ -43,12 +43,14 @@ struct RemoteStatus: Decodable {
 
     struct Power: Decodable {
         let configured: Bool
+        let state: String?
         let status: String?
         let supportedActions: [String]
         let targetHost: String?
 
         enum CodingKeys: String, CodingKey {
             case configured
+            case state
             case status
             case supportedActions = "supported_actions"
             case targetHost = "target_host"

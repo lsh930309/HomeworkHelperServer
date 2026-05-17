@@ -17,6 +17,14 @@ enum RemoteUITestFlags {
         hasArgument("--ui-test-show-popover") || hasEnvironment("HH_REMOTE_SHOW_POPOVER")
     }
 
+    static var clickStatusItem: Bool {
+        hasArgument("--ui-test-click-status-item") || hasEnvironment("HH_REMOTE_CLICK_STATUS_ITEM")
+    }
+
+    static var openSettings: Bool {
+        hasArgument("--ui-test-open-settings") || hasEnvironment("HH_REMOTE_OPEN_SETTINGS")
+    }
+
     static var skipExternalState: Bool {
         hasArgument("--ui-test-no-external-state")
             || hasEnvironment("HH_REMOTE_NO_EXTERNAL_STATE")
@@ -24,6 +32,8 @@ enum RemoteUITestFlags {
             || showSidebar
             || showSummary
             || showPopover
+            || clickStatusItem
+            || openSettings
     }
 
     private static func hasArgument(_ argument: String) -> Bool {

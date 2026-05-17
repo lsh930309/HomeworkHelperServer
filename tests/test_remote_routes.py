@@ -782,6 +782,43 @@ def test_remote_device_token_survives_registry_reload_without_refresh(tmp_path):
     assert reloaded.validate_token(token, now=1778497020.0) is not None
 
 
+def test_remote_power_actions_preserve_authenticated_pairing_token():
+    commands: list[list[str]] = []
+    config = RemotePowerConfig(
+        smartthings_device_id="device-1",
+        smartthings_cli_path="/opt/homebrew/bin/smartthings",
+        ssh_host="pc.example.test",
+        ssh_port=50022,
+        ssh_user="player",
+        ssh_key_path="~/.ssh/id_ed25519",
+    )
+    controller = ConfigurablePowerController(
+        config,
+        runner=lambda args, _timeout: commands.append(list(args)) is None or True,
+        tcp_checker=lambda _host, _port, _timeout: True,
+    )
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=controller)
+
+    pairing = client.post("/remote/pair/start")
+    confirmed = client.post(
+        "/remote/pair/confirm",
+        json={"code": pairing.json()["code"], "device_name": "MacBook", "platform": "macos"},
+    )
+    token = confirmed.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for action in ["sleep", "wake", "restart", "shutdown"]:
+        response = client.post(f"/remote/power/{action}", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["accepted"] is True
+        assert client.get("/remote/status", headers=headers).status_code == 200
+        devices = client.get("/remote/devices", headers=headers)
+        assert devices.status_code == 200
+        assert devices.json()["devices"][0]["revoked_at"] is None
+
+    assert len(commands) == 4
+
+
 def test_configured_power_controller_uses_pc_remote_smartthings_and_ssh_commands():
     commands: list[list[str]] = []
     config = RemotePowerConfig(
@@ -1009,3 +1046,45 @@ def test_remote_status_revision_changes_for_mirrored_state_changes():
     assert base_status["state_revision"] != changed_status["state_revision"]
     assert changed_status["updated_at"] == 1778496900.0
     assert capabilities["state_revision"] == changed_status["state_revision"]
+
+
+def test_remote_status_revision_changes_for_hoyolab_stamina_updates():
+    base_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(
+                id="stamina-game",
+                name="Stamina Game",
+                monitoring_path="/game.exe",
+                launch_path="/game.url",
+                stamina_tracking_enabled=True,
+                hoyolab_game_id="genshin",
+                stamina_current=100,
+                stamina_max=240,
+                stamina_updated_at=1778496900.0,
+            ),
+        ],
+    )
+    changed_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(
+                id="stamina-game",
+                name="Stamina Game",
+                monitoring_path="/game.exe",
+                launch_path="/game.url",
+                stamina_tracking_enabled=True,
+                hoyolab_game_id="genshin",
+                stamina_current=92,
+                stamina_max=240,
+                stamina_updated_at=1778497000.0,
+            ),
+        ],
+    )
+
+    base_status = base_client.get("/remote/status").json()
+    changed_status = changed_client.get("/remote/status").json()
+    changed_process = changed_client.get("/remote/processes").json()[0]
+
+    assert base_status["state_revision"] != changed_status["state_revision"]
+    assert changed_status["updated_at"] == 1778497000.0
+    assert changed_process["progress"]["stamina_current"] == 92
+    assert changed_process["progress"]["display_text"] == "92/240"

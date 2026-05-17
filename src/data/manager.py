@@ -114,6 +114,24 @@ class DataManager:
         print(f"Process with ID {updated_process.id} not found for update.")
         return False
 
+    def update_process_stamina(
+        self,
+        process_id: str,
+        stamina_current: int,
+        stamina_max: int,
+        stamina_updated_at: float,
+    ) -> bool:
+        """HoYoLab 재동기화가 갱신한 스태미나 필드만 저장합니다."""
+        process = self.get_process_by_id(process_id)
+        if process is None:
+            print(f"Process with ID {process_id} not found for stamina update.")
+            return False
+        process.stamina_current = stamina_current
+        process.stamina_max = stamina_max
+        process.stamina_updated_at = stamina_updated_at
+        self.save_managed_processes()
+        return True
+
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 프로세스를 찾아 반환합니다."""
         for process in self.managed_processes:

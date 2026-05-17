@@ -475,6 +475,11 @@ def run_server_main():
         stamina_max: int | None = None
         stamina_updated_at: float | None = None
 
+    class ProcessStaminaPatch(BaseModel):
+        stamina_current: int
+        stamina_max: int
+        stamina_updated_at: float
+
     @app.exception_handler(beholder.BeholderBlocked)
     async def beholder_blocked_handler(request, exc):
         return JSONResponse(
@@ -561,6 +566,29 @@ def run_server_main():
             stamina_updated_at=patch.stamina_updated_at,
             actor="process_monitor",
             operation_kind="process_runtime_state_update",
+            override_token=x_hh_beholder_override,
+        )
+        if updated_process is None:
+            raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        return updated_process
+
+    @app.patch("/processes/{process_id}/stamina", response_model=schemas.ProcessSchema)
+    def update_process_stamina(
+        process_id: str,
+        patch: ProcessStaminaPatch,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        updated_process = crud.update_process_stamina(
+            db=db,
+            process_id=process_id,
+            stamina_current=patch.stamina_current,
+            stamina_max=patch.stamina_max,
+            stamina_updated_at=patch.stamina_updated_at,
+            actor=x_hh_beholder_actor or "hoyolab_slow_followup",
+            operation_kind=x_hh_beholder_operation or "process_stamina_refresh",
             override_token=x_hh_beholder_override,
         )
         if updated_process is None:

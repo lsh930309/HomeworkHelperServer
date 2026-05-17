@@ -266,6 +266,33 @@ class ApiClient:
             print(f"프로세스 런타임 상태 저장에 실패했습니다: {e}")
             return False
 
+    def update_process_stamina(
+        self,
+        process_id: str,
+        stamina_current: int,
+        stamina_max: int,
+        stamina_updated_at: float,
+    ) -> bool:
+        """Persist only HoYoLab stamina fields after slow follow-up reconciliation."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/processes/{process_id}/stamina",
+                json={
+                    "stamina_current": stamina_current,
+                    "stamina_max": stamina_max,
+                    "stamina_updated_at": stamina_updated_at,
+                },
+                headers=self._beholder_headers("hoyolab_slow_followup", "process_stamina_refresh"),
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("hoyolab_slow_followup", "process_stamina_refresh")
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException as e:
+            print(f"프로세스 스태미나 저장에 실패했습니다: {e}")
+            return False
+
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 단일 프로세스를 찾습니다 (내부 메모리에서)."""
         for p in self.managed_processes:

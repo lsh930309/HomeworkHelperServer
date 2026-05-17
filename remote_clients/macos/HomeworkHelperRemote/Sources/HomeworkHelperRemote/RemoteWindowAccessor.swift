@@ -122,3 +122,103 @@ struct RemoteWindowAccessor: NSViewRepresentable {
         RemoteAppDelegate.prepareMainWindow(window)
     }
 }
+
+struct RemotePlaceholderWindowAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { configure(window: view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(window: nsView.window) }
+    }
+
+    private func configure(window: NSWindow?) {
+        guard let window else { return }
+        window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.placeholderWindowIdentifier)
+        window.title = RemoteAppDelegate.placeholderWindowTitle
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.setFrame(NSRect(x: -10_000, y: -10_000, width: 160, height: 96), display: false)
+        window.orderOut(nil)
+    }
+}
+
+struct RemoteSettingsWindowAccessor: NSViewRepresentable {
+    let targetSize: CGSize
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { configure(window: view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(window: nsView.window) }
+    }
+
+    private func configure(window: NSWindow?) {
+        guard let window else { return }
+        let maxSize = NSScreen.main.map {
+            CGSize(
+                width: max(RemoteSettingsLayout.minWindowWidth, $0.visibleFrame.width - 80),
+                height: max(RemoteSettingsLayout.minWindowHeight, $0.visibleFrame.height - 80)
+            )
+        } ?? CGSize(width: 1180, height: 800)
+        window.minSize = CGSize(width: RemoteSettingsLayout.minWindowWidth, height: RemoteSettingsLayout.minWindowHeight)
+        window.maxSize = maxSize
+        window.setContentSize(targetSize)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .visible
+        window.isMovableByWindowBackground = true
+    }
+}
+
+struct RemoteSettingsKeyboardShortcutBridge: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.view = nsView
+    }
+
+    final class Coordinator {
+        weak var view: NSView?
+        private var monitor: Any?
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+
+        func attach(to view: NSView) {
+            self.view = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.view?.window, NSApp.keyWindow === window else {
+                    return event
+                }
+                let isEscape = event.keyCode == 53
+                let isReturn = event.keyCode == 36 || event.keyCode == 76
+                let isCommandReturn = isReturn && event.modifierFlags.contains(.command)
+                if isEscape || isCommandReturn || (isReturn && !self.isEditingText(in: window)) {
+                    window.orderOut(nil)
+                    return nil
+                }
+                return event
+            }
+        }
+
+        private func isEditingText(in window: NSWindow) -> Bool {
+            if window.firstResponder is NSTextView { return true }
+            return String(describing: type(of: window.firstResponder as Any)).contains("FieldEditor")
+        }
+    }
+}

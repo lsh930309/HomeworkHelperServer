@@ -51,6 +51,7 @@ private enum RemoteClientPreferences {
     private static let menuBarIconSymbolKey = "remote.menuBarIconSymbol"
     private static let showPlaySummaryKey = "remote.showPlaySummary"
     private static let cycleProgressDisplayModeKey = "remote.cycleProgressDisplayMode"
+    private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -128,6 +129,15 @@ private enum RemoteClientPreferences {
     static func saveCycleProgressDisplayMode(_ mode: CycleProgressDisplayMode) {
         defaults.set(mode.rawValue, forKey: cycleProgressDisplayModeKey)
     }
+
+    static func loadMirrorPollIntervalSeconds() -> Int {
+        guard defaults.object(forKey: mirrorPollIntervalSecondsKey) != nil else { return 5 }
+        return min(60, max(1, defaults.integer(forKey: mirrorPollIntervalSecondsKey)))
+    }
+
+    static func saveMirrorPollIntervalSeconds(_ seconds: Int) {
+        defaults.set(min(60, max(1, seconds)), forKey: mirrorPollIntervalSecondsKey)
+    }
 }
 
 enum RemoteMenuBarIconChoice {
@@ -145,6 +155,58 @@ enum CycleProgressDisplayMode: String, CaseIterable, Identifiable {
         switch self {
         case .remaining: return "잔여 시간"
         case .readyAt: return "완료 예정 시각"
+        }
+    }
+}
+
+enum RemoteHostAvailabilityState: String {
+    case unknown
+    case online
+    case goingOffline
+    case offlineExpected
+    case waking
+    case restarting
+    case reconnecting
+    case authRejected
+
+    var connectionState: String {
+        switch self {
+        case .online:
+            return "online"
+        case .offlineExpected:
+            return "offline"
+        default:
+            return rawValue
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .unknown: return "상태 확인 중"
+        case .online: return "페어링됨"
+        case .goingOffline: return "종료 확인 중"
+        case .offlineExpected: return "호스트 꺼짐"
+        case .waking: return "부팅 대기 중"
+        case .restarting: return "재시동 대기 중"
+        case .reconnecting: return "재연결 중"
+        case .authRejected: return "인증 확인 필요"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .online:
+            return .green
+        case .goingOffline, .restarting:
+            return .orange
+        case .offlineExpected:
+            return .secondary
+        case .waking, .reconnecting:
+            return .blue
+        case .authRejected:
+            return .red
+        case .unknown:
+            return .secondary
         }
     }
 }
@@ -206,6 +268,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var remoteDesktopLoggingPath = RemoteClientDesktopLogger.logPath()
     @Published var pairingRecoveryMessage = ""
     @Published var hostConnectionState = "unknown"
+    @Published var hostAvailabilityState: RemoteHostAvailabilityState = .unknown
     @Published var status: RemoteStatus?
     @Published var dashboardSummary: RemoteDashboardSummary?
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
@@ -233,6 +296,16 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var cycleProgressDisplayMode = RemoteClientPreferences.loadCycleProgressDisplayMode() {
         didSet { RemoteClientPreferences.saveCycleProgressDisplayMode(cycleProgressDisplayMode) }
     }
+    @Published var mirrorPollIntervalSeconds = RemoteClientPreferences.loadMirrorPollIntervalSeconds() {
+        didSet {
+            let clamped = min(60, max(1, mirrorPollIntervalSeconds))
+            if clamped != mirrorPollIntervalSeconds {
+                mirrorPollIntervalSeconds = clamped
+                return
+            }
+            RemoteClientPreferences.saveMirrorPollIntervalSeconds(clamped)
+        }
+    }
     @Published var isLoading = false
     @Published var message = "Remote Agent에 연결하세요."
 
@@ -251,20 +324,15 @@ final class RemoteDashboardViewModel: ObservableObject {
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var hostStatusLabel: String {
-        if isLoading { return "동기화 중" }
         if !isPaired { return "페어링 해제됨" }
-        if !pairingRecoveryMessage.isEmpty { return "페어링 확인 필요" }
-        if hostConnectionState == "offline" { return "오프라인/꺼져 있음" }
-        return "페어링됨"
+        if isLoading, hostAvailabilityState == .online { return "동기화 중" }
+        if hostAvailabilityState == .authRejected { return RemoteHostAvailabilityState.authRejected.label }
+        return hostAvailabilityState.label
     }
 
     var hostStatusColor: Color {
-        switch hostStatusLabel {
-        case "페어링됨": return .green
-        case "동기화 중": return .blue
-        case "오프라인/꺼져 있음": return .orange
-        default: return .secondary
-        }
+        if isLoading, hostAvailabilityState == .online { return .blue }
+        return isPaired ? hostAvailabilityState.color : .secondary
     }
 
     private let tokenStore: any RemoteTokenStore
@@ -272,6 +340,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     private var mirrorTask: Task<Void, Never>?
     private var lastStateRevision: String?
     private var consecutiveMirrorFailures = 0
+    private var reconnectSchedule: [UInt64] = []
+    private static let expectedOfflineProbeSchedule = Array(repeating: UInt64(2), count: 5)
+    private static let wakeReconnectSchedule = Array(repeating: UInt64(1), count: 15)
+        + Array(repeating: UInt64(2), count: 15)
+        + Array(repeating: UInt64(5), count: 24)
+    private static let restartReconnectSchedule = [UInt64(5)] + wakeReconnectSchedule
 
     init(tokenStore: any RemoteTokenStore = KeychainTokenStore(), bootstrapEnabled: Bool = true) {
         self.tokenStore = tokenStore
@@ -288,7 +362,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func applyUITestSnapshot() {
         tokenText = "ui-test-token"
-        hostConnectionState = "online"
+        setHostAvailability(.online, clearPairingRecovery: true)
         pairingRecoveryMessage = ""
         message = "GUI 검수 모드: 외부 상태 접근 없이 샘플 데이터를 표시합니다."
         setupProgress = "GUI 검수 모드입니다. Keychain, 네트워크, Tailscale 자동 점검을 건너뜁니다."
@@ -331,6 +405,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             ),
             power: RemoteStatus.Power(
                 configured: true,
+                state: "on",
                 status: "ready",
                 supportedActions: ["wake", "sleep", "restart", "shutdown"],
                 targetHost: "ui-test-host"
@@ -386,6 +461,133 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteDashboardService(client: client)
     }
 
+    private func setHostAvailability(_ state: RemoteHostAvailabilityState, clearPairingRecovery: Bool = false) {
+        hostAvailabilityState = state
+        hostConnectionState = state.connectionState
+        if clearPairingRecovery {
+            pairingRecoveryMessage = ""
+        }
+    }
+
+    private func applyRemoteStatus(_ latestStatus: RemoteStatus, clearPairingRecovery: Bool = true) {
+        status = latestStatus
+        consecutiveMirrorFailures = 0
+        setHostAvailability(.online, clearPairingRecovery: clearPairingRecovery)
+        if let statusReadiness = latestStatus.readiness {
+            readiness = statusReadiness
+        }
+        applyPowerStateHint(latestStatus.power?.state ?? latestStatus.power?.status)
+    }
+
+    private func applyPowerStateHint(_ rawState: String?) {
+        guard let rawState else { return }
+        let normalized = rawState.lowercased()
+        if ["off", "offline", "asleep", "sleeping"].contains(normalized),
+           ![.goingOffline, .waking, .restarting].contains(hostAvailabilityState) {
+            setHostAvailability(.offlineExpected)
+        } else if ["on", "online", "ready"].contains(normalized),
+                  hostAvailabilityState != .authRejected {
+            setHostAvailability(.online, clearPairingRecovery: true)
+        }
+    }
+
+    private func beginPowerTransition(for action: String) {
+        consecutiveMirrorFailures = 0
+        switch action {
+        case "wake":
+            reconnectSchedule = Self.wakeReconnectSchedule
+            setHostAvailability(.waking)
+            pairingRecoveryMessage = ""
+        case "restart":
+            reconnectSchedule = Self.restartReconnectSchedule
+            setHostAvailability(.restarting)
+            pairingRecoveryMessage = ""
+        case "sleep", "shutdown":
+            reconnectSchedule = Self.expectedOfflineProbeSchedule
+            setHostAvailability(.goingOffline)
+            pairingRecoveryMessage = ""
+        default:
+            reconnectSchedule = []
+        }
+    }
+
+    private func nextMirrorDelaySeconds() -> UInt64 {
+        if reconnectSchedule.isEmpty == false {
+            return reconnectSchedule.removeFirst()
+        }
+        switch hostAvailabilityState {
+        case .goingOffline:
+            setHostAvailability(.online, clearPairingRecovery: true)
+            return UInt64(mirrorPollIntervalSeconds)
+        case .waking, .restarting, .reconnecting:
+            setHostAvailability(.offlineExpected)
+            return 60
+        case .offlineExpected:
+            return 60
+        case .authRejected:
+            return 60
+        default:
+            if consecutiveMirrorFailures > 0 { return 60 }
+            return UInt64(mirrorPollIntervalSeconds)
+        }
+    }
+
+    private func isAuthFailure(_ error: Error) -> Bool {
+        let raw = error.localizedDescription
+        return raw.contains("HTTP 401") || raw.contains("HTTP 403")
+    }
+
+    private func isConnectivityFailure(_ error: Error) -> Bool {
+        let raw = error.localizedDescription.lowercased()
+        return raw.contains("could not connect")
+            || raw.contains("timed out")
+            || raw.contains("cannot connect")
+            || raw.contains("connection lost")
+            || raw.contains("not connected")
+            || raw.contains("network")
+            || raw.contains("server")
+            || raw.contains("서버")
+            || raw.contains("연결")
+    }
+
+    private func handleRemoteFailure(_ error: Error, updateMessage: Bool = true) {
+        if processes.isEmpty {
+            processes = RemoteClientCache.loadProcesses()
+        }
+        consecutiveMirrorFailures += 1
+        if isAuthFailure(error) {
+            reconnectSchedule = []
+            setHostAvailability(.authRejected)
+            pairingRecoveryMessage = "저장된 토큰이 호스트에서 거부되었습니다. 로컬 토큰은 보존됩니다. 호스트 원격 설정에서 해당 디바이스가 폐기됐는지 확인하세요."
+            setupProgress = pairingRecoveryMessage
+            if updateMessage { message = pairingRecoveryMessage }
+            return
+        }
+
+        if isConnectivityFailure(error) {
+            if hostAvailabilityState == .goingOffline {
+                reconnectSchedule = []
+                setHostAvailability(.offlineExpected)
+                setupProgress = "호스트가 절전/종료 상태로 전환된 것으로 판단했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+                if updateMessage { message = setupProgress }
+                return
+            }
+            if [.waking, .restarting].contains(hostAvailabilityState) {
+                setHostAvailability(hostAvailabilityState)
+                if updateMessage { message = "호스트 응답을 기다리는 중입니다. 저장된 토큰은 보존합니다." }
+                return
+            }
+            setHostAvailability(.reconnecting)
+            if reconnectSchedule.isEmpty {
+                reconnectSchedule = Self.wakeReconnectSchedule
+            }
+            if updateMessage { message = "호스트 연결이 끊겼습니다. 저장된 토큰으로 자동 재연결을 시도합니다." }
+            return
+        }
+
+        if updateMessage { message = connectionGuidance(for: error) }
+    }
+
     private func applyHostPowerConfig(_ config: RemotePowerConfigPayload) {
         powerConfig = config.preservingLocalWake(from: powerConfig)
     }
@@ -430,8 +632,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             await recoverPairing(silent: true)
         }
         await refresh()
-        if pairingRecoveryMessage.contains("재페어링") {
-            setupProgress = "Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급해 입력하세요."
+        if hostAvailabilityState == .authRejected {
+            setupProgress = "호스트가 저장 토큰을 거부했습니다. 토큰은 보존했으니 Windows 앱의 원격 설정에서 디바이스 상태를 확인하세요."
         } else if status != nil {
             setupProgress = isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
         } else if snapshot.running {
@@ -447,8 +649,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             while !Task.isCancelled {
                 let seconds: UInt64 = await MainActor.run {
                     guard let self else { return 15 }
-                    if self.consecutiveMirrorFailures > 0 { return 60 }
-                    return NSApp.isActive ? 5 : 15
+                    return self.nextMirrorDelaySeconds()
                 }
                 try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 guard !Task.isCancelled else { break }
@@ -540,7 +741,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func connectionGuidance(for error: Error) -> String {
         let raw = error.localizedDescription
         if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
-            return "페어링 토큰이 없거나 만료되었습니다. Windows 앱의 [설정 > 원격 설정]에서 새 페어링 코드를 발급하세요. (\(raw))"
+            return "저장된 페어링 토큰이 호스트에서 거부되었습니다. 로컬 토큰은 보존되며, Windows 앱의 원격 설정에서 디바이스 폐기 여부를 확인하세요. (\(raw))"
         }
         if raw.localizedCaseInsensitiveContains("could not connect") || raw.localizedCaseInsensitiveContains("timed out") || raw.localizedCaseInsensitiveContains("서버") {
             return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
@@ -561,26 +762,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let latestStatus = try await service?.status()
             if let latestStatus {
-                status = latestStatus
-                hostConnectionState = "online"
-                pairingRecoveryMessage = ""
+                applyRemoteStatus(latestStatus)
                 setupProgress = "저장된 Keychain 토큰으로 페어링을 확인했습니다."
-                if let statusReadiness = latestStatus.readiness {
-                    readiness = statusReadiness
-                }
             }
             devices = (try? await service?.devices()) ?? devices
         } catch {
-            let guidance = connectionGuidance(for: error)
-            if guidance.contains("페어링 토큰") || guidance.contains("HTTP 401") || guidance.contains("HTTP 403") {
-                pairingRecoveryMessage = "저장된 토큰 확인에 실패했습니다. 로컬 토큰은 보존했으니 호스트 앱 재실행 후 자동 복구를 다시 시도하세요."
-                setupProgress = pairingRecoveryMessage
-            } else {
-                pairingRecoveryMessage = guidance
-                setupProgress = guidance
-            }
-            if !silent {
-                message = setupProgress
+            handleRemoteFailure(error, updateMessage: !silent)
+            if !isAuthFailure(error) {
+                setupProgress = "호스트가 오프라인일 수 있습니다. 저장된 토큰과 캐시 데이터는 보존하고 자동 재연결을 유지합니다."
             }
         }
     }
@@ -611,12 +800,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         let service = RemoteDashboardService(client: client)
         do {
             setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
-            status = try await service.status()
-            hostConnectionState = "online"
-            if let statusReadiness = status?.readiness {
-                readiness = statusReadiness
-            } else {
+            let latestStatus = try await service.status()
+            applyRemoteStatus(latestStatus)
+            if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
+            } else {
+                readiness = latestStatus.readiness
             }
             powerConfigResponse = try? await service.powerConfig()
             powerSetup = try? await service.powerSetup()
@@ -628,8 +817,9 @@ final class RemoteDashboardViewModel: ObservableObject {
                 await recoverPairing(silent: true)
                 devices = (try? await service.devices()) ?? devices
                 serverTailscaleEnsure = try? await service.ensureServerTailscale()
-                status = try await service.status()
-                readiness = status?.readiness
+                let latestStatus = try await service.status()
+                applyRemoteStatus(latestStatus)
+                readiness = latestStatus.readiness
             } else {
                 setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
             }
@@ -637,9 +827,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
             message = setupProgress
         } catch {
-            let guidance = connectionGuidance(for: error)
-            setupProgress = guidance
-            message = guidance
+            handleRemoteFailure(error)
+            if !isAuthFailure(error) {
+                setupProgress = "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 재연결을 유지합니다."
+            }
         }
     }
 
@@ -656,11 +847,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             serverTailscaleEnsure = try await service.ensureServerTailscale()
-            status = try await service.status()
-            readiness = status?.readiness
+            let latestStatus = try await service.status()
+            applyRemoteStatus(latestStatus)
+            readiness = latestStatus.readiness
             message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
         } catch {
-            message = connectionGuidance(for: error)
+            handleRemoteFailure(error)
         }
     }
 
@@ -690,24 +882,15 @@ final class RemoteDashboardViewModel: ObservableObject {
         let service = RemoteDashboardService(client: client)
         do {
             let latestStatus = try await service.status()
-            status = latestStatus
-            hostConnectionState = "online"
-            consecutiveMirrorFailures = 0
-            if let statusReadiness = latestStatus.readiness {
-                readiness = statusReadiness
-            } else {
+            applyRemoteStatus(latestStatus)
+            if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
             }
             guard latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else { return }
             lastStateRevision = latestStatus.stateRevision
             await syncRemotePayloads(using: service, client: client)
         } catch {
-            if processes.isEmpty {
-                processes = RemoteClientCache.loadProcesses()
-            }
-            consecutiveMirrorFailures += 1
-            hostConnectionState = "offline"
-            message = connectionGuidance(for: error)
+            handleRemoteFailure(error)
         }
     }
 
@@ -722,7 +905,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             if processes.isEmpty {
                 processes = RemoteClientCache.loadProcesses()
             }
-            message = connectionGuidance(for: error)
+            handleRemoteFailure(error)
         }
     }
 
@@ -733,13 +916,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             // Keep refreshes sequential. The Remote Agent's file-backed device
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
-            status = try await service.status()
-            lastStateRevision = status?.stateRevision
-            consecutiveMirrorFailures = 0
-            hostConnectionState = "online"
-            if let statusReadiness = status?.readiness {
-                readiness = statusReadiness
-            } else {
+            let latestStatus = try await service.status()
+            applyRemoteStatus(latestStatus)
+            lastStateRevision = latestStatus.stateRevision
+            if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
             }
             dashboardSummary = try await service.dashboardSummary()
@@ -760,13 +940,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개"
         } catch {
-            let guidance = connectionGuidance(for: error)
-            if guidance.contains("연결하지 못했습니다") { hostConnectionState = "offline" }
-            if processes.isEmpty {
-                processes = RemoteClientCache.loadProcesses()
+            handleRemoteFailure(error)
+            if isAuthFailure(error) {
+                setupProgress = pairingRecoveryMessage
             }
-            message = guidance
-            setupProgress = guidance
         }
     }
 
@@ -846,8 +1023,16 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func isPowerActionEnabled(_ action: String) -> Bool {
         if action == "wake", powerConfig.localWakeConfigured { return true }
-        if ["shutdown", "sleep", "restart"].contains(action), powerConfig.localSSHConfigured { return true }
+        if ["shutdown", "sleep", "restart"].contains(action),
+           powerConfig.localSSHConfigured,
+           ![.offlineExpected, .waking, .restarting, .goingOffline, .authRejected].contains(hostAvailabilityState) {
+            return true
+        }
         guard let status else { return false }
+        if ["shutdown", "sleep", "restart"].contains(action),
+           [.offlineExpected, .waking, .restarting, .goingOffline, .authRejected].contains(hostAvailabilityState) {
+            return false
+        }
         guard status.capabilities.powerControl, status.power?.configured == true else { return false }
         let supported = status.supportedPowerActions
         return supported.isEmpty || supported.contains(action)
@@ -862,11 +1047,15 @@ final class RemoteDashboardViewModel: ObservableObject {
             RemoteClientDesktopLogger.write("power.click", ["action": action])
         }
         if action == "wake", powerConfig.localWakeConfigured {
-            await localWake()
+            if await localWake() {
+                beginPowerTransition(for: "wake")
+            }
             return
         }
         if ["shutdown", "sleep", "restart"].contains(action), powerConfig.localSSHConfigured {
-            await localSSH(action)
+            if await localSSH(action) {
+                beginPowerTransition(for: action)
+            }
             return
         }
         guard let client else { return }
@@ -874,36 +1063,46 @@ final class RemoteDashboardViewModel: ObservableObject {
             let service = RemoteDashboardService(client: client)
             let result = try await service.power(action: action)
             message = result.message
-            await refresh()
+            if result.accepted {
+                beginPowerTransition(for: action)
+            }
         } catch {
             if action == "wake" {
-                await localWake()
+                if await localWake() {
+                    beginPowerTransition(for: "wake")
+                }
             } else {
-                message = error.localizedDescription
+                handleRemoteFailure(error)
             }
         }
     }
 
-    func localWake() async {
+    @discardableResult
+    func localWake() async -> Bool {
         do {
             message = try await LocalPowerWakeManager.wake(config: powerConfig)
             if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("power.local_wake", ["device_id": powerConfig.smartthingsDeviceID]) }
+            return true
         } catch {
             message = error.localizedDescription
+            return false
         }
     }
 
-    func localSSH(_ action: String) async {
+    @discardableResult
+    func localSSH(_ action: String) async -> Bool {
         do {
             message = try await LocalSSHPowerManager.run(action: action, config: powerConfig)
             if remoteDesktopLoggingEnabled {
                 RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted"])
             }
+            return true
         } catch {
             message = error.localizedDescription
             if remoteDesktopLoggingEnabled {
                 RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "failed", "message": error.localizedDescription])
             }
+            return false
         }
     }
 
@@ -1036,9 +1235,10 @@ final class RemoteDashboardViewModel: ObservableObject {
                 powerConfigResponse = saved
             }
         }
-        status = try? await service.status()
-        readiness = status?.readiness ?? readiness
-        hostConnectionState = status == nil ? hostConnectionState : "online"
+        if let latestStatus = try? await service.status() {
+            applyRemoteStatus(latestStatus)
+            readiness = latestStatus.readiness ?? readiness
+        }
         setupProgress = smartThingsDeviceCandidates.count > 1
             ? "PIN 설정 대부분 완료. SmartThings 후보가 여러 개라 wake 대상만 선택 후 저장하세요."
             : "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다."
@@ -1049,12 +1249,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let response = try await service.savePowerConfig(powerConfig.hostSafeForRemoteSave())
             powerConfigResponse = response
-            status = try await service.status()
-            readiness = status?.readiness
+            let latestStatus = try await service.status()
+            applyRemoteStatus(latestStatus)
+            readiness = latestStatus.readiness
             let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
             message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions)"
         } catch {
-            message = error.localizedDescription
+            handleRemoteFailure(error)
         }
     }
 
@@ -1095,7 +1296,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let response = try await service.refreshToken()
             tokenText = response.token
-            pairingRecoveryMessage = "토큰 갱신 완료: \(response.name)"
+            pairingRecoveryMessage = ""
             setupProgress = "현재 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             message = "'\(response.name)' 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             await refreshDevices()

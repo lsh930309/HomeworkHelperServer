@@ -1246,6 +1246,126 @@ def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
     assert client.managed_processes == ["fresh"]
 
 
+def test_stamina_refresh_client_uses_hoyolab_specific_patch(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.managed_processes = []
+    client.web_shortcuts = []
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    monkeypatch.setattr(ApiClient, "_fetch_all_processes", lambda self: ["fresh-stamina"])
+    calls = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    assert client.update_process_stamina("game-a", 92, 240, 1778497000.0) is True
+
+    assert calls[0][0] == ("http://testserver/processes/game-a/stamina",)
+    assert calls[0][1]["json"] == {
+        "stamina_current": 92,
+        "stamina_max": 240,
+        "stamina_updated_at": 1778497000.0,
+    }
+    assert calls[0][1]["headers"] == {
+        "X-HH-Beholder-Actor": "hoyolab_slow_followup",
+        "X-HH-Beholder-Operation": "process_stamina_refresh",
+    }
+    assert client.managed_processes == ["fresh-stamina"]
+
+
+def test_hoyolab_reconcile_persists_only_final_stamina_fields():
+    from src.core.hoyolab_reconcile import _StaminaPersistTask
+    from src.data.data_models import ManagedProcess
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+        stamina_tracking_enabled=True,
+        hoyolab_game_id="genshin",
+        stamina_current=100,
+        stamina_max=240,
+        stamina_updated_at=1000.0,
+    )
+
+    class FakeDataManager:
+        runtime_updates = []
+        stamina_updates = []
+        session_updates = []
+
+        def get_process_by_id(self, process_id):
+            assert process_id == "game-a"
+            return process
+
+        def update_process_runtime_state(self, updated_process):
+            self.runtime_updates.append(updated_process)
+            return True
+
+        def update_process_stamina(self, process_id, stamina_current, stamina_max, stamina_updated_at):
+            self.stamina_updates.append((process_id, stamina_current, stamina_max, stamina_updated_at))
+            return True
+
+        def update_session_stamina(self, session_id, stamina_at_end):
+            self.session_updates.append((session_id, stamina_at_end))
+            return True
+
+    class Finished:
+        def __init__(self):
+            self.payloads = []
+
+        def emit(self, *args):
+            self.payloads.append(args)
+
+    class Signals:
+        def __init__(self):
+            self.finished = Finished()
+
+    data_manager = FakeDataManager()
+    signals = Signals()
+    task = _StaminaPersistTask(
+        process_id="game-a",
+        process_name="Game A",
+        session_id=7,
+        lifecycle_token=1,
+        request_seq=1,
+        fetched_current=90,
+        fetched_max=240,
+        fetched_at=1778497000.0,
+        exit_timestamp=1778497000.0,
+        allow_session_correction=True,
+        applied_session_stamina=100,
+        data_manager=data_manager,
+        should_abort=lambda: False,
+        signals=signals,
+    )
+
+    task.run()
+
+    assert data_manager.stamina_updates == [("game-a", 90, 240, 1778497000.0)]
+    assert data_manager.runtime_updates == []
+    assert data_manager.session_updates == [(7, 90)]
+    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+
+
 def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
