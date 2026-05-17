@@ -244,6 +244,13 @@ def _input_text(adb: str, device: str | None, value: str) -> None:
     _adb(adb, device, "shell", "input", "text", escaped)
 
 
+def _replace_text(adb: str, device: str | None, value: str, *, max_delete: int = 120) -> None:
+    _adb(adb, device, "shell", "input", "keyevent", "KEYCODE_MOVE_END")
+    for _ in range(max_delete):
+        _adb(adb, device, "shell", "input", "keyevent", "KEYCODE_DEL")
+    _input_text(adb, device, value)
+
+
 def _secure_prefs(adb: str, device: str | None, package_name: str) -> str:
     return _adb(
         adb,
@@ -257,14 +264,14 @@ def _secure_prefs(adb: str, device: str | None, package_name: str) -> str:
     ).stdout
 
 
-def _start_server(port: int, temp_dir: Path) -> subprocess.Popen[str]:
+def _start_server(port: int, temp_dir: Path, host: str) -> subprocess.Popen[str]:
     home = temp_dir / "home"
     home.mkdir()
     env = os.environ.copy()
     env.update(
         {
             "HOME": str(home),
-            "HH_API_HOST": "127.0.0.1",
+            "HH_API_HOST": host,
             "HH_API_PORT": str(port),
             "HH_REMOTE_REQUIRE_AUTH": "0",
             "PYTHONPATH": str(PROJECT_ROOT),
@@ -287,7 +294,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK, help="Debug APK to install.")
     parser.add_argument("--package", default=DEFAULT_PACKAGE, help="Android package name.")
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Activity component to launch.")
-    parser.add_argument("--port", type=int, default=8000, help="Host Remote Agent port. Android default URL expects 10.0.2.2:8000.")
+    parser.add_argument("--port", type=int, default=8000, help="Host Remote Agent port.")
+    parser.add_argument("--host-bind", default="127.0.0.1", help="Host interface for the temporary Remote Agent.")
+    parser.add_argument(
+        "--android-base-url",
+        default=None,
+        help="Remote Agent URL typed into the Android app. Defaults to emulator-friendly http://10.0.2.2:<port>.",
+    )
+    parser.add_argument(
+        "--adb-reverse",
+        action="store_true",
+        help="Run adb reverse tcp:<port> tcp:<port> and use Android URL http://127.0.0.1:<port>; useful for physical devices.",
+    )
     args = parser.parse_args(argv)
 
     if not args.apk.exists():
@@ -296,11 +314,23 @@ def main(argv: list[str] | None = None) -> int:
     adb = args.adb
     device = _connected_device(adb, args.device)
     base_url = f"http://127.0.0.1:{args.port}"
+    android_base_url = args.android_base_url or (
+        f"http://127.0.0.1:{args.port}" if args.adb_reverse else f"http://10.0.2.2:{args.port}"
+    )
 
     with tempfile.TemporaryDirectory(prefix="hh-android-e2e-") as temp_root:
         temp_dir = Path(temp_root)
-        server = _start_server(args.port, temp_dir)
+        reverse_enabled = False
+        server: subprocess.Popen[str] | None = None
+        if args.adb_reverse:
+            try:
+                _adb(adb, device, "reverse", f"tcp:{args.port}", f"tcp:{args.port}", timeout=10)
+                reverse_enabled = True
+            except Exception as exc:
+                print(f"Android Remote e2e smoke failed: adb reverse failed: {exc}", file=sys.stderr)
+                return 1
         try:
+            server = _start_server(args.port, temp_dir, args.host_bind)
             _wait_for_status(base_url, timeout_seconds=20)
             seed_status, seed_body = _json_request(
                 "POST",
@@ -341,6 +371,10 @@ def main(argv: list[str] | None = None) -> int:
             _wait_text_contains(adb, device, "HomeworkHelper Remote", timeout=20)
             _scroll_to_top(adb, device)
 
+            _tap_edit_by_label(adb, device, "Remote Agent URL")
+            _replace_text(adb, device, android_base_url)
+            _adb(adb, device, "shell", "input", "keyevent", "BACK")
+
             _tap_edit_by_label(adb, device, "Pairing code")
             _input_text(adb, device, pairing_code)
             _adb(adb, device, "shell", "input", "keyevent", "BACK")
@@ -371,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "Android Remote e2e smoke passed: "
                 f"device={device}, pairing=ok, encrypted_token=ok, restart_refresh=ok, "
-                f"mobile_session=ok, usage_message={usage_message!r}"
+                f"mobile_session=ok, android_base_url={android_base_url!r}, usage_message={usage_message!r}"
             )
             return 0
         except Exception as exc:
@@ -383,11 +417,16 @@ def main(argv: list[str] | None = None) -> int:
                     print(output, file=sys.stderr)
             return 1
         finally:
-            server.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                server.wait(timeout=5)
-            if server.poll() is None:
-                server.kill()
+            if server is not None:
+                server.terminate()
+            if reverse_enabled:
+                with contextlib.suppress(Exception):
+                    _adb(adb, device, "reverse", "--remove", f"tcp:{args.port}", timeout=10, check=False)
+            if server is not None:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    server.wait(timeout=5)
+                if server.poll() is None:
+                    server.kill()
                 server.wait(timeout=5)
 
 

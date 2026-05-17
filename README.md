@@ -14,9 +14,9 @@
 
 **게임 일일 루틴 자동 관리 시스템**
 
-프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • RESTful API
+프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • Remote Agent • macOS/Android 클라이언트 • RESTful API
 
-[다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
+[다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [원격 클라이언트](#-원격-클라이언트) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
 
 </div>
 
@@ -29,6 +29,7 @@
 - [주요 기능](#-주요-기능)
 - [설치 방법](#-설치-방법)
 - [사용 가이드](#-사용-가이드)
+- [원격 클라이언트](#-원격-클라이언트)
 - [프로젝트 구조](#-프로젝트-구조)
 - [모듈 설명](#-모듈-설명)
 - [API 문서](#-api-문서)
@@ -40,7 +41,7 @@
 
 ## 🎯 개요
 
-HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows용 데스크톱 애플리케이션입니다.
+HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows 데스크톱 애플리케이션이며, Remote Agent를 통해 macOS/Android 네이티브 클라이언트에서도 주요 제어 기능을 사용할 수 있습니다.
 
 ### 해결하는 문제
 
@@ -53,7 +54,7 @@ HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows용 
 ### 핵심 가치
 
 - **자동화**: 프로세스 모니터링, 세션 트래킹, 알림 발송을 자동으로 처리
-- **확장성**: RESTful API로 외부 도구와 연동 가능
+- **확장성**: RESTful API와 Remote Agent로 외부 도구·네이티브 클라이언트 연동 가능
 - **안정성**: SQLite WAL 모드, 자동 재시도 로직으로 데이터 손실 방지
 - **편의성**: 시스템 트레이 상주, 원클릭 실행, 커스터마이징 가능한 알림
 
@@ -179,6 +180,14 @@ sequenceDiagram
 - **창 위치 기억**: 마지막 창 위치 자동 복원
 - **마그넷 스냅**: 화면 가장자리 자동 정렬
 
+### 🛰️ Remote Agent & 네이티브 클라이언트
+
+- **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
+- **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
+- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
+- **Android 클라이언트**: Kotlin + Jetpack Compose 앱, Android Keystore 저장, package launch, UsageStats 기반 모바일 세션 sync, Android-PC game-link 지원
+- **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
+
 ---
 
 ## 🚀 설치 방법
@@ -213,6 +222,28 @@ pip install -r requirements.txt
 # 4. 프로그램 실행
 python homework_helper.pyw
 ```
+
+### Option 4: macOS Remote Client
+
+```bash
+swift build --package-path remote_clients/macos/HomeworkHelperRemote
+./.venv/bin/python tools/package_macos_remote_app.py
+open dist/macos/HomeworkHelperRemote.app
+```
+
+macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
+
+### Option 5: Android Remote Client
+
+```bash
+cd remote_clients/android/HomeworkHelperRemote
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
+./gradlew :app:assembleDebug
+```
+
+APK는 `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk`에 생성된다. Android emulator에서 host loopback Remote Agent에 연결할 때는 `http://10.0.2.2:8000`을 사용한다.
 
 ---
 
@@ -334,6 +365,39 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ---
 
+## 🛰️ 원격 클라이언트
+
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기능 구현이 완료된 기준 클라이언트이고, Android 클라이언트는 같은 Remote API 계약을 기준으로 full parity 설계가 진행 중이다.
+
+### Remote Agent 실행
+
+```bash
+HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.pyw --server
+```
+
+- 로컬 개발만 할 때는 `./.venv/bin/python homework_helper.pyw --server`로 충분하다.
+- 외부 기기에서 접속하려면 LAN/Tailscale URL을 사용하고 `HH_REMOTE_REQUIRE_AUTH=1`을 유지한다.
+- 최초 pairing code는 host loopback에서 `curl -X POST http://127.0.0.1:8000/remote/pair/start`로 발급한다.
+
+### 문서
+
+- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS/Android build, smoke 검증 절차
+- `docs/remote/android-client-design.md` — Android 클라이언트 full-parity 설계도
+- `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
+- `remote_clients/android/HomeworkHelperRemote/README.md` — Android 빌드와 실기기 검증 노트
+
+### 핵심 검증 명령
+
+```bash
+./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py
+swift build --package-path remote_clients/macos/HomeworkHelperRemote
+./.venv/bin/python tools/verify_android_internal.py
+# Android 실기기 연결 후
+./.venv/bin/python tools/verify_android_device.py
+```
+
+---
+
 ## 📁 프로젝트 구조
 
 ```
@@ -348,6 +412,7 @@ HomeworkHelperServer/
 ├── 🔧 src/                       # 소스 코드
 │   ├── api/                      # API 레이어
 │   │   ├── client.py             # FastAPI 서버와 통신
+│   │   ├── remote_routes.py      # Remote Agent API 라우터
 │   │   └── dashboard/            # 웹 대시보드 (FastAPI 라우터·템플릿·정적 파일)
 │   │
 │   ├── core/                     # 핵심 로직
@@ -377,7 +442,7 @@ HomeworkHelperServer/
 │   │   ├── gui_notification_handler.py  # GUI 알림 핸들러
 │   │   ├── main_window.py       # 메인 윈도우
 │   │   ├── preset_editor_dialog.py      # 게임 프리셋 편집기
-│   │   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
+│   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
 │   │   ├── tray_manager.py      # 시스템 트레이 관리
 │   │   └── volume_panel.py      # 게임별 볼륨 조절 팝오버 패널
 │   │
@@ -411,11 +476,19 @@ HomeworkHelperServer/
 │   ├── architecture.md          # 아키텍처 가이드
 │   ├── milestone.md             # 마일스톤 로드맵
 │   ├── git-workflow.md          # Git 워크플로우
+│   ├── remote/                  # Remote Agent/클라이언트 운영·설계 문서
+│   │   ├── setup-guide.md
+│   │   ├── android-client-design.md
+│   │   └── remote-storage-policy.md
 │   ├── guides/                  # 사용 가이드
 │   │   ├── build-guide.md
 │   │   └── multi-pc-sync-guide.md
 │   ├── archive/                 # 과거 작업 기록
 │   └── archived/                # 보류된 문서
+│
+├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
+│   ├── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
+│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android Remote Client
 │
 ├── 🎨 assets/                    # 리소스
 │   ├── icons/                   # 아이콘

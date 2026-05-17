@@ -1,23 +1,30 @@
 # HomeworkHelper Remote Android
 
-Kotlin + Jetpack Compose 기반 Android 네이티브 리모트 컨트롤러 초안입니다. macOS 앱에서 먼저 검증한 Remote Agent API 계약을 Android로 전파하는 것을 목표로 합니다.
+Kotlin + Jetpack Compose 기반 Android 네이티브 리모트 클라이언트입니다. macOS Remote Client에서 검증한 Remote Agent API 계약을 Android로 전파한 현재 baseline이며, 다음 단계의 목표는 `docs/remote/android-client-design.md`의 Full-parity 설계를 따라 제품 수준으로 다듬는 것입니다.
 
 ## 현재 범위
 
-- Remote Agent URL / device name 저장 및 Bearer token Android Keystore 암호화 저장
-- `/remote/pair/confirm` pairing code 입력 및 token 저장
-- `/remote/status`, `/remote/processes`, `/remote/shortcuts`, `/remote/devices` 조회
-- `/remote/dashboard/summary` 조회 및 Compose 플레이 요약/모바일 플레이 집계 카드 표시
-- `/remote/beholder/incidents` 조회 및 Compose Beholder 알림 카드 표시
-- PC 게임 실행, 웹 숏컷 열기, 전원 설정 저장 및 전원 명령 호출
-- 등록 device token revoke 호출
-- Android package name 수동 입력 후 `PackageManager.getLaunchIntentForPackage()`로 로컬 앱 실행
-- `PACKAGE_USAGE_STATS` 선언, Usage Access 설정 화면 진입, 최근 전면 앱 조회 및 game-link 기반 `usage_stats` 자동 세션 sync
-- Android 11+ package visibility 대응을 위한 launcher intent `<queries>` 선언
+- Remote Agent URL / device name 저장
+- Bearer token Android Keystore AES/GCM 암호화 저장 및 legacy plaintext preference migration
+- `/remote/pair/confirm` pairing code 입력, `/remote/tokens/refresh` token 갱신, `/remote/devices` 조회/폐기
+- `/remote/status`, `/remote/capabilities`, `/remote/processes`, `/remote/shortcuts` 조회
+- `/remote/dashboard/summary` 기반 플레이 요약/모바일 플레이 집계 카드
+- `/remote/beholder/incidents` 기반 Beholder read-only 알림 카드
+- PC 게임 실행, 웹 숏컷 열기, 전원 설정 저장 및 capability-gated 전원 명령 호출
+- `/remote/game-links` 기반 PC process와 Android package mapping 생성/조회
+- Android package name launcher intent 실행
+- `PACKAGE_USAGE_STATS` 선언, Usage Access 설정 화면 진입, 최근 전면 앱 조회, game-link 기반 `usage_stats` 모바일 세션 sync
+- Android 11+ package visibility 대응 launcher intent `<queries>` 선언
 
 ## 빌드
 
-이 개발 세션에서 OpenJDK 17, Android command line tools, Gradle wrapper, Android SDK license, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0` 설치를 확인했고 `:app:assembleDebug`가 성공해 debug APK가 생성되었습니다.
+요구 도구:
+
+- OpenJDK 17
+- Android command line tools 또는 Android Studio SDK
+- `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`
+- Android Gradle Plugin 8.13.0, Kotlin 2.2.21, Kotlin Compose compiler plugin 2.2.21, Compose BOM 2026.03.00
+- Gradle wrapper 9.5.0
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -27,48 +34,80 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 ./gradlew :app:assembleDebug
 ```
 
-최근 빌드 evidence:
+검증된 산출물 계약:
 
-- `tools/check_android_sdk_readiness.py` → SDK package/license readiness passed
-- `./gradlew :app:assembleDebug --stacktrace` → BUILD SUCCESSFUL
 - APK: `app/build/outputs/apk/debug/app-debug.apk`
-- `tools/check_android_apk_artifact.py` → APK package/version/SDK/permission contract passed
-
-현재 남은 blocker:
-
-- 연결된 adb device/emulator가 없어 `tools/smoke_android_remote_controller.py`의 install/launch smoke는 아직 실행되지 못했습니다.
-- Android emulator/system image 설치를 시도했지만 로컬 디스크 여유 공간 부족(`No space left on device`, 약 5.5GiB available)으로 system image 준비가 중단되었습니다.
-
-Gradle 구성은 Android Gradle Plugin 8.13.0, Kotlin 2.2.21, Kotlin Compose compiler plugin 2.2.21, Compose BOM 2026.03.00을 사용합니다. Gradle wrapper는 9.5.0으로 고정했습니다.
+- package: `dev.homeworkhelper.remote`
+- version: `0.1.0`
+- minSdk: 26
+- targetSdk: 36
+- permissions: `INTERNET`, `PACKAGE_USAGE_STATS`
 
 ## 로컬 연결 흐름
 
-1. PC/macOS에서 Remote Agent 실행:
+1. PC/macOS host에서 Remote Agent 실행:
 
 ```bash
 HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.pyw --server
 ```
 
-2. PC 로컬에서 pairing code 발급:
+2. host loopback에서 pairing code 발급:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/remote/pair/start
 ```
 
-3. Android 앱에 `http://<PC tailnet 또는 LAN IP>:8000`, device name, 6자리 pairing code 입력 후 `페어링 완료`.
-4. `새로고침`으로 PC 게임/숏컷/device 목록을 동기화.
-5. PC 실행 버튼, 웹 숏컷, 전원 버튼을 Remote Agent API로 호출.
+3. Android 앱에 `http://<host LAN 또는 tailnet IP>:8000`, device name, 6자리 pairing code 입력 후 `페어링 완료`.
+4. `새로고침`으로 PC 게임, 웹 숏컷, device, dashboard, Beholder, game-link, mobile-session 상태 동기화.
+5. PC 실행, 웹 숏컷, 전원, Android package 실행, 모바일 세션 시작/종료를 앱에서 검증.
 
-## Android 로컬 실행 / Usage Access
+Android emulator에서 host loopback server에 붙을 때는 `http://10.0.2.2:8000`을 사용합니다.
 
-- Android 패키지명은 현재 수동 입력으로 검증합니다. 예: `com.example.game`
-- 앱 실행은 Android package visibility와 launcher intent에 의존하므로 실제 기기에서 설치된 패키지로 smoke test가 필요합니다.
+## Usage Access와 Android 로컬 실행
+
+- Android package launch는 `PackageManager.getLaunchIntentForPackage()`에 의존합니다.
+- 실제 package가 설치되어 있고 launcher activity가 있어야 실행됩니다.
 - Usage Access는 manifest 선언만으로 활성화되지 않습니다. 앱의 `Usage 권한` 버튼으로 Android 설정에 들어가 사용자가 직접 허용해야 합니다.
-- APK 설치 후 `./.venv/bin/python tools/smoke_android_remote_controller.py --skip-install --skip-launch --require-usage-access`로 `GET_USAGE_STATS` appop이 `allow` 상태인지 gate할 수 있습니다.
+- 권한 허용 후 `Usage 동기화`는 최근 전면 앱 package와 game-link를 비교해 `usage_stats` source의 mobile session start/end를 호출합니다.
 
-## 다음 단계
+## 검증
 
-- 실제 기기에서 Android Keystore token 저장/마이그레이션 smoke test
-- 실제 기기에서 game-link package Intent 실행 및 UsageStats 자동 세션 전환 smoke test
-- 실제 기기에서 UsageStats 자동 세션 sync 장시간 전환 smoke 및 edge case 보강
-- CI/실기기 `assembleDebug` 재검증 및 adb device/emulator install/launch smoke 검증
+기본 워크플로우는 **내부 테스트 → 실기기 테스트** 2단계입니다. 에뮬레이터는 선택 사항이며 기본 release gate가 아닙니다.
+
+### 1단계: 내부 테스트
+
+Android runtime 없이 빌드/계약을 확인합니다.
+
+```bash
+./.venv/bin/python tools/verify_android_internal.py
+```
+
+포함 범위: 정적 계약 pytest, SDK readiness, `:app:assembleDebug --stacktrace`, APK artifact 계약 검사.
+
+### 2단계: 실기기 자동 테스트
+
+Android 실기기를 USB 디버깅으로 연결한 뒤 실행합니다.
+
+```bash
+./.venv/bin/python tools/verify_android_device.py
+```
+
+여러 기기가 연결된 경우:
+
+```bash
+./.venv/bin/python tools/verify_android_device.py --device <adb-serial>
+```
+
+이 단계는 APK install/launch, UsageStats appop 보고, `adb reverse` 기반 임시 Remote Agent 연결, pairing code 입력, 데이터 sync, mobile session start/end, UsageStats sync, 앱 재시작 후 Android Keystore token persistence를 자동 검증합니다.
+
+## Full-parity 후속 작업
+
+자세한 설계는 `docs/remote/android-client-design.md`를 기준으로 합니다.
+
+우선순위:
+
+1. `MainActivity.kt`의 prototype state/UI를 `RemoteAppViewModel`, repository, Compose section/tab 구조로 분리.
+2. readiness/auth/offline 상태와 pairing/token recovery UX 보강.
+3. process/resource icon cache와 progress display parity 추가.
+4. Settings/device/power/logging 화면을 macOS 기능 범위에 맞춰 정리.
+5. UsageStats sync 정책과 physical-device smoke를 release gate로 고정.

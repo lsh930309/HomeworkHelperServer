@@ -217,23 +217,113 @@ def test_android_usage_stats_ui_can_query_recent_foreground_app():
     assert "events.getNextEvent(event)" in integration
 
 
-def test_android_docs_pin_current_sdk_build_and_device_blocker():
+def test_android_docs_track_current_parity_plan_and_verification():
     readme = _read(ANDROID_ROOT / "README.md")
-    guide = _read(Path("docs/remote-controller/setup-guide.md"))
-    todo = _read(Path("docs/remote/archive/remote-controller-todo.md"))
+    guide = _read(Path("docs/remote/setup-guide.md"))
+    design = _read(Path("docs/remote/android-client-design.md"))
+    root_readme = _read(Path("README.md"))
 
-    assert "Android SDK license" in readme
-    assert "BUILD SUCCESSFUL" in readme
-    assert "adb device/emulator" in readme
-    assert 'build-tools;35.0.0' in readme
-    assert 'platforms;android-36' in readme
-    assert "Android Keystore" in guide
-    assert "--require-branch dev-remote" in guide
-    assert "--expect-main-hash 4052da3" in guide
-    assert "--allow-android-device-blocker" in guide
-    assert "usage_stats` 자동 세션 sync" in guide
-    assert "game-link package Intent 실행 및 UsageStats 자동 세션 전환 smoke test" in readme
-    assert "PC 게임과 Android package/deeplink 매칭 데이터 모델 추가" not in readme
-    assert "[x] Android SDK License 수락 후 SDK platform/build-tools 설치" in todo
-    assert "연결된 Android 기기 또는 emulator 확보" in todo
-    assert "Android token 저장소를 Keystore 암호화 저장으로 교체" in todo
+    for marker in [
+        "Full-parity",
+        "Android Keystore",
+        "build-tools;35.0.0",
+        "platforms;android-36",
+        "내부 테스트 → 실기기 테스트",
+        "tools/verify_android_internal.py",
+        "tools/verify_android_device.py",
+        "adb reverse",
+    ]:
+        assert marker in readme
+
+    for marker in [
+        "HomeworkHelper Remote Client Setup Guide",
+        "Remote Agent",
+        "Android Keystore",
+        "docs/remote/android-client-design.md",
+        "tools/verify_remote_controller.py",
+        "tools/verify_android_internal.py",
+        "tools/verify_android_device.py",
+        "adb reverse",
+    ]:
+        assert marker in guide
+
+    for marker in [
+        "Android Remote Client Full-Parity Design",
+        "Full-parity matrix",
+        "RemoteAppViewModel",
+        "RemoteRepository",
+        "UsageStats",
+        "Tailscale",
+        "two automated stages",
+        "Stage 1 — Internal tests",
+        "Stage 2 — Physical-device automated tests",
+        "tools/verify_android_internal.py",
+        "tools/verify_android_device.py",
+        "adb reverse",
+    ]:
+        assert marker in design
+
+    assert "docs/remote/setup-guide.md" in root_readme
+    assert "docs/remote/android-client-design.md" in root_readme
+    assert "remote_clients/android/HomeworkHelperRemote/README.md" in root_readme
+
+    for stale in [
+        "No space left on device",
+        "docs/remote-controller/setup-guide.md",
+        "remote-controller-todo.md",
+        "remote-controller-work-report.md",
+        "remote-controller-completion-audit.md",
+    ]:
+        assert stale not in readme
+        assert stale not in guide
+        assert stale not in design
+
+    for obsolete_path in [
+        Path("docs/remote-controller/setup-guide.md"),
+        Path("docs/remote/archive/remote-controller-todo.md"),
+        Path("docs/remote/archive/remote-controller-work-report.md"),
+        Path("docs/remote/archive/remote-controller-completion-audit.md"),
+        Path("docs/remote/archive/remote-controller-technical-review.md"),
+        Path("docs/remote/connectivity-automation-live-check.md"),
+        Path("docs/remote/macos-client-test-tutorial.md"),
+        Path("macos-client-regression-checklist.md"),
+        Path("macos26-liquid-glass-upgrade-plan.md"),
+    ]:
+        assert not obsolete_path.exists()
+
+
+def test_android_two_stage_verification_scripts_are_the_primary_entrypoints():
+    internal = _read(Path("tools/verify_android_internal.py"))
+    device = _read(Path("tools/verify_android_device.py"))
+    e2e = _read(Path("tools/smoke_android_remote_e2e.py"))
+
+    for marker in [
+        "tests/test_remote_android_client_static.py",
+        "tools/check_android_sdk_readiness.py",
+        ":app:assembleDebug",
+        "tools/check_android_apk_artifact.py",
+        "Android internal verification passed",
+    ]:
+        assert marker in internal
+
+    for marker in [
+        "tools/smoke_android_remote_controller.py",
+        "--report-usage-access",
+        "tools/smoke_android_remote_e2e.py",
+        "--adb-reverse",
+        "--android-base-url",
+        "http://127.0.0.1:{args.port}",
+        "Android physical-device verification passed",
+    ]:
+        assert marker in device
+
+    for marker in [
+        "--android-base-url",
+        "--host-bind",
+        "--adb-reverse",
+        "reverse",
+        "Remote Agent URL",
+        "_replace_text",
+        "android_base_url",
+    ]:
+        assert marker in e2e
