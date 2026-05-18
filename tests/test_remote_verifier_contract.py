@@ -205,6 +205,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     macos = _read(TOOLS / "smoke_macos_remote_api_client.py")
     viewmodel = _read(TOOLS / "smoke_macos_remote_viewmodel.py")
     packager = _read(TOOLS / "package_macos_remote_app.py")
+    setup_guide = _read(Path("docs") / "remote" / "setup-guide.md")
 
     assert "runpy.run_path('homework_helper.pyw')" in runtime
     assert "run_server_main" in runtime
@@ -245,6 +246,18 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "await viewModel.refreshToken()" in viewmodel
     assert "await viewModel.refreshDevices()" in viewmodel
     assert "macOS RemoteDashboardViewModel smoke passed" in viewmodel
+    assert "HH_REMOTE_CACHE_DIR" in viewmodel
+    assert "HH_REMOTE_PREFS_SUITE" in viewmodel
+    assert "_assert_production_cache_unchanged" in viewmodel
+    assert "_production_process_cache_path" in viewmodel
+    assert "smoke_ssh_key" in viewmodel
+    assert "Smoke Game" in viewmodel
+
+    assert "Stateful client smoke isolation contract" in setup_guide
+    assert "HH_REMOTE_CACHE_DIR" in setup_guide
+    assert "HH_REMOTE_PREFS_SUITE" in setup_guide
+    assert "~/Library/Application Support/HomeworkHelperRemote/cache/processes.json" in setup_guide
+    assert "production cache signature is unchanged" in setup_guide
 
     assert "swift\", \"build\", \"-c\", \"release" in packager
     assert "HomeworkHelperRemote.app" in packager

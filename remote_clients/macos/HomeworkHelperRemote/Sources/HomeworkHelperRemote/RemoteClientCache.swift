@@ -4,8 +4,19 @@ import Foundation
 struct RemoteClientCache {
     private static let appDirectoryName = "HomeworkHelperRemote"
     private static let iconCacheVersion = "v3_pixels"
+    private static let cacheDirectoryOverrideKey = "HH_REMOTE_CACHE_DIR"
+
+    private static var cacheDirectoryOverride: String? {
+        let value = ProcessInfo.processInfo.environment[cacheDirectoryOverrideKey]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
 
     static var cacheDirectory: URL {
+        if let override = cacheDirectoryOverride {
+            let directory = URL(fileURLWithPath: override, isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let directory = base.appendingPathComponent(appDirectoryName, isDirectory: true).appendingPathComponent("cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -28,12 +39,20 @@ struct RemoteClientCache {
 
     static func loadProcesses() -> [RemoteProcess] {
         guard let data = try? Data(contentsOf: processSnapshotURL) else { return [] }
-        return (try? JSONDecoder().decode([RemoteProcess].self, from: data)) ?? []
+        let processes = (try? JSONDecoder().decode([RemoteProcess].self, from: data)) ?? []
+        if cacheDirectoryOverride == nil, isSmokeOnlySnapshot(processes) {
+            return []
+        }
+        return processes
     }
 
     static func saveProcesses(_ processes: [RemoteProcess]) {
         guard let data = try? JSONEncoder().encode(processes) else { return }
         try? data.write(to: processSnapshotURL, options: [.atomic])
+    }
+
+    private static func isSmokeOnlySnapshot(_ processes: [RemoteProcess]) -> Bool {
+        processes.count == 1 && processes.first?.id == "smoke-game" && processes.first?.name == "Smoke Game"
     }
 
     static func cachedIconURL(for process: RemoteProcess, preferredSize: Int = 256) -> URL? {

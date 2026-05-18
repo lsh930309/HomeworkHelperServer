@@ -612,6 +612,10 @@ private extension View {
     func menuBarHoverTint(disabled: Bool = false, tint: Color = .accentColor) -> some View {
         modifier(MenuBarHoverTintModifier(disabled: disabled, tint: tint))
     }
+
+    func menuBarSuppressFocusRing() -> some View {
+        focusable(false)
+    }
 }
 
 struct MenuBarGameRow: View {
@@ -634,7 +638,7 @@ struct MenuBarGameRow: View {
                     Spacer(minLength: 4)
                     MenuBarGameStatusBadges(process: process, progress: process.progress, viewModel: viewModel)
                         .layoutPriority(2)
-                        .help("\(process.isRunning ? "실행 중" : "대기") · \(process.playedToday ? "오늘 실행" : "오늘 미실행")")
+                        .help(viewModel.processRuntimeHelp(process))
                 }
                 if let progress = process.progress {
                     HStack(spacing: 5) {
@@ -643,13 +647,13 @@ struct MenuBarGameRow: View {
                         MenuBarProgressMeter(progress: progress)
                     }
                 } else {
-                    Text(process.statusText ?? "대기")
+                    Text(viewModel.processStatusText(process))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-            MenuBarLaunchButton(launch: launch, disabled: viewModel.isLoading || process.isRunning)
+            MenuBarLaunchButton(launch: launch, disabled: !viewModel.isLaunchEnabled(process))
         }
         .frame(height: RemotePopoverLayout.rowHeight, alignment: .center)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -683,6 +687,7 @@ struct MenuBarLaunchButton: View {
         .frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)
         .clipShape(RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous))
+        .menuBarSuppressFocusRing()
         .onHover { hovering in
             guard !disabled else { return }
             withAnimation(.easeOut(duration: 0.12)) {
@@ -727,6 +732,23 @@ struct MenuBarProgressMeter: View {
     }
 }
 
+struct MenuBarRunningBadge: View {
+    var body: some View {
+        Text("실행 중")
+            .font(.caption2.bold())
+            .foregroundStyle(.green)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .allowsTightening(true)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
+            .remoteGlass(.pill, tint: Color.green.opacity(0.18))
+            .help("실행 중")
+    }
+}
+
 struct MenuBarProgressBadge: View {
     let progress: RemoteProcess.Progress
     @ObservedObject var viewModel: RemoteDashboardViewModel
@@ -758,15 +780,9 @@ struct MenuBarGameStatusBadges: View {
 
     var body: some View {
         HStack(spacing: RemotePopoverLayout.statusBadgeSpacing) {
-            if process.isRunning {
-                Text("실행 중")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .remoteGlass(.pill, tint: Color.green.opacity(0.18))
-            }
-            if let progress {
+            if viewModel.isProcessRunningCurrent(process) {
+                MenuBarRunningBadge()
+            } else if let progress {
                 MenuBarProgressBadge(progress: progress, viewModel: viewModel)
             }
             Label("오늘", systemImage: process.playedToday ? "checkmark.circle.fill" : "circle")
@@ -826,6 +842,7 @@ struct MenuBarPopoverView: View {
                     }
                     .buttonStyle(.glassProminent)
                     .menuBarHoverTint()
+                    .menuBarSuppressFocusRing()
                     .controlSize(.small)
                 }
                 if viewModel.showPlaySummary, let summary = viewModel.dashboardSummary {
@@ -887,6 +904,7 @@ struct MenuBarPowerButton: View {
         }
         .controlSize(.small)
         .menuBarHoverTint(disabled: disabled)
+        .menuBarSuppressFocusRing()
         .disabled(disabled)
         .help(label)
     }
@@ -906,6 +924,7 @@ struct MenuBarFooterButton: View {
         .controlSize(.small)
         .foregroundStyle(.primary)
         .menuBarHoverTint()
+        .menuBarSuppressFocusRing()
     }
 }
 

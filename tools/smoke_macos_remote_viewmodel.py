@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import socket
@@ -34,7 +35,30 @@ LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
 REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
+REMOTE_UI_TEST_FLAGS = MACOS_SOURCE_DIR / "RemoteUITestFlags.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
+
+
+def _production_process_cache_path() -> Path:
+    return Path.home() / "Library" / "Application Support" / "HomeworkHelperRemote" / "cache" / "processes.json"
+
+
+def _file_signature(path: Path) -> tuple[bool, int, int, str]:
+    if not path.exists():
+        return (False, 0, 0, "")
+    data = path.read_bytes()
+    stat = path.stat()
+    return (True, stat.st_size, stat.st_mtime_ns, hashlib.sha256(data).hexdigest())
+
+
+def _assert_production_cache_unchanged(before: tuple[bool, int, int, str]) -> None:
+    path = _production_process_cache_path()
+    after = _file_signature(path)
+    if after != before:
+        raise RuntimeError(
+            "macOS ViewModel smoke mutated the production process cache. "
+            f"Tests must use HH_REMOTE_CACHE_DIR, not {path}"
+        )
 
 
 def _free_loopback_port() -> int:
@@ -80,16 +104,21 @@ def _wait_for_status(base_url: str, *, timeout_seconds: float) -> None:
     raise RuntimeError(f"server did not become ready within {timeout_seconds}s: {last_error}")
 
 
-def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) -> str:
+def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str, smartthings_cli: str, ssh_key_path: str) -> str:
     source = r'''
         import Foundation
         import SwiftUI
 
-        final class InMemoryTokenStore: RemoteTokenStore {
+        final class SmokeInMemoryTokenStore: RemoteTokenStore {
             var token = ""
             func load() -> String { token }
             func save(_ token: String) { self.token = token }
             func delete() { token = "" }
+        }
+
+        enum RemotePopoverGlassTransparency: String {
+            case standard
+            case high
         }
 
         func smokeStep(_ name: String) {
@@ -102,10 +131,12 @@ def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) 
             @MainActor
             static func main() async {
                 smokeStep("init")
-                let store = InMemoryTokenStore()
+                let store = SmokeInMemoryTokenStore()
                 let viewModel = RemoteDashboardViewModel(tokenStore: store)
                 viewModel.baseURLText = "__BASE_URL__"
                 viewModel.deviceName = "macos-viewmodel-smoke"
+                viewModel.powerConfig.sshKeyPath = "__SMOKE_SSH_KEY__"
+                viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"
                 viewModel.pairingCode = "__PAIRING_CODE__"
 
                 smokeStep("confirmPairing")
@@ -127,7 +158,6 @@ def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) 
                 }
                 smokeStep("offline local wake")
                 viewModel.hostConnectionState = "offline"
-                viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"
                 viewModel.powerConfig.smartthingsDeviceID = "smoke-device"
                 await viewModel.power("wake")
                 guard viewModel.message.contains("wake 신호") else {
@@ -167,17 +197,34 @@ def _swift_smoke_source(base_url: str, pairing_code: str, smartthings_cli: str) 
                     fatalError("refreshDevices did not populate devices: \(viewModel.message)")
                 }
 
+                smokeStep("closed port connection loss")
+                viewModel.baseURLText = "__OFFLINE_BASE_URL__"
+                await viewModel.refresh()
+                guard viewModel.hostAvailabilityState != .online else {
+                    fatalError("closed port refresh should not leave host online")
+                }
+                guard !viewModel.processes.isEmpty else {
+                    fatalError("closed port refresh should preserve cached standalone process cards")
+                }
+
                 print("macOS RemoteDashboardViewModel smoke passed: processes=\(viewModel.processes.count), game_links=\(viewModel.gameLinks.count), devices=\(viewModel.devices.count), message=\(viewModel.message)")
             }
         }
     '''
-    return textwrap.dedent(source).replace("__BASE_URL__", base_url).replace("__PAIRING_CODE__", pairing_code).replace("__SMARTTHINGS_CLI__", smartthings_cli)
+    return (
+        textwrap.dedent(source)
+        .replace("__BASE_URL__", base_url)
+        .replace("__OFFLINE_BASE_URL__", offline_base_url)
+        .replace("__PAIRING_CODE__", pairing_code)
+        .replace("__SMARTTHINGS_CLI__", smartthings_cli)
+        .replace("__SMOKE_SSH_KEY__", ssh_key_path)
+    )
 
 
-def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, smartthings_cli: str, work_dir: Path, env: dict[str, str]) -> None:
+def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_code: str, smartthings_cli: str, ssh_key_path: str, work_dir: Path, env: dict[str, str]) -> None:
     smoke_source = work_dir / "MacOSRemoteViewModelSmoke.swift"
     binary = work_dir / "macos-remote-viewmodel-smoke"
-    smoke_source.write_text(_swift_smoke_source(base_url, pairing_code, smartthings_cli), encoding="utf-8")
+    smoke_source.write_text(_swift_smoke_source(base_url, offline_base_url, pairing_code, smartthings_cli, ssh_key_path), encoding="utf-8")
     compile_cmd = [
         "swiftc",
         "-parse-as-library",
@@ -190,6 +237,7 @@ def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, smartthings_c
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_CLIENT_CACHE),
         str(REMOTE_LOGIN_ITEM_MANAGER),
+        str(REMOTE_UI_TEST_FLAGS),
         str(REMOTE_VIEW_MODEL),
         str(smoke_source),
         "-o",
@@ -219,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
 
     port = args.port or _free_loopback_port()
     base_url = f"http://{args.host}:{port}"
+    production_cache_signature = _file_signature(_production_process_cache_path())
 
     with tempfile.TemporaryDirectory(prefix="hh-macos-viewmodel-smoke-") as temp_root:
         temp_dir = Path(temp_root)
@@ -231,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
                 "HH_API_HOST": args.host,
                 "HH_API_PORT": str(port),
                 "HH_REMOTE_REQUIRE_AUTH": "0",
+                "HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache"),
+                "HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}",
                 "PYTHONPATH": str(PROJECT_ROOT),
             }
         )
@@ -266,10 +317,17 @@ def main(argv: list[str] | None = None) -> int:
             fake_smartthings = temp_dir / "smartthings"
             fake_smartthings.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fake_smartthings.chmod(0o755)
-            _compile_and_run_swift_smoke(base_url, code, str(fake_smartthings), temp_dir, env)
+            smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"
+            offline_base_url = f"http://127.0.0.1:{_free_loopback_port()}"
+            _compile_and_run_swift_smoke(base_url, offline_base_url, code, str(fake_smartthings), str(smoke_ssh_key), temp_dir, env)
+            _assert_production_cache_unchanged(production_cache_signature)
             return 0
         except Exception as exc:
             print(f"macOS RemoteDashboardViewModel smoke failed: {exc}", file=sys.stderr)
+            try:
+                _assert_production_cache_unchanged(production_cache_signature)
+            except Exception as guard_exc:
+                print(f"macOS RemoteDashboardViewModel smoke isolation guard failed: {guard_exc}", file=sys.stderr)
             with contextlib.suppress(Exception):
                 process.terminate()
                 output, _ = process.communicate(timeout=5)

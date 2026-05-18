@@ -351,8 +351,12 @@ struct RemoteProcess: Codable, Identifiable {
     let launchPath: String?
     let preferredLaunchType: String?
     let lastPlayedTimestamp: Double?
+    let userCycleHours: Int?
+    let staminaTrackingEnabled: Bool
+    let hoyolabGameID: String?
     let staminaCurrent: Int?
     let staminaMax: Int?
+    let staminaUpdatedAt: Double?
     let progress: Progress?
     let iconURL: String?
     let iconURLs: [String: String]?
@@ -369,8 +373,12 @@ struct RemoteProcess: Codable, Identifiable {
         case launchPath = "launch_path"
         case preferredLaunchType = "preferred_launch_type"
         case lastPlayedTimestamp = "last_played_timestamp"
+        case userCycleHours = "user_cycle_hours"
+        case staminaTrackingEnabled = "stamina_tracking_enabled"
+        case hoyolabGameID = "hoyolab_game_id"
         case staminaCurrent = "stamina_current"
         case staminaMax = "stamina_max"
+        case staminaUpdatedAt = "stamina_updated_at"
         case progress
         case iconURL = "icon_url"
         case iconURLs = "icon_urls"
@@ -387,14 +395,58 @@ struct RemoteProcess: Codable, Identifiable {
         launchPath = try container.decodeIfPresent(String.self, forKey: .launchPath)
         preferredLaunchType = try container.decodeIfPresent(String.self, forKey: .preferredLaunchType)
         lastPlayedTimestamp = try container.decodeIfPresent(Double.self, forKey: .lastPlayedTimestamp)
+        userCycleHours = try container.decodeIfPresent(Int.self, forKey: .userCycleHours)
+        staminaTrackingEnabled = try container.decodeIfPresent(Bool.self, forKey: .staminaTrackingEnabled) ?? false
+        hoyolabGameID = try container.decodeIfPresent(String.self, forKey: .hoyolabGameID)
         staminaCurrent = try container.decodeIfPresent(Int.self, forKey: .staminaCurrent)
         staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
+        staminaUpdatedAt = try container.decodeIfPresent(Double.self, forKey: .staminaUpdatedAt)
         progress = try container.decodeIfPresent(Progress.self, forKey: .progress)
         iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
         iconURLs = try container.decodeIfPresent([String: String].self, forKey: .iconURLs)
         isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning) ?? false
         playedToday = try container.decodeIfPresent(Bool.self, forKey: .playedToday) ?? false
         statusText = try container.decodeIfPresent(String.self, forKey: .statusText)
+    }
+
+    init(
+        processID: String?,
+        name: String,
+        monitoringPath: String?,
+        launchPath: String?,
+        preferredLaunchType: String?,
+        lastPlayedTimestamp: Double?,
+        userCycleHours: Int?,
+        staminaTrackingEnabled: Bool,
+        hoyolabGameID: String?,
+        staminaCurrent: Int?,
+        staminaMax: Int?,
+        staminaUpdatedAt: Double?,
+        progress: Progress?,
+        iconURL: String?,
+        iconURLs: [String: String]?,
+        isRunning: Bool,
+        playedToday: Bool,
+        statusText: String?
+    ) {
+        self.processID = processID
+        self.name = name
+        self.monitoringPath = monitoringPath
+        self.launchPath = launchPath
+        self.preferredLaunchType = preferredLaunchType
+        self.lastPlayedTimestamp = lastPlayedTimestamp
+        self.userCycleHours = userCycleHours
+        self.staminaTrackingEnabled = staminaTrackingEnabled
+        self.hoyolabGameID = hoyolabGameID
+        self.staminaCurrent = staminaCurrent
+        self.staminaMax = staminaMax
+        self.staminaUpdatedAt = staminaUpdatedAt
+        self.progress = progress
+        self.iconURL = iconURL
+        self.iconURLs = iconURLs
+        self.isRunning = isRunning
+        self.playedToday = playedToday
+        self.statusText = statusText
     }
 }
 

@@ -3,7 +3,15 @@ import Foundation
 struct RemoteAPIClient {
     var baseURL: URL
     var bearerToken: String?
-    var session: URLSession = URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())
+    var session: URLSession = RemoteAPIClient.defaultSession()
+
+    static func defaultSession(requestTimeout: TimeInterval = 5, resourceTimeout: TimeInterval = 8) -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration, delegate: nil, delegateQueue: OperationQueue())
+    }
 
     private func endpoint(_ path: String) -> URL {
         baseURL.appendingPathComponent(path)

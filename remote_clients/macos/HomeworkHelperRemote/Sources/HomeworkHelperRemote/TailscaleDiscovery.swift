@@ -33,7 +33,28 @@ struct LocalTailscaleSnapshot: Equatable {
     }
 }
 
+struct LocalTailscalePingResult: Equatable {
+    enum Outcome: Equatable {
+        case reachable
+        case unreachable
+        case unavailable
+    }
+
+    let host: String
+    let outcome: Outcome
+    let message: String
+
+    var attempted: Bool { outcome != .unavailable }
+    var reachable: Bool { outcome == .reachable }
+}
+
 enum TailscaleDiscovery {
+    private struct ProcessResult {
+        let status: Int32
+        let stdout: String
+        let stderr: String
+    }
+
     static func status() async -> LocalTailscaleSnapshot {
         guard let executable = tailscaleExecutable() else {
             return LocalTailscaleSnapshot(installed: false, running: false, backendState: "missing", selfIPs: [], selfHostname: "", peers: [], message: "tailscale CLI를 찾지 못했습니다. Base URL을 수동 입력하세요.")
@@ -60,6 +81,34 @@ enum TailscaleDiscovery {
             return LocalTailscaleSnapshot(installed: true, running: running, backendState: backendState, selfIPs: selfIPs, selfHostname: selfNode["HostName"] as? String ?? "", peers: peers, message: running ? "tailscale 네트워크 사용 가능" : "tailscale 상태: \(backendState)")
         } catch {
             return LocalTailscaleSnapshot(installed: true, running: false, backendState: "error", selfIPs: [], selfHostname: "", peers: [], message: error.localizedDescription)
+        }
+    }
+
+    static func ping(host: String, timeoutSeconds: Int = 2) async -> LocalTailscalePingResult {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return LocalTailscalePingResult(host: host, outcome: .unavailable, message: "ping할 호스트가 비어 있습니다.")
+        }
+        guard let executable = tailscaleExecutable() else {
+            return LocalTailscalePingResult(host: trimmedHost, outcome: .unavailable, message: "tailscale CLI를 찾지 못해 HTTP 상태 확인으로 fallback합니다.")
+        }
+        do {
+            let result = try await runForResult(executable: executable, arguments: ["ping", "--timeout=\(max(1, timeoutSeconds))s", trimmedHost])
+            let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.status == 0 {
+                return LocalTailscalePingResult(host: trimmedHost, outcome: .reachable, message: combined.isEmpty ? "tailscale ping 성공" : combined)
+            }
+            let lowered = combined.lowercased()
+            if lowered.contains("not running")
+                || lowered.contains("not logged")
+                || lowered.contains("tailscaled")
+                || lowered.contains("daemon")
+                || lowered.contains("backend") {
+                return LocalTailscalePingResult(host: trimmedHost, outcome: .unavailable, message: combined.isEmpty ? "tailscale ping을 실행할 수 없습니다." : combined)
+            }
+            return LocalTailscalePingResult(host: trimmedHost, outcome: .unreachable, message: combined.isEmpty ? "tailscale ping 응답이 없습니다." : combined)
+        } catch {
+            return LocalTailscalePingResult(host: trimmedHost, outcome: .unavailable, message: error.localizedDescription)
         }
     }
 
@@ -150,6 +199,29 @@ enum TailscaleDiscovery {
                     } else {
                         continuation.resume(throwing: NSError(domain: "TailscaleDiscovery", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "tailscale status 실패"]))
                     }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func runForResult(executable: String, arguments: [String]) async throws -> ProcessResult {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let process = Process()
+                let output = Pipe()
+                let error = Pipe()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+                process.standardOutput = output
+                process.standardError = error
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    continuation.resume(returning: ProcessResult(status: process.terminationStatus, stdout: stdout, stderr: stderr))
                 } catch {
                     continuation.resume(throwing: error)
                 }

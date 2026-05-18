@@ -163,6 +163,14 @@ Individual smoke entry points remain available for debugging:
 ./.venv/bin/python tools/smoke_android_remote_e2e.py --adb-reverse --android-base-url http://127.0.0.1:8000
 ```
 
+Stateful client smoke isolation contract:
+
+- Any smoke that compiles or launches production client code must isolate every local persistence boundary, not just the temporary server.
+- macOS ViewModel smoke must set `HH_REMOTE_CACHE_DIR` for `RemoteClientCache`, `HH_REMOTE_PREFS_SUITE` for `UserDefaults`, an injected in-memory token store for Keychain-equivalent secrets, and temporary SSH/SmartThings paths for local power setup.
+- Smoke fixtures such as `Smoke Game` may never be written to production cache paths like `~/Library/Application Support/HomeworkHelperRemote/cache/processes.json`.
+- Tests that intentionally verify local cache behavior must also assert the production cache signature is unchanged before reporting success.
+- If a new client smoke touches persistence, add an override hook first and lock it with a static test before adding the behavior assertion.
+
 External connectivity check against an already-running host:
 
 ```bash

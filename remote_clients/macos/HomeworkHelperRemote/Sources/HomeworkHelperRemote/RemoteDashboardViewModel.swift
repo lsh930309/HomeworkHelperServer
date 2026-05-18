@@ -42,7 +42,15 @@ private actor RemoteDashboardService {
 
 
 private enum RemoteClientPreferences {
-    private static let defaults = UserDefaults.standard
+    private static let preferenceSuiteOverrideKey = "HH_REMOTE_PREFS_SUITE"
+    private static var defaults: UserDefaults {
+        if let suite = ProcessInfo.processInfo.environment[preferenceSuiteOverrideKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !suite.isEmpty,
+           let scopedDefaults = UserDefaults(suiteName: suite) {
+            return scopedDefaults
+        }
+        return UserDefaults.standard
+    }
     private static let baseURLKey = "remote.baseURL"
     private static let deviceNameKey = "remote.deviceName"
     private static let powerConfigKey = "remote.powerConfig"
@@ -348,17 +356,47 @@ final class RemoteDashboardViewModel: ObservableObject {
         return isPaired ? hostAvailabilityState.color : .secondary
     }
 
+    var hostAllowsRemoteCommands: Bool {
+        isPaired && hostAvailabilityState == .online
+    }
+
+    func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool {
+        hostAvailabilityState == .online && process.isRunning
+    }
+
+    func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
+        hostAllowsRemoteCommands && !isLoading && !process.isRunning
+    }
+
+    func processRuntimeHelp(_ process: RemoteProcess) -> String {
+        let runningText = isProcessRunningCurrent(process) ? "실행 중" : (process.isRunning ? "마지막 동기화 기준 실행 중" : "대기")
+        return "\(runningText) · \(process.playedToday ? "오늘 실행" : "오늘 미실행")"
+    }
+
+    func processStatusText(_ process: RemoteProcess) -> String {
+        if hostAvailabilityState != .online, process.isRunning {
+            return "마지막 동기화: 실행 중"
+        }
+        return process.statusText ?? "대기"
+    }
+
     private let tokenStore: any RemoteTokenStore
     private let bootstrapEnabled: Bool
     private var mirrorTask: Task<Void, Never>?
+    private var localProgressTask: Task<Void, Never>?
     private var lastStateRevision: String?
     private var consecutiveMirrorFailures = 0
     private var reconnectSchedule: [UInt64] = []
     private static let expectedOfflineProbeSchedule = Array(repeating: UInt64(2), count: 5)
+    private static let connectionLossReconnectSchedule = Array(repeating: UInt64(1), count: 5)
+        + Array(repeating: UInt64(2), count: 5)
+        + Array(repeating: UInt64(5), count: 4)
     private static let wakeReconnectSchedule = Array(repeating: UInt64(1), count: 15)
         + Array(repeating: UInt64(2), count: 15)
         + Array(repeating: UInt64(5), count: 24)
     private static let restartReconnectSchedule = [UInt64(5)] + wakeReconnectSchedule
+    private static let localProgressTickSeconds: UInt64 = 30
+    private static let staminaRecoverySecondsPerPoint: Double = 360
 
     init(tokenStore: any RemoteTokenStore = KeychainTokenStore(), bootstrapEnabled: Bool = true) {
         self.tokenStore = tokenStore
@@ -371,6 +409,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     deinit {
         mirrorTask?.cancel()
+        localProgressTask?.cancel()
     }
 
     private func applyUITestSnapshot() {
@@ -474,6 +513,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteDashboardService(client: client)
     }
 
+    private enum HostReachability {
+        case reachable(String)
+        case unreachable(String)
+        case skipped(String)
+    }
+
     private func setHostAvailability(_ state: RemoteHostAvailabilityState, clearPairingRecovery: Bool = false) {
         hostAvailabilityState = state
         hostConnectionState = state.connectionState
@@ -482,9 +527,65 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    private func shouldProbeTailscalePing(for url: URL) -> Bool {
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else { return false }
+        let lowered = host.lowercased()
+        if ["127.0.0.1", "::1", "localhost", "0.0.0.0"].contains(lowered) { return false }
+        if Self.isLikelyTailscaleHost(lowered) { return true }
+        return localTailscale?.peers.contains { peer in
+            peer.ips.contains(host)
+                || peer.hostname.lowercased() == lowered
+                || peer.dnsName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == lowered
+        } == true
+    }
+
+    private static func isLikelyTailscaleHost(_ host: String) -> Bool {
+        if host.hasSuffix(".ts.net") || host.contains(".ts.net:") { return true }
+        if host.hasPrefix("fd7a:115c:a1e0:") { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    private func probeHostReachability(for client: RemoteAPIClient) async -> HostReachability {
+        guard shouldProbeTailscalePing(for: client.baseURL), let host = client.baseURL.host else {
+            return .skipped("loopback, 비-Tailscale 또는 호스트 없는 URL은 tailscale ping을 건너뜁니다.")
+        }
+        let result = await TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)
+        switch result.outcome {
+        case .reachable:
+            return .reachable(result.message)
+        case .unreachable:
+            return .unreachable(result.message)
+        case .unavailable:
+            return .skipped(result.message)
+        }
+    }
+
+    private func markHostUnreachable(_ detail: String, updateMessage: Bool = true) {
+        if processes.isEmpty {
+            processes = RemoteClientCache.loadProcesses()
+        }
+        refreshLocalProcessDisplay()
+        consecutiveMirrorFailures += 1
+        if hostAvailabilityState == .goingOffline {
+            reconnectSchedule = []
+        } else if ![.offlineExpected, .waking, .restarting, .authRejected].contains(hostAvailabilityState),
+                  reconnectSchedule.isEmpty {
+            reconnectSchedule = Self.wakeReconnectSchedule
+        }
+        setHostAvailability(.offlineExpected)
+        setupProgress = "호스트 Tailscale ping 응답이 없습니다. 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다."
+        if updateMessage {
+            let suffix = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " (\(detail))"
+            message = setupProgress + suffix
+        }
+    }
+
     private func applyRemoteStatus(_ latestStatus: RemoteStatus, clearPairingRecovery: Bool = true) {
         status = latestStatus
         consecutiveMirrorFailures = 0
+        reconnectSchedule = []
         setHostAvailability(.online, clearPairingRecovery: clearPairingRecovery)
         if let statusReadiness = latestStatus.readiness {
             readiness = statusReadiness
@@ -550,13 +651,49 @@ final class RemoteDashboardViewModel: ObservableObject {
         return raw.contains("HTTP 401") || raw.contains("HTTP 403")
     }
 
+    private func urlError(from error: Error) -> URLError? {
+        if let urlError = error as? URLError { return urlError }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return URLError(URLError.Code(rawValue: nsError.code))
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? URLError {
+            return underlying
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSURLErrorDomain {
+            return URLError(URLError.Code(rawValue: underlying.code))
+        }
+        return nil
+    }
+
     private func isConnectivityFailure(_ error: Error) -> Bool {
+        if let code = urlError(from: error)?.code {
+            switch code {
+            case .timedOut,
+                 .cannotConnectToHost,
+                 .cannotFindHost,
+                 .networkConnectionLost,
+                 .notConnectedToInternet,
+                 .dnsLookupFailed,
+                 .internationalRoamingOff,
+                 .callIsActive,
+                 .dataNotAllowed:
+                return true
+            default:
+                break
+            }
+        }
         let raw = error.localizedDescription.lowercased()
         return raw.contains("could not connect")
             || raw.contains("timed out")
             || raw.contains("cannot connect")
             || raw.contains("connection lost")
             || raw.contains("not connected")
+            || raw.contains("no route to host")
+            || raw.contains("host is down")
+            || raw.contains("offline")
+            || raw.contains("no reply")
             || raw.contains("network")
             || raw.contains("server")
             || raw.contains("서버")
@@ -567,6 +704,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if processes.isEmpty {
             processes = RemoteClientCache.loadProcesses()
         }
+        refreshLocalProcessDisplay()
         consecutiveMirrorFailures += 1
         if isAuthFailure(error) {
             reconnectSchedule = []
@@ -590,9 +728,22 @@ final class RemoteDashboardViewModel: ObservableObject {
                 if updateMessage { message = "호스트 응답을 기다리는 중입니다. 저장된 토큰은 보존합니다." }
                 return
             }
+            if hostAvailabilityState == .offlineExpected {
+                reconnectSchedule = []
+                setHostAvailability(.offlineExpected)
+                setupProgress = "호스트가 계속 응답하지 않습니다. 저장된 토큰과 캐시 데이터는 보존하고 standalone 표시를 유지합니다."
+                if updateMessage { message = setupProgress }
+                return
+            }
+            if hostAvailabilityState == .reconnecting, reconnectSchedule.isEmpty {
+                setHostAvailability(.offlineExpected)
+                setupProgress = "짧은 재연결 확인 후에도 호스트가 응답하지 않아 꺼짐/오프라인 상태로 전환했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+                if updateMessage { message = setupProgress }
+                return
+            }
             setHostAvailability(.reconnecting)
             if reconnectSchedule.isEmpty {
-                reconnectSchedule = Self.wakeReconnectSchedule
+                reconnectSchedule = Self.connectionLossReconnectSchedule
             }
             if updateMessage { message = "호스트 연결이 끊겼습니다. 저장된 토큰으로 자동 재연결을 시도합니다." }
             return
@@ -627,6 +778,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         startMirroring()
+        startLocalProgressTicker()
         setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
         let snapshot = await TailscaleDiscovery.status()
         localTailscale = snapshot
@@ -671,6 +823,19 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    func startLocalProgressTicker() {
+        guard bootstrapEnabled, localProgressTask == nil else { return }
+        localProgressTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.localProgressTickSeconds * 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                await MainActor.run {
+                    self?.refreshLocalProcessDisplay()
+                }
+            }
+        }
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
         do {
             try RemoteLoginItemManager.setEnabled(enabled)
@@ -705,6 +870,95 @@ final class RemoteDashboardViewModel: ObservableObject {
             return progress.displayText
         }
         return "\(Self.formatCycleReadyAt(readyAt)) 완료"
+    }
+
+    private func refreshLocalProcessDisplay() {
+        guard !processes.isEmpty else { return }
+        processes = processes.map { Self.processWithLocalProgress($0, now: Date()) }
+    }
+
+    private static func processWithLocalProgress(_ process: RemoteProcess, now: Date) -> RemoteProcess {
+        let progress = localProgress(for: process, now: now) ?? process.progress
+        return RemoteProcess(
+            processID: process.processID,
+            name: process.name,
+            monitoringPath: process.monitoringPath,
+            launchPath: process.launchPath,
+            preferredLaunchType: process.preferredLaunchType,
+            lastPlayedTimestamp: process.lastPlayedTimestamp,
+            userCycleHours: process.userCycleHours,
+            staminaTrackingEnabled: process.staminaTrackingEnabled,
+            hoyolabGameID: process.hoyolabGameID,
+            staminaCurrent: process.staminaCurrent,
+            staminaMax: process.staminaMax,
+            staminaUpdatedAt: process.staminaUpdatedAt,
+            progress: progress,
+            iconURL: process.iconURL,
+            iconURLs: process.iconURLs,
+            isRunning: process.isRunning,
+            playedToday: process.playedToday,
+            statusText: process.statusText
+        )
+    }
+
+    private static func localProgress(for process: RemoteProcess, now: Date) -> RemoteProcess.Progress? {
+        let existing = process.progress
+        if process.staminaTrackingEnabled,
+           (process.hoyolabGameID ?? existing?.hoyolabGameID) != nil,
+           let current = process.staminaCurrent ?? existing?.staminaCurrent,
+           let maximum = process.staminaMax ?? existing?.staminaMax,
+           maximum > 0 {
+            let elapsed = max(0, now.timeIntervalSince1970 - (process.staminaUpdatedAt ?? now.timeIntervalSince1970))
+            let recovered = Int(elapsed / Self.staminaRecoverySecondsPerPoint)
+            let predicted = min(maximum, max(0, current + recovered))
+            let remainingSeconds = max(0, (maximum - predicted) * Int(Self.staminaRecoverySecondsPerPoint))
+            return RemoteProcess.Progress(
+                kind: "stamina",
+                percentage: min(max((Double(predicted) / Double(maximum)) * 100.0, 0.0), 100.0),
+                displayText: "\(predicted)/\(maximum)",
+                staminaCurrent: predicted,
+                staminaMax: maximum,
+                hoyolabGameID: process.hoyolabGameID ?? existing?.hoyolabGameID,
+                resourceIconURL: existing?.resourceIconURL,
+                resourceIconURLs: existing?.resourceIconURLs,
+                remainingSeconds: remainingSeconds,
+                readyAt: now.addingTimeInterval(Double(remainingSeconds)).timeIntervalSince1970
+            )
+        }
+
+        guard let lastPlayed = process.lastPlayedTimestamp,
+              let cycleHours = process.userCycleHours,
+              cycleHours > 0 else {
+            return existing
+        }
+        let elapsed = max(0, now.timeIntervalSince1970 - lastPlayed)
+        let cycleSeconds = Double(cycleHours) * 3600.0
+        let percentage = min(max((elapsed / cycleSeconds) * 100.0, 0.0), 100.0)
+        let remainingSeconds = max(0, Int(cycleSeconds - elapsed))
+        return RemoteProcess.Progress(
+            kind: "cycle",
+            percentage: percentage,
+            displayText: Self.formatRemainingDuration(seconds: remainingSeconds),
+            staminaCurrent: nil,
+            staminaMax: nil,
+            hoyolabGameID: existing?.hoyolabGameID,
+            resourceIconURL: existing?.resourceIconURL,
+            resourceIconURLs: existing?.resourceIconURLs,
+            remainingSeconds: remainingSeconds,
+            readyAt: now.addingTimeInterval(Double(remainingSeconds)).timeIntervalSince1970
+        )
+    }
+
+    private static func formatRemainingDuration(seconds: Int) -> String {
+        if seconds <= 0 { return "0분" }
+        let hours = seconds / 3600
+        if hours >= 24 {
+            let days = hours / 24
+            let remainderHours = hours % 24
+            return remainderHours > 0 ? "\(days)일 \(remainderHours)시간" : "\(days)일"
+        }
+        if hours >= 1 { return "\(hours)시간" }
+        return "\(max(0, seconds / 60))분"
     }
 
     func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
@@ -893,13 +1147,24 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func mirrorRemoteState() async {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
+        switch await probeHostReachability(for: client) {
+        case .unreachable(let detail):
+            markHostUnreachable(detail)
+            return
+        case .reachable, .skipped:
+            break
+        }
+        let wasDisconnected = hostAvailabilityState != .online
         do {
             let latestStatus = try await service.status()
             applyRemoteStatus(latestStatus)
             if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
             }
-            guard latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else { return }
+            guard wasDisconnected || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
+                refreshLocalProcessDisplay()
+                return
+            }
             lastStateRevision = latestStatus.stateRevision
             await syncRemotePayloads(using: service, client: client)
         } catch {
@@ -911,13 +1176,15 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             dashboardSummary = try await service.dashboardSummary()
             beholderIncidents = try await service.beholderIncidents()
-            processes = try await service.processes()
-            RemoteClientCache.saveProcesses(processes)
-            await RemoteClientCache.cacheIcons(for: processes, baseURL: client.baseURL)
+            let remoteProcesses = try await service.processes()
+            RemoteClientCache.saveProcesses(remoteProcesses)
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
+            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
             if processes.isEmpty {
                 processes = RemoteClientCache.loadProcesses()
             }
+            refreshLocalProcessDisplay()
             handleRemoteFailure(error)
         }
     }
@@ -925,6 +1192,15 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func refresh(using service: RemoteDashboardService, includeDevices: Bool) async {
         isLoading = true
         defer { isLoading = false }
+        if let client {
+            switch await probeHostReachability(for: client) {
+            case .unreachable(let detail):
+                markHostUnreachable(detail)
+                return
+            case .reachable, .skipped:
+                break
+            }
+        }
         do {
             // Keep refreshes sequential. The Remote Agent's file-backed device
             // registry updates token last-seen metadata during auth checks, so
@@ -943,10 +1219,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerSetup = try? await service.powerSetup()
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             fillDefaultSSHFields()
-            processes = try await service.processes()
-            RemoteClientCache.saveProcesses(processes)
+            let remoteProcesses = try await service.processes()
+            RemoteClientCache.saveProcesses(remoteProcesses)
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
             if let client {
-                await RemoteClientCache.cacheIcons(for: processes, baseURL: client.baseURL)
+                await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             }
             if includeDevices {
                 devices = try await service.devices()
@@ -1024,6 +1301,10 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func launch(_ process: RemoteProcess) async {
+        guard isLaunchEnabled(process) else {
+            message = hostAvailabilityState == .online ? "이미 실행 중이거나 동기화 중입니다." : "호스트 연결이 복구된 뒤 실행할 수 있습니다. 캐시된 게임 상태는 standalone으로 계속 갱신합니다."
+            return
+        }
         guard let service else { return }
         do {
             let result = try await service.launchProcess(id: process.id)
@@ -1038,12 +1319,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         if action == "wake", powerConfig.localWakeConfigured { return true }
         if ["shutdown", "sleep", "restart"].contains(action),
            powerConfig.localSSHConfigured,
-           ![.offlineExpected, .waking, .restarting, .goingOffline, .authRejected].contains(hostAvailabilityState) {
+           ![.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .authRejected].contains(hostAvailabilityState) {
             return true
         }
         guard let status else { return false }
         if ["shutdown", "sleep", "restart"].contains(action),
-           [.offlineExpected, .waking, .restarting, .goingOffline, .authRejected].contains(hostAvailabilityState) {
+           [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .authRejected].contains(hostAvailabilityState) {
             return false
         }
         guard status.capabilities.powerControl, status.power?.configured == true else { return false }

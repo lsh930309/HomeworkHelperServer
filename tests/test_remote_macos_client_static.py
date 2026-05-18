@@ -98,11 +98,14 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
+        'userCycleHours = "user_cycle_hours"',
+        'staminaTrackingEnabled = "stamina_tracking_enabled"',
         'iconURL = "icon_url"',
         'iconURLs = "icon_urls"',
         'resourceIconURLs = "resource_icon_urls"',
         'remainingSeconds = "remaining_seconds"',
         'readyAt = "ready_at"',
+        'staminaUpdatedAt = "stamina_updated_at"',
         'isRunning = "is_running"',
         'playedToday = "played_today"',
         'statusText = "status_text"',
@@ -186,7 +189,10 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func smartThingsDevices(cliPath: String?)' in client
     assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
     assert 'request(path: path, method: "PUT")' in client
-    assert 'URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: OperationQueue())' in client
+    assert "static func defaultSession(requestTimeout: TimeInterval = 5, resourceTimeout: TimeInterval = 8) -> URLSession" in client
+    assert "configuration.timeoutIntervalForRequest = requestTimeout" in client
+    assert "configuration.timeoutIntervalForResource = resourceTimeout" in client
+    assert "configuration.waitsForConnectivity = false" in client
     assert 'let path = http.url?.path ?? "unknown endpoint"' in client
     assert 'RemoteAPIError.http(status: http.statusCode, message: "\\(path): \\(message)")' in client
 
@@ -216,6 +222,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
     models = _read(SOURCE_ROOT / "RemoteModels.swift")
     cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
+    tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
 
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
@@ -311,12 +318,23 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in app
     assert "(0x44, 0xcc, 0x44)" in app
     assert "(0xff, 0x44, 0x44)" in app
+    running_badge_source = app.split("struct MenuBarRunningBadge", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
+    assert 'Text("실행 중")' in running_badge_source
+    assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in running_badge_source
+    status_badges_source = app.split("struct MenuBarGameStatusBadges", 1)[1].split("struct HostStatusPill", 1)[0]
+    assert "if viewModel.isProcessRunningCurrent(process)" in status_badges_source
+    assert "MenuBarRunningBadge()" in status_badges_source
+    assert "} else if let progress {" in status_badges_source
+    assert 'Text("실행 중")' not in status_badges_source
     assert 'Text("실행 중")' in app
     assert 'checkmark.circle.fill' in app
     assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in app
     assert ".frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)" in app
     assert ".fixedSize(horizontal: true, vertical: false)" in app
     assert "MenuBarProgressBadge(progress: progress, viewModel: viewModel)" in app
+    assert "func menuBarSuppressFocusRing() -> some View" in app
+    assert "focusable(false)" in app
+    assert ".menuBarSuppressFocusRing()" in app
     assert 'Label("페어링 필요 · 설정 열기", systemImage: "link.badge.plus")' in app
     assert 'MenuBarPowerButton(action: "wake", label: "전원 켜기"' in app
     assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
@@ -365,8 +383,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
     assert "RemoteHostAvailabilityState" in view_model
     assert "hostAvailabilityState" in view_model
+    assert "private enum HostReachability" in view_model
+    assert "probeHostReachability(for: client)" in view_model
+    assert "markHostUnreachable" in view_model
+    assert "isLikelyTailscaleHost" in view_model
+    assert 'host.hasSuffix(".ts.net")' in view_model
+    assert "parts[0] == 100 && (64...127).contains(parts[1])" in view_model
+    assert "localTailscale?.peers.contains" in view_model
+    assert "TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
     assert "Self.wakeReconnectSchedule" in view_model
+    assert "connectionLossReconnectSchedule" in view_model
+    assert "호스트가 계속 응답하지 않습니다" in view_model
+    assert "짧은 재연결 확인 후에도 호스트가 응답하지 않아" in view_model
     assert "Array(repeating: UInt64(1), count: 15)" in view_model
     assert "Array(repeating: UInt64(2), count: 15)" in view_model
     assert "Array(repeating: UInt64(5), count: 24)" in view_model
@@ -397,6 +426,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
 
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model
+    assert '"HH_REMOTE_PREFS_SUITE"' in view_model
+    assert "UserDefaults(suiteName: suite)" in view_model
     assert "func bootstrap() async" in view_model
     assert "func startMirroring()" in view_model
     assert "latestStatus.stateRevision != lastStateRevision" in view_model
@@ -404,10 +435,15 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private actor RemoteDashboardService" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
+    assert "func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool" in view_model
+    assert "func isLaunchEnabled(_ process: RemoteProcess) -> Bool" in view_model
+    assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
     assert "status.capabilities.powerControl" in view_model
     assert "status.power?.configured == true" in view_model
     assert "status.supportedPowerActions" in view_model
     assert "!viewModel.isPowerActionEnabled(action)" in app
+    assert "!viewModel.isLaunchEnabled(process)" in app
+    assert "viewModel.processStatusText(process)" in app
     assert "func launch(_ process: RemoteProcess) async" in view_model
     assert "func power(_ action: String) async" in view_model
     assert "func confirmPairing() async" in view_model
@@ -429,6 +465,18 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "resourceIconURL" in models
     assert "cachedResourceIconURL" in cache
     assert 'private static let iconCacheVersion = "v3_pixels"' in cache
+    assert '"HH_REMOTE_CACHE_DIR"' in cache
+    assert 'private static var cacheDirectoryOverride' in cache
+    assert 'ProcessInfo.processInfo.environment[cacheDirectoryOverrideKey]' in cache
+    assert 'isSmokeOnlySnapshot' in cache
+    assert 'processes.first?.id == "smoke-game"' in cache
+    assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "_assert_production_cache_unchanged" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "_production_process_cache_path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert 'viewModel.powerConfig.sshKeyPath = "__SMOKE_SSH_KEY__"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert 'viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert 'smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "validatedCachedURL" in cache
     assert "decodedPixelDimension(data) >= preferredSize" in cache
     assert "displayThumbnailImage" in cache
@@ -442,6 +490,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteClientCache.cacheIcons" in view_model
     assert "CycleProgressDisplayMode" in view_model
     assert "progressDisplayText" in view_model
+    assert "startLocalProgressTicker" in view_model
+    assert "processWithLocalProgress" in view_model
+    assert "staminaRecoverySecondsPerPoint" in view_model
+    assert "formatRemainingDuration" in view_model
+    assert "LocalTailscalePingResult" in tailscale
+    assert '["ping", "--timeout=\\(max(1, timeoutSeconds))s", trimmedHost]' in tailscale
     for marker in ["어제", "오늘", "내일", "일 전", "일 후", "아침", "낮", "저녁", "밤"]:
         assert marker in view_model
 
