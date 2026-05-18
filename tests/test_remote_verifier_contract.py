@@ -204,8 +204,10 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     runtime = _read(TOOLS / "smoke_remote_controller_runtime.py")
     macos = _read(TOOLS / "smoke_macos_remote_api_client.py")
     viewmodel = _read(TOOLS / "smoke_macos_remote_viewmodel.py")
+    supervisor_smoke = _read(TOOLS / "smoke_macos_connection_supervisor.py")
     packager = _read(TOOLS / "package_macos_remote_app.py")
     setup_guide = _read(Path("docs") / "remote" / "setup-guide.md")
+    scenario_doc = _read(Path("docs") / "remote" / "macos-connection-state-scenarios.md")
 
     assert "runpy.run_path('homework_helper.pyw')" in runtime
     assert "run_server_main" in runtime
@@ -215,6 +217,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
 
     assert "RemoteAPIClient.swift" in macos
     assert "RemoteModels.swift" in macos
+    assert "LocalPowerWakeManager.swift" in macos
     assert "swiftc" in macos
     assert "confirmPairing" in macos
     assert "authedClient.status()" in macos
@@ -234,6 +237,8 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "dashboard summary did not include the ended mobile session metrics" in macos
     assert "process seed failed" in macos
     assert "refreshedClient.devices()" in macos
+    assert "process.communicate(timeout=5)" in macos
+    assert "process.stdout.read()" not in macos
 
     assert "RemoteDashboardViewModel.swift" in viewmodel
     assert "KeychainTokenStore.swift" in viewmodel
@@ -246,6 +251,10 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "await viewModel.refreshToken()" in viewmodel
     assert "await viewModel.refreshDevices()" in viewmodel
     assert "macOS RemoteDashboardViewModel smoke passed" in viewmodel
+    assert "RemoteConnectionSupervisor.swift" in viewmodel
+    assert "ssh power acceptance command" in viewmodel
+    assert "LocalSSHPowerManager.command(for: \"sleep\")" in viewmodel
+    assert "LocalSSHPowerManager.acceptedMarker" in viewmodel
     assert "HH_REMOTE_CACHE_DIR" in viewmodel
     assert "HH_REMOTE_PREFS_SUITE" in viewmodel
     assert "_assert_production_cache_unchanged" in viewmodel
@@ -253,11 +262,30 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "smoke_ssh_key" in viewmodel
     assert "Smoke Game" in viewmodel
 
+    assert "RemoteConnectionSupervisor.swift" in supervisor_smoke
+    assert "macOS RemoteConnectionSupervisor smoke passed" in supervisor_smoke
+    assert "tailscale no reply should infer offline host" in supervisor_smoke
+    assert "exhausted HTTP reconnect should become agentUnavailable" in supervisor_smoke
+    assert "client resume should request immediate probe" in supervisor_smoke
+    assert "tools/smoke_macos_connection_supervisor.py" in _read(TOOLS / "verify_remote_controller.py")
+
     assert "Stateful client smoke isolation contract" in setup_guide
     assert "HH_REMOTE_CACHE_DIR" in setup_guide
     assert "HH_REMOTE_PREFS_SUITE" in setup_guide
     assert "~/Library/Application Support/HomeworkHelperRemote/cache/processes.json" in setup_guide
     assert "production cache signature is unchanged" in setup_guide
+    assert "tools/smoke_macos_connection_supervisor.py" in setup_guide
+    assert "docs/remote/macos-connection-state-scenarios.md" in setup_guide
+
+    for marker in [
+        "External host shutdown / hibernate",
+        "Tailscale reachable but HTTP server down",
+        "Auth rejected",
+        "Client wake command accepted",
+        "Recovery with unchanged revision",
+        "Mac sleep then resume",
+    ]:
+        assert marker in scenario_doc
 
     assert "swift\", \"build\", \"-c\", \"release" in packager
     assert "HomeworkHelperRemote.app" in packager

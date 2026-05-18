@@ -34,6 +34,7 @@ LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
 LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
+REMOTE_CONNECTION_SUPERVISOR = MACOS_SOURCE_DIR / "RemoteConnectionSupervisor.swift"
 REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
 REMOTE_UI_TEST_FLAGS = MACOS_SOURCE_DIR / "RemoteUITestFlags.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
@@ -139,6 +140,19 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 viewModel.powerConfig.smartthingsCLIPath = "__SMARTTHINGS_CLI__"
                 viewModel.pairingCode = "__PAIRING_CODE__"
 
+                smokeStep("ssh power acceptance command")
+                let sleepCommand = try! LocalSSHPowerManager.command(for: "sleep")
+                guard sleepCommand.contains(LocalSSHPowerManager.acceptedMarker),
+                      sleepCommand.contains("cmd /C"),
+                      sleepCommand.contains("start") else {
+                    fatalError("sleep command should emit an acceptance marker after launching the power transition")
+                }
+                let shutdownCommand = try! LocalSSHPowerManager.command(for: "shutdown")
+                guard shutdownCommand.contains(LocalSSHPowerManager.acceptedMarker),
+                      shutdownCommand.contains("shutdown /s /t 0") else {
+                    fatalError("shutdown command should require command success before the acceptance marker")
+                }
+
                 smokeStep("confirmPairing")
                 await viewModel.confirmPairing()
                 guard !viewModel.tokenText.isEmpty, store.token == viewModel.tokenText else {
@@ -236,6 +250,7 @@ def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_c
         str(LOCAL_SSH_POWER_MANAGER),
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_CLIENT_CACHE),
+        str(REMOTE_CONNECTION_SUPERVISOR),
         str(REMOTE_LOGIN_ITEM_MANAGER),
         str(REMOTE_UI_TEST_FLAGS),
         str(REMOTE_VIEW_MODEL),

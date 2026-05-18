@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MACOS_SOURCE_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / "Sources" / "HomeworkHelperRemote"
 REMOTE_API_CLIENT = MACOS_SOURCE_DIR / "RemoteAPIClient.swift"
 REMOTE_MODELS = MACOS_SOURCE_DIR / "RemoteModels.swift"
+LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
 
 
 def _free_loopback_port() -> int:
@@ -165,6 +166,7 @@ def _compile_and_run_swift_smoke(base_url: str, pairing_code: str, process_id: s
         "swiftc",
         "-parse-as-library",
         str(REMOTE_MODELS),
+        str(LOCAL_POWER_WAKE_MANAGER),
         str(REMOTE_API_CLIENT),
         str(smoke_source),
         "-o",
@@ -237,9 +239,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"macOS RemoteAPIClient smoke failed: {exc}", file=sys.stderr)
             with contextlib.suppress(Exception):
-                if process.stdout:
+                process.terminate()
+                try:
+                    output, _ = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    output, _ = process.communicate(timeout=5)
+                if output:
                     print("\n--- server output ---", file=sys.stderr)
-                    print(process.stdout.read(), file=sys.stderr)
+                    print(output, file=sys.stderr)
             return 1
         finally:
             process.terminate()

@@ -178,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     checks.append(_run("macOS static contract", [sys.executable, "-m", "pytest", "tests/test_remote_macos_client_static.py"]))
     checks.append(_run("remote runtime smoke", [sys.executable, "tools/smoke_remote_controller_runtime.py"]))
     checks.append(_run("macOS RemoteAPIClient smoke", [sys.executable, "tools/smoke_macos_remote_api_client.py"]))
+    checks.append(_run("macOS RemoteConnectionSupervisor smoke", [sys.executable, "tools/smoke_macos_connection_supervisor.py"]))
     checks.append(_run("macOS RemoteDashboardViewModel smoke", [sys.executable, "tools/smoke_macos_remote_viewmodel.py"]))
     checks.append(_run("remote power readiness", [sys.executable, "tools/check_remote_power_readiness.py", "--allow-blocker"]))
     checks.append(_run("Android SDK readiness", [sys.executable, "tools/check_android_sdk_readiness.py", "--allow-blocker"]))

@@ -151,11 +151,14 @@ Stage 2, after connecting one USB-debuggable physical Android device:
 
 The device stage installs and launches the APK, reports UsageStats appop state, starts a temporary Remote Agent, uses `adb reverse` so no emulator or LAN IP is required, types the Android app's Remote Agent URL, pairs with a generated code, syncs data, verifies mobile-session/UsageStats behavior, and checks Android Keystore token persistence after app restart.
 
+macOS connection-state behavior is scenario-mapped in `docs/remote/macos-connection-state-scenarios.md`.
+
 Individual smoke entry points remain available for debugging:
 
 ```bash
 ./.venv/bin/python tools/smoke_remote_controller_runtime.py
 ./.venv/bin/python tools/smoke_macos_remote_api_client.py
+./.venv/bin/python tools/smoke_macos_connection_supervisor.py
 ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
 ./.venv/bin/python tools/check_android_sdk_readiness.py
 ./.venv/bin/python tools/check_android_apk_artifact.py

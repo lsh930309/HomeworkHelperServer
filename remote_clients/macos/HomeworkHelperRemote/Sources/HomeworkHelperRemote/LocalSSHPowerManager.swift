@@ -1,25 +1,32 @@
 import Foundation
 
 enum LocalSSHPowerManager {
+    static let acceptedMarker = "__HH_REMOTE_POWER_ACCEPTED__"
+
     private struct ProcessResult {
         let status: Int32
         let stdout: String
         let stderr: String
     }
 
-    static func run(action: String, config: RemotePowerConfigPayload) async throws -> String {
-        let command: String
-        var extraArgs: [String] = []
+    static func command(for action: String) throws -> String {
         switch action {
         case "shutdown":
-            command = "shutdown /s /t 0"
+            return "cmd /C shutdown /s /t 0 && echo \(acceptedMarker)"
         case "restart":
-            command = "shutdown /r /t 0"
+            return "cmd /C shutdown /r /t 0 && echo \(acceptedMarker)"
         case "sleep":
-            command = "rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
-            extraArgs = ["-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=2"]
+            return "cmd /C start \"\" rundll32.exe powrprof.dll,SetSuspendState 0,0,0 && echo \(acceptedMarker)"
         default:
             throw NSError(domain: "LocalSSHPowerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "지원하지 않는 SSH 전원 명령입니다: \(action)"])
+        }
+    }
+
+    static func run(action: String, config: RemotePowerConfigPayload) async throws -> String {
+        let command = try command(for: action)
+        var extraArgs: [String] = []
+        if action == "sleep" {
+            extraArgs = ["-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=2"]
         }
 
         let host = config.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,11 +48,12 @@ enum LocalSSHPowerManager {
         args.append(command)
 
         let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
-        guard result.status == 0 else {
+        let combined = [result.stdout, result.stderr].joined(separator: "\n")
+        guard combined.contains(Self.acceptedMarker) else {
             let detail = result.stderr.isEmpty ? result.stdout : result.stderr
-            throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 실패" : detail])
+            throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 수락 신호를 확인하지 못했습니다." : detail])
         }
-        return "Mac에서 OpenSSH로 \(action) 명령을 전송했습니다."
+        return "Mac에서 OpenSSH로 \(action) 명령 수락 신호를 확인했습니다."
     }
 
     private static func runForResult(executable: String, arguments: [String]) async throws -> ProcessResult {

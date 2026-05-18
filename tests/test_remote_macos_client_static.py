@@ -222,7 +222,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     liquid_glass = _read(SOURCE_ROOT / "RemoteLiquidGlass.swift")
     models = _read(SOURCE_ROOT / "RemoteModels.swift")
     cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
+    supervisor = _read(SOURCE_ROOT / "RemoteConnectionSupervisor.swift")
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
+    local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
 
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
@@ -381,26 +383,41 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'Picker("Popover 투명도", selection: $viewModel.popoverGlassTransparency)' in app
     assert "ForEach(RemotePopoverGlassTransparency.allCases)" in app
     assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
-    assert "RemoteHostAvailabilityState" in view_model
+    assert "RemoteHostAvailabilityState" in supervisor
+    assert "case agentUnavailable" in supervisor
+    assert 'case .agentUnavailable: return "서버 응답 없음"' in supervisor
+    assert "RemoteConnectionSupervisor" in supervisor
+    assert "RemoteConnectionDecision" in supervisor
+    assert "RemoteConnectionEvent" in supervisor
+    assert "RemoteConnectionFailureKind" in supervisor
+    assert "case clientResumed" in supervisor
+    assert "shouldForcePayloadSync" in supervisor
+    assert "shouldProbeImmediately" in supervisor
     assert "hostAvailabilityState" in view_model
     assert "private enum HostReachability" in view_model
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
+    assert "supervisorDecision(_ event: RemoteConnectionEvent)" in view_model
+    assert "applyConnectionDecision(_ decision: RemoteConnectionDecision" in view_model
+    assert "installClientResumeObservers" in view_model
+    assert "NSWorkspace.didWakeNotification" in view_model
+    assert "NSApplication.didBecomeActiveNotification" in view_model
+    assert "handleClientResumed" in view_model
     assert "isLikelyTailscaleHost" in view_model
     assert 'host.hasSuffix(".ts.net")' in view_model
     assert "parts[0] == 100 && (64...127).contains(parts[1])" in view_model
     assert "localTailscale?.peers.contains" in view_model
     assert "TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
-    assert "Self.wakeReconnectSchedule" in view_model
-    assert "connectionLossReconnectSchedule" in view_model
-    assert "호스트가 계속 응답하지 않습니다" in view_model
-    assert "짧은 재연결 확인 후에도 호스트가 응답하지 않아" in view_model
-    assert "Array(repeating: UInt64(1), count: 15)" in view_model
-    assert "Array(repeating: UInt64(2), count: 15)" in view_model
-    assert "Array(repeating: UInt64(5), count: 24)" in view_model
+    assert "static let wakeReconnectSchedule" in supervisor
+    assert "connectionLossReconnectSchedule" in supervisor
+    assert "호스트가 계속 응답하지 않습니다" in supervisor
+    assert "서버 응답 없음 상태로 전환했습니다" in supervisor
+    assert "Array(repeating: UInt64(1), count: 15)" in supervisor
+    assert "Array(repeating: UInt64(2), count: 15)" in supervisor
+    assert "Array(repeating: UInt64(5), count: 24)" in supervisor
     assert "beginPowerTransition(for: action)" in view_model
-    assert "setHostAvailability(.offlineExpected)" in view_model
+    assert "setHostAvailability(state, clearPairingRecovery: decision.shouldClearPairingRecovery)" in view_model
     assert "authRejected" in view_model
     assert "return NSApp.isActive ? 5 : 15" not in view_model
 
@@ -441,6 +458,13 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "status.capabilities.powerControl" in view_model
     assert "status.power?.configured == true" in view_model
     assert "status.supportedPowerActions" in view_model
+    assert "disconnectingPowerActions" in view_model
+    assert "static let acceptedMarker" in local_ssh
+    assert "static func command(for action: String)" in local_ssh
+    assert "cmd /C" in local_ssh
+    assert "shutdown /s /t 0 && echo" in local_ssh
+    assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
+    assert "combined.contains(Self.acceptedMarker)" in local_ssh
     assert "!viewModel.isPowerActionEnabled(action)" in app
     assert "!viewModel.isLaunchEnabled(process)" in app
     assert "viewModel.processStatusText(process)" in app
@@ -472,6 +496,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'processes.first?.id == "smoke-game"' in cache
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "tools/smoke_macos_connection_supervisor.py" in _read(Path("tests/test_remote_verifier_contract.py"))
     assert "_assert_production_cache_unchanged" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "_production_process_cache_path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert 'viewModel.powerConfig.sshKeyPath = "__SMOKE_SSH_KEY__"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))

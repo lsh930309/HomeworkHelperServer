@@ -177,58 +177,6 @@ enum CycleProgressDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum RemoteHostAvailabilityState: String {
-    case unknown
-    case online
-    case goingOffline
-    case offlineExpected
-    case waking
-    case restarting
-    case reconnecting
-    case authRejected
-
-    var connectionState: String {
-        switch self {
-        case .online:
-            return "online"
-        case .offlineExpected:
-            return "offline"
-        default:
-            return rawValue
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .unknown: return "상태 확인 중"
-        case .online: return "페어링됨"
-        case .goingOffline: return "종료 확인 중"
-        case .offlineExpected: return "호스트 꺼짐"
-        case .waking: return "부팅 대기 중"
-        case .restarting: return "재시동 대기 중"
-        case .reconnecting: return "재연결 중"
-        case .authRejected: return "인증 확인 필요"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .online:
-            return .green
-        case .goingOffline, .restarting:
-            return .orange
-        case .offlineExpected:
-            return .secondary
-        case .waking, .reconnecting:
-            return .blue
-        case .authRejected:
-            return .red
-        case .unknown:
-            return .secondary
-        }
-    }
-}
-
 private enum RemoteClientDesktopLogger {
     static func logPath() -> String {
         guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else {
@@ -384,24 +332,21 @@ final class RemoteDashboardViewModel: ObservableObject {
     private let bootstrapEnabled: Bool
     private var mirrorTask: Task<Void, Never>?
     private var localProgressTask: Task<Void, Never>?
+    private var resumeObservers: [NSObjectProtocol] = []
     private var lastStateRevision: String?
     private var consecutiveMirrorFailures = 0
     private var reconnectSchedule: [UInt64] = []
-    private static let expectedOfflineProbeSchedule = Array(repeating: UInt64(2), count: 5)
-    private static let connectionLossReconnectSchedule = Array(repeating: UInt64(1), count: 5)
-        + Array(repeating: UInt64(2), count: 5)
-        + Array(repeating: UInt64(5), count: 4)
-    private static let wakeReconnectSchedule = Array(repeating: UInt64(1), count: 15)
-        + Array(repeating: UInt64(2), count: 15)
-        + Array(repeating: UInt64(5), count: 24)
-    private static let restartReconnectSchedule = [UInt64(5)] + wakeReconnectSchedule
     private static let localProgressTickSeconds: UInt64 = 30
     private static let staminaRecoverySecondsPerPoint: Double = 360
+    private static let disconnectingPowerActions: Set<String> = ["shutdown", "sleep", "restart"]
 
     init(tokenStore: any RemoteTokenStore = KeychainTokenStore(), bootstrapEnabled: Bool = true) {
         self.tokenStore = tokenStore
         self.bootstrapEnabled = bootstrapEnabled
         tokenText = bootstrapEnabled ? tokenStore.load() : "ui-test-token"
+        if bootstrapEnabled {
+            installClientResumeObservers()
+        }
         if !bootstrapEnabled {
             applyUITestSnapshot()
         }
@@ -410,6 +355,33 @@ final class RemoteDashboardViewModel: ObservableObject {
     deinit {
         mirrorTask?.cancel()
         localProgressTask?.cancel()
+        for observer in resumeObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+    }
+
+    private func installClientResumeObservers() {
+        let wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.handleClientResumed()
+            }
+        }
+        let activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.hostAvailabilityState != .online else { return }
+                await self.handleClientResumed()
+            }
+        }
+        resumeObservers.append(contentsOf: [wakeObserver, activeObserver])
     }
 
     private func applyUITestSnapshot() {
@@ -527,6 +499,38 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    private func supervisorDecision(_ event: RemoteConnectionEvent) -> RemoteConnectionDecision {
+        RemoteConnectionSupervisor.decide(
+            event: event,
+            currentState: hostAvailabilityState,
+            reconnectScheduleIsEmpty: reconnectSchedule.isEmpty
+        )
+    }
+
+    private func applyConnectionDecision(_ decision: RemoteConnectionDecision, updateMessage: Bool = true) {
+        if decision.shouldLoadCache, processes.isEmpty {
+            processes = RemoteClientCache.loadProcesses()
+        }
+        if decision.shouldRefreshLocalProgress {
+            refreshLocalProcessDisplay()
+        }
+        if let schedule = decision.reconnectSchedule {
+            reconnectSchedule = schedule
+        }
+        if let state = decision.availabilityState {
+            setHostAvailability(state, clearPairingRecovery: decision.shouldClearPairingRecovery)
+            if state == .authRejected, let message = decision.message {
+                pairingRecoveryMessage = message
+            }
+        } else if decision.shouldClearPairingRecovery {
+            pairingRecoveryMessage = ""
+        }
+        if updateMessage, let message = decision.message {
+            setupProgress = message
+            self.message = message
+        }
+    }
+
     private func shouldProbeTailscalePing(for url: URL) -> Bool {
         guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else { return false }
         let lowered = host.lowercased()
@@ -563,82 +567,49 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func markHostUnreachable(_ detail: String, updateMessage: Bool = true) {
-        if processes.isEmpty {
-            processes = RemoteClientCache.loadProcesses()
-        }
-        refreshLocalProcessDisplay()
         consecutiveMirrorFailures += 1
-        if hostAvailabilityState == .goingOffline {
-            reconnectSchedule = []
-        } else if ![.offlineExpected, .waking, .restarting, .authRejected].contains(hostAvailabilityState),
-                  reconnectSchedule.isEmpty {
-            reconnectSchedule = Self.wakeReconnectSchedule
-        }
-        setHostAvailability(.offlineExpected)
-        setupProgress = "호스트 Tailscale ping 응답이 없습니다. 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다."
-        if updateMessage {
-            let suffix = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " (\(detail))"
-            message = setupProgress + suffix
-        }
+        applyConnectionDecision(
+            supervisorDecision(.tailscaleReachability(result: .unreachable(detail))),
+            updateMessage: updateMessage
+        )
     }
 
-    private func applyRemoteStatus(_ latestStatus: RemoteStatus, clearPairingRecovery: Bool = true) {
+    @discardableResult
+    private func applyRemoteStatus(_ latestStatus: RemoteStatus, clearPairingRecovery: Bool = true) -> RemoteConnectionDecision {
         status = latestStatus
         consecutiveMirrorFailures = 0
-        reconnectSchedule = []
-        setHostAvailability(.online, clearPairingRecovery: clearPairingRecovery)
+        let decision = supervisorDecision(
+            .httpStatusSucceeded(
+                powerHint: latestStatus.power?.state ?? latestStatus.power?.status,
+                stateRevision: latestStatus.stateRevision
+            )
+        )
+        applyConnectionDecision(decision, updateMessage: false)
+        if clearPairingRecovery, decision.shouldClearPairingRecovery {
+            pairingRecoveryMessage = ""
+        }
         if let statusReadiness = latestStatus.readiness {
             readiness = statusReadiness
         }
-        applyPowerStateHint(latestStatus.power?.state ?? latestStatus.power?.status)
-    }
-
-    private func applyPowerStateHint(_ rawState: String?) {
-        guard let rawState else { return }
-        let normalized = rawState.lowercased()
-        if ["off", "offline", "asleep", "sleeping"].contains(normalized),
-           ![.goingOffline, .waking, .restarting].contains(hostAvailabilityState) {
-            setHostAvailability(.offlineExpected)
-        } else if ["on", "online", "ready"].contains(normalized),
-                  hostAvailabilityState != .authRejected {
-            setHostAvailability(.online, clearPairingRecovery: true)
-        }
+        return decision
     }
 
     private func beginPowerTransition(for action: String) {
         consecutiveMirrorFailures = 0
-        switch action {
-        case "wake":
-            reconnectSchedule = Self.wakeReconnectSchedule
-            setHostAvailability(.waking)
-            pairingRecoveryMessage = ""
-        case "restart":
-            reconnectSchedule = Self.restartReconnectSchedule
-            setHostAvailability(.restarting)
-            pairingRecoveryMessage = ""
-        case "sleep", "shutdown":
-            reconnectSchedule = Self.expectedOfflineProbeSchedule
-            setHostAvailability(.goingOffline)
-            pairingRecoveryMessage = ""
-        default:
-            reconnectSchedule = []
-        }
+        applyConnectionDecision(supervisorDecision(.powerIntentAccepted(action: action)), updateMessage: false)
     }
 
     private func nextMirrorDelaySeconds() -> UInt64 {
         if reconnectSchedule.isEmpty == false {
             return reconnectSchedule.removeFirst()
         }
+        let exhaustedDecision = supervisorDecision(.scheduleExhausted)
+        if exhaustedDecision != .none {
+            applyConnectionDecision(exhaustedDecision, updateMessage: false)
+            return 60
+        }
         switch hostAvailabilityState {
-        case .goingOffline:
-            setHostAvailability(.online, clearPairingRecovery: true)
-            return UInt64(mirrorPollIntervalSeconds)
-        case .waking, .restarting, .reconnecting:
-            setHostAvailability(.offlineExpected)
-            return 60
-        case .offlineExpected:
-            return 60
-        case .authRejected:
+        case .offlineExpected, .agentUnavailable, .authRejected:
             return 60
         default:
             if consecutiveMirrorFailures > 0 { return 60 }
@@ -647,8 +618,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func isAuthFailure(_ error: Error) -> Bool {
-        let raw = error.localizedDescription
-        return raw.contains("HTTP 401") || raw.contains("HTTP 403")
+        failureKind(for: error) == .authRejected
     }
 
     private func urlError(from error: Error) -> URLError? {
@@ -667,85 +637,56 @@ final class RemoteDashboardViewModel: ObservableObject {
         return nil
     }
 
-    private func isConnectivityFailure(_ error: Error) -> Bool {
+    private func failureKind(for error: Error) -> RemoteConnectionFailureKind {
+        let raw = error.localizedDescription
+        if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
+            return .authRejected
+        }
         if let code = urlError(from: error)?.code {
             switch code {
-            case .timedOut,
-                 .cannotConnectToHost,
-                 .cannotFindHost,
-                 .networkConnectionLost,
-                 .notConnectedToInternet,
-                 .dnsLookupFailed,
-                 .internationalRoamingOff,
-                 .callIsActive,
-                 .dataNotAllowed:
-                return true
+            case .timedOut:
+                return .timedOut
+            case .cannotConnectToHost:
+                return .cannotConnect
+            case .cannotFindHost, .dnsLookupFailed:
+                return .dnsFailed
+            case .networkConnectionLost, .notConnectedToInternet:
+                return .networkLost
+            case .internationalRoamingOff, .callIsActive, .dataNotAllowed:
+                return .otherConnectivity
             default:
                 break
             }
         }
-        let raw = error.localizedDescription.lowercased()
-        return raw.contains("could not connect")
-            || raw.contains("timed out")
-            || raw.contains("cannot connect")
-            || raw.contains("connection lost")
-            || raw.contains("not connected")
-            || raw.contains("no route to host")
-            || raw.contains("host is down")
-            || raw.contains("offline")
-            || raw.contains("no reply")
-            || raw.contains("network")
-            || raw.contains("server")
-            || raw.contains("서버")
-            || raw.contains("연결")
+        let lowered = raw.lowercased()
+        if lowered.contains("timed out") {
+            return .timedOut
+        }
+        if lowered.contains("could not connect")
+            || lowered.contains("cannot connect")
+            || lowered.contains("no route to host")
+            || lowered.contains("host is down")
+            || lowered.contains("server")
+            || lowered.contains("서버") {
+            return .cannotConnect
+        }
+        if lowered.contains("connection lost")
+            || lowered.contains("not connected")
+            || lowered.contains("offline")
+            || lowered.contains("no reply")
+            || lowered.contains("network")
+            || lowered.contains("연결") {
+            return .otherConnectivity
+        }
+        return .nonConnectivity
     }
 
     private func handleRemoteFailure(_ error: Error, updateMessage: Bool = true) {
-        if processes.isEmpty {
-            processes = RemoteClientCache.loadProcesses()
-        }
-        refreshLocalProcessDisplay()
         consecutiveMirrorFailures += 1
-        if isAuthFailure(error) {
-            reconnectSchedule = []
-            setHostAvailability(.authRejected)
-            pairingRecoveryMessage = "저장된 토큰이 호스트에서 거부되었습니다. 로컬 토큰은 보존됩니다. 호스트 원격 설정에서 해당 디바이스가 폐기됐는지 확인하세요."
-            setupProgress = pairingRecoveryMessage
-            if updateMessage { message = pairingRecoveryMessage }
-            return
-        }
-
-        if isConnectivityFailure(error) {
-            if hostAvailabilityState == .goingOffline {
-                reconnectSchedule = []
-                setHostAvailability(.offlineExpected)
-                setupProgress = "호스트가 절전/종료 상태로 전환된 것으로 판단했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
-                if updateMessage { message = setupProgress }
-                return
-            }
-            if [.waking, .restarting].contains(hostAvailabilityState) {
-                setHostAvailability(hostAvailabilityState)
-                if updateMessage { message = "호스트 응답을 기다리는 중입니다. 저장된 토큰은 보존합니다." }
-                return
-            }
-            if hostAvailabilityState == .offlineExpected {
-                reconnectSchedule = []
-                setHostAvailability(.offlineExpected)
-                setupProgress = "호스트가 계속 응답하지 않습니다. 저장된 토큰과 캐시 데이터는 보존하고 standalone 표시를 유지합니다."
-                if updateMessage { message = setupProgress }
-                return
-            }
-            if hostAvailabilityState == .reconnecting, reconnectSchedule.isEmpty {
-                setHostAvailability(.offlineExpected)
-                setupProgress = "짧은 재연결 확인 후에도 호스트가 응답하지 않아 꺼짐/오프라인 상태로 전환했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
-                if updateMessage { message = setupProgress }
-                return
-            }
-            setHostAvailability(.reconnecting)
-            if reconnectSchedule.isEmpty {
-                reconnectSchedule = Self.connectionLossReconnectSchedule
-            }
-            if updateMessage { message = "호스트 연결이 끊겼습니다. 저장된 토큰으로 자동 재연결을 시도합니다." }
+        let kind = failureKind(for: error)
+        let decision = supervisorDecision(.httpStatusFailed(kind: kind))
+        if decision != .none {
+            applyConnectionDecision(decision, updateMessage: updateMessage)
             return
         }
 
@@ -834,6 +775,13 @@ final class RemoteDashboardViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func handleClientResumed() async {
+        let decision = supervisorDecision(.clientResumed)
+        applyConnectionDecision(decision, updateMessage: false)
+        guard decision.shouldProbeImmediately, isPaired else { return }
+        await mirrorRemoteState()
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -1154,14 +1102,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .reachable, .skipped:
             break
         }
-        let wasDisconnected = hostAvailabilityState != .online
         do {
             let latestStatus = try await service.status()
-            applyRemoteStatus(latestStatus)
+            let statusDecision = applyRemoteStatus(latestStatus)
             if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
             }
-            guard wasDisconnected || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
+            guard statusDecision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
                 refreshLocalProcessDisplay()
                 return
             }
@@ -1317,14 +1264,14 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func isPowerActionEnabled(_ action: String) -> Bool {
         if action == "wake", powerConfig.localWakeConfigured { return true }
-        if ["shutdown", "sleep", "restart"].contains(action),
+        if Self.disconnectingPowerActions.contains(action),
            powerConfig.localSSHConfigured,
-           ![.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .authRejected].contains(hostAvailabilityState) {
+           ![.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(hostAvailabilityState) {
             return true
         }
         guard let status else { return false }
-        if ["shutdown", "sleep", "restart"].contains(action),
-           [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .authRejected].contains(hostAvailabilityState) {
+        if Self.disconnectingPowerActions.contains(action),
+           [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(hostAvailabilityState) {
             return false
         }
         guard status.capabilities.powerControl, status.power?.configured == true else { return false }
@@ -1346,7 +1293,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             return
         }
-        if ["shutdown", "sleep", "restart"].contains(action), powerConfig.localSSHConfigured {
+        if Self.disconnectingPowerActions.contains(action), powerConfig.localSSHConfigured {
             if await localSSH(action) {
                 beginPowerTransition(for: action)
             }
