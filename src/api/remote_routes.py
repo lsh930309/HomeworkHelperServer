@@ -20,7 +20,7 @@ from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
-from src.core.remote_power import ConfigurablePowerController, PowerAction, RemotePowerConfig
+from src.core.remote_power import ConfigurablePowerController, RemotePowerConfig
 from src.core.remote_power_setup import list_smartthings_devices, power_setup_status, register_public_key
 from src.core.process_progress import calculate_process_progress
 from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
@@ -464,7 +464,7 @@ def create_remote_router(
             "game_links": True,
             "mobile_sessions": True,
             "power_config": True,
-            "power_control": bool(power_status.get("configured")),
+            "power_control": False,
             "beholder": True,
             "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
             "pairing": True,
@@ -515,7 +515,9 @@ def create_remote_router(
             "power_readiness": {
                 "state": "ok" if power_ready else "warning",
                 "color": "green" if power_ready else "yellow",
-                "message": power_status.get("message") or ("전원 제어 adapter 설정됨" if power_ready else "전원 제어 adapter 미설정"),
+                "message": power_status.get("message") or (
+                    "클라이언트 직접 전원 경로 설정됨" if power_ready else "클라이언트 직접 전원 경로 미설정"
+                ),
                 "supported_actions": power_status.get("supported_actions") or [],
             },
             "tailscale_readiness": {
@@ -866,14 +868,14 @@ def create_remote_router(
 
     @router.get("/power/config")
     def remote_power_config():
-        """Return editable power adapter config without sending power commands."""
+        """Return editable direct-power config without sending power commands."""
 
         config = RemotePowerConfig.load(power_config_path)
         return _power_config_payload(config, power_config_path, power_config_path.exists())
 
     @router.put("/power/config")
     def update_remote_power_config(request: RemotePowerConfigRequest):
-        """Persist fixed-schema power config and refresh the in-process adapter.
+        """Persist fixed-schema direct-power config and refresh readiness.
 
         This endpoint writes only HomeworkHelper's allowlisted
         ``remote_power_config.json`` shape. It never accepts raw commands and
@@ -1156,31 +1158,8 @@ def create_remote_router(
     @router.get("/power/status")
     def remote_power_status():
         if not hasattr(power_controller, "status"):
-            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="전원 제어 adapter가 없습니다.")
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="전원 준비 상태 provider가 없습니다.")
         return power_controller.status()
-
-    @router.post("/power/{action}", response_model=RemoteCommandResult)
-    def remote_power_action(action: PowerAction):
-        if not hasattr(power_controller, "perform"):
-            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="전원 제어 adapter가 없습니다.")
-        result = power_controller.perform(action)
-        auditor.record(
-            command=f"power.{action}",
-            accepted=bool(result.accepted),
-            status=result.status,
-            target_id=None,
-            target_name="desktop",
-            target=action,
-        )
-        return RemoteCommandResult(
-            accepted=bool(result.accepted),
-            command=f"power.{action}",
-            target_id=None,
-            target_name="desktop",
-            target=action,
-            status=result.status,
-            message=result.message,
-        )
 
     return router
 

@@ -73,7 +73,6 @@ def test_android_api_client_tracks_remote_agent_contract():
         "remote/mobile-sessions/end",
         "remote/processes",
         "remote/shortcuts",
-        "remote/power/$action",
         "remote/power/config",
         "remote/pair/confirm",
         "remote/tokens/refresh",
@@ -141,6 +140,7 @@ def test_android_api_client_tracks_remote_agent_contract():
     assert 'fun savePowerConfig(config: RemotePowerConfigPayload)' in api_client
     assert 'put("remote/power/config", body)' in api_client
     assert 'toPowerConfigResponse()' in api_client
+    assert "remote/power/$action" not in api_client
 
 
 def test_android_token_storage_uses_keystore_not_plaintext_preferences():
@@ -186,16 +186,17 @@ def test_android_local_integration_covers_intent_and_usage_access_boundaries():
     assert "ACTION_APPLICATION_DETAILS_SETTINGS" in integration
 
 
-def test_android_power_ui_uses_remote_power_capabilities_to_disable_actions():
+def test_android_power_ui_disables_actions_until_direct_power_path_exists():
     sources = _android_sources()
     models = _read(MAIN_SRC / "RemoteModels.kt")
 
     assert "fun isPowerActionEnabled(action: String): Boolean" in models
-    assert "!powerControl || !currentPower.configured" in models
-    assert "currentPower.supportedActions.contains(action)" in models
+    assert "return false" in models
+    assert "no longer" in models
     assert "fun powerCommand(action: String)" in sources
     assert "state.status?.isPowerActionEnabled(action) == true" in sources
-    assert "전원 제어 adapter가 설정되지" in sources
+    assert "SmartThings/OpenSSH 직접 경로" in sources
+    assert "repository.power(" not in sources
     assert 'enabled = viewModel.isPowerActionEnabled("wake")' in sources
     assert 'enabled = viewModel.isPowerActionEnabled("sleep")' in sources
     assert 'enabled = viewModel.isPowerActionEnabled("restart")' in sources

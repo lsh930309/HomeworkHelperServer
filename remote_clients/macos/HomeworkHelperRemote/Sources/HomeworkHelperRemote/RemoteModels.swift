@@ -67,10 +67,6 @@ struct RemoteStatus: Decodable {
     let power: Power?
     let readiness: RemoteReadiness?
 
-    var supportedPowerActions: Set<String> {
-        Set(power?.supportedActions ?? [])
-    }
-
     enum CodingKeys: String, CodingKey {
         case app
         case remoteAPIVersion = "remote_api_version"

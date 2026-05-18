@@ -27,7 +27,6 @@ private actor RemoteDashboardService {
         try await client.createGameLink(processID: processID, androidPackageName: androidPackageName)
     }
     func launchProcess(id: String) async throws -> RemoteCommandResult { try await client.launchProcess(id: id) }
-    func power(action: String) async throws -> RemoteCommandResult { try await client.power(action: action) }
     func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse { try await client.savePowerConfig(config) }
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
         try await client.confirmPairing(code: code, deviceName: deviceName)
@@ -808,6 +807,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func writeConnectivityEvaluationLog(_ evaluationLog: ConnectivityEvaluationLog) {
+        guard remoteDesktopLoggingEnabled else { return }
         var fields = evaluationLog.fields
         fields["bundle_version"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         fields["bundle_build"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
@@ -1001,10 +1001,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = "저장된 Base URL이 없어서 Windows Desktop 후보를 적용했습니다: \(url)"
         }
         if let logging = try? await service?.remoteLoggingConfig() {
-            if logging.enabled {
-                remoteDesktopLoggingEnabled = true
-                RemoteClientPreferences.saveDesktopLoggingEnabled(true)
-            }
             remoteDesktopLoggingPath = logging.path
         }
         if isPaired {
@@ -1513,26 +1509,23 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    private static func isDisconnectedPowerState(_ state: RemoteHostAvailabilityState) -> Bool {
+        [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(state)
+    }
+
     func isPowerActionEnabled(_ action: String) -> Bool {
         if action == "wake", powerConfig.localWakeConfigured { return true }
         if Self.disconnectingPowerActions.contains(action),
            powerConfig.localSSHConfigured,
-           ![.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(hostAvailabilityState) {
+           !Self.isDisconnectedPowerState(hostAvailabilityState) {
             return true
         }
-        guard let status else { return false }
-        if Self.disconnectingPowerActions.contains(action),
-           [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(hostAvailabilityState) {
-            return false
-        }
-        guard status.capabilities.powerControl, status.power?.configured == true else { return false }
-        let supported = status.supportedPowerActions
-        return supported.isEmpty || supported.contains(action)
+        return false
     }
 
     func power(_ action: String) async {
         guard isPowerActionEnabled(action) else {
-            message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다."
+            message = "전원 명령은 클라이언트의 SmartThings/OpenSSH 직접 경로가 준비되어야 사용할 수 있습니다."
             return
         }
         if remoteDesktopLoggingEnabled {
@@ -1544,29 +1537,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             return
         }
+
         if Self.disconnectingPowerActions.contains(action), powerConfig.localSSHConfigured {
             if await localSSH(action) {
                 beginPowerTransition(for: action)
             }
             return
         }
-        guard let client else { return }
-        do {
-            let service = RemoteDashboardService(client: client)
-            let result = try await service.power(action: action)
-            message = result.message
-            if result.accepted {
-                beginPowerTransition(for: action)
-            }
-        } catch {
-            if action == "wake" {
-                if await localWake() {
-                    beginPowerTransition(for: "wake")
-                }
-            } else {
-                handleRemoteFailure(error)
-            }
-        }
+        message = "전원 명령은 클라이언트의 SmartThings/OpenSSH 직접 경로가 준비되어야 사용할 수 있습니다."
     }
 
     @discardableResult

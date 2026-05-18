@@ -53,8 +53,6 @@ class RemoteRepository {
 
     fun openShortcut(baseUrl: String, token: String, id: String): RemoteCommandResult = client(baseUrl, token).openShortcut(id)
 
-    fun power(baseUrl: String, token: String, action: String): RemoteCommandResult = client(baseUrl, token).power(action)
-
     fun savePowerConfig(baseUrl: String, token: String, config: RemotePowerConfigPayload): RemotePowerConfigResponse =
         client(baseUrl, token).savePowerConfig(config)
 

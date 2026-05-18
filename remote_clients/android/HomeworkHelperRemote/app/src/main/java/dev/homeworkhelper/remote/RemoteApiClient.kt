@@ -188,8 +188,6 @@ class RemoteApiClient(
 
     fun openShortcut(id: String): RemoteCommandResult = command(post("remote/shortcuts/${pathSegment(id)}/open", "{}"))
 
-    fun power(action: String): RemoteCommandResult = command(post("remote/power/$action", "{}"))
-
     fun confirmPairing(code: String, deviceName: String): PairingResult {
         val body = JSONObject()
             .put("code", code)

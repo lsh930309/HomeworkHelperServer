@@ -33,7 +33,7 @@ enum LocalSSHPowerManager {
         case "restart":
             return "cmd /C shutdown /r /t 0 && echo \(acceptedMarker)"
         case "sleep":
-            return "cmd /C start \"\" rundll32.exe powrprof.dll,SetSuspendState 0,0,0 && echo \(acceptedMarker)"
+            return "rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
         default:
             throw NSError(domain: "LocalSSHPowerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "지원하지 않는 SSH 전원 명령입니다: \(action)"])
         }
@@ -66,6 +66,9 @@ enum LocalSSHPowerManager {
 
         let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
         let combined = [result.stdout, result.stderr].joined(separator: "\n")
+        if action == "sleep", result.status == 0 {
+            return "Mac에서 OpenSSH로 sleep 명령을 전송했습니다."
+        }
         guard combined.contains(Self.acceptedMarker) else {
             let detail = result.stderr.isEmpty ? result.stdout : result.stderr
             throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 수락 신호를 확인하지 못했습니다." : detail])

@@ -64,7 +64,6 @@ def test_macos_models_track_remote_agent_snake_case_contract():
     assert "struct Game: Decodable" in models
     assert "struct MobileMetrics: Decodable" in models
     assert "let power: Power?" in models
-    assert "var supportedPowerActions: Set<String>" in models
 
     for coding_key in [
         'activeSessions = "active_sessions"',
@@ -157,7 +156,6 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/mobile-sessions/end',
         'remote/processes',
         'remote/shortcuts',
-        'remote/power/\\(action)',
         'remote/power/config',
         'remote/power/setup',
         'remote/power/ssh-key',
@@ -386,6 +384,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
     assert "RemoteHostAvailabilityState" in supervisor
     assert "case agentUnavailable" in supervisor
+    assert 'case .goingOffline: return "종료 대기 중"' in supervisor
     assert 'case .agentUnavailable: return "서버 응답 없음"' in supervisor
     assert "RemoteConnectionSupervisor" in supervisor
     assert "RemoteConnectionDecision" in supervisor
@@ -400,6 +399,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private enum TailnetManagementReachability" in view_model
     assert "private struct ConnectivityEvaluationLog" in view_model
     assert "writeConnectivityEvaluationLog" in view_model
+    assert "guard remoteDesktopLoggingEnabled else { return }" in view_model
     assert '"connectivity.evaluate"' in view_model
     assert "bundle_release_id" in view_model
     assert "HHRemoteReleaseID" in view_model
@@ -471,15 +471,16 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool" in view_model
     assert "func isLaunchEnabled(_ process: RemoteProcess) -> Bool" in view_model
     assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
-    assert "status.capabilities.powerControl" in view_model
-    assert "status.power?.configured == true" in view_model
-    assert "status.supportedPowerActions" in view_model
     assert "disconnectingPowerActions" in view_model
+    assert "isDisconnectedPowerState" in view_model
+    assert "client.power(action:" not in view_model
     assert "static let acceptedMarker" in local_ssh
     assert "static func command(for action: String)" in local_ssh
     assert "cmd /C" in local_ssh
     assert "shutdown /s /t 0 && echo" in local_ssh
     assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
+    assert 'start "" rundll32.exe' not in local_ssh
+    assert 'if action == "sleep", result.status == 0' in local_ssh
     assert "combined.contains(Self.acceptedMarker)" in local_ssh
     assert "!viewModel.isPowerActionEnabled(action)" in app
     assert "!viewModel.isLaunchEnabled(process)" in app

@@ -100,10 +100,6 @@ struct RemoteAPIClient {
         try await post("remote/shortcuts/\(id)/open", body: Data("{}".utf8))
     }
 
-    func power(action: String) async throws -> RemoteCommandResult {
-        try await post("remote/power/\(action)", body: Data("{}".utf8))
-    }
-
     func powerConfig() async throws -> RemotePowerConfigResponse {
         try await get("remote/power/config")
     }

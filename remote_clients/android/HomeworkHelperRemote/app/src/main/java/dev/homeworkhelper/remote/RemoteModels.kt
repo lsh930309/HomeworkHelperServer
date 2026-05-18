@@ -19,9 +19,10 @@ data class RemoteStatus(
     val power: RemotePowerStatus?,
 ) {
     fun isPowerActionEnabled(action: String): Boolean {
-        val currentPower = power ?: return false
-        if (!powerControl || !currentPower.configured) return false
-        return currentPower.supportedActions.isEmpty() || currentPower.supportedActions.contains(action)
+        // Power side effects are intentionally client-direct (SmartThings/OpenSSH).
+        // The host Remote Agent only reports readiness/configuration and no longer
+        // exposes /remote/power/{action}.
+        return false
     }
 }
 

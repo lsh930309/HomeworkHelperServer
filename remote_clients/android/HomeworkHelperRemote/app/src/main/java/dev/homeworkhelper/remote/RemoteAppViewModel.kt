@@ -270,11 +270,7 @@ class RemoteAppViewModel(
     }
 
     fun powerCommand(action: String) {
-        if (!isPowerActionEnabled(action)) {
-            state = state.copy(message = "전원 제어 adapter가 설정되지 않았거나 지원하지 않는 명령입니다.")
-            return
-        }
-        command(refreshAfter = true) { repository.power(baseUrl, token, action) }
+        state = state.copy(message = "전원 명령은 Android의 SmartThings/OpenSSH 직접 경로가 준비된 뒤 사용할 수 있습니다.")
     }
 
     fun savePowerConfig() {

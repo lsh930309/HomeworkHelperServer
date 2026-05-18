@@ -314,9 +314,10 @@ private fun PowerQuickActionsCard(state: RemoteAppState, viewModel: RemoteAppVie
             Text("전원 빠른 실행", style = MaterialTheme.typography.titleMedium)
             val power = state.status?.power
             if (power == null || power.configured.not()) {
-                Text("Remote Agent의 전원 제어 adapter가 설정되지 않아 전원 버튼을 비활성화했습니다.")
+                Text("클라이언트 직접 전원 경로(SmartThings/OpenSSH)가 준비되지 않아 전원 버튼을 비활성화했습니다.")
             } else {
                 Text("전원 상태: ${power.status} · 지원 명령: ${if (power.supportedActions.isEmpty()) "전체" else power.supportedActions.joinToString(", ")}")
+                Text("Android 직접 SmartThings/OpenSSH 실행 경로가 구현되기 전까지 버튼은 비활성화됩니다.", style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (power == null || power.configured.not()) {
