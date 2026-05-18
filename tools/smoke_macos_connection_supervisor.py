@@ -60,6 +60,11 @@ def _swift_source() -> str:
                 expect(sleep.availabilityState == .goingOffline, "sleep intent should enter goingOffline")
                 expect(sleep.reconnectSchedule == RemoteConnectionSupervisor.expectedOfflineProbeSchedule, "sleep should use expected offline schedule")
 
+                let staleGoingOffline = decision(.httpStatusSucceeded(powerHint: "on", stateRevision: "same"), state: .goingOffline)
+                expect(staleGoingOffline.availabilityState == .goingOffline, "status success during goingOffline should not recover to online")
+                expect(staleGoingOffline.reconnectSchedule == nil, "goingOffline status success should preserve existing schedule")
+                expect(staleGoingOffline.shouldForcePayloadSync == false, "goingOffline status success should not force payload sync")
+
                 let restart = decision(.powerIntentAccepted(action: "restart"), state: .online)
                 expect(restart.availabilityState == .restarting, "restart intent should enter restarting")
                 expect(restart.reconnectSchedule == RemoteConnectionSupervisor.restartReconnectSchedule, "restart should use restart schedule")

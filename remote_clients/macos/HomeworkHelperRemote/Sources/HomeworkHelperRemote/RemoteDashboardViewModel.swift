@@ -223,6 +223,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var powerConfigResponse: RemotePowerConfigResponse?
     @Published var powerSetup: RemotePowerSetupResponse?
     @Published var localSSHKey: LocalSSHKeyPair?
+    @Published var localSSHHealth: LocalSSHPowerManager.HealthResult?
     @Published var smartThingsDevices: [String] = []
     @Published var smartThingsDeviceCandidates: [RemoteSmartThingsDeviceCandidate] = []
     @Published var readiness: RemoteReadiness?
@@ -280,16 +281,30 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var setupChecklist: [(String, String, Bool)] {
         let pairingHealthy = !tokenText.isEmpty && pairingRecoveryMessage.isEmpty
+        let powerHealthy = powerConfig.localWakeConfigured || localSSHHealthReady
+        let powerDetail = powerConfigResponse?.readiness.supportedActions.isEmpty == false
+            ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "") · \(localSSHHealthSummary)"
+            : "SmartThings/SSH 설정 저장 필요"
         return [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
-            ("4. 전원 관리", powerConfigResponse?.readiness.supportedActions.isEmpty == false ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "")" : "SmartThings/SSH 설정 저장 필요", powerConfigResponse?.readiness.supportedActions.isEmpty == false),
+            ("4. 전원 관리", powerDetail, powerConfigResponse?.readiness.supportedActions.isEmpty == false && powerHealthy),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
     }
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var localSSHHealthReady: Bool {
+        localSSHHealth?.authenticated == true
+    }
+
+    var localSSHHealthSummary: String {
+        guard let localSSHHealth else { return "SSH health 미확인" }
+        if localSSHHealth.authenticated { return "SSH 인증 확인됨" }
+        return localSSHHealth.message
+    }
 
     var hostStatusLabel: String {
         if !isPaired { return "페어링 해제됨" }
@@ -952,8 +967,9 @@ final class RemoteDashboardViewModel: ObservableObject {
            !hostUser.isEmpty {
             powerConfig.sshUser = hostUser
         }
-        if powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            powerConfig.sshKeyPath = LocalSSHKeyManager.defaultPrivateKeyPath
+        let normalizedKeyPath = powerConfig.normalizedLocalSSHKeyPath()
+        if powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines) != normalizedKeyPath {
+            powerConfig.sshKeyPath = normalizedKeyPath
         }
     }
 
@@ -1294,6 +1310,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         powerSetup = try? await service.powerSetup()
         if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
         fillDefaultSSHFields()
+        if isPaired {
+            _ = await verifyLocalSSHHealth(updateMessage: false)
+        }
 
         if isPaired {
             setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
@@ -1307,7 +1326,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
         }
 
-        setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
+        setupProgress = isPaired ? "4/4 자동 설정 점검 완료. SSH 상태: \(localSSHHealthSummary). 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
         message = setupProgress
     }
 
@@ -1415,6 +1434,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             powerSetup = try? await service.powerSetup()
             if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             fillDefaultSSHFields()
+            _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
@@ -1517,6 +1537,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if action == "wake", powerConfig.localWakeConfigured { return true }
         if Self.disconnectingPowerActions.contains(action),
            powerConfig.localSSHConfigured,
+           localSSHHealthReady,
            !Self.isDisconnectedPowerState(hostAvailabilityState) {
             return true
         }
@@ -1560,17 +1581,48 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     @discardableResult
+    private func verifyLocalSSHHealth(updateMessage: Bool = true) async -> Bool {
+        guard powerConfig.localSSHConfigured else {
+            localSSHHealth = nil
+            return false
+        }
+        let result = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
+        localSSHHealth = result
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.ssh_health",
+                [
+                    "host": powerConfig.sshHost,
+                    "user": powerConfig.sshUser,
+                    "outcome": "\(result.outcome)",
+                    "authenticated": String(result.authenticated),
+                    "exit_status": result.exitStatus.map(String.init) ?? "",
+                    "message": result.message,
+                ]
+            )
+        }
+        if updateMessage {
+            message = result.authenticated
+                ? "SSH health 인증 확인 완료: \(result.host)"
+                : "SSH key 등록은 확인했지만 실제 SSH 인증은 실패했습니다: \(result.message)"
+        }
+        return result.authenticated
+    }
+
+    @discardableResult
     func localSSH(_ action: String) async -> Bool {
+        let identityStatus = powerConfig.localSSHIdentityStatus
         do {
             message = try await LocalSSHPowerManager.run(action: action, config: powerConfig)
             if remoteDesktopLoggingEnabled {
-                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted"])
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted", "ssh_identity": identityStatus])
             }
             return true
         } catch {
             message = error.localizedDescription
+            localSSHHealth = nil
             if remoteDesktopLoggingEnabled {
-                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "failed", "message": error.localizedDescription])
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "failed", "ssh_identity": identityStatus, "message": error.localizedDescription])
             }
             return false
         }
@@ -1589,7 +1641,8 @@ final class RemoteDashboardViewModel: ObservableObject {
                 }
             }
             fillDefaultSSHFields()
-            message = powerSetup?.message ?? "전원 준비 상태 확인 완료"
+            _ = await verifyLocalSSHHealth(updateMessage: false)
+            message = "\(powerSetup?.message ?? "전원 준비 상태 확인 완료") · \(localSSHHealthSummary)"
         } catch {
             message = connectionGuidance(for: error)
         }
@@ -1607,12 +1660,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? LocalSSHKeyManager.defaultPrivateKeyPath : powerConfig.sshKeyPath)
+            powerConfig.sshKeyPath = powerConfig.normalizedLocalSSHKeyPath()
+            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath)
             localSSHKey = key
             powerConfig.sshKeyPath = key.privateKeyPath
             let result = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
             powerSetup = try? await service.powerSetup()
-            message = result.message
+            let sshReady = await verifyLocalSSHHealth(updateMessage: false)
+            message = sshReady ? "\(result.message) SSH 인증까지 확인했습니다." : "\(result.message) 하지만 실제 SSH 인증은 아직 실패합니다: \(localSSHHealthSummary)"
         } catch {
             message = connectionGuidance(for: error)
         }
@@ -1655,6 +1710,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         setupProgress = "PIN 확인 완료: Tailscale, SSH key, SmartThings 전원 설정을 자동 점검합니다."
         serverTailscaleEnsure = try? await service.ensureServerTailscale()
         powerSetup = try? await service.powerSetup()
+        var sshOnboardingReady = false
+        var sshOnboardingMessage = "SSH health 미확인"
         if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
                 powerConfig.smartthingsCLIPath = local
@@ -1668,11 +1725,16 @@ final class RemoteDashboardViewModel: ObservableObject {
         fillDefaultSSHFields()
 
         do {
-            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? LocalSSHKeyManager.defaultPrivateKeyPath : powerConfig.sshKeyPath)
+            powerConfig.sshKeyPath = powerConfig.normalizedLocalSSHKeyPath()
+            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath)
             localSSHKey = key
             powerConfig.sshKeyPath = key.privateKeyPath
             _ = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
+            sshOnboardingReady = await verifyLocalSSHHealth(updateMessage: false)
+            sshOnboardingMessage = localSSHHealthSummary
         } catch {
+            sshOnboardingReady = false
+            sshOnboardingMessage = error.localizedDescription
             setupProgress = "SSH key 자동 등록은 실패했습니다. Windows 원격 설정 또는 mac 전원 설정에서 다시 시도하세요: \(error.localizedDescription)"
         }
 
@@ -1709,9 +1771,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             applyRemoteStatus(latestStatus)
             readiness = latestStatus.readiness ?? readiness
         }
-        setupProgress = smartThingsDeviceCandidates.count > 1
-            ? "PIN 설정 대부분 완료. SmartThings 후보가 여러 개라 wake 대상만 선택 후 저장하세요."
-            : "PIN 1회 입력으로 가능한 원격 연결 설정을 자동 완료했습니다."
+        setupProgress = sshOnboardingReady
+            ? (smartThingsDeviceCandidates.count > 1
+                ? "PIN 설정 대부분 완료. SSH 인증 확인됨. SmartThings 후보가 여러 개라 wake 대상만 선택 후 저장하세요."
+                : "PIN 1회 입력으로 가능한 원격 연결 설정과 SSH 인증을 자동 완료했습니다.")
+            : "PIN 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(sshOnboardingMessage)"
     }
 
     func savePowerConfig() async {
@@ -1722,8 +1786,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig") {
                 readiness = evaluation.status.readiness
             }
+            _ = await verifyLocalSSHHealth(updateMessage: false)
             let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
-            message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions)"
+            message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions). SSH 상태: \(localSSHHealthSummary)"
         } catch {
             if let client {
                 _ = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig.failure")
@@ -1757,7 +1822,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             fillDefaultSSHFields()
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
-            message = "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
+            message = localSSHHealthReady
+                ? "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
+                : "'\(response.name)' 디바이스 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(localSSHHealthSummary)"
             if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("pairing.complete", ["device": response.name]) }
             await refresh(using: pairedService, includeDevices: true)
         } catch {

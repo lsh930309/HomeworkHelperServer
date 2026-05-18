@@ -22,6 +22,7 @@ enum LocalSSHPowerManager {
         let message: String
         let executablePath: String
         let exitStatus: Int32?
+        let authenticated: Bool
         let stdout: String
         let stderr: String
     }
@@ -33,7 +34,7 @@ enum LocalSSHPowerManager {
         case "restart":
             return "cmd /C shutdown /r /t 0 && echo \(acceptedMarker)"
         case "sleep":
-            return "rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
+            return "cmd /C echo \(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
         default:
             throw NSError(domain: "LocalSSHPowerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "지원하지 않는 SSH 전원 명령입니다: \(action)"])
         }
@@ -48,7 +49,7 @@ enum LocalSSHPowerManager {
 
         let host = config.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = config.sshUser.trimmingCharacters(in: .whitespacesAndNewlines)
-        let keyPath = NSString(string: config.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
+        let keyPath = NSString(string: config.normalizedLocalSSHKeyPath()).expandingTildeInPath
         guard !host.isEmpty, !user.isEmpty, !keyPath.isEmpty else {
             throw NSError(domain: "LocalSSHPowerManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mac에 저장된 SSH host/user/key path가 없어 SSH 전원 명령을 보낼 수 없습니다."])
         }
@@ -58,6 +59,7 @@ enum LocalSSHPowerManager {
             "-p", String(config.sshPort),
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
+            "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=no",
         ]
         args.append(contentsOf: extraArgs)
@@ -66,9 +68,6 @@ enum LocalSSHPowerManager {
 
         let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
         let combined = [result.stdout, result.stderr].joined(separator: "\n")
-        if action == "sleep", result.status == 0 {
-            return "Mac에서 OpenSSH로 sleep 명령을 전송했습니다."
-        }
         guard combined.contains(Self.acceptedMarker) else {
             let detail = result.stderr.isEmpty ? result.stdout : result.stderr
             throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 수락 신호를 확인하지 못했습니다." : detail])
@@ -79,9 +78,9 @@ enum LocalSSHPowerManager {
     static func health(config: RemotePowerConfigPayload, timeoutSeconds: Int = 3) async -> HealthResult {
         let host = config.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = config.sshUser.trimmingCharacters(in: .whitespacesAndNewlines)
-        let keyPath = NSString(string: config.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
+        let keyPath = NSString(string: config.normalizedLocalSSHKeyPath()).expandingTildeInPath
         guard !host.isEmpty, !user.isEmpty, !keyPath.isEmpty, config.sshPort > 0 else {
-            return HealthResult(host: host, outcome: .unavailable, message: "SSH health를 확인할 host/user/key path가 비어 있습니다.", executablePath: "/usr/bin/ssh", exitStatus: nil, stdout: "", stderr: "")
+            return HealthResult(host: host, outcome: .unavailable, message: "SSH health를 확인할 host/user/key path가 비어 있습니다.", executablePath: "/usr/bin/ssh", exitStatus: nil, authenticated: false, stdout: "", stderr: "")
         }
 
         let args = [
@@ -89,6 +88,7 @@ enum LocalSSHPowerManager {
             "-p", String(config.sshPort),
             "-o", "ConnectTimeout=\(max(1, timeoutSeconds))",
             "-o", "BatchMode=yes",
+            "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=no",
             "\(user)@\(host)",
             "echo \(healthMarker)",
@@ -99,10 +99,10 @@ enum LocalSSHPowerManager {
             let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             let lowered = combined.lowercased()
             if result.status == 0 && combined.contains(healthMarker) {
-                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH health 성공" : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH health 성공" : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: true, stdout: result.stdout, stderr: result.stderr)
             }
             if lowered.contains("connection refused") || lowered.contains("permission denied") {
-                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 인증/서비스가 거부되었습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 인증/서비스가 거부되었습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
             }
             if lowered.contains("timed out")
                 || lowered.contains("operation timed out")
@@ -110,11 +110,11 @@ enum LocalSSHPowerManager {
                 || lowered.contains("host is down")
                 || lowered.contains("network is unreachable")
                 || lowered.contains("could not resolve hostname") {
-                return HealthResult(host: host, outcome: .unreachable, message: combined.isEmpty ? "SSH health 응답이 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+                return HealthResult(host: host, outcome: .unreachable, message: combined.isEmpty ? "SSH health 응답이 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
             }
-            return HealthResult(host: host, outcome: .unavailable, message: combined.isEmpty ? "SSH health를 판독할 수 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+            return HealthResult(host: host, outcome: .unavailable, message: combined.isEmpty ? "SSH health를 판독할 수 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
         } catch {
-            return HealthResult(host: host, outcome: .unavailable, message: error.localizedDescription, executablePath: "/usr/bin/ssh", exitStatus: nil, stdout: "", stderr: "")
+            return HealthResult(host: host, outcome: .unavailable, message: error.localizedDescription, executablePath: "/usr/bin/ssh", exitStatus: nil, authenticated: false, stdout: "", stderr: "")
         }
     }
 

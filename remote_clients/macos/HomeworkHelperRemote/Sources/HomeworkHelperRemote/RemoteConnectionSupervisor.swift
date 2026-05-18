@@ -211,7 +211,20 @@ enum RemoteConnectionSupervisor {
 
     private static func statusSuccessDecision(powerHint: String?, currentState: RemoteHostAvailabilityState) -> RemoteConnectionDecision {
         let normalized = powerHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let state: RemoteHostAvailabilityState = ["off", "offline", "asleep", "sleeping"].contains(normalized) ? .offlineExpected : .online
+        let isOfflineHint = ["off", "offline", "asleep", "sleeping"].contains(normalized)
+        if currentState == .goingOffline && !isOfflineHint {
+            return RemoteConnectionDecision(
+                availabilityState: .goingOffline,
+                reconnectSchedule: nil,
+                message: nil,
+                shouldLoadCache: false,
+                shouldRefreshLocalProgress: false,
+                shouldForcePayloadSync: false,
+                shouldClearPairingRecovery: false,
+                shouldProbeImmediately: false
+            )
+        }
+        let state: RemoteHostAvailabilityState = isOfflineHint ? .offlineExpected : .online
         return RemoteConnectionDecision(
             availabilityState: state,
             reconnectSchedule: [],

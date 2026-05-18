@@ -9,7 +9,7 @@
 | Remote Agent만 응답 없음 | HTTP 실패 + Tailnet/Management reachable/skipped/inconclusive | `agentUnavailable` / `서버 응답 없음` | blind reconnect burst 없이 standalone 유지 | `agentUnavailable` | HTTP와 하위 관리 계층을 분리해 호스트 전원 꺼짐과 서버/포트 문제를 분리 |
 | 인증 거부 | HTTP 401/403 | `authRejected` / `인증 확인 필요` | 자동 재연결 schedule 비움 | `authRejected` | 로컬 token/cache는 보존, 사용자 확인 필요 |
 | 클라이언트에서 wake 명령 수락 | 클라이언트 직접 SmartThings/local wake 성공 | `waking` / `부팅 대기 중` | wake schedule로 빠르게 status probe | `online` 또는 `offlineExpected` | 온라인 복구 시 payload 강제 sync |
-| 클라이언트에서 sleep/shutdown 명령 수락 | 클라이언트 직접 OpenSSH 명령이 explicit accepted signal 반환 | `goingOffline` / `종료 대기 중` | 2초 x 5회 expected-offline 확인 | `offlineExpected` / `호스트 꺼짐` | 예상된 disconnect이므로 `reconnecting` 장기 체류 방지 |
+| 클라이언트에서 sleep/shutdown 명령 수락 | 클라이언트 직접 OpenSSH 명령이 explicit accepted signal 반환 | `goingOffline` / `종료 대기 중` | 2초 x 5회 expected-offline 확인. 전환 중 stale HTTP success가 와도 offline hint가 아니면 `online`으로 되돌리지 않음 | `offlineExpected` / `호스트 꺼짐` | SSH health 인증이 먼저 성공해야 버튼이 활성화됨 |
 | 클라이언트에서 restart 명령 수락 | 클라이언트 직접 OpenSSH 명령이 explicit accepted signal 반환 | `restarting` / `재시동 대기 중` | 5초 대기 후 wake schedule | `online` 또는 `offlineExpected` | 복구 성공 시 payload 강제 sync |
 | Mac client wake/resume | `NSWorkspace.didWakeNotification` 또는 disconnected 중 app active | 현재 상태 유지 | local progress 즉시 갱신 후 immediate probe | probe 결과에 따름 | client sleep/power-off 자체는 세부 시나리오로 확장하지 않음 |
 
@@ -56,7 +56,8 @@ flowchart TB
     Waking --> HTTP
     Restarting --> HTTP
 
-    HTTP -->|200 OK| Online["online<br/>페어링됨"]
+    HTTP -->|200 OK + normal| Online["online<br/>페어링됨"]
+    HTTP -->|200 OK + goingOffline + no offline hint| GoingOffline
     HTTP -->|401 / 403| AuthRejected["authRejected<br/>인증 확인 필요"]
     HTTP -->|timeout / cannot connect| Management["L3 Tailnet/Management<br/>tailscale ping hard deadline<br/>SSH health fallback"]
 
@@ -83,7 +84,10 @@ flowchart TB
 - 전원 side effect는 항상 클라이언트가 직접 SmartThings/OpenSSH 경로로 수행한다. Android도 직접 경로가 구현되기 전까지 전원 버튼을 비활성화한다.
 - 클라이언트 local command adapter가 명령 수락 여부를 typed signal로 결정하고, supervisor는 `powerIntentAccepted(action:)` 이벤트만 해석한다.
 - macOS local SSH adapter는 Windows command에 `__HH_REMOTE_POWER_ACCEPTED__` marker를 붙이고, SSH 출력에서 marker가 확인될 때만 accepted로 본다.
-- 단, `sleep`은 Windows OpenSSH 세션에서 `start "" rundll32...`로 분리 실행하면 child process가 세션 종료와 함께 유실될 수 있으므로, 이전에 검증된 direct `rundll32.exe powrprof.dll,SetSuspendState 0,0,0` 호출을 유지하고 exit status 0을 dispatch accepted로 본다.
+- 단, `sleep`은 Windows OpenSSH 세션에서 `start "" rundll32...`로 분리 실행하면 child process가 세션 종료와 함께 유실될 수 있으므로, marker를 먼저 출력한 뒤 이전에 검증된 direct `rundll32.exe powrprof.dll,SetSuspendState 0,0,0` 호출을 유지한다. 이후 호스트가 절전 진입으로 SSH 세션을 끊더라도 marker가 확인되면 accepted로 본다.
+- macOS client의 SSH private key path는 클라이언트 로컬 책임이다. 호스트 설정 저장 시 `ssh_key_path`는 비우고, Windows `authorized_keys` 경로나 `C:\...` 형태가 클라이언트에 섞이면 기본 private key(`~/.ssh/homeworkhelper_remote_ed25519`)로 정규화한다. SSH 실행은 `IdentitiesOnly=yes`를 사용해 우연히 다른 key/agent로 인증되는 일을 막고, 로컬 private key 파일이 없거나 SSH health 인증이 성공하지 않으면 SSH 전원 버튼을 준비 완료로 보지 않는다.
+- Windows host는 sshd의 effective authorized keys target을 기준으로 public key를 등록한다. `Match Group administrators`가 `__PROGRAMDATA__/ssh/administrators_authorized_keys`를 사용하고 현재 계정이 Administrators 그룹이면, `%USERPROFILE%\.ssh\authorized_keys`가 아니라 `C:\ProgramData\ssh\administrators_authorized_keys`에 등록하고 ACL 보정을 시도한다.
+- 페어링 성공은 API bearer token 성공이고, SSH 전원 제어 완료 조건은 public key 등록 후 client-side SSH health marker 인증 성공이다. SSH health가 `Permission denied`를 반환하면 페어링은 유지하되 전원 자동 설정 완료로 표시하지 않는다.
 - Timeout, no route, permission denied처럼 marker가 없는 실패는 accepted로 보지 않는다.
 - Accepted 후 발생하는 연결 끊김은 사용자 의도 전원 전환의 후속 현상으로 보고 `goingOffline` / `restarting` schedule에서 처리한다.
 

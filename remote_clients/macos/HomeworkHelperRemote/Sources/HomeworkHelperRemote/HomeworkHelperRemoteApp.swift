@@ -1167,7 +1167,8 @@ struct RemoteSettingsView: View {
                             lines: [
                                 "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
                                 "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
-                                "authorized_keys: \(setup.authorizedKeysPath)",
+                                "authorized_keys: \(setup.effectiveAuthorizedKeysPath ?? setup.authorizedKeysPath)",
+                                "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")",
                                 "SmartThings CLI: \(setup.smartthingsCLICandidates.first ?? "감지 안 됨")"
                             ]
                         )
@@ -1175,6 +1176,7 @@ struct RemoteSettingsView: View {
                     if let key = viewModel.localSSHKey {
                         SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
                     }
+                    SidebarInfoRow(label: "SSH health", value: viewModel.localSSHHealthSummary)
                     if !viewModel.smartThingsDeviceCandidates.isEmpty {
                         Text("SmartThings device 후보").font(.caption.bold())
                         ForEach(viewModel.smartThingsDeviceCandidates.prefix(5)) { candidate in

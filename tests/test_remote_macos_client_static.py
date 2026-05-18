@@ -478,10 +478,35 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static func command(for action: String)" in local_ssh
     assert "cmd /C" in local_ssh
     assert "shutdown /s /t 0 && echo" in local_ssh
+    assert "cmd /C echo \\(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0" in local_ssh
     assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
     assert 'start "" rundll32.exe' not in local_ssh
-    assert 'if action == "sleep", result.status == 0' in local_ssh
+    assert 'if action == "sleep", result.status == 0' not in local_ssh
     assert "combined.contains(Self.acceptedMarker)" in local_ssh
+    assert '"IdentitiesOnly=yes"' in local_ssh
+    assert "authenticated: Bool" in local_ssh
+    assert "authenticated: true" in local_ssh
+    assert "normalizedLocalSSHKeyPath()" in local_ssh
+    assert "effectiveAuthorizedKeysPath" in models
+    assert "authorizedKeysScope" in models
+    assert "administratorsAuthorizedKeysActive" in models
+    assert "aclRepairAttempted" in models
+    assert "isHostAuthorizedKeysPath" in models
+    assert "host-authorized-keys-rejected" in models
+    assert "localSSHKeyFileExists" in models
+    assert 'copy.sshKeyPath = ""' in models
+    assert "localSSHHealthReady" in view_model
+    assert "localSSHHealthSummary" in view_model
+    assert "verifyLocalSSHHealth" in view_model
+    assert '"power.ssh_health"' in view_model
+    assert "localSSHHealthReady," in view_model
+    assert "localSSHIdentityStatus" in view_model
+    assert '"ssh_identity": identityStatus' in view_model
+    assert "setup.effectiveAuthorizedKeysPath" in app
+    assert "setup.authorizedKeysScope" in app
+    assert "viewModel.localSSHHealthSummary" in app
+    assert "currentState == .goingOffline && !isOfflineHint" in supervisor
+    assert "shouldForcePayloadSync: false" in supervisor
     assert "!viewModel.isPowerActionEnabled(action)" in app
     assert "!viewModel.isLaunchEnabled(process)" in app
     assert "viewModel.processStatusText(process)" in app

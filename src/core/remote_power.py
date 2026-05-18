@@ -92,7 +92,7 @@ class RemotePowerConfig:
 
     @property
     def ssh_configured(self) -> bool:
-        return bool(self.ssh_host and self.ssh_user and self.ssh_key_path and self.ssh_port)
+        return bool(self.ssh_host and self.ssh_user and self.ssh_port)
 
     @property
     def configured(self) -> bool:

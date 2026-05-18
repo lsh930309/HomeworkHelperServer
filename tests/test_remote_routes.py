@@ -1,6 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ["HOME"] = "/tmp/homeworkhelper-tests"
 Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
@@ -14,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 from src.api.remote_routes import create_remote_router
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController, RemotePowerConfig
+from src.core import remote_power_setup
 from src.data import models
 
 
@@ -352,6 +354,40 @@ def test_remote_power_config_can_be_saved_without_sending_power_commands(tmp_pat
     assert set(status_response.json()["power"]["supported_actions"]) == {"wake", "shutdown", "sleep", "restart"}
     assert auditor.events[-1]["command"] == "power.config.update"
     assert auditor.events[-1]["metadata"] == {"wake_configured": True, "ssh_configured": True}
+
+
+def test_remote_power_config_treats_client_private_key_path_as_optional(tmp_path):
+    config_path = tmp_path / "remote_power_config.json"
+    controller = ConfigurablePowerController(
+        RemotePowerConfig(),
+        tcp_checker=lambda _host, _port, _timeout: True,
+    )
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        power_controller=controller,
+        power_config_path=config_path,
+    )
+
+    saved = client.put(
+        "/remote/power/config",
+        json={
+            "ssh_host": "pc.example.test",
+            "ssh_port": 50022,
+            "ssh_user": "player",
+            "ssh_key_path": "",
+        },
+    )
+    remote_status = client.get("/remote/status")
+    power_status = client.get("/remote/power/status")
+
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["config"]["ssh_key_path"] == ""
+    assert body["readiness"]["ssh_configured"] is True
+    assert set(body["readiness"]["supported_actions"]) == {"shutdown", "sleep", "restart"}
+    assert set(remote_status.json()["power"]["supported_actions"]) == {"shutdown", "sleep", "restart"}
+    assert power_status.json()["configured"] is True
+    assert power_status.json()["state"] == "on"
+    assert auditor.events[-1]["metadata"] == {"wake_configured": False, "ssh_configured": True}
 
 
 def test_remote_beholder_incidents_exposes_pending_incidents_without_resolving():
@@ -867,11 +903,88 @@ def test_remote_power_setup_reports_host_readiness_and_registers_public_key():
     assert "ssh_service" in setup.json()
     assert registered.status_code == 200
     assert registered.json()["registered"] is True
+    assert registered.json()["effective_authorized_keys_path"] == registered.json()["authorized_keys_path"]
+    assert registered.json()["acl_repair_ok"] is True
     assert Path(registered.json()["authorized_keys_path"]).read_text(encoding="utf-8").count("ssh-ed25519") == 1
     assert registered_again.status_code == 200
     assert registered_again.json()["already_present"] is True
     assert invalid.status_code == 400
     assert auditor.events[-2]["command"] == "power.ssh_key.register"
+
+
+def test_windows_admin_power_setup_uses_programdata_authorized_keys(monkeypatch, tmp_path):
+    user_profile = tmp_path / "Users" / "lsh93"
+    program_data = tmp_path / "ProgramData"
+    ssh_dir = program_data / "ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "sshd_config").write_text(
+        "AuthorizedKeysFile .ssh/authorized_keys\n"
+        "Match Group administrators\n"
+        "       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("USERPROFILE", str(user_profile))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setattr(remote_power_setup.platform, "system", lambda: "Windows")
+
+    def runner(command, **_kwargs):
+        joined = " ".join(command)
+        if command[:2] == ["whoami", "/groups"]:
+            return SimpleNamespace(returncode=0, stdout="BUILTIN\\Administrators S-1-5-32-544", stderr="")
+        if "Get-Service sshd" in joined:
+            return SimpleNamespace(returncode=0, stdout='{"Status":"Running","StartType":"Automatic"}', stderr="")
+        if "Get-NetFirewallRule" in joined:
+            return SimpleNamespace(returncode=0, stdout="OpenSSH Server", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    setup = remote_power_setup.power_setup_status(runner=runner)
+
+    expected = program_data / "ssh" / "administrators_authorized_keys"
+    assert setup["administrators_authorized_keys_active"] is True
+    assert setup["authorized_keys_scope"] == "administrators"
+    assert setup["authorized_keys_path"] == str(expected)
+    assert setup["effective_authorized_keys_path"] == str(expected)
+    assert setup["user_authorized_keys_path"] == str(user_profile / ".ssh" / "authorized_keys")
+
+
+def test_windows_admin_public_key_registration_targets_programdata_and_repairs_acl(monkeypatch, tmp_path):
+    user_profile = tmp_path / "Users" / "lsh93"
+    program_data = tmp_path / "ProgramData"
+    ssh_dir = program_data / "ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "sshd_config").write_text(
+        "AuthorizedKeysFile .ssh/authorized_keys\n"
+        "Match Group administrators\n"
+        "       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("USERPROFILE", str(user_profile))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setattr(remote_power_setup.platform, "system", lambda: "Windows")
+    commands: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        commands.append(command)
+        if command[:2] == ["whoami", "/groups"]:
+            return SimpleNamespace(returncode=0, stdout="S-1-5-32-544", stderr="")
+        if command and command[0] == "icacls":
+            return SimpleNamespace(returncode=0, stdout="processed file", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZha2VLZXlGb3JUZXN0T25seU5vdFJlYWw= MacBook"
+    registered = remote_power_setup.register_public_key(key, label="MacBook", runner=runner)
+    registered_again = remote_power_setup.register_public_key(key, label="MacBook", runner=runner)
+
+    admin_keys = program_data / "ssh" / "administrators_authorized_keys"
+    assert registered["registered"] is True
+    assert registered["authorized_keys_scope"] == "administrators"
+    assert registered["authorized_keys_path"] == str(admin_keys)
+    assert registered["acl_repair_attempted"] is True
+    assert registered["acl_repair_ok"] is True
+    assert user_profile.joinpath(".ssh", "authorized_keys").exists() is False
+    assert admin_keys.read_text(encoding="utf-8").count("ssh-ed25519") == 1
+    assert any(command and command[0] == "icacls" for command in commands)
+    assert registered_again["already_present"] is True
 
 
 def test_remote_power_smartthings_probe_is_safe_when_cli_missing():

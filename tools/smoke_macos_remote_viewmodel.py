@@ -142,8 +142,10 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
 
                 smokeStep("ssh power acceptance command")
                 let sleepCommand = try! LocalSSHPowerManager.command(for: "sleep")
-                guard sleepCommand == "rundll32.exe powrprof.dll,SetSuspendState 0,0,0" else {
-                    fatalError("sleep command should preserve the direct rundll32 invocation that works over Windows OpenSSH")
+                guard sleepCommand.contains(LocalSSHPowerManager.acceptedMarker),
+                      sleepCommand.contains("rundll32.exe powrprof.dll,SetSuspendState 0,0,0"),
+                      sleepCommand.contains("start") == false else {
+                    fatalError("sleep command should emit the acceptance marker before the direct rundll32 invocation that works over Windows OpenSSH")
                 }
                 let shutdownCommand = try! LocalSSHPowerManager.command(for: "shutdown")
                 guard shutdownCommand.contains(LocalSSHPowerManager.acceptedMarker),

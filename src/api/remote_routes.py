@@ -243,7 +243,7 @@ def _mobile_session_metrics(
 
 def _power_config_payload(config: RemotePowerConfig, config_path: Path, config_exists: bool) -> dict[str, Any]:
     wake_ready = bool(config.smartthings_device_id and config.smartthings_cli_path)
-    ssh_ready = bool(config.ssh_host and config.ssh_user and config.ssh_key_path and config.ssh_port)
+    ssh_ready = bool(config.ssh_host and config.ssh_user and config.ssh_port)
     supported_actions: list[str] = []
     if wake_ready:
         supported_actions.append("wake")

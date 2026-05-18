@@ -182,6 +182,16 @@ struct RemotePowerSetupResponse: Decodable {
     let user: String
     let authorizedKeysPath: String
     let authorizedKeysExists: Bool
+    let effectiveAuthorizedKeysPath: String?
+    let authorizedKeysScope: String?
+    let userAuthorizedKeysPath: String?
+    let userAuthorizedKeysExists: Bool?
+    let adminAuthorizedKeysPath: String?
+    let adminAuthorizedKeysExists: Bool?
+    let sshdConfigPath: String?
+    let sshdConfigAdminMatch: Bool?
+    let currentUserIsAdmin: Bool?
+    let administratorsAuthorizedKeysActive: Bool?
     let sshService: SSHService
     let firewall: Firewall
     let smartthingsCLICandidates: [String]
@@ -193,6 +203,16 @@ struct RemotePowerSetupResponse: Decodable {
         case user
         case authorizedKeysPath = "authorized_keys_path"
         case authorizedKeysExists = "authorized_keys_exists"
+        case effectiveAuthorizedKeysPath = "effective_authorized_keys_path"
+        case authorizedKeysScope = "authorized_keys_scope"
+        case userAuthorizedKeysPath = "user_authorized_keys_path"
+        case userAuthorizedKeysExists = "user_authorized_keys_exists"
+        case adminAuthorizedKeysPath = "admin_authorized_keys_path"
+        case adminAuthorizedKeysExists = "admin_authorized_keys_exists"
+        case sshdConfigPath = "sshd_config_path"
+        case sshdConfigAdminMatch = "sshd_config_admin_match"
+        case currentUserIsAdmin = "current_user_is_admin"
+        case administratorsAuthorizedKeysActive = "administrators_authorized_keys_active"
         case sshService = "ssh_service"
         case firewall
         case smartthingsCLICandidates = "smartthings_cli_candidates"
@@ -205,12 +225,24 @@ struct RemoteSSHKeyRegistrationResponse: Decodable {
     let registered: Bool
     let alreadyPresent: Bool
     let authorizedKeysPath: String
+    let effectiveAuthorizedKeysPath: String?
+    let authorizedKeysScope: String?
+    let administratorsAuthorizedKeysActive: Bool?
+    let aclRepairAttempted: Bool?
+    let aclRepairOK: Bool?
+    let aclMessage: String?
     let message: String
 
     enum CodingKeys: String, CodingKey {
         case registered
         case alreadyPresent = "already_present"
         case authorizedKeysPath = "authorized_keys_path"
+        case effectiveAuthorizedKeysPath = "effective_authorized_keys_path"
+        case authorizedKeysScope = "authorized_keys_scope"
+        case administratorsAuthorizedKeysActive = "administrators_authorized_keys_active"
+        case aclRepairAttempted = "acl_repair_attempted"
+        case aclRepairOK = "acl_repair_ok"
+        case aclMessage = "acl_message"
         case message
     }
 }
@@ -251,6 +283,7 @@ extension RemotePowerConfigPayload {
         if LocalPowerWakeManager.isLocalSmartThingsCLIPath(copy.smartthingsCLIPath) {
             copy.smartthingsCLIPath = ""
         }
+        copy.sshKeyPath = ""
         return copy
     }
 
@@ -269,10 +302,38 @@ extension RemotePowerConfigPayload {
         if copy.sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             copy.sshUser = local.sshUser
         }
-        if copy.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            copy.sshKeyPath = local.sshKeyPath
-        }
+        copy.sshKeyPath = local.normalizedLocalSSHKeyPath()
         return copy
+    }
+
+    static func isHostAuthorizedKeysPath(_ path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lowered = trimmed.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if lowered == "authorized_keys" || lowered.hasSuffix("/authorized_keys") { return true }
+        if trimmed.range(of: #"^[A-Za-z]:[/\\]"#, options: .regularExpression) != nil { return true }
+        return trimmed.contains("\\")
+    }
+
+    func normalizedLocalSSHKeyPath(defaultPath: String = LocalSSHKeyManager.defaultPrivateKeyPath) -> String {
+        let trimmed = sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || Self.isHostAuthorizedKeysPath(trimmed) {
+            return defaultPath
+        }
+        return trimmed
+    }
+
+    var localSSHIdentityStatus: String {
+        let trimmed = sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "default-private-key" }
+        if Self.isHostAuthorizedKeysPath(trimmed) { return "host-authorized-keys-rejected" }
+        return "configured-private-key"
+    }
+
+    var localSSHKeyFileExists: Bool {
+        let expanded = NSString(string: normalizedLocalSSHKeyPath()).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory) && !isDirectory.boolValue
     }
 
     var localWakeConfigured: Bool {
@@ -283,7 +344,8 @@ extension RemotePowerConfigPayload {
     var localSSHConfigured: Bool {
         !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !normalizedLocalSSHKeyPath().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && localSSHKeyFileExists
         && sshPort > 0
     }
 }
