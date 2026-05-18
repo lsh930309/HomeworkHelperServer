@@ -1,20 +1,4 @@
-from pathlib import Path
-
 from src.core.tailscale import TailscalePeer, TailscaleSnapshot, suggest_remote_base_urls
-from tools.import_pcremote_power_config import parse_pc_remote_swift
-
-
-def test_parse_pc_remote_power_constants_into_homeworkhelper_schema():
-    source = Path('../pc_remote/Sources/PCRemote/PCRemoteApp.swift').read_text(encoding='utf-8')
-
-    config = parse_pc_remote_swift(source)
-
-    assert config.smartthings_device_id == '145ad447-9969-4ee7-bda0-1760430d9be1'
-    assert config.smartthings_cli_path == '/opt/homebrew/bin/smartthings'
-    assert config.ssh_host == '211.216.28.65'
-    assert config.ssh_port == 50022
-    assert config.ssh_user == 'lsh93'
-    assert config.ssh_key_path == '~/.ssh/id_ed25519'
 
 
 def test_tailscale_suggests_http_base_urls_from_online_peer_ipv4s():
@@ -230,50 +214,6 @@ def test_tailscale_status_cache_avoids_repeated_cli_poll(monkeypatch):
     assert calls['run'] == 1
 
 
-def test_smartthings_device_parser_extracts_candidate_ids():
-    from src.core.remote_power_setup import _parse_smartthings_devices
-
-    devices = _parse_smartthings_devices([
-        "────────────────",
-        "d8f4f6b1-1111-2222-3333-444444444444 Bedroom Plug ONLINE",
-        "short bad",
-    ])
-
-    assert devices == [
-        {
-            "id": "d8f4f6b1-1111-2222-3333-444444444444",
-            "name": "Bedroom Plug ONLINE",
-            "raw": "d8f4f6b1-1111-2222-3333-444444444444 Bedroom Plug ONLINE",
-        }
-    ]
-
-
-def test_smartthings_device_parser_extracts_json_output():
-    from src.core.remote_power_setup import _parse_smartthings_devices
-
-    devices = _parse_smartthings_devices([
-        '[',
-        '  {"deviceId": "145ad447-9969-4ee7-bda0-1760430d9be1", "name": "vWOL.v1", "label": "PC 켜기"},',
-        '  {"deviceId": "1693383e-f46b-4e90-ba3b-1d0aca9c27bf", "name": "Samjin Wi-Fi Smart Plug", "label": "PC 플러그"}',
-        ']',
-    ])
-
-    assert [(device["id"], device["name"]) for device in devices] == [
-        ("145ad447-9969-4ee7-bda0-1760430d9be1", "PC 켜기"),
-        ("1693383e-f46b-4e90-ba3b-1d0aca9c27bf", "PC 플러그"),
-    ]
-
-
-def test_smartthings_device_probe_marks_cli_failure_unavailable():
-    from src.core.remote_power_setup import list_smartthings_devices
-
-    result = list_smartthings_devices("/missing/smartthings")
-
-    assert result["available"] is False
-    assert result["device_candidates"] == []
-    assert "실행 실패" in result["message"]
-
-
 def test_windows_ssh_service_status_parses_numeric_powershell_json(monkeypatch):
     from src.core import remote_power_setup
 
@@ -289,15 +229,6 @@ def test_windows_ssh_service_status_parses_numeric_powershell_json(monkeypatch):
     assert status["available"] is True
     assert status["running"] is True
     assert status["start_type"] == "automatic"
-
-
-def test_windows_power_config_sanitizes_mac_smartthings_cli_path(monkeypatch):
-    from src.core import remote_power
-
-    monkeypatch.setattr(remote_power.platform, "system", lambda: "Windows")
-
-    assert remote_power.RemotePowerConfig.sanitize_smartthings_cli_path("/opt/homebrew/bin/smartthings") == ""
-    assert remote_power.RemotePowerConfig.sanitize_smartthings_cli_path(r"C:\Program Files\SmartThings\smartthings.exe")
 
 
 def test_tailscale_status_unknown_json_falls_back_to_plain_status(monkeypatch):

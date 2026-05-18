@@ -5,26 +5,13 @@ import json
 import os
 import platform
 import re
-import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from src.core.tailscale import _hidden_subprocess_kwargs
 
 _PUBLIC_KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))\s+[A-Za-z0-9+/=]+(?:\s+.*)?$")
-
-
-def _which_many(names: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    paths: list[str] = []
-    for name in names:
-        found = shutil.which(name)
-        if found and found not in seen:
-            paths.append(found)
-            seen.add(found)
-    return paths
 
 
 def _is_windows() -> bool:
@@ -199,83 +186,9 @@ def _firewall_status(runner=None) -> dict[str, Any]:
     return {"available": True, "enabled": enabled, "message": (result.stdout or "OpenSSH 방화벽 규칙 없음").strip()}
 
 
-def smartthings_cli_candidates() -> list[str]:
-    names = ["smartthings", "smartthings.exe"]
-    candidates = _which_many(names)
-    for path in [
-        "/opt/homebrew/bin/smartthings",
-        "/usr/local/bin/smartthings",
-        str(Path.home() / ".npm-global" / "bin" / "smartthings"),
-    ]:
-        if os.path.exists(path) and path not in candidates:
-            candidates.append(path)
-    return candidates
-
-
-def _parse_smartthings_devices(lines: list[str]) -> list[dict[str, str]]:
-    joined = "\n".join(lines).strip()
-    if joined.startswith("["):
-        try:
-            payload = json.loads(joined)
-        except json.JSONDecodeError:
-            payload = None
-        if isinstance(payload, list):
-            devices: list[dict[str, str]] = []
-            for item in payload:
-                if not isinstance(item, dict):
-                    continue
-                device_id = str(item.get("deviceId") or item.get("id") or "").strip()
-                if not device_id:
-                    continue
-                name = str(item.get("label") or item.get("name") or device_id).strip()
-                devices.append({"id": device_id, "name": name, "raw": json.dumps(item, ensure_ascii=False, sort_keys=True)})
-            return devices
-
-    devices: list[dict[str, str]] = []
-    for line in lines:
-        lowered = line.lower()
-        if not line or lowered.startswith("id ") or "----" in line or not any(ch.isalnum() for ch in line):
-            continue
-        parts = line.split()
-        if not parts:
-            continue
-        candidate_id = parts[0]
-        if len(candidate_id) < 8 or candidate_id.lower() in {"id", "name", "label"}:
-            continue
-        name = " ".join(parts[1:]).strip()
-        devices.append({"id": candidate_id, "name": name or candidate_id, "raw": line})
-    return devices
-
-def list_smartthings_devices(cli_path: str | None = None, runner=None) -> dict[str, Any]:
-    cli = cli_path or (smartthings_cli_candidates()[0] if smartthings_cli_candidates() else "")
-    if not cli:
-        return {"available": False, "devices": [], "device_candidates": [], "message": "SmartThings CLI를 찾지 못했습니다.", "cli_path": None}
-    runner = runner or subprocess.run
-    kwargs = _hidden_subprocess_kwargs() if runner is subprocess.run else {}
-    try:
-        result = runner([cli, "devices"], capture_output=True, text=True, timeout=10, check=False, **kwargs)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"available": False, "devices": [], "device_candidates": [], "message": f"SmartThings CLI 실행 실패: {exc}", "cli_path": cli, "error": str(exc)}
-    lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-    parsed = _parse_smartthings_devices(lines)
-    ok = result.returncode == 0
-    stderr = (result.stderr or "").strip()
-    return {
-        "available": ok,
-        "devices": lines,
-        "device_candidates": parsed if ok else [],
-        "message": "SmartThings device 목록 조회 완료" if ok else (stderr or "SmartThings 로그인/권한 확인 필요"),
-        "cli_path": cli,
-        "return_code": result.returncode,
-        "stderr": stderr,
-        "stdout_line_count": len(lines),
-    }
-
-
 def power_setup_status(runner=None) -> dict[str, Any]:
     target = _effective_authorized_keys_target(runner=runner)
     authorized_keys = target["path"]
-    smartthings = smartthings_cli_candidates()
     return {
         "host_platform": platform.system() or "unknown",
         "user": getpass.getuser(),
@@ -294,8 +207,6 @@ def power_setup_status(runner=None) -> dict[str, Any]:
         "administrators_authorized_keys_active": target["administrators_authorized_keys_active"],
         "ssh_service": _ssh_service_status(runner=runner),
         "firewall": _firewall_status(runner=runner),
-        "smartthings_cli_candidates": smartthings,
-        "smartthings_ready": bool(smartthings),
         "message": "전원 관리 준비 상태를 확인했습니다.",
     }
 

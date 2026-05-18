@@ -41,7 +41,6 @@ from src.utils.windows import (
     get_startup_shortcut_status,
 )
 from src.core.launcher import Launcher
-from src.core.remote_power import RemotePowerConfig
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -450,7 +449,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._set_remote_readiness_indicator("beholder", "red", f"Beholder 상태 확인 실패: {exc}")
 
-        config = RemotePowerConfig.load()
         tailscale_message = "Tailscale 상태 미확인"
         tailscale_ready = False
         tailscale_installed = False
@@ -467,15 +465,14 @@ class MainWindow(QMainWindow):
         has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
         remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
         remote_exposed = externally_bound or remote_server_mode_enabled or has_token
-        remote_ready = remote_exposed and config.configured and tailscale_ready
+        remote_ready = remote_exposed and tailscale_ready
         if remote_ready:
             remote_color = "green"
-            remote_message = f"Remote ready · {tailscale_message} · power profile saved"
-        elif remote_exposed or config.configured or tailscale_installed:
+            remote_message = f"Remote ready · {tailscale_message}"
+        elif remote_exposed or tailscale_installed:
             remote_color = "yellow"
             remote_message = (
-                f"Remote 준비 중 · exposed={remote_exposed} · power={config.configured} · "
-                f"tailscale={tailscale_message}"
+                f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}"
             )
         else:
             remote_color = "gray"

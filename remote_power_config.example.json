@@ -1,9 +1,0 @@
-{
-  "smartthings_device_id": "YOUR_SMARTTHINGS_DEVICE_ID",
-  "smartthings_cli_path": "/opt/homebrew/bin/smartthings",
-  "ssh_host": "YOUR_PUBLIC_OR_TAILSCALE_PC_HOST",
-  "ssh_port": 50022,
-  "ssh_user": "YOUR_WINDOWS_USER",
-  "ssh_key_path": "~/.ssh/id_ed25519",
-  "status_timeout_seconds": 4.0
-}

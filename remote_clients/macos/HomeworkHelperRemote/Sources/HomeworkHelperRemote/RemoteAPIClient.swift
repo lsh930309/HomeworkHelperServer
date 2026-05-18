@@ -100,10 +100,6 @@ struct RemoteAPIClient {
         try await post("remote/shortcuts/\(id)/open", body: Data("{}".utf8))
     }
 
-    func powerConfig() async throws -> RemotePowerConfigResponse {
-        try await get("remote/power/config")
-    }
-
     func powerSetup() async throws -> RemotePowerSetupResponse {
         try await get("remote/power/setup")
     }
@@ -115,17 +111,6 @@ struct RemoteAPIClient {
         ]
         let body = try JSONEncoder().encode(payload)
         return try await post("remote/power/ssh-key", body: body)
-    }
-
-    func smartThingsDevices(cliPath: String?) async throws -> RemoteSmartThingsDevicesResponse {
-        let payload = ["cli_path": cliPath ?? ""]
-        let body = try JSONEncoder().encode(payload)
-        return try await post("remote/power/smartthings/devices", body: body)
-    }
-
-    func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse {
-        let body = try JSONEncoder().encode(config)
-        return try await put("remote/power/config", body: body)
     }
 
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {

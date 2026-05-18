@@ -323,23 +323,36 @@ enum TailscaleDiscovery {
 
     private static func tailscaleCommands() -> [TailscaleCommand] {
         var commands: [TailscaleCommand] = []
-        for path in ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"] {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                commands.append(.direct(path: path))
-            }
+        var seen = Set<String>()
+
+        func appendDirect(_ path: String) {
+            guard !seen.contains(path), FileManager.default.isExecutableFile(atPath: path) else { return }
+            seen.insert(path)
+            commands.append(.direct(path: path))
+        }
+
+        // Packaged apps do not inherit the user's interactive zsh aliases. Prefer
+        // real executable paths, including the Tailscale.app bundled CLI entry,
+        // before the login-shell bridge so connectivity logs stay shell-noise-free.
+        for path in [
+            "/opt/homebrew/bin/tailscale",
+            "/usr/local/bin/tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        ] {
+            appendDirect(path)
         }
         if FileManager.default.isExecutableFile(atPath: "/bin/zsh") {
             commands.append(.zshLoginShell)
-        }
-        let appPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-        if FileManager.default.isExecutableFile(atPath: appPath) {
-            commands.append(.direct(path: appPath))
         }
         return commands
     }
 
     private static func hasKnownTailscaleInstall() -> Bool {
-        ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+        [
+            "/opt/homebrew/bin/tailscale",
+            "/usr/local/bin/tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        ]
             .contains { FileManager.default.isExecutableFile(atPath: $0) }
     }
 

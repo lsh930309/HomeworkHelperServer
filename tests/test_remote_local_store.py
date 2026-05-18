@@ -4,14 +4,14 @@ from src.core.remote_local_store import RemoteLocalStore
 def test_remote_local_store_writes_manifest_and_rotating_backup(tmp_path):
     store = RemoteLocalStore(root=tmp_path / "remote", legacy_root=tmp_path / "legacy", max_backups=2)
 
-    store.write_json("remote_power_config.json", {"ssh_host": "host-a"})
-    store.write_json("remote_power_config.json", {"ssh_host": "host-b"})
+    store.write_json("remote_devices.json", {"devices": [{"id": "host-a"}]})
+    store.write_json("remote_devices.json", {"devices": [{"id": "host-b"}]})
 
-    assert store.read_json("remote_power_config.json", {})["ssh_host"] == "host-b"
+    assert store.read_json("remote_devices.json", {})["devices"][0]["id"] == "host-b"
     report = store.integrity_report()
     assert report["ok"] is True
-    assert "remote_power_config.json" in report["manifest"]["files"]
-    assert list((tmp_path / "remote" / "backups").glob("remote_power_config.json.*.bak"))
+    assert "remote_devices.json" in report["manifest"]["files"]
+    assert list((tmp_path / "remote" / "backups").glob("remote_devices.json.*.bak"))
 
 
 def test_remote_local_store_migrates_legacy_file(tmp_path):

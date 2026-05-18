@@ -25,7 +25,6 @@ Keep machine-local remote integration state outside the DB under:
 This includes:
 
 - paired remote device tokens and revocation state (`remote_devices.json`)
-- remote power adapter settings (`remote_power_config.json`)
 - remote desktop logging preference (`remote_debug_logging.json`)
 - remote-local audit/diagnostic append-only files
 

@@ -1135,41 +1135,42 @@ struct RemoteSettingsView: View {
 
     private var settingsPowerTab: some View {
         SettingsTabScrollView(tab: .power) {
-            RemoteSettingsSection("전원/SSH/SmartThings") {
+            RemoteSettingsSection("전원 자동 설정") {
                 VStack(alignment: .leading, spacing: 8) {
-                    if let response = viewModel.powerConfigResponse {
-                        SidebarInfoRow(label: "설정 파일", value: response.configPath)
-                        SidebarInfoRow(label: "저장 상태", value: response.configExists ? "있음" : "없음")
-                        SidebarInfoRow(label: "지원 명령", value: response.readiness.supportedActions.isEmpty ? "없음" : response.readiness.supportedActions.joined(separator: ", "))
-                    }
-                    TextField("SmartThings device id", text: $viewModel.powerConfig.smartthingsDeviceID)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("SmartThings CLI path", text: $viewModel.powerConfig.smartthingsCLIPath)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("SSH host", text: $viewModel.powerConfig.sshHost)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("SSH user", text: $viewModel.powerConfig.sshUser)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("SSH key path", text: $viewModel.powerConfig.sshKeyPath)
-                        .textFieldStyle(.roundedBorder)
-                    Stepper("SSH port: \(viewModel.powerConfig.sshPort)", value: $viewModel.powerConfig.sshPort, in: 1...65535)
+                    Text("Wake는 Mac 로컬 SmartThings CLI가, 절전/종료/재시동은 Mac 로컬 OpenSSH key가 직접 수행합니다. 호스트에는 key 등록/준비 상태만 자동 확인합니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    SidebarInfoRow(
+                        label: "Wake 대상",
+                        value: viewModel.powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "PC 켜기 자동 탐색 대기"
+                            : viewModel.powerConfig.smartthingsDeviceID
+                    )
+                    SidebarInfoRow(
+                        label: "SmartThings CLI",
+                        value: LocalPowerWakeManager.resolveSmartThingsCLIPath(viewModel.powerConfig.smartthingsCLIPath)
+                            ?? (viewModel.powerConfig.smartthingsCLIPath.isEmpty ? "자동 설치/확인 대기" : viewModel.powerConfig.smartthingsCLIPath)
+                    )
+                    SidebarInfoRow(
+                        label: "SSH host",
+                        value: viewModel.powerConfig.sshHost.isEmpty ? "Base URL에서 자동 설정" : "\(viewModel.powerConfig.sshHost):\(viewModel.powerConfig.sshPort)"
+                    )
+                    SidebarInfoRow(label: "SSH user", value: viewModel.powerConfig.sshUser.isEmpty ? "호스트 계정 자동 확인 대기" : viewModel.powerConfig.sshUser)
+                    SidebarInfoRow(label: "SSH key", value: viewModel.powerConfig.normalizedLocalSSHKeyPath())
                     SettingsActionGrid {
-                        Button("SSH host 채우기") { viewModel.applySuggestedPowerHost() }
-                        Button("준비 상태 확인") { Task { await viewModel.refreshPowerSetup() } }
-                        Button("SSH key 생성/전송") { Task { await viewModel.generateAndSendSSHKey() } }
+                        Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
+                            .disabled(viewModel.isLoading)
+                        Button("전원 준비 확인") { Task { await viewModel.refreshPowerSetup() } }
                             .disabled(!viewModel.isPaired || viewModel.isLoading)
-                        Button("SmartThings 기기 확인") { Task { await viewModel.probeSmartThingsDevices() } }
-                        Button("전원 설정 저장") { Task { await viewModel.savePowerConfig() } }
                     }
                     if let setup = viewModel.powerSetup {
                         SetupInstructionBlock(
-                            title: "Windows 전원 준비",
+                            title: "호스트 SSH 준비",
                             lines: [
                                 "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
                                 "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
                                 "authorized_keys: \(setup.effectiveAuthorizedKeysPath ?? setup.authorizedKeysPath)",
-                                "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")",
-                                "SmartThings CLI: \(setup.smartthingsCLICandidates.first ?? "감지 안 됨")"
+                                "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")"
                             ]
                         )
                     }
@@ -1177,15 +1178,6 @@ struct RemoteSettingsView: View {
                         SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
                     }
                     SidebarInfoRow(label: "SSH health", value: viewModel.localSSHHealthSummary)
-                    if !viewModel.smartThingsDeviceCandidates.isEmpty {
-                        Text("SmartThings device 후보").font(.caption.bold())
-                        ForEach(viewModel.smartThingsDeviceCandidates.prefix(5)) { candidate in
-                            Button("\(candidate.name) · \(candidate.id)") {
-                                viewModel.applySmartThingsDevice(candidate)
-                            }
-                            .buttonStyle(.glass)
-                        }
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

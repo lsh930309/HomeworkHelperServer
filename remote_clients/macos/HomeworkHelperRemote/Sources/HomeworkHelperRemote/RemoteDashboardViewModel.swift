@@ -15,10 +15,8 @@ private actor RemoteDashboardService {
     func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await client.beholderIncidents() }
     func gameLinks() async throws -> [RemoteGameLink] { try await client.gameLinks() }
     func activeMobileSessions() async throws -> [RemoteMobileSession] { try await client.activeMobileSessions() }
-    func powerConfig() async throws -> RemotePowerConfigResponse { try await client.powerConfig() }
     func powerSetup() async throws -> RemotePowerSetupResponse { try await client.powerSetup() }
     func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
-    func smartThingsDevices(cliPath: String?) async throws -> RemoteSmartThingsDevicesResponse { try await client.smartThingsDevices(cliPath: cliPath) }
     func processes() async throws -> [RemoteProcess] { try await client.processes() }
     func devices() async throws -> [RemoteDevice] { try await client.devices() }
     func startMobileSession(gameLinkID: String) async throws -> RemoteMobileSession { try await client.startMobileSession(gameLinkID: gameLinkID) }
@@ -27,7 +25,6 @@ private actor RemoteDashboardService {
         try await client.createGameLink(processID: processID, androidPackageName: androidPackageName)
     }
     func launchProcess(id: String) async throws -> RemoteCommandResult { try await client.launchProcess(id: id) }
-    func savePowerConfig(_ config: RemotePowerConfigPayload) async throws -> RemotePowerConfigResponse { try await client.savePowerConfig(config) }
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
         try await client.confirmPairing(code: code, deviceName: deviceName)
     }
@@ -79,7 +76,7 @@ private enum RemoteClientPreferences {
         defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: deviceNameKey)
     }
 
-    static func loadPowerConfig() -> RemotePowerConfigPayload {
+    static func loadPowerPreferences() -> RemotePowerConfigPayload {
         guard let data = defaults.data(forKey: powerConfigKey),
               let config = try? JSONDecoder().decode(RemotePowerConfigPayload.self, from: data) else {
             return RemotePowerConfigPayload()
@@ -87,7 +84,7 @@ private enum RemoteClientPreferences {
         return config
     }
 
-    static func savePowerConfig(_ config: RemotePowerConfigPayload) {
+    static func savePowerPreferences(_ config: RemotePowerConfigPayload) {
         if let data = try? JSONEncoder().encode(config) {
             defaults.set(data, forKey: powerConfigKey)
         }
@@ -217,10 +214,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
-    @Published var powerConfig = RemoteClientPreferences.loadPowerConfig() {
-        didSet { RemoteClientPreferences.savePowerConfig(powerConfig) }
+    @Published var powerConfig = RemoteClientPreferences.loadPowerPreferences() {
+        didSet { RemoteClientPreferences.savePowerPreferences(powerConfig) }
     }
-    @Published var powerConfigResponse: RemotePowerConfigResponse?
     @Published var powerSetup: RemotePowerSetupResponse?
     @Published var localSSHKey: LocalSSHKeyPair?
     @Published var localSSHHealth: LocalSSHPowerManager.HealthResult?
@@ -282,14 +278,18 @@ final class RemoteDashboardViewModel: ObservableObject {
     var setupChecklist: [(String, String, Bool)] {
         let pairingHealthy = !tokenText.isEmpty && pairingRecoveryMessage.isEmpty
         let powerHealthy = powerConfig.localWakeConfigured || localSSHHealthReady
-        let powerDetail = powerConfigResponse?.readiness.supportedActions.isEmpty == false
-            ? "지원 명령: \(powerConfigResponse?.readiness.supportedActions.joined(separator: ", ") ?? "") · \(localSSHHealthSummary)"
-            : "SmartThings/SSH 설정 저장 필요"
+        let wakeDetail = powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Wake 대상 자동 확인 필요"
+            : "Wake 대상: \(powerConfig.smartthingsDeviceID)"
+        let sshDetail = powerConfig.localSSHConfigured
+            ? localSSHHealthSummary
+            : "SSH key 자동 등록/health 확인 필요"
+        let powerDetail = "\(wakeDetail) · \(sshDetail)"
         return [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
-            ("4. 전원 관리", powerDetail, powerConfigResponse?.readiness.supportedActions.isEmpty == false && powerHealthy),
+            ("4. 전원 관리", powerDetail, powerHealthy),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
     }
@@ -435,7 +435,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 beholderIncidents: true,
                 gameLinks: true,
                 mobileSessions: true,
-                powerConfig: true,
+                powerConfig: false,
                 powerControl: true,
                 beholder: true,
                 authRequired: true,
@@ -957,11 +957,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         if updateMessage { message = connectionGuidance(for: error) }
     }
 
-    private func applyHostPowerConfig(_ config: RemotePowerConfigPayload) {
-        powerConfig = config.preservingLocalWake(from: powerConfig)
-    }
-
     private func fillDefaultSSHFields() {
+        fillDefaultPowerHostFromBaseURL()
         if powerConfig.sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let hostUser = powerSetup?.user.trimmingCharacters(in: .whitespacesAndNewlines),
            !hostUser.isEmpty {
@@ -970,6 +967,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         let normalizedKeyPath = powerConfig.normalizedLocalSSHKeyPath()
         if powerConfig.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines) != normalizedKeyPath {
             powerConfig.sshKeyPath = normalizedKeyPath
+        }
+    }
+
+    private func fillDefaultPowerHostFromBaseURL() {
+        if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let host = URL(string: baseURLText)?.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !host.isEmpty {
+            powerConfig.sshHost = host
         }
     }
 
@@ -1280,11 +1285,30 @@ final class RemoteDashboardViewModel: ObservableObject {
     func runSetupAutomation() async {
         isLoading = true
         defer { isLoading = false }
-        setupProgress = "1/4 Mac Tailscale 확인 중..."
+        setupProgress = "1/5 Mac Tailscale 확인 중..."
         let local = await TailscaleDiscovery.ensureReady()
         localTailscale = local
         if let url = local.suggestedBaseURLs.first, baseURLText.contains("127.0.0.1") || baseURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             baseURLText = url
+        }
+
+        setupProgress = "2/5 Mac SmartThings wake 대상 확인 중..."
+        let smartThingsPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let smartThings = await LocalPowerWakeManager.probeDevices(cliPath: smartThingsPath)
+        let selected = applySmartThingsProbeResult(smartThings, updateMessage: false)
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.smartthings.local_devices",
+                [
+                    "available": String(smartThings.available),
+                    "cli_path": smartThings.cliPath ?? "",
+                    "install_attempted": String(smartThings.installAttempted ?? false),
+                    "install_succeeded": String(smartThings.installSucceeded ?? false),
+                    "candidates": String(smartThings.deviceCandidates.count),
+                    "auto_selected_device_id": selected?.id ?? "",
+                    "message": smartThings.message,
+                ]
+            )
         }
 
         guard let client else {
@@ -1293,7 +1317,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         let service = RemoteDashboardService(client: client)
-        setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
+        setupProgress = "3/5 Windows Remote Agent 상태 확인 중..."
         guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.status") else {
             if hostAvailabilityState != .authRejected {
                 setupProgress = "Tailscale/SSH 관리 계층 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 저장된 캐시 데이터는 유지합니다."
@@ -1306,16 +1330,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         } else {
             readiness = latestStatus.readiness
         }
-        powerConfigResponse = try? await service.powerConfig()
         powerSetup = try? await service.powerSetup()
-        if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
         fillDefaultSSHFields()
         if isPaired {
             _ = await verifyLocalSSHHealth(updateMessage: false)
         }
 
         if isPaired {
-            setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
+            setupProgress = "4/5 페어링 토큰 복구와 등록 디바이스 확인 중..."
             await recoverPairing(silent: true)
             devices = (try? await service.devices()) ?? devices
             serverTailscaleEnsure = try? await service.ensureServerTailscale()
@@ -1323,10 +1345,10 @@ final class RemoteDashboardViewModel: ObservableObject {
                 readiness = evaluation.status.readiness
             }
         } else {
-            setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
+            setupProgress = "4/5 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
         }
 
-        setupProgress = isPaired ? "4/4 자동 설정 점검 완료. SSH 상태: \(localSSHHealthSummary). 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
+        setupProgress = isPaired ? "5/5 자동 설정 점검 완료. Wake/SSH 상태를 클라이언트 로컬 설정으로 관리합니다. SSH 상태: \(localSSHHealthSummary)." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
         message = setupProgress
     }
 
@@ -1353,15 +1375,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             } else {
                 handleRemoteFailure(error)
             }
-        }
-    }
-
-    func applySuggestedPowerHost() {
-        if let host = URL(string: baseURLText)?.host {
-            powerConfig.sshHost = host
-            message = "Base URL에서 SSH host를 채웠습니다. 사용자, 키 경로, SmartThings 값은 실제 전원 제어 환경에 맞게 입력하세요."
-        } else {
-            message = "Base URL에서 SSH host를 추출하지 못했습니다."
         }
     }
 
@@ -1430,9 +1443,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = try await service.beholderIncidents()
             gameLinks = try await service.gameLinks()
             mobileSessions = try await service.activeMobileSessions()
-            powerConfigResponse = try await service.powerConfig()
             powerSetup = try? await service.powerSetup()
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             fillDefaultSSHFields()
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
@@ -1572,10 +1583,30 @@ final class RemoteDashboardViewModel: ObservableObject {
     func localWake() async -> Bool {
         do {
             message = try await LocalPowerWakeManager.wake(config: powerConfig)
-            if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("power.local_wake", ["device_id": powerConfig.smartthingsDeviceID]) }
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write(
+                    "power.local_wake",
+                    [
+                        "status": "accepted",
+                        "cli_path": LocalPowerWakeManager.resolveSmartThingsCLIPath(powerConfig.smartthingsCLIPath) ?? powerConfig.smartthingsCLIPath,
+                        "device_id": powerConfig.smartthingsDeviceID,
+                    ]
+                )
+            }
             return true
         } catch {
             message = error.localizedDescription
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write(
+                    "power.local_wake",
+                    [
+                        "status": "failed",
+                        "cli_path": LocalPowerWakeManager.resolveSmartThingsCLIPath(powerConfig.smartthingsCLIPath) ?? powerConfig.smartthingsCLIPath,
+                        "device_id": powerConfig.smartthingsDeviceID,
+                        "message": error.localizedDescription,
+                    ]
+                )
+            }
             return false
         }
     }
@@ -1636,8 +1667,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
                     powerConfig.smartthingsCLIPath = local
-                } else if let first = powerSetup?.smartthingsCLICandidates.first {
-                    powerConfig.smartthingsCLIPath = first
                 }
             }
             fillDefaultSSHFields()
@@ -1648,61 +1677,43 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func generateAndSendSSHKey() async {
-        guard let service else {
-            message = "Remote Agent URL이 올바르지 않습니다."
-            return
-        }
-        guard isPaired else {
-            message = "SSH key 등록은 페어링 후 사용할 수 있습니다."
-            return
-        }
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            powerConfig.sshKeyPath = powerConfig.normalizedLocalSSHKeyPath()
-            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath)
-            localSSHKey = key
-            powerConfig.sshKeyPath = key.privateKeyPath
-            let result = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
-            powerSetup = try? await service.powerSetup()
-            let sshReady = await verifyLocalSSHHealth(updateMessage: false)
-            message = sshReady ? "\(result.message) SSH 인증까지 확인했습니다." : "\(result.message) 하지만 실제 SSH 인증은 아직 실패합니다: \(localSSHHealthSummary)"
-        } catch {
-            message = connectionGuidance(for: error)
-        }
-    }
-
     func probeSmartThingsDevices() async {
-        guard let service else { return }
-        do {
-            let cliPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result: RemoteSmartThingsDevicesResponse
-            if LocalPowerWakeManager.isLocalSmartThingsCLIPath(cliPath) {
-                result = await LocalPowerWakeManager.probeDevices(cliPath: cliPath)
-                if remoteDesktopLoggingEnabled {
-                    RemoteClientDesktopLogger.write(
-                        "power.smartthings.local_devices",
-                        ["available": String(result.available), "cli_path": result.cliPath ?? "", "candidates": String(result.deviceCandidates.count), "message": result.message]
-                    )
-                }
-            } else {
-                result = try await service.smartThingsDevices(cliPath: cliPath.isEmpty ? nil : cliPath)
-            }
-            smartThingsDevices = result.devices
-            smartThingsDeviceCandidates = result.deviceCandidates
-            if let cliPath = result.cliPath, powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                powerConfig.smartthingsCLIPath = cliPath
-            }
-            message = result.message
-        } catch {
-            message = connectionGuidance(for: error)
+        let cliPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = await LocalPowerWakeManager.probeDevices(cliPath: cliPath)
+        let selected = applySmartThingsProbeResult(result, updateMessage: true)
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.smartthings.local_devices",
+                [
+                    "available": String(result.available),
+                    "cli_path": result.cliPath ?? "",
+                    "install_attempted": String(result.installAttempted ?? false),
+                    "install_succeeded": String(result.installSucceeded ?? false),
+                    "candidates": String(result.deviceCandidates.count),
+                    "auto_selected_device_id": selected?.id ?? "",
+                    "message": result.message,
+                ]
+            )
         }
     }
 
-    func applySmartThingsDevice(_ candidate: RemoteSmartThingsDeviceCandidate) {
-        powerConfig.smartthingsDeviceID = candidate.id
-        message = "SmartThings device id 후보를 적용했습니다. 전원 설정 저장을 누르세요: \(candidate.name)"
+    @discardableResult
+    private func applySmartThingsProbeResult(_ result: RemoteSmartThingsDevicesResponse, updateMessage: Bool) -> RemoteSmartThingsDeviceCandidate? {
+        smartThingsDevices = result.devices
+        smartThingsDeviceCandidates = result.deviceCandidates
+        let shouldUpdateCLIPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || LocalPowerWakeManager.isLocalSmartThingsCLIPath(powerConfig.smartthingsCLIPath)
+        if let cliPath = result.cliPath, shouldUpdateCLIPath {
+            powerConfig.smartthingsCLIPath = cliPath
+        }
+        let selected = LocalPowerWakeManager.preferredWakeDevice(from: result.deviceCandidates)
+        if let selected {
+            powerConfig.smartthingsDeviceID = selected.id
+        }
+        if updateMessage {
+            message = selected.map { "\(result.message) Wake 대상 자동 선택: \($0.name)" } ?? result.message
+        }
+        return selected
     }
 
 
@@ -1715,12 +1726,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
                 powerConfig.smartthingsCLIPath = local
-            } else if let first = powerSetup?.smartthingsCLICandidates.first {
-                powerConfig.smartthingsCLIPath = first
             }
-        }
-        if powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let host = URL(string: baseURLText)?.host {
-            powerConfig.sshHost = host
         }
         fillDefaultSSHFields()
 
@@ -1739,63 +1745,32 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
 
         let smartThingsCLIPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if smartThingsCLIPath.isEmpty == false {
-            let result: RemoteSmartThingsDevicesResponse?
-            if LocalPowerWakeManager.isLocalSmartThingsCLIPath(smartThingsCLIPath) {
-                result = await LocalPowerWakeManager.probeDevices(cliPath: smartThingsCLIPath)
-                if let result, remoteDesktopLoggingEnabled {
-                    RemoteClientDesktopLogger.write(
-                        "power.smartthings.local_devices",
-                        ["available": String(result.available), "cli_path": result.cliPath ?? "", "candidates": String(result.deviceCandidates.count), "message": result.message]
-                    )
-                }
-            } else {
-                result = try? await service.smartThingsDevices(cliPath: smartThingsCLIPath)
-            }
-            if let result {
-                smartThingsDevices = result.devices
-                smartThingsDeviceCandidates = result.deviceCandidates
-                if result.deviceCandidates.count == 1 {
-                    powerConfig.smartthingsDeviceID = result.deviceCandidates[0].id
-                }
-            }
+        let result = await LocalPowerWakeManager.probeDevices(cliPath: smartThingsCLIPath)
+        if remoteDesktopLoggingEnabled {
+            let selected = LocalPowerWakeManager.preferredWakeDevice(from: result.deviceCandidates)
+            RemoteClientDesktopLogger.write(
+                "power.smartthings.local_devices",
+                [
+                    "available": String(result.available),
+                    "cli_path": result.cliPath ?? "",
+                    "install_attempted": String(result.installAttempted ?? false),
+                    "install_succeeded": String(result.installSucceeded ?? false),
+                    "candidates": String(result.deviceCandidates.count),
+                    "auto_selected_device_id": selected?.id ?? "",
+                    "message": result.message,
+                ]
+            )
         }
-
-        let hostPowerConfig = powerConfig.hostSafeForRemoteSave()
-        if hostPowerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || hostPowerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            if let saved = try? await service.savePowerConfig(hostPowerConfig) {
-                powerConfigResponse = saved
-            }
-        }
+        _ = applySmartThingsProbeResult(result, updateMessage: false)
         if let latestStatus = try? await service.status() {
             applyRemoteStatus(latestStatus)
             readiness = latestStatus.readiness ?? readiness
         }
         setupProgress = sshOnboardingReady
-            ? (smartThingsDeviceCandidates.count > 1
-                ? "PIN 설정 대부분 완료. SSH 인증 확인됨. SmartThings 후보가 여러 개라 wake 대상만 선택 후 저장하세요."
+            ? (smartThingsDeviceCandidates.count > 1 && powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "PIN 설정 대부분 완료. SSH 인증 확인됨. SmartThings 후보가 여러 개라 wake 대상을 확인하세요."
                 : "PIN 1회 입력으로 가능한 원격 연결 설정과 SSH 인증을 자동 완료했습니다.")
             : "PIN 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(sshOnboardingMessage)"
-    }
-
-    func savePowerConfig() async {
-        guard let service else { return }
-        do {
-            let response = try await service.savePowerConfig(powerConfig.hostSafeForRemoteSave())
-            powerConfigResponse = response
-            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig") {
-                readiness = evaluation.status.readiness
-            }
-            _ = await verifyLocalSSHHealth(updateMessage: false)
-            let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
-            message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions). SSH 상태: \(localSSHHealthSummary)"
-        } catch {
-            if let client {
-                _ = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig.failure")
-            } else {
-                handleRemoteFailure(error)
-            }
-        }
     }
 
     func confirmPairing() async {
@@ -1817,8 +1792,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             pairingRecoveryMessage = ""
             readiness = response.onboarding?.readiness ?? readiness
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
-            powerConfigResponse = response.onboarding?.powerConfig ?? powerConfigResponse
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
             fillDefaultSSHFields()
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)

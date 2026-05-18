@@ -167,8 +167,11 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard RemoteClientCache.loadProcesses().contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not write process snapshot cache")
                 }
-                guard viewModel.powerConfigResponse != nil else {
-                    fatalError("refresh did not populate power config: \(viewModel.message)")
+                guard viewModel.powerSetup != nil else {
+                    fatalError("refresh did not populate power setup: \(viewModel.message)")
+                }
+                guard viewModel.powerConfig.smartthingsDeviceID == "145ad447-9969-4ee7-bda0-1760430d9be1" else {
+                    fatalError("SmartThings PC 켜기 device was not auto-selected: \(viewModel.powerConfig.smartthingsDeviceID) message=\(viewModel.message)")
                 }
                 smokeStep("offline local wake")
                 viewModel.hostConnectionState = "offline"
@@ -330,7 +333,23 @@ def main(argv: list[str] | None = None) -> int:
             if len(code) != 6 or not code.isdigit():
                 raise RuntimeError(f"unexpected pairing code payload: {pair_body}")
             fake_smartthings = temp_dir / "smartthings"
-            fake_smartthings.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_smartthings.write_text(
+                """#!/bin/sh
+if [ "$1" = "devices" ]; then
+  cat <<'EOF'
+───────────────────────────────────────────────────────────────────────────────────────────────
+ #  Label                Name                     Type    Device Id
+───────────────────────────────────────────────────────────────────────────────────────────────
+ 1  PC 켜기              vWOL.v1                  LAN     145ad447-9969-4ee7-bda0-1760430d9be1
+ 2  PC 플러그            Samjin Wi-Fi Smart Plug  MQTT    1693383e-f46b-4e90-ba3b-1d0aca9c27bf
+───────────────────────────────────────────────────────────────────────────────────────────────
+EOF
+  exit 0
+fi
+exit 0
+""",
+                encoding="utf-8",
+            )
             fake_smartthings.chmod(0o755)
             smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"
             offline_base_url = f"http://127.0.0.1:{_free_loopback_port()}"

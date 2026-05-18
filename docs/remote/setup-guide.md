@@ -69,9 +69,9 @@ The native clients share these Remote Agent contracts:
 - `GET /remote/devices`, `DELETE /remote/devices/{id}`, `DELETE /remote/devices/revoked`
 - `GET /remote/logging/config`, `PUT /remote/logging/config`
 - `POST /remote/tailscale/ensure`
-- `GET /remote/power/status`, `GET /remote/power/config`, `PUT /remote/power/config`
-- `GET /remote/power/setup`, `POST /remote/power/ssh-key`, `POST /remote/power/smartthings/devices`
-- `POST /remote/power/{wake|sleep|restart|shutdown}`
+- `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
+
+전원 실행 API는 호스트가 제공하지 않습니다. Wake는 클라이언트 로컬 SmartThings CLI가, sleep/restart/shutdown은 클라이언트 로컬 OpenSSH key가 직접 수행합니다.
 
 ## 4. macOS client
 

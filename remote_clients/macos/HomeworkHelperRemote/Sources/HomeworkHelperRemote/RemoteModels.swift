@@ -194,8 +194,6 @@ struct RemotePowerSetupResponse: Decodable {
     let administratorsAuthorizedKeysActive: Bool?
     let sshService: SSHService
     let firewall: Firewall
-    let smartthingsCLICandidates: [String]
-    let smartthingsReady: Bool
     let message: String
 
     enum CodingKeys: String, CodingKey {
@@ -215,8 +213,6 @@ struct RemotePowerSetupResponse: Decodable {
         case administratorsAuthorizedKeysActive = "administrators_authorized_keys_active"
         case sshService = "ssh_service"
         case firewall
-        case smartthingsCLICandidates = "smartthings_cli_candidates"
-        case smartthingsReady = "smartthings_ready"
         case message
     }
 }
@@ -259,6 +255,8 @@ struct RemoteSmartThingsDevicesResponse: Decodable {
     let deviceCandidates: [RemoteSmartThingsDeviceCandidate]
     let message: String
     let cliPath: String?
+    let installAttempted: Bool?
+    let installSucceeded: Bool?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -266,46 +264,12 @@ struct RemoteSmartThingsDevicesResponse: Decodable {
         case deviceCandidates = "device_candidates"
         case message
         case cliPath = "cli_path"
+        case installAttempted = "install_attempted"
+        case installSucceeded = "install_succeeded"
     }
 }
 
 extension RemotePowerConfigPayload {
-    var hasAnyPowerSetting: Bool {
-        !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    func hostSafeForRemoteSave() -> RemotePowerConfigPayload {
-        var copy = self
-        if LocalPowerWakeManager.isLocalSmartThingsCLIPath(copy.smartthingsCLIPath) {
-            copy.smartthingsCLIPath = ""
-        }
-        copy.sshKeyPath = ""
-        return copy
-    }
-
-    func preservingLocalWake(from local: RemotePowerConfigPayload) -> RemotePowerConfigPayload {
-        var copy = self
-        if copy.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           LocalPowerWakeManager.isLocalSmartThingsCLIPath(local.smartthingsCLIPath) {
-            copy.smartthingsCLIPath = local.smartthingsCLIPath
-        }
-        if copy.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            copy.smartthingsDeviceID = local.smartthingsDeviceID
-        }
-        if copy.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            copy.sshHost = local.sshHost
-        }
-        if copy.sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            copy.sshUser = local.sshUser
-        }
-        copy.sshKeyPath = local.normalizedLocalSSHKeyPath()
-        return copy
-    }
-
     static func isHostAuthorizedKeysPath(_ path: String) -> Bool {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -337,8 +301,9 @@ extension RemotePowerConfigPayload {
     }
 
     var localWakeConfigured: Bool {
-        !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && !smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let cliPath = smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && (cliPath.isEmpty || LocalPowerWakeManager.isLocalSmartThingsCLIPath(cliPath) || LocalPowerWakeManager.resolveSmartThingsCLIPath(cliPath) != nil)
     }
 
     var localSSHConfigured: Bool {
@@ -347,32 +312,6 @@ extension RemotePowerConfigPayload {
         && !normalizedLocalSSHKeyPath().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && localSSHKeyFileExists
         && sshPort > 0
-    }
-}
-
-struct RemotePowerConfigResponse: Decodable {
-    struct Readiness: Decodable {
-        let wakeConfigured: Bool
-        let sshConfigured: Bool
-        let supportedActions: [String]
-
-        enum CodingKeys: String, CodingKey {
-            case wakeConfigured = "wake_configured"
-            case sshConfigured = "ssh_configured"
-            case supportedActions = "supported_actions"
-        }
-    }
-
-    let configPath: String
-    let configExists: Bool
-    let config: RemotePowerConfigPayload
-    let readiness: Readiness
-
-    enum CodingKeys: String, CodingKey {
-        case configPath = "config_path"
-        case configExists = "config_exists"
-        case config
-        case readiness
     }
 }
 
@@ -546,13 +485,11 @@ struct RemoteCommandResult: Decodable {
 
 struct RemoteOnboardingBundle: Decodable {
     let readiness: RemoteReadiness?
-    let powerConfig: RemotePowerConfigResponse?
     let powerSetup: RemotePowerSetupResponse?
     let message: String?
 
     enum CodingKeys: String, CodingKey {
         case readiness
-        case powerConfig = "power_config"
         case powerSetup = "power_setup"
         case message
     }

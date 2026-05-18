@@ -80,7 +80,8 @@ flowchart TB
 ## 4. 전원 명령 acceptance 원칙
 
 - Connectivity supervisor는 SSH stderr/stdout 문자열을 직접 해석하지 않는다.
-- 호스트 Remote Agent는 `/remote/power/{action}` 같은 전원 실행 API를 제공하지 않는다. 호스트 API는 `/remote/power/config`, `/remote/power/setup`, `/remote/power/ssh-key`, `/remote/power/smartthings/devices`, `/remote/power/status`로 설정/준비도만 제공한다.
+- 호스트 Remote Agent는 `/remote/power/{action}` 같은 전원 실행 API를 제공하지 않는다. 호스트 API는 `/remote/power/setup`, `/remote/power/ssh-key`, `/remote/power/status`로 OpenSSH 준비도와 key 등록만 제공한다.
+- SmartThings CLI와 wake device id는 클라이언트 로컬 책임이다. macOS 클라이언트는 패키지 환경에서도 실행 가능한 SmartThings CLI를 직접 찾거나 Homebrew fallback으로 설치하고, `PC 켜기` device를 wake 대상으로 자동 선택한다.
 - 전원 side effect는 항상 클라이언트가 직접 SmartThings/OpenSSH 경로로 수행한다. Android도 직접 경로가 구현되기 전까지 전원 버튼을 비활성화한다.
 - 클라이언트 local command adapter가 명령 수락 여부를 typed signal로 결정하고, supervisor는 `powerIntentAccepted(action:)` 이벤트만 해석한다.
 - macOS local SSH adapter는 Windows command에 `__HH_REMOTE_POWER_ACCEPTED__` marker를 붙이고, SSH 출력에서 marker가 확인될 때만 accepted로 본다.

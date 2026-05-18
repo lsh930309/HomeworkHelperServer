@@ -38,7 +38,6 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteDevicesResponse",
         "RemoteCapabilitiesResponse",
         "RemotePowerConfigPayload",
-        "RemotePowerConfigResponse",
         "RemotePowerSetupResponse",
         "RemoteSSHKeyRegistrationResponse",
         "RemoteSmartThingsDevicesResponse",
@@ -86,10 +85,6 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'sshUser = "ssh_user"',
         'sshKeyPath = "ssh_key_path"',
         'statusTimeoutSeconds = "status_timeout_seconds"',
-        'configPath = "config_path"',
-        'configExists = "config_exists"',
-        'wakeConfigured = "wake_configured"',
-        'sshConfigured = "ssh_configured"',
         'remoteAPIVersion = "remote_api_version"',
         'serverTime = "server_time"',
         'stateRevision = "state_revision"',
@@ -156,10 +151,8 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/mobile-sessions/end',
         'remote/processes',
         'remote/shortcuts',
-        'remote/power/config',
         'remote/power/setup',
         'remote/power/ssh-key',
-        'remote/power/smartthings/devices',
         'remote/pair/confirm',
         'remote/tokens/refresh',
         'remote/logging/config',
@@ -180,11 +173,8 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func startMobileSession(gameLinkID: String' in client
     assert 'func endMobileSession(sessionID: String)' in client
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
-    assert 'func powerConfig() async throws -> RemotePowerConfigResponse' in client
-    assert 'func savePowerConfig(_ config: RemotePowerConfigPayload)' in client
     assert 'func powerSetup() async throws -> RemotePowerSetupResponse' in client
     assert 'func registerPowerSSHKey(publicKey: String, label: String)' in client
-    assert 'func smartThingsDevices(cliPath: String?)' in client
     assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
     assert 'request(path: path, method: "PUT")' in client
     assert "static func defaultSession(requestTimeout: TimeInterval = 5, resourceTimeout: TimeInterval = 8) -> URLSession" in client
@@ -223,6 +213,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     supervisor = _read(SOURCE_ROOT / "RemoteConnectionSupervisor.swift")
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
+    local_power = _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
     packager = _read(Path("tools/package_macos_remote_app.py"))
 
     assert "RemoteDashboardViewModel(" in app
@@ -445,8 +436,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "페어링 토큰 복구" in app
     assert "로컬 토큰 삭제" in app
     assert "Tailscale 서버/호스트 탐색" in app
-    assert "전원/SSH/SmartThings" in app
-    assert "전원 설정 저장" in app
+    assert "전원 자동 설정" in app
+    assert "전원 설정 저장" not in app
     assert "기기 관리" in app
     assert "현재 토큰 갱신" in app
     assert "Android-PC 연결" in app
@@ -494,7 +485,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "isHostAuthorizedKeysPath" in models
     assert "host-authorized-keys-rejected" in models
     assert "localSSHKeyFileExists" in models
-    assert 'copy.sshKeyPath = ""' in models
+    assert "hostSafeForRemoteSave" not in models
     assert "localSSHHealthReady" in view_model
     assert "localSSHHealthSummary" in view_model
     assert "verifyLocalSSHHealth" in view_model
@@ -518,11 +509,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func saveRemoteDesktopLogging" in view_model
     assert "runSetupAutomation" in view_model
     assert "ensureServerTailscale" in view_model
-    assert "applySuggestedPowerHost" in view_model
-    assert "generateAndSendSSHKey" in view_model
     assert "probeSmartThingsDevices" in view_model
     assert "refreshPowerSetup" in view_model
-    assert "applySmartThingsDevice" in view_model
+    assert "applySuggestedPowerHost" not in view_model
+    assert "generateAndSendSSHKey" not in view_model
+    assert "applySmartThingsDevice" not in view_model
+    assert 'TextField("SmartThings device id"' not in app
+    assert 'TextField("SmartThings CLI path"' not in app
+    assert 'TextField("SSH host"' not in app
+    assert 'TextField("SSH user"' not in app
+    assert 'TextField("SSH key path"' not in app
+    assert 'Button("전원 설정 저장")' not in app
+    assert 'Button("자동 설정 점검")' in app
+    assert 'Button("전원 준비 확인")' in app
 
     assert "GameProgressView" in app
     assert "GameIconView" in app
@@ -572,6 +571,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'return ("/bin/zsh", ["-lic", command])' in tailscale
     assert "shellQuote" in tailscale
     assert "tailscaleCommands()" in tailscale
+    assert '"/Applications/Tailscale.app/Contents/MacOS/Tailscale"' in tailscale
+    assert tailscale.index('"/Applications/Tailscale.app/Contents/MacOS/Tailscale"') < tailscale.index("commands.append(.zshLoginShell)")
+    assert "Packaged apps do not inherit the user's interactive zsh aliases" in tailscale
     assert '["ping", "--timeout=\\(max(1, timeoutSeconds))s", trimmedHost]' in tailscale
     assert "hardTimeoutSeconds" in tailscale
     assert "noReplySignalCount" in tailscale
@@ -584,6 +586,16 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "tailscale_stderr" in view_model
     assert "static let healthMarker" in local_ssh
     assert "static func health(config: RemotePowerConfigPayload" in local_ssh
+    assert 'private static let preferredWakeDeviceName = "PC 켜기"' in local_power
+    assert "static func resolveSmartThingsCLIPath" in local_power
+    assert '["install", "smartthings"]' in local_power
+    assert "parseSmartThingsTableRow" in local_power
+    assert "preferredWakeDevice(from candidates" in local_power
+    assert "LocalPowerWakeManager.resolveSmartThingsCLIPath(cliPath)" in models
+    assert "설정된 SmartThings CLI 대신 Mac 로컬 CLI를 사용합니다." in local_power
+    assert "applySmartThingsProbeResult" in view_model
+    assert '"install_attempted"' in view_model
+    assert '"auto_selected_device_id"' in view_model
     assert "HHRemoteReleaseID" in packager
     assert "--release-id" in packager
     assert "--git-hash" in packager

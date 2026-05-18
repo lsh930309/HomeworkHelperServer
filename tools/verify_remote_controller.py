@@ -180,7 +180,6 @@ def main(argv: list[str] | None = None) -> int:
     checks.append(_run("macOS RemoteAPIClient smoke", [sys.executable, "tools/smoke_macos_remote_api_client.py"]))
     checks.append(_run("macOS RemoteConnectionSupervisor smoke", [sys.executable, "tools/smoke_macos_connection_supervisor.py"]))
     checks.append(_run("macOS RemoteDashboardViewModel smoke", [sys.executable, "tools/smoke_macos_remote_viewmodel.py"]))
-    checks.append(_run("remote power readiness", [sys.executable, "tools/check_remote_power_readiness.py", "--allow-blocker"]))
     checks.append(_run("Android SDK readiness", [sys.executable, "tools/check_android_sdk_readiness.py", "--allow-blocker"]))
     checks.append(_run("Android APK smoke readiness", [sys.executable, "tools/smoke_android_remote_controller.py", "--allow-missing-apk"]))
     checks.append(_run("Android Remote e2e smoke", [sys.executable, "tools/smoke_android_remote_e2e.py"]))
