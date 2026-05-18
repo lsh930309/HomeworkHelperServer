@@ -86,6 +86,7 @@ enum RemoteConnectionEvent: Equatable {
     case tailscaleReachability(result: RemoteTailscaleReachabilitySignal)
     case httpStatusSucceeded(powerHint: String?, stateRevision: String?)
     case httpStatusFailed(kind: RemoteConnectionFailureKind)
+    case httpAgentUnavailable(kind: RemoteConnectionFailureKind, detail: String)
     case scheduleExhausted
     case clientResumed
 }
@@ -136,6 +137,8 @@ enum RemoteConnectionSupervisor {
             return statusSuccessDecision(powerHint: powerHint, currentState: currentState)
         case .httpStatusFailed(let kind):
             return httpFailureDecision(kind: kind, currentState: currentState, reconnectScheduleIsEmpty: reconnectScheduleIsEmpty)
+        case .httpAgentUnavailable(let kind, let detail):
+            return httpAgentUnavailableDecision(kind: kind, detail: detail, currentState: currentState, reconnectScheduleIsEmpty: reconnectScheduleIsEmpty)
         case .scheduleExhausted:
             return scheduleExhaustedDecision(currentState: currentState)
         case .clientResumed:
@@ -197,13 +200,10 @@ enum RemoteConnectionSupervisor {
                     message: "호스트 응답을 기다리는 중입니다. 저장된 토큰은 보존합니다."
                 )
             }
-            let schedule: [UInt64]? = currentState == .goingOffline || currentState == .offlineExpected || currentState == .authRejected
-                ? []
-                : (reconnectScheduleIsEmpty ? wakeReconnectSchedule : nil)
             let suffix = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " (\(detail))"
             return disconnectedDecision(
                 state: .offlineExpected,
-                schedule: schedule,
+                schedule: [],
                 message: "호스트 Tailscale ping 응답이 없습니다. 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다." + suffix
             )
         }
@@ -288,6 +288,47 @@ enum RemoteConnectionSupervisor {
                 state: .reconnecting,
                 schedule: reconnectScheduleIsEmpty ? connectionLossReconnectSchedule : nil,
                 message: "호스트 연결이 끊겼습니다. 저장된 토큰으로 자동 재연결을 시도합니다."
+            )
+        }
+    }
+
+    private static func httpAgentUnavailableDecision(
+        kind: RemoteConnectionFailureKind,
+        detail: String,
+        currentState: RemoteHostAvailabilityState,
+        reconnectScheduleIsEmpty: Bool
+    ) -> RemoteConnectionDecision {
+        if kind == .authRejected {
+            return httpFailureDecision(kind: kind, currentState: currentState, reconnectScheduleIsEmpty: reconnectScheduleIsEmpty)
+        }
+        guard kind.isConnectivity else { return .none }
+
+        switch currentState {
+        case .goingOffline:
+            return disconnectedDecision(
+                state: .offlineExpected,
+                schedule: [],
+                message: "호스트가 절전/종료 상태로 전환된 것으로 판단했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+            )
+        case .waking, .restarting:
+            if reconnectScheduleIsEmpty {
+                return disconnectedDecision(
+                    state: .agentUnavailable,
+                    schedule: [],
+                    message: "Remote Agent HTTP 응답이 아직 없습니다. Windows 앱 서버 모드와 방화벽/포트 설정을 확인하세요."
+                )
+            }
+            return disconnectedDecision(
+                state: currentState,
+                schedule: nil,
+                message: "Remote Agent HTTP 응답을 기다리는 중입니다."
+            )
+        default:
+            let suffix = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " (\(detail))"
+            return disconnectedDecision(
+                state: .agentUnavailable,
+                schedule: [],
+                message: "Remote Agent HTTP 상태 응답이 없습니다. Windows 앱 서버 모드와 방화벽/포트 8000을 확인하세요." + suffix
             )
         }
     }

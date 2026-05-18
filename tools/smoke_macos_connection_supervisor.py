@@ -35,10 +35,15 @@ def _swift_source() -> str:
                 let noReply = decision(.tailscaleReachability(result: .unreachable("no reply")), state: .online)
                 expect(noReply.availabilityState == .offlineExpected, "tailscale no reply should infer offline host")
                 expect(noReply.shouldLoadCache && noReply.shouldRefreshLocalProgress, "offline host should preserve standalone cache")
+                expect(noReply.reconnectSchedule == [], "offline host should settle into standalone cadence instead of wake reconnect burst")
 
                 let agentDownStart = decision(.httpStatusFailed(kind: .cannotConnect), state: .online)
                 expect(agentDownStart.availabilityState == .reconnecting, "first HTTP connection loss should enter reconnecting")
                 expect(agentDownStart.reconnectSchedule == RemoteConnectionSupervisor.connectionLossReconnectSchedule, "connection loss should use short reconnect burst")
+
+                let layeredAgentDown = decision(.httpAgentUnavailable(kind: .cannotConnect, detail: "tailscale ping OK"), state: .online)
+                expect(layeredAgentDown.availabilityState == .agentUnavailable, "HTTP failure with management reachability should become agentUnavailable immediately")
+                expect(layeredAgentDown.reconnectSchedule == [], "layered agent unavailable should not run a blind reconnect burst")
 
                 let agentDownExhausted = decision(.httpStatusFailed(kind: .cannotConnect), state: .reconnecting, empty: true)
                 expect(agentDownExhausted.availabilityState == .agentUnavailable, "exhausted HTTP reconnect should become agentUnavailable")

@@ -19,6 +19,7 @@ import traceback
 import json
 import platform
 import argparse
+import hashlib
 from pathlib import Path
 from datetime import datetime
 try:
@@ -52,6 +53,8 @@ INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
 MACOS_PACKAGE_TOOL = PROJECT_ROOT / "tools" / "package_macos_remote_app.py"
 MACOS_APP_NAME = "HomeworkHelperRemote.app"
 MACOS_APP_BUNDLE = DIST_DIR / "macos" / MACOS_APP_NAME
+MACOS_SWIFT_RELEASE_EXECUTABLE = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / ".build" / "release" / "HomeworkHelperRemote"
+MACOS_APP_EXECUTABLE = MACOS_APP_BUNDLE / "Contents" / "MacOS" / "HomeworkHelperRemote"
 
 VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)_g([0-9a-fA-F]+|unknown)(?:_dirty)?')
 
@@ -171,6 +174,14 @@ def make_version_info(target: str, config: dict, *, git_hash: str | None = None,
 def release_filename(prefix: str, version_info: dict, suffix: str, extension: str) -> str:
     suffix_part = f"_{suffix}" if suffix else ""
     return f"{prefix}_{version_info['string']}{suffix_part}.{extension}"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class ConsoleBuildProgress:
@@ -1207,7 +1218,13 @@ def build_macos_remote_app(gui, version_info):
         str(version_info["build"]),
         "--jobs",
         str(version_info["jobs"]),
+        "--release-id",
+        version_info["string"],
+        "--git-hash",
+        version_info["git_hash"],
     ]
+    if version_info.get("dirty"):
+        cmd.append("--dirty")
     gui.log(f"앱 번들 명령: {' '.join(cmd)}\n")
     try:
         process = subprocess.run(
@@ -1233,6 +1250,23 @@ def build_macos_remote_app(gui, version_info):
     if not MACOS_APP_BUNDLE.exists():
         gui.log(f"✗ 앱 번들을 찾을 수 없습니다: {MACOS_APP_BUNDLE}", 'error')
         return False
+    if not MACOS_SWIFT_RELEASE_EXECUTABLE.exists():
+        gui.log(f"✗ Swift release 실행 파일을 찾을 수 없습니다: {MACOS_SWIFT_RELEASE_EXECUTABLE}", 'error')
+        return False
+    if not MACOS_APP_EXECUTABLE.exists():
+        gui.log(f"✗ 앱 번들 실행 파일을 찾을 수 없습니다: {MACOS_APP_EXECUTABLE}", 'error')
+        return False
+    swift_hash = sha256_file(MACOS_SWIFT_RELEASE_EXECUTABLE)
+    app_hash = sha256_file(MACOS_APP_EXECUTABLE)
+    gui.log(f"  Swift release SHA256: {swift_hash}")
+    gui.log(f"  App bundle SHA256:   {app_hash}")
+    if swift_hash != app_hash:
+        gui.log("✗ Swift release binary와 app bundle binary hash가 다릅니다.", 'error')
+        return False
+    gui.log(
+        "  App metadata: "
+        f"release={version_info['string']}, git={version_info['git_hash']}, dirty={version_info['dirty']}"
+    )
     gui.set_progress(70)
     return True
 

@@ -2,9 +2,26 @@ import Foundation
 
 enum LocalSSHPowerManager {
     static let acceptedMarker = "__HH_REMOTE_POWER_ACCEPTED__"
+    static let healthMarker = "__HH_SSH_HEALTH_OK__"
 
     private struct ProcessResult {
         let status: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    struct HealthResult: Equatable {
+        enum Outcome: Equatable {
+            case reachable
+            case unreachable
+            case unavailable
+        }
+
+        let host: String
+        let outcome: Outcome
+        let message: String
+        let executablePath: String
+        let exitStatus: Int32?
         let stdout: String
         let stderr: String
     }
@@ -54,6 +71,48 @@ enum LocalSSHPowerManager {
             throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 수락 신호를 확인하지 못했습니다." : detail])
         }
         return "Mac에서 OpenSSH로 \(action) 명령 수락 신호를 확인했습니다."
+    }
+
+    static func health(config: RemotePowerConfigPayload, timeoutSeconds: Int = 3) async -> HealthResult {
+        let host = config.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = config.sshUser.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyPath = NSString(string: config.sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
+        guard !host.isEmpty, !user.isEmpty, !keyPath.isEmpty, config.sshPort > 0 else {
+            return HealthResult(host: host, outcome: .unavailable, message: "SSH health를 확인할 host/user/key path가 비어 있습니다.", executablePath: "/usr/bin/ssh", exitStatus: nil, stdout: "", stderr: "")
+        }
+
+        let args = [
+            "-i", keyPath,
+            "-p", String(config.sshPort),
+            "-o", "ConnectTimeout=\(max(1, timeoutSeconds))",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "\(user)@\(host)",
+            "echo \(healthMarker)",
+        ]
+
+        do {
+            let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
+            let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowered = combined.lowercased()
+            if result.status == 0 && combined.contains(healthMarker) {
+                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH health 성공" : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+            }
+            if lowered.contains("connection refused") || lowered.contains("permission denied") {
+                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 인증/서비스가 거부되었습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+            }
+            if lowered.contains("timed out")
+                || lowered.contains("operation timed out")
+                || lowered.contains("no route to host")
+                || lowered.contains("host is down")
+                || lowered.contains("network is unreachable")
+                || lowered.contains("could not resolve hostname") {
+                return HealthResult(host: host, outcome: .unreachable, message: combined.isEmpty ? "SSH health 응답이 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+            }
+            return HealthResult(host: host, outcome: .unavailable, message: combined.isEmpty ? "SSH health를 판독할 수 없습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
+        } catch {
+            return HealthResult(host: host, outcome: .unavailable, message: error.localizedDescription, executablePath: "/usr/bin/ssh", exitStatus: nil, stdout: "", stderr: "")
+        }
     }
 
     private static func runForResult(executable: String, arguments: [String]) async throws -> ProcessResult {

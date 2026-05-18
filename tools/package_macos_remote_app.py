@@ -41,7 +41,14 @@ def _run(command: list[str], *, cwd: Path) -> None:
         print(completed.stdout.rstrip())
 
 
-def _info_plist(version: str = "0.1.0", build: str = "1") -> dict[str, object]:
+def _info_plist(
+    version: str = "0.1.0",
+    build: str = "1",
+    *,
+    release_id: str = "",
+    git_hash: str = "",
+    dirty: bool = False,
+) -> dict[str, object]:
     return {
         "CFBundleDevelopmentRegion": "ko",
         "CFBundleDisplayName": "HomeworkHelper Remote",
@@ -53,6 +60,9 @@ def _info_plist(version: str = "0.1.0", build: str = "1") -> dict[str, object]:
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": version,
         "CFBundleVersion": str(build),
+        "HHRemoteGitDirty": bool(dirty),
+        "HHRemoteGitHash": git_hash,
+        "HHRemoteReleaseID": release_id,
         "LSApplicationCategoryType": "public.app-category.productivity",
         "LSUIElement": True,
         "LSMinimumSystemVersion": "26.0",
@@ -82,7 +92,16 @@ def _copy_icon(resources: Path) -> None:
     shutil.rmtree(iconset, ignore_errors=True)
 
 
-def package_app(output_dir: Path, *, version: str = "0.1.0", build: str = "1", jobs: int | None = None) -> Path:
+def package_app(
+    output_dir: Path,
+    *,
+    version: str = "0.1.0",
+    build: str = "1",
+    jobs: int | None = None,
+    release_id: str = "",
+    git_hash: str = "",
+    dirty: bool = False,
+) -> Path:
     swift_command = ["swift", "build", "-c", "release"]
     if jobs and jobs > 0:
         swift_command.extend(["--jobs", str(jobs)])
@@ -107,7 +126,17 @@ def package_app(output_dir: Path, *, version: str = "0.1.0", build: str = "1", j
     except Exception as exc:
         print(f"warning: app icon generation skipped: {exc}")
     with (contents / "Info.plist").open("wb") as file:
-        plistlib.dump(_info_plist(version, str(build)), file, sort_keys=True)
+        plistlib.dump(
+            _info_plist(
+                version,
+                str(build),
+                release_id=release_id,
+                git_hash=git_hash,
+                dirty=dirty,
+            ),
+            file,
+            sort_keys=True,
+        )
     return app
 
 
@@ -117,10 +146,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", default="0.1.0")
     parser.add_argument("--build", default="1")
     parser.add_argument("--jobs", type=int, default=None)
+    parser.add_argument("--release-id", default="")
+    parser.add_argument("--git-hash", default="")
+    parser.add_argument("--dirty", action="store_true")
     args = parser.parse_args(argv)
 
     try:
-        app = package_app(args.output_dir, version=args.version, build=args.build, jobs=args.jobs)
+        app = package_app(
+            args.output_dir,
+            version=args.version,
+            build=args.build,
+            jobs=args.jobs,
+            release_id=args.release_id,
+            git_hash=args.git_hash,
+            dirty=args.dirty,
+        )
     except Exception as exc:
         print(f"macOS app packaging failed: {exc}", file=sys.stderr)
         return 1

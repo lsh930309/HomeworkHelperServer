@@ -292,6 +292,10 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "CFBundlePackageType" in packager
     assert "APPL" in packager
     assert "CFBundleIdentifier" in packager
+    assert "HHRemoteReleaseID" in packager
+    assert "HHRemoteGitHash" in packager
+    assert "--release-id" in packager
+    assert "--git-hash" in packager
     assert "NSAppTransportSecurity" in packager
     assert "NSAllowsArbitraryLoads" in packager
     assert "NSHighResolutionCapable" in packager

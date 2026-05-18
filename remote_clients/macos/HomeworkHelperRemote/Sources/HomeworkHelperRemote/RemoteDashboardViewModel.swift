@@ -486,9 +486,110 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private enum HostReachability {
-        case reachable(String)
-        case unreachable(String)
-        case skipped(String)
+        case reachable(ConnectivityProbeDetail)
+        case unreachable(ConnectivityProbeDetail)
+        case skipped(ConnectivityProbeDetail)
+    }
+
+    private enum TailnetManagementReachability {
+        case reachable(ConnectivityProbeDetail)
+        case unreachable(ConnectivityProbeDetail)
+        case unavailable(ConnectivityProbeDetail)
+        case skipped(ConnectivityProbeDetail)
+    }
+
+    private struct ConnectivityProbeDetail {
+        let outcome: String
+        let message: String
+        let elapsedSeconds: TimeInterval
+        let executablePath: String
+        let exitStatus: String
+        let stdout: String
+        let stderr: String
+        let timedOut: Bool
+
+        init(
+            outcome: String,
+            message: String,
+            elapsedSeconds: TimeInterval,
+            executablePath: String = "",
+            exitStatus: String = "",
+            stdout: String = "",
+            stderr: String = "",
+            timedOut: Bool = false
+        ) {
+            self.outcome = outcome
+            self.message = message
+            self.elapsedSeconds = elapsedSeconds
+            self.executablePath = executablePath
+            self.exitStatus = exitStatus
+            self.stdout = stdout
+            self.stderr = stderr
+            self.timedOut = timedOut
+        }
+
+        static func skipped(_ message: String) -> ConnectivityProbeDetail {
+            ConnectivityProbeDetail(outcome: "skipped", message: message, elapsedSeconds: 0)
+        }
+    }
+
+    private struct TailnetManagementProbe {
+        let reachability: TailnetManagementReachability
+        let tailscale: ConnectivityProbeDetail?
+        let ssh: ConnectivityProbeDetail?
+    }
+
+    private struct ConnectivityEvaluationLog {
+        let trigger: String
+        var httpOutcome = "not_attempted"
+        var httpFailureKind = ""
+        var httpMessage = ""
+        var httpElapsedSeconds: TimeInterval = 0
+        var tailscale: ConnectivityProbeDetail?
+        var ssh: ConnectivityProbeDetail?
+        var finalState = "unknown"
+        var finalMessage = ""
+
+        var fields: [String: String] {
+            var values = [
+                "trigger": trigger,
+                "http_outcome": httpOutcome,
+                "http_failure_kind": httpFailureKind,
+                "http_message": httpMessage,
+                "http_elapsed_seconds": Self.format(httpElapsedSeconds),
+                "final_state": finalState,
+                "final_message": finalMessage,
+            ]
+            if let tailscale {
+                values["tailscale_outcome"] = tailscale.outcome
+                values["tailscale_message"] = tailscale.message
+                values["tailscale_elapsed_seconds"] = Self.format(tailscale.elapsedSeconds)
+                values["tailscale_executable_path"] = tailscale.executablePath
+                values["tailscale_exit_status"] = tailscale.exitStatus
+                values["tailscale_stdout"] = tailscale.stdout
+                values["tailscale_stderr"] = tailscale.stderr
+                values["tailscale_timed_out"] = String(tailscale.timedOut)
+            } else {
+                values["tailscale_outcome"] = "not_attempted"
+            }
+            if let ssh {
+                values["ssh_outcome"] = ssh.outcome
+                values["ssh_message"] = ssh.message
+                values["ssh_elapsed_seconds"] = Self.format(ssh.elapsedSeconds)
+                values["ssh_executable_path"] = ssh.executablePath
+                values["ssh_exit_status"] = ssh.exitStatus
+                values["ssh_stdout"] = ssh.stdout
+                values["ssh_stderr"] = ssh.stderr
+                values["ssh_timed_out"] = String(ssh.timedOut)
+            } else {
+                values["ssh_outcome"] = "not_attempted"
+            }
+            return values
+        }
+
+        private static func format(_ value: TimeInterval) -> String {
+            String(format: "%.2f", value)
+        }
     }
 
     private func setHostAvailability(_ state: RemoteHostAvailabilityState, clearPairingRecovery: Bool = false) {
@@ -553,25 +654,173 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func probeHostReachability(for client: RemoteAPIClient) async -> HostReachability {
         guard shouldProbeTailscalePing(for: client.baseURL), let host = client.baseURL.host else {
-            return .skipped("loopback, 비-Tailscale 또는 호스트 없는 URL은 tailscale ping을 건너뜁니다.")
+            return .skipped(.skipped("loopback, 비-Tailscale 또는 호스트 없는 URL은 tailscale ping을 건너뜁니다."))
         }
+        let startedAt = Date()
         let result = await TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)
+        let detail = ConnectivityProbeDetail(
+            outcome: "\(result.outcome)",
+            message: result.message,
+            elapsedSeconds: Date().timeIntervalSince(startedAt),
+            executablePath: result.executablePath ?? "",
+            exitStatus: result.exitStatus.map(String.init) ?? "",
+            stdout: result.stdout,
+            stderr: result.stderr,
+            timedOut: result.timedOut
+        )
         switch result.outcome {
         case .reachable:
-            return .reachable(result.message)
+            return .reachable(detail)
         case .unreachable:
-            return .unreachable(result.message)
+            return .unreachable(detail)
         case .unavailable:
-            return .skipped(result.message)
+            return .unreachable(detail)
         }
     }
 
-    private func markHostUnreachable(_ detail: String, updateMessage: Bool = true) {
+    private func shouldProbeSSHHealth(for client: RemoteAPIClient) -> Bool {
+        guard powerConfig.localSSHConfigured else { return false }
+        let sshHost = powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !sshHost.isEmpty else { return false }
+        guard let httpHost = client.baseURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !httpHost.isEmpty else {
+            return Self.isLikelyTailscaleHost(sshHost)
+        }
+        return sshHost == httpHost || Self.isLikelyTailscaleHost(sshHost)
+    }
+
+    private func probeTailnetManagementReachability(for client: RemoteAPIClient) async -> TailnetManagementProbe {
+        switch await probeHostReachability(for: client) {
+        case .reachable(let detail):
+            let management = ConnectivityProbeDetail(outcome: "reachable", message: "tailscale ping OK: \(detail.message)", elapsedSeconds: detail.elapsedSeconds)
+            return TailnetManagementProbe(reachability: .reachable(management), tailscale: detail, ssh: nil)
+        case .unreachable(let detail):
+            return TailnetManagementProbe(reachability: .unreachable(detail), tailscale: detail, ssh: nil)
+        case .skipped(let detail):
+            guard shouldProbeSSHHealth(for: client) else {
+                return TailnetManagementProbe(reachability: .skipped(detail), tailscale: detail, ssh: nil)
+            }
+            let startedAt = Date()
+            let ssh = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
+            let sshDetail = ConnectivityProbeDetail(
+                outcome: "\(ssh.outcome)",
+                message: ssh.message,
+                elapsedSeconds: Date().timeIntervalSince(startedAt),
+                executablePath: ssh.executablePath,
+                exitStatus: ssh.exitStatus.map(String.init) ?? "",
+                stdout: ssh.stdout,
+                stderr: ssh.stderr,
+                timedOut: false
+            )
+            switch ssh.outcome {
+            case .reachable:
+                let management = ConnectivityProbeDetail(outcome: "reachable", message: "SSH management OK: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .reachable(management), tailscale: detail, ssh: sshDetail)
+            case .unreachable:
+                let management = ConnectivityProbeDetail(outcome: "unreachable", message: "tailscale ping skipped; SSH health unreachable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .unreachable(management), tailscale: detail, ssh: sshDetail)
+            case .unavailable:
+                let management = ConnectivityProbeDetail(outcome: "unavailable", message: "tailscale ping skipped; SSH health unavailable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .unavailable(management), tailscale: detail, ssh: sshDetail)
+            }
+        }
+    }
+
+    @discardableResult
+    private func markHostUnreachable(_ detail: String, updateMessage: Bool = true) -> RemoteConnectionDecision {
         consecutiveMirrorFailures += 1
-        applyConnectionDecision(
-            supervisorDecision(.tailscaleReachability(result: .unreachable(detail))),
-            updateMessage: updateMessage
-        )
+        let decision = supervisorDecision(.tailscaleReachability(result: .unreachable(detail)))
+        applyConnectionDecision(decision, updateMessage: updateMessage)
+        return decision
+    }
+
+    @discardableResult
+    private func markHTTPAgentUnavailable(_ error: Error, detail: String, updateMessage: Bool = true) -> RemoteConnectionDecision {
+        consecutiveMirrorFailures += 1
+        let decision = supervisorDecision(.httpAgentUnavailable(kind: failureKind(for: error), detail: detail))
+        applyConnectionDecision(decision, updateMessage: updateMessage)
+        return decision
+    }
+
+    @discardableResult
+    private func evaluateConnectivity(
+        using service: RemoteDashboardService,
+        client: RemoteAPIClient,
+        trigger: String,
+        updateMessage: Bool = true
+    ) async -> (status: RemoteStatus, decision: RemoteConnectionDecision)? {
+        var evaluationLog = ConnectivityEvaluationLog(trigger: trigger)
+        let httpStartedAt = Date()
+        do {
+            let latestStatus = try await service.status()
+            let decision = applyRemoteStatus(latestStatus)
+            evaluationLog.httpOutcome = "success"
+            evaluationLog.httpElapsedSeconds = Date().timeIntervalSince(httpStartedAt)
+            evaluationLog.finalState = hostAvailabilityState.rawValue
+            evaluationLog.finalMessage = message
+            writeConnectivityEvaluationLog(evaluationLog)
+            return (latestStatus, decision)
+        } catch {
+            let kind = failureKind(for: error)
+            evaluationLog.httpOutcome = "failed"
+            evaluationLog.httpFailureKind = "\(kind)"
+            evaluationLog.httpMessage = error.localizedDescription
+            evaluationLog.httpElapsedSeconds = Date().timeIntervalSince(httpStartedAt)
+            if kind == .authRejected {
+                let decision = supervisorDecision(.httpStatusFailed(kind: kind))
+                applyConnectionDecision(decision, updateMessage: updateMessage)
+                evaluationLog.finalState = hostAvailabilityState.rawValue
+                evaluationLog.finalMessage = decision.message ?? message
+                writeConnectivityEvaluationLog(evaluationLog)
+                return nil
+            }
+
+            let management = await probeTailnetManagementReachability(for: client)
+            evaluationLog.tailscale = management.tailscale
+            evaluationLog.ssh = management.ssh
+            let decision: RemoteConnectionDecision
+            switch management.reachability {
+            case .unreachable(let detail):
+                decision = markHostUnreachable(detail.message, updateMessage: updateMessage)
+            case .reachable(let detail):
+                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
+            case .unavailable(let detail):
+                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
+            case .skipped(let detail):
+                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
+            }
+            evaluationLog.finalState = hostAvailabilityState.rawValue
+            evaluationLog.finalMessage = decision.message ?? message
+            writeConnectivityEvaluationLog(evaluationLog)
+            return nil
+        }
+    }
+
+    private func handlePayloadSyncFailure(_ error: Error, fallbackMessage: String? = nil) {
+        if isAuthFailure(error) {
+            handleRemoteFailure(error)
+            return
+        }
+        if processes.isEmpty {
+            processes = RemoteClientCache.loadProcesses()
+        }
+        refreshLocalProcessDisplay()
+        message = fallbackMessage ?? "Remote Agent 상태는 응답했지만 일부 데이터 동기화에 실패했습니다. 캐시 데이터와 standalone 진행률을 유지합니다. (\(error.localizedDescription))"
+    }
+
+    private func writeConnectivityEvaluationLog(_ evaluationLog: ConnectivityEvaluationLog) {
+        var fields = evaluationLog.fields
+        fields["bundle_version"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        fields["bundle_build"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        fields["bundle_release_id"] = Bundle.main.object(forInfoDictionaryKey: "HHRemoteReleaseID") as? String ?? ""
+        fields["bundle_git_hash"] = Bundle.main.object(forInfoDictionaryKey: "HHRemoteGitHash") as? String ?? ""
+        if let dirty = Bundle.main.object(forInfoDictionaryKey: "HHRemoteGitDirty") as? Bool {
+            fields["bundle_git_dirty"] = String(dirty)
+        } else {
+            fields["bundle_git_dirty"] = ""
+        }
+        fields["base_url_host"] = client?.baseURL.host ?? ""
+        fields["availability_label"] = hostAvailabilityState.label
+        RemoteClientDesktopLogger.write("connectivity.evaluate", fields)
     }
 
     @discardableResult
@@ -713,12 +962,36 @@ final class RemoteDashboardViewModel: ObservableObject {
         return trimmed.isEmpty || trimmed.contains("127.0.0.1") || trimmed.contains("localhost")
     }
 
+    private func bootstrapConnectionProgress(localTailscale snapshot: LocalTailscaleSnapshot) -> String {
+        switch hostAvailabilityState {
+        case .authRejected:
+            return "호스트가 저장 토큰을 거부했습니다. 토큰은 보존했으니 Windows 앱의 원격 설정에서 디바이스 상태를 확인하세요."
+        case .online:
+            return isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
+        case .offlineExpected:
+            return "호스트 Tailscale ping 응답이 없어 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다. 캐시 데이터는 standalone으로 유지합니다."
+        case .agentUnavailable:
+            return "호스트 관리 계층은 확인됐지만 Windows Remote Agent HTTP 응답이 없습니다. Windows 앱 서버 모드와 방화벽/포트 8000을 확인하세요."
+        case .waking:
+            return "호스트 부팅을 기다리는 중입니다. 연결이 복구되면 자동으로 데이터를 다시 미러링합니다."
+        case .restarting:
+            return "호스트 재시동을 기다리는 중입니다. 연결이 복구되면 자동으로 데이터를 다시 미러링합니다."
+        case .goingOffline:
+            return "호스트가 절전/종료 상태로 전환되는지 확인 중입니다."
+        case .reconnecting:
+            return "호스트 연결을 다시 확인하는 중입니다. 캐시 데이터는 standalone으로 유지합니다."
+        case .unknown:
+            return snapshot.running
+                ? "Tailscale은 준비됐지만 Windows Remote Agent 상태를 아직 확정하지 못했습니다."
+                : "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 설정 점검을 실행하세요."
+        }
+    }
+
     func bootstrap() async {
         guard bootstrapEnabled else {
             applyUITestSnapshot()
             return
         }
-        startMirroring()
         startLocalProgressTicker()
         setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
         let snapshot = await TailscaleDiscovery.status()
@@ -737,16 +1010,11 @@ final class RemoteDashboardViewModel: ObservableObject {
         if isPaired {
             await recoverPairing(silent: true)
         }
-        await refresh()
-        if hostAvailabilityState == .authRejected {
-            setupProgress = "호스트가 저장 토큰을 거부했습니다. 토큰은 보존했으니 Windows 앱의 원격 설정에서 디바이스 상태를 확인하세요."
-        } else if status != nil {
-            setupProgress = isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
-        } else if snapshot.running {
-            setupProgress = "Tailscale은 준비됐지만 Windows Remote Agent에 연결하지 못했습니다. Windows 앱의 서버 모드와 방화벽을 확인하세요."
-        } else {
-            setupProgress = "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 설정 점검을 실행하세요."
+        if !isPaired || hostAvailabilityState == .online || hostAvailabilityState == .unknown {
+            await refresh()
         }
+        setupProgress = bootstrapConnectionProgress(localTailscale: snapshot)
+        startMirroring()
     }
 
     func startMirroring() {
@@ -974,19 +1242,19 @@ final class RemoteDashboardViewModel: ObservableObject {
             isLoading = true
         }
         defer { if !silent { isLoading = false } }
-        do {
-            let latestStatus = try await service?.status()
-            if let latestStatus {
-                applyRemoteStatus(latestStatus)
-                setupProgress = "저장된 Keychain 토큰으로 페어링을 확인했습니다."
-            }
-            devices = (try? await service?.devices()) ?? devices
-        } catch {
-            handleRemoteFailure(error, updateMessage: !silent)
-            if !isAuthFailure(error) {
-                setupProgress = "호스트가 오프라인일 수 있습니다. 저장된 토큰과 캐시 데이터는 보존하고 자동 재연결을 유지합니다."
-            }
+        guard let client, let service else {
+            pairingRecoveryMessage = "Remote Agent URL이 올바르지 않습니다."
+            setupProgress = pairingRecoveryMessage
+            return
         }
+        guard let _ = await evaluateConnectivity(using: service, client: client, trigger: silent ? "recoverPairing.silent" : "recoverPairing", updateMessage: !silent) else {
+            if hostAvailabilityState != .authRejected {
+                setupProgress = "호스트가 오프라인이거나 Remote Agent가 응답하지 않습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+            }
+            return
+        }
+        setupProgress = "저장된 Keychain 토큰으로 페어링을 확인했습니다."
+        devices = (try? await service.devices()) ?? devices
     }
 
     func clearLocalPairing() {
@@ -1013,40 +1281,38 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         let service = RemoteDashboardService(client: client)
-        do {
-            setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
-            let latestStatus = try await service.status()
-            applyRemoteStatus(latestStatus)
-            if latestStatus.readiness == nil {
-                readiness = try? await service.readiness()
-            } else {
-                readiness = latestStatus.readiness
+        setupProgress = "2/4 Windows Remote Agent 상태 확인 중..."
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.status") else {
+            if hostAvailabilityState != .authRejected {
+                setupProgress = "Tailscale/SSH 관리 계층 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 저장된 캐시 데이터는 유지합니다."
             }
-            powerConfigResponse = try? await service.powerConfig()
-            powerSetup = try? await service.powerSetup()
-            if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
-            fillDefaultSSHFields()
-
-            if isPaired {
-                setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
-                await recoverPairing(silent: true)
-                devices = (try? await service.devices()) ?? devices
-                serverTailscaleEnsure = try? await service.ensureServerTailscale()
-                let latestStatus = try await service.status()
-                applyRemoteStatus(latestStatus)
-                readiness = latestStatus.readiness
-            } else {
-                setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
-            }
-
-            setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
-            message = setupProgress
-        } catch {
-            handleRemoteFailure(error)
-            if !isAuthFailure(error) {
-                setupProgress = "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 재연결을 유지합니다."
-            }
+            return
         }
+        let latestStatus = evaluation.status
+        if latestStatus.readiness == nil {
+            readiness = try? await service.readiness()
+        } else {
+            readiness = latestStatus.readiness
+        }
+        powerConfigResponse = try? await service.powerConfig()
+        powerSetup = try? await service.powerSetup()
+        if let config = powerConfigResponse?.config, config.hasAnyPowerSetting { applyHostPowerConfig(config) }
+        fillDefaultSSHFields()
+
+        if isPaired {
+            setupProgress = "3/4 페어링 토큰 복구와 등록 디바이스 확인 중..."
+            await recoverPairing(silent: true)
+            devices = (try? await service.devices()) ?? devices
+            serverTailscaleEnsure = try? await service.ensureServerTailscale()
+            if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus") {
+                readiness = evaluation.status.readiness
+            }
+        } else {
+            setupProgress = "3/4 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
+        }
+
+        setupProgress = isPaired ? "4/4 자동 설정 점검 완료. 전원 설정이 비어 있으면 아래 값을 저장하세요." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
+        message = setupProgress
     }
 
     func ensureServerTailscale() async {
@@ -1062,12 +1328,16 @@ final class RemoteDashboardViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             serverTailscaleEnsure = try await service.ensureServerTailscale()
-            let latestStatus = try await service.status()
-            applyRemoteStatus(latestStatus)
-            readiness = latestStatus.readiness
+            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale") {
+                readiness = evaluation.status.readiness
+            }
             message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
         } catch {
-            handleRemoteFailure(error)
+            if let client {
+                _ = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale.failure")
+            } else {
+                handleRemoteFailure(error)
+            }
         }
     }
 
@@ -1095,28 +1365,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func mirrorRemoteState() async {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
-        switch await probeHostReachability(for: client) {
-        case .unreachable(let detail):
-            markHostUnreachable(detail)
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "mirror", updateMessage: false) else {
             return
-        case .reachable, .skipped:
-            break
         }
-        do {
-            let latestStatus = try await service.status()
-            let statusDecision = applyRemoteStatus(latestStatus)
-            if latestStatus.readiness == nil {
-                readiness = try? await service.readiness()
-            }
-            guard statusDecision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
-                refreshLocalProcessDisplay()
-                return
-            }
-            lastStateRevision = latestStatus.stateRevision
-            await syncRemotePayloads(using: service, client: client)
-        } catch {
-            handleRemoteFailure(error)
+        let latestStatus = evaluation.status
+        if latestStatus.readiness == nil {
+            readiness = try? await service.readiness()
         }
+        guard evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
+            refreshLocalProcessDisplay()
+            return
+        }
+        lastStateRevision = latestStatus.stateRevision
+        await syncRemotePayloads(using: service, client: client)
     }
 
     private func syncRemotePayloads(using service: RemoteDashboardService, client: RemoteAPIClient) async {
@@ -1132,28 +1393,20 @@ final class RemoteDashboardViewModel: ObservableObject {
                 processes = RemoteClientCache.loadProcesses()
             }
             refreshLocalProcessDisplay()
-            handleRemoteFailure(error)
+            handlePayloadSyncFailure(error)
         }
     }
 
     private func refresh(using service: RemoteDashboardService, includeDevices: Bool) async {
         isLoading = true
         defer { isLoading = false }
-        if let client {
-            switch await probeHostReachability(for: client) {
-            case .unreachable(let detail):
-                markHostUnreachable(detail)
-                return
-            case .reachable, .skipped:
-                break
-            }
-        }
+        guard let client else { return }
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "refresh") else { return }
+        let latestStatus = evaluation.status
         do {
             // Keep refreshes sequential. The Remote Agent's file-backed device
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
-            let latestStatus = try await service.status()
-            applyRemoteStatus(latestStatus)
             lastStateRevision = latestStatus.stateRevision
             if latestStatus.readiness == nil {
                 readiness = try? await service.readiness()
@@ -1169,15 +1422,13 @@ final class RemoteDashboardViewModel: ObservableObject {
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
-            if let client {
-                await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
-            }
+            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             if includeDevices {
                 devices = try await service.devices()
             }
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개"
         } catch {
-            handleRemoteFailure(error)
+            handlePayloadSyncFailure(error)
             if isAuthFailure(error) {
                 setupProgress = pairingRecoveryMessage
             }
@@ -1490,13 +1741,17 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let response = try await service.savePowerConfig(powerConfig.hostSafeForRemoteSave())
             powerConfigResponse = response
-            let latestStatus = try await service.status()
-            applyRemoteStatus(latestStatus)
-            readiness = latestStatus.readiness
+            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig") {
+                readiness = evaluation.status.readiness
+            }
             let supportedActions = response.readiness.supportedActions.joined(separator: ", ")
             message = "전원 설정을 저장했습니다. Mac 로컬 SmartThings CLI는 클라이언트에만 보존합니다. 지원 명령: \(supportedActions)"
         } catch {
-            handleRemoteFailure(error)
+            if let client {
+                _ = await evaluateConnectivity(using: service, client: client, trigger: "savePowerConfig.failure")
+            } else {
+                handleRemoteFailure(error)
+            }
         }
     }
 

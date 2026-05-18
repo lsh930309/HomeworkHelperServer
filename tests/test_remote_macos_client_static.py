@@ -225,6 +225,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     supervisor = _read(SOURCE_ROOT / "RemoteConnectionSupervisor.swift")
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
+    packager = _read(Path("tools/package_macos_remote_app.py"))
 
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
@@ -390,13 +391,28 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteConnectionDecision" in supervisor
     assert "RemoteConnectionEvent" in supervisor
     assert "RemoteConnectionFailureKind" in supervisor
+    assert "httpAgentUnavailable" in supervisor
     assert "case clientResumed" in supervisor
     assert "shouldForcePayloadSync" in supervisor
     assert "shouldProbeImmediately" in supervisor
     assert "hostAvailabilityState" in view_model
     assert "private enum HostReachability" in view_model
+    assert "private enum TailnetManagementReachability" in view_model
+    assert "private struct ConnectivityEvaluationLog" in view_model
+    assert "writeConnectivityEvaluationLog" in view_model
+    assert '"connectivity.evaluate"' in view_model
+    assert "bundle_release_id" in view_model
+    assert "HHRemoteReleaseID" in view_model
+    assert "HHRemoteGitHash" in view_model
+    assert "bootstrapConnectionProgress" in view_model
+    assert "private func evaluateConnectivity" in view_model
+    assert 'trigger: "refresh"' in view_model
+    assert 'trigger: "mirror"' in view_model
+    assert "probeTailnetManagementReachability(for: client)" in view_model
+    assert "LocalSSHPowerManager.health(config: powerConfig" in view_model
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
+    assert "markHTTPAgentUnavailable" in view_model
     assert "supervisorDecision(_ event: RemoteConnectionEvent)" in view_model
     assert "applyConnectionDecision(_ decision: RemoteConnectionDecision" in view_model
     assert "installClientResumeObservers" in view_model
@@ -521,7 +537,30 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "staminaRecoverySecondsPerPoint" in view_model
     assert "formatRemainingDuration" in view_model
     assert "LocalTailscalePingResult" in tailscale
+    assert "private enum TailscaleCommand" in tailscale
+    assert "case zshLoginShell" in tailscale
+    assert 'return "/bin/zsh -lic tailscale"' in tailscale
+    assert "var isShellBridge" in tailscale
+    assert "POWERLEVEL9K_DISABLE_GITSTATUS" in tailscale
+    assert "ZSH_DISABLE_COMPFIX" in tailscale
+    assert 'return ("/bin/zsh", ["-lic", command])' in tailscale
+    assert "shellQuote" in tailscale
+    assert "tailscaleCommands()" in tailscale
     assert '["ping", "--timeout=\\(max(1, timeoutSeconds))s", trimmedHost]' in tailscale
+    assert "hardTimeoutSeconds" in tailscale
+    assert "noReplySignalCount" in tailscale
+    assert "isRuntimeUnavailableMessage" in tailscale
+    assert "gui failed to start" in tailscale
+    assert "clierror" in tailscale
+    assert "tailscale_executable_path" in view_model
+    assert "tailscale_exit_status" in view_model
+    assert "tailscale_stdout" in view_model
+    assert "tailscale_stderr" in view_model
+    assert "static let healthMarker" in local_ssh
+    assert "static func health(config: RemotePowerConfigPayload" in local_ssh
+    assert "HHRemoteReleaseID" in packager
+    assert "--release-id" in packager
+    assert "--git-hash" in packager
     for marker in ["어제", "오늘", "내일", "일 전", "일 후", "아침", "낮", "저녁", "밤"]:
         assert marker in view_model
 

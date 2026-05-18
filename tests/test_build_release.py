@@ -89,11 +89,27 @@ def test_version_example_is_unified_and_local_version_file_is_ignored():
     assert "build.version.json" in gitignore
 
 
-def test_macos_packager_plist_accepts_build_versions():
-    plist = package_macos_remote_app._info_plist("1.2.3", "45")
+def test_sha256_file_reports_file_digest(tmp_path):
+    target = tmp_path / "artifact.bin"
+    target.write_bytes(b"homework-helper")
+
+    assert build.sha256_file(target) == "74499229f1c63d312fa1e8e8cf93da3ab295a8f4185fbe0e410f9202a0782d12"
+
+
+def test_macos_packager_plist_accepts_build_versions_and_release_metadata():
+    plist = package_macos_remote_app._info_plist(
+        "1.2.3",
+        "45",
+        release_id="v1.2.3_gabcdef0_dirty",
+        git_hash="abcdef0",
+        dirty=True,
+    )
 
     assert plist["CFBundleShortVersionString"] == "1.2.3"
     assert plist["CFBundleVersion"] == "45"
+    assert plist["HHRemoteReleaseID"] == "v1.2.3_gabcdef0_dirty"
+    assert plist["HHRemoteGitHash"] == "abcdef0"
+    assert plist["HHRemoteGitDirty"] is True
     assert plist["CFBundlePackageType"] == "APPL"
     assert plist["LSMinimumSystemVersion"] == "26.0"
     assert plist["NSHighResolutionCapable"] is True
