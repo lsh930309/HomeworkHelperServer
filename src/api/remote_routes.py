@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.api.runtime_config import resolve_api_port
 from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
@@ -459,7 +460,7 @@ def create_remote_router(
                 "state": "ok" if tailscale_ready else "warning",
                 "color": "green" if tailscale_ready else "yellow",
                 "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
-                "suggested_base_urls": suggest_remote_base_urls(ts_snapshot) if tailscale_ready and ts_snapshot is not None else [],
+                "suggested_base_urls": suggest_remote_base_urls(ts_snapshot, port=resolve_api_port()) if tailscale_ready and ts_snapshot is not None else [],
                 "details": tailscale_payload,
             },
         }

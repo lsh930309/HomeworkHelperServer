@@ -20,6 +20,7 @@ from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 import requests
+from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 
 
 class RemoteSettingsDialog(QDialog):
@@ -28,7 +29,7 @@ class RemoteSettingsDialog(QDialog):
     def __init__(self, data_manager, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.data_manager = data_manager
-        self.base_url = str(getattr(data_manager, "base_url", "http://127.0.0.1:8000")).rstrip("/")
+        self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
         self.setWindowTitle("원격 설정")
         self.setMinimumSize(720, 560)
 
@@ -52,7 +53,7 @@ class RemoteSettingsDialog(QDialog):
     def _build_server_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.remote_server_mode_checkbox = QCheckBox("리모트 서버 모드로 시작 (0.0.0.0:8000 바인딩)")
+        self.remote_server_mode_checkbox = QCheckBox(f"리모트 서버 모드로 시작 (0.0.0.0:{resolve_api_port()} 바인딩)")
         self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
         self.server_status_label = QLabel("변경 사항은 앱 재시작 후 적용됩니다.")
         save_button = QPushButton("서버 모드 설정 저장")
@@ -1239,7 +1240,7 @@ class GlobalSettingsDialog(QDialog):
         self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
         self.remote_server_mode_checkbox = QCheckBox("리모트 서버 모드로 시작 (Tailscale/LAN 클라이언트 접속 허용)")
         self.remote_server_mode_checkbox.setToolTip(
-            "다음 앱 실행부터 API 서버를 0.0.0.0:8000으로 열어 macOS/Android 리모트 클라이언트가 접속할 수 있게 합니다."
+            f"다음 앱 실행부터 API 서버를 0.0.0.0:{resolve_api_port()}으로 열어 macOS/Android 리모트 클라이언트가 접속할 수 있게 합니다."
         )
 
         # 테마 선택 (라디오 버튼)

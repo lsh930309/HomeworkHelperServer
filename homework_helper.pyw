@@ -71,6 +71,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QFontDatabase, QFont
 from src.utils.common import get_bundle_resource_path
 from src.api.client import ApiClient
+from src.api.runtime_config import gui_health_url, resolve_api_port, resolve_local_api_base_url
 
 # Windows 전용 모듈 임포트 (선택적)
 if os.name == 'nt':
@@ -117,21 +118,42 @@ def cleanup_old_mei_folders():
     except Exception as e:
         print(f"임시 폴더 정리 중 오류 발생: {e}")
 
-def wait_for_server_ready(max_wait_seconds: int = 10) -> bool:
+def _server_health_payload(base_url: str | None = None, timeout: float = 0.5) -> dict[str, Any] | None:
+    """Return the local API health payload when a compatible server responds."""
+    import requests
+
+    try:
+        response = requests.get(gui_health_url(base_url), timeout=timeout)
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _is_existing_server_healthy(base_url: str | None = None) -> bool:
+    payload = _server_health_payload(base_url=base_url, timeout=0.7)
+    return bool(payload and payload.get("ok") is True and payload.get("db_ready") is True)
+
+
+def wait_for_server_ready(max_wait_seconds: int = 10, base_url: str | None = None) -> bool:
     """서버가 준비될 때까지 대기합니다."""
     print("API 서버 준비 대기 중...")
     import requests
-    base_url = "http://127.0.0.1:8000"
+    base_url = resolve_local_api_base_url(base_url)
     iterations = int(max_wait_seconds / 0.2)
 
     for i in range(iterations):
         try:
-            # /settings 엔드포인트에 GET 요청을 보내 서버 상태 확인
-            response = requests.get(f"{base_url}/settings", timeout=0.5)
-            if response.status_code == 200:
+            response = requests.get(gui_health_url(base_url), timeout=0.5)
+            if response.status_code == 200 and response.json().get("ok") is True:
                 print(f"API 서버 준비 완료. ({i * 0.2:.1f}초 소요)")
                 return True
         except requests.ConnectionError:
+            time.sleep(0.2)
+        except ValueError as e:
+            print(f"API 서버 health 응답 파싱 오류: {e}")
             time.sleep(0.2)
         except Exception as e:
             print(f"API 서버 확인 중 오류: {e}")
@@ -217,7 +239,11 @@ def start_api_server() -> bool:
     try:
         # 이미 서버가 실행 중인지 확인
         if is_server_running():
-            print("기존 API 서버 발견. 종료 후 재시작합니다...")
+            if _is_existing_server_healthy():
+                print("기존 API 서버가 정상 응답 중입니다. 재사용합니다.")
+                return True
+
+            print("기존 API 서버가 응답하지 않습니다. 종료 후 재시작합니다...")
             # 직접 참조가 있으면 terminate, 없으면 PID 파일로 종료
             if api_server_process and api_server_process.is_alive():
                 api_server_process.terminate()
@@ -467,6 +493,9 @@ def run_server_main():
         signal.signal(signal.SIGBREAK, shutdown_handler)
         logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
 
+    api_host = resolve_api_bind_host()
+    api_port = resolve_api_port()
+
     app = FastAPI()
 
     class ProcessRuntimeStatePatch(BaseModel):
@@ -499,6 +528,41 @@ def run_server_main():
                 yield db
             finally:
                 db.close()
+
+    def _dashboard_static_health() -> dict[str, Any]:
+        from src.api.dashboard.static_files import dashboard_static_dir
+
+        static_path = dashboard_static_dir()
+        ready = (
+            static_path.exists()
+            and (static_path / "dashboard.js").exists()
+            and (static_path / "dashboard.css").exists()
+        )
+        return {"ready": ready, "path": str(static_path)}
+
+    @app.get("/api/gui/health")
+    def gui_health():
+        db_ready = False
+        db_error: str | None = None
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_ready = True
+        except Exception as e:
+            db_error = str(e)
+
+        dashboard_static = _dashboard_static_health()
+        return {
+            "ok": db_ready,
+            "pid": os.getpid(),
+            "host": api_host,
+            "port": api_port,
+            "base_url": f"http://127.0.0.1:{api_port}",
+            "db_ready": db_ready,
+            "db_error": db_error,
+            "dashboard_static_ready": dashboard_static["ready"],
+            "dashboard_static_path": dashboard_static["path"],
+        }
 
     # create / read / update / delete [managed processes]
     @app.get("/processes", response_model=List[schemas.ProcessSchema])
@@ -850,8 +914,6 @@ def run_server_main():
     app.include_router(dashboard_router)
     app.include_router(beholder_router)
 
-    api_host = resolve_api_bind_host()
-    api_port = int(os.environ.get("HH_API_PORT", "8000"))
     loopback_hosts = {"127.0.0.1", "localhost", "::1"}
     remote_require_auth = (
         os.environ.get("HH_REMOTE_REQUIRE_AUTH", "").lower() in {"1", "true", "yes", "on"}
@@ -1119,13 +1181,14 @@ if __name__ == "__main__":
     # GUI 애플리케이션 실행
     check_admin_requirement()
 
-    # API 서버 시작 및 준비 확인
-    if not start_api_server():
-        # 서버 시작 실패 시 프로그램 종료
-        sys.exit(1)
-
     # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
+    def start_primary_application(instance_manager: SingleInstanceApplication):
+        # 보조 인스턴스는 기존 창만 활성화해야 하며 API 서버를 건드리면 안 됩니다.
+        if not start_api_server():
+            sys.exit(1)
+        start_main_application(instance_manager)
+
     run_with_single_instance_check(
         application_name="숙제 관리자",
-        main_app_start_callback=start_main_application
+        main_app_start_callback=start_primary_application
     )

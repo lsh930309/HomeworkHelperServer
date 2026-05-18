@@ -306,6 +306,32 @@ def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
+def test_dashboard_button_uses_data_manager_base_url(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    data_manager = _FakeApiClient([])
+    data_manager.base_url = "http://127.0.0.1:43210"
+    window = main_window.MainWindow(data_manager)
+    opened = []
+    health_urls = []
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "dashboard_static_ready": True}
+
+    monkeypatch.setattr(main_window.requests, "get", lambda url, **_kwargs: health_urls.append(url) or _Response())
+    window.open_webpage = lambda url: opened.append(url)
+    try:
+        window._open_dashboard()
+
+        assert health_urls == ["http://127.0.0.1:43210/api/gui/health"]
+        assert opened == ["http://127.0.0.1:43210/dashboard"]
+    finally:
+        _stop_window(window, app)
+
+
 def test_resource_icon_label_centers_pixmap_in_fixed_space(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)

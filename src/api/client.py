@@ -2,8 +2,8 @@
 
 import requests
 from typing import Any, List, Optional
-import os
 import uuid
+from src.api.runtime_config import resolve_local_api_base_url
 from src.data import beholder
 from src.data.data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
 
@@ -21,19 +21,26 @@ class ApiClient:
     FastAPI 서버와 통신하여 데이터를 CRUD하는 클라이언트.
     기존 DataManager의 역할을 대체합니다.
     """
-    def __init__(self, base_url: str = "http://127.0.0.1:8000"):
-        # 패키지 환경에서 동적으로 선택된 포트를 우선 사용
-        dyn_port = os.environ.get("HH_API_PORT")
-        if dyn_port:
-            base_url = f"http://127.0.0.1:{dyn_port}"
-        self.base_url = base_url
+    _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+
+    def __init__(self, base_url: str = _DEFAULT_BASE_URL):
+        # 패키지/스모크 환경에서 동적으로 선택된 포트를 한 곳에서 해석합니다.
+        self.base_url = (
+            resolve_local_api_base_url()
+            if base_url == self._DEFAULT_BASE_URL
+            else resolve_local_api_base_url(base_url)
+        )
         self.app_instance_id = str(uuid.uuid4())
         self.latest_beholder_incident: dict[str, Any] | None = None
+        self.last_connection_error: str | None = None
+        self.connection_errors: list[str] = []
+        self.initial_load_errors: list[str] = []
         self._pending_beholder_overrides: dict[tuple[str, str], str] = {}
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
         self.global_settings: GlobalSettings = self._fetch_global_settings()
+        self.initial_load_errors = list(self.connection_errors)
 
 
     def _raise_for_status(self, response: requests.Response) -> None:
@@ -47,6 +54,11 @@ class ApiClient:
                 self.latest_beholder_incident = incident
                 raise BeholderIncidentRequired(response, incident)
         response.raise_for_status()
+
+    def _record_connection_error(self, context: str, error: Exception) -> None:
+        message = f"{context}: {error}"
+        self.last_connection_error = message
+        self.connection_errors.append(message)
 
     def pop_latest_beholder_incident(self) -> dict[str, Any] | None:
         incident = self.latest_beholder_incident
@@ -161,6 +173,7 @@ class ApiClient:
             # JSON 딕셔너리 리스트를 ManagedProcess 객체 리스트로 변환
             return [ManagedProcess.from_dict(p) for p in processes_data]
         except requests.RequestException as e:
+            self._record_connection_error("프로세스 목록 로드 실패", e)
             print(f"프로세스 목록을 불러오는 데 실패했습니다: {e}")
             return []
 
@@ -309,6 +322,7 @@ class ApiClient:
             shortcuts_data = response.json()
             return [WebShortcut.from_dict(sc) for sc in shortcuts_data]
         except requests.RequestException as e:
+            self._record_connection_error("웹 바로가기 목록 로드 실패", e)
             print(f"웹 바로 가기 목록을 불러오는 데 실패했습니다: {e}")
             return []
 
@@ -412,6 +426,7 @@ class ApiClient:
             self._raise_for_status(response)
             return GlobalSettings.from_dict(response.json())
         except requests.RequestException as e:
+            self._record_connection_error("전역 설정 로드 실패", e)
             print(f"전역 설정을 불러오는 데 실패했습니다: {e}")
             return GlobalSettings()
         

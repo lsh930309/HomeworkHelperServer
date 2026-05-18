@@ -29,6 +29,7 @@ from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from src.utils.common import get_bundle_resource_path
+from src.api.runtime_config import dashboard_url, gui_health_url, resolve_local_api_base_url
 import requests
 
 # --- 기타 로컬 유틸리티/데이터 모듈 임포트 ---
@@ -125,6 +126,9 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar(self))
         self._remote_readiness_indicator_labels: dict[str, QLabel] = {}
         self._setup_remote_readiness_indicators()
+        initial_api_error = getattr(self.data_manager, "last_connection_error", None)
+        if initial_api_error:
+            self._set_remote_readiness_indicator("beholder", "red", f"API 초기 연결 실패: {initial_api_error}")
         self.setMenuBar(QMenuBar(self))
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
@@ -260,7 +264,7 @@ class MainWindow(QMainWindow):
         self.dashboard_button.setToolTip("통계 대시보드 열기")
         self.dashboard_button.setText("📊")  # 차트 이모지
         self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
-        self.dashboard_button.clicked.connect(lambda: self.open_webpage("http://127.0.0.1:8000/dashboard"))
+        self.dashboard_button.clicked.connect(self._open_dashboard)
         self.top_button_area_layout.addWidget(self.dashboard_button)
 
         # GitHub 바로가기 버튼 추가
@@ -484,6 +488,26 @@ class MainWindow(QMainWindow):
             "green" if is_admin() else "gray",
             "관리자 권한으로 실행 중입니다." if is_admin() else "일반 사용자 권한으로 실행 중입니다.",
         )
+
+    def _api_base_url(self) -> str:
+        return resolve_local_api_base_url(getattr(self.data_manager, "base_url", None))
+
+    def _dashboard_url(self) -> str:
+        return dashboard_url(self._api_base_url())
+
+    def _open_dashboard(self) -> None:
+        base_url = self._api_base_url()
+        try:
+            response = requests.get(gui_health_url(base_url), timeout=0.8)
+            if response.status_code == 200:
+                payload = response.json()
+                if not payload.get("dashboard_static_ready", True):
+                    logger.warning("Dashboard static files are not ready: %s", payload)
+            else:
+                logger.warning("Dashboard health check failed before open: status=%s", response.status_code)
+        except Exception as exc:
+            logger.warning("Dashboard health check failed before open: %s", exc)
+        self.open_webpage(self._dashboard_url())
 
     def _poll_beholder_incidents(self):
         """Show Beholder incidents promptly in the PyQt main GUI."""
@@ -781,8 +805,7 @@ class MainWindow(QMainWindow):
         self.process_table.setCornerButtonEnabled(False)
 
     def _remote_pairing_endpoint(self) -> str:
-        base_url = getattr(self.data_manager, "base_url", "http://127.0.0.1:8000")
-        return f"{str(base_url).rstrip('/')}/remote/pair/start"
+        return f"{self._api_base_url()}/remote/pair/start"
 
     def _request_remote_pairing_code(self) -> dict:
         response = requests.post(self._remote_pairing_endpoint(), timeout=5)
