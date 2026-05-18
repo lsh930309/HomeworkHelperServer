@@ -225,8 +225,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "sendAction(on: [.leftMouseDown])" in app
     assert "installStatusItemClickMonitor()" in app
     assert "event.window === button.window" in app
+    assert "scheduleStatusItemToggle(relativeTo: button)" in app
+    assert "DispatchQueue.main.async { [weak self, weak button] in" in app
+    assert "NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown])" in app
+    assert "func applicationDidResignActive" in app
+    assert "closePopoverForFocusLoss()" in app
+    assert "func popoverDidClose" in app
+    assert "removePopoverOutsideClickMonitor()" in app
+    assert "focusPopoverWindow()" in app
+    assert "window.makeKeyAndOrderFront(nil)" in app
     assert "clickStatusItemForUITest()" in app
     assert "NSApp.activate(ignoringOtherApps: true)" in app
+    assert "NSApp.setActivationPolicy(.regular)" not in app
+    assert "NSApp.setActivationPolicy(.accessory)" in app
     assert "NSPopover" in app
     assert "RemoteMenuBarPopoverPanel" not in app
     assert "MenuBarPopoverView" in app
@@ -248,6 +259,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
     assert ".keyboardShortcut(\",\", modifiers: .command)" in app
     assert "RemoteAppDelegate.openSettingsWindow()" in app
+    assert "SettingsLink" not in app
     assert "RemoteSettingsOpenBridge" in app
     assert "@Environment(\\.openSettings)" in app
     assert "homeworkHelperRemoteOpenSettings" in app
