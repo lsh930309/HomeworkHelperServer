@@ -502,6 +502,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "localSSHHealthSummary" in view_model
     assert "verifyLocalSSHHealth" in view_model
     assert '"power.ssh_health"' in view_model
+    assert "let previousAvailabilityState = hostAvailabilityState" in view_model
+    assert "shouldRefreshLocalSSHHealthAfterOnlineRecovery(" in view_model
+    assert "previousState != .online || decision.shouldForcePayloadSync" in view_model
+    assert "refreshLocalSSHHealthAfterOnlineRecovery(using: service)" in view_model
+    assert "private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async" in view_model
     assert "localSSHHealthReady," in view_model
     assert "localSSHIdentityStatus" in view_model
     assert '"ssh_identity": identityStatus' in view_model

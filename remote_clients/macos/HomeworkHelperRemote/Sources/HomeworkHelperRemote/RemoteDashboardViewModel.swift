@@ -1393,19 +1393,44 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func mirrorRemoteState() async {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
+        let previousAvailabilityState = hostAvailabilityState
         guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "mirror", updateMessage: false) else {
             return
         }
         let latestStatus = evaluation.status
+        let shouldRefreshSSHHealthAfterRecovery = shouldRefreshLocalSSHHealthAfterOnlineRecovery(
+            previousState: previousAvailabilityState,
+            decision: evaluation.decision
+        )
         if latestStatus.readiness == nil {
             readiness = try? await service.readiness()
         }
         guard evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
             refreshLocalProcessDisplay()
+            if shouldRefreshSSHHealthAfterRecovery {
+                await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
+            }
             return
         }
         lastStateRevision = latestStatus.stateRevision
         await syncRemotePayloads(using: service, client: client)
+        if shouldRefreshSSHHealthAfterRecovery {
+            await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
+        }
+    }
+
+    private func shouldRefreshLocalSSHHealthAfterOnlineRecovery(
+        previousState: RemoteHostAvailabilityState,
+        decision: RemoteConnectionDecision
+    ) -> Bool {
+        guard isPaired, hostAvailabilityState == .online else { return false }
+        return previousState != .online || decision.shouldForcePayloadSync
+    }
+
+    private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async {
+        powerSetup = try? await service.powerSetup()
+        fillDefaultSSHFields()
+        _ = await verifyLocalSSHHealth(updateMessage: false)
     }
 
     private func syncRemotePayloads(using service: RemoteDashboardService, client: RemoteAPIClient) async {
