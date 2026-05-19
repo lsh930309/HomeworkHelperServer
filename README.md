@@ -185,7 +185,7 @@ sequenceDiagram
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
 - **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: Kotlin + Jetpack Compose 앱, Android Keystore 저장, package launch, UsageStats 기반 모바일 세션 sync, Android-PC game-link 지원
+- **Android 클라이언트**: Kotlin + Jetpack Compose rebuild scaffold 유지. 새 구현은 macOS popover형 게임 미러링 UX를 Android 메인 화면으로 재구축 예정
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---
@@ -233,7 +233,7 @@ open dist/macos/HomeworkHelperRemote.app
 
 macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
 
-### Option 5: Android Remote Client
+### Option 5: Android Remote Client Rebuild Scaffold
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -243,7 +243,7 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 ./gradlew :app:assembleDebug
 ```
 
-APK는 `remote_clients/android/HomeworkHelperRemote/app/build/outputs/apk/debug/app-debug.apk`에 생성된다. Android emulator에서 host loopback Remote Agent에 연결할 때는 `http://10.0.2.2:8000`을 사용한다.
+현재 Android 앱은 새 구현을 위한 scaffold 상태다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
 
 ---
 
@@ -367,7 +367,7 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ## 🛰️ 원격 클라이언트
 
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기능 구현이 완료된 기준 클라이언트이고, Android 클라이언트는 같은 Remote API 계약을 기준으로 full parity 설계가 진행 중이다.
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기준 클라이언트이고, Android 클라이언트는 기존 구현을 제거한 뒤 macOS popover형 게임 미러링 UX를 중심으로 재작성할 예정이다.
 
 ### Remote Agent 실행
 
@@ -381,18 +381,20 @@ HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.
 
 ### 문서
 
-- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS/Android build, smoke 검증 절차
-- `docs/remote/android-client-design.md` — Android 클라이언트 full-parity 설계도
+- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS/Android scaffold build 절차
+- `docs/remote/macos-client-architecture.md` — macOS 기준 클라이언트 구조/계약
+- `docs/remote/android-client-design.md` — Android 클라이언트 재작성 설계도
 - `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
-- `remote_clients/android/HomeworkHelperRemote/README.md` — Android 빌드와 실기기 검증 노트
+- `REMOTE_CONNECTION_SUPERVISOR.md` — 공통 pairing/connectivity/power/OpenSSH 프로토콜
+- `remote_clients/android/HomeworkHelperRemote/README.md` — Android rebuild scaffold 안내
 
 ### 핵심 검증 명령
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
-./.venv/bin/python tools/verify_android_internal.py
-# Android 실기기 연결 후
+./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
+# Android 기능 e2e는 새 Home/Games 구현 후 재활성화
 ./.venv/bin/python tools/verify_android_device.py
 ```
 
@@ -478,6 +480,7 @@ HomeworkHelperServer/
 │   ├── git-workflow.md          # Git 워크플로우
 │   ├── remote/                  # Remote Agent/클라이언트 운영·설계 문서
 │   │   ├── setup-guide.md
+│   │   ├── macos-client-architecture.md
 │   │   ├── android-client-design.md
 │   │   └── remote-storage-policy.md
 │   ├── guides/                  # 사용 가이드
@@ -488,7 +491,7 @@ HomeworkHelperServer/
 │
 ├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
 │   ├── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
-│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android Remote Client
+│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android rebuild scaffold
 │
 ├── 🎨 assets/                    # 리소스
 │   ├── icons/                   # 아이콘

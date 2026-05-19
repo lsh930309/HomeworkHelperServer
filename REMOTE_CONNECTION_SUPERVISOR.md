@@ -1,101 +1,204 @@
-# Remote Connection Supervisor & Power Management
+# Remote Connection Supervisor, Pairing, and Power Protocol
 
-## 1. 전원 관리 시나리오 및 동작 표
+Last refreshed: 2026-05-19
+Status: Shared protocol reference for macOS and Android clients
 
-| 시나리오 | 입력/신호 | 클라이언트 즉시 상태 | 이후 확인 로직 | 최종 기대 상태 | 비고 |
-| --- | --- | --- | --- | --- | --- |
-| 정상 온라인 | `/remote/status` 성공 | `online` / `페어링됨` | revision 변경 또는 offline 복구 후 payload sync | `online` | 연결 복구 직후에는 revision이 같아도 1회 강제 sync |
-| 호스트가 외부에서 꺼짐/절전 | HTTP 실패 + Tailscale ping no reply/hard deadline | `offlineExpected` / `호스트 꺼짐` | 캐시 로드, local progress 재계산, 60초 cadence | `offlineExpected` | 현재 SSH도 Tailscale IP에 의존하므로 Tailnet/Management layer 단절로 판단 |
-| Remote Agent만 응답 없음 | HTTP 실패 + Tailnet/Management reachable/skipped/inconclusive | `agentUnavailable` / `서버 응답 없음` | blind reconnect burst 없이 standalone 유지 | `agentUnavailable` | HTTP와 하위 관리 계층을 분리해 호스트 전원 꺼짐과 서버/포트 문제를 분리 |
-| 인증 거부 | HTTP 401/403 | `authRejected` / `인증 확인 필요` | 자동 재연결 schedule 비움 | `authRejected` | 로컬 token/cache는 보존, 사용자 확인 필요 |
-| 클라이언트에서 wake 명령 수락 | 클라이언트 직접 SmartThings/local wake 성공 | `waking` / `부팅 대기 중` | wake schedule로 빠르게 status probe | `online` 또는 `offlineExpected` | 온라인 복구 시 payload 강제 sync |
-| 클라이언트에서 sleep/shutdown 명령 수락 | 클라이언트 직접 OpenSSH 명령이 explicit accepted signal 반환 | `goingOffline` / `종료 대기 중` | 2초 x 5회 expected-offline 확인. 전환 중 stale HTTP success가 와도 offline hint가 아니면 `online`으로 되돌리지 않음 | `offlineExpected` / `호스트 꺼짐` | SSH health 인증이 먼저 성공해야 버튼이 활성화됨 |
-| 클라이언트에서 restart 명령 수락 | 클라이언트 직접 OpenSSH 명령이 explicit accepted signal 반환 | `restarting` / `재시동 대기 중` | 5초 대기 후 wake schedule | `online` 또는 `offlineExpected` | 복구 성공 시 payload 강제 sync |
-| Mac client wake/resume | `NSWorkspace.didWakeNotification` 또는 disconnected 중 app active | 현재 상태 유지 | local progress 즉시 갱신 후 immediate probe | probe 결과에 따름 | client sleep/power-off 자체는 세부 시나리오로 확장하지 않음 |
+## 1. Purpose
 
-## 2. Layered Connectivity Protocol
+This document defines the shared Remote Client connectivity protocol. It is not a macOS-only implementation note. Platform clients may use different reachability probes or power adapters, but they must present the same connection semantics to users.
 
-연결 상태는 HTTP timeout 하나로 판정하지 않고, custom protocol의 계층별 evidence를 합산한다.
+The supervisor is a reducer: it accepts typed evidence and returns UI state, reconnect schedule guidance, and payload-sync hints. It must not directly perform HTTP, Tailscale, SSH, SmartThings, Android, or AppKit side effects.
 
-| Layer | 이름 | Probe | 의미 |
-| --- | --- | --- | --- |
-| L4 | HTTP Agent | `/remote/status` | Remote Agent, HTTP 포트, auth, host runtime까지 모두 만족해야 성공 |
-| L3 | Tailnet/Management | `tailscale ping` + Tailscale IP 기반 SSH health | 현재 환경에서는 SSH가 Tailscale IP에 의존하므로 하나의 묶음으로 판단 |
-| L2 | Power/Reachability inference | L4 실패 + L3 no-reply/hard deadline | Tailscale off 또는 host power off/hibernate로 간주 |
-| L1 | Local Cache | cached processes + local progress ticker | 연결과 무관하게 standalone UI 유지 |
-| Overlay | Client power intent | 클라이언트 직접 SmartThings/OpenSSH accepted signal | 관측값이 아니라 비동기 기대 상태로 UI 상태에 overlay |
+## 2. Remote Agent pairing and auth
 
-Tailscale CLI 실행은 패키지 앱이 사용자의 zsh alias를 자동 상속하지 않는다는 전제에서 해석한다. macOS client는 `/opt/homebrew/bin/tailscale`, `/usr/local/bin/tailscale` 같은 실제 CLI wrapper를 먼저 시도하고, 없으면 `/bin/zsh -lic tailscale ...`로 interactive zsh alias를 명시적으로 시도한 뒤, 마지막으로 `/Applications/Tailscale.app/Contents/MacOS/Tailscale` 앱 번들 실행 파일을 fallback으로 사용한다. 각 후보의 executable path, exit status, stdout, stderr는 connectivity 로그에 남긴다.
+Pairing flow:
 
-## 3. Connectivity Supervisor 알고리즘 순서도
+1. Host creates a six-digit code with `POST /remote/pair/start` from loopback or an already trusted context.
+2. Client sends `POST /remote/pair/confirm` with code, device name, and platform.
+3. Host returns a bearer token and device metadata.
+4. Client stores the token in platform secret storage.
+5. Protected `/remote/*` requests use `Authorization: Bearer <token>`.
 
-상태 모델은 9개 UI state를 사용하지만, 장기적으로 수렴하는 안정 상태는 4개다. `goingOffline`, `waking`, `restarting`, `reconnecting`, `unknown`은 probe schedule을 가진 transient state이며, 최종적으로 아래 4개 outcome 중 하나로 정리된다.
+Token operations:
 
-| 구분 | State | UI 라벨 | 의미 |
-| --- | --- | --- | --- |
-| 안정 상태 | `online` | 페어링됨 | 호스트와 Remote Agent가 모두 사용 가능 |
-| 안정 상태 | `offlineExpected` | 호스트 꺼짐 | 호스트 전원 off/sleep/hibernate 또는 Tailscale no-reply |
-| 안정 상태 | `agentUnavailable` | 서버 응답 없음 | 호스트 네트워크는 가능성이 있으나 Remote Agent/HTTP가 불가 |
-| 안정 상태 | `authRejected` | 인증 확인 필요 | 저장 token이 호스트에서 거부됨 |
-| 일시 상태 | `goingOffline` | 종료 대기 중 | 사용자가 sleep/shutdown을 요청했고 단절이 예상됨 |
-| 일시 상태 | `waking` | 부팅 대기 중 | 사용자가 wake를 요청했고 복구를 빠르게 확인 중 |
-| 일시 상태 | `restarting` | 재시동 대기 중 | 사용자가 restart를 요청했고 단절/복구를 기다림 |
-| 일시 상태 | `reconnecting` | 재연결 중 | 예상되지 않은 HTTP 단절을 짧게 확인 중 |
-| 일시 상태 | `unknown` | 상태 확인 중 | 아직 충분한 신호가 없음 |
+- `POST /remote/tokens/refresh`: rotate/refresh the current device token.
+- `GET /remote/devices`: list registered devices.
+- `DELETE /remote/devices/{id}`: revoke a device.
+- `DELETE /remote/devices/revoked`: purge revoked devices.
 
-```mermaid
-flowchart TB
-    Trigger["Trigger<br/>startup / recover / refresh / mirror / resume"] --> Intent{Active client power intent?}
+Client rules:
 
-    Intent -->|sleep/shutdown accepted| GoingOffline["goingOffline<br/>종료 대기 중<br/>2s x 5 probe"]
-    Intent -->|wake accepted| Waking["waking<br/>부팅 대기 중<br/>wake probe schedule"]
-    Intent -->|restart accepted| Restarting["restarting<br/>재시동 대기 중<br/>restart probe schedule"]
-    Intent -->|none or probe due| HTTP["L4 HTTP status<br/>/remote/status"]
+- Preserve local token/cache on transient network failures.
+- On 401/403, enter `authRejected`; do not silently clear token.
+- Local token deletion only removes the client copy. Host-side revocation is a separate user action.
 
-    GoingOffline --> HTTP
-    Waking --> HTTP
-    Restarting --> HTTP
+## 3. Shared status states
 
-    HTTP -->|200 OK + normal| Online["online<br/>페어링됨"]
-    HTTP -->|200 OK + goingOffline + no offline hint| GoingOffline
-    HTTP -->|401 / 403| AuthRejected["authRejected<br/>인증 확인 필요"]
-    HTTP -->|timeout / cannot connect| Management["L3 Tailnet/Management<br/>tailscale ping hard deadline<br/>SSH health fallback"]
+Stable states:
 
-    Management -->|tailscale no reply / hard deadline / CLI runtime unavailable| ExpectedOffline["offlineExpected<br/>호스트 꺼짐"]
-    Management -->|reachable or inconclusive| AgentUnavailable["agentUnavailable<br/>서버 응답 없음"]
+| State | User meaning | Required behavior |
+| --- | --- | --- |
+| `online` | Remote Agent and auth are usable | Enable supported commands and sync payloads |
+| `offlineExpected` | Host/network is likely unavailable | Show cached game state and offline guidance |
+| `agentUnavailable` | Host may be reachable but Remote Agent/HTTP is unavailable | Show cached state and server/port guidance |
+| `authRejected` | Stored token is rejected | Preserve cache/token, show pairing/token recovery guidance |
 
-    GoingOffline --> ExpectedOffline["offlineExpected<br/>호스트 꺼짐"]
-    Waking -->|status success| Online
-    Waking -->|schedule exhausted or no reply| ExpectedOffline
-    Restarting -->|status success| Online
-    Restarting -->|schedule exhausted or no reply| ExpectedOffline
+Transient states:
 
-    Online --> Mirror["Mirror host payload<br/>Force sync once after recovery"]
-    ExpectedOffline --> Standalone["Standalone mode<br/>Cache + local progress"]
-    AgentUnavailable --> Standalone
-    AuthRejected --> Preserve["Preserve token/cache<br/>Show recovery guidance"]
-```
+| State | Meaning |
+| --- | --- |
+| `unknown` | Initial state before enough evidence |
+| `reconnecting` | Unexpected connection loss; short confirmation probes may run |
+| `waking` | Client accepted a wake intent and expects host recovery |
+| `goingOffline` | Client accepted sleep/shutdown and expects disconnect |
+| `restarting` | Client accepted restart and expects disconnect then recovery |
 
+## 4. Evidence layers
 
-## 4. 전원 명령 acceptance 원칙
+All clients should evaluate evidence in this order where available:
 
-- Connectivity supervisor는 SSH stderr/stdout 문자열을 직접 해석하지 않는다.
-- 호스트 Remote Agent는 `/remote/power/{action}` 같은 전원 실행 API를 제공하지 않는다. 호스트 API는 `/remote/power/setup`, `/remote/power/ssh-key`, `/remote/power/status`로 OpenSSH 준비도와 key 등록만 제공한다.
-- SmartThings CLI와 wake device id는 클라이언트 로컬 책임이다. macOS 클라이언트는 패키지 환경에서도 실행 가능한 SmartThings CLI를 직접 찾거나 Homebrew fallback으로 설치하고, `PC 켜기` device를 wake 대상으로 자동 선택한다.
-- 전원 side effect는 항상 클라이언트가 직접 SmartThings/OpenSSH 경로로 수행한다. Android도 직접 경로가 구현되기 전까지 전원 버튼을 비활성화한다.
-- 클라이언트 local command adapter가 명령 수락 여부를 typed signal로 결정하고, supervisor는 `powerIntentAccepted(action:)` 이벤트만 해석한다.
-- macOS local SSH adapter는 Windows command에 `__HH_REMOTE_POWER_ACCEPTED__` marker를 붙이고, SSH 출력에서 marker가 확인될 때만 accepted로 본다.
-- 단, `sleep`은 Windows OpenSSH 세션에서 `start "" rundll32...`로 분리 실행하면 child process가 세션 종료와 함께 유실될 수 있으므로, marker를 먼저 출력한 뒤 이전에 검증된 direct `rundll32.exe powrprof.dll,SetSuspendState 0,0,0` 호출을 유지한다. 이후 호스트가 절전 진입으로 SSH 세션을 끊더라도 marker가 확인되면 accepted로 본다.
-- macOS client의 SSH private key path는 클라이언트 로컬 책임이다. 호스트 설정 저장 시 `ssh_key_path`는 비우고, Windows `authorized_keys` 경로나 `C:\...` 형태가 클라이언트에 섞이면 기본 private key(`~/.ssh/homeworkhelper_remote_ed25519`)로 정규화한다. SSH 실행은 `IdentitiesOnly=yes`를 사용해 우연히 다른 key/agent로 인증되는 일을 막고, 로컬 private key 파일이 없거나 SSH health 인증이 성공하지 않으면 SSH 전원 버튼을 준비 완료로 보지 않는다.
-- Windows host는 sshd의 effective authorized keys target을 기준으로 public key를 등록한다. `Match Group administrators`가 `__PROGRAMDATA__/ssh/administrators_authorized_keys`를 사용하고 현재 계정이 Administrators 그룹이면, `%USERPROFILE%\.ssh\authorized_keys`가 아니라 `C:\ProgramData\ssh\administrators_authorized_keys`에 등록하고 ACL 보정을 시도한다.
-- 페어링 성공은 API bearer token 성공이고, SSH 전원 제어 완료 조건은 public key 등록 후 client-side SSH health marker 인증 성공이다. SSH health가 `Permission denied`를 반환하면 페어링은 유지하되 전원 자동 설정 완료로 표시하지 않는다.
-- Timeout, no route, permission denied처럼 marker가 없는 실패는 accepted로 보지 않는다.
-- Accepted 후 발생하는 연결 끊김은 사용자 의도 전원 전환의 후속 현상으로 보고 `goingOffline` / `restarting` schedule에서 처리한다.
+1. **HTTP Agent**: `GET /remote/status` tells whether Remote Agent, auth, and host runtime are usable.
+2. **Auth result**: HTTP 401/403 always maps to `authRejected`.
+3. **Management reachability**: optional platform-specific evidence that host/network exists even if HTTP failed.
+   - macOS may use Tailscale ping and SSH health.
+   - Android v1 may initially skip this and rely on friendly HTTP error categories.
+4. **Local cache**: cached process snapshot keeps the main UI useful while disconnected.
+5. **Client power intent overlay**: accepted local power commands temporarily override ambiguous HTTP results.
 
-## 5. 빌드/런타임 진단 원칙
+HTTP failure interpretation:
 
-- `build.py --target macos-client`는 `tools/package_macos_remote_app.py`에 release id, git hash, dirty 여부를 전달하고, `.app`의 `Info.plist`에 `HHRemoteReleaseID`, `HHRemoteGitHash`, `HHRemoteGitDirty`로 기록한다.
-- 패키징 단계에서는 Swift release binary와 app bundle binary의 SHA256을 출력하고, 둘이 다르면 실패한다.
-- macOS client는 사용자가 `원격 진단 로그를 바탕 화면에 저장`을 켠 경우에만 connectivity 평가마다 `~/Desktop/HomeworkHelperRemoteClient.log`에 `connectivity.evaluate` JSON line을 남긴다.
-- 로그에는 trigger, HTTP outcome/failure kind/elapsed, Tailscale outcome/message/elapsed/executable/stdout/stderr/exit status, SSH outcome/message/elapsed/executable/stdout/stderr/exit status, final state/label, bundle release metadata가 포함된다.
-- 실제 UI badge와 시뮬레이션 결과가 다르면 먼저 이 로그의 `bundle_release_id`, `trigger`, `final_state`, `tailscale_outcome`, `tailscale_executable_path`, `tailscale_stderr`를 비교한다.
+- Timeout/no route/DNS failure plus management no-reply -> `offlineExpected`.
+- Connection refused/HTTP port unavailable with management reachable or inconclusive -> `agentUnavailable`.
+- Unknown failures should prefer preserving cache and showing actionable copy over clearing state.
+
+## 5. Supervisor reducer contract
+
+Inputs should be typed events, for example:
+
+- `httpStatusSucceeded(powerHint, stateRevision)`
+- `httpStatusFailed(kind, message)`
+- `authRejected`
+- `powerIntentAccepted(action)`
+- `clientResumed`
+
+Outputs should include:
+
+- availability state
+- user-facing message, if any
+- reconnect schedule, if any
+- whether to force payload sync
+- whether to load/cache local snapshot
+- whether to clear pairing-recovery message
+
+Rules:
+
+- Entering `online` from any non-online state forces one payload sync even if `state_revision` is unchanged.
+- During `goingOffline`, a stale HTTP success must not immediately flip back to `online` unless the server reports a clear online/non-offline power hint.
+- `authRejected` clears reconnect schedules and waits for user action.
+- The supervisor never parses raw SSH stdout/stderr. Platform adapters convert local command output into accepted/failed events.
+
+## 6. Remote payload synchronization
+
+Required online payloads for the main game mirror:
+
+- `/remote/status`
+- `/remote/readiness`
+- `/remote/processes`
+
+Optional payloads:
+
+- dashboard summary
+- Beholder incidents
+- game links/mobile sessions
+- device list
+- logging config
+- power setup/status
+
+Cache rule:
+
+- Process snapshots are the minimum cache required for a good native client.
+- If payload sync fails after status success, keep previous snapshot and show partial error/stale state.
+- Last successful base URL and sync time should be visible in diagnostics or status copy.
+
+## 7. Remote power control boundary
+
+The host Remote Agent does not execute power actions. It reports readiness and registers SSH public keys only.
+
+Host endpoints:
+
+- `GET /remote/power/status`: report client-managed power status.
+- `GET /remote/power/setup`: report host OpenSSH readiness and effective authorized-keys target.
+- `POST /remote/power/ssh-key`: register a client public key for future client-local SSH control.
+
+Invalid for current clients:
+
+- `/remote/power/{action}` execution endpoints.
+- Arbitrary command execution payloads.
+- Host-stored client private key paths.
+
+Client responsibilities:
+
+- Wake: use a client-local wake adapter, currently SmartThings on macOS.
+- Sleep/restart/shutdown: use client-local OpenSSH, currently implemented on macOS.
+- Android: keep power actions disabled until Android-local direct adapters exist.
+
+## 8. OpenSSH automation protocol
+
+SSH setup:
+
+1. Client creates or selects a local private key.
+2. Client sends the public key to `POST /remote/power/ssh-key`.
+3. Host writes the key to the effective Windows authorized keys target.
+4. Client runs SSH health with the intended key only.
+
+Windows authorized-key details:
+
+- Normal users usually use `%USERPROFILE%\.ssh\authorized_keys`.
+- Administrator accounts may use `C:\ProgramData\ssh\administrators_authorized_keys` when `sshd_config` has `Match Group administrators` with `AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys`.
+- Host setup response must expose enough information for the client to explain which target was used.
+
+SSH command acceptance:
+
+- Commands must include an explicit marker such as `__HH_REMOTE_POWER_ACCEPTED__`.
+- The client treats a power command as accepted only when the marker is observed.
+- Missing marker, timeout, permission denied, no route, or command failure means not accepted.
+- Accepted commands emit a supervisor `powerIntentAccepted(action)` event.
+
+Current macOS command policy:
+
+- `shutdown`: Windows `shutdown /s /t 0` plus marker.
+- `restart`: Windows `shutdown /r /t 0` plus marker.
+- `sleep`: marker is emitted before direct `rundll32.exe powrprof.dll,SetSuspendState 0,0,0`, because Windows OpenSSH may drop the session as sleep begins.
+- `IdentitiesOnly=yes` prevents accidental success through unrelated SSH agent keys.
+
+## 9. Platform adapter boundaries
+
+macOS adapters:
+
+- Keychain token store.
+- UserDefaults settings.
+- Application Support process/icon cache.
+- Tailscale CLI discovery.
+- SmartThings wake.
+- OpenSSH power.
+
+Android adapters to implement later:
+
+- Android Keystore token store.
+- Preferences/DataStore settings.
+- Process/icon cache.
+- Friendly network error classification.
+- Optional package/Usage Access integration.
+- Optional Android-local power adapters only if a safe direct path is designed.
+
+Shared principle: adapters perform side effects; reducer/state logic consumes typed results.
+
+## 10. Verification expectations
+
+Every client must prove:
+
+- Auth failures enter a recovery state without deleting cache.
+- Offline/agent-unavailable states preserve last successful game snapshot.
+- Launch actions are disabled when auth/offline/loading/running makes them unsafe.
+- Power actions are disabled unless the platform has a direct, verified local power adapter.
+- Payload sync after online recovery refreshes process state at least once.

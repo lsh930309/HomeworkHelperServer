@@ -1,188 +1,234 @@
-# Android Remote Client Full-Parity Design
+# Android Remote Client Rebuild Design
 
-Last refreshed: 2026-05-17
-Status: Active design plus implemented Android rebuild baseline
+Last refreshed: 2026-05-19
+Status: Active rebuild design; existing Android feature code is legacy and should not be extended
 
-## 1. Goal
+## 1. Decision
 
-Build the Android Remote Client as a native counterpart to the completed macOS Remote Client. Full parity means Android exposes the same user-facing HomeworkHelper remote-control jobs through Android-native UI and platform integrations, while keeping the shared Remote Agent API contract stable.
+The Android client will be rebuilt from a clean scaffold.
 
-Success criteria:
+Reason: the current Android code and documents describe a full-parity client, but the product direction has changed. The Android app should now mirror the macOS popover-first UX: the main screen is registered game status and quick launch. Pairing, power setup, diagnostics, Usage Access, and device management are supporting setup tasks, not the main experience.
 
-- A user can pair Android with the Remote Agent, recover or refresh the token, and manage registered devices without using curl.
-- Android can inspect host readiness, launch PC games, open web shortcuts, show play summary and Beholder read-only alerts, and run supported power commands with capability gating.
-- Android can map PC processes to Android packages, launch the matching Android app, and record manual or UsageStats-driven mobile sessions into the same dashboard metrics as macOS/host.
-- Android explains offline/auth/power/Usage Access states in the UI instead of failing silently.
-- Android verification is split into two automated stages: device-free internal tests and physical-device tests run after connecting a USB-debuggable Android device.
-- The physical-device stage uses scripts, adb install/launch, adb reverse, pairing automation, Keystore persistence checks, Usage Access appop setup/reporting, package launch, and mobile-session sync without requiring an emulator.
+Keep:
 
-Non-goals for this design:
+- Gradle project, wrapper, package name `dev.homeworkhelper.remote`, manifest/resource scaffold.
+- Kotlin + Jetpack Compose + Material 3 stack.
+- Remote Agent API contract and Android Keystore requirement.
+- Internal/device verification script entrypoints, updated to match rebuild phases.
 
-- Do not rename or reshape existing `/remote/*` endpoints.
-- Do not add a cloud relay, push channel, or new dependency unless a later release explicitly chooses it.
-- Do not copy macOS-only concepts literally. Menu bar, Dock reopen, and SF Symbol picker become Android-native entry points/settings.
+Discard before rebuilding:
 
-## 2. Current baseline
+- Current `RemoteAppViewModel`, `RemoteRepository`, `RemoteApiClient`, `RemoteModels`, `RemoteScreens`, and platform integration code.
+- Documents that claim Android full parity or device QA completion.
+- Host-power execution assumptions such as `/remote/power/config` or `/remote/power/{action}` style flows.
 
-Existing Android project: `remote_clients/android/HomeworkHelperRemote`
+## 2. Product goal
 
-Observed baseline:
+Build an Android-native remote play assistant for HomeworkHelper users.
 
-- Build: Android Gradle Plugin 8.13.0, Kotlin 2.2.21, Compose BOM 2026.03.00, Gradle wrapper 9.5.0.
-- Runtime package: `dev.homeworkhelper.remote`, minSdk 26, targetSdk 36.
-- Storage: `RemotePreferences` for non-secret settings, `AndroidTokenStore` for Android Keystore AES/GCM token storage.
-- API: `RemoteApiClient` covers status, capabilities, readiness, Tailscale ensure, diagnostic logging config, dashboard summary, Beholder incidents, game-links, mobile sessions, processes with icon/progress metadata, shortcuts, power setup/config/control, pairing, token refresh, devices, and revoked-device cleanup.
-- Platform integration: `AndroidIntegration` handles package launch intent, Tailscale app/store deep links, Android app settings, Usage Access settings, appop check, and recent foreground app query.
-- Architecture: `MainActivity.kt` now hosts `RemoteAppViewModel`, `RemoteRepository`, and `ui/RemoteScreens.kt` so state, API orchestration, and Material 3 sections are separated.
-- UI: bottom tabs cover Dashboard, Library, Android-PC links, and Settings. Cards surface Tailscale/readiness, auth/offline recovery, dashboard metrics, Beholder alerts, process progress, shortcuts, UsageStats sync, device management, power setup/config, logging, and persisted display settings.
+Primary job:
 
-This is the implemented rebuild baseline. Remaining work should now focus on runtime polish, optional icon caching, and the Stage 2 physical-device gate rather than another structural rewrite.
+> Open the app, immediately see the host's registered games and their state, then launch the desired host game with clear feedback.
 
-## 3. Full-parity matrix
+Secondary jobs:
 
-| Capability | macOS baseline | Android full-parity target | Current Android state | Required work |
-| --- | --- | --- | --- | --- |
-| Pairing/token | Keychain token, pair, refresh, revoke, clear local token, auto setup messaging | Keystore token, pair, refresh, revoke, clear local token, recovery messaging | Present in Settings/connection cards | Runtime polish after Stage 2 |
-| Host readiness | Status, capabilities, readiness, Tailscale ensure, setup progress | Same information with Android-native status cards | Present with Tailscale/auth/offline cards | Runtime polish after Stage 2 |
-| Process control | Process list with icons/progress and PC launch | Process list with icons/progress and PC launch | Progress/status metadata displayed; network icon cache deferred | Add optional icon/resource cache after runtime QA |
-| Web shortcuts | List and open host shortcuts | Same | Present | Add empty/error/loading states |
-| Dashboard | Play summary and mobile metrics | Same | Present | Improve visual hierarchy and refresh states |
-| Beholder | Read-only incident card | Same | Present | Add severity styling and empty state |
-| Android-PC links | Create link, manual mobile start/end | Create link, Android package launch, manual start/end, link management | Present | Add edit/delete affordance if host API supports it later; keep create-only until then |
-| UsageStats sync | N/A as a macOS platform feature; Android-specific extension is already in shared data model | Permission-guided automatic start/end based on foreground package | Present as manual sync button | Add persistent periodic/manual sync policy and explicit permission diagnostics |
-| Power config/control | SSH/SmartThings setup helpers and capability-gated buttons | Capability-gated buttons, config save, setup/readiness display | Present with setup, SmartThings probe, SSH key registration, and gating | Runtime validation on physical device |
-| Tailscale/connectivity | Discovery and server ensure helpers | URL entry plus connectivity check; Tailscale app deep link/instructions if needed | Present with suggested URL, local app/store deep link, and host ensure action | Runtime validation on physical device |
-| Diagnostic logging | Toggle host/client desktop logging | Toggle host logging and Android local log export/share | Host logging toggle surfaced; local export deferred | Add local export only if needed |
-| App settings | Login item, summary toggle, poll interval, progress mode, popover transparency, menu-bar icon | Summary toggle, refresh interval, progress mode, theme/system settings, clear cache | Present in Settings with persisted non-secret preferences | Theme/cache polish later |
-| Verification | Swift build, API/ViewModel smoke, static tests | Two-stage automated workflow: internal device-free gate, then physical-device gate | Static/build/APK checks and adb/e2e scripts exist | Keep `tools/verify_android_internal.py` and `tools/verify_android_device.py` as the required entry points |
+- Pair this Android device with the Remote Agent.
+- Diagnose online/offline/auth state.
+- View readiness and cached game state when the host is unavailable.
+- Manage optional Android-PC mobile-session features.
+- Prepare future Android-local power control without pretending it exists now.
 
-## 4. Target architecture
+Non-goals for the first rebuild pass:
 
-Keep the existing package and API model files, but split responsibilities before adding more parity UI.
+- Full Android power side effects.
+- Background sync, notifications, or WorkManager.
+- Cloud relay or public Remote Agent exposure.
+- Recreating every macOS settings option.
+- Moonlight/Apollo integration.
 
-Recommended module shape:
+## 3. UX structure
+
+The Android home screen is the equivalent of the macOS popover.
+
+Recommended navigation:
+
+1. **Home / Games**: default screen, game mirror, quick launch, status feedback.
+2. **Setup**: pairing, Remote Agent URL, auth recovery, connectivity guidance.
+3. **More**: diagnostics, device management, Android-PC mobile-session tools, app settings.
+
+If using bottom navigation, Home must be the first tab and remain selected after app launch. If using a single-screen layout for v1, Home content appears first and setup sections are below collapsible cards.
+
+## 4. Home screen blueprint
+
+Home header:
+
+- App title and compact host status chip.
+- Last sync time.
+- Offline/stale/auth banner when needed.
+- Manual refresh action.
+
+Game list:
+
+- Host-provided game icon when available; Material fallback when absent.
+- Game name, status text, progress meter/resource text.
+- Today-played indicator and running-state emphasis.
+- Primary `[실행]` button for `POST /remote/processes/{id}/launch`.
+- Disabled state with explicit reason when auth/offline/loading/running.
+
+Feedback states:
+
+- Loading: preserve previous list; show refresh spinner/banner.
+- Empty: explain that host has no registered games or pairing is needed.
+- Offline: show cached games with stale marker.
+- Auth rejected: preserve cache; show pairing/token recovery CTA.
+- Launch accepted: show success message and refresh.
+- Launch failed: show failure without clearing game list.
+
+Visual direction:
+
+- Material 3 cards, large touch targets, strong status color semantics.
+- Keep hierarchy simple: status banner -> game cards -> secondary setup entry.
+- Avoid dense admin dashboards on the home screen.
+
+## 5. Setup and support screens
+
+Setup screen:
+
+- Remote Agent URL.
+- Device name.
+- Pairing code.
+- Pair/refresh token/clear local token actions.
+- Server reachability and auth guidance.
+
+More/settings screen:
+
+- Remote diagnostic logging toggle when implemented.
+- Registered devices list and revoke/purge actions.
+- Android-PC links and Usage Access tools, if retained in this rebuild.
+- Power readiness explanation.
+
+Power UI policy:
+
+- Android must not show enabled wake/sleep/restart/shutdown buttons until Android-local direct adapters exist.
+- It may show readiness/setup documentation and disabled buttons with explanatory copy.
+- It must not call removed or host-managed power execution endpoints.
+
+## 6. Android implementation architecture
+
+Use a small, rebuild-friendly architecture:
 
 ```text
 app/src/main/java/dev/homeworkhelper/remote/
-├── MainActivity.kt                 # Activity and top-level Compose host only
-├── RemoteAppViewModel.kt           # state machine, refresh, commands, pairing, messages
-├── RemoteRepository.kt             # RemoteApiClient orchestration and snapshot fetches
-├── RemoteApiClient.kt              # low-level HTTP/JSON contract; keep endpoint names stable
-├── RemoteModels.kt                 # DTOs matching snake_case Remote Agent payloads
-├── AndroidTokenStore.kt            # secret token storage
-├── RemotePreferences.kt            # base URL, device name, UI settings, poll interval
-├── AndroidIntegration.kt           # package launch and UsageStats integration
-├── ui/                             # Compose screens and section components
-└── verification/ or androidTest/    # future instrumentation helpers when added
+├── MainActivity.kt              # Activity + top-level Compose scaffold
+├── data/RemoteApiClient.kt      # low-level HTTP/JSON client for shared /remote/* contract
+├── data/RemoteModels.kt         # DTOs and mapping helpers
+├── data/RemoteRepository.kt     # snapshot fetch and commands
+├── state/RemoteViewModel.kt     # UI state, refresh, pairing, launch commands
+├── platform/TokenStore.kt       # Android Keystore token store
+├── platform/Preferences.kt      # non-secret settings
+├── platform/AndroidPlatform.kt  # browser/settings/package/Usage Access adapters
+└── ui/                          # Home, Setup, More, shared components
 ```
 
-State model:
+Rules:
 
-- `RemoteAppState` owns base URL, pairing code, token presence, loading/error message, host status, dashboard summary, incidents, game links, sessions, processes, shortcuts, devices, power config, readiness, usage snapshot, and settings.
-- `RemoteAppViewModel.refresh()` performs one snapshot fetch for status, dashboard, incidents, links, sessions, power config, processes, shortcuts, and optionally devices.
-- Commands return user-visible messages and then refresh the affected snapshot.
-- Auth failures should mark the state as `authRejected` and show pairing/token recovery actions.
-- Network failures should preserve the last successful snapshot and show an offline banner.
+- Keep low-level HTTP free of Compose state.
+- Keep token persistence behind a small interface.
+- Treat cached process snapshots as a first-class Home requirement.
+- Do not introduce repository abstractions that only forward one method; keep layers small.
+- Add background sync only after the foreground app is stable.
 
-Refresh policy:
+## 7. Shared Remote Agent API subset for Android v1
 
-- Default to manual refresh plus a persisted polling interval, matching the macOS hybrid polling direction.
-- Poll only while the app is foregrounded for v1.
-- Defer background sync/WorkManager until there is a concrete need for notifications or unattended UsageStats sync.
+Required for Home:
 
-## 5. UX blueprint
+- `GET /remote/status`
+- `GET /remote/readiness`
+- `GET /remote/processes`
+- `POST /remote/processes/{id}/launch`
 
-Use Material 3 and keep the first release simple:
+Required for setup:
 
-1. **Connection screen/state**
-   - Remote Agent URL, device name, pairing code, pair button.
-   - Token present/absent indicator, refresh token, clear local token.
-   - Last connection result and auth/offline guidance.
+- `POST /remote/pair/confirm`
+- `POST /remote/tokens/refresh`
+- `GET /remote/devices`
+- `DELETE /remote/devices/{id}`
 
-2. **Dashboard tab**
-   - Host status/readiness card.
-   - Play summary and mobile metrics.
-   - Beholder read-only alerts.
-   - Quick actions: refresh, PC wake/sleep/restart/shutdown when supported.
+Optional after Home is stable:
 
-3. **Library tab**
-   - Process cards with icon/progress/PC launch.
-   - Web shortcut cards.
-   - Empty and loading states.
+- `GET /remote/dashboard/summary`
+- `GET /remote/beholder/incidents`
+- `GET /remote/game-links`, `POST /remote/game-links`
+- `GET /remote/mobile-sessions/active`, start/end mobile sessions
+- `GET /remote/logging/config`, `PUT /remote/logging/config`
+- `POST /remote/tailscale/ensure`
+- `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
 
-4. **Android-PC tab**
-   - Game-link create form using PC process ID and Android package.
-   - Linked app list with Android launch and mobile start/end.
-   - Usage Access status, open-settings action, recent foreground app, and sync action.
+Do not use:
 
-5. **Settings tab**
-   - Token/device management.
-   - Power config and readiness display.
-   - Remote diagnostic logging toggle.
-   - Refresh interval, dashboard summary visibility, progress display mode, clear cache.
+- `/remote/power/config`
+- `/remote/power/{action}`
+- `/remote/power/smartthings/devices`
 
-## 6. Platform policies
+Those belonged to older host-managed or macOS-local assumptions and are not valid Android v1 execution contracts.
 
-- **Cleartext HTTP**: keep `usesCleartextTraffic=true` for private LAN/tailnet Remote Agent use. Revisit if public distribution or HTTPS support is added.
-- **Usage Access**: request by explanation and settings deep link only. The permission cannot be granted from the manifest alone.
-- **Package visibility**: launcher intent query remains broad enough for package launch. Avoid hardcoding game package lists.
-- **Keystore**: token operations must continue through `AndroidTokenStore`; no Bearer token writes to plaintext preferences.
-- **Power commands**: Android must use `RemoteStatus.isPowerActionEnabled(action)` or equivalent gating before enabling buttons.
-- **Local logs**: if Android log export is added, avoid storing tokens or full Authorization headers.
+## 8. Assets and icons
 
-## 7. Implementation sequence
+Preferred assets:
 
-1. Lock current behavior with static tests for existing API endpoints, Keystore markers, UsageStats markers, and Compose labels.
-2. Done: extract `RemoteAppViewModel`, `RemoteRepository`, and Compose section components without changing the Remote Agent API contract.
-3. Done: add readiness/auth/offline state handling and clearer connection recovery messages.
-4. Partially done: show process progress/status metadata; add network icon/resource caching only if runtime QA proves it is needed.
-5. Done: split screens/tabs and add Settings/device/power/logging controls.
-6. Done for manual flow: harden UsageStats sync policy and diagnostics; validate on a physical device in Stage 2.
-7. Keep verification as a two-stage workflow: run internal tests first, then run the physical-device script after connecting a USB-debuggable Android device. Emulator e2e remains optional, not the default release gate.
+- Host process icon URLs from `/remote/processes`.
+- Host resource icon URLs for progress/resource display.
+- Material Icons/Material 3 default visual language for fallback status symbols.
 
-## 8. Verification workflow
+Do not add a custom icon pack for v1. The visual quality target should come from layout, spacing, status color, typography, and good empty/error states.
 
-Android verification has exactly two default stages. Use an emulator only when reproducing emulator-specific behavior or when CI cannot attach a physical device.
+Icon caching:
 
-### Stage 1 — Internal tests, no Android runtime
+- Cache process icons only after the Home screen and API mapping are stable.
+- Cache invalidation should be simple: process id + preferred size + URL/revision.
 
-Run this on every Android client change before touching a device:
+## 9. Connectivity model
+
+Android should share the supervisor concepts from `REMOTE_CONNECTION_SUPERVISOR.md`:
+
+- `online`: Remote Agent and auth are OK.
+- `offlineExpected`: host/network likely unavailable.
+- `agentUnavailable`: network may exist but Remote Agent/HTTP is unavailable.
+- `authRejected`: token rejected.
+- transient loading/reconnecting states for UI feedback.
+
+Android reachability can start simple:
+
+- HTTP status probe first.
+- Friendly messages for timeout, DNS, connection refused, 401/403.
+- Preserve last successful game snapshot.
+- Add Tailscale-specific probes only after the core Home flow is stable.
+
+## 10. Verification plan
+
+Phase 0, rebuild scaffold:
 
 ```bash
-./.venv/bin/python tools/verify_android_internal.py
+./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
+cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug --stacktrace
+./.venv/bin/python tools/check_android_apk_artifact.py
 ```
 
-The script runs:
+Phase 1, Home implementation:
 
-1. `pytest tests/test_remote_android_client_static.py` for API, Keystore, UsageStats, manifest, docs, and script contract markers.
-2. `tools/check_android_sdk_readiness.py` for SDK/package/license readiness.
-3. `./gradlew :app:assembleDebug --stacktrace` for Kotlin/Compose build.
-4. `tools/check_android_apk_artifact.py` for APK package/version/SDK/permission contract.
+- Static test for required v1 endpoints and no stale power endpoints.
+- Unit/static checks for token store and process card labels.
+- APK build.
 
-This stage proves the APK can be built and has the expected contract, but it does not prove Android runtime behavior.
+Phase 2, physical device:
 
-### Stage 2 — Physical-device automated tests
+- Pairing and process-list sync on a real device.
+- Cached game state survives app restart/offline host.
+- Launch command accepted against a test Remote Agent.
+- Usage Access/mobile-session checks only if those features are reintroduced.
 
-Connect one Android device with USB debugging enabled, then run:
+## 11. Open questions for implementation phase
 
-```bash
-./.venv/bin/python tools/verify_android_device.py
-```
-
-If multiple devices are connected:
-
-```bash
-./.venv/bin/python tools/verify_android_device.py --device <adb-serial>
-```
-
-The script runs:
-
-1. `tools/smoke_android_remote_controller.py --report-usage-access` to install the APK, launch `MainActivity`, confirm package installation, and report UsageStats appop state.
-2. `tools/smoke_android_remote_e2e.py --adb-reverse --android-base-url http://127.0.0.1:<port>` to start a temporary Remote Agent, reverse the device port to the host, type the Remote Agent URL into the app, pair with a generated code, sync data, start/end mobile sessions, run UsageStats sync, force-stop/restart the app, and verify encrypted token persistence.
-
-Release criteria for Android parity:
-
-- Stage 1 passes.
-- Stage 2 passes on a physical Android device.
-- Power buttons remain capability-gated and do not fire unsupported side-effect commands.
-- Any emulator run is optional supplementary evidence, not a replacement for the physical-device gate.
+- Should Home include dashboard summary above or below game cards?
+- Should Android v1 support Android-PC links immediately, or only after Home is stable?
+- Which persistence API should replace SharedPreferences if settings grow: DataStore or simple SharedPreferences?
