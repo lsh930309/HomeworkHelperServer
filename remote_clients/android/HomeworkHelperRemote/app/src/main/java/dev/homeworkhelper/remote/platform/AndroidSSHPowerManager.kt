@@ -3,6 +3,7 @@ package dev.homeworkhelper.remote.platform
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.IOUtils
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
@@ -33,7 +34,7 @@ class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
             return@withContext SshCommandResult(false, "SSH host/user 설정이 필요합니다.")
         }
         var observedFingerprint: String? = null
-        val client = SSHClient()
+        val client = SSHClient(androidCompatibleSshConfig())
         try {
             client.addHostKeyVerifier(object : HostKeyVerifier {
                 override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
@@ -74,6 +75,17 @@ class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
             SshCommandResult(false, exception.message ?: "SSH 명령 실행 실패", observedFingerprint)
         } finally {
             runCatching { client.disconnect() }
+        }
+    }
+
+
+    private fun androidCompatibleSshConfig(): DefaultConfig {
+        return DefaultConfig().apply {
+            setKeyExchangeFactories(
+                keyExchangeFactories.filterNot { factory ->
+                    factory.name.contains("curve25519", ignoreCase = true)
+                },
+            )
         }
     }
 
