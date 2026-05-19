@@ -185,7 +185,7 @@ sequenceDiagram
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
 - **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: Kotlin + Jetpack Compose Home/Games MVP. macOS popover형 게임 미러링 UX를 Android 메인 화면으로 재구축 중
+- **Android 클라이언트**: Kotlin + Jetpack Compose v2 탭 UX. Home/Power/Setup/More 구조로 게임 실행, 전원 readiness, 연결 설정을 분리
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---
@@ -233,7 +233,7 @@ open dist/macos/HomeworkHelperRemote.app
 
 macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
 
-### Option 5: Android Remote Client Rebuild Scaffold
+### Option 5: Android Remote Client
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -243,7 +243,7 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 ./gradlew :app:assembleDebug
 ```
 
-현재 Android 앱은 Home/Games MVP 상태다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
+현재 Android 앱은 v2 탭 UX 상태다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
 
 ---
 
@@ -367,7 +367,7 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ## 🛰️ 원격 클라이언트
 
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기준 클라이언트이고, Android 클라이언트는 기존 구현을 제거한 뒤 macOS popover형 게임 미러링 UX를 중심으로 Home/Games MVP부터 재작성 중이다.
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기준 클라이언트이고, Android 클라이언트는 기존 구현을 제거한 뒤 v2 탭 UX로 게임 미러링, 전원 readiness, 연결 설정을 분리하는 중이다.
 
 ### Remote Agent 실행
 
@@ -386,7 +386,7 @@ HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.
 - `docs/remote/android-client-design.md` — Android 클라이언트 재작성 설계도
 - `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
 - `REMOTE_CONNECTION_SUPERVISOR.md` — 공통 pairing/connectivity/power/OpenSSH 프로토콜
-- `remote_clients/android/HomeworkHelperRemote/README.md` — Android Home/Games MVP 안내
+- `remote_clients/android/HomeworkHelperRemote/README.md` — Android v2 탭 UX 및 fake smoke 안내
 
 ### 핵심 검증 명령
 
@@ -394,7 +394,8 @@ HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.
 ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-# Android 기능 e2e는 실기기 Home/Games 검증 단계에서 재활성화
+# Android 개발 루프는 fake Remote Agent smoke를 우선 사용
+python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ./.venv/bin/python tools/verify_android_device.py
 ```
 
@@ -491,7 +492,7 @@ HomeworkHelperServer/
 │
 ├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
 │   ├── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
-│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android Home/Games MVP
+│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android v2 tabbed UX
 │
 ├── 🎨 assets/                    # 리소스
 │   ├── icons/                   # 아이콘

@@ -9,10 +9,17 @@ class RemoteRepository(
     suspend fun fetchHomeSnapshot(): RemoteHomeSnapshot {
         val status = api.status()
         val readiness = runCatching { api.readiness() }.getOrNull()
+        val powerStatus = runCatching { api.powerStatus() }.getOrNull()
+        val powerSetup = runCatching { api.powerSetup() }.getOrNull()
         val rawProcesses = api.processesRaw()
         return RemoteHomeSnapshot(
             status = status,
             readiness = readiness,
+            powerReadiness = RemotePowerReadiness(
+                status = powerStatus,
+                setup = powerSetup,
+                readiness = readiness?.powerReadiness,
+            ),
             processes = RemoteProcess.listFromJson(rawProcesses),
             rawProcessesJson = rawProcesses,
         )

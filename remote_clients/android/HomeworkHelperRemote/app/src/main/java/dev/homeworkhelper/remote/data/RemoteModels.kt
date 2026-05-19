@@ -20,8 +20,16 @@ data class RemoteStatus(
 )
 
 data class RemoteReadiness(
-    val message: String?,
+    val remoteConnectivity: RemoteReadinessSection?,
+    val serverModeReadiness: RemoteReadinessSection?,
+    val powerReadiness: RemoteReadinessSection?,
+)
+
+data class RemoteReadinessSection(
+    val state: String?,
     val color: String?,
+    val message: String?,
+    val supportedActions: List<String> = emptyList(),
 )
 
 data class RemoteProgress(
@@ -80,6 +88,38 @@ data class RemoteCommandResult(
     val message: String,
 )
 
+data class RemotePowerStatus(
+    val configured: Boolean,
+    val state: String?,
+    val status: String?,
+    val targetHost: String?,
+    val supportedActions: List<String>,
+    val message: String?,
+)
+
+data class RemotePowerSetup(
+    val message: String?,
+    val hostPlatform: String?,
+    val user: String?,
+    val effectiveAuthorizedKeysPath: String?,
+    val sshServiceMessage: String?,
+)
+
+data class RemotePowerReadiness(
+    val status: RemotePowerStatus?,
+    val setup: RemotePowerSetup?,
+    val readiness: RemoteReadinessSection?,
+) {
+    val isConfigured: Boolean
+        get() = status?.configured == true
+
+    val summary: String
+        get() = readiness?.message
+            ?: status?.message
+            ?: setup?.message
+            ?: "전원 준비 상태를 아직 확인하지 못했습니다."
+}
+
 data class PairingConfirmResponse(
     val id: String,
     val name: String,
@@ -89,6 +129,7 @@ data class PairingConfirmResponse(
 data class RemoteHomeSnapshot(
     val status: RemoteStatus,
     val readiness: RemoteReadiness?,
+    val powerReadiness: RemotePowerReadiness,
     val processes: List<RemoteProcess>,
     val rawProcessesJson: String,
 )
@@ -116,12 +157,21 @@ fun JSONObject.toRemoteStatus(): RemoteStatus {
 }
 
 fun JSONObject.toRemoteReadiness(): RemoteReadiness {
-    val remote = optJSONObject("remote_connectivity")
-    val server = optJSONObject("server_mode_readiness")
-    val section = remote ?: server
     return RemoteReadiness(
-        message = section?.optStringOrNull("message"),
-        color = section?.optStringOrNull("color"),
+        remoteConnectivity = optJSONObject("remote_connectivity")?.toRemoteReadinessSection(),
+        serverModeReadiness = optJSONObject("server_mode_readiness")?.toRemoteReadinessSection(),
+        powerReadiness = optJSONObject("power_readiness")?.toRemoteReadinessSection(),
+    )
+}
+
+fun JSONObject.toRemoteReadinessSection(): RemoteReadinessSection {
+    return RemoteReadinessSection(
+        state = optStringOrNull("state"),
+        color = optStringOrNull("color"),
+        message = optStringOrNull("message"),
+        supportedActions = optJSONArray("supported_actions")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
+        }.orEmpty(),
     )
 }
 
@@ -138,5 +188,30 @@ fun JSONObject.toPairingConfirmResponse(): PairingConfirmResponse {
         id = optString("id"),
         name = optString("name"),
         token = optString("token"),
+    )
+}
+
+fun JSONObject.toRemotePowerStatus(): RemotePowerStatus {
+    return RemotePowerStatus(
+        configured = optBoolean("configured", false),
+        state = optStringOrNull("state"),
+        status = optStringOrNull("status"),
+        targetHost = optStringOrNull("target_host"),
+        supportedActions = optJSONArray("supported_actions")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
+        }.orEmpty(),
+        message = optStringOrNull("message"),
+    )
+}
+
+fun JSONObject.toRemotePowerSetup(): RemotePowerSetup {
+    val sshService = optJSONObject("ssh_service")
+    return RemotePowerSetup(
+        message = optStringOrNull("message"),
+        hostPlatform = optStringOrNull("host_platform"),
+        user = optStringOrNull("user"),
+        effectiveAuthorizedKeysPath = optStringOrNull("effective_authorized_keys_path")
+            ?: optStringOrNull("authorized_keys_path"),
+        sshServiceMessage = sshService?.optStringOrNull("message"),
     )
 }

@@ -86,11 +86,11 @@ The macOS client is the reference native client. Its main UX is a menu-bar popov
 
 Architecture reference: `docs/remote/macos-client-architecture.md`.
 
-## 5. Android client Home/Games MVP
+## 5. Android client v2 tabbed UX
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The current Android MVP implements the Home/Games-first client surface from the new design: Remote Agent URL setup, pairing, registered game mirroring, cached offline display, and host game launch.
+The old Android full-parity feature implementation was removed. The current Android v2 client uses bottom tabs: Home for game mirror and quick launch, Power for read-only readiness and disabled direct-power buttons, Setup for URL/pairing/token management, and More for diagnostics.
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -112,15 +112,16 @@ Remote route/static checks:
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
 ```
 
-Android Home/Games MVP/internal checks:
+Android v2/internal checks:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
 cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug --stacktrace
 ./.venv/bin/python tools/check_android_apk_artifact.py
+python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ```
 
-Physical-device Android verification remains a later release gate. Use it after the Home/Games MVP is exercised against a real Remote Agent and pairing flow.
+Fake Remote Agent smoke is the default development loop. Physical-device real-host verification remains a later release gate after fake-host UI/API contracts pass.
 
 Stateful client smoke isolation contract:
 

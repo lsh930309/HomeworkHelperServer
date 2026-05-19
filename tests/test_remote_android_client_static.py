@@ -41,9 +41,16 @@ def test_android_project_is_home_games_mvp_with_reproducible_compose_build():
         "platform/Preferences.kt",
         "platform/TokenStore.kt",
         "state/RemoteViewModel.kt",
+        "ui/AppShell.kt",
         "ui/HomeScreen.kt",
+        "ui/MoreTab.kt",
+        "ui/PowerTab.kt",
+        "ui/RemoteTheme.kt",
+        "ui/SetupTab.kt",
     ]:
         assert (MAIN_SRC / source_file).exists()
+    assert Path("tools/fake_android_remote_agent.py").exists()
+    assert Path("tools/smoke_android_fake_remote.py").exists()
 
     for legacy_file in [
         "RemoteAppViewModel.kt",
@@ -77,8 +84,19 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
     sources = _android_sources()
 
     for marker in [
-        "RemoteHomeScreen",
-        "Home / Games",
+        "RemoteAppShell",
+        "NavigationBar",
+        "NavigationBarItem",
+        "RemoteTab",
+        "HomeTab",
+        "PowerTab",
+        "SetupTab",
+        "MoreTab",
+        "홈",
+        "전원",
+        "설정",
+        "더보기",
+        "게임 상태와 빠른 실행",
         "등록된 게임",
         "Remote Agent URL",
         "6자리 페어링 코드",
@@ -96,6 +114,8 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
         "remote/processes",
         "remote/processes/$encodedId/launch",
         "remote/pair/confirm",
+        "remote/power/status",
+        "remote/power/setup",
         "process_launch",
         "auth_required",
         "is_running",
@@ -105,20 +125,63 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
     ]:
         assert marker in sources
 
-    assert "HomeworkHelperRemoteRebuildScaffold" not in sources
-    assert "Android rebuild scaffold" not in sources
+    for marker in [
+        "HomeworkHelperRemoteRebuildScaffold",
+        "Android rebuild scaffold",
+        "RemoteHomeScreen",
+    ]:
+        assert marker not in sources
 
     for stale in [
         "RemoteAppViewModel",
         "RemoteScreens",
         "remote/power/config",
         "remote/power/{action}",
+        "/remote/power/wake",
+        "/remote/power/sleep",
+        "/remote/power/restart",
+        "/remote/power/shutdown",
         "remote/power/smartthings/devices",
         "Full-parity",
         "Tailscale-first Android client",
         "Android-PC 연결 저장",
     ]:
         assert stale not in sources
+
+
+def test_android_v2_theme_and_fake_smoke_contract_are_declared():
+    sources = _android_sources()
+    fake_agent = _read(Path("tools/fake_android_remote_agent.py"))
+    smoke = _read(Path("tools/smoke_android_fake_remote.py"))
+
+    for marker in [
+        "RemoteTheme",
+        "isSystemInDarkTheme()",
+        "lightColorScheme",
+        "darkColorScheme",
+    ]:
+        assert marker in sources
+
+    for marker in [
+        "Fake Android Remote Agent",
+        "/remote/status",
+        "/remote/readiness",
+        "/remote/processes",
+        "/remote/power/status",
+        "/remote/power/setup",
+        "/remote/processes/fake-game-a/launch",
+    ]:
+        assert marker in fake_agent
+
+    for marker in [
+        "adb",
+        "reverse",
+        "uiautomator",
+        "android-v2-home",
+        "android-v2-launch",
+        "Fake Game A 실행 요청을 접수했습니다.",
+    ]:
+        assert marker in smoke
 
 
 def test_remote_docs_define_macos_reference_android_rebuild_and_shared_supervisor():
@@ -162,18 +225,18 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         assert marker in supervisor
 
     for marker in [
-        "Android client Home/Games MVP",
+        "Android client v2 tabbed UX",
         "docs/remote/macos-client-architecture.md",
         "docs/remote/android-client-design.md",
         "REMOTE_CONNECTION_SUPERVISOR.md",
-        "Physical-device Android verification remains a later release gate",
+        "Fake Remote Agent smoke is the default development loop",
     ]:
         assert marker in setup
 
     for marker in [
-        "Home/Games MVP",
+        "v2 tabbed UX",
         "Do not resurrect the deleted Android full-parity code",
-        "macOS popover",
+        "bottom tabs",
     ]:
         assert marker in android_readme
 

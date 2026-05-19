@@ -42,6 +42,14 @@ class RemoteApiClient(
             .toRemoteCommandResult()
     }
 
+    suspend fun powerStatus(): RemotePowerStatus {
+        return JSONObject(request("remote/power/status")).toRemotePowerStatus()
+    }
+
+    suspend fun powerSetup(): RemotePowerSetup {
+        return JSONObject(request("remote/power/setup")).toRemotePowerSetup()
+    }
+
     suspend fun confirmPairing(code: String, deviceName: String): PairingConfirmResponse {
         val payload = JSONObject()
             .put("code", code)

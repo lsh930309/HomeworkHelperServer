@@ -3,18 +3,15 @@ package dev.homeworkhelper.remote
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.homeworkhelper.remote.state.RemoteViewModel
 import dev.homeworkhelper.remote.state.RemoteViewModelFactory
-import dev.homeworkhelper.remote.ui.RemoteHomeScreen
+import dev.homeworkhelper.remote.ui.RemoteAppShell
+import dev.homeworkhelper.remote.ui.RemoteTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,17 +25,15 @@ private fun HomeworkHelperRemoteApp(
     viewModel: RemoteViewModel = viewModel(factory = RemoteViewModelFactory(LocalContext.current)),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            RemoteHomeScreen(
-                state = state,
-                onBaseUrlChange = viewModel::updateBaseUrl,
-                onDeviceNameChange = viewModel::updateDeviceName,
-                onRefresh = viewModel::refresh,
-                onPair = viewModel::pair,
-                onLaunch = viewModel::launch,
-                onClearToken = viewModel::clearLocalToken,
-            )
-        }
+    RemoteTheme {
+        RemoteAppShell(
+            state = state,
+            onBaseUrlChange = viewModel::updateBaseUrl,
+            onDeviceNameChange = viewModel::updateDeviceName,
+            onRefresh = viewModel::refresh,
+            onPair = viewModel::pair,
+            onLaunch = viewModel::launch,
+            onClearToken = viewModel::clearLocalToken,
+        )
     }
 }

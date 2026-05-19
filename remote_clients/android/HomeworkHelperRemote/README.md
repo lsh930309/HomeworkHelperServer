@@ -1,8 +1,8 @@
 # HomeworkHelper Remote Android
 
-Status: Home/Games MVP. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
+Status: v2 tabbed UX in progress. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
 
-The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current MVP makes the Android home screen mirror the macOS popover: registered game status, progress, running/today indicators, quick host launch, and minimal pairing/setup are the primary UX. Power readiness, device management, Android-PC links, and diagnostics remain supporting surfaces for later phases.
+The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current v2 shape uses bottom tabs: Home keeps registered game status and quick host launch focused, Power shows read-only readiness with disabled direct-power buttons, Setup owns pairing/URL/token inputs, and More carries diagnostics plus fake Remote Agent smoke guidance.
 
 ## Preserved project contract
 
@@ -16,7 +16,7 @@ The Android client is being rebuilt from `docs/remote/android-client-design.md`.
 - targetSdk: 36
 - Manifest permissions retained for the rebuild: `INTERNET`, `PACKAGE_USAGE_STATS`
 
-## Build MVP
+## Build v2
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -35,3 +35,13 @@ The APK is still produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - `REMOTE_CONNECTION_SUPERVISOR.md` — shared pairing, connectivity, power, OpenSSH, and SSH protocol rules.
 
 Do not resurrect the deleted Android full-parity code. Rebuild Home/Games first, then add setup/support surfaces only as needed.
+
+## Fake Remote Agent smoke
+
+During Android iteration, prefer fake host validation before real-host pairing:
+
+```bash
+python tools/smoke_android_fake_remote.py --serial <adb-serial>
+```
+
+The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator markers, and screenshots under `artifacts/android-device/`.

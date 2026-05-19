@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.homeworkhelper.remote.data.RemoteApiException
 import dev.homeworkhelper.remote.data.RemoteAvailability
+import dev.homeworkhelper.remote.data.RemotePowerReadiness
 import dev.homeworkhelper.remote.data.RemoteProcess
 import dev.homeworkhelper.remote.data.RemoteRepository
 import dev.homeworkhelper.remote.platform.AndroidTokenStore
@@ -33,6 +34,7 @@ data class RemoteUiState(
     val userMessage: String? = null,
     val lastSyncMillis: Long = 0L,
     val processLaunchEnabled: Boolean = false,
+    val powerReadiness: RemotePowerReadiness? = null,
 ) {
     val canRefresh: Boolean
         get() = baseUrl.isNotBlank() && !isRefreshing
@@ -105,11 +107,13 @@ class RemoteViewModel(
                             availability = RemoteAvailability.Online,
                             isRefreshing = false,
                             processes = snapshot.processes,
-                            hostMessage = snapshot.readiness?.message,
+                            hostMessage = snapshot.readiness?.remoteConnectivity?.message
+                                ?: snapshot.readiness?.serverModeReadiness?.message,
                             userMessage = successMessage ?: "게임 목록을 동기화했습니다.",
                             lastSyncMillis = now,
                             hasToken = tokenStore.loadToken() != null,
                             processLaunchEnabled = snapshot.status.processLaunch,
+                            powerReadiness = snapshot.powerReadiness,
                         )
                     }
                 }

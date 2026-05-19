@@ -13,31 +13,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.homeworkhelper.remote.data.RemoteAvailability
@@ -45,67 +37,49 @@ import dev.homeworkhelper.remote.data.RemoteProcess
 import dev.homeworkhelper.remote.state.RemoteUiState
 
 @Composable
-fun RemoteHomeScreen(
+fun HomeTab(
     state: RemoteUiState,
-    onBaseUrlChange: (String) -> Unit,
-    onDeviceNameChange: (String) -> Unit,
     onRefresh: () -> Unit,
-    onPair: (String) -> Unit,
     onLaunch: (RemoteProcess) -> Unit,
-    onClearToken: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Scaffold { padding ->
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                HeaderCard(state = state, onRefresh = onRefresh)
-                if (state.userMessage != null || state.availability != RemoteAvailability.Online) {
-                    StatusBanner(state)
-                }
-                GameList(
-                    state = state,
-                    onLaunch = onLaunch,
-                )
-                ConnectionCard(
-                    state = state,
-                    onBaseUrlChange = onBaseUrlChange,
-                    onDeviceNameChange = onDeviceNameChange,
-                    onPair = onPair,
-                    onClearToken = onClearToken,
-                )
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            HomeHeroCard(state = state, onRefresh = onRefresh)
+            if (state.userMessage != null || state.availability != RemoteAvailability.Online) {
+                StatusBanner(state)
             }
+            GameList(state = state, onLaunch = onLaunch)
+            PowerQuickRow(state = state)
         }
     }
 }
 
 @Composable
-private fun HeaderCard(state: RemoteUiState, onRefresh: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun HomeHeroCard(state: RemoteUiState, onRefresh: () -> Unit) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text("HomeworkHelper Remote", style = MaterialTheme.typography.headlineSmall)
-                    Text("Home / Games", style = MaterialTheme.typography.titleMedium)
+                    Text("게임 상태와 빠른 실행", style = MaterialTheme.typography.titleMedium)
                 }
                 StatusChip(state.availability)
             }
-            Text(
-                text = "마지막 동기화: ${state.lastSyncLabel}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text("마지막 동기화: ${state.lastSyncLabel}", style = MaterialTheme.typography.bodyMedium)
             Button(
                 onClick = onRefresh,
                 enabled = state.canRefresh,
@@ -122,7 +96,7 @@ private fun HeaderCard(state: RemoteUiState, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun StatusChip(availability: RemoteAvailability) {
+fun StatusChip(availability: RemoteAvailability) {
     val (label, color) = when (availability) {
         RemoteAvailability.Online -> "online" to Color(0xFF1B8A3A)
         RemoteAvailability.OfflineExpected -> "offline" to Color(0xFF8A5A00)
@@ -142,7 +116,7 @@ private fun StatusChip(availability: RemoteAvailability) {
 }
 
 @Composable
-private fun StatusBanner(state: RemoteUiState) {
+fun StatusBanner(state: RemoteUiState) {
     val container = when (state.availability) {
         RemoteAvailability.Online -> MaterialTheme.colorScheme.primaryContainer
         RemoteAvailability.AuthRejected -> MaterialTheme.colorScheme.errorContainer
@@ -179,18 +153,13 @@ private fun GameList(
     state: RemoteUiState,
     onLaunch: (RemoteProcess) -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("등록된 게임", style = MaterialTheme.typography.titleLarge)
-            if (state.processes.isEmpty()) {
-                EmptyGameList(state)
-            } else {
-                state.processes.forEach { process ->
-                    GameCard(state = state, process = process, onLaunch = onLaunch)
-                }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("등록된 게임", style = MaterialTheme.typography.titleLarge)
+        if (state.processes.isEmpty()) {
+            EmptyGameList(state)
+        } else {
+            state.processes.forEach { process ->
+                GameCard(state = state, process = process, onLaunch = onLaunch)
             }
         }
     }
@@ -201,9 +170,11 @@ private fun EmptyGameList(state: RemoteUiState) {
     val text = if (state.hasToken) {
         "호스트에 등록된 게임이 없거나 아직 동기화되지 않았습니다."
     } else {
-        "페어링 후 호스트에 등록된 게임 목록이 여기에 표시됩니다."
+        "설정 탭에서 페어링하면 호스트에 등록된 게임 목록이 여기에 표시됩니다."
     }
-    Text(text, style = MaterialTheme.typography.bodyMedium)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Text(text, modifier = Modifier.padding(18.dp), style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 @Composable
@@ -217,12 +188,9 @@ private fun GameCard(
         state.launchInFlightId == null &&
         !state.isRefreshing &&
         !process.isRunning
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
@@ -269,8 +237,8 @@ private fun GameCard(
 private fun GameIcon(process: RemoteProcess) {
     Box(
         modifier = Modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .size(52.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
     ) {
@@ -284,7 +252,7 @@ private fun GameIcon(process: RemoteProcess) {
 }
 
 @Composable
-private fun SmallBadge(label: String) {
+fun SmallBadge(label: String) {
     Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
@@ -296,59 +264,36 @@ private fun SmallBadge(label: String) {
 }
 
 @Composable
-private fun ConnectionCard(
-    state: RemoteUiState,
-    onBaseUrlChange: (String) -> Unit,
-    onDeviceNameChange: (String) -> Unit,
-    onPair: (String) -> Unit,
-    onClearToken: () -> Unit,
-) {
-    var pairingCode by remember { mutableStateOf("") }
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun PowerQuickRow(state: RemoteUiState) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("연결 설정", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(
-                value = state.baseUrl,
-                onValueChange = onBaseUrlChange,
-                label = { Text("Remote Agent URL") },
-                placeholder = { Text("http://192.168.0.10:8000") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            Text("원격 전원 관리", style = MaterialTheme.typography.titleMedium)
+            Text(
+                state.powerReadiness?.summary ?: "전원 준비 상태는 연결 후 표시됩니다.",
+                style = MaterialTheme.typography.bodyMedium,
             )
-            OutlinedTextField(
-                value = state.deviceName,
-                onValueChange = onDeviceNameChange,
-                label = { Text("기기 이름") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = pairingCode,
-                onValueChange = { pairingCode = it.filter(Char::isDigit).take(6) },
-                label = { Text("6자리 페어링 코드") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = { onPair(pairingCode) },
-                enabled = !state.isPairing,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (state.isPairing) "페어링 중..." else "페어링")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DisabledPowerButton("깨우기", Modifier.weight(1f))
+                DisabledPowerButton("절전", Modifier.weight(1f))
             }
-            if (state.hasToken) {
-                TextButton(onClick = onClearToken, modifier = Modifier.fillMaxWidth()) {
-                    Text("로컬 토큰 삭제")
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DisabledPowerButton("재시작", Modifier.weight(1f))
+                DisabledPowerButton("종료", Modifier.weight(1f))
             }
             Text(
-                "전원 제어와 Android-PC 링크는 다음 단계에서 별도 direct adapter가 준비된 뒤 활성화합니다.",
+                "Android 전원 제어는 direct adapter 준비 후 활성화됩니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+    }
+}
+
+@Composable
+fun DisabledPowerButton(label: String, modifier: Modifier = Modifier) {
+    OutlinedButton(onClick = {}, enabled = false, modifier = modifier.height(48.dp)) {
+        Text(label)
     }
 }
