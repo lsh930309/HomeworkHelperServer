@@ -20,7 +20,7 @@ class RemoteRepository(
                 setup = powerSetup,
                 readiness = readiness?.powerReadiness,
             ),
-            processes = RemoteProcess.listFromJson(rawProcesses),
+            processes = RemoteProcess.listFromJson(rawProcesses, baseUrl),
             rawProcessesJson = rawProcesses,
         )
     }

@@ -23,7 +23,7 @@ class RemotePreferences(context: Context) {
         set(value) = preferences.edit().putLong(KEY_LAST_SYNC_MILLIS, value).apply()
 
     fun cachedProcesses(): List<RemoteProcess> {
-        return runCatching { RemoteProcess.listFromJson(cachedProcessesJson) }.getOrDefault(emptyList())
+        return runCatching { RemoteProcess.listFromJson(cachedProcessesJson, baseUrl) }.getOrDefault(emptyList())
     }
 
     companion object {

@@ -1,6 +1,7 @@
 package dev.homeworkhelper.remote.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,23 +21,33 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import dev.homeworkhelper.remote.data.RemoteAvailability
 import dev.homeworkhelper.remote.data.RemoteProcess
+import dev.homeworkhelper.remote.data.RemoteProgress
 import dev.homeworkhelper.remote.state.RemoteUiState
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeTab(
     state: RemoteUiState,
@@ -44,52 +56,55 @@ fun HomeTab(
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+        PullToRefreshBox(
+            isRefreshing = state.isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
         ) {
-            HomeHeroCard(state = state, onRefresh = onRefresh)
-            if (state.userMessage != null || state.availability != RemoteAvailability.Online) {
-                StatusBanner(state)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 16.dp)
+                    .padding(bottom = 92.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                HomeHeroCard(state = state)
+                GameList(state = state, onLaunch = onLaunch)
+                PowerQuickSection(state = state)
             }
-            GameList(state = state, onLaunch = onLaunch)
-            PowerQuickRow(state = state)
         }
     }
 }
 
 @Composable
-private fun HomeHeroCard(state: RemoteUiState, onRefresh: () -> Unit) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+private fun HomeHeroCard(state: RemoteUiState) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("HomeworkHelper Remote", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("게임 상태와 빠른 실행", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                StatusChip(state.availability)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("HomeworkHelper Remote", style = MaterialTheme.typography.headlineSmall)
-                    Text("게임 상태와 빠른 실행", style = MaterialTheme.typography.titleMedium)
-                }
-                StatusChip(state.availability)
-            }
-            Text("마지막 동기화: ${state.lastSyncLabel}", style = MaterialTheme.typography.bodyMedium)
-            Button(
-                onClick = onRefresh,
-                enabled = state.canRefresh,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (state.isRefreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.size(8.dp))
-                }
-                Text("새로고침")
+                Text("마지막 동기화: ${state.lastSyncLabel}", style = MaterialTheme.typography.bodyMedium)
+                Text("아래로 당겨 새로고침", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -115,29 +130,6 @@ fun StatusChip(availability: RemoteAvailability) {
     )
 }
 
-@Composable
-fun StatusBanner(state: RemoteUiState) {
-    val container = when (state.availability) {
-        RemoteAvailability.Online -> MaterialTheme.colorScheme.primaryContainer
-        RemoteAvailability.AuthRejected -> MaterialTheme.colorScheme.errorContainer
-        RemoteAvailability.AgentUnavailable -> MaterialTheme.colorScheme.errorContainer
-        RemoteAvailability.OfflineExpected -> MaterialTheme.colorScheme.tertiaryContainer
-        RemoteAvailability.Unknown -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = container)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(statusTitle(state.availability), fontWeight = FontWeight.Bold)
-            state.userMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            state.hostMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        }
-    }
-}
-
 private fun statusTitle(availability: RemoteAvailability): String {
     return when (availability) {
         RemoteAvailability.Online -> "연결됨"
@@ -153,8 +145,15 @@ private fun GameList(
     state: RemoteUiState,
     onLaunch: (RemoteProcess) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("등록된 게임", style = MaterialTheme.typography.titleLarge)
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("등록된 게임", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${state.processes.size}개", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (state.processes.isEmpty()) {
             EmptyGameList(state)
         } else {
@@ -188,9 +187,12 @@ private fun GameCard(
         state.launchInFlightId == null &&
         !state.isRefreshing &&
         !process.isRunning
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
@@ -204,30 +206,24 @@ private fun GameCard(
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold,
                     )
-                    Text(process.safeStatusText, style = MaterialTheme.typography.bodyMedium)
+                    Text(process.safeStatusText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(
                     onClick = { onLaunch(process) },
                     enabled = launchEnabled,
+                    shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(if (state.launchInFlightId == process.id) "실행 중..." else "실행")
                 }
             }
-            process.progress?.let { progress ->
-                LinearProgressIndicator(
-                    progress = { (progress.percentage / 100.0).toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = progress.displayText ?: "${progress.percentage.toInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (process.isRunning) SmallBadge("실행중")
-                if (process.playedToday) SmallBadge("오늘 실행")
-                if (state.availability != RemoteAvailability.Online) SmallBadge("stale")
+            process.progress?.let { progress -> ProgressLane(progress) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (process.isRunning) RunningBadge()
+                if (!process.isRunning && process.progress != null) ProgressBadge(process.progress)
+                if (process.playedToday) SmallBadge("오늘 실행", BadgeTone.Neutral)
+                if (state.availability != RemoteAvailability.Online) SmallBadge("stale", BadgeTone.Warning)
             }
         }
     }
@@ -237,40 +233,138 @@ private fun GameCard(
 private fun GameIcon(process: RemoteProcess) {
     Box(
         modifier = Modifier
-            .size(52.dp)
+            .size(54.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
         contentAlignment = Alignment.Center,
     ) {
+        val iconUrl = process.preferredIconUrl
+        if (iconUrl != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(iconUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "${process.name} 아이콘",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         Text(
             text = process.name.take(1).ifBlank { "G" },
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (iconUrl == null) 1f else 0f),
             fontWeight = FontWeight.Bold,
         )
     }
 }
 
 @Composable
-fun SmallBadge(label: String) {
+private fun ProgressLane(progress: RemoteProgress) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ResourceIcon(progress)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LinearProgressIndicator(
+                progress = { (progress.percentage / 100.0).toFloat().coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(999.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            Text(
+                text = progress.displayText ?: "${progress.percentage.toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ResourceIcon(progress: RemoteProgress) {
+    val iconUrl = progress.preferredResourceIconUrl
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (iconUrl != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(iconUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "진행도 리소스 아이콘",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.padding(4.dp).fillMaxSize(),
+            )
+        } else {
+            Text("↻", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+    }
+}
+
+@Composable
+private fun RunningBadge() {
+    Text(
+        text = "실행중",
+        color = Color.White,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Brush.horizontalGradient(listOf(Color(0xFF2563EB), Color(0xFF9333EA))))
+            .width(92.dp)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+    )
+}
+
+@Composable
+private fun ProgressBadge(progress: RemoteProgress) {
+    val text = progress.displayText ?: "${progress.percentage.toInt()}%"
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .width(92.dp)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+    )
+}
+
+enum class BadgeTone { Neutral, Warning }
+
+@Composable
+fun SmallBadge(label: String, tone: BadgeTone = BadgeTone.Neutral) {
+    val colors = when (tone) {
+        BadgeTone.Neutral -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        BadgeTone.Warning -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+    }
     Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
+        color = colors.second,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .background(colors.first)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
 
 @Composable
-private fun PowerQuickRow(state: RemoteUiState) {
+private fun PowerQuickSection(state: RemoteUiState) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("원격 전원 관리", style = MaterialTheme.typography.titleMedium)
+            Text("원격 전원 관리", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
                 state.powerReadiness?.summary ?: "전원 준비 상태는 연결 후 표시됩니다.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -286,6 +380,7 @@ private fun PowerQuickRow(state: RemoteUiState) {
             Text(
                 "Android 전원 제어는 direct adapter 준비 후 활성화됩니다.",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -293,7 +388,7 @@ private fun PowerQuickRow(state: RemoteUiState) {
 
 @Composable
 fun DisabledPowerButton(label: String, modifier: Modifier = Modifier) {
-    OutlinedButton(onClick = {}, enabled = false, modifier = modifier.height(48.dp)) {
+    OutlinedButton(onClick = {}, enabled = false, modifier = modifier.height(46.dp)) {
         Text(label)
     }
 }

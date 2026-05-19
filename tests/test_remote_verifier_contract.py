@@ -162,15 +162,15 @@ def test_android_remote_e2e_smoke_drives_runtime_pairing_and_secure_token_paths(
         "runpy.run_path('homework_helper.pyw')",
         "run_server_main",
         "remote/pair/start",
-        "Pairing code",
-        "페어링 완료",
+        "6자리 페어링 코드",
+        "페어링",
         "encrypted_bearer_token",
         "GET_USAGE_STATS",
         "모바일 시작",
         "모바일 종료",
         "Usage 동기화",
         "force-stop",
-        "새로고침",
+        "_pull_to_refresh",
         "Android Remote e2e smoke passed",
     ]:
         assert marker in smoke

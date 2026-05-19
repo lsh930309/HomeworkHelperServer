@@ -86,11 +86,11 @@ The macOS client is the reference native client. Its main UX is a menu-bar popov
 
 Architecture reference: `docs/remote/macos-client-architecture.md`.
 
-## 5. Android client v2 tabbed UX
+## 5. Android client v3 game-first UX
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The current Android v2 client uses bottom tabs: Home for game mirror and quick launch, Power for read-only readiness and disabled direct-power buttons, Setup for URL/pairing/token management, and More for diagnostics.
+The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch, pull-to-refresh, and a floating status message above bottom navigation. Setup owns URL/pairing/token inputs, display preferences, power readiness, diagnostics, and fake smoke guidance.
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -112,7 +112,7 @@ Remote route/static checks:
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
 ```
 
-Android v2/internal checks:
+Android v3/internal checks:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q

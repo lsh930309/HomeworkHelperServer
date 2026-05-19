@@ -31,6 +31,8 @@ def test_android_project_is_home_games_mvp_with_reproducible_compose_build():
     assert 'implementation("androidx.compose.material3:material3")' in app_build
     assert 'implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")' in app_build
     assert 'implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")' in app_build
+    assert 'implementation("io.coil-kt.coil3:coil-compose:3.4.0")' in app_build
+    assert 'implementation("io.coil-kt.coil3:coil-network-okhttp:3.4.0")' in app_build
     assert "gradle-9.5.0-bin.zip" in wrapper
 
     for source_file in [
@@ -43,8 +45,6 @@ def test_android_project_is_home_games_mvp_with_reproducible_compose_build():
         "state/RemoteViewModel.kt",
         "ui/AppShell.kt",
         "ui/HomeScreen.kt",
-        "ui/MoreTab.kt",
-        "ui/PowerTab.kt",
         "ui/RemoteTheme.kt",
         "ui/SetupTab.kt",
     ]:
@@ -89,18 +89,17 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
         "NavigationBarItem",
         "RemoteTab",
         "HomeTab",
-        "PowerTab",
         "SetupTab",
-        "MoreTab",
         "홈",
-        "전원",
         "설정",
-        "더보기",
         "게임 상태와 빠른 실행",
         "등록된 게임",
+        "아래로 당겨 새로고침",
+        "PullToRefreshBox",
+        "FloatingStatusMessage",
+        "AsyncImage",
         "Remote Agent URL",
         "6자리 페어링 코드",
-        "새로고침",
         "실행",
         "실행중",
         "오늘 실행",
@@ -122,6 +121,9 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
         "played_today",
         "status_text",
         "icon_url",
+        "icon_urls",
+        "resource_icon_url",
+        "resource_icon_urls",
     ]:
         assert marker in sources
 
@@ -145,11 +147,18 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
         "Full-parity",
         "Tailscale-first Android client",
         "Android-PC 연결 저장",
+        "PowerTab",
+        "MoreTab",
+        "더보기",
     ]:
         assert stale not in sources
 
+    assert "RemoteTab.Power" not in sources
+    assert "RemoteTab.More" not in sources
+    assert "onClick = onRefresh" not in sources
+    assert 'Text("새로고침")' not in sources
 
-def test_android_v2_theme_and_fake_smoke_contract_are_declared():
+def test_android_v3_theme_assets_and_fake_smoke_contract_are_declared():
     sources = _android_sources()
     fake_agent = _read(Path("tools/fake_android_remote_agent.py"))
     smoke = _read(Path("tools/smoke_android_fake_remote.py"))
@@ -170,6 +179,11 @@ def test_android_v2_theme_and_fake_smoke_contract_are_declared():
         "/remote/power/status",
         "/remote/power/setup",
         "/remote/processes/fake-game-a/launch",
+        "/api/dashboard/icons/",
+        "/api/dashboard/resource-icons/",
+        "Content-Type",
+        "image/png",
+        "IMAGE_HITS",
     ]:
         assert marker in fake_agent
 
@@ -177,9 +191,12 @@ def test_android_v2_theme_and_fake_smoke_contract_are_declared():
         "adb",
         "reverse",
         "uiautomator",
-        "android-v2-home",
-        "android-v2-launch",
+        "android-v3-home",
+        "android-v3-pull-refresh",
+        "android-v3-launch",
         "Fake Game A 실행 요청을 접수했습니다.",
+        "IMAGE_HITS",
+        "swipe_down",
     ]:
         assert marker in smoke
 
@@ -206,11 +223,15 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         "Android Remote Client Rebuild Design",
         "The Android home screen is the equivalent of the macOS popover",
         "Home / Games",
+        "Information-only Power/More tabs are consolidated",
+        "Pull-to-refresh",
         "Discard before rebuilding",
         "Do not use:",
         "/remote/power/config",
         "/remote/power/{action}",
         "process icon URLs",
+        "resource_icon_url",
+        "Coil memory/disk caching",
     ]:
         assert marker in android
 
@@ -225,7 +246,7 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         assert marker in supervisor
 
     for marker in [
-        "Android client v2 tabbed UX",
+        "Android client v3 game-first UX",
         "docs/remote/macos-client-architecture.md",
         "docs/remote/android-client-design.md",
         "REMOTE_CONNECTION_SUPERVISOR.md",
@@ -234,9 +255,9 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         assert marker in setup
 
     for marker in [
-        "v2 tabbed UX",
+        "v3 game-first UX",
         "Do not resurrect the deleted Android full-parity code",
-        "bottom tabs",
+        "two bottom tabs",
     ]:
         assert marker in android_readme
 

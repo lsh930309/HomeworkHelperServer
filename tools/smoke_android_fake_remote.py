@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from fake_android_remote_agent import FakeRemoteHandler, LAUNCHES
+from fake_android_remote_agent import FakeRemoteHandler, IMAGE_HITS, LAUNCHES
 from http.server import ThreadingHTTPServer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +95,10 @@ def tap_first_launch(serial: str | None, xml: str) -> None:
     adb(serial, ["shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)])
 
 
+def swipe_down(serial: str | None) -> None:
+    adb(serial, ["shell", "input", "swipe", "500", "450", "500", "1200", "450"])
+
+
 def tap_text(serial: str | None, xml: str, text: str) -> None:
     match = re.search(rf'text="{re.escape(text)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
     if not match:
@@ -121,33 +125,44 @@ def main(argv: list[str] | None = None) -> int:
         adb(args.serial, ["shell", "am", "start", "-n", f"{PACKAGE}/.MainActivity"])
         time.sleep(1.5)
 
-        home_xml = dump_ui(args.serial, "android-v2-home", args.artifacts)
-        require_markers(home_xml, ["홈", "전원", "설정", "더보기", "Fake Game A", "Fake Running Game", "실행", "online"])
+        home_xml = dump_ui(args.serial, "android-v3-home", args.artifacts)
+        require_markers(home_xml, ["홈", "설정", "Fake Game A", "Fake Running Game", "실행", "online", "아래로 당겨 새로고침", "연결됨"])
+        if "더보기" in home_xml:
+            raise AssertionError("info-only More tab should not remain in bottom navigation")
 
-        tap_text(args.serial, home_xml, "전원")
-        time.sleep(0.5)
-        power_xml = dump_ui(args.serial, "android-v2-power", args.artifacts)
-        require_markers(power_xml, ["전원 준비 상태", "원격 전원 버튼", "깨우기", "절전", "재시작", "종료", "direct adapter"])
+        deadline = time.time() + 6
+        while len(IMAGE_HITS) < 2 and time.time() < deadline:
+            time.sleep(0.25)
+        if len(IMAGE_HITS) < 2:
+            raise AssertionError(f"fake PNG icon endpoints were not requested enough: {IMAGE_HITS}")
 
-        tap_text(args.serial, power_xml, "설정")
-        time.sleep(0.5)
-        setup_xml = dump_ui(args.serial, "android-v2-setup", args.artifacts)
-        require_markers(setup_xml, ["연결 설정", "Remote Agent URL", "기기 이름", "6자리 페어링 코드", "페어링"])
+        swipe_down(args.serial)
+        time.sleep(1.0)
+        refreshed_xml = dump_ui(args.serial, "android-v3-pull-refresh", args.artifacts)
+        require_markers(refreshed_xml, ["Fake Game A", "Fake Running Game", "등록된 게임"])
 
-        tap_text(args.serial, setup_xml, "더보기")
+        tap_text(args.serial, refreshed_xml, "설정")
         time.sleep(0.5)
-        more_xml = dump_ui(args.serial, "android-v2-more", args.artifacts)
-        require_markers(more_xml, ["진단", "Fake Remote Agent smoke", "Availability", "Base URL"])
+        setup_xml = dump_ui(args.serial, "android-v3-setup", args.artifacts)
+        require_markers(setup_xml, ["연결 설정", "Remote Agent URL", "기기 이름", "6자리 페어링 코드", "페어링", "전원 준비 상태", "진단"])
+        adb(args.serial, ["shell", "input", "swipe", "500", "2300", "500", "900", "450"])
+        time.sleep(0.5)
+        setup_more_xml = dump_ui(args.serial, "android-v3-setup-sections", args.artifacts)
+        require_markers(setup_more_xml, ["Fake Remote Agent smoke", "PNG icon 전송"])
 
-        tap_text(args.serial, more_xml, "홈")
+        tap_text(args.serial, setup_more_xml, "홈")
         time.sleep(0.5)
-        home_xml = dump_ui(args.serial, "android-v2-home-return", args.artifacts)
+        home_xml = dump_ui(args.serial, "android-v3-home-return", args.artifacts)
         tap_first_launch(args.serial, home_xml)
         time.sleep(1.0)
-        launch_xml = dump_ui(args.serial, "android-v2-launch", args.artifacts)
-        require_markers(launch_xml, ["Fake Game A 실행 요청을 접수했습니다.", "Fake Game A", "Fake Running Game"])
+        launch_xml = dump_ui(args.serial, "android-v3-launch", args.artifacts)
+        require_markers(launch_xml, ["Fake Game A 실행 요청을 접수했습니다.", "Fake Game A", "Fake Running Game", "연결됨"])
         if "fake-game-a" not in LAUNCHES:
             raise AssertionError("fake agent did not receive launch POST")
+        if not any("/api/dashboard/icons/" in hit for hit in IMAGE_HITS):
+            raise AssertionError(f"process icon endpoint was not requested: {IMAGE_HITS}")
+        if not any("/api/dashboard/resource-icons/" in hit for hit in IMAGE_HITS):
+            raise AssertionError(f"resource icon endpoint was not requested: {IMAGE_HITS}")
         print("Android fake Remote Agent smoke passed.")
         return 0
     finally:

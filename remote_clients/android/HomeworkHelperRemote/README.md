@@ -1,8 +1,8 @@
 # HomeworkHelper Remote Android
 
-Status: v2 tabbed UX in progress. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
+Status: v3 game-first UX in progress. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
 
-The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current v2 shape uses bottom tabs: Home keeps registered game status and quick host launch focused, Power shows read-only readiness with disabled direct-power buttons, Setup owns pairing/URL/token inputs, and More carries diagnostics plus fake Remote Agent smoke guidance.
+The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current v3 shape uses two bottom tabs: Home mirrors the macOS popover with registered game status, host/resource icons, badges, quick launch, pull-to-refresh, and a floating status message; Setup owns pairing/URL/token inputs, display preferences, power readiness, diagnostics, and fake Remote Agent smoke guidance.
 
 ## Preserved project contract
 
@@ -16,7 +16,7 @@ The Android client is being rebuilt from `docs/remote/android-client-design.md`.
 - targetSdk: 36
 - Manifest permissions retained for the rebuild: `INTERNET`, `PACKAGE_USAGE_STATS`
 
-## Build v2
+## Build v3
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote

@@ -239,6 +239,11 @@ def _scroll_to_top(adb: str, device: str | None) -> None:
         _adb(adb, device, "shell", "input", "swipe", "540", "650", "540", "2050", "250")
 
 
+
+def _pull_to_refresh(adb: str, device: str | None) -> None:
+    _scroll_to_top(adb, device)
+    _adb(adb, device, "shell", "input", "swipe", "540", "650", "540", "1700", "450")
+
 def _input_text(adb: str, device: str | None, value: str) -> None:
     escaped = value.replace(" ", "%s").replace("&", "\\&")
     _adb(adb, device, "shell", "input", "text", escaped)
@@ -375,14 +380,11 @@ def main(argv: list[str] | None = None) -> int:
             _replace_text(adb, device, android_base_url)
             _adb(adb, device, "shell", "input", "keyevent", "BACK")
 
-            _tap_edit_by_label(adb, device, "Pairing code")
+            _tap_edit_by_label(adb, device, "6자리 페어링 코드")
             _input_text(adb, device, pairing_code)
             _adb(adb, device, "shell", "input", "keyevent", "BACK")
-            _tap_text(adb, device, "페어링 완료")
-            _wait_text_contains(adb, device, "동기화 완료", timeout=30)
-            _tap_text(adb, device, "연결", timeout=20, scroll=False)
-            _wait_text_contains(adb, device, "Android-PC 연결", timeout=20, scroll=True)
-
+            _tap_text(adb, device, "페어링")
+            _wait_text_contains(adb, device, "동기화", timeout=30)
             _tap_text(adb, device, "모바일 시작", timeout=20, scroll=True)
             _wait_text_contains(adb, device, "모바일 종료", timeout=30, scroll=True)
             _tap_text(adb, device, "모바일 종료", timeout=20, scroll=True)
@@ -397,8 +399,8 @@ def main(argv: list[str] | None = None) -> int:
             _adb(adb, device, "shell", "am", "force-stop", args.package)
             _adb(adb, device, "shell", "am", "start", "-n", args.activity)
             _wait_text_contains(adb, device, "HomeworkHelper Remote", timeout=20)
-            _tap_text(adb, device, "새로고침", timeout=20, scroll=False)
-            _wait_text_contains(adb, device, "동기화 완료", timeout=30)
+            _pull_to_refresh(adb, device)
+            _wait_text_contains(adb, device, "동기화", timeout=30)
             secure_after_restart = _secure_prefs(adb, device, args.package)
             if "encrypted_bearer_token" not in secure_after_restart:
                 raise RuntimeError("encrypted token disappeared after restart")

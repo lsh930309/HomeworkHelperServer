@@ -1,7 +1,7 @@
 # Android Remote Client Rebuild Design
 
 Last refreshed: 2026-05-19
-Status: Active rebuild design; existing Android feature code is legacy and should not be extended
+Status: Active v3 implementation design; existing Android full-parity code must not be resurrected
 
 ## 1. Decision
 
@@ -52,11 +52,10 @@ The Android home screen is the equivalent of the macOS popover.
 
 Recommended navigation:
 
-1. **Home / Games**: default screen, game mirror, quick launch, status feedback.
-2. **Setup**: pairing, Remote Agent URL, auth recovery, connectivity guidance.
-3. **More**: diagnostics, device management, Android-PC mobile-session tools, app settings.
+1. **Home / Games**: default screen, game mirror, quick launch, pull-to-refresh, status feedback.
+2. **Setup**: pairing, Remote Agent URL, auth recovery, display preferences, power readiness, diagnostics, fake smoke guidance.
 
-If using bottom navigation, Home must be the first tab and remain selected after app launch. If using a single-screen layout for v1, Home content appears first and setup sections are below collapsible cards.
+Bottom navigation should contain only user-action surfaces. Information-only Power/More tabs are consolidated into Setup sections.
 
 ## 4. Home screen blueprint
 
@@ -64,12 +63,13 @@ Home header:
 
 - App title and compact host status chip.
 - Last sync time.
-- Offline/stale/auth banner when needed.
-- Manual refresh action.
+- Floating status message fixed just above bottom navigation.
+- Pull-to-refresh gesture for snapshot refresh; no primary refresh button on Home.
 
 Game list:
 
 - Host-provided game icon when available; Material fallback when absent.
+- Host resource icon URL beside progress when available.
 - Game name, status text, progress meter/resource text.
 - Today-played indicator and running-state emphasis.
 - Primary `[실행]` button for `POST /remote/processes/{id}/launch`.
@@ -90,7 +90,7 @@ Visual direction:
 - Keep hierarchy simple: status banner -> game cards -> secondary setup entry.
 - Avoid dense admin dashboards on the home screen.
 
-## 5. Setup and support screens
+## 5. Setup and support screen
 
 Setup screen:
 
@@ -99,13 +99,9 @@ Setup screen:
 - Pairing code.
 - Pair/refresh token/clear local token actions.
 - Server reachability and auth guidance.
-
-More/settings screen:
-
-- Remote diagnostic logging toggle when implemented.
-- Registered devices list and revoke/purge actions.
-- Android-PC links and Usage Access tools, if retained in this rebuild.
-- Power readiness explanation.
+- User-facing display preferences such as diagnostic section visibility.
+- Power readiness explanation and OpenSSH/setup details.
+- Diagnostics and fake Remote Agent smoke guidance.
 
 Power UI policy:
 
@@ -127,7 +123,7 @@ app/src/main/java/dev/homeworkhelper/remote/
 ├── platform/TokenStore.kt       # Android Keystore token store
 ├── platform/Preferences.kt      # non-secret settings
 ├── platform/AndroidPlatform.kt  # browser/settings/package/Usage Access adapters
-└── ui/                          # Home, Setup, More, shared components
+└── ui/                          # Home, Setup, shared components
 ```
 
 Rules:
@@ -176,16 +172,16 @@ Those belonged to older host-managed or macOS-local assumptions and are not vali
 
 Preferred assets:
 
-- Host process icon URLs from `/remote/processes`.
-- Host resource icon URLs for progress/resource display.
+- Host process icon URLs from `/remote/processes` (`icon_url`, `icon_urls`).
+- Host resource icon URLs for progress/resource display (`resource_icon_url`, `resource_icon_urls`).
 - Material Icons/Material 3 default visual language for fallback status symbols.
 
 Do not add a custom icon pack for v1. The visual quality target should come from layout, spacing, status color, typography, and good empty/error states.
 
 Icon caching:
 
-- Cache process icons only after the Home screen and API mapping are stable.
-- Cache invalidation should be simple: process id + preferred size + URL/revision.
+- Use Coil memory/disk caching for Android v3 URL images.
+- Add explicit app-level icon cache only if Coil behavior is insufficient after real-host testing.
 
 ## 9. Connectivity model
 
@@ -216,9 +212,10 @@ cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug -
 
 Phase 1, Home implementation:
 
-- Static test for required v1 endpoints and no stale power endpoints.
+- Static test for required v3 endpoints, icon payload fields, pull-to-refresh, and no stale power endpoints.
 - Unit/static checks for token store and process card labels.
 - APK build.
+- Fake Remote Agent serves PNG process/resource icons from `assets/` and smoke verifies image endpoint hits.
 
 Phase 2, physical device:
 

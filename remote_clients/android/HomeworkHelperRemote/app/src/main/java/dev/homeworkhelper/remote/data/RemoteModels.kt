@@ -37,7 +37,12 @@ data class RemoteProgress(
     val percentage: Double,
     val displayText: String?,
     val remainingSeconds: Int?,
-)
+    val resourceIconUrl: String?,
+    val resourceIconUrls: Map<String, String>,
+) {
+    val preferredResourceIconUrl: String?
+        get() = resourceIconUrls["32"] ?: resourceIconUrls["64"] ?: resourceIconUrl ?: resourceIconUrls.values.firstOrNull()
+}
 
 data class RemoteProcess(
     val id: String,
@@ -45,16 +50,21 @@ data class RemoteProcess(
     val statusText: String?,
     val progress: RemoteProgress?,
     val iconUrl: String?,
+    val iconUrls: Map<String, String>,
     val isRunning: Boolean,
     val playedToday: Boolean,
 ) {
     val safeStatusText: String
         get() = statusText?.takeIf { it.isNotBlank() } ?: if (isRunning) "실행 중" else "대기"
 
+    val preferredIconUrl: String?
+        get() = iconUrls["128"] ?: iconUrls["64"] ?: iconUrl ?: iconUrls.values.firstOrNull()
+
     companion object {
-        fun listFromJson(raw: String): List<RemoteProcess> {
+        fun listFromJson(raw: String, baseUrl: String? = null): List<RemoteProcess> {
             val array = JSONArray(raw)
             return List(array.length()) { index -> fromJson(array.getJSONObject(index)) }
+                .map { process -> if (baseUrl.isNullOrBlank()) process else process.resolveAssetUrls(baseUrl) }
         }
 
         private fun fromJson(json: JSONObject): RemoteProcess {
@@ -66,6 +76,7 @@ data class RemoteProcess(
                 statusText = json.optStringOrNull("status_text"),
                 progress = json.optJSONObject("progress")?.let(::progressFromJson),
                 iconUrl = json.optStringOrNull("icon_url"),
+                iconUrls = json.optJSONObject("icon_urls")?.toStringMap().orEmpty(),
                 isRunning = json.optBoolean("is_running", false),
                 playedToday = json.optBoolean("played_today", false),
             )
@@ -77,6 +88,8 @@ data class RemoteProcess(
                 percentage = json.optDouble("percentage", 0.0).coerceIn(0.0, 100.0),
                 displayText = json.optStringOrNull("display_text"),
                 remainingSeconds = json.optIntOrNull("remaining_seconds"),
+                resourceIconUrl = json.optStringOrNull("resource_icon_url"),
+                resourceIconUrls = json.optJSONObject("resource_icon_urls")?.toStringMap().orEmpty(),
             )
         }
     }
@@ -142,6 +155,34 @@ fun JSONObject.optStringOrNull(name: String): String? {
 fun JSONObject.optIntOrNull(name: String): Int? {
     if (!has(name) || isNull(name)) return null
     return optInt(name)
+}
+
+fun JSONObject.toStringMap(): Map<String, String> {
+    return keys().asSequence().mapNotNull { key ->
+        optStringOrNull(key)?.let { value -> key to value }
+    }.toMap()
+}
+
+fun RemoteProcess.resolveAssetUrls(baseUrl: String): RemoteProcess {
+    return copy(
+        iconUrl = resolveRemoteUrl(baseUrl, iconUrl),
+        iconUrls = iconUrls.mapValues { (_, value) -> resolveRemoteUrl(baseUrl, value) ?: value },
+        progress = progress?.resolveAssetUrls(baseUrl),
+    )
+}
+
+fun RemoteProgress.resolveAssetUrls(baseUrl: String): RemoteProgress {
+    return copy(
+        resourceIconUrl = resolveRemoteUrl(baseUrl, resourceIconUrl),
+        resourceIconUrls = resourceIconUrls.mapValues { (_, value) -> resolveRemoteUrl(baseUrl, value) ?: value },
+    )
+}
+
+fun resolveRemoteUrl(baseUrl: String, value: String?): String? {
+    val raw = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
+    val base = baseUrl.trim().trimEnd('/')
+    return if (raw.startsWith('/')) "$base$raw" else "$base/$raw"
 }
 
 fun JSONObject.toRemoteStatus(): RemoteStatus {
