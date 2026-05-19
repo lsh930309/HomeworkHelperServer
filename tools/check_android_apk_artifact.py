@@ -29,6 +29,7 @@ EXPECTED_MIN_SDK = "26"
 EXPECTED_TARGET_SDK = "36"
 EXPECTED_PERMISSIONS = {
     "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.PACKAGE_USAGE_STATS",
 }
 

@@ -26,7 +26,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.homeworkhelper.remote.data.SMARTTHINGS_DEFAULT_WAKE_LABEL
+import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
 import dev.homeworkhelper.remote.state.RemoteUiState
 
 @Composable
@@ -36,6 +39,18 @@ fun SetupTab(
     onDeviceNameChange: (String) -> Unit,
     onPair: (String) -> Unit,
     onClearToken: () -> Unit,
+    onInspectTailscale: () -> Unit,
+    onOpenTailscale: () -> Unit,
+    onInstallTailscale: () -> Unit,
+    onEnsureTailscale: () -> Unit,
+    onSshHostChange: (String) -> Unit,
+    onSshUserChange: (String) -> Unit,
+    onSshPortChange: (String) -> Unit,
+    onRegisterSshKey: () -> Unit,
+    onVerifySsh: () -> Unit,
+    onDiscoverSmartThings: (String?) -> Unit,
+    onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
+    onManualSmartThingsDeviceChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showDiagnostics by remember { mutableStateOf(true) }
@@ -55,6 +70,21 @@ fun SetupTab(
                 onDeviceNameChange = onDeviceNameChange,
                 onPair = onPair,
                 onClearToken = onClearToken,
+            )
+            AutomationCard(
+                state = state,
+                onInspectTailscale = onInspectTailscale,
+                onOpenTailscale = onOpenTailscale,
+                onInstallTailscale = onInstallTailscale,
+                onEnsureTailscale = onEnsureTailscale,
+                onSshHostChange = onSshHostChange,
+                onSshUserChange = onSshUserChange,
+                onSshPortChange = onSshPortChange,
+                onRegisterSshKey = onRegisterSshKey,
+                onVerifySsh = onVerifySsh,
+                onDiscoverSmartThings = onDiscoverSmartThings,
+                onSelectSmartThingsDevice = onSelectSmartThingsDevice,
+                onManualSmartThingsDeviceChange = onManualSmartThingsDeviceChange,
             )
             DisplayPreferencesCard(showDiagnostics = showDiagnostics, onShowDiagnosticsChange = { showDiagnostics = it })
             PowerStatusSection(state)
@@ -119,6 +149,130 @@ private fun ConnectionCard(
 }
 
 @Composable
+private fun AutomationCard(
+    state: RemoteUiState,
+    onInspectTailscale: () -> Unit,
+    onOpenTailscale: () -> Unit,
+    onInstallTailscale: () -> Unit,
+    onEnsureTailscale: () -> Unit,
+    onSshHostChange: (String) -> Unit,
+    onSshUserChange: (String) -> Unit,
+    onSshPortChange: (String) -> Unit,
+    onRegisterSshKey: () -> Unit,
+    onVerifySsh: () -> Unit,
+    onDiscoverSmartThings: (String?) -> Unit,
+    onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
+    onManualSmartThingsDeviceChange: (String) -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("자동화 설정", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            TailscaleSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onEnsureTailscale)
+            SshSection(state, onSshHostChange, onSshUserChange, onSshPortChange, onRegisterSshKey, onVerifySsh)
+            SmartThingsSection(state, onDiscoverSmartThings, onSelectSmartThingsDevice, onManualSmartThingsDeviceChange)
+        }
+    }
+}
+
+@Composable
+private fun TailscaleSection(
+    state: RemoteUiState,
+    onInspectTailscale: () -> Unit,
+    onOpenTailscale: () -> Unit,
+    onInstallTailscale: () -> Unit,
+    onEnsureTailscale: () -> Unit,
+) {
+    val tailscale = state.automation.tailscale
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Tailscale 바인딩", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("설치: ${if (tailscale.installed) "감지됨" else "없음"} · VPN: ${if (tailscale.vpnActive) "활성" else "미감지"}")
+        Text(tailscale.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (tailscale.suggestedBaseUrls.isNotEmpty()) {
+            Text("후보 URL: ${tailscale.suggestedBaseUrls.joinToString()}", style = MaterialTheme.typography.bodySmall)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onInspectTailscale) { Text("상태 확인") }
+            TextButton(onClick = onOpenTailscale) { Text("앱 열기") }
+            TextButton(onClick = onInstallTailscale) { Text("설치") }
+        }
+        Button(onClick = onEnsureTailscale, enabled = !state.automation.isTailscaleBusy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (state.automation.isTailscaleBusy) "확인 중..." else "Host Tailscale URL 확인")
+        }
+    }
+}
+
+@Composable
+private fun SshSection(
+    state: RemoteUiState,
+    onSshHostChange: (String) -> Unit,
+    onSshUserChange: (String) -> Unit,
+    onSshPortChange: (String) -> Unit,
+    onRegisterSshKey: () -> Unit,
+    onVerifySsh: () -> Unit,
+) {
+    val ssh = state.automation.ssh
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("OpenSSH 전원 제어", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        OutlinedTextField(value = ssh.host, onValueChange = onSshHostChange, label = { Text("SSH host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(value = ssh.user, onValueChange = onSshUserChange, label = { Text("User") }, singleLine = true, modifier = Modifier.weight(1f))
+            OutlinedTextField(value = ssh.port.toString(), onValueChange = onSshPortChange, label = { Text("Port") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(0.55f))
+        }
+        Text("Key: ${if (ssh.publicKey.isNotBlank()) "생성됨" else "없음"} · Health: ${if (ssh.healthOk) "OK" else "미확인"}")
+        if (ssh.trustedFingerprint.isNotBlank()) Text("Fingerprint: ${ssh.trustedFingerprint}", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onRegisterSshKey, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("Key 등록") }
+            Button(onClick = onVerifySsh, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("SSH health") }
+        }
+    }
+}
+
+@Composable
+private fun SmartThingsSection(
+    state: RemoteUiState,
+    onDiscoverSmartThings: (String?) -> Unit,
+    onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
+    onManualSmartThingsDeviceChange: (String) -> Unit,
+) {
+    var patInput by remember { mutableStateOf("") }
+    val smartThings = state.automation.smartThings
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("SmartThings Wake", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("자동 선택 target label: $SMARTTHINGS_DEFAULT_WAKE_LABEL")
+        OutlinedTextField(
+            value = patInput,
+            onValueChange = { patInput = it.trim() },
+            label = { Text("SmartThings PAT") },
+            placeholder = { Text(if (smartThings.hasPat) "저장됨 - 비워 두면 기존 PAT 사용" else "PAT 입력") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = { onDiscoverSmartThings(patInput.takeIf { it.isNotBlank() }) },
+            enabled = !state.automation.isSmartThingsBusy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (state.automation.isSmartThingsBusy) "조회 중..." else "디바이스 자동 조회/선택") }
+        Text("선택: ${smartThings.deviceLabel.ifBlank { "없음" }} ${smartThings.deviceId.takeIf { it.isNotBlank() }?.let { "($it)" }.orEmpty()}")
+        OutlinedTextField(
+            value = smartThings.deviceId,
+            onValueChange = onManualSmartThingsDeviceChange,
+            label = { Text("deviceId 수동 입력 fallback") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (state.automation.smartThingsCandidates.isNotEmpty()) {
+            Text("후보 디바이스", style = MaterialTheme.typography.labelLarge)
+            state.automation.smartThingsCandidates.forEach { candidate ->
+                TextButton(onClick = { onSelectSmartThingsDevice(candidate) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("${candidate.label} · ${candidate.deviceId}")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DisplayPreferencesCard(
     showDiagnostics: Boolean,
     onShowDiagnosticsChange: (Boolean) -> Unit,
@@ -156,7 +310,7 @@ private fun PowerStatusSection(state: RemoteUiState) {
             Text("SSH: ${power?.setup?.sshServiceMessage ?: "확인 전"}")
             power?.setup?.effectiveAuthorizedKeysPath?.let { Text("Authorized keys: $it", style = MaterialTheme.typography.bodySmall) }
             Text(
-                "실제 절전/재시작/종료 명령은 Android direct adapter 준비 후 별도 단계에서 활성화됩니다.",
+                "Wake는 SmartThings REST API, 절전/재시작/종료는 Android OpenSSH adapter가 직접 수행합니다.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -174,6 +328,8 @@ private fun DiagnosticsSection(state: RemoteUiState) {
             Text("Token: ${if (state.hasToken) "저장됨" else "없음"}")
             Text("Games: ${state.processes.size}")
             Text("Last sync: ${state.lastSyncLabel}")
+            Text("SSH ready: ${state.automation.sshReady}")
+            Text("SmartThings ready: ${state.automation.wakeReady}")
         }
     }
 }

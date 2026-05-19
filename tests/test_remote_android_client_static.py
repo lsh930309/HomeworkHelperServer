@@ -71,6 +71,7 @@ def test_android_manifest_preserves_package_permissions_and_launcher_contract():
     manifest = _read(manifest_path)
 
     assert 'android.permission.INTERNET' in manifest
+    assert 'android.permission.ACCESS_NETWORK_STATE' in manifest
     assert 'android.permission.PACKAGE_USAGE_STATS' in manifest
     assert 'tools:ignore="ProtectedPermissions"' in manifest
     assert 'android.intent.action.MAIN' in manifest
@@ -232,6 +233,10 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         "process icon URLs",
         "resource_icon_url",
         "Coil memory/disk caching",
+        "SmartThings PAT input",
+        "`PC 켜기` device auto-selection",
+        "AndroidSSHPowerManager.kt",
+        "TailscaleBinding.kt",
     ]:
         assert marker in android
 
@@ -240,7 +245,8 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         "OpenSSH automation protocol",
         "SSH command acceptance",
         "__HH_REMOTE_POWER_ACCEPTED__",
-        "Android: keep power actions disabled",
+        "Android-local direct adapters may enable power buttons",
+        "SmartThings REST with PAT-based `PC 켜기` device auto-selection",
         "The supervisor never parses raw SSH stdout/stderr",
     ]:
         assert marker in supervisor
@@ -305,7 +311,66 @@ def test_android_internal_verifier_remains_home_mvp_build_entrypoint():
     for marker in [
         "dev.homeworkhelper.remote",
         "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.PACKAGE_USAGE_STATS",
         "Android APK artifact passed",
     ]:
         assert marker in artifact
+
+
+def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect():
+    sources = _android_sources()
+    manifest = _read(ANDROID_ROOT / "app/src/main/AndroidManifest.xml")
+    app_build = _read(ANDROID_ROOT / "app/build.gradle.kts")
+    fake_agent = _read(Path("tools/fake_android_remote_agent.py"))
+
+    for marker in [
+        'implementation("com.hierynomus:sshj:0.40.0")',
+        '<package android:name="com.tailscale.ipn" />',
+    ]:
+        assert marker in app_build + manifest
+
+    for marker in [
+        "AndroidSSHPowerManager",
+        "AndroidSSHKeyStore",
+        "SecureStringStore",
+        "AutomationPreferences",
+        "TailscaleBinding",
+        "SmartThingsClient",
+        "SMARTTHINGS_DEFAULT_WAKE_LABEL = \"PC 켜기\"",
+        "selectSmartThingsWakeDevice",
+        "devices?capability=switch",
+        "devices/${deviceId}/commands",
+        "__HH_SSH_HEALTH_OK__",
+        "__HH_REMOTE_POWER_ACCEPTED__",
+        "remote/power/ssh-key",
+        "remote/tailscale/ensure",
+        "com.tailscale.ipn",
+        "PowerAction.Wake",
+        "PowerAction.Sleep",
+        "PowerAction.Restart",
+        "PowerAction.Shutdown",
+        "Fingerprint:",
+        "deviceId 수동 입력 fallback",
+        "디바이스 자동 조회/선택",
+        "PC 켜기",
+    ]:
+        assert marker in sources
+
+    for forbidden in [
+        "remote/power/{action}",
+        "/remote/power/wake",
+        "/remote/power/sleep",
+        "/remote/power/restart",
+        "/remote/power/shutdown",
+        "smartthings.com/v1" + "/remote",
+    ]:
+        assert forbidden not in sources
+
+    for marker in [
+        "/remote/power/ssh-key",
+        "/remote/tailscale/ensure",
+        "suggested_base_urls",
+        "Fake SSH public key registered",
+    ]:
+        assert marker in fake_agent

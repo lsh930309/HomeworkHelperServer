@@ -9,6 +9,9 @@ enum class RemoteAvailability {
     OfflineExpected,
     AgentUnavailable,
     AuthRejected,
+    Waking,
+    GoingOffline,
+    Restarting,
 }
 
 data class RemoteStatus(
@@ -23,6 +26,7 @@ data class RemoteReadiness(
     val remoteConnectivity: RemoteReadinessSection?,
     val serverModeReadiness: RemoteReadinessSection?,
     val powerReadiness: RemoteReadinessSection?,
+    val tailscaleReadiness: RemoteReadinessSection?,
 )
 
 data class RemoteReadinessSection(
@@ -118,6 +122,13 @@ data class RemotePowerSetup(
     val sshServiceMessage: String?,
 )
 
+data class RemoteTailscaleEnsure(
+    val ready: Boolean,
+    val method: String?,
+    val message: String?,
+    val suggestedBaseUrls: List<String>,
+)
+
 data class RemotePowerReadiness(
     val status: RemotePowerStatus?,
     val setup: RemotePowerSetup?,
@@ -202,6 +213,7 @@ fun JSONObject.toRemoteReadiness(): RemoteReadiness {
         remoteConnectivity = optJSONObject("remote_connectivity")?.toRemoteReadinessSection(),
         serverModeReadiness = optJSONObject("server_mode_readiness")?.toRemoteReadinessSection(),
         powerReadiness = optJSONObject("power_readiness")?.toRemoteReadinessSection(),
+        tailscaleReadiness = optJSONObject("tailscale_readiness")?.toRemoteReadinessSection(),
     )
 }
 
@@ -242,6 +254,19 @@ fun JSONObject.toRemotePowerStatus(): RemotePowerStatus {
             List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
         }.orEmpty(),
         message = optStringOrNull("message"),
+    )
+}
+
+fun JSONObject.toRemoteTailscaleEnsure(): RemoteTailscaleEnsure {
+    return RemoteTailscaleEnsure(
+        ready = optBoolean("ready", false),
+        method = optStringOrNull("method"),
+        message = optStringOrNull("message"),
+        suggestedBaseUrls = optJSONArray("suggested_base_urls")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
+        } ?: optJSONObject("after")?.optJSONArray("suggested_base_urls")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
+        }.orEmpty(),
     )
 }
 

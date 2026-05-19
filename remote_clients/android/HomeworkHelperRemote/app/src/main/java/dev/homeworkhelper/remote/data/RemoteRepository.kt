@@ -32,4 +32,16 @@ class RemoteRepository(
     suspend fun confirmPairing(code: String, deviceName: String): PairingConfirmResponse {
         return api.confirmPairing(code, deviceName)
     }
+
+    suspend fun registerPowerSSHKey(publicKey: String, label: String): RemoteCommandResult {
+        return api.registerPowerSSHKey(publicKey, label)
+    }
+
+    suspend fun ensureTailscale(): RemoteTailscaleEnsure {
+        return api.ensureTailscale()
+    }
+
+    suspend fun probe(candidateBaseUrl: String): Boolean {
+        return runCatching { RemoteApiClient(candidateBaseUrl, token).status() }.isSuccess
+    }
 }

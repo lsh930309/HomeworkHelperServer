@@ -23,6 +23,7 @@ RESOURCE_ICONS = {
 
 LAUNCHES: list[str] = []
 IMAGE_HITS: list[str] = []
+SSH_KEYS: list[str] = []
 
 
 def _process_icon_urls(process_id: str) -> dict[str, str]:
@@ -199,6 +200,20 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/remote/pair/confirm":
             self._json({"id": "android-device", "name": "Android Device", "token": "fake-token"})
+            return
+        if self.path == "/remote/power/ssh-key":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length).decode("utf-8", "replace") if length else "{}"
+            SSH_KEYS.append(body)
+            self._json({"registered": True, "already_present": False, "message": "Fake SSH public key registered"})
+            return
+        if self.path == "/remote/tailscale/ensure":
+            self._json({
+                "ready": True,
+                "method": "fake",
+                "message": "Fake Tailscale ready",
+                "suggested_base_urls": ["http://127.0.0.1:18080"],
+            })
             return
         self._json({"error": "not found"}, status=404)
 

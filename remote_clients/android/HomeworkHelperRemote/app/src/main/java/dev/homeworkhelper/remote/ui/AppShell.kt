@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.homeworkhelper.remote.data.RemoteAvailability
 import dev.homeworkhelper.remote.data.RemoteProcess
+import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
+import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.state.RemoteUiState
 
 enum class RemoteTab(val label: String) {
@@ -41,6 +43,19 @@ fun RemoteAppShell(
     onPair: (String) -> Unit,
     onLaunch: (RemoteProcess) -> Unit,
     onClearToken: () -> Unit,
+    onInspectTailscale: () -> Unit,
+    onOpenTailscale: () -> Unit,
+    onInstallTailscale: () -> Unit,
+    onEnsureTailscale: () -> Unit,
+    onSshHostChange: (String) -> Unit,
+    onSshUserChange: (String) -> Unit,
+    onSshPortChange: (String) -> Unit,
+    onRegisterSshKey: () -> Unit,
+    onVerifySsh: () -> Unit,
+    onDiscoverSmartThings: (String?) -> Unit,
+    onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
+    onManualSmartThingsDeviceChange: (String) -> Unit,
+    onPowerAction: (PowerAction) -> Unit,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(RemoteTab.Home) }
 
@@ -68,6 +83,7 @@ fun RemoteAppShell(
                     state = state,
                     onRefresh = onRefresh,
                     onLaunch = onLaunch,
+                    onPowerAction = onPowerAction,
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -77,6 +93,18 @@ fun RemoteAppShell(
                     onDeviceNameChange = onDeviceNameChange,
                     onPair = onPair,
                     onClearToken = onClearToken,
+                    onInspectTailscale = onInspectTailscale,
+                    onOpenTailscale = onOpenTailscale,
+                    onInstallTailscale = onInstallTailscale,
+                    onEnsureTailscale = onEnsureTailscale,
+                    onSshHostChange = onSshHostChange,
+                    onSshUserChange = onSshUserChange,
+                    onSshPortChange = onSshPortChange,
+                    onRegisterSshKey = onRegisterSshKey,
+                    onVerifySsh = onVerifySsh,
+                    onDiscoverSmartThings = onDiscoverSmartThings,
+                    onSelectSmartThingsDevice = onSelectSmartThingsDevice,
+                    onManualSmartThingsDeviceChange = onManualSmartThingsDeviceChange,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -101,6 +129,9 @@ private fun FloatingStatusMessage(state: RemoteUiState, modifier: Modifier = Mod
         RemoteAvailability.OfflineExpected -> Triple("오프라인", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
         RemoteAvailability.AgentUnavailable -> Triple("Agent", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
         RemoteAvailability.AuthRejected -> Triple("인증", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        RemoteAvailability.Waking -> Triple("Wake", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+        RemoteAvailability.GoingOffline -> Triple("전원", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
+        RemoteAvailability.Restarting -> Triple("재시작", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
         RemoteAvailability.Unknown -> Triple("설정", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Surface(

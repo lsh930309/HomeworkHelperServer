@@ -34,6 +34,19 @@ private fun HomeworkHelperRemoteApp(
             onPair = viewModel::pair,
             onLaunch = viewModel::launch,
             onClearToken = viewModel::clearLocalToken,
+            onInspectTailscale = viewModel::inspectTailscale,
+            onOpenTailscale = viewModel::openTailscaleApp,
+            onInstallTailscale = viewModel::openTailscaleInstallPage,
+            onEnsureTailscale = viewModel::ensureTailscaleAndProbe,
+            onSshHostChange = viewModel::updateSshHost,
+            onSshUserChange = viewModel::updateSshUser,
+            onSshPortChange = viewModel::updateSshPort,
+            onRegisterSshKey = viewModel::createAndRegisterSshKey,
+            onVerifySsh = viewModel::verifySshHealth,
+            onDiscoverSmartThings = viewModel::discoverSmartThingsDevices,
+            onSelectSmartThingsDevice = viewModel::selectSmartThingsDevice,
+            onManualSmartThingsDeviceChange = viewModel::updateManualSmartThingsDevice,
+            onPowerAction = viewModel::executePowerAction,
         )
     }
 }

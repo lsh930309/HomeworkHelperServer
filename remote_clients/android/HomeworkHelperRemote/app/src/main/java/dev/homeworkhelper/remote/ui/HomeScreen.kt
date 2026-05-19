@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,6 +29,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +51,7 @@ import coil3.request.crossfade
 import dev.homeworkhelper.remote.data.RemoteAvailability
 import dev.homeworkhelper.remote.data.RemoteProcess
 import dev.homeworkhelper.remote.data.RemoteProgress
+import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.state.RemoteUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,6 +60,7 @@ fun HomeTab(
     state: RemoteUiState,
     onRefresh: () -> Unit,
     onLaunch: (RemoteProcess) -> Unit,
+    onPowerAction: (PowerAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -75,7 +79,7 @@ fun HomeTab(
             ) {
                 HomeHeroCard(state = state)
                 GameList(state = state, onLaunch = onLaunch)
-                PowerQuickSection(state = state)
+                PowerQuickSection(state = state, onPowerAction = onPowerAction)
             }
         }
     }
@@ -121,6 +125,9 @@ fun StatusChip(availability: RemoteAvailability) {
         RemoteAvailability.OfflineExpected -> "offline" to Color(0xFF8A5A00)
         RemoteAvailability.AgentUnavailable -> "agent unavailable" to Color(0xFFB3261E)
         RemoteAvailability.AuthRejected -> "auth rejected" to Color(0xFFB3261E)
+        RemoteAvailability.Waking -> "waking" to Color(0xFF2563EB)
+        RemoteAvailability.GoingOffline -> "powering off" to Color(0xFF8A5A00)
+        RemoteAvailability.Restarting -> "restarting" to Color(0xFF2563EB)
         RemoteAvailability.Unknown -> "unknown" to Color(0xFF666666)
     }
     Text(
@@ -140,6 +147,9 @@ private fun statusTitle(availability: RemoteAvailability): String {
         RemoteAvailability.OfflineExpected -> "호스트 오프라인"
         RemoteAvailability.AgentUnavailable -> "Remote Agent 확인 필요"
         RemoteAvailability.AuthRejected -> "페어링 복구 필요"
+        RemoteAvailability.Waking -> "Wake 진행 중"
+        RemoteAvailability.GoingOffline -> "전원 전환 중"
+        RemoteAvailability.Restarting -> "재시작 중"
         RemoteAvailability.Unknown -> "연결 설정 필요"
     }
 }
@@ -369,7 +379,11 @@ fun SmallBadge(label: String, tone: BadgeTone = BadgeTone.Neutral) {
 }
 
 @Composable
-private fun PowerQuickSection(state: RemoteUiState) {
+private fun PowerQuickSection(
+    state: RemoteUiState,
+    onPowerAction: (PowerAction) -> Unit,
+) {
+    var pendingAction by remember { mutableStateOf<PowerAction?>(null) }
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -381,25 +395,77 @@ private fun PowerQuickSection(state: RemoteUiState) {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DisabledPowerButton("깨우기", Modifier.weight(1f))
-                DisabledPowerButton("절전", Modifier.weight(1f))
+                PowerButton(
+                    action = PowerAction.Wake,
+                    enabled = state.automation.wakeReady && state.automation.powerActionInFlight == null,
+                    inFlight = state.automation.powerActionInFlight == PowerAction.Wake,
+                    modifier = Modifier.weight(1f),
+                    onClick = onPowerAction,
+                )
+                PowerButton(
+                    action = PowerAction.Sleep,
+                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    inFlight = state.automation.powerActionInFlight == PowerAction.Sleep,
+                    modifier = Modifier.weight(1f),
+                    onClick = { pendingAction = it },
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DisabledPowerButton("재시작", Modifier.weight(1f))
-                DisabledPowerButton("종료", Modifier.weight(1f))
+                PowerButton(
+                    action = PowerAction.Restart,
+                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    inFlight = state.automation.powerActionInFlight == PowerAction.Restart,
+                    modifier = Modifier.weight(1f),
+                    onClick = { pendingAction = it },
+                )
+                PowerButton(
+                    action = PowerAction.Shutdown,
+                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    inFlight = state.automation.powerActionInFlight == PowerAction.Shutdown,
+                    modifier = Modifier.weight(1f),
+                    onClick = { pendingAction = it },
+                )
             }
             Text(
-                "Android 전원 제어는 direct adapter 준비 후 활성화됩니다.",
+                powerHint(state),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
+    pendingAction?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingAction = null },
+            title = { Text("${action.label} 실행") },
+            text = { Text("호스트 PC에 ${action.label} 명령을 전송합니다. 현재 작업을 저장했는지 확인하세요.") },
+            confirmButton = {
+                Button(onClick = { pendingAction = null; onPowerAction(action) }) { Text("실행") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAction = null }) { Text("취소") }
+            },
+        )
+    }
 }
 
 @Composable
-fun DisabledPowerButton(label: String, modifier: Modifier = Modifier) {
-    OutlinedButton(onClick = {}, enabled = false, modifier = modifier.height(46.dp)) {
-        Text(label)
+private fun PowerButton(
+    action: PowerAction,
+    enabled: Boolean,
+    inFlight: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: (PowerAction) -> Unit,
+) {
+    OutlinedButton(onClick = { onClick(action) }, enabled = enabled, modifier = modifier.height(46.dp)) {
+        Text(if (inFlight) "처리 중" else action.label)
+    }
+}
+
+private fun powerHint(state: RemoteUiState): String {
+    return when {
+        !state.automation.wakeReady && !state.automation.sshReady -> "설정 탭에서 SmartThings PC 켜기 디바이스와 SSH health를 먼저 완료하세요."
+        !state.automation.wakeReady -> "Wake는 SmartThings PC 켜기 디바이스 선택 후 활성화됩니다."
+        !state.automation.sshReady -> "절전/재시작/종료는 SSH key 등록과 health 확인 후 활성화됩니다."
+        else -> "Wake는 SmartThings REST API, 나머지 전원 명령은 OpenSSH로 직접 실행합니다."
     }
 }

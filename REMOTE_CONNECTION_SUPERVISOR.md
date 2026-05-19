@@ -138,9 +138,9 @@ Invalid for current clients:
 
 Client responsibilities:
 
-- Wake: use a client-local wake adapter, currently SmartThings on macOS.
-- Sleep/restart/shutdown: use client-local OpenSSH, currently implemented on macOS.
-- Android: keep power actions disabled until Android-local direct adapters exist.
+- Wake: use a client-local wake adapter. macOS uses SmartThings CLI; Android uses SmartThings REST with PAT-based `PC 켜기` device auto-selection.
+- Sleep/restart/shutdown: use client-local OpenSSH on macOS and Android.
+- Android must keep host-managed power endpoints unused; only Android-local direct adapters may enable power buttons.
 
 ## 8. OpenSSH automation protocol
 
@@ -164,12 +164,13 @@ SSH command acceptance:
 - Missing marker, timeout, permission denied, no route, or command failure means not accepted.
 - Accepted commands emit a supervisor `powerIntentAccepted(action)` event.
 
-Current macOS command policy:
+Current client command policy:
 
 - `shutdown`: Windows `shutdown /s /t 0` plus marker.
 - `restart`: Windows `shutdown /r /t 0` plus marker.
 - `sleep`: marker is emitted before direct `rundll32.exe powrprof.dll,SetSuspendState 0,0,0`, because Windows OpenSSH may drop the session as sleep begins.
-- `IdentitiesOnly=yes` prevents accidental success through unrelated SSH agent keys.
+- macOS uses `IdentitiesOnly=yes` to prevent accidental success through unrelated SSH agent keys.
+- Android stores its private key locally, registers only the public key through `/remote/power/ssh-key`, verifies `__HH_SSH_HEALTH_OK__`, and pins the observed host key fingerprint with TOFU.
 
 ## 9. Platform adapter boundaries
 
@@ -182,14 +183,15 @@ macOS adapters:
 - SmartThings wake.
 - OpenSSH power.
 
-Android adapters to implement later:
+Android adapters:
 
-- Android Keystore token store.
-- Preferences/DataStore settings.
+- Android Keystore token/secret store.
+- Preferences settings.
 - Process/icon cache.
 - Friendly network error classification.
-- Optional package/Usage Access integration.
-- Optional Android-local power adapters only if a safe direct path is designed.
+- Tailscale Android app binding (`com.tailscale.ipn`) and VPN-state detection.
+- SmartThings REST wake with `PC 켜기` auto-selection and manual deviceId fallback.
+- SSHJ-backed OpenSSH health plus sleep/restart/shutdown commands.
 
 Shared principle: adapters perform side effects; reducer/state logic consumes typed results.
 

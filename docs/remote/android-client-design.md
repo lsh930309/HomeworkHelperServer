@@ -36,11 +36,11 @@ Secondary jobs:
 - Diagnose online/offline/auth state.
 - View readiness and cached game state when the host is unavailable.
 - Manage optional Android-PC mobile-session features.
-- Prepare future Android-local power control without pretending it exists now.
+- Provide optional Android-local power control through Tailscale app binding, SmartThings Wake, and OpenSSH.
 
 Non-goals for the first rebuild pass:
 
-- Full Android power side effects.
+- Host-managed power side effects or `/remote/power/{action}` execution endpoints.
 - Background sync, notifications, or WorkManager.
 - Cloud relay or public Remote Agent exposure.
 - Recreating every macOS settings option.
@@ -101,12 +101,15 @@ Setup screen:
 - Server reachability and auth guidance.
 - User-facing display preferences such as diagnostic section visibility.
 - Power readiness explanation and OpenSSH/setup details.
+- Tailscale app binding status and host tailnet URL probing.
+- SmartThings PAT input, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
 - Diagnostics and fake Remote Agent smoke guidance.
 
 Power UI policy:
 
-- Android must not show enabled wake/sleep/restart/shutdown buttons until Android-local direct adapters exist.
-- It may show readiness/setup documentation and disabled buttons with explanatory copy.
+- Wake is enabled only after SmartThings PAT plus `PC 켜기` device selection succeeds.
+- Sleep/restart/shutdown are enabled only after SSH key registration and marker-based SSH health succeed.
+- Restart/shutdown/sleep require a confirmation dialog; Wake may be one-tap.
 - It must not call removed or host-managed power execution endpoints.
 
 ## 6. Android implementation architecture
@@ -119,10 +122,13 @@ app/src/main/java/dev/homeworkhelper/remote/
 ├── data/RemoteApiClient.kt      # low-level HTTP/JSON client for shared /remote/* contract
 ├── data/RemoteModels.kt         # DTOs and mapping helpers
 ├── data/RemoteRepository.kt     # snapshot fetch and commands
-├── state/RemoteViewModel.kt     # UI state, refresh, pairing, launch commands
+├── data/SmartThingsClient.kt    # SmartThings REST list/command client
+├── state/RemoteViewModel.kt     # UI state, refresh, pairing, launch and automation commands
 ├── platform/TokenStore.kt       # Android Keystore token store
 ├── platform/Preferences.kt      # non-secret settings
-├── platform/AndroidPlatform.kt  # browser/settings/package/Usage Access adapters
+├── platform/AutomationPreferences.kt # SSH/SmartThings/Tailscale local settings
+├── platform/AndroidSSHPowerManager.kt # SSHJ health and power commands
+├── platform/TailscaleBinding.kt # app detection, launch/install, VPN-state adapter
 └── ui/                          # Home, Setup, shared components
 ```
 
@@ -150,6 +156,13 @@ Required for setup:
 - `GET /remote/devices`
 - `DELETE /remote/devices/{id}`
 
+Required for automation setup:
+
+- `POST /remote/tailscale/ensure`
+- `GET /remote/power/status`
+- `GET /remote/power/setup`
+- `POST /remote/power/ssh-key`
+
 Optional after Home is stable:
 
 - `GET /remote/dashboard/summary`
@@ -157,8 +170,6 @@ Optional after Home is stable:
 - `GET /remote/game-links`, `POST /remote/game-links`
 - `GET /remote/mobile-sessions/active`, start/end mobile sessions
 - `GET /remote/logging/config`, `PUT /remote/logging/config`
-- `POST /remote/tailscale/ensure`
-- `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
 
 Do not use:
 
@@ -166,7 +177,7 @@ Do not use:
 - `/remote/power/{action}`
 - `/remote/power/smartthings/devices`
 
-Those belonged to older host-managed or macOS-local assumptions and are not valid Android v1 execution contracts.
+Those belonged to older host-managed assumptions and are not valid Android execution contracts.
 
 ## 8. Assets and icons
 

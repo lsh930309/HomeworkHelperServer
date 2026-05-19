@@ -1,0 +1,71 @@
+package dev.homeworkhelper.remote.platform
+
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
+import android.os.Build
+
+private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
+
+data class TailscaleBindingState(
+    val installed: Boolean = false,
+    val vpnActive: Boolean = false,
+    val suggestedBaseUrls: List<String> = emptyList(),
+    val message: String = "Tailscale 상태를 아직 확인하지 않았습니다.",
+)
+
+class TailscaleBinding(private val context: Context) {
+    fun inspect(): TailscaleBindingState {
+        val installed = isInstalled()
+        val vpnActive = isVpnActive()
+        return TailscaleBindingState(
+            installed = installed,
+            vpnActive = vpnActive,
+            message = when {
+                installed && vpnActive -> "Tailscale 앱과 VPN 연결을 감지했습니다."
+                installed -> "Tailscale 앱은 설치되어 있지만 VPN 활성 네트워크가 보이지 않습니다."
+                else -> "Tailscale 앱이 설치되어 있지 않습니다."
+            },
+        )
+    }
+
+    fun openTailscaleApp(): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(TAILSCALE_PACKAGE) ?: return false
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        return true
+    }
+
+    fun openInstallPage() {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$TAILSCALE_PACKAGE"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$TAILSCALE_PACKAGE"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+    }
+
+    private fun isInstalled(): Boolean {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(TAILSCALE_PACKAGE, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(TAILSCALE_PACKAGE, 0)
+            }
+        }.isSuccess
+    }
+
+    private fun isVpnActive(): Boolean {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return connectivity.allNetworks.any { network ->
+            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+    }
+}

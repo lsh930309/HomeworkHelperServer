@@ -10,16 +10,47 @@ import dev.homeworkhelper.remote.data.RemoteAvailability
 import dev.homeworkhelper.remote.data.RemotePowerReadiness
 import dev.homeworkhelper.remote.data.RemoteProcess
 import dev.homeworkhelper.remote.data.RemoteRepository
+import dev.homeworkhelper.remote.data.SMARTTHINGS_DEFAULT_WAKE_LABEL
+import dev.homeworkhelper.remote.data.SmartThingsClient
+import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
+import dev.homeworkhelper.remote.data.selectSmartThingsWakeDevice
+import dev.homeworkhelper.remote.platform.AndroidSSHKeyStore
+import dev.homeworkhelper.remote.platform.AndroidSSHPowerManager
 import dev.homeworkhelper.remote.platform.AndroidTokenStore
+import dev.homeworkhelper.remote.platform.AutomationPreferences
+import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.platform.RemotePreferences
+import dev.homeworkhelper.remote.platform.SmartThingsPreferences
+import dev.homeworkhelper.remote.platform.SshPowerPreferences
+import dev.homeworkhelper.remote.platform.TailscaleBinding
+import dev.homeworkhelper.remote.platform.TailscaleBindingState
 import dev.homeworkhelper.remote.platform.TokenStore
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.net.URI
 import java.text.DateFormat
 import java.util.Date
+
+data class AutomationUiState(
+    val tailscale: TailscaleBindingState = TailscaleBindingState(),
+    val ssh: SshPowerPreferences = SshPowerPreferences(),
+    val smartThings: SmartThingsPreferences = SmartThingsPreferences(),
+    val smartThingsCandidates: List<SmartThingsDeviceCandidate> = emptyList(),
+    val isTailscaleBusy: Boolean = false,
+    val isSshBusy: Boolean = false,
+    val isSmartThingsBusy: Boolean = false,
+    val powerActionInFlight: PowerAction? = null,
+) {
+    val sshReady: Boolean
+        get() = ssh.publicKey.isNotBlank() && ssh.healthOk && ssh.host.isNotBlank() && ssh.user.isNotBlank()
+
+    val wakeReady: Boolean
+        get() = smartThings.hasPat && smartThings.deviceId.isNotBlank()
+}
 
 data class RemoteUiState(
     val baseUrl: String = "",
@@ -35,6 +66,7 @@ data class RemoteUiState(
     val lastSyncMillis: Long = 0L,
     val processLaunchEnabled: Boolean = false,
     val powerReadiness: RemotePowerReadiness? = null,
+    val automation: AutomationUiState = AutomationUiState(),
 ) {
     val canRefresh: Boolean
         get() = baseUrl.isNotBlank() && !isRefreshing
@@ -51,7 +83,13 @@ class RemoteViewModel(
     context: Context,
     private val preferences: RemotePreferences = RemotePreferences(context.applicationContext),
     private val tokenStore: TokenStore = AndroidTokenStore(context.applicationContext),
+    private val automationPreferences: AutomationPreferences = AutomationPreferences(context.applicationContext),
 ) : ViewModel() {
+    private val appContext = context.applicationContext
+    private val tailscaleBinding = TailscaleBinding(appContext)
+    private val sshKeyStore = AndroidSSHKeyStore(automationPreferences)
+    private val sshPowerManager = AndroidSSHPowerManager(automationPreferences)
+
     private val _uiState = MutableStateFlow(
         RemoteUiState(
             baseUrl = preferences.baseUrl,
@@ -60,6 +98,11 @@ class RemoteViewModel(
             processes = preferences.cachedProcesses(),
             lastSyncMillis = preferences.lastSyncMillis,
             userMessage = "Remote Agent URL과 페어링 코드가 있으면 바로 연결할 수 있습니다.",
+            automation = AutomationUiState(
+                tailscale = tailscaleBinding.inspect(),
+                ssh = automationPreferences.loadSsh(),
+                smartThings = automationPreferences.loadSmartThings(),
+            ),
         )
     )
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
@@ -73,11 +116,39 @@ class RemoteViewModel(
     fun updateBaseUrl(value: String) {
         preferences.baseUrl = value
         _uiState.update { it.copy(baseUrl = value, userMessage = null) }
+        fillDefaultSshHost(value)
     }
 
     fun updateDeviceName(value: String) {
         preferences.deviceName = value
         _uiState.update { it.copy(deviceName = value, userMessage = null) }
+    }
+
+    fun updateSshHost(value: String) {
+        automationPreferences.sshHost = value
+        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+    }
+
+    fun updateSshUser(value: String) {
+        automationPreferences.sshUser = value
+        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+    }
+
+    fun updateSshPort(value: String) {
+        val port = value.toIntOrNull() ?: return
+        automationPreferences.sshPort = port
+        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+    }
+
+    fun updateManualSmartThingsDevice(value: String) {
+        automationPreferences.smartThingsDeviceId = value
+        if (value.isBlank()) {
+            automationPreferences.smartThingsDeviceLabel = ""
+            automationPreferences.smartThingsLocationId = ""
+            automationPreferences.smartThingsLastVerifiedMillis = 0L
+        }
+        updateAutomation { it.copy(smartThings = automationPreferences.loadSmartThings()) }
+        _uiState.update { it.copy(userMessage = "SmartThings deviceId를 수동 저장했습니다.") }
     }
 
     fun refresh() {
@@ -102,6 +173,7 @@ class RemoteViewModel(
                     val now = System.currentTimeMillis()
                     preferences.cachedProcessesJson = snapshot.rawProcessesJson
                     preferences.lastSyncMillis = now
+                    applyPowerDefaults(snapshot.powerReadiness)
                     _uiState.update {
                         it.copy(
                             availability = RemoteAvailability.Online,
@@ -114,6 +186,7 @@ class RemoteViewModel(
                             hasToken = tokenStore.loadToken() != null,
                             processLaunchEnabled = snapshot.status.processLaunch,
                             powerReadiness = snapshot.powerReadiness,
+                            automation = it.automation.copy(ssh = automationPreferences.loadSsh()),
                         )
                     }
                 }
@@ -179,6 +252,131 @@ class RemoteViewModel(
         }
     }
 
+    fun inspectTailscale() {
+        updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
+        _uiState.update { it.copy(userMessage = it.automation.tailscale.message) }
+    }
+
+    fun openTailscaleApp() {
+        val opened = tailscaleBinding.openTailscaleApp()
+        _uiState.update { it.copy(userMessage = if (opened) "Tailscale 앱을 열었습니다." else "Tailscale 앱을 찾지 못했습니다.") }
+    }
+
+    fun openTailscaleInstallPage() {
+        tailscaleBinding.openInstallPage()
+        _uiState.update { it.copy(userMessage = "Tailscale 설치 페이지를 열었습니다.") }
+    }
+
+    fun ensureTailscaleAndProbe() {
+        if (_uiState.value.baseUrl.isBlank()) {
+            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
+            return
+        }
+        viewModelScope.launch {
+            updateAutomation { it.copy(isTailscaleBusy = true, tailscale = tailscaleBinding.inspect()) }
+            runCatching { repository().ensureTailscale() }
+                .onSuccess { result ->
+                    val acceptedUrl = result.suggestedBaseUrls.firstOrNull { candidate -> repository().probe(candidate) }
+                    if (acceptedUrl != null) {
+                        preferences.baseUrl = acceptedUrl
+                    }
+                    updateAutomation {
+                        it.copy(
+                            isTailscaleBusy = false,
+                            tailscale = tailscaleBinding.inspect().copy(suggestedBaseUrls = result.suggestedBaseUrls, message = result.message ?: it.tailscale.message),
+                        )
+                    }
+                    _uiState.update {
+                        it.copy(
+                            baseUrl = acceptedUrl ?: it.baseUrl,
+                            userMessage = acceptedUrl?.let { url -> "Tailscale URL을 확인하고 저장했습니다: $url" }
+                                ?: (result.message ?: "Tailscale 후보 URL을 확인했습니다."),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    updateAutomation { it.copy(isTailscaleBusy = false) }
+                    _uiState.update { it.copy(userMessage = error.message ?: "Tailscale 확인 실패") }
+                }
+        }
+    }
+
+    fun createAndRegisterSshKey() {
+        if (_uiState.value.baseUrl.isBlank()) {
+            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
+            return
+        }
+        viewModelScope.launch {
+            updateAutomation { it.copy(isSshBusy = true) }
+            val keyPair = sshKeyStore.ensureKeyPair()
+            runCatching { repository().registerPowerSSHKey(keyPair.publicKeyLine, "Android") }
+                .onSuccess { result ->
+                    updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+                    _uiState.update { it.copy(userMessage = result.message) }
+                }
+                .onFailure { error ->
+                    updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+                    applyFailure(error)
+                }
+        }
+    }
+
+    fun verifySshHealth() {
+        val privateKey = sshKeyStore.loadPrivateKey()
+        if (privateKey.isNullOrBlank()) {
+            _uiState.update { it.copy(userMessage = "SSH key를 먼저 생성/등록하세요.") }
+            return
+        }
+        viewModelScope.launch {
+            updateAutomation { it.copy(isSshBusy = true) }
+            val result = sshPowerManager.health(automationPreferences.loadSsh(), privateKey)
+            updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+            _uiState.update { it.copy(userMessage = result.message) }
+        }
+    }
+
+    fun discoverSmartThingsDevices(pat: String? = null) {
+        val token = pat?.trim()?.takeIf { it.isNotBlank() } ?: automationPreferences.loadSmartThingsPat()
+        if (token.isNullOrBlank()) {
+            _uiState.update { it.copy(userMessage = "SmartThings PAT를 입력하세요.") }
+            return
+        }
+        pat?.trim()?.takeIf { it.isNotBlank() }?.let(automationPreferences::saveSmartThingsPat)
+        viewModelScope.launch {
+            updateAutomation { it.copy(isSmartThingsBusy = true, smartThings = automationPreferences.loadSmartThings()) }
+            runCatching { SmartThingsClient(token).listSwitchDevices() }
+                .onSuccess { devices ->
+                    val selection = selectSmartThingsWakeDevice(devices, SMARTTHINGS_DEFAULT_WAKE_LABEL)
+                    selection.selected?.let(::persistSmartThingsDevice)
+                    updateAutomation {
+                        it.copy(
+                            isSmartThingsBusy = false,
+                            smartThings = automationPreferences.loadSmartThings(),
+                            smartThingsCandidates = selection.candidates,
+                        )
+                    }
+                    _uiState.update { it.copy(userMessage = selection.message) }
+                }
+                .onFailure { error ->
+                    updateAutomation { it.copy(isSmartThingsBusy = false, smartThings = automationPreferences.loadSmartThings()) }
+                    _uiState.update { it.copy(userMessage = error.message ?: "SmartThings 디바이스 조회 실패") }
+                }
+        }
+    }
+
+    fun selectSmartThingsDevice(candidate: SmartThingsDeviceCandidate) {
+        persistSmartThingsDevice(candidate)
+        updateAutomation { it.copy(smartThings = automationPreferences.loadSmartThings()) }
+        _uiState.update { it.copy(userMessage = "SmartThings '${candidate.label}' 디바이스를 선택했습니다.") }
+    }
+
+    fun executePowerAction(action: PowerAction) {
+        when (action) {
+            PowerAction.Wake -> wakeWithSmartThings()
+            PowerAction.Sleep, PowerAction.Restart, PowerAction.Shutdown -> executeSshPower(action)
+        }
+    }
+
     fun clearLocalToken() {
         tokenStore.clearToken()
         _uiState.update {
@@ -190,8 +388,90 @@ class RemoteViewModel(
         }
     }
 
+    private fun wakeWithSmartThings() {
+        val pat = automationPreferences.loadSmartThingsPat()
+        val deviceId = automationPreferences.smartThingsDeviceId
+        if (pat.isNullOrBlank() || deviceId.isBlank()) {
+            _uiState.update { it.copy(userMessage = "SmartThings PAT와 PC 켜기 디바이스를 먼저 설정하세요.") }
+            return
+        }
+        viewModelScope.launch {
+            updateAutomation { it.copy(powerActionInFlight = PowerAction.Wake) }
+            runCatching { SmartThingsClient(pat).wake(deviceId) }
+                .onSuccess { result ->
+                    updateAutomation { it.copy(powerActionInFlight = null) }
+                    _uiState.update {
+                        it.copy(
+                            availability = if (result.accepted) RemoteAvailability.Waking else it.availability,
+                            userMessage = result.message,
+                        )
+                    }
+                    if (result.accepted) {
+                        delay(4_000)
+                        refreshWithMessage("Wake 후 Remote Agent 재연결을 확인했습니다.")
+                    }
+                }
+                .onFailure { error ->
+                    updateAutomation { it.copy(powerActionInFlight = null) }
+                    _uiState.update { it.copy(userMessage = error.message ?: "SmartThings Wake 실패") }
+                }
+        }
+    }
+
+    private fun executeSshPower(action: PowerAction) {
+        val privateKey = sshKeyStore.loadPrivateKey()
+        if (privateKey.isNullOrBlank() || !automationPreferences.loadSsh().healthOk) {
+            _uiState.update { it.copy(userMessage = "SSH health 확인이 완료되어야 ${action.label} 명령을 사용할 수 있습니다.") }
+            return
+        }
+        viewModelScope.launch {
+            updateAutomation { it.copy(powerActionInFlight = action) }
+            val result = sshPowerManager.executePowerAction(action, automationPreferences.loadSsh(), privateKey)
+            updateAutomation { it.copy(powerActionInFlight = null) }
+            _uiState.update {
+                it.copy(
+                    availability = if (result.ok) {
+                        if (action == PowerAction.Restart) RemoteAvailability.Restarting else RemoteAvailability.GoingOffline
+                    } else {
+                        it.availability
+                    },
+                    userMessage = result.message,
+                )
+            }
+        }
+    }
+
+    private fun persistSmartThingsDevice(candidate: SmartThingsDeviceCandidate) {
+        automationPreferences.smartThingsDeviceId = candidate.deviceId
+        automationPreferences.smartThingsDeviceLabel = candidate.label
+        automationPreferences.smartThingsLocationId = candidate.locationId.orEmpty()
+        automationPreferences.smartThingsLastVerifiedMillis = System.currentTimeMillis()
+    }
+
     private fun repository(tokenOverride: String? = tokenStore.loadToken()): RemoteRepository {
         return RemoteRepository(_uiState.value.baseUrl.trim(), tokenOverride)
+    }
+
+    private fun applyPowerDefaults(powerReadiness: RemotePowerReadiness?) {
+        if (automationPreferences.sshUser.isBlank()) {
+            powerReadiness?.setup?.user?.takeIf { it.isNotBlank() }?.let { automationPreferences.sshUser = it }
+        }
+        if (automationPreferences.sshHost.isBlank()) {
+            fillDefaultSshHost(_uiState.value.baseUrl)
+        }
+    }
+
+    private fun fillDefaultSshHost(baseUrl: String) {
+        if (automationPreferences.sshHost.isNotBlank()) return
+        val host = runCatching { URI(baseUrl.trim()).host }.getOrNull().orEmpty()
+        if (host.isNotBlank()) {
+            automationPreferences.sshHost = host
+            updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+        }
+    }
+
+    private fun updateAutomation(transform: (AutomationUiState) -> AutomationUiState) {
+        _uiState.update { state -> state.copy(automation = transform(state.automation)) }
     }
 
     private fun applyFailure(error: Throwable) {
