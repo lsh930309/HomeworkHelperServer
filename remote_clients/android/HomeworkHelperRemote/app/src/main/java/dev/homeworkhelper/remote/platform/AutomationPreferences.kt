@@ -1,6 +1,7 @@
 package dev.homeworkhelper.remote.platform
 
 import android.content.Context
+import dev.homeworkhelper.remote.BuildConfig
 
 data class SshPowerPreferences(
     val host: String = "",
@@ -52,15 +53,15 @@ class AutomationPreferences(context: Context) {
         set(value) = preferences.edit().putBoolean(KEY_SSH_HEALTH_OK, value).apply()
 
     var smartThingsDeviceId: String
-        get() = preferences.getString(KEY_ST_DEVICE_ID, "").orEmpty()
+        get() = preferences.getString(KEY_ST_DEVICE_ID, "").orEmpty().ifBlank { BuildConfig.SMARTTHINGS_DEFAULT_DEVICE_ID }
         set(value) = preferences.edit().putString(KEY_ST_DEVICE_ID, value.trim()).apply()
 
     var smartThingsDeviceLabel: String
-        get() = preferences.getString(KEY_ST_DEVICE_LABEL, "").orEmpty()
+        get() = preferences.getString(KEY_ST_DEVICE_LABEL, "").orEmpty().ifBlank { BuildConfig.SMARTTHINGS_DEFAULT_DEVICE_LABEL }
         set(value) = preferences.edit().putString(KEY_ST_DEVICE_LABEL, value.trim()).apply()
 
     var smartThingsLocationId: String
-        get() = preferences.getString(KEY_ST_LOCATION_ID, "").orEmpty()
+        get() = preferences.getString(KEY_ST_LOCATION_ID, "").orEmpty().ifBlank { BuildConfig.SMARTTHINGS_DEFAULT_LOCATION_ID }
         set(value) = preferences.edit().putString(KEY_ST_LOCATION_ID, value.trim()).apply()
 
     var smartThingsLastVerifiedMillis: Long
@@ -89,6 +90,7 @@ class AutomationPreferences(context: Context) {
     }
 
     fun loadSmartThingsPat(): String? = secureStore.load(KEY_ST_PAT)?.takeIf { it.isNotBlank() }
+        ?: BuildConfig.SMARTTHINGS_DEBUG_PAT.takeIf { it.isNotBlank() }
 
     fun clearSmartThingsPat() {
         secureStore.clear(KEY_ST_PAT)

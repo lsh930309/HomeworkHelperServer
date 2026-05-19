@@ -327,9 +327,14 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
     for marker in [
         'implementation("com.hierynomus:sshj:0.40.0")',
         'implementation("org.bouncycastle:bcprov-jdk18on:1.80.2")',
-        '<package android:name="com.tailscale.ipn" />',
+        'SMARTTHINGS_DEFAULT_DEVICE_ID',
+        '145ad447-9969-4ee7-bda0-1760430d9be1',
+        'SMARTTHINGS_DEBUG_PAT',
+        'buildConfig = true',
+        'local.properties',
     ]:
-        assert marker in app_build + manifest
+        assert marker in app_build
+    assert '<package android:name="com.tailscale.ipn" />' in manifest
 
     for marker in [
         "AndroidSSHPowerManager",
@@ -367,6 +372,11 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "deviceId 수동 입력 fallback",
         "디바이스 자동 조회/선택",
         "PC 켜기",
+        "SMARTTHINGS_DEFAULT_DEVICE_ID",
+        "SMARTTHINGS_DEFAULT_LOCATION_ID",
+        "SMARTTHINGS_DEBUG_PAT",
+        "BuildConfig.SMARTTHINGS_DEFAULT_DEVICE_ID",
+        "BuildConfig.SMARTTHINGS_DEBUG_PAT",
     ]:
         assert marker in sources
 

@@ -1,3 +1,15 @@
+import java.util.Properties
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
+
+fun localProperty(name: String, defaultValue: String = ""): String =
+    localProperties.getProperty(name)?.trim().orEmpty().ifBlank { defaultValue }
+
+fun buildConfigString(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,10 +26,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+
+        buildConfigField("String", "SMARTTHINGS_DEFAULT_DEVICE_ID", buildConfigString(localProperty("smartthings.deviceId", "145ad447-9969-4ee7-bda0-1760430d9be1")))
+        buildConfigField("String", "SMARTTHINGS_DEFAULT_DEVICE_LABEL", buildConfigString(localProperty("smartthings.deviceLabel", "PC 켜기")))
+        buildConfigField("String", "SMARTTHINGS_DEFAULT_LOCATION_ID", buildConfigString(localProperty("smartthings.locationId", "7bbf137d-1f96-4ad4-9e39-1cdab082d41a")))
+        buildConfigField("String", "SMARTTHINGS_DEBUG_PAT", buildConfigString(localProperty("smartthings.pat")))
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

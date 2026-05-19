@@ -45,3 +45,16 @@ python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ```
 
 The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator markers, and screenshots under `artifacts/android-device/`.
+
+
+## Local SmartThings wake defaults
+
+The debug build has a personal default wake target for `PC 켜기` baked into BuildConfig.
+Secrets must stay out of git: put a temporary local token in the untracked `local.properties` file only when building a private APK.
+
+```properties
+smartthings.deviceId=145ad447-9969-4ee7-bda0-1760430d9be1
+smartthings.deviceLabel=PC 켜기
+smartthings.locationId=7bbf137d-1f96-4ad4-9e39-1cdab082d41a
+smartthings.pat= # optional local-only debug token; never commit a real value
+```
