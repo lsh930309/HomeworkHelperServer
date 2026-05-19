@@ -86,11 +86,11 @@ The macOS client is the reference native client. Its main UX is a menu-bar popov
 
 Architecture reference: `docs/remote/macos-client-architecture.md`.
 
-## 5. Android client rebuild scaffold
+## 5. Android client Home/Games MVP
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The project currently preserves only the build/package/manifest scaffold so the next implementation can start cleanly from the new design.
+The old Android full-parity feature implementation was removed. The current Android MVP implements the Home/Games-first client surface from the new design: Remote Agent URL setup, pairing, registered game mirroring, cached offline display, and host game launch.
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -112,7 +112,7 @@ Remote route/static checks:
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
 ```
 
-Android scaffold/internal checks:
+Android Home/Games MVP/internal checks:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
@@ -120,7 +120,7 @@ cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug -
 ./.venv/bin/python tools/check_android_apk_artifact.py
 ```
 
-The previous physical-device Android verifier is not a release gate while the app is a rebuild scaffold. Re-enable device e2e only after the new Home/Games implementation lands.
+Physical-device Android verification remains a later release gate. Use it after the Home/Games MVP is exercised against a real Remote Agent and pairing flow.
 
 Stateful client smoke isolation contract:
 

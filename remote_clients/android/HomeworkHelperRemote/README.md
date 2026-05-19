@@ -1,8 +1,8 @@
 # HomeworkHelper Remote Android
 
-Status: rebuild scaffold only. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
+Status: Home/Games MVP. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
 
-The Android client will be rebuilt from `docs/remote/android-client-design.md`. The new product direction is to make the Android home screen mirror the macOS popover: registered game status, progress, running/today indicators, and quick host launch are the primary UX. Pairing, power readiness, device management, Android-PC links, and diagnostics are supporting setup surfaces.
+The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current MVP makes the Android home screen mirror the macOS popover: registered game status, progress, running/today indicators, quick host launch, and minimal pairing/setup are the primary UX. Power readiness, device management, Android-PC links, and diagnostics remain supporting surfaces for later phases.
 
 ## Preserved project contract
 
@@ -16,7 +16,7 @@ The Android client will be rebuilt from `docs/remote/android-client-design.md`. 
 - targetSdk: 36
 - Manifest permissions retained for the rebuild: `INTERNET`, `PACKAGE_USAGE_STATS`
 
-## Build scaffold
+## Build MVP
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -28,7 +28,7 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 
 The APK is still produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
-## Next implementation source of truth
+## Implementation source of truth
 
 - `docs/remote/macos-client-architecture.md` — reference macOS client behavior and contracts.
 - `docs/remote/android-client-design.md` — Android rebuild UX/system design.

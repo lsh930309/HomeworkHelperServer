@@ -14,7 +14,7 @@ def _android_sources() -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in MAIN_SRC.rglob("*.kt"))
 
 
-def test_android_project_is_rebuild_scaffold_with_reproducible_compose_build():
+def test_android_project_is_home_games_mvp_with_reproducible_compose_build():
     assert (ANDROID_ROOT / "settings.gradle.kts").exists()
     assert (ANDROID_ROOT / "gradlew").exists()
     assert (ANDROID_ROOT / "gradle/wrapper/gradle-wrapper.jar").exists()
@@ -29,9 +29,22 @@ def test_android_project_is_rebuild_scaffold_with_reproducible_compose_build():
     assert 'implementation(platform("androidx.compose:compose-bom:2026.03.00"))' in app_build
     assert 'implementation("androidx.activity:activity-compose:1.12.0")' in app_build
     assert 'implementation("androidx.compose.material3:material3")' in app_build
+    assert 'implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")' in app_build
+    assert 'implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")' in app_build
     assert "gradle-9.5.0-bin.zip" in wrapper
 
-    assert (MAIN_SRC / "MainActivity.kt").exists()
+    for source_file in [
+        "MainActivity.kt",
+        "data/RemoteApiClient.kt",
+        "data/RemoteModels.kt",
+        "data/RemoteRepository.kt",
+        "platform/Preferences.kt",
+        "platform/TokenStore.kt",
+        "state/RemoteViewModel.kt",
+        "ui/HomeScreen.kt",
+    ]:
+        assert (MAIN_SRC / source_file).exists()
+
     for legacy_file in [
         "RemoteAppViewModel.kt",
         "RemoteRepository.kt",
@@ -60,22 +73,46 @@ def test_android_manifest_preserves_package_permissions_and_launcher_contract():
     assert 'android:label="HomeworkHelper Remote"' in manifest
 
 
-def test_android_scaffold_declares_rebuild_pending_instead_of_legacy_feature_surface():
+def test_android_home_games_mvp_implements_required_remote_contracts():
     sources = _android_sources()
 
-    assert "HomeworkHelperRemoteRebuildScaffold" in sources
-    assert "Android rebuild scaffold" in sources
-    assert "등록된 게임 현황과 빠른 실행" in sources
-    assert "docs/remote/macos-client-architecture.md" in sources
-    assert "docs/remote/android-client-design.md" in sources
-    assert "REMOTE_CONNECTION_SUPERVISOR.md" in sources
+    for marker in [
+        "RemoteHomeScreen",
+        "Home / Games",
+        "등록된 게임",
+        "Remote Agent URL",
+        "6자리 페어링 코드",
+        "새로고침",
+        "실행",
+        "실행중",
+        "오늘 실행",
+        "stale",
+        "AuthRejected",
+        "OfflineExpected",
+        "AgentUnavailable",
+        "AndroidKeyStore",
+        "remote/status",
+        "remote/readiness",
+        "remote/processes",
+        "remote/processes/$encodedId/launch",
+        "remote/pair/confirm",
+        "process_launch",
+        "auth_required",
+        "is_running",
+        "played_today",
+        "status_text",
+        "icon_url",
+    ]:
+        assert marker in sources
+
+    assert "HomeworkHelperRemoteRebuildScaffold" not in sources
+    assert "Android rebuild scaffold" not in sources
 
     for stale in [
         "RemoteAppViewModel",
-        "RemoteApiClient",
-        "RemoteRepository",
         "RemoteScreens",
         "remote/power/config",
+        "remote/power/{action}",
         "remote/power/smartthings/devices",
         "Full-parity",
         "Tailscale-first Android client",
@@ -125,16 +162,16 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         assert marker in supervisor
 
     for marker in [
-        "Android client rebuild scaffold",
+        "Android client Home/Games MVP",
         "docs/remote/macos-client-architecture.md",
         "docs/remote/android-client-design.md",
         "REMOTE_CONNECTION_SUPERVISOR.md",
-        "The previous physical-device Android verifier is not a release gate",
+        "Physical-device Android verification remains a later release gate",
     ]:
         assert marker in setup
 
     for marker in [
-        "rebuild scaffold only",
+        "Home/Games MVP",
         "Do not resurrect the deleted Android full-parity code",
         "macOS popover",
     ]:
@@ -168,7 +205,7 @@ def test_legacy_android_completion_docs_and_claims_are_removed():
         assert stale not in checked_text
 
 
-def test_android_internal_verifier_remains_scaffold_build_entrypoint():
+def test_android_internal_verifier_remains_home_mvp_build_entrypoint():
     internal = _read(Path("tools/verify_android_internal.py"))
     artifact = _read(Path("tools/check_android_apk_artifact.py"))
 
