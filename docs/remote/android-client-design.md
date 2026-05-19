@@ -102,12 +102,12 @@ Setup screen:
 - User-facing display preferences such as diagnostic section visibility.
 - Power readiness explanation and OpenSSH/setup details.
 - Tailscale app binding status and host tailnet URL probing.
-- SmartThings PAT input, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
+- SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
 - Diagnostics and fake Remote Agent smoke guidance.
 
 Power UI policy:
 
-- Wake is enabled only after SmartThings PAT plus `PC 켜기` device selection succeeds.
+- Wake is enabled only after SmartThings PAT/OAuth authorization plus `PC 켜기` deviceId are present; deviceId is a target identifier and is never sufficient as SmartThings Cloud authorization.
 - After pairing or online recovery, Android automatically creates/registers its SSH public key and runs marker-based SSH health.
 - Sleep/restart/shutdown are enabled only after that automatic SSH registration/health chain succeeds.
 - Restart/shutdown/sleep require a confirmation dialog; Wake may be one-tap.

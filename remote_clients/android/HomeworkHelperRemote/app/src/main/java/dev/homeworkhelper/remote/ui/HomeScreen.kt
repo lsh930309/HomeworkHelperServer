@@ -463,8 +463,8 @@ private fun PowerButton(
 
 private fun powerHint(state: RemoteUiState): String {
     return when {
-        !state.automation.wakeReady && !state.automation.sshReady -> "설정 탭에서 SmartThings PC 켜기 디바이스와 SSH health를 먼저 완료하세요."
-        !state.automation.wakeReady -> "Wake는 SmartThings PC 켜기 디바이스 선택 후 활성화됩니다."
+        !state.automation.wakeReady && !state.automation.sshReady -> "설정 탭에서 SmartThings 인증+PC 켜기 deviceId와 SSH health를 먼저 완료하세요."
+        !state.automation.wakeReady -> "Wake는 SmartThings PAT/OAuth 인증과 PC 켜기 deviceId가 모두 있어야 활성화됩니다."
         !state.automation.sshReady -> "절전/재시작/종료는 SSH key 등록과 health 확인 후 활성화됩니다."
         else -> "Wake는 SmartThings REST API, 나머지 전원 명령은 OpenSSH로 직접 실행합니다."
     }

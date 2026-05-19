@@ -50,7 +50,17 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 ## Local SmartThings wake defaults
 
 The debug build has a personal default wake target for `PC 켜기` baked into BuildConfig.
+The `deviceId` selects the target only; SmartThings REST still requires an authenticated actor.
 Secrets must stay out of git: put a temporary local token in the untracked `local.properties` file only when building a private APK.
+
+SmartThings CLI can reuse an existing login or a PAT, but it does not mint PATs from the command line.
+Generate a short-lived PAT at `https://account.smartthings.com/tokens`, then either paste it into the Android app or keep it local for a private debug APK.
+For one-off CLI verification:
+
+```bash
+smartthings devices --token "$SMARTTHINGS_PAT"
+smartthings devices:commands 145ad447-9969-4ee7-bda0-1760430d9be1 'switch:on' --token "$SMARTTHINGS_PAT"
+```
 
 ```properties
 smartthings.deviceId=145ad447-9969-4ee7-bda0-1760430d9be1

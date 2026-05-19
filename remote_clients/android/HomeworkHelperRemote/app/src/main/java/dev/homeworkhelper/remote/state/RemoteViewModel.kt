@@ -152,6 +152,17 @@ class RemoteViewModel(
         _uiState.update { it.copy(userMessage = "SmartThings deviceId를 수동 저장했습니다.") }
     }
 
+    fun saveSmartThingsPat(value: String) {
+        val token = value.trim()
+        if (token.isBlank()) {
+            _uiState.update { it.copy(userMessage = "SmartThings PAT를 입력하세요. deviceId만으로는 Cloud 명령을 보낼 수 없습니다.") }
+            return
+        }
+        automationPreferences.saveSmartThingsPat(token)
+        updateAutomation { it.copy(smartThings = automationPreferences.loadSmartThings()) }
+        _uiState.update { it.copy(userMessage = "SmartThings PAT를 저장했습니다. 저장된 deviceId로 Wake를 실행할 수 있습니다.") }
+    }
+
     fun refresh() {
         refreshWithMessage()
     }
@@ -426,7 +437,12 @@ class RemoteViewModel(
         val pat = automationPreferences.loadSmartThingsPat()
         val deviceId = automationPreferences.smartThingsDeviceId
         if (pat.isNullOrBlank() || deviceId.isBlank()) {
-            _uiState.update { it.copy(userMessage = "SmartThings PAT와 PC 켜기 디바이스를 먼저 설정하세요.") }
+            val message = when {
+                pat.isNullOrBlank() && deviceId.isBlank() -> "SmartThings PAT와 PC 켜기 deviceId를 먼저 설정하세요."
+                pat.isNullOrBlank() -> "PC 켜기 deviceId는 설정되어 있지만 SmartThings PAT/OAuth 인증이 없어 Wake 명령을 보낼 수 없습니다."
+                else -> "SmartThings PAT는 저장되어 있지만 PC 켜기 deviceId가 없습니다."
+            }
+            _uiState.update { it.copy(userMessage = message) }
             return
         }
         viewModelScope.launch {

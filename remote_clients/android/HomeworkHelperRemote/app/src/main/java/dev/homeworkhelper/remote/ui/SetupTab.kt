@@ -48,6 +48,7 @@ fun SetupTab(
     onSshPortChange: (String) -> Unit,
     onRegisterSshKey: () -> Unit,
     onVerifySsh: () -> Unit,
+    onSaveSmartThingsPat: (String) -> Unit,
     onDiscoverSmartThings: (String?) -> Unit,
     onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
     onManualSmartThingsDeviceChange: (String) -> Unit,
@@ -82,6 +83,7 @@ fun SetupTab(
                 onSshPortChange = onSshPortChange,
                 onRegisterSshKey = onRegisterSshKey,
                 onVerifySsh = onVerifySsh,
+                onSaveSmartThingsPat = onSaveSmartThingsPat,
                 onDiscoverSmartThings = onDiscoverSmartThings,
                 onSelectSmartThingsDevice = onSelectSmartThingsDevice,
                 onManualSmartThingsDeviceChange = onManualSmartThingsDeviceChange,
@@ -160,6 +162,7 @@ private fun AutomationCard(
     onSshPortChange: (String) -> Unit,
     onRegisterSshKey: () -> Unit,
     onVerifySsh: () -> Unit,
+    onSaveSmartThingsPat: (String) -> Unit,
     onDiscoverSmartThings: (String?) -> Unit,
     onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
     onManualSmartThingsDeviceChange: (String) -> Unit,
@@ -169,7 +172,7 @@ private fun AutomationCard(
             Text("자동화 설정", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             TailscaleSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onEnsureTailscale)
             SshSection(state, onSshHostChange, onSshUserChange, onSshPortChange, onRegisterSshKey, onVerifySsh)
-            SmartThingsSection(state, onDiscoverSmartThings, onSelectSmartThingsDevice, onManualSmartThingsDeviceChange)
+            SmartThingsSection(state, onSaveSmartThingsPat, onDiscoverSmartThings, onSelectSmartThingsDevice, onManualSmartThingsDeviceChange)
         }
     }
 }
@@ -235,6 +238,7 @@ private fun SshSection(
 @Composable
 private fun SmartThingsSection(
     state: RemoteUiState,
+    onSaveSmartThingsPat: (String) -> Unit,
     onDiscoverSmartThings: (String?) -> Unit,
     onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
     onManualSmartThingsDeviceChange: (String) -> Unit,
@@ -243,16 +247,22 @@ private fun SmartThingsSection(
     val smartThings = state.automation.smartThings
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("SmartThings Wake", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("대상 deviceId는 수동 입력만으로 충분하지만, SmartThings Cloud 명령 전송에는 PAT/OAuth 인증이 반드시 필요합니다.")
         Text("자동 선택 target label: $SMARTTHINGS_DEFAULT_WAKE_LABEL")
         OutlinedTextField(
             value = patInput,
             onValueChange = { patInput = it.trim() },
-            label = { Text("SmartThings PAT") },
+            label = { Text("SmartThings PAT 또는 로컬 debug token") },
             placeholder = { Text(if (smartThings.hasPat) "저장됨 - 비워 두면 기존 PAT 사용" else "PAT 입력") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        Button(
+            onClick = { onSaveSmartThingsPat(patInput) },
+            enabled = patInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("PAT 저장 / 현재 deviceId로 Wake 활성화") }
         Button(
             onClick = { onDiscoverSmartThings(patInput.takeIf { it.isNotBlank() }) },
             enabled = !state.automation.isSmartThingsBusy,
@@ -262,7 +272,7 @@ private fun SmartThingsSection(
         OutlinedTextField(
             value = smartThings.deviceId,
             onValueChange = onManualSmartThingsDeviceChange,
-            label = { Text("deviceId 수동 입력 fallback") },
+            label = { Text("Wake target deviceId 수동 입력 fallback") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )

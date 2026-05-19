@@ -43,6 +43,7 @@ private fun HomeworkHelperRemoteApp(
             onSshPortChange = viewModel::updateSshPort,
             onRegisterSshKey = viewModel::createAndRegisterSshKey,
             onVerifySsh = viewModel::verifySshHealth,
+            onSaveSmartThingsPat = viewModel::saveSmartThingsPat,
             onDiscoverSmartThings = viewModel::discoverSmartThingsDevices,
             onSelectSmartThingsDevice = viewModel::selectSmartThingsDevice,
             onManualSmartThingsDeviceChange = viewModel::updateManualSmartThingsDevice,
