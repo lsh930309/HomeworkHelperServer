@@ -326,6 +326,7 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
 
     for marker in [
         'implementation("com.hierynomus:sshj:0.40.0")',
+        'implementation("org.bouncycastle:bcprov-jdk18on:1.80.2")',
         '<package android:name="com.tailscale.ipn" />',
     ]:
         assert marker in app_build + manifest
@@ -344,6 +345,9 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "__HH_SSH_HEALTH_OK__",
         "__HH_REMOTE_POWER_ACCEPTED__",
         "androidCompatibleSshConfig",
+        "ensurePackagedBouncyCastleProvider",
+        "BouncyCastleProvider",
+        "PACKAGED_BOUNCY_CASTLE_CLASS",
         "curve25519",
         "setKeyExchangeFactories",
         "remote/power/ssh-key",

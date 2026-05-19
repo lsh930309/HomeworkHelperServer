@@ -8,11 +8,15 @@ import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.IOUtils
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import java.security.MessageDigest
+import java.security.Security
 import java.security.PublicKey
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.util.concurrent.TimeUnit
 
 private const val SSH_HEALTH_MARKER = "__HH_SSH_HEALTH_OK__"
 private const val SSH_ACCEPTED_MARKER = "__HH_REMOTE_POWER_ACCEPTED__"
+private const val BOUNCY_CASTLE_PROVIDER = "BC"
+private const val PACKAGED_BOUNCY_CASTLE_CLASS = "org.bouncycastle.jce.provider.BouncyCastleProvider"
 
 class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
     suspend fun health(config: SshPowerPreferences, privateKeyPem: String): SshCommandResult {
@@ -80,12 +84,23 @@ class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
 
 
     private fun androidCompatibleSshConfig(): DefaultConfig {
+        ensurePackagedBouncyCastleProvider()
         return DefaultConfig().apply {
             setKeyExchangeFactories(
                 keyExchangeFactories.filterNot { factory ->
                     factory.name.contains("curve25519", ignoreCase = true)
                 },
             )
+        }
+    }
+
+
+    private fun ensurePackagedBouncyCastleProvider() {
+        synchronized(AndroidSSHPowerManager::class.java) {
+            val current = Security.getProvider(BOUNCY_CASTLE_PROVIDER)
+            if (current?.javaClass?.name == PACKAGED_BOUNCY_CASTLE_CLASS) return
+            if (current != null) Security.removeProvider(BOUNCY_CASTLE_PROVIDER)
+            Security.insertProviderAt(BouncyCastleProvider(), 1)
         }
     }
 
