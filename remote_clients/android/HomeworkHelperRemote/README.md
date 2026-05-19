@@ -51,10 +51,11 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 
 The debug build has a personal default wake target for `PC 켜기` baked into BuildConfig.
 The `deviceId` selects the target only; SmartThings REST still requires an authenticated actor.
-Secrets must stay out of git: put a temporary local token in the untracked `local.properties` file only when building a private APK.
+Secrets must stay out of git: put a temporary local token in repo-root `SmartThings_Token` or the untracked `local.properties` file only when building a private APK.
 
 SmartThings CLI can reuse an existing login or a PAT, but it does not mint PATs from the command line.
 Generate a short-lived PAT at `https://account.smartthings.com/tokens`, then either paste it into the Android app or keep it local for a private debug APK.
+The checked-in Gradle script reads `SmartThings_Token` first from the Android project root and then from the repository root; the file is ignored by git.
 For one-off CLI verification:
 
 ```bash

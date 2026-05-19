@@ -330,6 +330,8 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         'SMARTTHINGS_DEFAULT_DEVICE_ID',
         '145ad447-9969-4ee7-bda0-1760430d9be1',
         'SMARTTHINGS_DEBUG_PAT',
+        'SmartThings_Token',
+        'localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")',
         'buildConfig = true',
         'local.properties',
     ]:

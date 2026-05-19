@@ -8,6 +8,19 @@ val localProperties = Properties().apply {
 fun localProperty(name: String, defaultValue: String = ""): String =
     localProperties.getProperty(name)?.trim().orEmpty().ifBlank { defaultValue }
 
+fun localSecretFile(name: String): String =
+    listOf(
+        rootProject.file(name),
+        rootProject.file("../../../$name"),
+    )
+        .firstOrNull { it.isFile }
+        ?.readText()
+        ?.trim()
+        .orEmpty()
+
+fun localPropertyOrSecretFile(name: String, secretFileName: String, defaultValue: String = ""): String =
+    localProperty(name).ifBlank { localSecretFile(secretFileName) }.ifBlank { defaultValue }
+
 fun buildConfigString(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 plugins {
@@ -30,7 +43,7 @@ android {
         buildConfigField("String", "SMARTTHINGS_DEFAULT_DEVICE_ID", buildConfigString(localProperty("smartthings.deviceId", "145ad447-9969-4ee7-bda0-1760430d9be1")))
         buildConfigField("String", "SMARTTHINGS_DEFAULT_DEVICE_LABEL", buildConfigString(localProperty("smartthings.deviceLabel", "PC 켜기")))
         buildConfigField("String", "SMARTTHINGS_DEFAULT_LOCATION_ID", buildConfigString(localProperty("smartthings.locationId", "7bbf137d-1f96-4ad4-9e39-1cdab082d41a")))
-        buildConfigField("String", "SMARTTHINGS_DEBUG_PAT", buildConfigString(localProperty("smartthings.pat")))
+        buildConfigField("String", "SMARTTHINGS_DEBUG_PAT", buildConfigString(localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")))
     }
 
     buildFeatures {

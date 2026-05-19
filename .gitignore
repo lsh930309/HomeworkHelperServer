@@ -24,6 +24,7 @@ env/
 .env.*.local
 **/.env
 **/server/.env
+SmartThings_Token
 build.version.json
 
 # ===========================
