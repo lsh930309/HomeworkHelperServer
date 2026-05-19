@@ -221,9 +221,14 @@ private fun SshSection(
         Text("Key: ${if (ssh.publicKey.isNotBlank()) "생성됨" else "없음"} · Health: ${if (ssh.healthOk) "OK" else "미확인"}")
         if (ssh.trustedFingerprint.isNotBlank()) Text("Fingerprint: ${ssh.trustedFingerprint}", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onRegisterSshKey, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("Key 등록") }
-            Button(onClick = onVerifySsh, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("SSH health") }
+            Button(onClick = onRegisterSshKey, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("SSH 자동 설정") }
+            Button(onClick = onVerifySsh, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("Health 재확인") }
         }
+        Text(
+            "페어링 또는 온라인 복구 후 key 등록과 SSH health는 자동으로 시도됩니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

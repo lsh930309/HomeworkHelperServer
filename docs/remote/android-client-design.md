@@ -108,7 +108,8 @@ Setup screen:
 Power UI policy:
 
 - Wake is enabled only after SmartThings PAT plus `PC 켜기` device selection succeeds.
-- Sleep/restart/shutdown are enabled only after SSH key registration and marker-based SSH health succeed.
+- After pairing or online recovery, Android automatically creates/registers its SSH public key and runs marker-based SSH health.
+- Sleep/restart/shutdown are enabled only after that automatic SSH registration/health chain succeeds.
 - Restart/shutdown/sleep require a confirmation dialog; Wake may be one-tap.
 - It must not call removed or host-managed power execution endpoints.
 

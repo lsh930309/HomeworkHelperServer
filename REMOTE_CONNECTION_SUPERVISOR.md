@@ -149,7 +149,7 @@ SSH setup:
 1. Client creates or selects a local private key.
 2. Client sends the public key to `POST /remote/power/ssh-key`.
 3. Host writes the key to the effective Windows authorized keys target.
-4. Client runs SSH health with the intended key only.
+4. Client runs SSH health with the intended key only. macOS and Android should attempt this chain automatically after successful pairing or online recovery.
 
 Windows authorized-key details:
 

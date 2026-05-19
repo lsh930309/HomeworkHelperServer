@@ -89,6 +89,7 @@ class RemoteViewModel(
     private val tailscaleBinding = TailscaleBinding(appContext)
     private val sshKeyStore = AndroidSSHKeyStore(automationPreferences)
     private val sshPowerManager = AndroidSSHPowerManager(automationPreferences)
+    private var autoSshAttemptSignature: String? = null
 
     private val _uiState = MutableStateFlow(
         RemoteUiState(
@@ -189,6 +190,7 @@ class RemoteViewModel(
                             automation = it.automation.copy(ssh = automationPreferences.loadSsh()),
                         )
                     }
+                    maybeAutoCompleteSshAutomation("온라인 동기화 후")
                 }
                 .onFailure { error -> applyFailure(error) }
         }
@@ -307,17 +309,7 @@ class RemoteViewModel(
             return
         }
         viewModelScope.launch {
-            updateAutomation { it.copy(isSshBusy = true) }
-            val keyPair = sshKeyStore.ensureKeyPair()
-            runCatching { repository().registerPowerSSHKey(keyPair.publicKeyLine, "Android") }
-                .onSuccess { result ->
-                    updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-                    _uiState.update { it.copy(userMessage = result.message) }
-                }
-                .onFailure { error ->
-                    updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-                    applyFailure(error)
-                }
+            completeSshAutomation("수동 요청")
         }
     }
 
@@ -334,6 +326,48 @@ class RemoteViewModel(
             _uiState.update { it.copy(userMessage = result.message) }
         }
     }
+    private fun maybeAutoCompleteSshAutomation(trigger: String) {
+        val baseUrl = _uiState.value.baseUrl.trim()
+        val ssh = automationPreferences.loadSsh()
+        if (baseUrl.isBlank() || tokenStore.loadToken().isNullOrBlank()) return
+        if (ssh.host.isBlank() || ssh.user.isBlank() || ssh.healthOk || _uiState.value.automation.isSshBusy) return
+        val signature = listOf(baseUrl, ssh.host, ssh.user, ssh.port.toString(), ssh.publicKey.take(48)).joinToString("|")
+        if (autoSshAttemptSignature == signature) return
+        autoSshAttemptSignature = signature
+        viewModelScope.launch {
+            completeSshAutomation(trigger)
+        }
+    }
+
+    private suspend fun completeSshAutomation(trigger: String) {
+        updateAutomation { it.copy(isSshBusy = true) }
+        _uiState.update { it.copy(userMessage = "$trigger SSH key 등록과 health 확인을 자동 진행합니다.") }
+        val keyPair = sshKeyStore.ensureKeyPair()
+        val registerResult = runCatching { repository().registerPowerSSHKey(keyPair.publicKeyLine, "Android") }
+            .getOrElse { error ->
+                updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+                _uiState.update { it.copy(userMessage = "SSH public key 자동 등록 실패: ${error.message ?: "알 수 없는 오류"}") }
+                return
+            }
+        if (!registerResult.accepted) {
+            updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+            _uiState.update { it.copy(userMessage = "SSH public key 자동 등록이 거부되었습니다: ${registerResult.message}") }
+            return
+        }
+        val privateKey = sshKeyStore.loadPrivateKey() ?: keyPair.privateKeyPem
+        val healthResult = sshPowerManager.health(automationPreferences.loadSsh(), privateKey)
+        updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
+        _uiState.update {
+            it.copy(
+                userMessage = if (healthResult.ok) {
+                    "$trigger SSH key 등록과 health 확인을 자동 완료했습니다."
+                } else {
+                    "SSH key 등록은 완료했지만 health 확인 실패: ${healthResult.message}"
+                },
+            )
+        }
+    }
+
 
     fun discoverSmartThingsDevices(pat: String? = null) {
         val token = pat?.trim()?.takeIf { it.isNotBlank() } ?: automationPreferences.loadSmartThingsPat()
