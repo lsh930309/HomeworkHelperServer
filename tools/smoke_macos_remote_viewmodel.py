@@ -37,6 +37,7 @@ REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
 REMOTE_CONNECTION_SUPERVISOR = MACOS_SOURCE_DIR / "RemoteConnectionSupervisor.swift"
 REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
 REMOTE_UI_TEST_FLAGS = MACOS_SOURCE_DIR / "RemoteUITestFlags.swift"
+REMOTE_GLOBAL_SHORTCUT_REGISTRAR = MACOS_SOURCE_DIR / "RemoteGlobalShortcutRegistrar.swift"
 REMOTE_VIEW_MODEL = MACOS_SOURCE_DIR / "RemoteDashboardViewModel.swift"
 
 
@@ -132,8 +133,22 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
             @MainActor
             static func main() async {
                 smokeStep("init")
+                if let suite = ProcessInfo.processInfo.environment["HH_REMOTE_PREFS_SUITE"],
+                   let defaults = UserDefaults(suiteName: suite) {
+                    defaults.removePersistentDomain(forName: suite)
+                    defaults.set("sparkles", forKey: "remote.menuBarIconSymbol")
+                }
                 let store = SmokeInMemoryTokenStore()
                 let viewModel = RemoteDashboardViewModel(tokenStore: store)
+                guard viewModel.menuBarIdleIconSymbol == "sparkles",
+                      viewModel.menuBarRunningIconSymbol == "play.circle.fill",
+                      viewModel.menuBarOfflineIconSymbol == "power.circle.fill" else {
+                    fatalError("stateful menu bar icons should migrate the legacy idle icon and keep state defaults")
+                }
+                viewModel.menuBarRunningIconSymbol = "moon.fill"
+                guard viewModel.menuBarIconSymbol(for: .running) == "moon.fill" else {
+                    fatalError("running menu bar icon should be user-selectable")
+                }
                 viewModel.baseURLText = "__BASE_URL__"
                 viewModel.deviceName = "macos-viewmodel-smoke"
                 viewModel.powerConfig.sshKeyPath = "__SMOKE_SSH_KEY__"
@@ -163,6 +178,100 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 guard viewModel.processes.contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not populate seeded process list: \(viewModel.message)")
+                }
+                guard viewModel.menuBarPresentationState() == .idle,
+                      viewModel.menuBarIconSymbol(for: .idle) == "sparkles" else {
+                    fatalError("online paired host without running games should use the idle menu bar icon")
+                }
+                viewModel.processes = [
+                    RemoteProcess(
+                        processID: "sort-hi",
+                        name: "힣 테스트",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: nil,
+                        userCycleHours: nil,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: false,
+                        playedToday: false,
+                        statusText: nil
+                    ),
+                    RemoteProcess(
+                        processID: "sort-ga",
+                        name: "가 테스트",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: nil,
+                        userCycleHours: nil,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: false,
+                        playedToday: false,
+                        statusText: nil
+                    ),
+                    RemoteProcess(
+                        processID: "sort-na",
+                        name: "나 테스트",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: nil,
+                        userCycleHours: nil,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: false,
+                        playedToday: false,
+                        statusText: nil
+                    )
+                ]
+                guard viewModel.displayProcesses.map({ $0.name }) == ["가 테스트", "나 테스트", "힣 테스트"] else {
+                    fatalError("displayProcesses should sort game names by Korean dictionary order: \(viewModel.displayProcesses.map { $0.name })")
+                }
+                viewModel.processes = [
+                    RemoteProcess(
+                        processID: "running-game",
+                        name: "실행 중",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: nil,
+                        userCycleHours: nil,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: true,
+                        playedToday: false,
+                        statusText: "실행 중"
+                    )
+                ]
+                guard viewModel.menuBarPresentationState() == .running else {
+                    fatalError("online paired host with any running game should use the running menu bar icon")
                 }
                 guard RemoteClientCache.loadProcesses().contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not write process snapshot cache")
@@ -216,12 +325,61 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
 
                 smokeStep("closed port connection loss")
                 viewModel.baseURLText = "__OFFLINE_BASE_URL__"
+                viewModel.processes = [
+                    RemoteProcess(
+                        processID: "offline-yesterday",
+                        name: "어제 실행",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: Date().addingTimeInterval(-36 * 3600).timeIntervalSince1970,
+                        userCycleHours: 24,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: false,
+                        playedToday: true,
+                        statusText: "오늘 실행"
+                    ),
+                    RemoteProcess(
+                        processID: "offline-no-timestamp",
+                        name: "기록 없음",
+                        monitoringPath: nil,
+                        launchPath: nil,
+                        preferredLaunchType: nil,
+                        lastPlayedTimestamp: nil,
+                        userCycleHours: 24,
+                        staminaTrackingEnabled: false,
+                        hoyolabGameID: nil,
+                        staminaCurrent: nil,
+                        staminaMax: nil,
+                        staminaUpdatedAt: nil,
+                        progress: nil,
+                        iconURL: nil,
+                        iconURLs: nil,
+                        isRunning: false,
+                        playedToday: true,
+                        statusText: "오늘 실행"
+                    )
+                ]
                 await viewModel.refresh()
                 guard viewModel.hostAvailabilityState != .online else {
                     fatalError("closed port refresh should not leave host online")
                 }
                 guard !viewModel.processes.isEmpty else {
                     fatalError("closed port refresh should preserve cached standalone process cards")
+                }
+                guard viewModel.menuBarPresentationState() == .offline,
+                      viewModel.menuBarIconSymbol(for: .offline) == "power.circle.fill" else {
+                    fatalError("offline standalone mode should use the offline menu bar icon")
+                }
+                guard viewModel.processes.allSatisfy({ $0.playedToday == false && $0.statusText == "대기" }) else {
+                    fatalError("offline standalone process cards should recompute today's badge from lastPlayedTimestamp: \(viewModel.processes)")
                 }
 
                 print("macOS RemoteDashboardViewModel smoke passed: processes=\(viewModel.processes.count), game_links=\(viewModel.gameLinks.count), devices=\(viewModel.devices.count), message=\(viewModel.message)")
@@ -256,6 +414,7 @@ def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_c
         str(REMOTE_CONNECTION_SUPERVISOR),
         str(REMOTE_LOGIN_ITEM_MANAGER),
         str(REMOTE_UI_TEST_FLAGS),
+        str(REMOTE_GLOBAL_SHORTCUT_REGISTRAR),
         str(REMOTE_VIEW_MODEL),
         str(smoke_source),
         "-o",

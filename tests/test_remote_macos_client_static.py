@@ -214,6 +214,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
     local_power = _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    global_shortcut = _read(SOURCE_ROOT / "RemoteGlobalShortcutRegistrar.swift")
     packager = _read(Path("tools/package_macos_remote_app.py"))
 
     assert "RemoteDashboardViewModel(" in app
@@ -221,6 +222,15 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'InMemoryTokenStore(initialToken: "ui-test-token")' in app
     assert "NSStatusItem" in app
     assert "statusItem(withLength: NSStatusItem.squareLength)" in app
+    assert "image.isTemplate = true" in app
+    assert "statusItemImage" not in app
+    assert "image.isTemplate = false" not in app
+    assert "menuBarPresentationState()" in view_model
+    assert "RemoteMenuBarPresentationState" in view_model
+    assert "menuBarIconSymbol(for state: RemoteMenuBarPresentationState)" in view_model
+    assert "homeworkHelperRemoteMenuBarStatusDidChange" in app
+    assert "homeworkHelperRemoteMenuBarIconDidChange" in app
+    assert "homeworkHelperRemoteGlobalShortcutPressed" in app
     assert "statusItemClicked(_ sender: Any?)" in app
     assert "sendAction(on: [.leftMouseDown])" in app
     assert "installStatusItemClickMonitor()" in app
@@ -295,10 +305,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let statusBadgeSpacing: CGFloat = 4" in app
     assert "let progressStatusClusterWidth = progressBadgeWidth + statusBadgeSpacing + todayBadgeWidth" in app
     assert "static func contentWidth(processes: [RemoteProcess])" in app
-    assert "ForEach(viewModel.processes)" in app
+    assert "ForEach(viewModel.displayProcesses)" in app
+    assert "var displayProcesses: [RemoteProcess]" in view_model
+    assert "static func sortedProcesses(_ processes: [RemoteProcess])" in view_model
+    assert 'Locale(identifier: "ko_KR")' in view_model
     assert "viewModel.processes.prefix(5)" not in app
     assert "외 \\(viewModel.processes.count - 5)개" not in app
     assert "MenuBarGameRow(process: process, viewModel: viewModel)" in app
+    assert "MenuBarGameStatusBadges(progress: process.progress, viewModel: viewModel)" in app
     assert "Task { await viewModel.launch(process) }" in app
     assert "MenuBarLaunchButton" in app
     assert 'Image(systemName: "play.fill")' in app
@@ -320,20 +334,25 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in progress_badge_source
     assert "Text(MenuBarProgressVisuals.percentageText(progress.percentage))" in app
     assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in app
-    assert "(0x44, 0xcc, 0x44)" in app
-    assert "(0xff, 0x44, 0x44)" in app
-    running_badge_source = app.split("struct MenuBarRunningBadge", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
-    assert 'Text("실행 중")' in running_badge_source
-    assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in running_badge_source
+    assert "Color(hue: hue, saturation: 0.76, brightness: 0.86)" in app
+    assert "interpolatedColor" not in app
+    assert "(0x44, 0xcc, 0x44)" not in app
+    assert "(0xff, 0x44, 0x44)" not in app
+    assert "struct MenuBarRunningBadge" not in app
     status_badges_source = app.split("struct MenuBarGameStatusBadges", 1)[1].split("struct HostStatusPill", 1)[0]
-    assert "if viewModel.isProcessRunningCurrent(process)" in status_badges_source
-    assert "MenuBarRunningBadge()" in status_badges_source
-    assert "} else if let progress {" in status_badges_source
+    assert "if let progress {" in status_badges_source
+    assert "MenuBarRunningBadge()" not in status_badges_source
+    assert "if viewModel.isProcessRunningCurrent(process)" not in status_badges_source
     assert 'Text("실행 중")' not in status_badges_source
-    assert 'Text("실행 중")' in app
-    assert 'checkmark.circle.fill' in app
+    assert 'Text("실행 중")' not in app
+    assert 'checkmark.circle.fill' not in app
+    assert "runningOverlay" in app
+    assert "playNeededDotOverlay" in app
+    assert "if !process.playedToday" in app
+    assert ".stroke(Color.green" in app
+    assert ".fill(Color.red)" in app
     assert ".frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)" in app
-    assert ".frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)" in app
+    assert ".frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)" not in app
     assert ".fixedSize(horizontal: true, vertical: false)" in app
     assert "MenuBarProgressBadge(progress: progress, viewModel: viewModel)" in app
     assert "func menuBarSuppressFocusRing() -> some View" in app
@@ -345,7 +364,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'MenuBarFooterButton(title: "설정", systemImage: "gearshape")' in app
     assert 'MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise")' in app
     assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
-    assert ".labelStyle(.iconOnly)" in app  # still used where icon-only is intentional
+    assert ".labelStyle(.iconOnly)" not in app
 
     assert "Settings {" in app
     assert "RemoteSettingsView" in app
@@ -459,6 +478,22 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "비 HoYoLab 진행률 표시" in app
     assert "Popover 투명도" in app
     assert "메뉴바 아이콘" in app
+    assert "Popover 전역 단축키 사용" in app
+    assert "$viewModel.popoverGlobalShortcutEnabled" in app
+    assert "globalShortcutStatusMessage" in app
+    assert "popoverGlobalShortcutEnabledKey" in view_model
+    assert "remote.popoverGlobalShortcutEnabled" in view_model
+    assert "loadPopoverGlobalShortcutEnabled" in view_model
+    assert "savePopoverGlobalShortcutEnabled" in view_model
+    assert "updateGlobalShortcutRegistration" in view_model
+    assert "RemoteGlobalShortcutRegistrar.shared.setEnabled" in view_model
+    assert "import Carbon" in global_shortcut
+    assert "RegisterEventHotKey" in global_shortcut
+    assert "UnregisterEventHotKey" in global_shortcut
+    assert "kVK_ANSI_G" in global_shortcut
+    assert "cmdKey | optionKey" in global_shortcut
+    assert "⌘⌥G" in global_shortcut
+    assert "HomeworkHelperRemoteGlobalShortcutPressed" in global_shortcut
 
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model
@@ -555,6 +590,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline standalone process cards should recompute today's badge" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "tools/smoke_macos_connection_supervisor.py" in _read(Path("tests/test_remote_verifier_contract.py"))
     assert "_assert_production_cache_unchanged" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "_production_process_cache_path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
@@ -576,6 +614,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "progressDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
+    assert "locallyPlayedToday" in view_model
+    assert "Calendar.current.isDate" in view_model
     assert "staminaRecoverySecondsPerPoint" in view_model
     assert "formatRemainingDuration" in view_model
     assert "LocalTailscalePingResult" in tailscale
@@ -632,6 +672,16 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteLoginItemManager" in view_model
     assert "RemoteMenuBarIconChoice" in view_model
     assert "gamecontroller.fill" in view_model
+    assert "play.circle.fill" in view_model
+    assert "power.circle.fill" in view_model
+    assert "wifi.slash" not in view_model
+    assert "remote.menuBarIdleIconSymbol" in view_model
+    assert "remote.menuBarRunningIconSymbol" in view_model
+    assert "remote.menuBarOfflineIconSymbol" in view_model
+    assert "remote.menuBarIconSymbol" in view_model
+    assert 'Picker("대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)' in app
+    assert 'Picker("실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)' in app
+    assert 'Picker("오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)' in app
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
     assert "window.orderOut(nil)" in app

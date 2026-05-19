@@ -52,11 +52,15 @@ private enum RemoteClientPreferences {
     private static let powerConfigKey = "remote.powerConfig"
     private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
     private static let loginLaunchShowsWindowKey = "remote.loginLaunchShowsWindow"
-    private static let menuBarIconSymbolKey = "remote.menuBarIconSymbol"
+    private static let legacyMenuBarIconSymbolKey = "remote.menuBarIconSymbol"
+    private static let menuBarIdleIconSymbolKey = "remote.menuBarIdleIconSymbol"
+    private static let menuBarRunningIconSymbolKey = "remote.menuBarRunningIconSymbol"
+    private static let menuBarOfflineIconSymbolKey = "remote.menuBarOfflineIconSymbol"
     private static let showPlaySummaryKey = "remote.showPlaySummary"
     private static let cycleProgressDisplayModeKey = "remote.cycleProgressDisplayMode"
     private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
     private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
+    private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -106,13 +110,47 @@ private enum RemoteClientPreferences {
         defaults.set(enabled, forKey: loginLaunchShowsWindowKey)
     }
 
-    static func loadMenuBarIconSymbol() -> String {
-        let stored = defaults.string(forKey: menuBarIconSymbolKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return RemoteMenuBarIconChoice.symbols.contains(stored) ? stored : RemoteMenuBarIconChoice.defaultSymbol
+    static func loadMenuBarIdleIconSymbol() -> String {
+        if let stored = validatedMenuBarSymbol(defaults.string(forKey: menuBarIdleIconSymbolKey)) {
+            return stored
+        }
+        if let legacy = validatedMenuBarSymbol(defaults.string(forKey: legacyMenuBarIconSymbolKey)) {
+            return legacy
+        }
+        return RemoteMenuBarIconChoice.idleDefaultSymbol
     }
 
-    static func saveMenuBarIconSymbol(_ symbol: String) {
-        defaults.set(symbol, forKey: menuBarIconSymbolKey)
+    static func saveMenuBarIdleIconSymbol(_ symbol: String) {
+        defaults.set(normalizedMenuBarSymbol(symbol, fallback: RemoteMenuBarIconChoice.idleDefaultSymbol), forKey: menuBarIdleIconSymbolKey)
+    }
+
+    static func loadMenuBarRunningIconSymbol() -> String {
+        loadMenuBarIconSymbol(forKey: menuBarRunningIconSymbolKey, fallback: RemoteMenuBarIconChoice.runningDefaultSymbol)
+    }
+
+    static func saveMenuBarRunningIconSymbol(_ symbol: String) {
+        defaults.set(normalizedMenuBarSymbol(symbol, fallback: RemoteMenuBarIconChoice.runningDefaultSymbol), forKey: menuBarRunningIconSymbolKey)
+    }
+
+    static func loadMenuBarOfflineIconSymbol() -> String {
+        loadMenuBarIconSymbol(forKey: menuBarOfflineIconSymbolKey, fallback: RemoteMenuBarIconChoice.offlineDefaultSymbol)
+    }
+
+    static func saveMenuBarOfflineIconSymbol(_ symbol: String) {
+        defaults.set(normalizedMenuBarSymbol(symbol, fallback: RemoteMenuBarIconChoice.offlineDefaultSymbol), forKey: menuBarOfflineIconSymbolKey)
+    }
+
+    private static func loadMenuBarIconSymbol(forKey key: String, fallback: String) -> String {
+        validatedMenuBarSymbol(defaults.string(forKey: key)) ?? fallback
+    }
+
+    private static func normalizedMenuBarSymbol(_ symbol: String, fallback: String) -> String {
+        validatedMenuBarSymbol(symbol) ?? fallback
+    }
+
+    private static func validatedMenuBarSymbol(_ symbol: String?) -> String? {
+        let trimmed = symbol?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return RemoteMenuBarIconChoice.symbols.contains(trimmed) ? trimmed : nil
     }
 
     static func loadShowPlaySummary() -> Bool {
@@ -144,6 +182,14 @@ private enum RemoteClientPreferences {
         defaults.set(transparency.rawValue, forKey: popoverGlassTransparencyKey)
     }
 
+    static func loadPopoverGlobalShortcutEnabled() -> Bool {
+        defaults.bool(forKey: popoverGlobalShortcutEnabledKey)
+    }
+
+    static func savePopoverGlobalShortcutEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: popoverGlobalShortcutEnabledKey)
+    }
+
     static func loadMirrorPollIntervalSeconds() -> Int {
         guard defaults.object(forKey: mirrorPollIntervalSecondsKey) != nil else { return 5 }
         return min(60, max(1, defaults.integer(forKey: mirrorPollIntervalSecondsKey)))
@@ -155,8 +201,38 @@ private enum RemoteClientPreferences {
 }
 
 enum RemoteMenuBarIconChoice {
-    static let defaultSymbol = "gamecontroller.fill"
-    static let symbols = ["gamecontroller.fill", "sparkles", "bolt.circle.fill", "desktopcomputer", "menubar.rectangle"]
+    static let idleDefaultSymbol = "gamecontroller.fill"
+    static let runningDefaultSymbol = "play.circle.fill"
+    static let offlineDefaultSymbol = "power.circle.fill"
+    static let symbols = [
+        "gamecontroller.fill",
+        "desktopcomputer",
+        "menubar.rectangle",
+        "play.circle.fill",
+        "power.circle.fill",
+        "bolt.circle.fill",
+        "sparkles",
+        "circle.fill",
+        "moon.fill",
+        "exclamationmark.circle.fill",
+    ]
+}
+
+enum RemoteMenuBarPresentationState: Equatable {
+    case idle
+    case running
+    case offline
+
+    var tooltip: String {
+        switch self {
+        case .idle:
+            return "HomeworkHelper Remote · 대기"
+        case .running:
+            return "HomeworkHelper Remote · 게임 실행 중"
+        case .offline:
+            return "HomeworkHelper Remote · 오프라인/Standalone"
+        }
+    }
 }
 
 enum CycleProgressDisplayMode: String, CaseIterable, Identifiable {
@@ -206,7 +282,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         didSet { RemoteClientPreferences.saveBaseURL(baseURLText) }
     }
     @Published var tokenText = "" {
-        didSet { tokenStore.save(tokenText) }
+        didSet {
+            tokenStore.save(tokenText)
+            postMenuBarStatusDidChange()
+        }
     }
     @Published var pairingCode = ""
     @Published var deviceName = RemoteClientPreferences.loadDeviceName() {
@@ -236,20 +315,42 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var beholderIncidents: [RemoteBeholderIncident] = []
     @Published var gameLinks: [RemoteGameLink] = []
     @Published var mobileSessions: [RemoteMobileSession] = []
-    @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses()
+    @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses() {
+        didSet { postMenuBarStatusDidChange() }
+    }
     @Published var devices: [RemoteDevice] = []
     @Published var launchAtLoginEnabled = RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled
     @Published var loginLaunchShowsWindow = RemoteClientPreferences.loadLoginLaunchShowsWindow() {
         didSet { RemoteClientPreferences.saveLoginLaunchShowsWindow(loginLaunchShowsWindow) }
     }
-    @Published var menuBarIconSymbol = RemoteClientPreferences.loadMenuBarIconSymbol() {
+    @Published var menuBarIdleIconSymbol = RemoteClientPreferences.loadMenuBarIdleIconSymbol() {
         didSet {
-            if !RemoteMenuBarIconChoice.symbols.contains(menuBarIconSymbol) {
-                menuBarIconSymbol = RemoteMenuBarIconChoice.defaultSymbol
+            if !RemoteMenuBarIconChoice.symbols.contains(menuBarIdleIconSymbol) {
+                menuBarIdleIconSymbol = RemoteMenuBarIconChoice.idleDefaultSymbol
                 return
             }
-            RemoteClientPreferences.saveMenuBarIconSymbol(menuBarIconSymbol)
-            NotificationCenter.default.post(name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"), object: menuBarIconSymbol)
+            RemoteClientPreferences.saveMenuBarIdleIconSymbol(menuBarIdleIconSymbol)
+            postMenuBarIconDidChange()
+        }
+    }
+    @Published var menuBarRunningIconSymbol = RemoteClientPreferences.loadMenuBarRunningIconSymbol() {
+        didSet {
+            if !RemoteMenuBarIconChoice.symbols.contains(menuBarRunningIconSymbol) {
+                menuBarRunningIconSymbol = RemoteMenuBarIconChoice.runningDefaultSymbol
+                return
+            }
+            RemoteClientPreferences.saveMenuBarRunningIconSymbol(menuBarRunningIconSymbol)
+            postMenuBarIconDidChange()
+        }
+    }
+    @Published var menuBarOfflineIconSymbol = RemoteClientPreferences.loadMenuBarOfflineIconSymbol() {
+        didSet {
+            if !RemoteMenuBarIconChoice.symbols.contains(menuBarOfflineIconSymbol) {
+                menuBarOfflineIconSymbol = RemoteMenuBarIconChoice.offlineDefaultSymbol
+                return
+            }
+            RemoteClientPreferences.saveMenuBarOfflineIconSymbol(menuBarOfflineIconSymbol)
+            postMenuBarIconDidChange()
         }
     }
     @Published var showPlaySummary = RemoteClientPreferences.loadShowPlaySummary() {
@@ -261,6 +362,13 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var popoverGlassTransparency = RemoteClientPreferences.loadPopoverGlassTransparency() {
         didSet { RemoteClientPreferences.savePopoverGlassTransparency(popoverGlassTransparency) }
     }
+    @Published var popoverGlobalShortcutEnabled = RemoteClientPreferences.loadPopoverGlobalShortcutEnabled() {
+        didSet {
+            RemoteClientPreferences.savePopoverGlobalShortcutEnabled(popoverGlobalShortcutEnabled)
+            updateGlobalShortcutRegistration()
+        }
+    }
+    @Published var globalShortcutStatusMessage = RemoteGlobalShortcutRegistrar.disabledMessage
     @Published var mirrorPollIntervalSeconds = RemoteClientPreferences.loadMirrorPollIntervalSeconds() {
         didSet {
             let clamped = min(60, max(1, mirrorPollIntervalSeconds))
@@ -322,8 +430,31 @@ final class RemoteDashboardViewModel: ObservableObject {
         isPaired && hostAvailabilityState == .online
     }
 
+    var displayProcesses: [RemoteProcess] {
+        Self.sortedProcesses(processes)
+    }
+
     func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool {
         hostAvailabilityState == .online && process.isRunning
+    }
+
+    func menuBarPresentationState() -> RemoteMenuBarPresentationState {
+        guard isPaired, hostAvailabilityState == .online else { return .offline }
+        if displayProcesses.contains(where: { isProcessRunningCurrent($0) }) {
+            return .running
+        }
+        return .idle
+    }
+
+    func menuBarIconSymbol(for state: RemoteMenuBarPresentationState) -> String {
+        switch state {
+        case .idle:
+            return menuBarIdleIconSymbol
+        case .running:
+            return menuBarRunningIconSymbol
+        case .offline:
+            return menuBarOfflineIconSymbol
+        }
     }
 
     func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
@@ -364,11 +495,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         if !bootstrapEnabled {
             applyUITestSnapshot()
         }
+        updateGlobalShortcutRegistration()
     }
 
     deinit {
         mirrorTask?.cancel()
         localProgressTask?.cancel()
+        RemoteGlobalShortcutRegistrar.shared.unregister()
         for observer in resumeObservers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -612,6 +745,23 @@ final class RemoteDashboardViewModel: ObservableObject {
         if clearPairingRecovery {
             pairingRecoveryMessage = ""
         }
+        postMenuBarStatusDidChange()
+    }
+
+    private func postMenuBarStatusDidChange() {
+        NotificationCenter.default.post(name: Notification.Name("HomeworkHelperRemoteMenuBarStatusDidChange"), object: nil)
+    }
+
+    private func postMenuBarIconDidChange() {
+        NotificationCenter.default.post(name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"), object: nil)
+    }
+
+    private func updateGlobalShortcutRegistration() {
+        guard bootstrapEnabled else {
+            globalShortcutStatusMessage = RemoteGlobalShortcutRegistrar.disabledMessage
+            return
+        }
+        globalShortcutStatusMessage = RemoteGlobalShortcutRegistrar.shared.setEnabled(popoverGlobalShortcutEnabled)
     }
 
     private func supervisorDecision(_ event: RemoteConnectionEvent) -> RemoteConnectionDecision {
@@ -626,9 +776,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         if decision.shouldLoadCache, processes.isEmpty {
             processes = RemoteClientCache.loadProcesses()
         }
-        if decision.shouldRefreshLocalProgress {
-            refreshLocalProcessDisplay()
-        }
         if let schedule = decision.reconnectSchedule {
             reconnectSchedule = schedule
         }
@@ -639,6 +786,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
         } else if decision.shouldClearPairingRecovery {
             pairingRecoveryMessage = ""
+        }
+        if decision.shouldRefreshLocalProgress {
+            refreshLocalProcessDisplay()
         }
         if updateMessage, let message = decision.message {
             setupProgress = message
@@ -1107,11 +1257,19 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func refreshLocalProcessDisplay() {
         guard !processes.isEmpty else { return }
-        processes = processes.map { Self.processWithLocalProgress($0, now: Date()) }
+        processes = processes.map {
+            Self.processWithLocalProgress(
+                $0,
+                now: Date(),
+                recomputePlayedToday: hostAvailabilityState != .online
+            )
+        }
     }
 
-    private static func processWithLocalProgress(_ process: RemoteProcess, now: Date) -> RemoteProcess {
+    private static func processWithLocalProgress(_ process: RemoteProcess, now: Date, recomputePlayedToday: Bool) -> RemoteProcess {
         let progress = localProgress(for: process, now: now) ?? process.progress
+        let playedToday = recomputePlayedToday ? locallyPlayedToday(for: process, now: now) : process.playedToday
+        let statusText = recomputePlayedToday && !process.isRunning ? (playedToday ? "오늘 실행" : "대기") : process.statusText
         return RemoteProcess(
             processID: process.processID,
             name: process.name,
@@ -1129,9 +1287,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             iconURL: process.iconURL,
             iconURLs: process.iconURLs,
             isRunning: process.isRunning,
-            playedToday: process.playedToday,
-            statusText: process.statusText
+            playedToday: playedToday,
+            statusText: statusText
         )
+    }
+
+    private static func locallyPlayedToday(for process: RemoteProcess, now: Date) -> Bool {
+        guard let lastPlayed = process.lastPlayedTimestamp else { return false }
+        return Calendar.current.isDate(Date(timeIntervalSince1970: lastPlayed), inSameDayAs: now)
     }
 
     private static func localProgress(for process: RemoteProcess, now: Date) -> RemoteProcess.Progress? {
@@ -1192,6 +1355,28 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         if hours >= 1 { return "\(hours)시간" }
         return "\(max(0, seconds / 60))분"
+    }
+
+    private static let koreanProcessSortLocale = Locale(identifier: "ko_KR")
+
+    static func sortedProcesses(_ processes: [RemoteProcess]) -> [RemoteProcess] {
+        processes.sorted { lhs, rhs in
+            let nameOrder = lhs.name.compare(
+                rhs.name,
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive, .numeric],
+                range: nil,
+                locale: koreanProcessSortLocale
+            )
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return lhs.id.compare(
+                rhs.id,
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive, .numeric],
+                range: nil,
+                locale: Locale(identifier: "en_US_POSIX")
+            ) == .orderedAscending
+        }
     }
 
     func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
@@ -1439,7 +1624,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = try await service.beholderIncidents()
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
             if processes.isEmpty {
@@ -1473,7 +1658,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date()) }
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             if includeDevices {
                 devices = try await service.devices()

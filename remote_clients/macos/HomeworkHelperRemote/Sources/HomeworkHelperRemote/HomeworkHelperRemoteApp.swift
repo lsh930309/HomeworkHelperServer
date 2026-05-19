@@ -6,6 +6,9 @@ extension Notification.Name {
     static let homeworkHelperRemoteToggleSidebar = Notification.Name("HomeworkHelperRemoteToggleSidebar")
     static let homeworkHelperRemoteRefreshRequested = Notification.Name("HomeworkHelperRemoteRefreshRequested")
     static let homeworkHelperRemoteOpenSettings = Notification.Name("HomeworkHelperRemoteOpenSettings")
+    static let homeworkHelperRemoteMenuBarIconDidChange = Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange")
+    static let homeworkHelperRemoteMenuBarStatusDidChange = Notification.Name("HomeworkHelperRemoteMenuBarStatusDidChange")
+    static let homeworkHelperRemoteGlobalShortcutPressed = Notification.Name("HomeworkHelperRemoteGlobalShortcutPressed")
 }
 
 @MainActor
@@ -46,7 +49,19 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(menuBarIconDidChange(_:)),
-            name: Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange"),
+            name: .homeworkHelperRemoteMenuBarIconDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuBarStatusDidChange(_:)),
+            name: .homeworkHelperRemoteMenuBarStatusDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(globalShortcutPressed(_:)),
+            name: .homeworkHelperRemoteGlobalShortcutPressed,
             object: nil
         )
         Task {
@@ -97,11 +112,10 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        configureStatusButton(item.button, symbol: RemoteSharedModel.viewModel.menuBarIconSymbol)
+        configureStatusButton(item.button)
         item.button?.target = self
         item.button?.action = #selector(RemoteAppDelegate.statusItemClicked(_:))
         item.button?.sendAction(on: [.leftMouseDown])
-        item.button?.toolTip = "HomeworkHelper Remote"
         item.button?.isEnabled = true
         statusItem = item
         installStatusItemClickMonitor()
@@ -112,8 +126,11 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         updatePopoverContentSize()
     }
 
-    private func configureStatusButton(_ button: NSStatusBarButton?, symbol: String) {
+    private func configureStatusButton(_ button: NSStatusBarButton?) {
         guard let button else { return }
+        let viewModel = RemoteSharedModel.viewModel
+        let state = viewModel.menuBarPresentationState()
+        let symbol = viewModel.menuBarIconSymbol(for: state)
         if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "HomeworkHelper Remote") {
             image.isTemplate = true
             button.image = image
@@ -123,6 +140,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             button.title = "HH"
         }
         button.imagePosition = .imageOnly
+        button.toolTip = state.tooltip
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
@@ -211,7 +229,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     private func currentPopoverContentSize() -> CGSize {
         RemotePopoverLayout.contentSize(
-            processes: RemoteSharedModel.viewModel.processes,
+            processes: RemoteSharedModel.viewModel.displayProcesses,
             showsPairingCTA: !RemoteSharedModel.viewModel.isPaired,
             showsSummary: RemoteSharedModel.viewModel.showPlaySummary && RemoteSharedModel.viewModel.dashboardSummary != nil,
             incidentCount: RemoteSharedModel.viewModel.beholderIncidents.count
@@ -259,8 +277,15 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     @objc private func menuBarIconDidChange(_ notification: Notification) {
-        let symbol = notification.object as? String ?? RemoteMenuBarIconChoice.defaultSymbol
-        configureStatusButton(statusItem?.button, symbol: symbol)
+        configureStatusButton(statusItem?.button)
+    }
+
+    @objc private func menuBarStatusDidChange(_ notification: Notification) {
+        configureStatusButton(statusItem?.button)
+    }
+
+    @objc private func globalShortcutPressed(_ notification: Notification) {
+        showPopoverFromStatusItem()
     }
 
     static func showPrimaryInterface() {
@@ -295,7 +320,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         window.hasShadow = true
         window.contentView = NSHostingView(rootView: MenuBarPopoverView(viewModel: RemoteSharedModel.viewModel))
         window.setContentSize(RemotePopoverLayout.contentSize(
-            processes: RemoteSharedModel.viewModel.processes,
+            processes: RemoteSharedModel.viewModel.displayProcesses,
             showsPairingCTA: !RemoteSharedModel.viewModel.isPaired,
             showsSummary: RemoteSharedModel.viewModel.showPlaySummary && RemoteSharedModel.viewModel.dashboardSummary != nil,
             incidentCount: RemoteSharedModel.viewModel.beholderIncidents.count
@@ -499,7 +524,37 @@ struct GameIconView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous))
+        .overlay { runningOverlay }
+        .overlay(alignment: .topTrailing) {
+            playNeededDotOverlay
+        }
+        .help(viewModel.processRuntimeHelp(process))
     }
+
+    @ViewBuilder
+    private var runningOverlay: some View {
+        if viewModel.isProcessRunningCurrent(process) {
+            RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
+                .stroke(Color.green, lineWidth: Swift.max(2, displaySize * 0.06))
+                .shadow(color: Color.green.opacity(0.38), radius: Swift.max(2, displaySize * 0.08))
+        }
+    }
+
+    @ViewBuilder
+    private var playNeededDotOverlay: some View {
+        if !process.playedToday {
+            Circle()
+                .fill(Color.red)
+                .frame(width: playNeededDotSize, height: playNeededDotSize)
+                .overlay(Circle().stroke(Color.white.opacity(0.92), lineWidth: playNeededDotStrokeWidth))
+                .shadow(color: Color.black.opacity(0.18), radius: 1, y: 0.5)
+                .offset(x: playNeededDotOffset, y: -playNeededDotOffset)
+        }
+    }
+
+    private var playNeededDotSize: CGFloat { Swift.max(7, displaySize * 0.22) }
+    private var playNeededDotStrokeWidth: CGFloat { Swift.max(1.2, displaySize * 0.035) }
+    private var playNeededDotOffset: CGFloat { Swift.max(1, displaySize * 0.04) }
 
     private var fallback: some View {
         ZStack {
@@ -615,21 +670,8 @@ private enum MenuBarProgressVisuals {
 
     static func progressTone(percentage: Double) -> Color {
         let clamped = clampedPercentage(percentage)
-        if clamped <= 50 {
-            return interpolatedColor(from: (0x44, 0xcc, 0x44), to: (0xff, 0xcc, 0x00), fraction: clamped / 50)
-        }
-        if clamped <= 80 {
-            return interpolatedColor(from: (0xff, 0xcc, 0x00), to: (0xff, 0x88, 0x00), fraction: (clamped - 50) / 30)
-        }
-        return interpolatedColor(from: (0xff, 0x88, 0x00), to: (0xff, 0x44, 0x44), fraction: (clamped - 80) / 20)
-    }
-
-    private static func interpolatedColor(from start: (Int, Int, Int), to end: (Int, Int, Int), fraction: Double) -> Color {
-        let f = min(max(fraction, 0), 1)
-        let red = Double(start.0) + (Double(end.0) - Double(start.0)) * f
-        let green = Double(start.1) + (Double(end.1) - Double(start.1)) * f
-        let blue = Double(start.2) + (Double(end.2) - Double(start.2)) * f
-        return Color(red: red / 255, green: green / 255, blue: blue / 255)
+        let hue = (1.0 - (clamped / 100.0)) * 0.33
+        return Color(hue: hue, saturation: 0.76, brightness: 0.86)
     }
 }
 
@@ -686,7 +728,7 @@ struct MenuBarGameRow: View {
                         .truncationMode(.tail)
                         .layoutPriority(1)
                     Spacer(minLength: 4)
-                    MenuBarGameStatusBadges(process: process, progress: process.progress, viewModel: viewModel)
+                    MenuBarGameStatusBadges(progress: process.progress, viewModel: viewModel)
                         .layoutPriority(2)
                         .help(viewModel.processRuntimeHelp(process))
                 }
@@ -782,23 +824,6 @@ struct MenuBarProgressMeter: View {
     }
 }
 
-struct MenuBarRunningBadge: View {
-    var body: some View {
-        Text("실행 중")
-            .font(.caption2.bold())
-            .foregroundStyle(.green)
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
-            .allowsTightening(true)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
-            .remoteGlass(.pill, tint: Color.green.opacity(0.18))
-            .help("실행 중")
-    }
-}
-
 struct MenuBarProgressBadge: View {
     let progress: RemoteProcess.Progress
     @ObservedObject var viewModel: RemoteDashboardViewModel
@@ -824,22 +849,14 @@ struct MenuBarProgressBadge: View {
 }
 
 struct MenuBarGameStatusBadges: View {
-    let process: RemoteProcess
     let progress: RemoteProcess.Progress?
     @ObservedObject var viewModel: RemoteDashboardViewModel
 
     var body: some View {
         HStack(spacing: RemotePopoverLayout.statusBadgeSpacing) {
-            if viewModel.isProcessRunningCurrent(process) {
-                MenuBarRunningBadge()
-            } else if let progress {
+            if let progress {
                 MenuBarProgressBadge(progress: progress, viewModel: viewModel)
             }
-            Label("오늘", systemImage: process.playedToday ? "checkmark.circle.fill" : "circle")
-                .labelStyle(.iconOnly)
-                .font(.caption2)
-                .foregroundStyle(process.playedToday ? .blue : .secondary.opacity(0.55))
-                .frame(width: RemotePopoverLayout.todayBadgeWidth, alignment: .center)
         }
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -871,12 +888,12 @@ struct MenuBarPopoverView: View {
                     HostStatusPill(viewModel: viewModel)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(viewModel.processes) { process in
+                    ForEach(viewModel.displayProcesses) { process in
                         MenuBarGameRow(process: process, viewModel: viewModel) {
                             Task { await viewModel.launch(process) }
                         }
                     }
-                    if viewModel.processes.isEmpty {
+                    if viewModel.displayProcesses.isEmpty {
                         Text("캐시된 게임 상태가 없습니다.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -925,7 +942,7 @@ struct MenuBarPopoverView: View {
             .padding(14)
             .remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)
             .buttonStyle(.glass)
-            .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.processes) - 20)
+            .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.displayProcesses) - 20)
         }
     }
 }
@@ -1350,13 +1367,29 @@ struct RemoteSettingsView: View {
                     Text(viewModel.popoverGlassTransparency.description)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Picker("메뉴바 아이콘", selection: $viewModel.menuBarIconSymbol) {
+                    Picker("대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol) {
                         ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
                             Label(symbol, systemImage: symbol).tag(symbol)
                         }
                     }
                     .pickerStyle(.menu)
-                    Text("내장 SF Symbols 중 하나를 메뉴바 아이콘으로 사용합니다.")
+                    Picker("실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol) {
+                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
+                            Label(symbol, systemImage: symbol).tag(symbol)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol) {
+                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
+                            Label(symbol, systemImage: symbol).tag(symbol)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("상태별 내장 SF Symbols를 메뉴바 아이콘으로 사용합니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Toggle("Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)
+                    Text(viewModel.globalShortcutStatusMessage)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
