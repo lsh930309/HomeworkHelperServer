@@ -149,6 +149,43 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.menuBarIconSymbol(for: .running) == "moon.fill" else {
                     fatalError("running menu bar icon should be user-selectable")
                 }
+                let staminaProgress = RemoteProcess.Progress(
+                    kind: "stamina",
+                    percentage: 18,
+                    displayText: "서버 자원 표시",
+                    staminaCurrent: 44,
+                    staminaMax: 240,
+                    hoyolabGameID: "zzz",
+                    resourceIconURL: nil,
+                    resourceIconURLs: nil,
+                    remainingSeconds: 7200,
+                    readyAt: Date().addingTimeInterval(7200).timeIntervalSince1970
+                )
+                let cycleProgress = RemoteProcess.Progress(
+                    kind: "cycle",
+                    percentage: 42,
+                    displayText: "2시간",
+                    staminaCurrent: nil,
+                    staminaMax: nil,
+                    hoyolabGameID: nil,
+                    resourceIconURL: nil,
+                    resourceIconURLs: nil,
+                    remainingSeconds: 7200,
+                    readyAt: Date().addingTimeInterval(7200).timeIntervalSince1970
+                )
+                viewModel.cycleProgressDisplayMode = .remaining
+                guard viewModel.progressMeterDisplayText(staminaProgress) == "44/240",
+                      viewModel.progressMeterDisplayText(cycleProgress) == "42%",
+                      viewModel.trackBadgeDisplayText(staminaProgress) == "2시간",
+                      viewModel.trackBadgeDisplayText(cycleProgress) == "2시간" else {
+                    fatalError("progress meter should show stamina resources while track badge should show remaining time")
+                }
+                viewModel.cycleProgressDisplayMode = .readyAt
+                guard viewModel.trackBadgeDisplayText(staminaProgress).hasSuffix("완료"),
+                      viewModel.trackBadgeDisplayText(cycleProgress).hasSuffix("완료"),
+                      viewModel.trackBadgeDisplayText(staminaProgress) != "44/240" else {
+                    fatalError("track badge should show ready-at text for all progress kinds when preferred")
+                }
                 viewModel.baseURLText = "__BASE_URL__"
                 viewModel.deviceName = "macos-viewmodel-smoke"
                 viewModel.powerConfig.sshKeyPath = "__SMOKE_SSH_KEY__"

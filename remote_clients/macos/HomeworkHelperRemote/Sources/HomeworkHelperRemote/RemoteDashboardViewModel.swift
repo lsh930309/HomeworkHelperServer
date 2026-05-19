@@ -1248,11 +1248,28 @@ final class RemoteDashboardViewModel: ObservableObject {
         return RemoteClientCache.remoteResourceIconURL(for: process, baseURL: client.baseURL, preferredSize: preferredSize)
     }
 
-    func progressDisplayText(_ progress: RemoteProcess.Progress) -> String {
-        guard progress.kind == "cycle", cycleProgressDisplayMode == .readyAt, let readyAt = progress.readyAt else {
-            return progress.displayText
+    func progressMeterDisplayText(_ progress: RemoteProcess.Progress) -> String {
+        if progress.kind == "stamina",
+           let current = progress.staminaCurrent,
+           let maximum = progress.staminaMax,
+           maximum > 0 {
+            return "\(current)/\(maximum)"
         }
-        return "\(Self.formatCycleReadyAt(readyAt)) 완료"
+        return Self.percentageText(progress.percentage)
+    }
+
+    func trackBadgeDisplayText(_ progress: RemoteProcess.Progress) -> String {
+        if cycleProgressDisplayMode == .readyAt, let readyAt = progress.readyAt {
+            return "\(Self.formatCycleReadyAt(readyAt)) 완료"
+        }
+        if let remainingSeconds = progress.remainingSeconds {
+            return Self.formatRemainingDuration(seconds: remainingSeconds)
+        }
+        return progress.displayText
+    }
+
+    private static func percentageText(_ percentage: Double) -> String {
+        "\(Int(min(max(percentage, 0), 100).rounded()))%"
     }
 
     private func refreshLocalProcessDisplay() {

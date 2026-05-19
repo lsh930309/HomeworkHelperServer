@@ -612,7 +612,7 @@ struct GameProgressView: View {
         VStack(alignment: .leading, spacing: 2) {
             ProgressView(value: min(max(progress.percentage, 0), 100), total: 100)
                 .controlSize(.small)
-            Text(viewModel.progressDisplayText(progress))
+            Text(viewModel.trackBadgeDisplayText(progress))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -662,10 +662,6 @@ enum RemotePopoverLayout {
 private enum MenuBarProgressVisuals {
     static func clampedPercentage(_ percentage: Double) -> Double {
         min(max(percentage, 0), 100)
-    }
-
-    static func percentageText(_ percentage: Double) -> String {
-        "\(Int(clampedPercentage(percentage).rounded()))%"
     }
 
     static func progressTone(percentage: Double) -> Color {
@@ -736,7 +732,7 @@ struct MenuBarGameRow: View {
                     HStack(spacing: 5) {
                         ResourceIconView(process: process, viewModel: viewModel, preferredSize: 128, displaySize: 12)
                             .frame(width: 12, height: 12)
-                        MenuBarProgressMeter(progress: progress)
+                        MenuBarProgressMeter(progress: progress, viewModel: viewModel)
                     }
                 } else {
                     Text(viewModel.processStatusText(process))
@@ -794,6 +790,7 @@ struct MenuBarLaunchButton: View {
 
 struct MenuBarProgressMeter: View {
     let progress: RemoteProcess.Progress
+    @ObservedObject var viewModel: RemoteDashboardViewModel
 
     private var fraction: CGFloat {
         CGFloat(MenuBarProgressVisuals.clampedPercentage(progress.percentage) / 100)
@@ -807,7 +804,7 @@ struct MenuBarProgressMeter: View {
                 Capsule()
                     .fill(Color.accentColor.opacity(0.72))
                     .frame(width: proxy.size.width * fraction)
-                Text(MenuBarProgressVisuals.percentageText(progress.percentage))
+                Text(viewModel.progressMeterDisplayText(progress))
                     .font(.system(size: 8.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white)
@@ -819,8 +816,8 @@ struct MenuBarProgressMeter: View {
         .frame(height: RemotePopoverLayout.progressMeterHeight)
         .clipShape(Capsule())
         .remoteGlass(.pill, tint: Color.accentColor.opacity(0.08))
-        .accessibilityLabel("진행률 \(MenuBarProgressVisuals.percentageText(progress.percentage))")
-        .help(MenuBarProgressVisuals.percentageText(progress.percentage))
+        .accessibilityLabel("진행률 \(viewModel.progressMeterDisplayText(progress))")
+        .help(viewModel.progressMeterDisplayText(progress))
     }
 }
 
@@ -833,7 +830,7 @@ struct MenuBarProgressBadge: View {
     }
 
     var body: some View {
-        Text(viewModel.progressDisplayText(progress))
+        Text(viewModel.trackBadgeDisplayText(progress))
             .font(.caption2.weight(.semibold))
             .foregroundStyle(tone)
             .lineLimit(1)
@@ -844,7 +841,7 @@ struct MenuBarProgressBadge: View {
             .padding(.vertical, 2)
             .frame(width: RemotePopoverLayout.progressBadgeWidth, alignment: .center)
             .remoteGlass(.pill, tint: tone.opacity(0.15))
-            .help(viewModel.progressDisplayText(progress))
+            .help(viewModel.trackBadgeDisplayText(progress))
     }
 }
 

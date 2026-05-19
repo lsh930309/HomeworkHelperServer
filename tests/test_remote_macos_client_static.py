@@ -322,7 +322,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".menuBarHoverTint()" in app
     assert "MenuBarGameStatusBadges" in app
     assert "MenuBarProgressBadge" in app
-    assert "MenuBarProgressMeter(progress: progress)" in app
+    assert "MenuBarProgressMeter(progress: progress, viewModel: viewModel)" in app
     row_source = app.split("struct MenuBarGameRow", 1)[1].split("struct MenuBarLaunchButton", 1)[0]
     assert "ProgressView(" not in row_source
     assert ".truncationMode(.tail)" in row_source
@@ -330,9 +330,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "progressTone" not in progress_meter_source
     assert "Color.accentColor.opacity(0.72)" in progress_meter_source
     assert "Color.accentColor.opacity(0.08)" in progress_meter_source
+    assert "viewModel.progressMeterDisplayText(progress)" in progress_meter_source
+    assert "MenuBarProgressVisuals.percentageText" not in progress_meter_source
     progress_badge_source = app.split("struct MenuBarProgressBadge", 1)[1].split("struct MenuBarGameStatusBadges", 1)[0]
     assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in progress_badge_source
-    assert "Text(MenuBarProgressVisuals.percentageText(progress.percentage))" in app
+    assert "viewModel.trackBadgeDisplayText(progress)" in progress_badge_source
     assert "MenuBarProgressVisuals.progressTone(percentage: progress.percentage)" in app
     assert "Color(hue: hue, saturation: 0.76, brightness: 0.86)" in app
     assert "interpolatedColor" not in app
@@ -611,7 +613,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteClientCache.saveProcesses" in view_model
     assert "RemoteClientCache.cacheIcons" in view_model
     assert "CycleProgressDisplayMode" in view_model
-    assert "progressDisplayText" in view_model
+    assert "progressMeterDisplayText" in view_model
+    assert "trackBadgeDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
     assert "locallyPlayedToday" in view_model
