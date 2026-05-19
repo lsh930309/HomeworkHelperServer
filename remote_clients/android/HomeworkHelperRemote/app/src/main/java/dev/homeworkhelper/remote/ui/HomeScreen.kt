@@ -29,6 +29,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -231,6 +235,8 @@ private fun GameCard(
 
 @Composable
 private fun GameIcon(process: RemoteProcess) {
+    val iconUrl = process.preferredIconUrl
+    var iconLoaded by remember(iconUrl) { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .size(54.dp)
@@ -239,7 +245,12 @@ private fun GameIcon(process: RemoteProcess) {
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        val iconUrl = process.preferredIconUrl
+        Text(
+            text = process.name.take(1).ifBlank { "G" },
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (iconLoaded) 0f else 1f),
+            fontWeight = FontWeight.Bold,
+        )
         if (iconUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -249,14 +260,10 @@ private fun GameIcon(process: RemoteProcess) {
                 contentDescription = "${process.name} 아이콘",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                onSuccess = { iconLoaded = true },
+                onError = { iconLoaded = false },
             )
         }
-        Text(
-            text = process.name.take(1).ifBlank { "G" },
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (iconUrl == null) 1f else 0f),
-            fontWeight = FontWeight.Bold,
-        )
     }
 }
 
@@ -283,6 +290,7 @@ private fun ProgressLane(progress: RemoteProgress) {
 @Composable
 private fun ResourceIcon(progress: RemoteProgress) {
     val iconUrl = progress.preferredResourceIconUrl
+    var iconLoaded by remember(iconUrl) { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .size(28.dp)
@@ -290,6 +298,9 @@ private fun ResourceIcon(progress: RemoteProgress) {
             .background(MaterialTheme.colorScheme.secondaryContainer),
         contentAlignment = Alignment.Center,
     ) {
+        if (!iconLoaded) {
+            Text("↻", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
         if (iconUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -299,9 +310,9 @@ private fun ResourceIcon(progress: RemoteProgress) {
                 contentDescription = "진행도 리소스 아이콘",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.padding(4.dp).fillMaxSize(),
+                onSuccess = { iconLoaded = true },
+                onError = { iconLoaded = false },
             )
-        } else {
-            Text("↻", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
         }
     }
 }
@@ -315,7 +326,7 @@ private fun RunningBadge() {
         fontWeight = FontWeight.Bold,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(Brush.horizontalGradient(listOf(Color(0xFF2563EB), Color(0xFF9333EA))))
+            .background(Brush.horizontalGradient(listOf(Color(0xFF2563EB), Color(0xFF14B8A6))))
             .width(92.dp)
             .padding(horizontal = 8.dp, vertical = 5.dp),
     )
