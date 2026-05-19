@@ -82,8 +82,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             DispatchQueue.main.async {
                 Self.showUITestPopoverWindow()
             }
-        } else if shouldHideMainWindowForLoginLaunch {
-            DispatchQueue.main.async { Self.schedulePlaceholderHide() }
         }
     }
 
@@ -100,14 +98,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPopoverFromStatusItem()
         return true
-    }
-
-    private var shouldHideMainWindowForLoginLaunch: Bool {
-        guard !RemoteUITestFlags.skipExternalState else { return false }
-        return RemoteLoginItemManager.isEnabled
-        && !RemoteSharedModel.viewModel.loginLaunchShowsWindow
-        && (ProcessInfo.processInfo.environment["LaunchServicesLaunchReason"] == "LoginItems"
-            || ProcessInfo.processInfo.arguments.contains("--launched-at-login"))
     }
 
     private func configureStatusItem() {
@@ -1328,7 +1318,6 @@ struct RemoteSettingsView: View {
                         get: { viewModel.launchAtLoginEnabled },
                         set: { enabled in viewModel.setLaunchAtLogin(enabled) }
                     ))
-                    Toggle("로그인 자동 실행 시 창 표시", isOn: $viewModel.loginLaunchShowsWindow)
                     Toggle("플레이 요약 표시", isOn: $viewModel.showPlaySummary)
                     HStack {
                         Text("상태 동기화 주기")

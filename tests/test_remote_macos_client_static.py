@@ -475,7 +475,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "현재 토큰 갱신" in app
     assert "Android-PC 연결" in app
     assert "로그인 시 실행" in app
-    assert "로그인 자동 실행 시 창 표시" in app
+    assert "로그인 자동 실행 시 창 표시" not in app
+    assert "loginLaunchShowsWindow" not in app
+    assert "loginLaunchShowsWindow" not in view_model
+    assert "loginLaunchShowsWindowKey" not in view_model
     assert "플레이 요약 표시" in app
     assert "비 HoYoLab 진행률 표시" in app
     assert "Popover 투명도" in app

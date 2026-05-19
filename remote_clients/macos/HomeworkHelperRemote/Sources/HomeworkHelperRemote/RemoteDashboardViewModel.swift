@@ -51,7 +51,6 @@ private enum RemoteClientPreferences {
     private static let deviceNameKey = "remote.deviceName"
     private static let powerConfigKey = "remote.powerConfig"
     private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
-    private static let loginLaunchShowsWindowKey = "remote.loginLaunchShowsWindow"
     private static let legacyMenuBarIconSymbolKey = "remote.menuBarIconSymbol"
     private static let menuBarIdleIconSymbolKey = "remote.menuBarIdleIconSymbol"
     private static let menuBarRunningIconSymbolKey = "remote.menuBarRunningIconSymbol"
@@ -100,14 +99,6 @@ private enum RemoteClientPreferences {
 
     static func saveDesktopLoggingEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: desktopLoggingEnabledKey)
-    }
-
-    static func loadLoginLaunchShowsWindow() -> Bool {
-        defaults.object(forKey: loginLaunchShowsWindowKey) as? Bool ?? true
-    }
-
-    static func saveLoginLaunchShowsWindow(_ enabled: Bool) {
-        defaults.set(enabled, forKey: loginLaunchShowsWindowKey)
     }
 
     static func loadMenuBarIdleIconSymbol() -> String {
@@ -320,9 +311,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var devices: [RemoteDevice] = []
     @Published var launchAtLoginEnabled = RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled
-    @Published var loginLaunchShowsWindow = RemoteClientPreferences.loadLoginLaunchShowsWindow() {
-        didSet { RemoteClientPreferences.saveLoginLaunchShowsWindow(loginLaunchShowsWindow) }
-    }
     @Published var menuBarIdleIconSymbol = RemoteClientPreferences.loadMenuBarIdleIconSymbol() {
         didSet {
             if !RemoteMenuBarIconChoice.symbols.contains(menuBarIdleIconSymbol) {
