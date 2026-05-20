@@ -180,17 +180,40 @@ class RemoteSettingsDialog(QDialog):
         buttons = QHBoxLayout()
         refresh_button = QPushButton("새로고침")
         refresh_button.clicked.connect(self._refresh_devices)
-        revoke_button = QPushButton("선택 언페어링")
-        revoke_button.clicked.connect(self._revoke_selected_device)
+        self.revoke_button = QPushButton("선택 언페어링")
+        self.revoke_button.clicked.connect(self._revoke_selected_device)
         purge_button = QPushButton("폐기 목록 정리")
         purge_button.clicked.connect(self._purge_revoked_devices)
         buttons.addWidget(refresh_button)
-        buttons.addWidget(revoke_button)
+        buttons.addWidget(self.revoke_button)
         buttons.addWidget(purge_button)
         buttons.addStretch(1)
         layout.addWidget(self.devices_table)
         layout.addLayout(buttons)
         root.addWidget(group)
+
+    def _device_sort_key_for_host(self, device: dict) -> tuple[int, str, str]:
+        pairing_status = str(device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired"))
+        role = str(device.get("role") or "unknown")
+        if role == "host":
+            rank = 0
+        elif pairing_status == "paired":
+            rank = 1
+        elif pairing_status == "tailnet_unpaired":
+            rank = 2
+        elif pairing_status == "revoked":
+            rank = 3
+        else:
+            rank = 2
+        name = str(
+            device.get("name")
+            or device.get("tailnet_hostname")
+            or device.get("tailnet_dns_name")
+            or device.get("tailnet_ip")
+            or device.get("id")
+            or ""
+        ).casefold()
+        return (rank, name, str(device.get("tailnet_ip") or device.get("id") or ""))
 
     def _fit_devices_table_to_rows(self) -> None:
         """Show every paired-device row without an internal vertical scrollbar."""
@@ -330,23 +353,26 @@ class RemoteSettingsDialog(QDialog):
             "unknown": "미확인",
         }
         self.devices_table.setRowCount(0)
-        for device in devices:
+        for device in sorted(devices, key=self._device_sort_key_for_host):
             row = self.devices_table.rowCount()
             self.devices_table.insertRow(row)
             pairing_status = device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired")
             connectivity_state = device.get("connectivity_state") or ""
+            is_host_self = device.get("role") == "host"
             values = [
                 device.get("id") or "",
                 device.get("role") or "unknown",
                 device.get("name") or "",
                 device.get("tailnet_ip") or "",
                 device.get("tailnet_os") or device.get("platform") or "",
-                pairing_labels.get(pairing_status, pairing_status),
-                connectivity_labels.get(connectivity_state, connectivity_state),
+                "-" if is_host_self else pairing_labels.get(pairing_status, pairing_status),
+                "-" if is_host_self else connectivity_labels.get(connectivity_state, connectivity_state),
                 str(device.get("last_seen_at") or ""),
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if is_host_self:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
                 if col == 0:
                     item.setData(Qt.ItemDataRole.UserRole, bool(device.get("can_revoke", not device.get("revoked_at"))))
                 if col == 5:
@@ -366,7 +392,7 @@ class RemoteSettingsDialog(QDialog):
         device_id = item.text() if item else ""
         can_revoke = bool(item.data(Qt.ItemDataRole.UserRole)) if item else False
         if not can_revoke:
-            QMessageBox.information(self, "언페어링 불가", "Host 또는 아직 페어링되지 않은 tailnet 기기는 언페어링 대상이 아닙니다.")
+            QMessageBox.information(self, "언페어링 불가", "Host, 폐기된 기기 또는 아직 페어링되지 않은 tailnet 기기는 언페어링 대상이 아닙니다.")
             return
         if not device_id:
             return

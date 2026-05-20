@@ -201,6 +201,10 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
             {"id": "host:100.1.2.3", "name": "Host", "role": "host", "tailnet_ip": "100.1.2.3", "can_revoke": False}
         ])
         assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is False
+        assert dialog.devices_table.item(0, 5).text() == "-"
+        assert dialog.devices_table.item(0, 6).text() == "-"
+        assert not bool(dialog.devices_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsSelectable)
+        assert not bool(dialog.devices_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEnabled)
 
         dialog._populate_devices([
             {
@@ -218,6 +222,16 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
         assert dialog.devices_table.item(0, 5).toolTip() == "paired"
         assert dialog.devices_table.item(0, 6).text() == "대기/오프라인"
         assert dialog.devices_table.item(0, 6).toolTip() == "debug detail"
+
+        dialog._populate_devices([
+            {"id": "tailnet:100.2.2.2", "name": "Zeta", "role": "unknown", "tailnet_ip": "100.2.2.2", "pairing_status": "tailnet_unpaired", "can_revoke": False},
+            {"id": "device-b", "name": "Beta", "role": "client", "tailnet_ip": "100.1.1.2", "pairing_status": "paired", "can_revoke": True},
+            {"id": "host:100.1.1.1", "name": "Host", "role": "host", "tailnet_ip": "100.1.1.1", "can_revoke": False},
+            {"id": "device-a", "name": "Alpha", "role": "client", "tailnet_ip": "100.1.1.3", "pairing_status": "paired", "can_revoke": True},
+        ])
+        assert [dialog.devices_table.item(row, 2).text() for row in range(dialog.devices_table.rowCount())] == ["Host", "Alpha", "Beta", "Zeta"]
+        assert dialog.devices_table.item(1, 0).data(Qt.ItemDataRole.UserRole) is True
+        assert dialog.devices_table.item(3, 0).data(Qt.ItemDataRole.UserRole) is False
     finally:
         dialog.close()
         dialog.deleteLater()

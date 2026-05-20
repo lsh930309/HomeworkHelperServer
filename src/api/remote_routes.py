@@ -476,6 +476,35 @@ def create_remote_router(
             return "stale_or_offline", "최근 Remote API 통신 이력은 있지만 현재 tailnet status에서 찾지 못했습니다."
         return "unknown", "Tailnet 매칭 전인 페어링 기기입니다."
 
+    def _device_display_name(device: dict[str, Any]) -> str:
+        return str(
+            device.get("name")
+            or device.get("tailnet_hostname")
+            or device.get("tailnet_dns_name")
+            or device.get("tailnet_ip")
+            or device.get("id")
+            or ""
+        )
+
+    def _host_device_sort_key(device: dict[str, Any]) -> tuple[int, str, str]:
+        pairing_status = str(device.get("pairing_status") or "")
+        role = str(device.get("role") or "")
+        if role == "host":
+            rank = 0
+        elif pairing_status == "paired":
+            rank = 1
+        elif pairing_status == "tailnet_unpaired":
+            rank = 2
+        elif pairing_status == "revoked":
+            rank = 3
+        else:
+            rank = 2
+        return (
+            rank,
+            _normalized_device_name(_device_display_name(device)),
+            str(device.get("tailnet_ip") or device.get("id") or ""),
+        )
+
     def _managed_device_rows() -> list[dict[str, Any]]:
         paired_devices = device_registry.list_devices()
         tailscale_payload, _snapshot = _tailscale_snapshot_payload()
@@ -511,7 +540,7 @@ def create_remote_router(
                 "tailnet_online": bool(peer and peer.get("online")),
                 "connectivity_state": state,
                 "health_message": message,
-                "can_revoke": not bool(device.get("revoked_at")),
+                "can_revoke": not bool(device.get("revoked_at")) and (device.get("role") or "client") == "client",
             })
 
         host_ip = _primary_tailnet_ip(tailscale_payload.get("self_ips") or [])
@@ -562,7 +591,7 @@ def create_remote_router(
                 "health_message": "같은 tailnet에 보이지만 HomeworkHelper 페어링은 없습니다.",
                 "can_revoke": False,
             })
-        return rows
+        return sorted(rows, key=_host_device_sort_key)
 
     def _is_valid_remote_token(request: Request, authorization: str | None) -> bool:
         token = _bearer_token(authorization)

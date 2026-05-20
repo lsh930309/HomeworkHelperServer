@@ -766,6 +766,7 @@ def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
     paired = next(device for device in devices if device["id"] == confirm.json()["id"])
     host = next(device for device in devices if device["role"] == "host")
     assert accepted.status_code == 200
+    assert devices[0]["role"] == "host"
     assert paired["role"] == "client"
     assert paired["tailnet_ip"] == "100.114.138.46"
     assert paired["tailnet_hostname"] == "macbook"
@@ -815,6 +816,44 @@ def test_remote_devices_show_unpaired_tailnet_peers_without_granting_revoke():
     assert unpaired["pairing_status"] == "tailnet_unpaired"
     assert unpaired["connectivity_state"] == "tailnet_online_unpaired"
     assert unpaired["can_revoke"] is False
+
+
+def test_remote_devices_sort_host_first_clients_by_name_and_management_flags():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [],
+            }
+
+    registry = RemoteDeviceRegistry(path=Path(tempfile.mkdtemp(prefix="hh-remote-devices-")) / "remote_devices.json")
+    alpha = registry.start_pairing(now=1778497000.0)
+    alpha_device = registry.confirm_pairing(code=alpha["code"], device_name="Alpha", platform="macos", now=1778497001.0)
+    zeta = registry.start_pairing(now=1778497002.0)
+    zeta_device = registry.confirm_pairing(code=zeta["code"], device_name="Zeta", platform="android", now=1778497003.0)
+    assert alpha_device and zeta_device
+    registry.revoke_device(zeta_device["id"], now=1778497004.0)
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        auth_token="secret-token",
+        device_registry=registry,
+        tailscale_probe=lambda: _Snapshot(),
+    )
+
+    devices = client.get("/remote/devices", headers={"Authorization": "Bearer secret-token"}).json()["devices"]
+
+    assert [device["role"] for device in devices[:2]] == ["host", "client"]
+    assert devices[0]["pairing_status"] == "host"
+    assert devices[0]["can_revoke"] is False
+    assert devices[1]["name"] == "Alpha"
+    assert devices[1]["can_revoke"] is True
+    assert devices[-1]["name"] == "Zeta"
+    assert devices[-1]["pairing_status"] == "revoked"
+    assert devices[-1]["can_revoke"] is False
 
 
 def test_legacy_paired_device_merges_with_tailnet_peer_by_name_and_backfills_identity():
