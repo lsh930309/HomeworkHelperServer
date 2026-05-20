@@ -741,22 +741,33 @@ PUT    /settings               # 전역 설정 수정
 
 ### 핵심 라이브러리
 
-| 라이브러리 | 버전 | 용도 |
-|----------|------|------|
-| **Python** | 3.11+ | 메인 런타임 |
-| **FastAPI** | 0.116 | RESTful API 서버 |
-| **SQLAlchemy** | 2.0 | ORM 및 데이터베이스 관리 |
-| **PyQt6** | 6.9 | GUI 프레임워크 |
-| **psutil** | 7.1 | 프로세스 모니터링 |
-| **uvicorn** | 0.35 | ASGI 서버 |
-| **Pydantic** | 2.11 | 데이터 검증 |
-| **requests** | 2.32 | HTTP 클라이언트 |
-| **genshin** | 1.6+ | HoYoLab API |
-| **obsws-python** | 1.7+ | OBS WebSocket 5.x 클라이언트 |
-| **winshell** | 0.6 | Windows 특수 폴더 / 휴지통 이동 |
-| **mss** | 9.x | 고속 스크린샷 캡처 |
-| **PyInstaller** | 6.x | 실행 파일 빌드 |
-| **tqdm** | 4.67 | 진행률 표시 |
+정확한 설치 목록은 `requirements.txt`를 기준으로 관리합니다.
+Windows 전용 패키지는 platform marker로 제한되어 macOS/Linux 설치 시 자동으로 제외됩니다.
+
+| 분류 | 라이브러리 | 버전 제약 | 용도 |
+|------|------------|-----------|------|
+| 런타임 | **Python** | 3.11+ | 메인 런타임 |
+| GUI | **PyQt6** | `requirements.txt` | 데스크톱 GUI 프레임워크 |
+| Windows | **pywin32** | `requirements.txt` | Windows API / GDI 캡처 / 레지스트리 연동 |
+| Windows | **winshell** | `requirements.txt` | 시작 프로그램 폴더 조회, 휴지통 이동 |
+| Windows | **psutil** | `requirements.txt` | 프로세스 모니터링 |
+| Windows | **pycaw** | `requirements.txt` | Windows 앱 볼륨 제어 |
+| API 서버 | **FastAPI** | `requirements.txt` | RESTful API 서버 |
+| API 서버 | **uvicorn** | `requirements.txt` | ASGI 서버 |
+| 데이터 | **SQLAlchemy** | `requirements.txt` | ORM 및 SQLite 데이터베이스 관리 |
+| 데이터 | **pydantic** | `requirements.txt` | API / 설정 데이터 검증 |
+| 네트워크 | **requests** | `requirements.txt` | HTTP 클라이언트, 외부 리소스 조회 |
+| 데이터 검증 | **jsonschema** | `requirements.txt` | JSON 스키마 검증 |
+| 알림 / 입력 | **Windows-Toasts** | `requirements.txt` | Windows 토스트 알림 |
+| 알림 / 입력 | **winrt-Windows.Gaming.Input** | `requirements.txt` | Windows 게임 입력 WinRT 바인딩 |
+| 녹화 | **websocket-client** | `requirements.txt` | OBS WebSocket 5.x 프로토콜 클라이언트 |
+| 스크린샷 / 아이콘 | **mss** | `requirements.txt` | 고속 스크린샷 캡처 |
+| 스크린샷 / 아이콘 | **Pillow** | `requirements.txt` | 이미지 처리 및 아이콘 변환 |
+| 자원 추적 | **genshin** | 1.6+ | HoYoLab 스태미나 / 리소스 API |
+| 자원 추적 | **pycryptodome** | 3.20+ | 브라우저 쿠키 DB 복호화 |
+| 빌드 / 개발 | **pyinstaller** | `requirements.txt` | Windows 실행 파일 빌드 |
+| 빌드 / 개발 | **pytest** | `requirements.txt` | 테스트 실행 |
+| 빌드 / 개발 | **tqdm** | `requirements.txt` | 빌드 / 마이그레이션 진행률 표시 |
 
 ### 데이터베이스
 

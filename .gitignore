@@ -92,7 +92,6 @@ src/screenshot/_method.txt
 artifacts/
 local-artifacts/
 *.png
-!assets/icons/games/nikke_stamina.png
 
 # ===========================
 # 코드 서명 인증서
