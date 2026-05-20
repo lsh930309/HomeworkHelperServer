@@ -63,7 +63,7 @@ GLOBAL_DIALOG_FIELDS = {
     "cycle_deadline_advance_notify_hours", "run_on_startup", "always_on_top",
     "run_as_admin", "notify_on_mandatory_time", "notify_on_cycle_deadline",
     "notify_on_sleep_correction", "notify_on_daily_reset", "stamina_notify_enabled",
-    "stamina_notify_threshold", "theme", "hide_on_game", "remote_server_mode_enabled",
+    "stamina_notify_threshold", "theme", "hide_on_game",
 }
 PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
@@ -198,6 +198,7 @@ def _actor_label(actor: str | None) -> str:
         "legacy_process_monitor": "기존 GUI 실행 감지기",
         "global_settings_dialog": "기존 GUI 전역 설정 창",
         "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
+        "remote_settings_dialog": "기존 GUI 원격 설정 창",
         "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
         "runtime_stamina_tracker": "스태미나 런타임 보정",
     }.get(actor or "", actor or "알 수 없는 경로")

@@ -1144,6 +1144,12 @@ def test_remote_settings_dialog_can_save_only_remote_server_mode(monkeypatch):
     assert client.global_settings.remote_server_mode_enabled is True
 
 
+def test_remote_settings_dialog_has_user_facing_actor_label():
+    from src.data import beholder
+
+    assert beholder._actor_label("remote_settings_dialog") == "기존 GUI 원격 설정 창"
+
+
 def test_settings_override_returns_after_first_consumed_guard(monkeypatch):
     from src.data import beholder as beholder_mod
 

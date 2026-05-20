@@ -920,17 +920,7 @@ class MainWindow(QMainWindow):
         if not mb:
             return
         fm = mb.addMenu("파일(&F)") # 파일 메뉴
-        try:
-            # 표준 종료 아이콘 가져오기 시도
-            style = self.style()
-            if style:
-                ei_px = style.standardPixmap(QStyle.StandardPixmap.SP_DialogCloseButton)
-                ei = QIcon.fromTheme("app-exit", QIcon(ei_px)) # 테마 아이콘 우선, 없으면 표준 아이콘 사용
-            else:
-                ei = QIcon()
-        except AttributeError: # 예외 발생 시 빈 아이콘 사용 (안전 장치)
-            ei = QIcon()
-        ea = QAction(ei, "종료(&X)", self); ea.setShortcut("Ctrl+Q"); ea.triggered.connect(self.initiate_quit_sequence)
+        ea = QAction("종료(&X)", self); ea.setShortcut("Ctrl+Q"); ea.triggered.connect(self.initiate_quit_sequence)
         restart_action = QAction("재시작(&R)", self)
         restart_action.setShortcut("Ctrl+R")
         restart_action.triggered.connect(self._restart_app)
@@ -940,18 +930,18 @@ class MainWindow(QMainWindow):
             fm.addAction(ea) # 종료 액션
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
-        gsa = QAction("전역 설정 변경...", self); gsa.triggered.connect(self.open_global_settings_dialog)
+        gsa = QAction("앱 설정...", self); gsa.triggered.connect(self.open_global_settings_dialog)
         remote_settings_action = QAction("원격 설정...", self)
         remote_settings_action.triggered.connect(self.open_remote_settings_dialog)
         hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
         sidebar_settings_action = QAction("사이드바 설정...", self)
         sidebar_settings_action.triggered.connect(self.open_sidebar_settings_dialog)
         if sm:
-            sm.addAction(gsa) # 전역 설정 변경 액션
+            sm.addAction(gsa) # 앱 설정 액션
             sm.addAction(remote_settings_action)
-            sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
-            sm.addSeparator()
             sm.addAction(sidebar_settings_action)
+            sm.addSeparator()
+            sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
 
         # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
@@ -1146,7 +1136,6 @@ class MainWindow(QMainWindow):
         # ApiClient는 설정을 저장할 때마다 내부의 global_settings 객체를 새로 교체하기 때문입니다.
         latest_settings = self.data_manager.global_settings
         previous_run_as_admin = latest_settings.run_as_admin  # 이전 설정 값 저장
-        previous_remote_server_mode = bool(getattr(latest_settings, "remote_server_mode_enabled", False))
 
         dlg = GlobalSettingsDialog(latest_settings, self) # 최신 설정으로 대화 상자 생성
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
@@ -1155,13 +1144,6 @@ class MainWindow(QMainWindow):
             if not self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog"):
                 QMessageBox.warning(self, "저장 실패", "전역 설정 저장이 차단되었거나 실패했습니다. 변경 사항은 적용하지 않습니다.")
                 return
-            if previous_remote_server_mode != bool(getattr(upd_gs, "remote_server_mode_enabled", False)):
-                QMessageBox.information(
-                    self,
-                    "재시작 필요",
-                    "리모트 서버 모드 설정이 변경되었습니다.\n\n"
-                    "API 서버 바인딩 주소를 적용하려면 앱을 재시작해주세요.",
-                )
 
             # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
             def _log_admin_debug(msg):

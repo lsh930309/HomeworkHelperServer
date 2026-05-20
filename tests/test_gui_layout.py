@@ -123,13 +123,26 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
     dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
 
+    assert 'QAction("앱 설정...", self)' in source
     assert 'QAction("원격 설정...", self)' in source
+    assert source.index('QAction("앱 설정...", self)') < source.index('QAction("원격 설정...", self)')
+    assert source.index('QAction("원격 설정...", self)') < source.index('QAction("사이드바 설정...", self)')
     assert "open_remote_settings_dialog" in source
     assert "RemoteSettingsDialog" in source
     assert 'QAction("리모트 페어링 코드 발급(&P)", self)' not in source
     assert '/remote/pair/start' in source
     assert "class RemoteSettingsDialog" in dialog_source
+    remote_dialog_source = dialog_source[
+        dialog_source.index("class RemoteSettingsDialog"):
+        dialog_source.index("class NumericTableWidgetItem")
+    ]
     assert "remote_server_mode_checkbox" in dialog_source
+    assert "QTabWidget" not in remote_dialog_source
+    assert "_RemoteSettingsWorker" in dialog_source
+    assert "_schedule_initial_refreshes" in remote_dialog_source
+    assert "_start_worker(\"devices\"" in remote_dialog_source
+    assert "_start_worker(\"tailscale\"" in remote_dialog_source
+    assert "_start_worker(\"power\"" in remote_dialog_source
     assert "devices_table" in dialog_source
     assert "tailscale_health_text" in dialog_source
     assert "power_setup_text" in dialog_source
@@ -158,12 +171,21 @@ def test_main_window_uses_icon_only_remote_readiness_indicators():
     assert "QGraphicsDropShadowEffect" in source
 
 
-def test_global_settings_dialog_exposes_remote_server_mode_and_bind_logic_is_settings_backed():
+def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
     dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
     launcher_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    global_dialog_source = dialog_source[
+        dialog_source.index("class GlobalSettingsDialog"):
+        dialog_source.index("class WebShortcutDialog")
+    ]
+    remote_dialog_source = dialog_source[
+        dialog_source.index("class RemoteSettingsDialog"):
+        dialog_source.index("class NumericTableWidgetItem")
+    ]
 
-    assert "remote_server_mode_checkbox" in dialog_source
-    assert "remote_server_mode_enabled" in dialog_source
+    assert "remote_server_mode_checkbox" not in global_dialog_source
+    assert "remote_server_mode_checkbox" in remote_dialog_source
+    assert "updated.remote_server_mode_enabled = getattr(self.current_settings" in global_dialog_source
     assert "def resolve_api_bind_host" in launcher_source
     assert '"0.0.0.0"' in launcher_source
     assert "remote_server_mode_enabled" in launcher_source

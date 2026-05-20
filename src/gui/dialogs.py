@@ -10,9 +10,9 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup, QTabWidget, QTextEdit,
+    QRadioButton, QButtonGroup, QTextEdit, QGridLayout,
 )
-from PyQt6.QtCore import Qt, QTime
+from PyQt6.QtCore import Qt, QTime, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
 
 # Local imports
@@ -23,144 +23,222 @@ import requests
 from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 
 
+class _RemoteSettingsWorker(QThread):
+    """Run a remote-settings HTTP/probe task without blocking dialog creation."""
+
+    succeeded = pyqtSignal(str, object)
+    failed = pyqtSignal(str, object)
+
+    def __init__(self, task_name: str, task, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.task_name = task_name
+        self._task = task
+
+    def run(self):
+        try:
+            self.succeeded.emit(self.task_name, self._task())
+        except Exception as exc:
+            self.failed.emit(self.task_name, exc)
+
+
 class RemoteSettingsDialog(QDialog):
-    """Unified dialog for server-mode, pairing, device, Tailscale and power settings."""
+    """Compact remote setup dialog for server-mode, pairing, device and readiness tasks."""
 
     def __init__(self, data_manager, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.data_manager = data_manager
         self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
+        self._workers: list[_RemoteSettingsWorker] = []
         self.setWindowTitle("원격 설정")
-        self.setMinimumSize(720, 560)
+        self.setMinimumSize(680, 520)
 
         root = QVBoxLayout(self)
-        tabs = QTabWidget()
-        root.addWidget(tabs)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
 
-        tabs.addTab(self._build_server_tab(), "서버")
-        tabs.addTab(self._build_pairing_tab(), "페어링")
-        tabs.addTab(self._build_tailscale_tab(), "Tailscale")
-        tabs.addTab(self._build_power_tab(), "전원")
+        self._build_pairing_section(root)
+        self._build_server_section(root)
+        self._build_status_section(root)
+        self._build_devices_section(root)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.button_box.rejected.connect(self.reject)
         root.addWidget(self.button_box)
 
-        self._refresh_devices()
-        self._refresh_tailscale()
-        self._refresh_power_setup()
+        self._schedule_initial_refreshes()
 
-    def _build_server_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.remote_server_mode_checkbox = QCheckBox(f"리모트 서버 모드로 시작 (0.0.0.0:{resolve_api_port()} 바인딩)")
-        self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
-        self.server_status_label = QLabel("변경 사항은 앱 재시작 후 적용됩니다.")
-        save_button = QPushButton("서버 모드 설정 저장")
-        save_button.clicked.connect(self._save_server_mode)
-        layout.addWidget(self.remote_server_mode_checkbox)
-        layout.addWidget(self.server_status_label)
-        layout.addWidget(save_button)
-        self.remote_desktop_log_checkbox = QCheckBox("원격 진단 로그를 바탕 화면에 저장")
-        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/Tailscale/전원 설정 이벤트를 JSONL로 기록합니다.")
-        log_button = QPushButton("로그 설정 저장")
-        log_button.clicked.connect(self._save_remote_logging_config)
-        layout.addWidget(self.remote_desktop_log_checkbox)
-        layout.addWidget(log_button)
-        self._refresh_remote_logging_config()
-        layout.addStretch(1)
-        return widget
+    def _build_pairing_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("페어링")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
 
-    def _build_pairing_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        headline = QLabel("macOS/Android 리모트 클라이언트에서 입력할 6자리 코드")
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+
         code_row = QHBoxLayout()
         self.pairing_code_edit = QLineEdit()
         self.pairing_code_edit.setReadOnly(True)
-        self.pairing_code_edit.setPlaceholderText("페어링 코드를 발급하세요")
-        issue_button = QPushButton("페어링 코드 발급")
+        self.pairing_code_edit.setPlaceholderText("코드 발급")
+        self.pairing_code_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        code_font = self.pairing_code_edit.font()
+        code_font.setPointSize(max(code_font.pointSize() + 10, 20))
+        code_font.setBold(True)
+        self.pairing_code_edit.setFont(code_font)
+        self.pairing_code_edit.setMinimumHeight(44)
+        issue_button = QPushButton("발급")
         issue_button.clicked.connect(self._issue_pairing_code)
         copy_button = QPushButton("복사")
         copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.pairing_code_edit.text()))
-        code_row.addWidget(self.pairing_code_edit)
+        code_row.addWidget(self.pairing_code_edit, 1)
         code_row.addWidget(issue_button)
         code_row.addWidget(copy_button)
+        layout.addLayout(code_row)
+
         self.pairing_status_label = QLabel("최초 페어링 성공 후에는 명시적 언페어링 전까지 token으로 자동 연결됩니다.")
+        self.pairing_status_label.setWordWrap(True)
+        layout.addWidget(self.pairing_status_label)
+        root.addWidget(group)
+
+    def _build_server_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("호스트 서버")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.remote_server_mode_checkbox = QCheckBox(f"리모트 서버 모드로 시작 (0.0.0.0:{resolve_api_port()})")
+        self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
+        self.remote_server_mode_checkbox.setToolTip("다음 앱 실행부터 Tailscale/LAN 클라이언트 접속을 허용합니다.")
+        save_button = QPushButton("서버 모드 저장")
+        save_button.clicked.connect(self._save_server_mode)
+        self.remote_desktop_log_checkbox = QCheckBox("원격 진단 로그를 바탕 화면에 저장")
+        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/Tailscale/전원 설정 이벤트를 JSONL로 기록합니다.")
+        log_button = QPushButton("로그 저장")
+        log_button.clicked.connect(self._save_remote_logging_config)
+        self.server_status_label = QLabel("서버 모드 변경은 앱 재시작 후 적용됩니다. 로그 설정을 불러오는 중...")
+        self.server_status_label.setWordWrap(True)
+
+        layout.addWidget(self.remote_server_mode_checkbox, 0, 0)
+        layout.addWidget(save_button, 0, 1)
+        layout.addWidget(self.remote_desktop_log_checkbox, 1, 0)
+        layout.addWidget(log_button, 1, 1)
+        layout.addWidget(self.server_status_label, 2, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_status_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("연결/전원 상태")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.tailscale_summary_label = QLabel("Tailscale: 확인 대기")
+        self.tailscale_summary_label.setWordWrap(True)
+        self.power_status_label = QLabel("전원 준비: 확인 대기")
+        self.power_status_label.setWordWrap(True)
+        self.tailscale_health_text = QTextEdit()
+        self.tailscale_health_text.setReadOnly(True)
+        self.tailscale_health_text.setMaximumHeight(78)
+        self.tailscale_health_text.setPlainText("Tailscale 상태를 불러오는 중...")
+        self.power_setup_text = QTextEdit()
+        self.power_setup_text.setReadOnly(True)
+        self.power_setup_text.setMaximumHeight(94)
+        self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
+
+        tailscale_refresh = QPushButton("Tailscale 새로고침")
+        tailscale_refresh.clicked.connect(self._refresh_tailscale)
+        ensure_button = QPushButton("설치/실행 확인")
+        ensure_button.clicked.connect(self._ensure_tailscale)
+        power_refresh = QPushButton("전원 상태 확인")
+        power_refresh.clicked.connect(self._refresh_power_setup)
+
+        layout.addWidget(self.tailscale_summary_label, 0, 0)
+        layout.addWidget(tailscale_refresh, 0, 1)
+        layout.addWidget(ensure_button, 0, 2)
+        layout.addWidget(self.tailscale_health_text, 1, 0, 1, 3)
+        layout.addWidget(self.power_status_label, 2, 0)
+        layout.addWidget(power_refresh, 2, 1, 1, 2)
+        layout.addWidget(self.power_setup_text, 3, 0, 1, 3)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_devices_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("페어링된 기기")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
         self.devices_table = QTableWidget(0, 5)
         self.devices_table.setHorizontalHeaderLabels(["ID", "이름", "플랫폼", "마지막 연결", "상태"])
         self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.devices_table.setMaximumHeight(150)
         if self.devices_table.horizontalHeader():
             self.devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         buttons = QHBoxLayout()
-        refresh_button = QPushButton("목록 새로고침")
+        refresh_button = QPushButton("새로고침")
         refresh_button.clicked.connect(self._refresh_devices)
-        revoke_button = QPushButton("선택 기기 언페어링")
+        revoke_button = QPushButton("선택 언페어링")
         revoke_button.clicked.connect(self._revoke_selected_device)
-        buttons.addWidget(refresh_button)
-        purge_button = QPushButton("폐기된 기기 목록 정리")
+        purge_button = QPushButton("폐기 목록 정리")
         purge_button.clicked.connect(self._purge_revoked_devices)
+        buttons.addWidget(refresh_button)
         buttons.addWidget(revoke_button)
         buttons.addWidget(purge_button)
         buttons.addStretch(1)
-        layout.addLayout(code_row)
-        layout.addWidget(self.pairing_status_label)
         layout.addWidget(self.devices_table)
         layout.addLayout(buttons)
-        return widget
+        root.addWidget(group)
 
-    def _build_tailscale_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.tailscale_health_text = QTextEdit()
-        self.tailscale_health_text.setReadOnly(True)
-        buttons = QHBoxLayout()
-        refresh_button = QPushButton("상태 확인")
-        refresh_button.clicked.connect(self._refresh_tailscale)
-        ensure_button = QPushButton("설치/실행 확인")
-        ensure_button.clicked.connect(self._ensure_tailscale)
-        buttons.addWidget(refresh_button)
-        buttons.addWidget(ensure_button)
-        buttons.addStretch(1)
-        layout.addWidget(self.tailscale_health_text)
-        layout.addLayout(buttons)
-        return widget
+    def _schedule_initial_refreshes(self) -> None:
+        self._refresh_remote_logging_config()
+        self._refresh_devices()
+        self._refresh_tailscale()
+        self._refresh_power_setup()
 
-    def _build_power_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        description = QLabel(
-            "전원 제어는 macOS/Android 클라이언트가 SmartThings/OpenSSH 직접 경로로 수행합니다. "
-            "호스트는 OpenSSH Server, 방화벽, authorized_keys 대상만 자동 페어링 흐름에 제공합니다."
-        )
-        description.setWordWrap(True)
-        self.power_status_label = QLabel("클라이언트 페어링 후 SSH public key는 자동으로 등록됩니다.")
-        self.power_setup_text = QTextEdit()
-        self.power_setup_text.setReadOnly(True)
-        self.power_setup_text.setMinimumHeight(220)
-        setup_button = QPushButton("전원 준비 상태 확인")
-        setup_button.clicked.connect(self._refresh_power_setup)
-        row = QHBoxLayout()
-        row.addWidget(setup_button)
-        row.addStretch(1)
-        layout.addWidget(description)
-        layout.addWidget(self.power_status_label)
-        layout.addWidget(self.power_setup_text)
-        layout.addLayout(row)
-        layout.addStretch(1)
-        return widget
+    def _start_worker(self, task_name: str, task) -> None:
+        worker = _RemoteSettingsWorker(task_name, task, self)
+        worker.succeeded.connect(self._on_worker_succeeded)
+        worker.failed.connect(self._on_worker_failed)
+        worker.finished.connect(lambda w=worker: self._workers.remove(w) if w in self._workers else None)
+        self._workers.append(worker)
+        worker.start()
 
+    def _on_worker_succeeded(self, task_name: str, payload: object) -> None:
+        if task_name == "logging":
+            self._apply_remote_logging_config(payload if isinstance(payload, dict) else {})
+        elif task_name == "devices":
+            devices = payload if isinstance(payload, list) else []
+            self._populate_devices(devices)
+        elif task_name == "tailscale":
+            self._apply_tailscale_payload(payload if isinstance(payload, dict) else {})
+        elif task_name == "tailscale_ensure":
+            self._apply_tailscale_ensure_payload(payload if isinstance(payload, dict) else {})
+        elif task_name == "power":
+            self._apply_power_setup_payload(payload if isinstance(payload, dict) else {})
+
+    def _on_worker_failed(self, task_name: str, exc: object) -> None:
+        if task_name == "logging":
+            self.server_status_label.setText(f"원격 로그 설정 조회 실패: {exc}")
+        elif task_name == "devices":
+            self.pairing_status_label.setText(f"기기 목록 조회 실패: {exc}")
+        elif task_name in {"tailscale", "tailscale_ensure"}:
+            self.tailscale_summary_label.setText("Tailscale: 조회 실패")
+            self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
+        elif task_name == "power":
+            self.power_status_label.setText("전원 준비: 조회 실패")
+            self.power_setup_text.setPlainText(f"전원 준비 상태 조회 실패: {exc}")
 
     def _refresh_remote_logging_config(self):
-        try:
+        self.server_status_label.setText("원격 로그 설정을 불러오는 중...")
+        def task():
             response = requests.get(f"{self.base_url}/remote/logging/config", timeout=5)
             response.raise_for_status()
-            payload = response.json()
-            self.remote_desktop_log_checkbox.setChecked(bool(payload.get("enabled")))
-            self.server_status_label.setText(f"원격 로그: {payload.get('path')}")
-        except requests.RequestException:
-            pass
+            return response.json()
+        self._start_worker("logging", task)
+
+    def _apply_remote_logging_config(self, payload: dict) -> None:
+        self.remote_desktop_log_checkbox.setChecked(bool(payload.get("enabled")))
+        self.server_status_label.setText(f"원격 로그: {payload.get('path') or '경로 미확인'}")
 
     def _save_remote_logging_config(self):
         try:
@@ -171,15 +249,22 @@ class RemoteSettingsDialog(QDialog):
             )
             response.raise_for_status()
             payload = response.json()
-            self.server_status_label.setText(f"원격 로그 설정 저장: {payload.get('path')}")
+            self._apply_remote_logging_config(payload)
         except requests.RequestException as exc:
             QMessageBox.warning(self, "로그 설정 실패", str(exc))
 
     def _save_server_mode(self):
+        previous = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
         updated = GlobalSettings.from_dict(self.data_manager.global_settings.to_dict())
         updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
         if self.data_manager.save_global_settings(updated, actor="remote_settings_dialog"):
             self.server_status_label.setText("저장되었습니다. 앱 재시작 후 API 바인딩에 적용됩니다.")
+            if previous != self.remote_server_mode_checkbox.isChecked():
+                QMessageBox.information(
+                    self,
+                    "재시작 필요",
+                    "리모트 서버 모드 설정이 변경되었습니다.\n\nAPI 서버 바인딩 주소를 적용하려면 앱을 재시작해주세요.",
+                )
         else:
             QMessageBox.warning(self, "저장 실패", "리모트 서버 모드 설정 저장에 실패했습니다.")
 
@@ -189,18 +274,20 @@ class RemoteSettingsDialog(QDialog):
             response.raise_for_status()
             payload = response.json()
             self.pairing_code_edit.setText(str(payload.get("code") or ""))
+            self.pairing_code_edit.selectAll()
             self.pairing_status_label.setText(f"코드 발급 완료. 만료: {payload.get('expires_at')}")
         except requests.RequestException as exc:
             QMessageBox.warning(self, "페어링 코드 발급 실패", str(exc))
 
     def _refresh_devices(self):
-        try:
+        self.pairing_status_label.setText("페어링된 기기 목록을 불러오는 중...")
+        def task():
             response = requests.get(f"{self.base_url}/remote/devices", timeout=5)
             response.raise_for_status()
-            devices = response.json().get("devices", [])
-        except requests.RequestException as exc:
-            self.pairing_status_label.setText(f"기기 목록 조회 실패: {exc}")
-            return
+            return response.json().get("devices", [])
+        self._start_worker("devices", task)
+
+    def _populate_devices(self, devices: list) -> None:
         self.devices_table.setRowCount(0)
         for device in devices:
             row = self.devices_table.rowCount()
@@ -214,6 +301,7 @@ class RemoteSettingsDialog(QDialog):
             ]
             for col, value in enumerate(values):
                 self.devices_table.setItem(row, col, QTableWidgetItem(value))
+        self.pairing_status_label.setText(f"페어링된 기기 {len(devices)}개")
 
     def _revoke_selected_device(self):
         row = self.devices_table.currentRow()
@@ -231,7 +319,6 @@ class RemoteSettingsDialog(QDialog):
         except requests.RequestException as exc:
             QMessageBox.warning(self, "언페어링 실패", str(exc))
 
-
     def _purge_revoked_devices(self):
         try:
             response = requests.delete(f"{self.base_url}/remote/devices/revoked", timeout=5)
@@ -243,37 +330,51 @@ class RemoteSettingsDialog(QDialog):
             QMessageBox.warning(self, "기기 정리 실패", str(exc))
 
     def _refresh_tailscale(self):
-        try:
+        self.tailscale_summary_label.setText("Tailscale: 확인 중...")
+        self.tailscale_health_text.setPlainText("Tailscale 상태를 불러오는 중...")
+        def task():
             response = requests.get(f"{self.base_url}/remote/readiness", timeout=5)
             response.raise_for_status()
-            tailscale = response.json().get("tailscale_readiness", {})
-            self.tailscale_health_text.setPlainText(
-                "Tailscale readiness\n"
-                f"- state: {tailscale.get('state')}\n"
-                f"- color: {tailscale.get('color')}\n"
-                f"- message: {tailscale.get('message')}\n"
-                f"- suggested_base_urls: {tailscale.get('suggested_base_urls')}\n"
-                f"- details: {tailscale.get('details')}\n"
-            )
-        except requests.RequestException as exc:
-            self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
+            return response.json().get("tailscale_readiness", {})
+        self._start_worker("tailscale", task)
+
+    def _apply_tailscale_payload(self, tailscale: dict) -> None:
+        color = tailscale.get("color") or "unknown"
+        state = tailscale.get("state") or "unknown"
+        message = tailscale.get("message") or "tailscale 상태 미확인"
+        self.tailscale_summary_label.setText(f"Tailscale: {state} · {message}")
+        self.tailscale_health_text.setPlainText(
+            "Tailscale readiness\n"
+            f"- state: {state}\n"
+            f"- color: {color}\n"
+            f"- message: {message}\n"
+            f"- suggested_base_urls: {tailscale.get('suggested_base_urls')}\n"
+            f"- details: {tailscale.get('details')}\n"
+        )
 
     def _ensure_tailscale(self):
-        try:
+        self.tailscale_summary_label.setText("Tailscale: 설치/실행 확인 중...")
+        self.tailscale_health_text.setPlainText("설치/실행 확인은 시간이 걸릴 수 있습니다. 창은 계속 사용할 수 있습니다.")
+        def task():
             response = requests.post(f"{self.base_url}/remote/tailscale/ensure", timeout=30)
             response.raise_for_status()
-            self.tailscale_health_text.setPlainText(str(response.json()))
-        except requests.RequestException as exc:
-            QMessageBox.warning(self, "Tailscale 확인 실패", str(exc))
+            return response.json()
+        self._start_worker("tailscale_ensure", task)
+
+    def _apply_tailscale_ensure_payload(self, payload: dict) -> None:
+        self.tailscale_summary_label.setText(f"Tailscale: {'ready' if payload.get('ready') else 'not ready'} · {payload.get('message')}")
+        self.tailscale_health_text.setPlainText(str(payload))
 
     def _refresh_power_setup(self):
-        try:
+        self.power_status_label.setText("전원 준비: 확인 중...")
+        self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
+        def task():
             response = requests.get(f"{self.base_url}/remote/power/setup", timeout=5)
             response.raise_for_status()
-            payload = response.json()
-        except requests.RequestException as exc:
-            self.power_setup_text.setPlainText(f"전원 준비 상태 조회 실패: {exc}")
-            return
+            return response.json()
+        self._start_worker("power", task)
+
+    def _apply_power_setup_payload(self, payload: dict) -> None:
         ssh_service = payload.get("ssh_service") or {}
         firewall = payload.get("firewall") or {}
         self.power_status_label.setText(payload.get("message") or "전원 준비 상태 확인 완료")
@@ -285,7 +386,7 @@ class RemoteSettingsDialog(QDialog):
             f"{' / Administrators' if payload.get('administrators_authorized_keys_active') else ''}\n"
             f"- OpenSSH Server: running={ssh_service.get('running')} start_type={ssh_service.get('start_type')} message={ssh_service.get('message')}\n"
             f"- Firewall: enabled={firewall.get('enabled')} message={firewall.get('message')}\n"
-            "SmartThings CLI와 wake device는 클라이언트 로컬 전용입니다. "
+            "클라이언트가 SmartThings/OpenSSH 직접 경로로 전원 제어를 수행합니다. "
             "SSH public key 등록은 페어링한 클라이언트의 자동 설정 흐름이 수행합니다."
         )
 
@@ -1238,10 +1339,6 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
         self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
         self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
-        self.remote_server_mode_checkbox = QCheckBox("리모트 서버 모드로 시작 (Tailscale/LAN 클라이언트 접속 허용)")
-        self.remote_server_mode_checkbox.setToolTip(
-            f"다음 앱 실행부터 API 서버를 0.0.0.0:{resolve_api_port()}으로 열어 macOS/Android 리모트 클라이언트가 접속할 수 있게 합니다."
-        )
 
         # 테마 선택 (라디오 버튼)
         self.theme_system_rb = QRadioButton("시스템")
@@ -1284,7 +1381,6 @@ class GlobalSettingsDialog(QDialog):
         self.form_layout.addRow("일반 주기 만료 알림 (마감 기준):", self.cycle_advance_hours_spinbox)
         self.form_layout.addRow(self.run_on_startup_checkbox)
         self.form_layout.addRow(self.run_as_admin_checkbox)
-        self.form_layout.addRow(self.remote_server_mode_checkbox)
         self.form_layout.addRow(self.hide_on_game_checkbox)
         # 알림 설정 섹션
         self.form_layout.addRow(QLabel("알림 설정:"))
@@ -1400,7 +1496,6 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setValue(self.current_settings.cycle_deadline_advance_notify_hours)
         self.run_on_startup_checkbox.setChecked(self.current_settings.run_on_startup)
         self.run_as_admin_checkbox.setChecked(self.current_settings.run_as_admin)
-        self.remote_server_mode_checkbox.setChecked(getattr(self.current_settings, 'remote_server_mode_enabled', False))
         # 테마
         theme = getattr(self.current_settings, 'theme', 'system')
         if theme == 'light':
@@ -1432,7 +1527,7 @@ class GlobalSettingsDialog(QDialog):
         updated.run_on_startup = self.run_on_startup_checkbox.isChecked()
         updated.always_on_top = self.current_settings.always_on_top  # 메뉴바 체크박스로 관리
         updated.run_as_admin = self.run_as_admin_checkbox.isChecked()
-        updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
+        updated.remote_server_mode_enabled = getattr(self.current_settings, 'remote_server_mode_enabled', False)
         updated.notify_on_mandatory_time = self.notify_on_mandatory_time_checkbox.isChecked()
         updated.notify_on_cycle_deadline = self.notify_on_cycle_deadline_checkbox.isChecked()
         updated.notify_on_sleep_correction = self.notify_on_sleep_correction_checkbox.isChecked()
