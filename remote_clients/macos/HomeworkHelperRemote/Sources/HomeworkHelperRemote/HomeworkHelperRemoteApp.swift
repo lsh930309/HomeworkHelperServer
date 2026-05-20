@@ -1245,27 +1245,32 @@ struct RemoteSettingsView: View {
                     SettingsActionGrid {
                         Button("디바이스 새로고침") { Task { await viewModel.refreshDevices() } }
                             .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
-                        Button("폐기된 기기 정리") { Task { await viewModel.purgeRevokedDevices() } }
-                            .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
                         Button("현재 토큰 갱신") { Task { await viewModel.refreshToken() } }
                             .disabled(viewModel.tokenText.isEmpty || viewModel.isLoading)
                     }
-                    ForEach(viewModel.devices) { device in
+                    Text("이 Mac에서는 기기 목록을 읽기 전용으로 표시합니다. 토큰 폐기와 페어링 정리는 Windows Host 원격 설정에서만 수행할 수 있습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(viewModel.sortedDevices) { device in
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(device.name)
-                                Text(device.platform ?? "unknown")
+                                    .foregroundStyle(viewModel.isCurrentDevice(device) ? .secondary : .primary)
+                                Text(viewModel.deviceSubtitle(device))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if device.revokedAt == nil {
-                                Button("폐기") { Task { await viewModel.revoke(device) } }
-                                    .buttonStyle(.glass)
-                            } else {
-                                Text("폐기됨").font(.caption).foregroundStyle(.secondary)
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("페어링 \(viewModel.devicePairingDisplay(device))")
+                                Text("통신 \(viewModel.deviceConnectivityDisplay(device))")
                             }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
+                        .opacity(viewModel.isCurrentDevice(device) ? 0.55 : 1.0)
+                        .allowsHitTesting(!viewModel.isCurrentDevice(device))
+                        .help(device.healthMessage ?? "")
                         Divider()
                     }
                 }

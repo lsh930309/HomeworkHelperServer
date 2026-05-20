@@ -124,6 +124,13 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'sourceBreakdown = "source_breakdown"',
         'tokenRefreshedAt = "token_refreshed_at"',
         'revokedAt = "revoked_at"',
+        'tailnetIP = "tailnet_ip"',
+        'tailnetHostname = "tailnet_hostname"',
+        'tailnetOS = "tailnet_os"',
+        'pairingStatus = "pairing_status"',
+        'connectivityState = "connectivity_state"',
+        'healthMessage = "health_message"',
+        'canRevoke = "can_revoke"',
         'deviceID = "device_id"',
         'dailyAverageSeconds = "daily_average_seconds"',
         'totalSeconds = "total_seconds"',
@@ -200,6 +207,29 @@ def test_macos_keychain_store_uses_service_and_account_boundaries():
     assert 'protocol RemoteTokenStore' in keychain
     assert 'struct KeychainTokenStore: RemoteTokenStore' in keychain
     assert 'final class InMemoryTokenStore: RemoteTokenStore' in keychain
+
+
+def test_macos_client_tailnet_device_management_is_read_only_and_self_sorted():
+    app = _read(SOURCE_ROOT / "HomeworkHelperRemoteApp.swift")
+    view_model = _read(SOURCE_ROOT / "RemoteDashboardViewModel.swift")
+
+    assert 'private static let pairedDeviceIDKey = "remote.pairedDeviceID"' in view_model
+    assert "rememberPairedDeviceID(response.id)" in view_model
+    assert 'RemoteClientPreferences.savePairedDeviceID("")' in view_model
+    assert "tokenStore.delete()" in view_model
+    assert "clearPairingAfterHostRevocation(error)" in view_model
+    assert "var sortedDevices: [RemoteDevice]" in view_model
+    assert "func isCurrentDevice(_ device: RemoteDevice) -> Bool" in view_model
+    assert 'if device.role == "host" { return 2 }' in view_model
+    assert "func canManageRemoteDevices(_ device: RemoteDevice? = nil) -> Bool" in view_model
+    assert "false" in view_model[view_model.index("func canManageRemoteDevices") : view_model.index("var displayProcesses")]
+    assert "ForEach(viewModel.sortedDevices)" in app
+    assert "기기 목록을 읽기 전용으로 표시합니다" in app
+    assert "Windows Host 원격 설정에서만 수행" in app
+    assert "viewModel.devicePairingDisplay(device)" in app
+    assert "viewModel.deviceConnectivityDisplay(device)" in app
+    assert "viewModel.purgeRevokedDevices" not in app
+    assert "viewModel.revoke(device)" not in app
 
 
 def test_macos_popover_first_ui_preserves_remote_capabilities_contract():

@@ -507,6 +507,14 @@ struct RemoteDevice: Decodable, Identifiable {
     let id: String
     let name: String
     let platform: String?
+    let role: String?
+    let tailnetIP: String?
+    let tailnetHostname: String?
+    let tailnetOS: String?
+    let pairingStatus: String?
+    let connectivityState: String?
+    let healthMessage: String?
+    let canRevoke: Bool?
     let createdAt: Double?
     let lastSeenAt: Double?
     let tokenRefreshedAt: Double?
@@ -516,6 +524,14 @@ struct RemoteDevice: Decodable, Identifiable {
         case id
         case name
         case platform
+        case role
+        case tailnetIP = "tailnet_ip"
+        case tailnetHostname = "tailnet_hostname"
+        case tailnetOS = "tailnet_os"
+        case pairingStatus = "pairing_status"
+        case connectivityState = "connectivity_state"
+        case healthMessage = "health_message"
+        case canRevoke = "can_revoke"
         case createdAt = "created_at"
         case lastSeenAt = "last_seen_at"
         case tokenRefreshedAt = "token_refreshed_at"

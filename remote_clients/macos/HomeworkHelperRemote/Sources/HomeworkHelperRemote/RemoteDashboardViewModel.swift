@@ -49,6 +49,7 @@ private enum RemoteClientPreferences {
     }
     private static let baseURLKey = "remote.baseURL"
     private static let deviceNameKey = "remote.deviceName"
+    private static let pairedDeviceIDKey = "remote.pairedDeviceID"
     private static let powerConfigKey = "remote.powerConfig"
     private static let desktopLoggingEnabledKey = "remote.desktopLoggingEnabled"
     private static let legacyMenuBarIconSymbolKey = "remote.menuBarIconSymbol"
@@ -77,6 +78,19 @@ private enum RemoteClientPreferences {
 
     static func saveDeviceName(_ value: String) {
         defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: deviceNameKey)
+    }
+
+    static func loadPairedDeviceID() -> String {
+        defaults.string(forKey: pairedDeviceIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static func savePairedDeviceID(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: pairedDeviceIDKey)
+            return
+        }
+        defaults.set(trimmed, forKey: pairedDeviceIDKey)
     }
 
     static func loadPowerPreferences() -> RemotePowerConfigPayload {
@@ -282,6 +296,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var deviceName = RemoteClientPreferences.loadDeviceName() {
         didSet { RemoteClientPreferences.saveDeviceName(deviceName) }
     }
+    @Published private(set) var pairedDeviceID = RemoteClientPreferences.loadPairedDeviceID()
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
     @Published var powerConfig = RemoteClientPreferences.loadPowerPreferences() {
@@ -416,6 +431,55 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var hostAllowsRemoteCommands: Bool {
         isPaired && hostAvailabilityState == .online
+    }
+
+    var sortedDevices: [RemoteDevice] {
+        sortedDeviceList(devices)
+    }
+
+    func isCurrentDevice(_ device: RemoteDevice) -> Bool {
+        !pairedDeviceID.isEmpty && device.id == pairedDeviceID
+    }
+
+    func deviceSubtitle(_ device: RemoteDevice) -> String {
+        let os = device.tailnetOS?.nilIfBlank ?? device.platform?.nilIfBlank ?? "unknown"
+        let ip = device.tailnetIP?.nilIfBlank
+        let role = device.role?.nilIfBlank ?? "unknown"
+        if let ip {
+            return "\(role) · \(os) · \(ip)"
+        }
+        return "\(role) · \(os)"
+    }
+
+    func devicePairingDisplay(_ device: RemoteDevice) -> String {
+        if isCurrentDevice(device) { return "-" }
+        if device.role == "host" { return "호스트" }
+        if device.role == "client" { return "표시 불가" }
+        switch device.pairingStatus {
+        case "paired": return "페어링됨"
+        case "revoked": return "폐기됨"
+        case "tailnet_unpaired": return "미페어링"
+        default: return device.pairingStatus?.nilIfBlank ?? "-"
+        }
+    }
+
+    func deviceConnectivityDisplay(_ device: RemoteDevice) -> String {
+        if isCurrentDevice(device) { return "-" }
+        if device.role == "host" { return hostAvailabilityState.label }
+        if device.role == "client" { return "표시 불가" }
+        switch device.connectivityState {
+        case "active": return "정상"
+        case "local": return "로컬"
+        case "tailnet_online", "tailnet_online_unpaired": return "Tailnet 온라인"
+        case "tailnet_offline", "tailnet_offline_unpaired": return "Tailnet 오프라인"
+        case "stale_or_offline": return "대기/오프라인"
+        case "revoked": return "폐기됨"
+        default: return device.connectivityState?.nilIfBlank ?? "-"
+        }
+    }
+
+    func canManageRemoteDevices(_ device: RemoteDevice? = nil) -> Bool {
+        false
     }
 
     var displayProcesses: [RemoteProcess] {
@@ -920,6 +984,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             if kind == .authRejected {
                 let decision = supervisorDecision(.httpStatusFailed(kind: kind))
                 applyConnectionDecision(decision, updateMessage: updateMessage)
+                clearPairingAfterHostRevocation(error)
                 evaluationLog.finalState = hostAvailabilityState.rawValue
                 evaluationLog.finalMessage = decision.message ?? message
                 writeConnectivityEvaluationLog(evaluationLog)
@@ -949,7 +1014,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func handlePayloadSyncFailure(_ error: Error, fallbackMessage: String? = nil) {
         if isAuthFailure(error) {
-            handleRemoteFailure(error)
+            clearPairingAfterHostRevocation(error)
             return
         }
         if processes.isEmpty {
@@ -1086,6 +1151,10 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func handleRemoteFailure(_ error: Error, updateMessage: Bool = true) {
         consecutiveMirrorFailures += 1
         let kind = failureKind(for: error)
+        if kind == .authRejected {
+            clearPairingAfterHostRevocation(error)
+            return
+        }
         let decision = supervisorDecision(.httpStatusFailed(kind: kind))
         if decision != .none {
             applyConnectionDecision(decision, updateMessage: updateMessage)
@@ -1384,6 +1453,35 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    private func sortedDeviceList(_ devices: [RemoteDevice]) -> [RemoteDevice] {
+        devices.sorted { lhs, rhs in
+            let lhsRank = deviceSortRank(lhs)
+            let rhsRank = deviceSortRank(rhs)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            let nameOrder = deviceSortName(lhs).compare(
+                deviceSortName(rhs),
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive, .numeric],
+                range: nil,
+                locale: Self.koreanProcessSortLocale
+            )
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private func deviceSortRank(_ device: RemoteDevice) -> Int {
+        if isCurrentDevice(device) { return 0 }
+        if device.role == "host" { return 2 }
+        return 1
+    }
+
+    private func deviceSortName(_ device: RemoteDevice) -> String {
+        device.name.nilIfBlank
+            ?? device.tailnetHostname?.nilIfBlank
+            ?? device.tailnetIP?.nilIfBlank
+            ?? device.id
+    }
+
     func displayIconImage(for process: RemoteProcess, preferredSize: Int = 256, displayPointSize: CGFloat) -> NSImage? {
         RemoteClientCache.displayIconImage(for: process, preferredSize: preferredSize, displayPointSize: displayPointSize)
     }
@@ -1431,7 +1529,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func connectionGuidance(for error: Error) -> String {
         let raw = error.localizedDescription
         if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
-            return "저장된 페어링 토큰이 호스트에서 거부되었습니다. 로컬 토큰은 보존되며, Windows 앱의 원격 설정에서 디바이스 폐기 여부를 확인하세요. (\(raw))"
+            return "호스트에서 이 Mac의 페어링이 해제되어 로컬 토큰을 삭제했습니다. 다시 페어링하세요. (\(raw))"
         }
         if raw.localizedCaseInsensitiveContains("could not connect") || raw.localizedCaseInsensitiveContains("timed out") || raw.localizedCaseInsensitiveContains("서버") {
             return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
@@ -1461,15 +1559,42 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         setupProgress = "저장된 Keychain 토큰으로 페어링을 확인했습니다."
-        devices = (try? await service.devices()) ?? devices
+        if let remoteDevices = try? await service.devices() {
+            applyDevices(remoteDevices)
+        }
     }
 
     func clearLocalPairing() {
+        RemoteClientPreferences.savePairedDeviceID("")
+        pairedDeviceID = ""
+        tokenStore.delete()
         tokenText = ""
         devices = []
         pairingRecoveryMessage = "이 Mac의 로컬 토큰을 삭제했습니다. 서버 등록은 Windows 원격 설정에서 언페어링하세요."
         setupProgress = pairingRecoveryMessage
         message = pairingRecoveryMessage
+    }
+
+    private func clearPairingAfterHostRevocation(_ error: Error) {
+        RemoteClientPreferences.savePairedDeviceID("")
+        pairedDeviceID = ""
+        tokenStore.delete()
+        tokenText = ""
+        devices = []
+        setHostAvailability(.authRejected, clearPairingRecovery: false)
+        let guidance = connectionGuidance(for: error)
+        pairingRecoveryMessage = guidance
+        setupProgress = guidance
+        message = guidance
+    }
+
+    private func rememberPairedDeviceID(_ id: String) {
+        RemoteClientPreferences.savePairedDeviceID(id)
+        pairedDeviceID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func applyDevices(_ remoteDevices: [RemoteDevice]) {
+        devices = sortedDeviceList(remoteDevices)
     }
 
     func runSetupAutomation() async {
@@ -1529,7 +1654,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         if isPaired {
             setupProgress = "4/5 페어링 토큰 복구와 등록 디바이스 확인 중..."
             await recoverPairing(silent: true)
-            devices = (try? await service.devices()) ?? devices
+            if let remoteDevices = try? await service.devices() {
+                applyDevices(remoteDevices)
+            }
             serverTailscaleEnsure = try? await service.ensureServerTailscale()
             if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus") {
                 readiness = evaluation.status.readiness
@@ -1666,7 +1793,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             if includeDevices {
-                devices = try await service.devices()
+                applyDevices(try await service.devices())
             }
             message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개"
         } catch {
@@ -2003,6 +2130,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             let service = RemoteDashboardService(client: client)
             let response = try await service.confirmPairing(code: pairingCode, deviceName: deviceName)
             tokenText = response.token
+            rememberPairedDeviceID(response.id)
             pairingCode = ""
             pairingRecoveryMessage = ""
             readiness = response.onboarding?.readiness ?? readiness
@@ -2025,6 +2153,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let response = try await service.refreshToken()
             tokenText = response.token
+            rememberPairedDeviceID(response.id)
             pairingRecoveryMessage = ""
             setupProgress = "현재 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             message = "'\(response.name)' 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
@@ -2057,37 +2186,20 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    func purgeRevokedDevices() async {
-        guard let service else { return }
-        do {
-            let result = try await service.purgeRevokedDevices()
-            devices = try await service.devices()
-            message = "폐기된 기기 \(result.removed)개를 정리했습니다."
-        } catch {
-            message = connectionGuidance(for: error)
-        }
-    }
-
     func refreshDevices() async {
         guard let service else { return }
         do {
-            devices = try await service.devices()
+            applyDevices(try await service.devices())
             message = "등록 디바이스 \(devices.count)개를 불러왔습니다."
         } catch {
             message = error.localizedDescription
         }
     }
+}
 
-    func revoke(_ device: RemoteDevice) async {
-        guard let service else { return }
-        do {
-            let result = try await service.revokeDevice(id: device.id)
-            message = result.revoked ? "'\(device.name)' 디바이스 토큰을 폐기했습니다." : "디바이스 토큰 폐기에 실패했습니다."
-            if tokenText.isEmpty == false {
-                await refreshDevices()
-            }
-        } catch {
-            message = error.localizedDescription
-        }
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
