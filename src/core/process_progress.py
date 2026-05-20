@@ -7,6 +7,23 @@ from typing import Any
 def calculate_process_progress(process: Any, current_dt: datetime.datetime | None = None) -> dict[str, Any]:
     """Return a client-safe progress snapshot for a managed process."""
     current_dt = current_dt or datetime.datetime.now()
+    if getattr(process, "resource_tracking_enabled", False) and getattr(process, "resource_provider", None):
+        percent = getattr(process, "resource_percent", None)
+        status = getattr(process, "resource_status", None)
+        if percent is not None and status in (None, "ok"):
+            percentage = max(0.0, min(float(percent), 100.0))
+            label = getattr(process, "resource_label", None) or "리소스"
+            return {
+                "kind": "resource",
+                "percentage": percentage,
+                "display_text": f"{percentage:.1f}%",
+                "resource_provider": getattr(process, "resource_provider", None),
+                "resource_key": getattr(process, "resource_key", None),
+                "resource_label": label,
+                "resource_percent": percentage,
+                "resource_status": status or "ok",
+            }
+
     if getattr(process, "stamina_tracking_enabled", False) and getattr(process, "hoyolab_game_id", None):
         current = getattr(process, "stamina_current", None)
         maximum = getattr(process, "stamina_max", None)

@@ -36,7 +36,15 @@ PROCESS_SESSIONS_TABLE = "process_sessions"
 PROCESS_FIELDS = {column.name for column in models.Process.__table__.columns}
 WEB_SHORTCUT_FIELDS = {column.name for column in models.WebShortcut.__table__.columns}
 SESSION_FIELDS = {column.name for column in models.ProcessSession.__table__.columns}
-PROCESS_RUNTIME_FIELDS = {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}
+PROCESS_RUNTIME_FIELDS = {
+    "last_played_timestamp",
+    "stamina_current",
+    "stamina_max",
+    "stamina_updated_at",
+    "resource_percent",
+    "resource_updated_at",
+    "resource_status",
+}
 PROCESS_EDITOR_FIELDS = PROCESS_FIELDS - PROCESS_RUNTIME_FIELDS
 WEB_SHORTCUT_RUNTIME_FIELDS = {"last_reset_timestamp"}
 WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS

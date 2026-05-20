@@ -1559,6 +1559,13 @@ class MainWindow(QMainWindow):
                                        stamina_current=getattr(p_edit, 'stamina_current', None),  # 기존 스태미나 정보 유지
                                        stamina_max=getattr(p_edit, 'stamina_max', None),
                                        stamina_updated_at=getattr(p_edit, 'stamina_updated_at', None),
+                                       resource_tracking_enabled=data.get("resource_tracking_enabled", False),
+                                       resource_provider=data.get("resource_provider"),
+                                       resource_key=data.get("resource_key"),
+                                       resource_label=data.get("resource_label"),
+                                       resource_percent=getattr(p_edit, 'resource_percent', None) if data.get("resource_tracking_enabled", False) else None,
+                                       resource_updated_at=getattr(p_edit, 'resource_updated_at', None) if data.get("resource_tracking_enabled", False) else None,
+                                       resource_status=getattr(p_edit, 'resource_status', None) if data.get("resource_tracking_enabled", False) else None,
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
@@ -1738,7 +1745,11 @@ class MainWindow(QMainWindow):
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
                                        user_preset_id=data.get("user_preset_id"),  # 사용자 프리셋 ID
                                        stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
-                                       hoyolab_game_id=data.get("hoyolab_game_id"))  # 호요랩 게임 ID
+                                       hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID
+                                       resource_tracking_enabled=data.get("resource_tracking_enabled", False),
+                                       resource_provider=data.get("resource_provider"),
+                                       resource_key=data.get("resource_key"),
+                                       resource_label=data.get("resource_label"))
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
                 self.populate_process_list() # 전체 테이블 새로고침 (프로세스 추가)
                 # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
@@ -2830,6 +2841,14 @@ class MainWindow(QMainWindow):
 
         호요버스 게임의 경우 스태미나 기반으로 계산합니다.
         """
+        # 범용 외부 리소스 추적이 활성화된 경우 리소스 기반 계산
+        if getattr(process, 'resource_tracking_enabled', False) and getattr(process, 'resource_provider', None):
+            resource_percentage = process.get_resource_percentage() if hasattr(process, 'get_resource_percentage') else getattr(process, 'resource_percent', None)
+            if resource_percentage is not None:
+                label = getattr(process, 'resource_label', None) or "리소스"
+                result = f"RESOURCE:{getattr(process, 'resource_key', '')}:{label}:{float(resource_percentage):.1f}%"
+                return float(resource_percentage), result
+
         # 스태미나 자동 추적이 활성화된 경우 스태미나 기반 계산
         stamina_tracking_enabled = getattr(process, 'stamina_tracking_enabled', False)
         hoyolab_game_id = getattr(process, 'hoyolab_game_id', None)
@@ -2886,7 +2905,7 @@ class MainWindow(QMainWindow):
 
     def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
         """진행률을 표시하는 QProgressBar 위젯을 생성합니다."""
-        if percentage == 0.0 and not time_str.startswith("STAMINA:"):
+        if percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")):
             # 기록이 없는 경우 - 동일한 레이아웃 구조 유지
             container = QWidget()
             layout = QHBoxLayout(container)
@@ -2903,6 +2922,27 @@ class MainWindow(QMainWindow):
             layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
 
             return container
+
+        # 범용 리소스 형식 감지: "RESOURCE:key:label:percent"
+        if time_str.startswith("RESOURCE:"):
+            try:
+                parts = time_str.split(":", 3)
+                if len(parts) >= 4:
+                    resource_text = parts[3]
+
+                    container = QWidget()
+                    layout = QHBoxLayout(container)
+                    layout.setContentsMargins(2, 0, 2, 0)
+                    layout.setSpacing(4)
+
+                    icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
+                    layout.addWidget(icon_label)
+
+                    progress_bar = self._create_styled_progress_bar(percentage, resource_text)
+                    layout.addWidget(progress_bar, 1)
+                    return container
+            except Exception as e:
+                logger.error(f"리소스 위젯 생성 오류: {e}", exc_info=True)
 
         # 스태미나 형식 감지: "STAMINA:game_id:current/max"
         if time_str.startswith("STAMINA:"):
@@ -3082,7 +3122,7 @@ class MainWindow(QMainWindow):
                 progress_bar = current_widget
 
             # Progress Bar 업데이트
-            expects_progress_widget = not (percentage == 0.0 and not time_str.startswith("STAMINA:"))
+            expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
                 self.process_table.setCellWidget(
                     row,
@@ -3130,6 +3170,18 @@ class MainWindow(QMainWindow):
 
     def _get_progress_bar_format(self, percentage: float, time_str: str) -> str:
         """ProgressBar 표시 문자열을 반환합니다."""
+        if time_str.startswith("RESOURCE:"):
+            try:
+                parts = time_str.split(":", 3)
+                if len(parts) >= 4:
+                    return parts[3]
+            except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "ProgressBar 리소스 포맷 파싱 실패: time_str=%r, percentage=%.1f, error=%s",
+                    time_str,
+                    percentage,
+                    exc,
+                )
         if time_str.startswith("STAMINA:"):
             try:
                 parts = time_str.split(":")

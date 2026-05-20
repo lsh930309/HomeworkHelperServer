@@ -87,6 +87,14 @@ def auto_migrate_database():
         ("managed_processes", "stamina_current", "INTEGER", None),
         ("managed_processes", "stamina_max", "INTEGER", None),
         ("managed_processes", "stamina_updated_at", "REAL", None),
+        # Process 테이블 - 범용 외부 리소스 필드
+        ("managed_processes", "resource_tracking_enabled", "INTEGER", "0"),
+        ("managed_processes", "resource_provider", "TEXT", None),
+        ("managed_processes", "resource_key", "TEXT", None),
+        ("managed_processes", "resource_label", "TEXT", None),
+        ("managed_processes", "resource_percent", "REAL", None),
+        ("managed_processes", "resource_updated_at", "REAL", None),
+        ("managed_processes", "resource_status", "TEXT", None),
         # Process 테이블 - 사용자 프리셋 ID
         ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         # GlobalSettings 테이블 - 스태미나 알림 설정

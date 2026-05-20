@@ -279,6 +279,8 @@ class ProcessMonitor:
                     if managed_proc.is_hoyoverse_game():
                         stamina_at_end = self._update_stamina_on_game_exit(managed_proc)
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
+                    if getattr(managed_proc, "is_external_resource_game", lambda: False)():
+                        self._update_external_resource_on_game_exit(managed_proc)
 
                     # 세션 종료 기록 (스태미나 값 포함)
                     session_id = cached_info.get('session_id')
@@ -369,6 +371,35 @@ class ProcessMonitor:
         except Exception as e:
             logger.error(f"[HoYoLab] '{process.name}' 스태미나 조회 실패: {e}")
             return None
+
+    def _update_external_resource_on_game_exit(self, process: ManagedProcess) -> None:
+        """게임 종료 시 범용 외부 리소스 스냅샷을 갱신합니다."""
+        provider = getattr(process, "resource_provider", None)
+        resource_key = getattr(process, "resource_key", None)
+        if provider != "nikke_blablalink" or resource_key != "nikke_outpost_storage":
+            logger.debug("지원하지 않는 외부 리소스 추적 대상: provider=%s key=%s", provider, resource_key)
+            return
+
+        try:
+            from src.services.nikke import get_nikke_service
+
+            snapshot = get_nikke_service().get_outpost_storage()
+            process.resource_label = snapshot.label
+            process.resource_status = snapshot.status
+            process.resource_updated_at = snapshot.updated_at.timestamp()
+            if snapshot.percent is not None:
+                process.resource_percent = snapshot.percent
+            logger.info(
+                "[NIKKE] '%s' %s 업데이트: status=%s percent=%s",
+                process.name,
+                snapshot.label,
+                snapshot.status,
+                snapshot.percent,
+            )
+        except Exception as exc:
+            logger.error("[NIKKE] '%s' 리소스 조회 실패: %s", process.name, exc)
+            process.resource_status = "unavailable"
+            process.resource_updated_at = time.time()
 
     def _calibrate_stamina_on_game_start(self, process: ManagedProcess) -> None:
         """게임 시작 시 스태미나 보정

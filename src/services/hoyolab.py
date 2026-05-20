@@ -93,8 +93,9 @@ class HoYoLabService:
             cookies = {
                 "ltuid_v2": str(credentials.get("ltuid", "")),
                 "ltoken_v2": credentials.get("ltoken_v2", ""),
-                "ltmid_v2": credentials.get("ltmid_v2", ""),
             }
+            if credentials.get("ltmid_v2"):
+                cookies["ltmid_v2"] = credentials.get("ltmid_v2", "")
 
             self._client = genshin.Client(cookies=cookies)
             logger.info("HoYoLab 클라이언트 초기화 완료")

@@ -213,6 +213,49 @@ def update_process_stamina(
 
 
 @db_retry_on_lock
+def update_process_resource(
+    db: Session,
+    process_id: str,
+    *,
+    resource_percent: float | None,
+    resource_updated_at: float | None,
+    resource_status: str | None,
+    actor: str = "resource_tracker",
+    operation_kind: str = "process_resource_update",
+    override_token: str | None = None,
+):
+    db_process = get_process_by_id(db, process_id)
+    if db_process:
+        update_data = {
+            "resource_percent": resource_percent,
+            "resource_updated_at": resource_updated_at,
+            "resource_status": resource_status,
+        }
+        update_data = {key: value for key, value in update_data.items() if value is not None}
+        changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status"}},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
+            override_token=override_token,
+        )
+        beholder.guard_process_update(db, db_process, update_data, operation, changed)
+        if changed:
+            _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        for key, value in update_data.items():
+            setattr(db_process, key, value)
+        db.commit()
+        db.refresh(db_process)
+    return db_process
+
+
+@db_retry_on_lock
 def update_process_runtime_state(
     db: Session,
     process_id: str,
@@ -221,6 +264,9 @@ def update_process_runtime_state(
     stamina_current: int | None = None,
     stamina_max: int | None = None,
     stamina_updated_at: float | None = None,
+    resource_percent: float | None = None,
+    resource_updated_at: float | None = None,
+    resource_status: str | None = None,
     actor: str = "process_monitor",
     operation_kind: str = "process_runtime_state_update",
     override_token: str | None = None,
@@ -232,6 +278,9 @@ def update_process_runtime_state(
             "stamina_current": stamina_current,
             "stamina_max": stamina_max,
             "stamina_updated_at": stamina_updated_at,
+            "resource_percent": resource_percent,
+            "resource_updated_at": resource_updated_at,
+            "resource_status": resource_status,
         }
         update_data = {key: value for key, value in update_data.items() if value is not None}
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
@@ -239,7 +288,17 @@ def update_process_runtime_state(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}},
+            allowed_columns={
+                beholder.MANAGED_PROCESSES_TABLE: {
+                    "last_played_timestamp",
+                    "stamina_current",
+                    "stamina_max",
+                    "stamina_updated_at",
+                    "resource_percent",
+                    "resource_updated_at",
+                    "resource_status",
+                }
+            },
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},

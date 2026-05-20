@@ -261,6 +261,14 @@ class ApiClient:
         stamina_payload = {key: value for key, value in stamina_payload.items() if value is not None}
         if stamina_payload:
             payloads.append(stamina_payload)
+        resource_payload = {
+            "resource_percent": getattr(updated_process, "resource_percent", None),
+            "resource_updated_at": getattr(updated_process, "resource_updated_at", None),
+            "resource_status": getattr(updated_process, "resource_status", None),
+        }
+        resource_payload = {key: value for key, value in resource_payload.items() if value is not None}
+        if resource_payload:
+            payloads.append(resource_payload)
         if not payloads:
             return True
         try:
@@ -304,6 +312,33 @@ class ApiClient:
             return True
         except requests.RequestException as e:
             print(f"프로세스 스태미나 저장에 실패했습니다: {e}")
+            return False
+
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: float | None,
+        resource_updated_at: float | None,
+        resource_status: str | None,
+    ) -> bool:
+        """Persist only generic external resource fields."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/processes/{process_id}/resource",
+                json={
+                    "resource_percent": resource_percent,
+                    "resource_updated_at": resource_updated_at,
+                    "resource_status": resource_status,
+                },
+                headers=self._beholder_headers("resource_tracker", "process_resource_update"),
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("resource_tracker", "process_resource_update")
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException as e:
+            print(f"프로세스 리소스 저장에 실패했습니다: {e}")
             return False
 
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:

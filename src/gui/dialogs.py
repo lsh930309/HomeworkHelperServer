@@ -986,32 +986,33 @@ class ProcessDialog(QDialog):
 
     def _setup_stamina_section(self):
         """스태미나 추적 섹션 설정 (호요버스 게임 전용)"""
-        self.stamina_group_box = QGroupBox("스태미나 자동 추적 (호요버스 게임)")
+        self.stamina_group_box = QGroupBox("스태미나/리소스 자동 추적")
         stamina_layout = QVBoxLayout()
 
         # 스태미나 자동 추적 활성화 체크박스
         self.stamina_tracking_checkbox = QCheckBox("스태미나 자동 추적 활성화")
         self.stamina_tracking_checkbox.setToolTip(
-            "게임 종료 시 HoYoLab API를 통해 스태미나(개척력/배터리)를 자동으로 조회합니다."
+            "게임 종료 시 HoYoLab 또는 BlablaLink API를 통해 스태미나/리소스를 자동으로 조회합니다."
         )
         self.stamina_tracking_checkbox.toggled.connect(self._on_stamina_tracking_toggled)
         stamina_layout.addWidget(self.stamina_tracking_checkbox)
 
         # 호요버스 게임 선택 콤보박스
         hoyolab_game_layout = QHBoxLayout()
-        hoyolab_game_layout.addWidget(QLabel("추적할 게임:"))
+        hoyolab_game_layout.addWidget(QLabel("추적 대상:"))
         self.hoyolab_game_combo = QComboBox()
         self.hoyolab_game_combo.addItem("(없음)", None)
         self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
         self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
-        self.hoyolab_game_combo.setToolTip("스태미나를 추적할 호요버스 게임을 선택하세요.")
+        self.hoyolab_game_combo.addItem("NIKKE - 보관함 용량", "nikke_outpost_storage")
+        self.hoyolab_game_combo.setToolTip("추적할 HoYoLab 스태미나 또는 NIKKE ShiftyPad 리소스를 선택하세요.")
         hoyolab_game_layout.addWidget(self.hoyolab_game_combo)
         hoyolab_game_layout.addStretch()
         stamina_layout.addLayout(hoyolab_game_layout)
 
         # 스태미나 조회 테스트 버튼
-        self.stamina_test_button = QPushButton("스태미나 조회 테스트")
-        self.stamina_test_button.setToolTip("HoYoLab API 연결을 테스트하고 현재 스태미나를 조회합니다.")
+        self.stamina_test_button = QPushButton("조회 테스트")
+        self.stamina_test_button.setToolTip("HoYoLab/BlablaLink API 연결을 테스트하고 현재 값을 조회합니다.")
         self.stamina_test_button.clicked.connect(self._test_stamina_connection)
         stamina_layout.addWidget(self.stamina_test_button)
 
@@ -1036,7 +1037,11 @@ class ProcessDialog(QDialog):
         # 호요랩 게임 콤보박스에서 선택된 게임 사용
         game_id = self.hoyolab_game_combo.currentData()
         if not game_id:
-            QMessageBox.warning(self, "오류", "추적할 호요버스 게임을 선택해주세요.")
+            QMessageBox.warning(self, "오류", "추적 대상을 선택해주세요.")
+            return
+
+        if game_id == "nikke_outpost_storage":
+            self._test_nikke_resource_connection()
             return
 
         try:
@@ -1104,10 +1109,16 @@ class ProcessDialog(QDialog):
                             self.existing_process.stamina_max = stamina_info.max
                             self.existing_process.stamina_updated_at = stamina_info.updated_at.timestamp()
 
-                            # API를 통해 전체 프로세스 업데이트
+                            # API를 통해 스태미나 런타임 필드만 업데이트
                             parent_window = self.parent()
                             if parent_window and hasattr(parent_window, 'data_manager'):
-                                result = parent_window.data_manager.update_process(self.existing_process)
+                                updater = getattr(parent_window.data_manager, 'update_process_stamina', None)
+                                result = bool(updater and updater(
+                                    self.existing_process.id,
+                                    stamina_info.current,
+                                    stamina_info.max,
+                                    stamina_info.updated_at.timestamp(),
+                                ))
                                 if result:
                                     save_result = "\n\n💾 스태미나 정보가 저장되었습니다."
                                     # GUI 새로고침
@@ -1166,6 +1177,85 @@ class ProcessDialog(QDialog):
                 f"스태미나 테스트 중 오류가 발생했습니다:\n{str(e)}"
             )
 
+    def _test_nikke_resource_connection(self):
+        """NIKKE ShiftyPad 보관함 용량 조회 테스트."""
+        try:
+            from src.services.nikke import get_nikke_service, NIKKE_OUTPOST_LABEL
+
+            service = get_nikke_service()
+            if not service.is_configured():
+                reply = QMessageBox.question(
+                    self,
+                    "인증 정보 없음",
+                    "BlablaLink/NIKKE 인증 정보가 설정되지 않았습니다.\n"
+                    "게임 계정 연동 설정을 여시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    from src.gui.dialogs import HoYoLabSettingsDialog
+
+                    dialog = HoYoLabSettingsDialog(self)
+                    dialog.exec()
+                    if not service.is_configured():
+                        return
+                else:
+                    return
+
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents()
+            try:
+                snapshot = service.get_outpost_storage()
+                if snapshot.status == "ok" and snapshot.percent is not None:
+                    save_result = ""
+                    if self.existing_process:
+                        self.existing_process.resource_tracking_enabled = True
+                        self.existing_process.resource_provider = snapshot.provider
+                        self.existing_process.resource_key = snapshot.resource_key
+                        self.existing_process.resource_label = snapshot.label
+                        self.existing_process.resource_percent = snapshot.percent
+                        self.existing_process.resource_updated_at = snapshot.updated_at.timestamp()
+                        self.existing_process.resource_status = snapshot.status
+                        parent_window = self.parent()
+                        if parent_window and hasattr(parent_window, "data_manager"):
+                            updater = getattr(parent_window.data_manager, "update_process_resource", None)
+                            if updater and updater(
+                                self.existing_process.id,
+                                snapshot.percent,
+                                snapshot.updated_at.timestamp(),
+                                snapshot.status,
+                            ):
+                                save_result = "\n\n💾 리소스 정보가 저장되었습니다."
+                                if hasattr(parent_window, "populate_process_list"):
+                                    parent_window.populate_process_list()
+                            else:
+                                save_result = "\n\n⚠️ 리소스 정보 저장 실패"
+                        else:
+                            save_result = "\n\n💾 리소스 정보가 임시 저장되었습니다."
+                    else:
+                        save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
+
+                    QMessageBox.information(
+                        self,
+                        "NIKKE 리소스 조회 성공",
+                        f"✅ {NIKKE_OUTPOST_LABEL} 조회 성공!\n\n"
+                        f"{NIKKE_OUTPOST_LABEL}: {snapshot.percent:.1f}%\n"
+                        f"조회 시각: {snapshot.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"{save_result}",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "조회 실패",
+                        "❌ NIKKE 보관함 용량 조회에 실패했습니다.\n\n"
+                        f"상태: {snapshot.status}\n"
+                        f"메시지: {snapshot.message or 'BlablaLink 세션/대표 계정 상태를 확인하세요.'}",
+                    )
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"NIKKE 리소스 테스트 중 오류가 발생했습니다:\n{str(e)}")
+
     def populate_fields_from_existing_process(self):
         if not self.existing_process:
             return
@@ -1201,19 +1291,27 @@ class ProcessDialog(QDialog):
                     logger.debug(f"프리셋 자동 선택: {self.existing_process.user_preset_id}")
                     break
 
-        # 호요랩 게임 선택 로드 (스태미나 추적보다 먼저 설정)
-        if hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
+        # 추적 대상 로드 (체크박스보다 먼저 설정)
+        selected_tracking_target = None
+        if getattr(self.existing_process, 'resource_provider', None) == 'nikke_blablalink' and getattr(self.existing_process, 'resource_key', None) == 'nikke_outpost_storage':
+            selected_tracking_target = 'nikke_outpost_storage'
+        elif hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
+            selected_tracking_target = self.existing_process.hoyolab_game_id
+
+        if selected_tracking_target:
             for i in range(self.hoyolab_game_combo.count()):
-                if self.hoyolab_game_combo.itemData(i) == self.existing_process.hoyolab_game_id:
+                if self.hoyolab_game_combo.itemData(i) == selected_tracking_target:
                     self.hoyolab_game_combo.setCurrentIndex(i)
                     break
         else:
-            # hoyolab_game_id가 None이면 '(없음)' 선택
             self.hoyolab_game_combo.setCurrentIndex(0)
 
-        # 스태미나 추적 필드 로드 (콤보박스 설정 후 체크박스 설정)
-        if hasattr(self.existing_process, 'stamina_tracking_enabled'):
-            self.stamina_tracking_checkbox.setChecked(self.existing_process.stamina_tracking_enabled)
+        # 스태미나/리소스 추적 필드 로드 (콤보박스 설정 후 체크박스 설정)
+        tracking_enabled = bool(
+            getattr(self.existing_process, 'stamina_tracking_enabled', False)
+            or getattr(self.existing_process, 'resource_tracking_enabled', False)
+        )
+        self.stamina_tracking_checkbox.setChecked(tracking_enabled)
 
         # 체크박스 상태에 따라 콤보박스 활성화/비활성화
         self._on_stamina_tracking_toggled(self.stamina_tracking_checkbox.isChecked())
@@ -1359,14 +1457,24 @@ class ProcessDialog(QDialog):
         preset_data = self.preset_combo.currentData()
         user_preset_id = preset_data.get("id") if preset_data else None
 
-        # 스태미나 추적 필드
-        hoyolab_game_id = self.hoyolab_game_combo.currentData()
-        # hoyolab_game_id가 None이면 스태미나 추적도 자동으로 비활성화
-        stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked() and hoyolab_game_id is not None
+        # 스태미나/리소스 추적 필드
+        tracking_target = self.hoyolab_game_combo.currentData()
+        tracking_checked = self.stamina_tracking_checkbox.isChecked() and tracking_target is not None
+        hoyolab_game_id = None
+        stamina_tracking_enabled = False
+        resource_tracking_enabled = False
+        resource_provider = None
+        resource_key = None
+        resource_label = None
 
-        # 스태미나 추적이 비활성화되면 hoyolab_game_id도 null로 설정
-        if not stamina_tracking_enabled:
-            hoyolab_game_id = None
+        if tracking_checked and tracking_target == "nikke_outpost_storage":
+            resource_tracking_enabled = True
+            resource_provider = "nikke_blablalink"
+            resource_key = "nikke_outpost_storage"
+            resource_label = "보관함 용량"
+        elif tracking_checked:
+            stamina_tracking_enabled = True
+            hoyolab_game_id = tracking_target
 
         return {
             "name": name,
@@ -1380,6 +1488,10 @@ class ProcessDialog(QDialog):
             "user_preset_id": user_preset_id,
             "stamina_tracking_enabled": stamina_tracking_enabled,
             "hoyolab_game_id": hoyolab_game_id,
+            "resource_tracking_enabled": resource_tracking_enabled,
+            "resource_provider": resource_provider,
+            "resource_key": resource_key,
+            "resource_label": resource_label,
         }
 
 class GlobalSettingsDialog(QDialog):
@@ -1738,7 +1850,7 @@ class HoYoLabSettingsDialog(QDialog):
 
 
         # 자동 추출 버튼
-        auto_group = QGroupBox("자동 추출")
+        auto_group = QGroupBox("HoYoLab 자동 추출")
         auto_layout = QVBoxLayout()
 
         extract_btn_layout = QHBoxLayout()
@@ -1765,6 +1877,36 @@ class HoYoLabSettingsDialog(QDialog):
         auto_group.setLayout(auto_layout)
         layout.addWidget(auto_group)
 
+        # NIKKE / BlablaLink 인증
+        nikke_group = QGroupBox("NIKKE / BlablaLink")
+        nikke_layout = QVBoxLayout()
+
+        nikke_info = QLabel("ShiftyPad 보관함 용량 조회를 위해 BlablaLink 로그인 세션 쿠키가 필요합니다.")
+        nikke_info.setWordWrap(True)
+        nikke_layout.addWidget(nikke_info)
+
+        nikke_extract_layout = QHBoxLayout()
+        self.extract_nikke_chrome_btn = QPushButton("크롬에서 추출")
+        self.extract_nikke_edge_btn = QPushButton("엣지에서 추출")
+        self.extract_nikke_firefox_btn = QPushButton("파이어폭스에서 추출")
+        nikke_extract_layout.addWidget(self.extract_nikke_chrome_btn)
+        nikke_extract_layout.addWidget(self.extract_nikke_edge_btn)
+        nikke_extract_layout.addWidget(self.extract_nikke_firefox_btn)
+        nikke_layout.addLayout(nikke_extract_layout)
+
+        nikke_button_layout = QHBoxLayout()
+        self.open_nikke_btn = QPushButton("BlablaLink 열기")
+        self.clear_nikke_btn = QPushButton("NIKKE 인증 삭제")
+        self.clear_nikke_btn.setStyleSheet("color: #ff6666;")
+        nikke_button_layout.addWidget(self.open_nikke_btn)
+        nikke_button_layout.addWidget(self.clear_nikke_btn)
+        nikke_layout.addLayout(nikke_button_layout)
+
+        self.nikke_status_label = QLabel("")
+        nikke_layout.addWidget(self.nikke_status_label)
+        nikke_group.setLayout(nikke_layout)
+        layout.addWidget(nikke_group)
+
         # 수동 입력
         manual_group = QGroupBox("수동 입력 (고급)")
         manual_layout = QFormLayout()
@@ -1774,7 +1916,7 @@ class HoYoLabSettingsDialog(QDialog):
         self.ltoken_edit = QLineEdit()
         self.ltoken_edit.setPlaceholderText("ltoken_v2 쿠키 값")
         self.ltmid_edit = QLineEdit()
-        self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값")
+        self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값 (없으면 비워도 됨)")
 
         manual_layout.addRow("LTUID:", self.ltuid_edit)
         manual_layout.addRow("LTOKEN_V2:", self.ltoken_edit)
@@ -1805,7 +1947,12 @@ class HoYoLabSettingsDialog(QDialog):
         self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
         self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
         self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
+        self.extract_nikke_chrome_btn.clicked.connect(lambda: self._extract_nikke_cookies("chrome"))
+        self.extract_nikke_edge_btn.clicked.connect(lambda: self._extract_nikke_cookies("edge"))
+        self.extract_nikke_firefox_btn.clicked.connect(lambda: self._extract_nikke_cookies("firefox"))
         self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
+        self.open_nikke_btn.clicked.connect(self._open_nikke)
+        self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
         self.show_guide_btn.clicked.connect(self._show_manual_guide)
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.button_box.accepted.connect(self._save_and_accept)
@@ -1813,6 +1960,7 @@ class HoYoLabSettingsDialog(QDialog):
 
         # 기존 설정 로드
         self._load_existing_credentials()
+        self._update_nikke_status()
 
     def _update_status(self):
         """현재 인증 상태 업데이트"""
@@ -1853,10 +2001,11 @@ class HoYoLabSettingsDialog(QDialog):
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
 
             extractor = BrowserCookieExtractor()
-            if not extractor.is_available():
+            if not extractor.is_available(browser):
                 QMessageBox.warning(
-                    self, "라이브러리 없음",
-                    "쿠키 추출을 위한 라이브러리(pywin32, pycryptodome)가 설치되지 않았습니다."
+                    self, "추출 불가",
+                    f"{browser} 쿠키 추출을 사용할 수 없습니다.\n"
+                    "Firefox는 프로필이 필요하고, Chrome/Edge는 pywin32/pycryptodome이 필요합니다."
                 )
                 return
 
@@ -1881,6 +2030,93 @@ class HoYoLabSettingsDialog(QDialog):
         except Exception as e:
             self.extract_status_label.setText(f"❌ 추출 실패: {e}")
             self.extract_status_label.setStyleSheet("color: #ff6666;")
+
+    def _update_nikke_status(self):
+        """현재 NIKKE/BlablaLink 인증 상태 업데이트"""
+        try:
+            from src.utils.nikke_config import NikkeConfig
+
+            config = NikkeConfig()
+            if config.is_configured():
+                self.nikke_status_label.setText("✅ NIKKE/BlablaLink 인증 정보가 설정되어 있습니다.")
+                self.nikke_status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.nikke_status_label.setText("❌ NIKKE/BlablaLink 인증 정보가 없습니다.")
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.nikke_status_label.setText(f"⚠️ NIKKE 상태 확인 실패: {e}")
+            self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+
+    def _extract_nikke_cookies(self, browser: str):
+        """브라우저에서 BlablaLink 쿠키 자동 추출"""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            from src.utils.nikke_config import NikkeConfig
+            from src.services.nikke import reset_nikke_service
+
+            extractor = BrowserCookieExtractor()
+            if not extractor.is_available(browser):
+                self.nikke_status_label.setText(
+                    f"❌ {browser} 쿠키 추출을 사용할 수 없습니다. Firefox 프로필 또는 Chrome/Edge 복호화 의존성을 확인하세요."
+                )
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+                return
+
+            self.nikke_status_label.setText(f"{browser}에서 BlablaLink 쿠키 추출 중...")
+            self.nikke_status_label.repaint()
+
+            extracted = extractor.extract_from_browser(browser, provider="nikke_blablalink")
+            cookies = (extracted or {}).get("cookies") if isinstance(extracted, dict) else None
+            if cookies:
+                config = NikkeConfig()
+                if config.save_session(cookies):
+                    reset_nikke_service()
+                    self.nikke_status_label.setText(f"✅ {browser}에서 BlablaLink 쿠키 추출 성공! ShiftyPad 조회 시 세션 유효성을 확인합니다.")
+                    self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                else:
+                    self.nikke_status_label.setText("❌ BlablaLink 쿠키 저장 실패")
+                    self.nikke_status_label.setStyleSheet("color: #ff6666;")
+            else:
+                self.nikke_status_label.setText(
+                    f"❌ {browser}에서 BlablaLink 쿠키를 찾을 수 없습니다.\n"
+                    "BlablaLink/ShiftyPad에 로그인한 후 다시 시도하세요."
+                )
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.nikke_status_label.setText(f"❌ NIKKE 추출 실패: {e}")
+            self.nikke_status_label.setStyleSheet("color: #ff6666;")
+
+    def _open_nikke(self):
+        """BlablaLink/NIKKE ShiftyPad 웹사이트 열기"""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+
+            BrowserCookieExtractor().open_nikke_login()
+            self.nikke_status_label.setText("브라우저에서 BlablaLink/ShiftyPad에 로그인한 후 쿠키를 추출하세요.")
+        except Exception:
+            import webbrowser
+
+            webbrowser.open("https://www.blablalink.com/nikke")
+
+    def _clear_nikke_credentials(self):
+        """저장된 NIKKE/BlablaLink 인증 정보 삭제"""
+        reply = QMessageBox.question(
+            self, "NIKKE 인증 정보 삭제",
+            "저장된 NIKKE/BlablaLink 인증 정보를 삭제하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                from src.utils.nikke_config import NikkeConfig
+                from src.services.nikke import reset_nikke_service
+
+                NikkeConfig().clear_session()
+                reset_nikke_service()
+                self._update_nikke_status()
+                QMessageBox.information(self, "완료", "NIKKE/BlablaLink 인증 정보가 삭제되었습니다.")
+            except Exception as e:
+                QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
 
     def _open_hoyolab(self):
         """HoYoLab 웹사이트 열기"""
@@ -1916,7 +2152,7 @@ class HoYoLabSettingsDialog(QDialog):
 <ul>
 <li><b>ltuid_v2</b> (또는 ltuid) → LTUID 필드에 입력</li>
 <li><b>ltoken_v2</b> (또는 ltoken) → LTOKEN_V2 필드에 입력</li>
-<li><b>ltmid_v2</b> (또는 ltmid) → LTMID_V2 필드에 입력</li>
+<li><b>ltmid_v2</b> (또는 ltmid) → LTMID_V2 필드에 입력 (없으면 생략 가능)</li>
 </ul>
 
 <h4>⚠️ 주의사항</h4>
@@ -1963,15 +2199,21 @@ class HoYoLabSettingsDialog(QDialog):
         ltoken = self.ltoken_edit.text().strip()
         ltmid = self.ltmid_edit.text().strip()
 
-        # 마스킹된 값인지 확인 (변경 안 한 경우)
-        if ltoken == "••••••••" or ltmid == "••••••••":
-            self.accept()  # 변경 없이 닫기
-            return
+        # 마스킹된 값이면 기존 저장값을 유지
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            existing_creds = HoYoLabConfig().load_credentials() or {}
+        except Exception:
+            existing_creds = {}
+        if ltoken == "••••••••":
+            ltoken = existing_creds.get("ltoken_v2", "")
+        if ltmid == "••••••••":
+            ltmid = existing_creds.get("ltmid_v2", "")
 
-        if not ltuid_str or not ltoken or not ltmid:
+        if not ltuid_str or not ltoken:
             QMessageBox.warning(
                 self, "입력 오류",
-                "모든 필드를 입력하거나 자동 추출을 사용하세요."
+                "LTUID와 LTOKEN_V2를 입력하거나 자동 추출을 사용하세요. LTMID_V2는 없으면 비워도 됩니다."
             )
             return
 

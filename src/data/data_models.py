@@ -44,6 +44,14 @@ class ManagedProcess:
                  stamina_current: Optional[int] = None,
                  stamina_max: Optional[int] = None,
                  stamina_updated_at: Optional[float] = None,
+                 # 범용 게임 리소스 연동 필드 (예: NIKKE ShiftyPad 보관함 용량)
+                 resource_tracking_enabled: bool = False,
+                 resource_provider: Optional[str] = None,
+                 resource_key: Optional[str] = None,
+                 resource_label: Optional[str] = None,
+                 resource_percent: Optional[float] = None,
+                 resource_updated_at: Optional[float] = None,
+                 resource_status: Optional[str] = None,
                  # 앱 볼륨 제어
                  default_volume: Optional[int] = None,
                  default_muted: bool = False):
@@ -73,6 +81,15 @@ class ManagedProcess:
         self.stamina_current = stamina_current
         self.stamina_max = stamina_max
         self.stamina_updated_at = stamina_updated_at
+
+        # 범용 게임 리소스 연동 필드 초기화
+        self.resource_tracking_enabled = resource_tracking_enabled
+        self.resource_provider = resource_provider
+        self.resource_key = resource_key
+        self.resource_label = resource_label
+        self.resource_percent = resource_percent
+        self.resource_updated_at = resource_updated_at
+        self.resource_status = resource_status
 
         # 앱 볼륨 제어
         self.default_volume = default_volume
@@ -109,6 +126,21 @@ class ManagedProcess:
             data['stamina_max'] = None
         if 'stamina_updated_at' not in data:
             data['stamina_updated_at'] = None
+        # 범용 리소스 필드 하위 호환성
+        if 'resource_tracking_enabled' not in data:
+            data['resource_tracking_enabled'] = False
+        if 'resource_provider' not in data:
+            data['resource_provider'] = None
+        if 'resource_key' not in data:
+            data['resource_key'] = None
+        if 'resource_label' not in data:
+            data['resource_label'] = None
+        if 'resource_percent' not in data:
+            data['resource_percent'] = None
+        if 'resource_updated_at' not in data:
+            data['resource_updated_at'] = None
+        if 'resource_status' not in data:
+            data['resource_status'] = None
         # 볼륨 필드 하위 호환성
         if 'default_volume' not in data:
             data['default_volume'] = None
@@ -119,6 +151,21 @@ class ManagedProcess:
     def is_hoyoverse_game(self) -> bool:
         """호요버스 게임 스태미나 추적이 활성화되어 있는지 확인"""
         return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
+
+    def is_external_resource_game(self) -> bool:
+        """범용 외부 리소스 추적이 활성화되어 있는지 확인"""
+        return bool(self.resource_tracking_enabled and self.resource_provider and self.resource_key)
+
+    def get_resource_percentage(self) -> Optional[float]:
+        """범용 리소스 백분율 반환 (0.0 ~ 100.0)."""
+        if not self.is_external_resource_game():
+            return None
+        if self.resource_percent is None or self.resource_status not in (None, "ok"):
+            return None
+        try:
+            return max(0.0, min(float(self.resource_percent), 100.0))
+        except (TypeError, ValueError):
+            return None
     
     def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.

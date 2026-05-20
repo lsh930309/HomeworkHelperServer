@@ -20,6 +20,14 @@ class ProcessSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 범용 외부 리소스 필드
+    resource_tracking_enabled: bool = False
+    resource_provider: Optional[str] = None
+    resource_key: Optional[str] = None
+    resource_label: Optional[str] = None
+    resource_percent: Optional[float] = None
+    resource_updated_at: Optional[float] = None
+    resource_status: Optional[str] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False
@@ -46,6 +54,14 @@ class ProcessCreateSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 범용 외부 리소스 필드
+    resource_tracking_enabled: bool = False
+    resource_provider: Optional[str] = None
+    resource_key: Optional[str] = None
+    resource_label: Optional[str] = None
+    resource_percent: Optional[float] = None
+    resource_updated_at: Optional[float] = None
+    resource_status: Optional[str] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False

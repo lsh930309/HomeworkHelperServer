@@ -132,6 +132,24 @@ class DataManager:
         self.save_managed_processes()
         return True
 
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: float | None,
+        resource_updated_at: float | None,
+        resource_status: str | None,
+    ) -> bool:
+        """외부 리소스 추적기가 갱신한 리소스 필드만 저장합니다."""
+        process = self.get_process_by_id(process_id)
+        if process is None:
+            print(f"Process with ID {process_id} not found for resource update.")
+            return False
+        process.resource_percent = resource_percent
+        process.resource_updated_at = resource_updated_at
+        process.resource_status = resource_status
+        self.save_managed_processes()
+        return True
+
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 프로세스를 찾아 반환합니다."""
         for process in self.managed_processes:

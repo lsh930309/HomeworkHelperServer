@@ -103,7 +103,7 @@ class HoYoLabConfig:
         self,
         ltuid: int,
         ltoken_v2: str,
-        ltmid_v2: str,
+        ltmid_v2: Optional[str] = None,
         starrail_uid: Optional[int] = None,
         zzz_uid: Optional[int] = None
     ) -> bool:
@@ -112,7 +112,7 @@ class HoYoLabConfig:
         Args:
             ltuid: HoYoLab 사용자 ID
             ltoken_v2: HoYoLab 인증 토큰
-            ltmid_v2: HoYoLab 미들웨어 ID
+            ltmid_v2: HoYoLab 미들웨어 ID (선택)
             starrail_uid: 스타레일 게임 UID (선택)
             zzz_uid: 젠레스 존 제로 게임 UID (선택)
             
@@ -122,8 +122,9 @@ class HoYoLabConfig:
         credentials = {
             "ltuid": ltuid,
             "ltoken_v2": ltoken_v2,
-            "ltmid_v2": ltmid_v2,
         }
+        if ltmid_v2:
+            credentials["ltmid_v2"] = ltmid_v2
         
         if starrail_uid:
             credentials["starrail_uid"] = starrail_uid
