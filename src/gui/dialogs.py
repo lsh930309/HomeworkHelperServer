@@ -2018,7 +2018,10 @@ class HoYoLabSettingsDialog(QDialog):
                 self.ltuid_edit.setText(str(cookies.get("ltuid", "")))
                 self.ltoken_edit.setText(cookies.get("ltoken_v2", ""))
                 self.ltmid_edit.setText(cookies.get("ltmid_v2", ""))
-                self.extract_status_label.setText(f"✅ {browser}에서 쿠키 추출 성공!")
+                self.extract_status_label.setText(
+                    f"✅ {browser}에서 HoYoLab 쿠키 추출 성공! "
+                    "입력 필드가 새 값으로 채워졌고, 저장을 누르면 기존 토큰을 덮어씁니다."
+                )
                 self.extract_status_label.setStyleSheet("color: #44cc44;")
             else:
                 self.extract_status_label.setText(
@@ -2052,7 +2055,7 @@ class HoYoLabSettingsDialog(QDialog):
         try:
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
             from src.utils.nikke_config import NikkeConfig
-            from src.services.nikke import reset_nikke_service
+            from src.services.nikke import NikkeService, reset_nikke_service
 
             extractor = BrowserCookieExtractor()
             if not extractor.is_available(browser):
@@ -2071,8 +2074,23 @@ class HoYoLabSettingsDialog(QDialog):
                 config = NikkeConfig()
                 if config.save_session(cookies):
                     reset_nikke_service()
-                    self.nikke_status_label.setText(f"✅ {browser}에서 BlablaLink 쿠키 추출 성공! ShiftyPad 조회 시 세션 유효성을 확인합니다.")
-                    self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                    self.nikke_status_label.setText("BlablaLink 쿠키 저장 완료. ShiftyPad 대표 계정/서버 정보 확인 중...")
+                    self.nikke_status_label.repaint()
+
+                    role = NikkeService(config=config).get_role_info(refresh=True)
+                    reset_nikke_service()
+                    if role:
+                        self.nikke_status_label.setText(
+                            f"✅ {browser}에서 BlablaLink 쿠키와 ShiftyPad 대표 계정 정보를 확인했습니다. "
+                            f"서버={role.nikke_area_id}, open_id={self._mask_identifier(role.intl_open_id)}"
+                        )
+                        self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                    else:
+                        self.nikke_status_label.setText(
+                            f"⚠️ {browser}에서 BlablaLink 쿠키는 저장했지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다.\n"
+                            "BlablaLink에서 ShiftyPad를 열어 대표 계정이 보이는지 확인한 뒤 다시 추출하세요."
+                        )
+                        self.nikke_status_label.setStyleSheet("color: #ffcc00;")
                 else:
                     self.nikke_status_label.setText("❌ BlablaLink 쿠키 저장 실패")
                     self.nikke_status_label.setStyleSheet("color: #ff6666;")
@@ -2085,6 +2103,13 @@ class HoYoLabSettingsDialog(QDialog):
         except Exception as e:
             self.nikke_status_label.setText(f"❌ NIKKE 추출 실패: {e}")
             self.nikke_status_label.setStyleSheet("color: #ff6666;")
+
+    @staticmethod
+    def _mask_identifier(value: str) -> str:
+        text = str(value or "")
+        if len(text) <= 4:
+            return "••••"
+        return f"{text[:2]}•••{text[-2:]}"
 
     def _open_nikke(self):
         """BlablaLink/NIKKE ShiftyPad 웹사이트 열기"""
@@ -2230,7 +2255,12 @@ class HoYoLabSettingsDialog(QDialog):
             config = HoYoLabConfig()
             if config.save_credentials(ltuid, ltoken, ltmid):
                 reset_hoyolab_service()  # 서비스 인스턴스 리셋
-                QMessageBox.information(self, "저장 완료", "HoYoLab 인증 정보가 저장되었습니다.")
+                QMessageBox.information(
+                    self,
+                    "저장 완료",
+                    "HoYoLab 인증 정보가 현재 입력 필드 값으로 저장되었습니다.\n"
+                    "자동 추출 후 저장했다면 기존 토큰은 새로 추출한 토큰으로 덮어쓰기되었습니다."
+                )
                 self.accept()
             else:
                 QMessageBox.warning(self, "저장 실패", "인증 정보 저장에 실패했습니다.")

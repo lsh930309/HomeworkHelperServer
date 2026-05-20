@@ -145,6 +145,67 @@ def test_nikke_outpost_storage_marks_auth_expired(monkeypatch):
     assert snapshot.percent is None
 
 
+def test_nikke_role_discovery_combines_user_info_and_saved_role(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    post_calls = []
+    get_calls = []
+
+    def fake_post(url, **kwargs):
+        post_calls.append((url, kwargs))
+        if url.endswith("user/CheckLogin"):
+            return _FakeResponse({"code": 0, "msg": "ok"})
+        if url.endswith("ugc/proxy/standalonesite/User/GetUserInfoNew"):
+            return _FakeResponse({"code": 0, "data": {"info": {"intl_openid": "global-open-42"}}})
+        raise AssertionError(f"unexpected POST: {url}")
+
+    def fake_get(url, **kwargs):
+        get_calls.append((url, kwargs))
+        if url.endswith("game/proxy/Game/GetSavedRoleInfo"):
+            return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": "1", "role_id": "10105414"}}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    role = NikkeService(config=config).get_role_info(refresh=True)
+
+    assert role is not None
+    assert role.intl_open_id == "42"
+    assert role.nikke_area_id == 1
+    assert config.updated_role == ("42", 1)
+    assert any(url.endswith("game/proxy/Game/GetSavedRoleInfo") for url, _kwargs in get_calls)
+    assert all(not url.endswith("game/proxy/Game/GetSavedRoleInfo") for url, _kwargs in post_calls)
+
+
+def test_nikke_outpost_storage_discovers_role_before_daily_progress(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    daily_payloads = []
+
+    def fake_post(url, **kwargs):
+        if url.endswith("user/CheckLogin"):
+            return _FakeResponse({"code": 0, "msg": "ok"})
+        if url.endswith("ugc/proxy/standalonesite/User/GetUserInfoNew"):
+            return _FakeResponse({"code": 0, "data": {"info": {"intl_openid": "nikke-open-1"}}})
+        if url.endswith("game/proxy/Game/GetUserDailyContentsProgress"):
+            daily_payloads.append(kwargs["json"])
+            return _FakeResponse({"code": 0, "data": {"daily_progress": [{"outpost_battle_storage_fullness": 0.055}]}})
+        raise AssertionError(f"unexpected POST: {url}")
+
+    def fake_get(url, **kwargs):
+        if url.endswith("game/proxy/Game/GetSavedRoleInfo"):
+            return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": 1}}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    snapshot = NikkeService(config=config).get_outpost_storage()
+
+    assert snapshot.status == "ok"
+    assert snapshot.percent == 5.5
+    assert daily_payloads == [{"intl_open_id": "1", "nikke_area_id": 1}]
+
+
 def test_process_progress_exposes_generic_resource_snapshot():
     process = ManagedProcess(
         id="nikke",
