@@ -50,7 +50,8 @@ class RemoteSettingsDialog(QDialog):
         self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
         self._workers: list[_RemoteSettingsWorker] = []
         self.setWindowTitle("원격 설정")
-        self.setMinimumSize(680, 520)
+        self.setMinimumWidth(680)
+        self.resize(680, 520)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -80,7 +81,7 @@ class RemoteSettingsDialog(QDialog):
         self.pairing_code_edit = QLineEdit()
         self.pairing_code_edit.setReadOnly(True)
         self.pairing_code_edit.setPlaceholderText("코드 발급")
-        self.pairing_code_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pairing_code_edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         code_font = self.pairing_code_edit.font()
         code_font.setPointSize(max(code_font.pointSize() + 10, 20))
         code_font.setBold(True)
@@ -171,7 +172,8 @@ class RemoteSettingsDialog(QDialog):
         self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.devices_table.setMaximumHeight(150)
+        self.devices_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.devices_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         if self.devices_table.horizontalHeader():
             self.devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         buttons = QHBoxLayout()
@@ -188,6 +190,27 @@ class RemoteSettingsDialog(QDialog):
         layout.addWidget(self.devices_table)
         layout.addLayout(buttons)
         root.addWidget(group)
+
+    def _fit_devices_table_to_rows(self) -> None:
+        """Show every paired-device row without an internal vertical scrollbar."""
+        header = self.devices_table.horizontalHeader()
+        header_height = header.height() if header and not header.isHidden() else 0
+        visible_rows = max(self.devices_table.rowCount(), 1)
+        rows_height = sum(
+            self.devices_table.rowHeight(row)
+            for row in range(self.devices_table.rowCount())
+        )
+        if self.devices_table.rowCount() == 0:
+            rows_height = self.devices_table.verticalHeader().defaultSectionSize()
+        frame_height = self.devices_table.frameWidth() * 2
+        horizontal_scroll_height = (
+            self.devices_table.horizontalScrollBar().sizeHint().height()
+            if self.devices_table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            else 0
+        )
+        target_height = header_height + rows_height + frame_height + horizontal_scroll_height
+        self.devices_table.setFixedHeight(max(target_height, header_height + frame_height + visible_rows))
+        self.adjustSize()
 
     def _schedule_initial_refreshes(self) -> None:
         self._refresh_remote_logging_config()
@@ -301,6 +324,7 @@ class RemoteSettingsDialog(QDialog):
             ]
             for col, value in enumerate(values):
                 self.devices_table.setItem(row, col, QTableWidgetItem(value))
+        self._fit_devices_table_to_rows()
         self.pairing_status_label.setText(f"페어링된 기기 {len(devices)}개")
 
     def _revoke_selected_device(self):

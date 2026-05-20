@@ -123,10 +123,12 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
     dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
 
-    assert 'QAction("앱 설정...", self)' in source
-    assert 'QAction("원격 설정...", self)' in source
-    assert source.index('QAction("앱 설정...", self)') < source.index('QAction("원격 설정...", self)')
-    assert source.index('QAction("원격 설정...", self)') < source.index('QAction("사이드바 설정...", self)')
+    assert "def _text_menu_action" in source
+    assert "setIconVisibleInMenu(False)" in source
+    assert '_text_menu_action("앱 설정...", self.open_global_settings_dialog)' in source
+    assert '_text_menu_action("원격 설정...", self.open_remote_settings_dialog)' in source
+    assert source.index('_text_menu_action("앱 설정..."') < source.index('_text_menu_action("원격 설정..."')
+    assert source.index('_text_menu_action("원격 설정..."') < source.index('_text_menu_action("사이드바 설정..."')
     assert "open_remote_settings_dialog" in source
     assert "RemoteSettingsDialog" in source
     assert 'QAction("리모트 페어링 코드 발급(&P)", self)' not in source
@@ -140,6 +142,10 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "QTabWidget" not in remote_dialog_source
     assert "_RemoteSettingsWorker" in dialog_source
     assert "_schedule_initial_refreshes" in remote_dialog_source
+    assert "setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)" in remote_dialog_source
+    assert "setMaximumHeight(150)" not in remote_dialog_source
+    assert "ScrollBarAlwaysOff" in remote_dialog_source
+    assert "_fit_devices_table_to_rows" in remote_dialog_source
     assert "_start_worker(\"devices\"" in remote_dialog_source
     assert "_start_worker(\"tailscale\"" in remote_dialog_source
     assert "_start_worker(\"power\"" in remote_dialog_source
@@ -156,6 +162,56 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "전원 설정 저장" not in dialog_source
     assert "호스트 전원 준비 상태" in dialog_source
     assert "클라이언트가 SmartThings/OpenSSH 직접 경로" in dialog_source
+
+
+def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned(monkeypatch):
+    app = _qapp()
+    import src.gui.dialogs as dialogs
+
+    monkeypatch.setattr(dialogs.RemoteSettingsDialog, "_schedule_initial_refreshes", lambda self: None)
+    dialog = dialogs.RemoteSettingsDialog(_FakeApiClient([]))
+    try:
+        assert dialog.pairing_code_edit.alignment() & Qt.AlignmentFlag.AlignLeft
+        assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert dialog.devices_table.maximumHeight() > 1000
+
+        dialog._populate_devices([])
+        empty_height = dialog.devices_table.height()
+        dialog._populate_devices([
+            {"id": f"device-{index}", "name": f"Device {index}", "platform": "macOS"}
+            for index in range(4)
+        ])
+        app.processEvents()
+
+        assert dialog.devices_table.rowCount() == 4
+        assert dialog.devices_table.height() > empty_height
+        expected_min = (
+            dialog.devices_table.horizontalHeader().height()
+            + sum(dialog.devices_table.rowHeight(row) for row in range(dialog.devices_table.rowCount()))
+            + dialog.devices_table.frameWidth() * 2
+        )
+        assert dialog.devices_table.height() >= expected_min
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_menu_bar_dropdown_actions_are_text_only(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        dropdown_actions = []
+        for top_level_action in window.menuBar().actions():
+            menu = top_level_action.menu()
+            if menu is not None:
+                dropdown_actions.extend(action for action in menu.actions() if not action.isSeparator())
+
+        assert dropdown_actions
+        assert all(not action.isIconVisibleInMenu() for action in dropdown_actions)
+    finally:
+        _stop_window(window, app)
 
 
 def test_main_window_uses_icon_only_remote_readiness_indicators():

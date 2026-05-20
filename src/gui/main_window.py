@@ -915,27 +915,32 @@ class MainWindow(QMainWindow):
         close_button.clicked.connect(dialog.accept)
         dialog.exec()
 
+    def _text_menu_action(self, text: str, triggered, *, shortcut: Optional[str] = None) -> QAction:
+        """Create a text-only menu action so dark themes do not expose invisible icons."""
+        action = QAction(text, self)
+        action.setIconVisibleInMenu(False)
+        if shortcut:
+            action.setShortcut(shortcut)
+        action.triggered.connect(triggered)
+        return action
+
     def _create_menu_bar(self):
         mb = self.menuBar()
         if not mb:
             return
         fm = mb.addMenu("파일(&F)") # 파일 메뉴
-        ea = QAction("종료(&X)", self); ea.setShortcut("Ctrl+Q"); ea.triggered.connect(self.initiate_quit_sequence)
-        restart_action = QAction("재시작(&R)", self)
-        restart_action.setShortcut("Ctrl+R")
-        restart_action.triggered.connect(self._restart_app)
+        ea = self._text_menu_action("종료(&X)", self.initiate_quit_sequence, shortcut="Ctrl+Q")
+        restart_action = self._text_menu_action("재시작(&R)", self._restart_app, shortcut="Ctrl+R")
         if fm:
             fm.addAction(restart_action)
             fm.addSeparator()
             fm.addAction(ea) # 종료 액션
 
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
-        gsa = QAction("앱 설정...", self); gsa.triggered.connect(self.open_global_settings_dialog)
-        remote_settings_action = QAction("원격 설정...", self)
-        remote_settings_action.triggered.connect(self.open_remote_settings_dialog)
-        hoyolab_action = QAction("HoYoLab 설정...", self); hoyolab_action.triggered.connect(self.open_hoyolab_settings_dialog)
-        sidebar_settings_action = QAction("사이드바 설정...", self)
-        sidebar_settings_action.triggered.connect(self.open_sidebar_settings_dialog)
+        gsa = self._text_menu_action("앱 설정...", self.open_global_settings_dialog)
+        remote_settings_action = self._text_menu_action("원격 설정...", self.open_remote_settings_dialog)
+        hoyolab_action = self._text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)
+        sidebar_settings_action = self._text_menu_action("사이드바 설정...", self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 앱 설정 액션
             sm.addAction(remote_settings_action)
