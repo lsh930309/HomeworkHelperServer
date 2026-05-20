@@ -1,5 +1,5 @@
 {
-    "version": 2,
+    "version": 3,
     "presets": [
         {
             "id": "honkai_starrail",
@@ -21,7 +21,11 @@
             "launcher_patterns": [
                 "launcher.exe",
                 "HYP.exe"
-            ]
+            ],
+            "resource_tracking_enabled": false,
+            "resource_provider": null,
+            "resource_key": null,
+            "resource_label": null
         },
         {
             "id": "zenless_zone_zero",
@@ -43,7 +47,11 @@
             "launcher_patterns": [
                 "launcher.exe",
                 "HYP.exe"
-            ]
+            ],
+            "resource_tracking_enabled": false,
+            "resource_provider": null,
+            "resource_key": null,
+            "resource_label": null
         },
         {
             "id": "nikke",
@@ -62,7 +70,11 @@
             "stamina_name": null,
             "stamina_max_default": null,
             "stamina_recovery_minutes": null,
-            "launcher_patterns": null
+            "launcher_patterns": null,
+            "resource_tracking_enabled": true,
+            "resource_provider": "nikke_blablalink",
+            "resource_key": "nikke_outpost_storage",
+            "resource_label": "보관함 용량"
         },
         {
             "id": "endfield",
@@ -81,7 +93,11 @@
             "stamina_name": null,
             "stamina_max_default": null,
             "stamina_recovery_minutes": null,
-            "launcher_patterns": null
+            "launcher_patterns": null,
+            "resource_tracking_enabled": false,
+            "resource_provider": null,
+            "resource_key": null,
+            "resource_label": null
         },
         {
             "id": "wuwa",
@@ -100,7 +116,11 @@
             "stamina_name": null,
             "stamina_max_default": null,
             "stamina_recovery_minutes": null,
-            "launcher_patterns": null
+            "launcher_patterns": null,
+            "resource_tracking_enabled": false,
+            "resource_provider": null,
+            "resource_key": null,
+            "resource_label": null
         }
     ]
 }

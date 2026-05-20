@@ -127,6 +127,8 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "setIconVisibleInMenu(False)" in source
     assert '_text_menu_action("앱 설정...", self.open_global_settings_dialog)' in source
     assert '_text_menu_action("원격 설정...", self.open_remote_settings_dialog)' in source
+    assert '_text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)' in source
+    assert '_text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)' not in source
     assert source.index('_text_menu_action("앱 설정..."') < source.index('_text_menu_action("원격 설정..."')
     assert source.index('_text_menu_action("원격 설정..."') < source.index('_text_menu_action("사이드바 설정..."')
     assert "open_remote_settings_dialog" in source
@@ -164,6 +166,24 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "전원 설정 저장" not in dialog_source
     assert "호스트 전원 준비 상태" in dialog_source
     assert "클라이언트가 SmartThings/OpenSSH 직접 경로" in dialog_source
+
+
+def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
+    source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
+    dialog_source = source[source.index("class HoYoLabSettingsDialog"):]
+
+    assert 'setWindowTitle("자원 추적 설정")' in dialog_source
+    assert "HoYoLabAdvancedCredentialsDialog" in source
+    assert "NikkeAdvancedSessionDialog" in source
+    assert "hoyolab_advanced_btn" in dialog_source
+    assert "nikke_advanced_btn" in dialog_source
+    assert "check_cookies_btn" in dialog_source
+    assert "cookie_check_status_label" in dialog_source
+    assert "QDialogButtonBox.StandardButton.Close" in dialog_source
+    assert "self.ltuid_edit" not in dialog_source
+    assert "self.ltoken_edit" not in dialog_source
+    assert "self.ltmid_edit" not in dialog_source
+    assert "save_credentials(int(cookies.get(\"ltuid\"))" in dialog_source
 
 
 def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned(monkeypatch):

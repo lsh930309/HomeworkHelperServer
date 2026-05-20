@@ -420,13 +420,20 @@ class PresetEditorDialog(QDialog):
             "stamina_name": None,
             "stamina_max_default": None,
             "stamina_recovery_minutes": None,
-            "launcher_patterns": None
+            "launcher_patterns": None,
+            "resource_tracking_enabled": False,
+            "resource_provider": None,
+            "resource_key": None,
+            "resource_label": None
         }
 
         # 기존 프리셋이 있으면 시스템 필드 보존 (원본 프리셋 또는 덮어쓰기 대상)
         existing_preset = original_preset or target_preset
         if existing_preset:
-            for key in ["stamina_name", "stamina_max_default", "stamina_recovery_minutes", "launcher_patterns"]:
+            for key in [
+                "stamina_name", "stamina_max_default", "stamina_recovery_minutes", "launcher_patterns",
+                "resource_tracking_enabled", "resource_provider", "resource_key", "resource_label",
+            ]:
                 if key in existing_preset:
                     new_data[key] = existing_preset[key]
 

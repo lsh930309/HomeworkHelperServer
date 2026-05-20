@@ -808,11 +808,19 @@ class ProcessDialog(QDialog):
             except ValueError:
                 pass
 
-        # 호요버스 설정
-        is_hoyoverse = hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked()
-        hoyolab_game_id = None
-        if is_hoyoverse and hasattr(self, 'hoyolab_game_combo'):
-            hoyolab_game_id = self.hoyolab_game_combo.currentData()
+        # 자원 추적 설정
+        tracking_target = self.hoyolab_game_combo.currentData() if hasattr(self, 'hoyolab_game_combo') else None
+        tracking_enabled = bool(
+            hasattr(self, 'stamina_tracking_checkbox')
+            and self.stamina_tracking_checkbox.isChecked()
+            and tracking_target is not None
+        )
+        is_hoyoverse = tracking_enabled and tracking_target in {"honkai_starrail", "zenless_zone_zero"}
+        hoyolab_game_id = tracking_target if is_hoyoverse else None
+        resource_tracking_enabled = tracking_enabled and tracking_target == "nikke_outpost_storage"
+        resource_provider = "nikke_blablalink" if resource_tracking_enabled else None
+        resource_key = "nikke_outpost_storage" if resource_tracking_enabled else None
+        resource_label = "보관함 용량" if resource_tracking_enabled else None
 
         # 프리셋 데이터 구성 (모든 필드 명시적 포함)
         preset_data = {
@@ -835,7 +843,11 @@ class ProcessDialog(QDialog):
             "stamina_name": None,
             "stamina_max_default": None,
             "stamina_recovery_minutes": None,
-            "launcher_patterns": None
+            "launcher_patterns": None,
+            "resource_tracking_enabled": resource_tracking_enabled,
+            "resource_provider": resource_provider,
+            "resource_key": resource_key,
+            "resource_label": resource_label
         }
 
         # 4. 프리셋 저장
@@ -906,18 +918,22 @@ class ProcessDialog(QDialog):
             if idx >= 0:
                 self.launch_type_combo.setCurrentIndex(idx)
 
-        # 호요버스 게임 설정
-        if preset.get("is_hoyoverse", False):
-            if hasattr(self, 'stamina_tracking_checkbox'):
-                self.stamina_tracking_checkbox.setChecked(True)
+        # 스태미나/리소스 추적 대상 자동 선택
+        selected_tracking_target = None
+        if preset.get("is_hoyoverse", False) and preset.get("hoyolab_game_id"):
+            selected_tracking_target = preset.get("hoyolab_game_id")
+        elif (
+            preset.get("resource_tracking_enabled")
+            and preset.get("resource_provider") == "nikke_blablalink"
+            and preset.get("resource_key") == "nikke_outpost_storage"
+        ):
+            selected_tracking_target = "nikke_outpost_storage"
 
-            # 호요랩 게임 자동 선택
-            if hasattr(self, 'hoyolab_game_combo'):
-                hid = preset.get("hoyolab_game_id")
-                if hid:
-                    index = self.hoyolab_game_combo.findData(hid)
-                    if index >= 0:
-                        self.hoyolab_game_combo.setCurrentIndex(index)
+        if hasattr(self, 'hoyolab_game_combo'):
+            index = self.hoyolab_game_combo.findData(selected_tracking_target) if selected_tracking_target else 0
+            self.hoyolab_game_combo.setCurrentIndex(index if index >= 0 else 0)
+        if hasattr(self, 'stamina_tracking_checkbox'):
+            self.stamina_tracking_checkbox.setChecked(bool(selected_tracking_target))
 
     # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만,
     # multi_replace는 덮어쓰기이므로, 기존 _on_save_as_preset_clicked 메서드 전체를 이 청크로 대체하는 게 나을 수도 있음.
@@ -1152,7 +1168,7 @@ class ProcessDialog(QDialog):
                         "• HoYoLab 쿠키가 만료되었습니다.\n"
                         "• 해당 게임을 플레이하지 않았습니다.\n"
                         "• API 서버에 문제가 있습니다.\n\n"
-                        "HoYoLab 설정에서 쿠키를 다시 설정해보세요."
+                        "자원 추적 설정에서 쿠키를 다시 설정해보세요."
                     )
             except Exception as e:
                 QMessageBox.warning(
@@ -1188,7 +1204,7 @@ class ProcessDialog(QDialog):
                     self,
                     "인증 정보 없음",
                     "BlablaLink/NIKKE 인증 정보가 설정되지 않았습니다.\n"
-                    "게임 계정 연동 설정을 여시겠습니까?",
+                    "자원 추적 설정을 여시겠습니까?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
@@ -1224,6 +1240,7 @@ class ProcessDialog(QDialog):
                                 snapshot.percent,
                                 snapshot.updated_at.timestamp(),
                                 snapshot.status,
+                                snapshot.label,
                             ):
                                 save_result = "\n\n💾 리소스 정보가 저장되었습니다."
                                 if hasattr(parent_window, "populate_process_list"):
@@ -1827,61 +1844,299 @@ class WebShortcutDialog(QDialog):
         return None
 
 
-class HoYoLabSettingsDialog(QDialog):
-    """HoYoLab 인증 정보 설정 다이얼로그
+class HoYoLabAdvancedCredentialsDialog(QDialog):
+    """HoYoLab 쿠키를 수동 확인/수정하는 고급 다이얼로그."""
 
-    브라우저 쿠키 자동 추출 또는 수동 입력을 통해 HoYoLab 인증 정보를 설정합니다.
-    """
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("HoYoLab 설정")
-        self.setMinimumWidth(450)
+        self.setWindowTitle("HoYoLab 고급 인증 정보")
+        self.setMinimumWidth(520)
+        self._existing_credentials: dict[str, Any] = {}
+
+        layout = QVBoxLayout(self)
+        info = QLabel("자동 추출이 실패했거나 저장된 HoYoLab 쿠키를 직접 수정해야 할 때만 사용하세요.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.ltuid_field = QLineEdit()
+        self.ltuid_field.setPlaceholderText("숫자로 된 사용자 ID")
+        self.ltoken_field = QLineEdit()
+        self.ltoken_field.setPlaceholderText("ltoken_v2 쿠키 값")
+        self.ltoken_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ltmid_field = QLineEdit()
+        self.ltmid_field.setPlaceholderText("ltmid_v2 쿠키 값 (없으면 비워도 됨)")
+        self.ltmid_field.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("LTUID:", self.ltuid_field)
+        form.addRow("LTOKEN_V2:", self.ltoken_field)
+        form.addRow("LTMID_V2:", self.ltmid_field)
+        layout.addLayout(form)
+
+        self.show_tokens_checkbox = QCheckBox("토큰 값 표시")
+        self.show_tokens_checkbox.toggled.connect(self._toggle_token_visibility)
+        layout.addWidget(self.show_tokens_checkbox)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self._save_credentials)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._load_existing_credentials()
+
+    def _toggle_token_visibility(self, checked: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        self.ltoken_field.setEchoMode(mode)
+        self.ltmid_field.setEchoMode(mode)
+
+    def _load_existing_credentials(self) -> None:
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+
+            self._existing_credentials = HoYoLabConfig().load_credentials() or {}
+            if self._existing_credentials:
+                self.ltuid_field.setText(str(self._existing_credentials.get("ltuid", "")))
+                self.ltoken_field.setText(str(self._existing_credentials.get("ltoken_v2", "")))
+                self.ltmid_field.setText(str(self._existing_credentials.get("ltmid_v2", "")))
+                self.status_label.setText("저장된 HoYoLab 쿠키를 불러왔습니다.")
+                self.status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.status_label.setText("저장된 HoYoLab 쿠키가 없습니다.")
+                self.status_label.setStyleSheet("color: #ffcc00;")
+        except Exception as exc:
+            self.status_label.setText(f"⚠️ HoYoLab 쿠키 로드 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ffcc00;")
+
+    def _save_credentials(self) -> None:
+        ltuid_text = self.ltuid_field.text().strip()
+        ltoken = self.ltoken_field.text().strip()
+        ltmid = self.ltmid_field.text().strip()
+        if not ltuid_text or not ltoken:
+            self.status_label.setText("❌ LTUID와 LTOKEN_V2는 필수입니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+        try:
+            ltuid = int(ltuid_text)
+        except ValueError:
+            self.status_label.setText("❌ LTUID는 숫자여야 합니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            from src.services.hoyolab import reset_hoyolab_service
+
+            config = HoYoLabConfig()
+            if config.save_credentials(
+                ltuid,
+                ltoken,
+                ltmid,
+                starrail_uid=self._existing_credentials.get("starrail_uid"),
+                zzz_uid=self._existing_credentials.get("zzz_uid"),
+            ):
+                reset_hoyolab_service()
+                self.accept()
+            else:
+                self.status_label.setText("❌ HoYoLab 쿠키 저장에 실패했습니다.")
+                self.status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.status_label.setText(f"❌ HoYoLab 쿠키 저장 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ff6666;")
+
+
+class NikkeAdvancedSessionDialog(QDialog):
+    """BlablaLink 쿠키와 ShiftyPad 대표 계정 cache를 수동 확인/수정합니다."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("NIKKE / BlablaLink 고급 인증 정보")
+        self.setMinimumWidth(620)
+
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            "자동 추출이 실패했거나 저장된 BlablaLink 쿠키를 직접 수정해야 할 때만 사용하세요. "
+            "쿠키는 name=value 형식으로 한 줄씩 입력하거나, 세미콜론으로 구분된 Cookie header를 붙여넣을 수 있습니다."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.cookie_text = QTextEdit()
+        self.cookie_text.setPlaceholderText("session_id=...\napi_cookie=...")
+        self.cookie_text.setMinimumHeight(120)
+        self.open_id_field = QLineEdit()
+        self.open_id_field.setPlaceholderText("선택: ShiftyPad intl_open_id cache")
+        self.area_id_field = QLineEdit()
+        self.area_id_field.setPlaceholderText("선택: ShiftyPad 서버 area_id cache")
+        form.addRow("Cookies:", self.cookie_text)
+        form.addRow("intl_open_id:", self.open_id_field)
+        form.addRow("nikke_area_id:", self.area_id_field)
+        layout.addLayout(form)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self._save_session)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._load_existing_session()
+
+    def _load_existing_session(self) -> None:
+        try:
+            from src.utils.nikke_config import NikkeConfig
+
+            session = NikkeConfig().load_session() or {}
+            cookies = session.get("cookies") or {}
+            self.cookie_text.setPlainText("\n".join(f"{key}={value}" for key, value in sorted(cookies.items())))
+            if session.get("intl_open_id"):
+                self.open_id_field.setText(str(session.get("intl_open_id")))
+            if session.get("nikke_area_id") is not None:
+                self.area_id_field.setText(str(session.get("nikke_area_id")))
+            if cookies:
+                self.status_label.setText("저장된 BlablaLink 쿠키를 불러왔습니다.")
+                self.status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.status_label.setText("저장된 BlablaLink 쿠키가 없습니다.")
+                self.status_label.setStyleSheet("color: #ffcc00;")
+        except Exception as exc:
+            self.status_label.setText(f"⚠️ BlablaLink 쿠키 로드 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ffcc00;")
+
+    @staticmethod
+    def _parse_cookie_text(raw_text: str) -> dict[str, str]:
+        cookies: dict[str, str] = {}
+        for chunk in raw_text.replace(";", "\n").splitlines():
+            line = chunk.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key:
+                cookies[key] = value
+        return cookies
+
+    def _save_session(self) -> None:
+        cookies = self._parse_cookie_text(self.cookie_text.toPlainText())
+        if not cookies:
+            self.status_label.setText("❌ 저장할 BlablaLink 쿠키가 없습니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+        area_id = self.area_id_field.text().strip() or None
+        open_id = self.open_id_field.text().strip() or None
+        try:
+            from src.utils.nikke_config import NikkeConfig
+            from src.services.nikke import reset_nikke_service
+
+            if NikkeConfig().save_session(cookies, intl_open_id=open_id, nikke_area_id=area_id):
+                reset_nikke_service()
+                self.accept()
+            else:
+                self.status_label.setText("❌ BlablaLink 쿠키 저장에 실패했습니다.")
+                self.status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.status_label.setText(f"❌ BlablaLink 쿠키 저장 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ff6666;")
+
+
+class HoYoLabSettingsDialog(QDialog):
+    """자원 추적용 HoYoLab/BlablaLink 인증 정보 설정 다이얼로그."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("자원 추적 설정")
+        self.setMinimumWidth(500)
 
         layout = QVBoxLayout(self)
 
-        # 안내 문구
         info_label = QLabel(
-            "HoYoLab 게임 스태미나(개척력/배터리) 조회를 위해\n"
-            "HoYoLab 쿠키 정보가 필요합니다."
+            "게임 스태미나/리소스 자동 추적을 위해 HoYoLab 또는 BlablaLink 로그인 쿠키가 필요합니다.\n"
+            "일반적으로 브라우저 자동 추출을 사용하고, 직접 수정이 필요할 때만 고급 설정을 여세요."
         )
-
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
 
+        self._build_hoyolab_section(layout)
+        self._build_nikke_section(layout)
 
-        # 자동 추출 버튼
-        auto_group = QGroupBox("HoYoLab 자동 추출")
-        auto_layout = QVBoxLayout()
+        status_group = QGroupBox("유효성 검사")
+        status_layout = QVBoxLayout(status_group)
+        self.check_cookies_btn = QPushButton("쿠키 유효성 검사")
+        self.check_cookies_btn.setToolTip("저장된 HoYoLab/BlablaLink 쿠키로 실제 읽기 전용 조회가 가능한지 확인합니다.")
+        self.cookie_check_status_label = QLabel("저장된 쿠키를 검사하려면 버튼을 누르세요.")
+        self.cookie_check_status_label.setWordWrap(True)
+        status_layout.addWidget(self.check_cookies_btn)
+        status_layout.addWidget(self.cookie_check_status_label)
+        layout.addWidget(status_group)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
+        self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
+        self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
+        self.extract_nikke_chrome_btn.clicked.connect(lambda: self._extract_nikke_cookies("chrome"))
+        self.extract_nikke_edge_btn.clicked.connect(lambda: self._extract_nikke_cookies("edge"))
+        self.extract_nikke_firefox_btn.clicked.connect(lambda: self._extract_nikke_cookies("firefox"))
+        self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
+        self.open_nikke_btn.clicked.connect(self._open_nikke)
+        self.hoyolab_advanced_btn.clicked.connect(self._open_hoyolab_advanced)
+        self.nikke_advanced_btn.clicked.connect(self._open_nikke_advanced)
+        self.clear_btn.clicked.connect(self._clear_credentials)
+        self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
+        self.check_cookies_btn.clicked.connect(self._check_cookie_availability)
+
+        self._update_status()
+        self._update_nikke_status()
+
+    def _build_hoyolab_section(self, root: QVBoxLayout) -> None:
+        auto_group = QGroupBox("HoYoLab")
+        auto_layout = QVBoxLayout(auto_group)
+
+        info = QLabel("스타레일/젠레스 존 제로 스태미나 조회를 위한 HoYoLab 쿠키를 관리합니다.")
+        info.setWordWrap(True)
+        auto_layout.addWidget(info)
 
         extract_btn_layout = QHBoxLayout()
         self.extract_chrome_btn = QPushButton("크롬에서 추출")
         self.extract_edge_btn = QPushButton("엣지에서 추출")
         self.extract_firefox_btn = QPushButton("파이어폭스에서 추출")
-
         extract_btn_layout.addWidget(self.extract_chrome_btn)
         extract_btn_layout.addWidget(self.extract_edge_btn)
         extract_btn_layout.addWidget(self.extract_firefox_btn)
         auto_layout.addLayout(extract_btn_layout)
 
-        # HoYoLab 로그인 버튼
-        login_btn_layout = QHBoxLayout()
-        self.open_hoyolab_btn = QPushButton("호요랩 로그인 열기")
-        self.show_guide_btn = QPushButton("📖 수동 추출 가이드")
-        login_btn_layout.addWidget(self.open_hoyolab_btn)
-        login_btn_layout.addWidget(self.show_guide_btn)
-        auto_layout.addLayout(login_btn_layout)
+        button_layout = QHBoxLayout()
+        self.open_hoyolab_btn = QPushButton("HoYoLab 로그인 열기")
+        self.hoyolab_advanced_btn = QPushButton("고급")
+        self.clear_btn = QPushButton("HoYoLab 인증 삭제")
+        self.clear_btn.setStyleSheet("color: #ff6666;")
+        button_layout.addWidget(self.open_hoyolab_btn)
+        button_layout.addWidget(self.hoyolab_advanced_btn)
+        button_layout.addWidget(self.clear_btn)
+        auto_layout.addLayout(button_layout)
 
         self.extract_status_label = QLabel("")
+        self.extract_status_label.setWordWrap(True)
         auto_layout.addWidget(self.extract_status_label)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        auto_layout.addWidget(self.status_label)
 
-        auto_group.setLayout(auto_layout)
-        layout.addWidget(auto_group)
+        root.addWidget(auto_group)
 
-        # NIKKE / BlablaLink 인증
+    def _build_nikke_section(self, root: QVBoxLayout) -> None:
         nikke_group = QGroupBox("NIKKE / BlablaLink")
-        nikke_layout = QVBoxLayout()
+        nikke_layout = QVBoxLayout(nikke_group)
 
-        nikke_info = QLabel("ShiftyPad 보관함 용량 조회를 위해 BlablaLink 로그인 세션 쿠키가 필요합니다.")
+        nikke_info = QLabel("ShiftyPad 보관함 용량 조회를 위한 BlablaLink 로그인 세션 쿠키를 관리합니다.")
         nikke_info.setWordWrap(True)
         nikke_layout.addWidget(nikke_info)
 
@@ -1896,74 +2151,22 @@ class HoYoLabSettingsDialog(QDialog):
 
         nikke_button_layout = QHBoxLayout()
         self.open_nikke_btn = QPushButton("BlablaLink 열기")
+        self.nikke_advanced_btn = QPushButton("고급")
         self.clear_nikke_btn = QPushButton("NIKKE 인증 삭제")
         self.clear_nikke_btn.setStyleSheet("color: #ff6666;")
         nikke_button_layout.addWidget(self.open_nikke_btn)
+        nikke_button_layout.addWidget(self.nikke_advanced_btn)
         nikke_button_layout.addWidget(self.clear_nikke_btn)
         nikke_layout.addLayout(nikke_button_layout)
 
         self.nikke_status_label = QLabel("")
+        self.nikke_status_label.setWordWrap(True)
         nikke_layout.addWidget(self.nikke_status_label)
-        nikke_group.setLayout(nikke_layout)
-        layout.addWidget(nikke_group)
 
-        # 수동 입력
-        manual_group = QGroupBox("수동 입력 (고급)")
-        manual_layout = QFormLayout()
-
-        self.ltuid_edit = QLineEdit()
-        self.ltuid_edit.setPlaceholderText("숫자로 된 사용자 ID")
-        self.ltoken_edit = QLineEdit()
-        self.ltoken_edit.setPlaceholderText("ltoken_v2 쿠키 값")
-        self.ltmid_edit = QLineEdit()
-        self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값 (없으면 비워도 됨)")
-
-        manual_layout.addRow("LTUID:", self.ltuid_edit)
-        manual_layout.addRow("LTOKEN_V2:", self.ltoken_edit)
-        manual_layout.addRow("LTMID_V2:", self.ltmid_edit)
-
-        manual_group.setLayout(manual_layout)
-        layout.addWidget(manual_group)
-
-        # 상태 표시
-        self.status_label = QLabel()
-        self._update_status()
-        layout.addWidget(self.status_label)
-
-        # 버튼박스
-        button_layout = QHBoxLayout()
-        self.clear_btn = QPushButton("인증 정보 삭제")
-        self.clear_btn.setStyleSheet("color: #ff6666;")
-        button_layout.addWidget(self.clear_btn)
-        button_layout.addStretch()
-
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_layout.addWidget(self.button_box)
-        layout.addLayout(button_layout)
-
-        # 시그널 연결
-        self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
-        self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
-        self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
-        self.extract_nikke_chrome_btn.clicked.connect(lambda: self._extract_nikke_cookies("chrome"))
-        self.extract_nikke_edge_btn.clicked.connect(lambda: self._extract_nikke_cookies("edge"))
-        self.extract_nikke_firefox_btn.clicked.connect(lambda: self._extract_nikke_cookies("firefox"))
-        self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
-        self.open_nikke_btn.clicked.connect(self._open_nikke)
-        self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
-        self.show_guide_btn.clicked.connect(self._show_manual_guide)
-        self.clear_btn.clicked.connect(self._clear_credentials)
-        self.button_box.accepted.connect(self._save_and_accept)
-        self.button_box.rejected.connect(self.reject)
-
-        # 기존 설정 로드
-        self._load_existing_credentials()
-        self._update_nikke_status()
+        root.addWidget(nikke_group)
 
     def _update_status(self):
-        """현재 인증 상태 업데이트"""
+        """현재 HoYoLab 인증 상태 업데이트"""
         try:
             from src.utils.hoyolab_config import HoYoLabConfig
             config = HoYoLabConfig()
@@ -1974,64 +2177,46 @@ class HoYoLabSettingsDialog(QDialog):
                 self.status_label.setText("❌ HoYoLab 인증 정보가 없습니다.")
                 self.status_label.setStyleSheet("color: #ff6666;")
         except Exception as e:
-            self.status_label.setText(f"⚠️ 상태 확인 실패: {e}")
+            self.status_label.setText(f"⚠️ HoYoLab 상태 확인 실패: {e}")
             self.status_label.setStyleSheet("color: #ffcc00;")
 
-    def _load_existing_credentials(self):
-        """기존 저장된 인증 정보 로드"""
-        try:
-            from src.utils.hoyolab_config import HoYoLabConfig
-            config = HoYoLabConfig()
-            creds = config.load_credentials()
-            if creds:
-                self.ltuid_edit.setText(str(creds.get("ltuid", "")))
-                # 보안상 토큰은 마스킹
-                if creds.get("ltoken_v2"):
-                    self.ltoken_edit.setText("••••••••")
-                    self.ltoken_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
-                if creds.get("ltmid_v2"):
-                    self.ltmid_edit.setText("••••••••")
-                    self.ltmid_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
-        except Exception:
-            pass
-
     def _extract_cookies(self, browser: str):
-        """브라우저에서 쿠키 자동 추출"""
+        """브라우저에서 HoYoLab 쿠키를 추출하고 즉시 저장합니다."""
         try:
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            from src.utils.hoyolab_config import HoYoLabConfig
+            from src.services.hoyolab import reset_hoyolab_service
 
             extractor = BrowserCookieExtractor()
             if not extractor.is_available(browser):
-                QMessageBox.warning(
-                    self, "추출 불가",
-                    f"{browser} 쿠키 추출을 사용할 수 없습니다.\n"
-                    "Firefox는 프로필이 필요하고, Chrome/Edge는 pywin32/pycryptodome이 필요합니다."
-                )
-                return
-
-            self.extract_status_label.setText(f"{browser}에서 쿠키 추출 중...")
-            self.extract_status_label.repaint()
-
-            cookies = extractor.extract_from_browser(browser)
-
-            if cookies:
-                self.ltuid_edit.setText(str(cookies.get("ltuid", "")))
-                self.ltoken_edit.setText(cookies.get("ltoken_v2", ""))
-                self.ltmid_edit.setText(cookies.get("ltmid_v2", ""))
                 self.extract_status_label.setText(
-                    f"✅ {browser}에서 HoYoLab 쿠키 추출 성공! "
-                    "입력 필드가 새 값으로 채워졌고, 저장을 누르면 기존 토큰을 덮어씁니다."
-                )
-                self.extract_status_label.setStyleSheet("color: #44cc44;")
-            else:
-                self.extract_status_label.setText(
-                    f"❌ {browser}에서 HoYoLab 쿠키를 찾을 수 없습니다.\n"
-                    "HoYoLab에 로그인한 후 다시 시도하세요."
+                    f"❌ {browser} 쿠키 추출을 사용할 수 없습니다. Firefox 프로필 또는 Chrome/Edge 복호화 의존성을 확인하세요."
                 )
                 self.extract_status_label.setStyleSheet("color: #ff6666;")
+                return
 
+            self.extract_status_label.setText(f"{browser}에서 HoYoLab 쿠키 추출 중...")
+            self.extract_status_label.repaint()
+
+            cookies = extractor.extract_from_browser(browser, provider="hoyolab")
+            if cookies:
+                config = HoYoLabConfig()
+                ltmid = cookies.get("ltmid_v2", "")
+                if config.save_credentials(int(cookies.get("ltuid")), cookies.get("ltoken_v2", ""), ltmid):
+                    reset_hoyolab_service()
+                    self.extract_status_label.setText(f"✅ {browser}에서 HoYoLab 쿠키를 추출해 저장했습니다.")
+                    self.extract_status_label.setStyleSheet("color: #44cc44;")
+                    self._update_status()
+                else:
+                    self.extract_status_label.setText("❌ HoYoLab 쿠키 저장 실패")
+                    self.extract_status_label.setStyleSheet("color: #ff6666;")
+            else:
+                self.extract_status_label.setText(
+                    f"❌ {browser}에서 HoYoLab 쿠키를 찾을 수 없습니다. HoYoLab에 로그인한 후 다시 시도하세요."
+                )
+                self.extract_status_label.setStyleSheet("color: #ff6666;")
         except Exception as e:
-            self.extract_status_label.setText(f"❌ 추출 실패: {e}")
+            self.extract_status_label.setText(f"❌ HoYoLab 추출 실패: {e}")
             self.extract_status_label.setStyleSheet("color: #ff6666;")
 
     def _update_nikke_status(self):
@@ -2096,8 +2281,7 @@ class HoYoLabSettingsDialog(QDialog):
                     self.nikke_status_label.setStyleSheet("color: #ff6666;")
             else:
                 self.nikke_status_label.setText(
-                    f"❌ {browser}에서 BlablaLink 쿠키를 찾을 수 없습니다.\n"
-                    "BlablaLink/ShiftyPad에 로그인한 후 다시 시도하세요."
+                    f"❌ {browser}에서 BlablaLink 쿠키를 찾을 수 없습니다. BlablaLink/ShiftyPad에 로그인한 후 다시 시도하세요."
                 )
                 self.nikke_status_label.setStyleSheet("color: #ff6666;")
         except Exception as e:
@@ -2111,17 +2295,31 @@ class HoYoLabSettingsDialog(QDialog):
             return "••••"
         return f"{text[:2]}•••{text[-2:]}"
 
+    def _open_hoyolab_advanced(self) -> None:
+        dialog = HoYoLabAdvancedCredentialsDialog(self)
+        if dialog.exec():
+            self._update_status()
+            self.extract_status_label.setText("✅ HoYoLab 고급 인증 정보가 저장되었습니다.")
+            self.extract_status_label.setStyleSheet("color: #44cc44;")
+
+    def _open_nikke_advanced(self) -> None:
+        dialog = NikkeAdvancedSessionDialog(self)
+        if dialog.exec():
+            self._update_nikke_status()
+            self.nikke_status_label.setText("✅ NIKKE/BlablaLink 고급 인증 정보가 저장되었습니다.")
+            self.nikke_status_label.setStyleSheet("color: #44cc44;")
+
     def _open_nikke(self):
-        """BlablaLink/NIKKE ShiftyPad 웹사이트 열기"""
+        """BlablaLink 로그인 웹사이트 열기"""
         try:
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
 
             BrowserCookieExtractor().open_nikke_login()
-            self.nikke_status_label.setText("브라우저에서 BlablaLink/ShiftyPad에 로그인한 후 쿠키를 추출하세요.")
+            self.nikke_status_label.setText("브라우저에서 BlablaLink에 로그인한 후 쿠키를 추출하세요.")
         except Exception:
             import webbrowser
 
-            webbrowser.open("https://www.blablalink.com/nikke")
+            webbrowser.open("https://www.blablalink.com/login")
 
     def _clear_nikke_credentials(self):
         """저장된 NIKKE/BlablaLink 인증 정보 삭제"""
@@ -2139,7 +2337,7 @@ class HoYoLabSettingsDialog(QDialog):
                 NikkeConfig().clear_session()
                 reset_nikke_service()
                 self._update_nikke_status()
-                QMessageBox.information(self, "완료", "NIKKE/BlablaLink 인증 정보가 삭제되었습니다.")
+                self.cookie_check_status_label.setText("NIKKE/BlablaLink 인증 정보가 삭제되었습니다.")
             except Exception as e:
                 QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
 
@@ -2150,55 +2348,14 @@ class HoYoLabSettingsDialog(QDialog):
             extractor = BrowserCookieExtractor()
             extractor.open_hoyolab_login()
             self.extract_status_label.setText("브라우저에서 HoYoLab에 로그인한 후 쿠키를 추출하세요.")
-        except Exception as e:
+        except Exception:
             import webbrowser
             webbrowser.open("https://www.hoyolab.com/home")
 
-    def _show_manual_guide(self):
-        """수동 쿠키 추출 가이드 표시"""
-        guide_text = """<h3>수동 쿠키 추출 가이드</h3>
-
-<p>자동 추출이 실패할 경우 아래 방법으로 직접 쿠키를 추출할 수 있습니다.</p>
-
-<h4>1. HoYoLab 로그인</h4>
-<ol>
-<li><a href="https://www.hoyolab.com">www.hoyolab.com</a>에 접속하여 로그인합니다.</li>
-</ol>
-
-<h4>2. 개발자 도구 열기</h4>
-<ol>
-<li>F12 키를 눌러 개발자 도구를 엽니다.</li>
-<li><b>Application</b> 탭 (또는 Storage 탭)을 클릭합니다.</li>
-<li>좌측 메뉴에서 <b>Cookies → www.hoyolab.com</b>을 선택합니다.</li>
-</ol>
-
-<h4>3. 쿠키 값 복사</h4>
-<p>아래 3개의 쿠키를 찾아 값을 복사하세요:</p>
-<ul>
-<li><b>ltuid_v2</b> (또는 ltuid) → LTUID 필드에 입력</li>
-<li><b>ltoken_v2</b> (또는 ltoken) → LTOKEN_V2 필드에 입력</li>
-<li><b>ltmid_v2</b> (또는 ltmid) → LTMID_V2 필드에 입력 (없으면 생략 가능)</li>
-</ul>
-
-<h4>⚠️ 주의사항</h4>
-<ul>
-<li>쿠키 값은 절대 다른 사람과 공유하지 마세요!</li>
-<li>쿠키가 유출되면 계정 보안이 위험해집니다.</li>
-<li>이 앱은 쿠키를 로컬에만 저장하며 외부 서버로 전송하지 않습니다.</li>
-</ul>
-"""
-        msg = QMessageBox(self)
-        msg.setWindowTitle("수동 쿠키 추출 가이드")
-        msg.setTextFormat(Qt.TextFormat.RichText)
-        msg.setText(guide_text)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.exec()
-
-
     def _clear_credentials(self):
-        """저장된 인증 정보 삭제"""
+        """저장된 HoYoLab 인증 정보 삭제"""
         reply = QMessageBox.question(
-            self, "인증 정보 삭제",
+            self, "HoYoLab 인증 정보 삭제",
             "저장된 HoYoLab 인증 정보를 삭제하시겠습니까?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -2206,64 +2363,76 @@ class HoYoLabSettingsDialog(QDialog):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 from src.utils.hoyolab_config import HoYoLabConfig
-                config = HoYoLabConfig()
-                config.clear_credentials()
+                from src.services.hoyolab import reset_hoyolab_service
 
-                self.ltuid_edit.clear()
-                self.ltoken_edit.clear()
-                self.ltmid_edit.clear()
+                HoYoLabConfig().clear_credentials()
+                reset_hoyolab_service()
                 self._update_status()
-
-                QMessageBox.information(self, "완료", "인증 정보가 삭제되었습니다.")
+                self.cookie_check_status_label.setText("HoYoLab 인증 정보가 삭제되었습니다.")
             except Exception as e:
                 QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
 
-    def _save_and_accept(self):
-        """인증 정보 저장"""
-        ltuid_str = self.ltuid_edit.text().strip()
-        ltoken = self.ltoken_edit.text().strip()
-        ltmid = self.ltmid_edit.text().strip()
-
-        # 마스킹된 값이면 기존 저장값을 유지
+    def _check_cookie_availability(self) -> None:
+        self.check_cookies_btn.setEnabled(False)
+        self.cookie_check_status_label.setText("HoYoLab/BlablaLink 쿠키 유효성 검사 중...")
+        self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
+        QApplication.processEvents()
         try:
-            from src.utils.hoyolab_config import HoYoLabConfig
-            existing_creds = HoYoLabConfig().load_credentials() or {}
-        except Exception:
-            existing_creds = {}
-        if ltoken == "••••••••":
-            ltoken = existing_creds.get("ltoken_v2", "")
-        if ltmid == "••••••••":
-            ltmid = existing_creds.get("ltmid_v2", "")
-
-        if not ltuid_str or not ltoken:
-            QMessageBox.warning(
-                self, "입력 오류",
-                "LTUID와 LTOKEN_V2를 입력하거나 자동 추출을 사용하세요. LTMID_V2는 없으면 비워도 됩니다."
-            )
-            return
-
-        try:
-            ltuid = int(ltuid_str)
-        except ValueError:
-            QMessageBox.warning(self, "입력 오류", "LTUID는 숫자여야 합니다.")
-            return
-
-        try:
-            from src.utils.hoyolab_config import HoYoLabConfig
-            from src.services.hoyolab import reset_hoyolab_service
-
-            config = HoYoLabConfig()
-            if config.save_credentials(ltuid, ltoken, ltmid):
-                reset_hoyolab_service()  # 서비스 인스턴스 리셋
-                QMessageBox.information(
-                    self,
-                    "저장 완료",
-                    "HoYoLab 인증 정보가 현재 입력 필드 값으로 저장되었습니다.\n"
-                    "자동 추출 후 저장했다면 기존 토큰은 새로 추출한 토큰으로 덮어쓰기되었습니다."
-                )
-                self.accept()
+            lines = [self._check_hoyolab_availability(), self._check_nikke_availability()]
+            self.cookie_check_status_label.setText("\n".join(lines))
+            if all(line.startswith("✅") for line in lines):
+                self.cookie_check_status_label.setStyleSheet("color: #44cc44;")
+            elif any(line.startswith("✅") for line in lines):
+                self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
             else:
-                QMessageBox.warning(self, "저장 실패", "인증 정보 저장에 실패했습니다.")
+                self.cookie_check_status_label.setStyleSheet("color: #ff6666;")
+        finally:
+            self.check_cookies_btn.setEnabled(True)
 
-        except Exception as e:
-            QMessageBox.warning(self, "오류", f"저장 실패: {e}")
+    def _check_hoyolab_availability(self) -> str:
+        try:
+            from src.services.hoyolab import HoYoLabService
+            from src.utils.hoyolab_config import HoYoLabConfig
+
+            if not HoYoLabConfig().is_configured():
+                return "❌ HoYoLab: 저장된 쿠키가 없습니다."
+            service = HoYoLabService()
+            try:
+                if not service.is_available():
+                    return "❌ HoYoLab: genshin.py 라이브러리를 사용할 수 없습니다."
+                starrail = service.get_stamina("honkai_starrail")
+                zzz = service.get_stamina("zenless_zone_zero")
+                results = []
+                if starrail:
+                    results.append(f"스타레일 {starrail.current}/{starrail.max}")
+                if zzz:
+                    results.append(f"젠레스 존 제로 {zzz.current}/{zzz.max}")
+                if results:
+                    return "✅ HoYoLab: " + ", ".join(results)
+                return "⚠️ HoYoLab: 쿠키는 저장되어 있지만 스태미나 조회에 실패했습니다."
+            finally:
+                service.close()
+        except Exception as exc:
+            return f"❌ HoYoLab: 검사 실패 - {exc}"
+
+    def _check_nikke_availability(self) -> str:
+        try:
+            from src.services.nikke import NikkeService, NIKKE_OUTPOST_LABEL
+            from src.utils.nikke_config import NikkeConfig
+
+            config = NikkeConfig()
+            if not config.is_configured():
+                return "❌ BlablaLink: 저장된 쿠키가 없습니다."
+            service = NikkeService(config=config)
+            ok, message = service.check_login()
+            if not ok:
+                return f"❌ BlablaLink: 로그인 세션 확인 실패 ({message})"
+            role = service.get_role_info(refresh=True)
+            if not role:
+                return "⚠️ BlablaLink: 로그인은 유효하지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다."
+            snapshot = service.get_outpost_storage()
+            if snapshot.status == "ok" and snapshot.percent is not None:
+                return f"✅ BlablaLink: {NIKKE_OUTPOST_LABEL} {snapshot.percent:.1f}% (서버={role.nikke_area_id})"
+            return f"⚠️ BlablaLink: 대표 계정 확인됨, 리소스 조회 실패 ({snapshot.status})"
+        except Exception as exc:
+            return f"❌ BlablaLink: 검사 실패 - {exc}"

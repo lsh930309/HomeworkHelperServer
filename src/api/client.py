@@ -265,6 +265,7 @@ class ApiClient:
             "resource_percent": getattr(updated_process, "resource_percent", None),
             "resource_updated_at": getattr(updated_process, "resource_updated_at", None),
             "resource_status": getattr(updated_process, "resource_status", None),
+            "resource_label": getattr(updated_process, "resource_label", None),
         }
         resource_payload = {key: value for key, value in resource_payload.items() if value is not None}
         if resource_payload:
@@ -320,6 +321,7 @@ class ApiClient:
         resource_percent: float | None,
         resource_updated_at: float | None,
         resource_status: str | None,
+        resource_label: str | None = None,
     ) -> bool:
         """Persist only generic external resource fields."""
         try:
@@ -329,6 +331,7 @@ class ApiClient:
                     "resource_percent": resource_percent,
                     "resource_updated_at": resource_updated_at,
                     "resource_status": resource_status,
+                    "resource_label": resource_label,
                 },
                 headers=self._beholder_headers("resource_tracker", "process_resource_update"),
                 timeout=10,

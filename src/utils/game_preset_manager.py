@@ -26,6 +26,7 @@ class GamePresetManager:
     # 사용자 프리셋 경로 - 실제 런타임 사용
     USER_CONFIG_DIR = Path(os.environ.get("APPDATA", "")) / "HomeworkHelper"
     USER_PRESET_FILE = USER_CONFIG_DIR / "game_presets_user.json"
+    CURRENT_SCHEMA_VERSION = 3
     
     def __init__(self):
         """GamePresetManager 초기화"""
@@ -53,8 +54,8 @@ class GamePresetManager:
         if loaded_data and "presets" in loaded_data:
             # 마이그레이션 수행
             version = loaded_data.get("version", 1)
-            if version < 2:
-                logger.info(f"프리셋 스키마 v{version} → v2 마이그레이션 시작")
+            if version < self.CURRENT_SCHEMA_VERSION:
+                logger.info(f"프리셋 스키마 v{version} → v{self.CURRENT_SCHEMA_VERSION} 마이그레이션 시작")
                 migrated_presets = [self._migrate_preset_schema(p) for p in loaded_data["presets"]]
                 self._presets = migrated_presets
                 # 마이그레이션 결과를 파일에 저장
@@ -163,7 +164,7 @@ class GamePresetManager:
         return False
     
     def _migrate_preset_schema(self, preset: dict) -> dict:
-        """프리셋 스키마를 v2로 마이그레이션
+        """프리셋 스키마를 최신 버전으로 마이그레이션
 
         Args:
             preset: v1 프리셋 데이터
@@ -195,7 +196,11 @@ class GamePresetManager:
             "stamina_recovery_minutes": None,
             "launcher_patterns": None,
             "preferred_launch_type": "shortcut",
-            "mandatory_times": []
+            "mandatory_times": [],
+            "resource_tracking_enabled": False,
+            "resource_provider": None,
+            "resource_key": None,
+            "resource_label": None,
         }
         for key, default_val in default_fields.items():
             if key not in migrated:
@@ -205,13 +210,22 @@ class GamePresetManager:
         if migrated.get("is_hoyoverse") and not migrated.get("hoyolab_game_id"):
             migrated["hoyolab_game_id"] = migrated["id"]
 
+        # NIKKE는 HoYoLab 게임이 아니므로 범용 resource preset으로 관리합니다.
+        if migrated.get("id") == "nikke":
+            migrated["is_hoyoverse"] = False
+            migrated["hoyolab_game_id"] = None
+            migrated["resource_tracking_enabled"] = True
+            migrated["resource_provider"] = "nikke_blablalink"
+            migrated["resource_key"] = "nikke_outpost_storage"
+            migrated["resource_label"] = "보관함 용량"
+
         return migrated
 
     def _save_presets(self) -> bool:
         """현재 프리셋 목록을 파일에 저장"""
         try:
             data = {
-                "version": 2,
+                "version": self.CURRENT_SCHEMA_VERSION,
                 "presets": self._presets
             }
 

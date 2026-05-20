@@ -220,6 +220,7 @@ def update_process_resource(
     resource_percent: float | None,
     resource_updated_at: float | None,
     resource_status: str | None,
+    resource_label: str | None = None,
     actor: str = "resource_tracker",
     operation_kind: str = "process_resource_update",
     override_token: str | None = None,
@@ -230,6 +231,7 @@ def update_process_resource(
             "resource_percent": resource_percent,
             "resource_updated_at": resource_updated_at,
             "resource_status": resource_status,
+            "resource_label": resource_label,
         }
         update_data = {key: value for key, value in update_data.items() if value is not None}
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
@@ -237,7 +239,7 @@ def update_process_resource(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status"}},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label"}},
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -267,6 +269,7 @@ def update_process_runtime_state(
     resource_percent: float | None = None,
     resource_updated_at: float | None = None,
     resource_status: str | None = None,
+    resource_label: str | None = None,
     actor: str = "process_monitor",
     operation_kind: str = "process_runtime_state_update",
     override_token: str | None = None,
@@ -281,6 +284,7 @@ def update_process_runtime_state(
             "resource_percent": resource_percent,
             "resource_updated_at": resource_updated_at,
             "resource_status": resource_status,
+            "resource_label": resource_label,
         }
         update_data = {key: value for key, value in update_data.items() if value is not None}
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
@@ -297,6 +301,7 @@ def update_process_runtime_state(
                     "resource_percent",
                     "resource_updated_at",
                     "resource_status",
+                    "resource_label",
                 }
             },
             evidence={

@@ -138,6 +138,7 @@ class DataManager:
         resource_percent: float | None,
         resource_updated_at: float | None,
         resource_status: str | None,
+        resource_label: str | None = None,
     ) -> bool:
         """외부 리소스 추적기가 갱신한 리소스 필드만 저장합니다."""
         process = self.get_process_by_id(process_id)
@@ -147,6 +148,8 @@ class DataManager:
         process.resource_percent = resource_percent
         process.resource_updated_at = resource_updated_at
         process.resource_status = resource_status
+        if resource_label is not None:
+            process.resource_label = resource_label
         self.save_managed_processes()
         return True
 

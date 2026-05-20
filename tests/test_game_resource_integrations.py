@@ -1,9 +1,11 @@
+import json
 import sqlite3
 import time
 from pathlib import Path
 
 from src.core.process_progress import calculate_process_progress
 from src.data.data_models import ManagedProcess
+from src.utils.game_preset_manager import GamePresetManager
 from src.services.nikke import NikkeService
 from src.utils.browser_cookie_extractor import BrowserCookieExtractor
 
@@ -85,6 +87,74 @@ def test_firefox_nikke_cookie_extraction_keeps_all_blabla_cookies(monkeypatch, t
     assert extracted["cookies"] == {"api_cookie": "def", "session_id": "abc"}
     assert "api_cookie=def" in extracted["cookie_header"]
     assert "session_id=abc" in extracted["cookie_header"]
+
+
+def test_nikke_login_button_uses_blabla_login(monkeypatch):
+    opened = []
+
+    monkeypatch.setattr("src.utils.browser_cookie_extractor.webbrowser.open", lambda url: opened.append(url))
+
+    BrowserCookieExtractor().open_nikke_login()
+
+    assert opened == ["https://www.blablalink.com/login"]
+
+
+def test_nikke_factory_preset_enables_resource_tracking():
+    data = json.loads(Path("src/data/game_presets.json").read_text(encoding="utf-8"))
+    nikke = next(preset for preset in data["presets"] if preset["id"] == "nikke")
+
+    assert data["version"] == 3
+    assert nikke["is_hoyoverse"] is False
+    assert nikke["hoyolab_game_id"] is None
+    assert nikke["resource_tracking_enabled"] is True
+    assert nikke["resource_provider"] == "nikke_blablalink"
+    assert nikke["resource_key"] == "nikke_outpost_storage"
+    assert nikke["resource_label"] == "보관함 용량"
+
+
+def test_game_preset_schema_migrates_legacy_nikke_to_resource_mode(monkeypatch, tmp_path):
+    preset_path = tmp_path / "game_presets_user.json"
+    preset_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "presets": [
+                    {
+                        "id": "nikke",
+                        "display_name": "승리의 여신: 니케",
+                        "exe_patterns": ["nikke.exe"],
+                        "is_hoyoverse": False,
+                        "hoyolab_game_id": None,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(GamePresetManager, "USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(GamePresetManager, "USER_PRESET_FILE", preset_path)
+
+    manager = GamePresetManager()
+    nikke = manager.get_preset_by_id("nikke")
+    saved = json.loads(preset_path.read_text(encoding="utf-8"))
+
+    assert saved["version"] == GamePresetManager.CURRENT_SCHEMA_VERSION
+    assert nikke["resource_tracking_enabled"] is True
+    assert nikke["resource_provider"] == "nikke_blablalink"
+    assert nikke["resource_key"] == "nikke_outpost_storage"
+    assert nikke["resource_label"] == "보관함 용량"
+
+
+def test_resource_label_is_part_of_runtime_persistence_stream():
+    crud_source = Path("src/data/crud.py").read_text(encoding="utf-8")
+    api_client_source = Path("src/api/client.py").read_text(encoding="utf-8")
+    entrypoint_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert '"resource_label": resource_label' in crud_source
+    assert '{"resource_percent", "resource_updated_at", "resource_status", "resource_label"}' in crud_source
+    assert '"resource_label": getattr(updated_process, "resource_label", None)' in api_client_source
+    assert "resource_label: str | None = None" in entrypoint_source
 
 
 class _FakeNikkeConfig:

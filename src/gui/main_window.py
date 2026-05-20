@@ -939,14 +939,14 @@ class MainWindow(QMainWindow):
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = self._text_menu_action("앱 설정...", self.open_global_settings_dialog)
         remote_settings_action = self._text_menu_action("원격 설정...", self.open_remote_settings_dialog)
-        hoyolab_action = self._text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)
+        hoyolab_action = self._text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)
         sidebar_settings_action = self._text_menu_action("사이드바 설정...", self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 앱 설정 액션
             sm.addAction(remote_settings_action)
             sm.addAction(sidebar_settings_action)
             sm.addSeparator()
-            sm.addAction(hoyolab_action)  # HoYoLab 설정 액션
+            sm.addAction(hoyolab_action)  # 자원 추적 설정 액션
 
         # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
@@ -1238,7 +1238,7 @@ class MainWindow(QMainWindow):
         self._refresh_remote_readiness_indicators()
 
     def open_hoyolab_settings_dialog(self):
-        """HoYoLab 인증 정보 설정 다이얼로그를 엽니다."""
+        """자원 추적 인증 정보 설정 다이얼로그를 엽니다."""
         dlg = HoYoLabSettingsDialog(self)
         dlg.exec()
 

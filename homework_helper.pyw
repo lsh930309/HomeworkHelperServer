@@ -506,6 +506,7 @@ def run_server_main():
         resource_percent: float | None = None
         resource_updated_at: float | None = None
         resource_status: str | None = None
+        resource_label: str | None = None
 
     class ProcessStaminaPatch(BaseModel):
         stamina_current: int
@@ -516,6 +517,7 @@ def run_server_main():
         resource_percent: float | None = None
         resource_updated_at: float | None = None
         resource_status: str | None = None
+        resource_label: str | None = None
 
     @app.exception_handler(beholder.BeholderBlocked)
     async def beholder_blocked_handler(request, exc):
@@ -639,6 +641,7 @@ def run_server_main():
             resource_percent=patch.resource_percent,
             resource_updated_at=patch.resource_updated_at,
             resource_status=patch.resource_status,
+            resource_label=patch.resource_label,
             actor="process_monitor",
             operation_kind="process_runtime_state_update",
             override_token=x_hh_beholder_override,
@@ -685,6 +688,7 @@ def run_server_main():
             resource_percent=patch.resource_percent,
             resource_updated_at=patch.resource_updated_at,
             resource_status=patch.resource_status,
+            resource_label=patch.resource_label,
             actor=x_hh_beholder_actor or "resource_tracker",
             operation_kind=x_hh_beholder_operation or "process_resource_update",
             override_token=x_hh_beholder_override,

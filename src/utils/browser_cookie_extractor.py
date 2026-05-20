@@ -469,8 +469,8 @@ class BrowserCookieExtractor:
         logger.info("HoYoLab 로그인 페이지 열기")
 
     def open_nikke_login(self) -> None:
-        webbrowser.open("https://www.blablalink.com/nikke")
-        logger.info("BlablaLink/NIKKE 로그인 페이지 열기")
+        webbrowser.open("https://www.blablalink.com/login")
+        logger.info("BlablaLink 로그인 페이지 열기")
 
     def is_available(self, browser: str | None = None) -> bool:
         """쿠키 추출 기능 사용 가능 여부.
