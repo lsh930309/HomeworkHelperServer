@@ -4,7 +4,7 @@ from types import MethodType, SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
@@ -250,12 +250,14 @@ def test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen(monk
         screen = window.screen() or QApplication.primaryScreen()
         max_width = int(screen.availableGeometry().width() * window._SCREEN_SIZE_RATIO)
         assert window.width() <= max(max_width, window._MIN_WINDOW_WIDTH)
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
         assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     finally:
         _stop_window(window, app)
 
 
-def test_restore_window_state_does_not_leave_fixed_size(monkeypatch, tmp_path):
+def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(
@@ -269,10 +271,37 @@ def test_restore_window_state_does_not_leave_fixed_size(monkeypatch, tmp_path):
         window._restore_window_state()
         app.processEvents()
 
-        assert window.maximumWidth() > window.width()
-        assert window.maximumHeight() > window.height()
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
     finally:
         _stop_window(window, app)
+
+
+def test_relative_window_anchor_keeps_bottom_right_across_height_changes():
+    import src.gui.main_window as main_window
+
+    virtual_available = QRect(0, 0, 2560, 1560)
+    window_rect = QRect(2200, 1260, 360, 300)
+
+    anchor = main_window.MainWindow._window_anchor_from_rect(
+        window_rect,
+        virtual_available,
+        "Moonlight",
+    )
+
+    assert anchor["horizontal"] == "right"
+    assert anchor["vertical"] == "bottom"
+    assert anchor["right_gap"] == 0
+    assert anchor["bottom_gap"] == 0
+
+    physical_available = QRect(0, 0, 2560, 1400)
+    restored = main_window.MainWindow._position_from_window_anchor(
+        anchor,
+        physical_available,
+        QSize(360, 300),
+    )
+
+    assert restored == QPoint(2200, 1100)
 
 
 def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):

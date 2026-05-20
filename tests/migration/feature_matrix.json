@@ -15,7 +15,7 @@
       "automated_tests": [
         "tests/test_gui_layout.py::test_main_table_hides_headers_and_uses_fixed_name_sort",
         "tests/test_gui_layout.py::test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen",
-        "tests/test_gui_layout.py::test_restore_window_state_does_not_leave_fixed_size"
+        "tests/test_gui_layout.py::test_restore_window_state_preserves_fixed_content_size"
       ],
       "real_data_check": "HomeworkHelper.zip clone rendered to ignored screenshot artifact",
       "manual_smoke": "docs/migration-smoke-checklist.md#main-gui-table-sizing-with-real-data"

@@ -6,6 +6,7 @@ import sys
 import time
 import datetime
 import functools
+import json
 import logging
 from typing import Optional
 
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
     _TABLE_ROW_HEIGHT = 30
     _TABLE_ICON_LOGICAL_SIZE = 24
     _TABLE_ICON_COLUMN_PADDING = 4
+    _WINDOW_ANCHOR_SETTINGS_KEY = "window_anchor_v1"
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -163,6 +165,11 @@ class MainWindow(QMainWindow):
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
+        # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
+        self._saved_geometry = None
+        self._saved_size = None
+        self._wake_recovery_in_progress = False
+        self._pending_window_anchor = self._load_window_anchor()
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
@@ -225,10 +232,6 @@ class MainWindow(QMainWindow):
 
         # 앱 시작 즉시 게임패드 훅 활성화 (게임 실행 전에도 전역 동작)
         self._start_screenshot_manager()
-
-        # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
-        self._saved_geometry = None
-        self._saved_size = None
 
         # --- UI 구성 ---
         central_widget = QWidget(self) # 중앙 위젯 생성
@@ -669,30 +672,58 @@ class MainWindow(QMainWindow):
 
         절전모드 복귀 후 UI 갱신이 멈추는 문제 해결:
         - 타이머는 작동하지만 Qt 렌더링이 트리거되지 않는 문제 대응
-        - 테이블 전체를 다시 채워서 모든 셀이 강제로 다시 그려지도록 함
+        - 무거운 갱신을 한 이벤트 루프에 몰지 않고 단계화해 복귀 직후 버벅임을 줄임
         """
-        logger.info("절전 복귀 감지 - UI 전체 갱신 시작")
+        if self._wake_recovery_in_progress:
+            logger.info("절전 복귀 UI 갱신이 이미 진행 중이므로 중복 요청을 건너뜁니다.")
+            return
+
+        self._wake_recovery_in_progress = True
+        logger.info("절전 복귀 감지 - UI 단계적 갱신 시작")
 
         # 타이머 상태 확인 및 재시작
         self._ensure_timers_running()
 
-        # 테이블 전체 다시 채우기 (모든 위젯 강제 재생성)
-        # 이렇게 하면 Progress Bar, 상태 컬럼 등 모든 셀이 현재 시간에 맞게 다시 그려짐
-        self.populate_process_list()
+        QTimer.singleShot(0, self._run_sleep_wake_refresh)
 
-        # 웹 버튼 상태 갱신
-        self._refresh_web_button_states()
+    def _run_sleep_wake_refresh(self):
+        """절전 복귀 후 UI를 단계적으로 갱신합니다."""
+        refresh_start = time.time()
+        try:
+            # 테이블 전체 다시 채우기 (모든 위젯 강제 재생성)
+            # 이렇게 하면 Progress Bar, 상태 컬럼 등 모든 셀이 현재 시간에 맞게 다시 그려짐
+            populate_start = time.time()
+            self.populate_process_list()
+            populate_ms = (time.time() - populate_start) * 1000
 
-        # 테이블 viewport 강제 업데이트 (화면 다시 그리기)
-        if self.process_table.viewport():
-            self.process_table.viewport().update()
-            self.process_table.viewport().repaint()
+            # 웹 버튼 상태 갱신
+            web_start = time.time()
+            self._refresh_web_button_states()
+            web_ms = (time.time() - web_start) * 1000
 
-        # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
-        if self._saved_size:
-            QTimer.singleShot(100, self._restore_window_state)
+            # 동기 repaint()는 복귀 직후 GUI 스레드 정체를 키울 수 있으므로 update()만 요청합니다.
+            if self.process_table.viewport():
+                self.process_table.viewport().update()
 
-        logger.info("절전 복귀 UI 갱신 완료")
+            # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
+            if self._saved_size:
+                QTimer.singleShot(100, self._restore_window_state)
+
+            total_ms = (time.time() - refresh_start) * 1000
+            if total_ms > 100:
+                logger.warning(
+                    "절전 복귀 UI 갱신 지연: total=%.1fms populate=%.1fms web=%.1fms",
+                    total_ms,
+                    populate_ms,
+                    web_ms,
+                )
+            else:
+                logger.info("절전 복귀 UI 갱신 완료: total=%.1fms", total_ms)
+        finally:
+            QTimer.singleShot(250, self._finish_sleep_wake_refresh)
+
+    def _finish_sleep_wake_refresh(self):
+        self._wake_recovery_in_progress = False
 
     def _on_ui_refresh_tick(self) -> None:
         """메인 GUI의 동적 표시를 주기적으로 갱신합니다."""
@@ -737,29 +768,24 @@ class MainWindow(QMainWindow):
         핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
         이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
         """
-        # 1. 강제 다시 그리기
-        self.repaint()
-        self.update()
-
-        # 2. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
+        # 1. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
         #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
         w, h = self.width(), self.height()
-        self.resize(w + 1, h + 1)
-        self.resize(w, h)
+        self.setFixedSize(w + 1, h + 1)
+        self.setFixedSize(w, h)
 
-        # 3. 저장된 geometry가 있으면 위치도 복원
+        # 2. 저장된 geometry가 있으면 위치도 복원
         if self._saved_geometry:
             self.move(self._saved_geometry.x(), self._saved_geometry.y())
 
-        # 4. 레이아웃 강제 업데이트
+        # 3. 레이아웃 강제 업데이트
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
 
-        # 5. UI 강제 다시 그리기
+        # 4. 비동기 다시 그리기 요청
         self.update()
-        self.repaint()
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
@@ -2001,18 +2027,33 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "삭제 실패", "웹 바로 가기 삭제에 실패했습니다.")
 
     def _save_window_geometry(self):
-        """현재 창 위치와 크기를 QSettings에 저장합니다."""
+        """현재 창 위치를 QSettings에 저장합니다.
+
+        새 저장값은 해상도 변화에도 위치 의도를 유지하도록 화면 유효 영역 기준
+        상대 앵커를 사용합니다. 기존 geometry/position 값은 이전 버전 fallback 용도로만
+        함께 유지합니다.
+        """
         try:
+            anchor = self._build_current_window_anchor()
+            if anchor:
+                self._settings.setValue(self._WINDOW_ANCHOR_SETTINGS_KEY, json.dumps(anchor, ensure_ascii=False))
             self._settings.setValue("window_geometry", self.saveGeometry())
             self._settings.setValue("window_position", self.pos())
             self._settings.sync()
-            logger.debug(f"창 위치 저장: {self.pos()}, 크기: {self.size()}")
+            logger.debug("창 위치 저장: pos=%s size=%s anchor=%s", self.pos(), self.size(), anchor)
         except Exception as e:
             logger.error(f"창 위치 저장 실패: {e}", exc_info=True)
 
     def _restore_window_geometry(self):
         """저장된 창 위치와 크기를 복원합니다."""
         try:
+            # 상대 앵커가 있으면 최종 content-size 계산 뒤 적용합니다.
+            # 여기서 saveGeometry()를 먼저 복원하면 예전 해상도의 크기까지 되살아날 수
+            # 있으므로, 새 포맷은 위치 복원만 지연합니다.
+            if self._pending_window_anchor:
+                logger.debug("저장된 창 상대 앵커 복원 대기: %s", self._pending_window_anchor)
+                return
+
             # 저장된 geometry가 있으면 복원
             geometry = self._settings.value("window_geometry")
             if geometry:
@@ -2029,6 +2070,100 @@ class MainWindow(QMainWindow):
                 self._clamp_window_to_available_screen()
         except Exception as e:
             logger.error(f"창 위치 복원 실패: {e}", exc_info=True)
+
+    def _load_window_anchor(self) -> Optional[dict]:
+        """QSettings에서 상대 창 위치 앵커를 읽습니다."""
+        raw = self._settings.value(self._WINDOW_ANCHOR_SETTINGS_KEY)
+        if not raw:
+            return None
+        try:
+            if isinstance(raw, dict):
+                anchor = raw
+            else:
+                anchor = json.loads(str(raw))
+            if anchor.get("version") != 1:
+                return None
+            if anchor.get("horizontal") not in {"left", "right"}:
+                return None
+            if anchor.get("vertical") not in {"top", "bottom"}:
+                return None
+            return anchor
+        except Exception as e:
+            logger.warning("저장된 창 상대 앵커를 읽을 수 없습니다: %s", e)
+            return None
+
+    def _build_current_window_anchor(self) -> Optional[dict]:
+        """현재 창 위치를 화면 유효 영역 기준 상대 앵커로 변환합니다."""
+        screen = QApplication.screenAt(self.geometry().center())
+        if not screen:
+            screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return None
+        screen_name = screen.name() if hasattr(screen, "name") else ""
+        return self._window_anchor_from_rect(self.geometry(), screen.availableGeometry(), screen_name)
+
+    @staticmethod
+    def _window_anchor_from_rect(window_rect: QRect, available_geometry: QRect, screen_name: str = "") -> dict:
+        """창 rect를 availableGeometry 기준 상대 앵커로 직렬화 가능한 dict로 변환합니다."""
+        left_gap = max(0, window_rect.left() - available_geometry.left())
+        right_gap = max(0, available_geometry.right() - window_rect.right())
+        top_gap = max(0, window_rect.top() - available_geometry.top())
+        bottom_gap = max(0, available_geometry.bottom() - window_rect.bottom())
+        horizontal = "right" if right_gap <= left_gap else "left"
+        vertical = "bottom" if bottom_gap <= top_gap else "top"
+        return {
+            "version": 1,
+            "screen_name": screen_name,
+            "horizontal": horizontal,
+            "vertical": vertical,
+            "left_gap": left_gap,
+            "right_gap": right_gap,
+            "top_gap": top_gap,
+            "bottom_gap": bottom_gap,
+        }
+
+    @staticmethod
+    def _position_from_window_anchor(anchor: dict, available_geometry: QRect, size: QSize) -> QPoint:
+        """저장된 상대 앵커와 현재 화면 크기로 창 좌상단 좌표를 계산합니다."""
+        if anchor.get("horizontal") == "right":
+            x = available_geometry.right() - size.width() + 1 - int(anchor.get("right_gap", 0))
+        else:
+            x = available_geometry.left() + int(anchor.get("left_gap", 0))
+
+        if anchor.get("vertical") == "bottom":
+            y = available_geometry.bottom() - size.height() + 1 - int(anchor.get("bottom_gap", 0))
+        else:
+            y = available_geometry.top() + int(anchor.get("top_gap", 0))
+
+        max_x = available_geometry.right() - size.width() + 1
+        max_y = available_geometry.bottom() - size.height() + 1
+        return QPoint(
+            max(available_geometry.left(), min(x, max_x)),
+            max(available_geometry.top(), min(y, max_y)),
+        )
+
+    def _screen_for_window_anchor(self, anchor: dict) -> Optional[QScreen]:
+        """저장된 화면 이름을 우선 사용하고, 없으면 현재/기본 화면으로 fallback합니다."""
+        screen_name = anchor.get("screen_name")
+        if screen_name:
+            for screen in QApplication.screens():
+                if screen.name() == screen_name:
+                    return screen
+        return QApplication.screenAt(self.geometry().center()) or self.screen() or QApplication.primaryScreen()
+
+    def _restore_pending_window_anchor(self) -> bool:
+        """지연된 상대 앵커 복원을 적용합니다."""
+        anchor = self._pending_window_anchor
+        if not anchor:
+            return False
+        screen = self._screen_for_window_anchor(anchor)
+        if not screen:
+            return False
+        position = self._position_from_window_anchor(anchor, screen.availableGeometry(), self.size())
+        self.move(position)
+        self._pending_window_anchor = None
+        logger.debug("저장된 창 상대 앵커 복원: %s -> %s", anchor, position)
+        return True
 
     def _clamp_window_to_available_screen(self):
         """창이 상태 표시줄/Dock 등을 제외한 화면 유효 영역 안에 위치하도록 보정합니다."""
@@ -2304,9 +2439,12 @@ class MainWindow(QMainWindow):
         if max_height is not None:
             target.setHeight(min(target.height(), max_height))
 
-        self.resize(target)
+        self.setFixedSize(target)
         self.updateGeometry()
         self.update()
+
+        if not self._restore_pending_window_anchor():
+            self._clamp_window_to_available_screen()
 
         self._saved_size = self.size()
         self._saved_geometry = self.geometry()
