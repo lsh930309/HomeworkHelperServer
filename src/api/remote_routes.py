@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import time
 import webbrowser
 import datetime
@@ -40,6 +41,10 @@ def _temporary_pairing_allowed_ips() -> set[str]:
     if raw is None:
         raw = TEMPORARY_MACBOOK_TAILSCALE_IP
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _looks_like_tailscale_ip(value: str | None) -> bool:
+    return bool(value and re.match(r"^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$", value.strip()))
 
 
 class RemoteLaunchRequest(BaseModel):
@@ -316,7 +321,7 @@ def create_remote_router(
     device_registry = device_registry or RemoteDeviceRegistry()
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
     now = now or time.time
-    tailscale_probe = tailscale_probe or tailscale_status
+    tailscale_probe = tailscale_probe or (lambda: tailscale_status(cache_ttl_seconds=30.0))
 
     def _bearer_token(authorization: str | None) -> str | None:
         if not authorization:
@@ -334,13 +339,166 @@ def create_remote_router(
         host = request.client.host if request.client else ""
         return host in _temporary_pairing_allowed_ips()
 
-    def _is_valid_remote_token(authorization: str | None) -> bool:
+    def _request_host(request: Request) -> str:
+        return request.client.host if request.client else ""
+
+    def _tailscale_snapshot_payload() -> tuple[dict[str, Any], Any | None]:
+        try:
+            snapshot = tailscale_probe()
+            payload = snapshot.as_dict() if hasattr(snapshot, "as_dict") else dict(snapshot)
+            return payload, snapshot
+        except Exception as exc:
+            return {
+                "installed": False,
+                "running": False,
+                "backend_state": "error",
+                "self_ips": [],
+                "self_hostname": "",
+                "self_node_id": "",
+                "peers": [],
+                "message": f"tailscale 상태 확인 실패: {exc}",
+            }, None
+
+    def _primary_tailnet_ip(ips: Iterable[Any] | None) -> str:
+        for ip in ips or []:
+            candidate = str(ip or "").strip()
+            if _looks_like_tailscale_ip(candidate):
+                return candidate
+        return ""
+
+    def _peer_binding(peer: dict[str, Any]) -> dict[str, Any]:
+        tailnet_ip = str(peer.get("primary_ipv4") or "").strip() or _primary_tailnet_ip(peer.get("ips") or [])
+        return {
+            "tailnet_ip": tailnet_ip,
+            "tailnet_ips": [str(ip) for ip in (peer.get("ips") or []) if str(ip or "").strip()],
+            "tailnet_dns_name": str(peer.get("dns_name") or "").strip(),
+            "tailnet_hostname": str(peer.get("hostname") or "").strip(),
+            "tailnet_os": str(peer.get("os") or "").strip(),
+            "tailnet_node_id": str(peer.get("node_id") or "").strip(),
+        }
+
+    def _peer_binding_for_ip(tailnet_ip: str) -> dict[str, Any]:
+        if not _looks_like_tailscale_ip(tailnet_ip):
+            return {}
+        payload, _snapshot = _tailscale_snapshot_payload()
+        for peer in payload.get("peers") or []:
+            binding = _peer_binding(peer)
+            if tailnet_ip == binding.get("tailnet_ip") or tailnet_ip in binding.get("tailnet_ips", []):
+                return binding
+        return {"tailnet_ip": tailnet_ip, "tailnet_ips": [tailnet_ip]}
+
+    def _suggested_base_urls(tailscale_payload: dict[str, Any], ts_snapshot: Any | None) -> list[str]:
+        if ts_snapshot is not None and hasattr(ts_snapshot, "peers"):
+            return suggest_remote_base_urls(ts_snapshot, port=resolve_api_port())
+        return [
+            f"http://{binding['tailnet_ip']}:{resolve_api_port()}"
+            for binding in (_peer_binding(peer) for peer in tailscale_payload.get("peers") or [])
+            if binding.get("tailnet_ip")
+        ]
+
+    def _connectivity_state(device: dict[str, Any], peer: dict[str, Any] | None) -> tuple[str, str]:
+        if device.get("role") == "host":
+            return "local", "이 HomeworkHelper Host가 실행 중인 기기입니다."
+        if device.get("revoked_at"):
+            return "revoked", "페어링 토큰이 폐기되었습니다."
+        if peer and peer.get("online"):
+            if device.get("last_seen_at"):
+                return "active", "Tailnet online 및 Remote API 통신 이력이 있습니다."
+            return "tailnet_online", "Tailnet에는 보이지만 Remote API 통신 이력은 아직 없습니다."
+        if peer:
+            return "tailnet_offline", "Tailnet peer는 알려져 있지만 현재 offline으로 표시됩니다."
+        if device.get("last_seen_at"):
+            return "stale_or_offline", "최근 Remote API 통신 이력은 있지만 현재 tailnet status에서 찾지 못했습니다."
+        return "unknown", "Tailnet 매칭 전인 페어링 기기입니다."
+
+    def _managed_device_rows() -> list[dict[str, Any]]:
+        paired_devices = device_registry.list_devices()
+        tailscale_payload, _snapshot = _tailscale_snapshot_payload()
+        peers_by_ip: dict[str, dict[str, Any]] = {}
+        for peer in tailscale_payload.get("peers") or []:
+            binding = _peer_binding(peer)
+            tailnet_ip = binding.get("tailnet_ip")
+            if tailnet_ip:
+                row = {**peer, **binding}
+                peers_by_ip[tailnet_ip] = row
+
+        rows: list[dict[str, Any]] = []
+        used_tailnet_ips: set[str] = set()
+        for device in paired_devices:
+            tailnet_ip = str(device.get("tailnet_ip") or "").strip()
+            peer = peers_by_ip.get(tailnet_ip)
+            state, message = _connectivity_state(device, peer)
+            tailnet_fields = _peer_binding(peer) if peer else {}
+            if tailnet_ip:
+                used_tailnet_ips.add(tailnet_ip)
+            rows.append({
+                **device,
+                **{key: value for key, value in tailnet_fields.items() if value},
+                "role": device.get("role") or "client",
+                "pairing_status": "revoked" if device.get("revoked_at") else "paired",
+                "tailnet_online": bool(peer and peer.get("online")),
+                "connectivity_state": state,
+                "health_message": message,
+                "can_revoke": not bool(device.get("revoked_at")),
+            })
+
+        host_ip = _primary_tailnet_ip(tailscale_payload.get("self_ips") or [])
+        if host_ip:
+            rows.append({
+                "id": f"host:{host_ip}",
+                "name": tailscale_payload.get("self_hostname") or "HomeworkHelper Host",
+                "platform": platform.system().lower() or "host",
+                "role": "host",
+                "tailnet_ip": host_ip,
+                "tailnet_ips": list(tailscale_payload.get("self_ips") or []),
+                "tailnet_dns_name": "",
+                "tailnet_hostname": tailscale_payload.get("self_hostname") or "",
+                "tailnet_os": platform.system().lower() or "",
+                "tailnet_node_id": tailscale_payload.get("self_node_id") or "",
+                "created_at": None,
+                "last_seen_at": None,
+                "last_source_ip": None,
+                "token_refreshed_at": None,
+                "tailnet_bound_at": None,
+                "revoked_at": None,
+                "pairing_status": "host",
+                "tailnet_online": bool(tailscale_payload.get("running")),
+                "connectivity_state": "local",
+                "health_message": "이 HomeworkHelper Host가 실행 중인 기기입니다.",
+                "can_revoke": False,
+            })
+
+        for tailnet_ip, peer in peers_by_ip.items():
+            if tailnet_ip in used_tailnet_ips:
+                continue
+            binding = _peer_binding(peer)
+            rows.append({
+                "id": f"tailnet:{tailnet_ip}",
+                "name": binding.get("tailnet_hostname") or binding.get("tailnet_dns_name") or tailnet_ip,
+                "platform": binding.get("tailnet_os") or "unknown",
+                "role": "unknown",
+                **binding,
+                "created_at": None,
+                "last_seen_at": None,
+                "last_source_ip": None,
+                "token_refreshed_at": None,
+                "tailnet_bound_at": None,
+                "revoked_at": None,
+                "pairing_status": "tailnet_unpaired",
+                "tailnet_online": bool(peer.get("online")),
+                "connectivity_state": "tailnet_online_unpaired" if peer.get("online") else "tailnet_offline_unpaired",
+                "health_message": "같은 tailnet에 보이지만 HomeworkHelper 페어링은 없습니다.",
+                "can_revoke": False,
+            })
+        return rows
+
+    def _is_valid_remote_token(request: Request, authorization: str | None) -> bool:
         token = _bearer_token(authorization)
         if not token:
             return False
         if auth_token and secrets_compare(token, auth_token):
             return True
-        return bool(device_registry.validate_token(token, now=now()))
+        return bool(device_registry.validate_token(token, now=now(), source_ip=_request_host(request)))
 
     def _is_local_management_path(path: str, method: str) -> bool:
         if path.endswith("/remote/readiness") or path.endswith("/remote/capabilities"):
@@ -369,7 +527,7 @@ def create_remote_router(
         if path.endswith("/remote/pair/start") and (
             _is_loopback_request(request)
             or _is_temporary_pairing_allowed_request(request)
-            or _is_valid_remote_token(authorization)
+            or _is_valid_remote_token(request, authorization)
         ):
             return
         if _is_loopback_request(request) and _is_local_management_path(path, method):
@@ -381,7 +539,7 @@ def create_remote_router(
             )
         if not require_auth and not auth_token and not device_registry.has_registered_devices():
             return
-        if _is_valid_remote_token(authorization):
+        if _is_valid_remote_token(request, authorization):
             return
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -410,20 +568,7 @@ def create_remote_router(
         }
 
     def _readiness_payload(power_status: dict[str, Any], *, active_beholder_incidents: int | None = None) -> dict[str, Any]:
-        try:
-            ts_snapshot = tailscale_probe()
-            tailscale_payload = ts_snapshot.as_dict() if hasattr(ts_snapshot, "as_dict") else dict(ts_snapshot)
-        except Exception as exc:
-            tailscale_payload = {
-                "installed": False,
-                "running": False,
-                "backend_state": "error",
-                "self_ips": [],
-                "self_hostname": "",
-                "peers": [],
-                "message": f"tailscale readiness 확인 실패: {exc}",
-            }
-            ts_snapshot = None
+        tailscale_payload, ts_snapshot = _tailscale_snapshot_payload()
         tailscale_ready = bool(tailscale_payload.get("installed") and tailscale_payload.get("running"))
         power_ready = bool(power_status.get("configured"))
         auth_ready = bool(require_auth or auth_token or device_registry.has_registered_devices())
@@ -460,7 +605,7 @@ def create_remote_router(
                 "state": "ok" if tailscale_ready else "warning",
                 "color": "green" if tailscale_ready else "yellow",
                 "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
-                "suggested_base_urls": suggest_remote_base_urls(ts_snapshot, port=resolve_api_port()) if tailscale_ready and ts_snapshot is not None else [],
+                "suggested_base_urls": _suggested_base_urls(tailscale_payload, ts_snapshot) if tailscale_ready else [],
                 "details": tailscale_payload,
             },
         }
@@ -604,11 +749,15 @@ def create_remote_router(
         }
 
     @router.post("/pair/confirm")
-    def confirm_remote_pairing(request: PairingConfirmRequest):
+    def confirm_remote_pairing(request: Request, pair_request: PairingConfirmRequest):
+        source_ip = _request_host(request)
+        tailnet_binding = _peer_binding_for_ip(source_ip) if _looks_like_tailscale_ip(source_ip) else {}
         device = device_registry.confirm_pairing(
-            code=request.code,
-            device_name=request.device_name,
-            platform=request.platform,
+            code=pair_request.code,
+            device_name=pair_request.device_name,
+            platform=pair_request.platform,
+            role="client",
+            tailnet_binding=tailnet_binding,
             now=now(),
         )
         if not device:
@@ -633,7 +782,7 @@ def create_remote_router(
 
     @router.get("/devices")
     def list_remote_devices():
-        return {"devices": device_registry.list_devices()}
+        return {"devices": _managed_device_rows()}
 
     @router.delete("/devices/revoked")
     def purge_revoked_remote_devices():
@@ -655,7 +804,7 @@ def create_remote_router(
         return {"revoked": True, "device_id": device_id}
 
     @router.post("/tokens/refresh")
-    def refresh_remote_device_token(authorization: str | None = Header(None)):
+    def refresh_remote_device_token(request: Request, authorization: str | None = Header(None)):
         token = _bearer_token(authorization)
         if not token:
             raise HTTPException(
@@ -663,7 +812,7 @@ def create_remote_router(
                 detail="갱신할 device Bearer token이 필요합니다.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        device = device_registry.refresh_token(token, now=now())
+        device = device_registry.refresh_token(token, now=now(), source_ip=_request_host(request))
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

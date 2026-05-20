@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import time
 import uuid
@@ -14,6 +15,31 @@ from src.core.remote_local_store import remote_store
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _looks_like_tailscale_ip(value: str | None) -> bool:
+    return bool(value and re.match(r"^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$", value.strip()))
+
+
+def _normalized_tailnet_binding(binding: dict[str, Any] | None) -> dict[str, Any]:
+    if not binding:
+        return {}
+    tailnet_ip = str(binding.get("tailnet_ip") or "").strip()
+    tailnet_ips = [
+        str(ip).strip()
+        for ip in (binding.get("tailnet_ips") or ([tailnet_ip] if tailnet_ip else []))
+        if str(ip).strip()
+    ]
+    if tailnet_ip and tailnet_ip not in tailnet_ips:
+        tailnet_ips.insert(0, tailnet_ip)
+    return {
+        "tailnet_ip": tailnet_ip,
+        "tailnet_ips": tailnet_ips,
+        "tailnet_dns_name": str(binding.get("tailnet_dns_name") or "").strip(),
+        "tailnet_hostname": str(binding.get("tailnet_hostname") or "").strip(),
+        "tailnet_os": str(binding.get("tailnet_os") or "").strip(),
+        "tailnet_node_id": str(binding.get("tailnet_node_id") or "").strip(),
+    }
 
 
 @dataclass
@@ -41,6 +67,8 @@ class RemoteDeviceRegistry:
         code: str,
         device_name: str,
         platform: str | None = None,
+        role: str = "client",
+        tailnet_binding: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> dict[str, Any] | None:
         now = now or time.time()
@@ -60,7 +88,10 @@ class RemoteDeviceRegistry:
             "token_hash": _sha256(token),
             "created_at": now,
             "last_seen_at": None,
+            "last_source_ip": None,
             "revoked_at": None,
+            "role": role or "client",
+            **_normalized_tailnet_binding(tailnet_binding),
         }
         devices = state.setdefault("devices", [])
         devices.append(device)
@@ -77,7 +108,7 @@ class RemoteDeviceRegistry:
     def has_registered_devices(self) -> bool:
         return bool(self._read().get("devices", []))
 
-    def validate_token(self, token: str, *, now: float | None = None) -> dict[str, Any] | None:
+    def validate_token(self, token: str, *, now: float | None = None, source_ip: str | None = None) -> dict[str, Any] | None:
         now = now or time.time()
         token_hash = _sha256(token)
         state = self._read()
@@ -87,13 +118,14 @@ class RemoteDeviceRegistry:
                 continue
             if secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
                 device["last_seen_at"] = now
+                self._observe_source_ip(device, source_ip)
                 matched = self._public_device(device)
                 break
         if matched:
             self._write(state)
         return matched
 
-    def refresh_token(self, token: str, *, now: float | None = None) -> dict[str, Any] | None:
+    def refresh_token(self, token: str, *, now: float | None = None, source_ip: str | None = None) -> dict[str, Any] | None:
         """Rotate an active device token and return the new bearer token.
 
         The old token becomes invalid immediately. Static HH_REMOTE_TOKEN values
@@ -111,6 +143,7 @@ class RemoteDeviceRegistry:
             next_token = secrets.token_urlsafe(32)
             device["token_hash"] = _sha256(next_token)
             device["last_seen_at"] = now
+            self._observe_source_ip(device, source_ip)
             device["token_refreshed_at"] = now
             self._write(state)
             public = self._public_device(device)
@@ -120,6 +153,20 @@ class RemoteDeviceRegistry:
 
     def list_devices(self) -> list[dict[str, Any]]:
         return [self._public_device(device) for device in self._read().get("devices", [])]
+
+    def bind_tailnet_device(self, device_id: str, binding: dict[str, Any], *, now: float | None = None) -> bool:
+        normalized = _normalized_tailnet_binding(binding)
+        if not normalized.get("tailnet_ip"):
+            return False
+        state = self._read()
+        for device in state.get("devices", []):
+            if device.get("id") != device_id:
+                continue
+            device.update(normalized)
+            device["tailnet_bound_at"] = now or time.time()
+            self._write(state)
+            return True
+        return False
 
     def revoke_device(self, device_id: str, *, now: float | None = None) -> bool:
         now = now or time.time()
@@ -144,7 +191,7 @@ class RemoteDeviceRegistry:
         return removed
 
     def _read(self) -> dict[str, Any]:
-        default = {"schema_version": 1, "active_pairing": None, "devices": []}
+        default = {"schema_version": 2, "active_pairing": None, "devices": []}
         try:
             if self.path.parent == remote_store().root:
                 data = remote_store().read_json(self.path.name, default)
@@ -157,10 +204,21 @@ class RemoteDeviceRegistry:
         data.setdefault("schema_version", 1)
         data.setdefault("active_pairing", None)
         data.setdefault("devices", [])
+        if int(data.get("schema_version") or 1) < 2:
+            data["schema_version"] = 2
+        for device in data.get("devices", []):
+            device.setdefault("role", "client")
+            device.setdefault("last_source_ip", None)
+            device.setdefault("tailnet_ip", "")
+            device.setdefault("tailnet_ips", [])
+            device.setdefault("tailnet_dns_name", "")
+            device.setdefault("tailnet_hostname", "")
+            device.setdefault("tailnet_os", "")
+            device.setdefault("tailnet_node_id", "")
         return data
 
     def _write(self, state: dict[str, Any]) -> None:
-        state.setdefault("schema_version", 1)
+        state.setdefault("schema_version", 2)
         if self.path.parent == remote_store().root:
             remote_store().write_json(self.path.name, state)
             return
@@ -172,8 +230,30 @@ class RemoteDeviceRegistry:
             "id": device.get("id"),
             "name": device.get("name"),
             "platform": device.get("platform"),
+            "role": device.get("role") or "client",
+            "tailnet_ip": device.get("tailnet_ip") or "",
+            "tailnet_ips": device.get("tailnet_ips") or [],
+            "tailnet_dns_name": device.get("tailnet_dns_name") or "",
+            "tailnet_hostname": device.get("tailnet_hostname") or "",
+            "tailnet_os": device.get("tailnet_os") or "",
+            "tailnet_node_id": device.get("tailnet_node_id") or "",
             "created_at": device.get("created_at"),
             "last_seen_at": device.get("last_seen_at"),
+            "last_source_ip": device.get("last_source_ip"),
             "token_refreshed_at": device.get("token_refreshed_at"),
+            "tailnet_bound_at": device.get("tailnet_bound_at"),
             "revoked_at": device.get("revoked_at"),
         }
+
+    def _observe_source_ip(self, device: dict[str, Any], source_ip: str | None) -> None:
+        source_ip = (source_ip or "").strip()
+        if not source_ip:
+            return
+        device["last_source_ip"] = source_ip
+        if not _looks_like_tailscale_ip(source_ip):
+            return
+        device["tailnet_ip"] = source_ip
+        tailnet_ips = list(device.get("tailnet_ips") or [])
+        if source_ip not in tailnet_ips:
+            tailnet_ips.insert(0, source_ip)
+        device["tailnet_ips"] = tailnet_ips

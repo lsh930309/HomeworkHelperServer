@@ -146,6 +146,8 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "setMaximumHeight(150)" not in remote_dialog_source
     assert "ScrollBarAlwaysOff" in remote_dialog_source
     assert "_fit_devices_table_to_rows" in remote_dialog_source
+    assert "Tailnet 기기" in remote_dialog_source
+    assert "can_revoke" in remote_dialog_source
     assert "_start_worker(\"devices\"" in remote_dialog_source
     assert "_start_worker(\"tailscale\"" in remote_dialog_source
     assert "_start_worker(\"power\"" in remote_dialog_source
@@ -172,6 +174,8 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
     dialog = dialogs.RemoteSettingsDialog(_FakeApiClient([]))
     try:
         assert dialog.pairing_code_edit.alignment() & Qt.AlignmentFlag.AlignLeft
+        assert dialog.devices_table.columnCount() == 8
+        assert dialog.devices_table.isColumnHidden(0)
         assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         assert dialog.devices_table.maximumHeight() > 1000
 
@@ -185,12 +189,18 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
 
         assert dialog.devices_table.rowCount() == 4
         assert dialog.devices_table.height() > empty_height
+        assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is True
         expected_min = (
             dialog.devices_table.horizontalHeader().height()
             + sum(dialog.devices_table.rowHeight(row) for row in range(dialog.devices_table.rowCount()))
             + dialog.devices_table.frameWidth() * 2
         )
         assert dialog.devices_table.height() >= expected_min
+
+        dialog._populate_devices([
+            {"id": "host:100.1.2.3", "name": "Host", "role": "host", "tailnet_ip": "100.1.2.3", "can_revoke": False}
+        ])
+        assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is False
     finally:
         dialog.close()
         dialog.deleteLater()

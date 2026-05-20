@@ -164,11 +164,12 @@ class RemoteSettingsDialog(QDialog):
         root.addWidget(group)
 
     def _build_devices_section(self, root: QVBoxLayout) -> None:
-        group = QGroupBox("페어링된 기기")
+        group = QGroupBox("Tailnet 기기")
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
-        self.devices_table = QTableWidget(0, 5)
-        self.devices_table.setHorizontalHeaderLabels(["ID", "이름", "플랫폼", "마지막 연결", "상태"])
+        self.devices_table = QTableWidget(0, 8)
+        self.devices_table.setHorizontalHeaderLabels(["ID", "역할", "이름", "Tailnet IP", "OS", "페어링", "통신 상태", "마지막 통신"])
+        self.devices_table.setColumnHidden(0, True)
         self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -317,15 +318,21 @@ class RemoteSettingsDialog(QDialog):
             self.devices_table.insertRow(row)
             values = [
                 device.get("id") or "",
+                device.get("role") or "unknown",
                 device.get("name") or "",
-                device.get("platform") or "",
+                device.get("tailnet_ip") or "",
+                device.get("tailnet_os") or device.get("platform") or "",
+                device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired"),
+                device.get("connectivity_state") or "",
                 str(device.get("last_seen_at") or ""),
-                "revoked" if device.get("revoked_at") else "active",
             ]
             for col, value in enumerate(values):
-                self.devices_table.setItem(row, col, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, bool(device.get("can_revoke", not device.get("revoked_at"))))
+                self.devices_table.setItem(row, col, item)
         self._fit_devices_table_to_rows()
-        self.pairing_status_label.setText(f"페어링된 기기 {len(devices)}개")
+        self.pairing_status_label.setText(f"Tailnet/페어링 기기 {len(devices)}개")
 
     def _revoke_selected_device(self):
         row = self.devices_table.currentRow()
@@ -334,6 +341,10 @@ class RemoteSettingsDialog(QDialog):
             return
         item = self.devices_table.item(row, 0)
         device_id = item.text() if item else ""
+        can_revoke = bool(item.data(Qt.ItemDataRole.UserRole)) if item else False
+        if not can_revoke:
+            QMessageBox.information(self, "언페어링 불가", "Host 또는 아직 페어링되지 않은 tailnet 기기는 언페어링 대상이 아닙니다.")
+            return
         if not device_id:
             return
         try:

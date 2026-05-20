@@ -25,6 +25,7 @@ class TailscalePeer:
     ips: tuple[str, ...]
     online: bool
     os: str
+    node_id: str = ""
 
     def primary_ipv4(self) -> str:
         return next((ip for ip in self.ips if "." in ip), "")
@@ -39,6 +40,7 @@ class TailscaleSnapshot:
     self_hostname: str
     peers: tuple[TailscalePeer, ...]
     message: str
+    self_node_id: str = ""
 
     @property
     def ready(self) -> bool:
@@ -59,10 +61,12 @@ class TailscaleSnapshot:
                     "online": peer.online,
                     "os": peer.os,
                     "primary_ipv4": peer.primary_ipv4(),
+                    "node_id": peer.node_id,
                 }
                 for peer in self.peers
             ],
             "message": self.message,
+            "self_node_id": self.self_node_id,
         }
 
 
@@ -277,6 +281,7 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
                 ips=ips,
                 online=bool(item.get("Online")),
                 os=str(item.get("OS") or ""),
+                node_id=str(item.get("ID") or item.get("StableID") or item.get("NodeID") or ""),
             )
         )
     self_ips = _node_ips(self_node)
@@ -307,6 +312,7 @@ def tailscale_status(timeout_seconds: float = 1.5, runner=None, *, cache_ttl_sec
         self_hostname=str(self_node.get("HostName") or ""),
         peers=tuple(peers),
         message=message,
+        self_node_id=str(self_node.get("ID") or self_node.get("StableID") or self_node.get("NodeID") or ""),
     )
     if cache_ttl_seconds > 0 and runner is None:
         with _STATUS_CACHE_LOCK:

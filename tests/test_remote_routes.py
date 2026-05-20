@@ -85,6 +85,26 @@ def _client_with_seed(
     )
     opened_urls: list[str] = []
 
+    if tailscale_probe is None:
+        class _MissingTailscaleSnapshot:
+            @property
+            def peers(self):
+                return ()
+
+            def as_dict(self):
+                return {
+                    "installed": False,
+                    "running": False,
+                    "backend_state": "missing",
+                    "self_ips": [],
+                    "self_hostname": "",
+                    "self_node_id": "",
+                    "peers": [],
+                    "message": "tailscale CLI를 찾지 못했습니다.",
+                }
+
+        tailscale_probe = lambda: _MissingTailscaleSnapshot()
+
     def get_db():
         db = TestingSession()
         try:
@@ -708,6 +728,95 @@ def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     assert protected_without_token.status_code == 401
 
 
+def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "self_node_id": "host-node",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "macbook",
+                        "dns_name": "macbook.tailnet.ts.net.",
+                        "ips": ["100.114.138.46"],
+                        "online": True,
+                        "os": "macOS",
+                        "primary_ipv4": "100.114.138.46",
+                        "node_id": "mac-node",
+                    }
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        client_address=("100.114.138.46", 50000),
+        tailscale_probe=lambda: _Snapshot(),
+    )
+
+    start = client.post("/remote/pair/start")
+    confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "MacBook", "platform": "macos"})
+    token = confirm.json()["token"]
+    accepted = client.get("/remote/status", headers={"Authorization": f"Bearer {token}"})
+    devices = client.get("/remote/devices", headers={"Authorization": f"Bearer {token}"}).json()["devices"]
+
+    paired = next(device for device in devices if device["id"] == confirm.json()["id"])
+    host = next(device for device in devices if device["role"] == "host")
+    assert accepted.status_code == 200
+    assert paired["role"] == "client"
+    assert paired["tailnet_ip"] == "100.114.138.46"
+    assert paired["tailnet_hostname"] == "macbook"
+    assert paired["tailnet_os"] == "macOS"
+    assert paired["tailnet_online"] is True
+    assert paired["pairing_status"] == "paired"
+    assert paired["connectivity_state"] == "active"
+    assert paired["last_source_ip"] == "100.114.138.46"
+    assert paired["can_revoke"] is True
+    assert host["tailnet_ip"] == "100.109.140.97"
+    assert host["pairing_status"] == "host"
+    assert host["connectivity_state"] == "local"
+    assert host["can_revoke"] is False
+
+
+def test_remote_devices_show_unpaired_tailnet_peers_without_granting_revoke():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "phone",
+                        "dns_name": "phone.tailnet.ts.net.",
+                        "ips": ["100.100.100.2"],
+                        "online": True,
+                        "os": "android",
+                        "primary_ipv4": "100.100.100.2",
+                    }
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        auth_token="secret-token",
+        tailscale_probe=lambda: _Snapshot(),
+    )
+
+    devices = client.get("/remote/devices", headers={"Authorization": "Bearer secret-token"}).json()["devices"]
+
+    unpaired = next(device for device in devices if device["tailnet_ip"] == "100.100.100.2")
+    assert unpaired["role"] == "unknown"
+    assert unpaired["pairing_status"] == "tailnet_unpaired"
+    assert unpaired["connectivity_state"] == "tailnet_online_unpaired"
+    assert unpaired["can_revoke"] is False
+
+
 def test_remote_device_registry_migrates_legacy_file_to_schema_version(tmp_path):
     path = tmp_path / "remote_devices.json"
     path.write_text('{"active_pairing": null, "devices": []}', encoding="utf-8")
@@ -715,7 +824,7 @@ def test_remote_device_registry_migrates_legacy_file_to_schema_version(tmp_path)
 
     registry.start_pairing(now=1778497000.0)
 
-    assert '"schema_version": 1' in path.read_text(encoding="utf-8")
+    assert '"schema_version": 2' in path.read_text(encoding="utf-8")
 
 
 def test_remote_device_token_survives_registry_reload_without_refresh(tmp_path):
