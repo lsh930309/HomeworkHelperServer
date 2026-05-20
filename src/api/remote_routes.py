@@ -396,6 +396,71 @@ def create_remote_router(
             if binding.get("tailnet_ip")
         ]
 
+    def _normalized_device_name(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    def _peer_name_keys(peer: dict[str, Any]) -> set[str]:
+        hostname = str(peer.get("tailnet_hostname") or peer.get("hostname") or "")
+        dns_name = str(peer.get("tailnet_dns_name") or peer.get("dns_name") or "")
+        dns_label = dns_name.split(".", 1)[0] if dns_name else ""
+        return {
+            key
+            for key in (
+                _normalized_device_name(hostname),
+                _normalized_device_name(dns_label),
+            )
+            if key
+        }
+
+    def _normalized_platform(value: Any) -> str:
+        raw = str(value or "").lower()
+        if raw in {"macos", "darwin", "mac"}:
+            return "macos"
+        if raw in {"windows", "win32", "win"}:
+            return "windows"
+        if raw in {"android"}:
+            return "android"
+        return raw
+
+    def _match_peer_for_device(
+        device: dict[str, Any],
+        peers_by_ip: dict[str, dict[str, Any]],
+        used_tailnet_ips: set[str],
+    ) -> tuple[dict[str, Any] | None, bool]:
+        available = {
+            tailnet_ip: peer
+            for tailnet_ip, peer in peers_by_ip.items()
+            if tailnet_ip not in used_tailnet_ips
+        }
+        for key in ("tailnet_ip", "last_source_ip"):
+            tailnet_ip = str(device.get(key) or "").strip()
+            if tailnet_ip in available:
+                return available[tailnet_ip], True
+
+        device_name = _normalized_device_name(device.get("name"))
+        if device_name:
+            name_matches = [
+                peer
+                for peer in available.values()
+                if any(
+                    device_name == key or key.startswith(device_name) or device_name.startswith(key)
+                    for key in _peer_name_keys(peer)
+                )
+            ]
+            if len(name_matches) == 1:
+                return name_matches[0], True
+
+        device_platform = _normalized_platform(device.get("platform"))
+        if device_platform:
+            os_matches = [
+                peer
+                for peer in available.values()
+                if _normalized_platform(peer.get("tailnet_os") or peer.get("os")) == device_platform
+            ]
+            if len(os_matches) == 1:
+                return os_matches[0], False
+        return None, False
+
     def _connectivity_state(device: dict[str, Any], peer: dict[str, Any] | None) -> tuple[str, str]:
         if device.get("role") == "host":
             return "local", "이 HomeworkHelper Host가 실행 중인 기기입니다."
@@ -414,23 +479,30 @@ def create_remote_router(
     def _managed_device_rows() -> list[dict[str, Any]]:
         paired_devices = device_registry.list_devices()
         tailscale_payload, _snapshot = _tailscale_snapshot_payload()
+        self_ips = {
+            str(ip or "").strip()
+            for ip in (tailscale_payload.get("self_ips") or [])
+            if str(ip or "").strip()
+        }
         peers_by_ip: dict[str, dict[str, Any]] = {}
         for peer in tailscale_payload.get("peers") or []:
             binding = _peer_binding(peer)
             tailnet_ip = binding.get("tailnet_ip")
-            if tailnet_ip:
+            if tailnet_ip and tailnet_ip not in self_ips:
                 row = {**peer, **binding}
                 peers_by_ip[tailnet_ip] = row
 
         rows: list[dict[str, Any]] = []
         used_tailnet_ips: set[str] = set()
         for device in paired_devices:
-            tailnet_ip = str(device.get("tailnet_ip") or "").strip()
-            peer = peers_by_ip.get(tailnet_ip)
+            peer, should_backfill = _match_peer_for_device(device, peers_by_ip, used_tailnet_ips)
             state, message = _connectivity_state(device, peer)
             tailnet_fields = _peer_binding(peer) if peer else {}
-            if tailnet_ip:
+            tailnet_ip = tailnet_fields.get("tailnet_ip") or str(device.get("tailnet_ip") or "").strip()
+            if tailnet_ip and peer:
                 used_tailnet_ips.add(tailnet_ip)
+                if should_backfill:
+                    device_registry.bind_tailnet_device(str(device.get("id") or ""), tailnet_fields, now=now())
             rows.append({
                 **device,
                 **{key: value for key, value in tailnet_fields.items() if value},

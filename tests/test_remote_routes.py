@@ -817,6 +817,138 @@ def test_remote_devices_show_unpaired_tailnet_peers_without_granting_revoke():
     assert unpaired["can_revoke"] is False
 
 
+def test_legacy_paired_device_merges_with_tailnet_peer_by_name_and_backfills_identity():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "macbook-pro",
+                        "dns_name": "macbook-pro.tailnet.ts.net.",
+                        "ips": ["100.114.138.46"],
+                        "online": True,
+                        "os": "macOS",
+                        "primary_ipv4": "100.114.138.46",
+                    }
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, registry = _client_with_seed(tailscale_probe=lambda: _Snapshot())
+    start = client.post("/remote/pair/start")
+    confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "MacBook", "platform": "macos"})
+    token = confirm.json()["token"]
+
+    devices = client.get("/remote/devices", headers={"Authorization": f"Bearer {token}"}).json()["devices"]
+
+    paired = next(device for device in devices if device["id"] == confirm.json()["id"])
+    assert paired["tailnet_ip"] == "100.114.138.46"
+    assert paired["pairing_status"] == "paired"
+    assert paired["connectivity_state"] == "tailnet_online"
+    assert not any(device["id"] == "tailnet:100.114.138.46" for device in devices)
+    assert registry.list_devices()[0]["tailnet_ip"] == "100.114.138.46"
+
+
+def test_legacy_paired_device_merges_with_single_os_candidate_without_backfill():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "s25-ultra",
+                        "dns_name": "s25-ultra.tailnet.ts.net.",
+                        "ips": ["100.102.217.35"],
+                        "online": False,
+                        "os": "android",
+                        "primary_ipv4": "100.102.217.35",
+                    }
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, registry = _client_with_seed(tailscale_probe=lambda: _Snapshot())
+    start = client.post("/remote/pair/start")
+    confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "Galaxy S23", "platform": "android"})
+    token = confirm.json()["token"]
+
+    devices = client.get("/remote/devices", headers={"Authorization": f"Bearer {token}"}).json()["devices"]
+
+    paired = next(device for device in devices if device["id"] == confirm.json()["id"])
+    assert paired["tailnet_ip"] == "100.102.217.35"
+    assert paired["connectivity_state"] == "tailnet_offline"
+    assert not any(device["id"] == "tailnet:100.102.217.35" for device in devices)
+    assert registry.list_devices()[0]["tailnet_ip"] == ""
+
+
+def test_legacy_paired_device_does_not_merge_ambiguous_same_os_candidates():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "windows-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {"hostname": "phone-a", "dns_name": "phone-a.tailnet.ts.net.", "ips": ["100.102.217.35"], "online": True, "os": "android", "primary_ipv4": "100.102.217.35"},
+                    {"hostname": "phone-b", "dns_name": "phone-b.tailnet.ts.net.", "ips": ["100.102.217.36"], "online": True, "os": "android", "primary_ipv4": "100.102.217.36"},
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(tailscale_probe=lambda: _Snapshot())
+    start = client.post("/remote/pair/start")
+    confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "Galaxy", "platform": "android"})
+    token = confirm.json()["token"]
+
+    devices = client.get("/remote/devices", headers={"Authorization": f"Bearer {token}"}).json()["devices"]
+
+    paired = next(device for device in devices if device["id"] == confirm.json()["id"])
+    assert paired["tailnet_ip"] == ""
+    assert paired["connectivity_state"] == "unknown"
+    assert {device["id"] for device in devices} >= {"tailnet:100.102.217.35", "tailnet:100.102.217.36"}
+
+
+def test_remote_devices_do_not_duplicate_host_when_self_also_appears_as_peer():
+    class _Snapshot:
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "self_ips": ["100.109.140.97"],
+                "self_hostname": "lsh-desktop",
+                "message": "tailscale 네트워크 사용 가능",
+                "peers": [
+                    {
+                        "hostname": "lsh-desktop",
+                        "dns_name": "lsh-desktop.tailnet.ts.net.",
+                        "ips": ["100.109.140.97"],
+                        "online": True,
+                        "os": "windows",
+                        "primary_ipv4": "100.109.140.97",
+                    }
+                ],
+            }
+
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(auth_token="secret-token", tailscale_probe=lambda: _Snapshot())
+
+    devices = client.get("/remote/devices", headers={"Authorization": "Bearer secret-token"}).json()["devices"]
+
+    assert [device["tailnet_ip"] for device in devices].count("100.109.140.97") == 1
+    assert devices[0]["role"] == "host"
+
+
 def test_remote_device_registry_migrates_legacy_file_to_schema_version(tmp_path):
     path = tmp_path / "remote_devices.json"
     path.write_text('{"active_pairing": null, "devices": []}', encoding="utf-8")

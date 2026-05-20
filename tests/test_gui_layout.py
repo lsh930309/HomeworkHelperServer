@@ -201,6 +201,23 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
             {"id": "host:100.1.2.3", "name": "Host", "role": "host", "tailnet_ip": "100.1.2.3", "can_revoke": False}
         ])
         assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is False
+
+        dialog._populate_devices([
+            {
+                "id": "device-a",
+                "name": "MacBook",
+                "role": "client",
+                "tailnet_ip": "100.114.138.46",
+                "pairing_status": "paired",
+                "connectivity_state": "stale_or_offline",
+                "health_message": "debug detail",
+                "can_revoke": True,
+            }
+        ])
+        assert dialog.devices_table.item(0, 5).text() == "페어링됨"
+        assert dialog.devices_table.item(0, 5).toolTip() == "paired"
+        assert dialog.devices_table.item(0, 6).text() == "대기/오프라인"
+        assert dialog.devices_table.item(0, 6).toolTip() == "debug detail"
     finally:
         dialog.close()
         dialog.deleteLater()

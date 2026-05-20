@@ -312,24 +312,47 @@ class RemoteSettingsDialog(QDialog):
         self._start_worker("devices", task)
 
     def _populate_devices(self, devices: list) -> None:
+        pairing_labels = {
+            "paired": "페어링됨",
+            "revoked": "폐기됨",
+            "host": "호스트",
+            "tailnet_unpaired": "미페어링",
+        }
+        connectivity_labels = {
+            "active": "정상",
+            "local": "로컬",
+            "revoked": "폐기됨",
+            "tailnet_online": "Tailnet 온라인",
+            "tailnet_online_unpaired": "Tailnet 온라인",
+            "tailnet_offline": "Tailnet 오프라인",
+            "tailnet_offline_unpaired": "Tailnet 오프라인",
+            "stale_or_offline": "대기/오프라인",
+            "unknown": "미확인",
+        }
         self.devices_table.setRowCount(0)
         for device in devices:
             row = self.devices_table.rowCount()
             self.devices_table.insertRow(row)
+            pairing_status = device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired")
+            connectivity_state = device.get("connectivity_state") or ""
             values = [
                 device.get("id") or "",
                 device.get("role") or "unknown",
                 device.get("name") or "",
                 device.get("tailnet_ip") or "",
                 device.get("tailnet_os") or device.get("platform") or "",
-                device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired"),
-                device.get("connectivity_state") or "",
+                pairing_labels.get(pairing_status, pairing_status),
+                connectivity_labels.get(connectivity_state, connectivity_state),
                 str(device.get("last_seen_at") or ""),
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col == 0:
                     item.setData(Qt.ItemDataRole.UserRole, bool(device.get("can_revoke", not device.get("revoked_at"))))
+                if col == 5:
+                    item.setToolTip(str(pairing_status))
+                elif col == 6:
+                    item.setToolTip(str(device.get("health_message") or connectivity_state))
                 self.devices_table.setItem(row, col, item)
         self._fit_devices_table_to_rows()
         self.pairing_status_label.setText(f"Tailnet/페어링 기기 {len(devices)}개")
