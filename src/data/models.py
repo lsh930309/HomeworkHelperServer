@@ -33,7 +33,7 @@ class Process(Base):
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
-    # 범용 외부 리소스 연동 필드 (예: NIKKE ShiftyPad 보관함 용량)
+    # 범용 외부 리소스 연동 필드 (예: NIKKE ShiftyPad 전초기지 방어 보상)
     resource_tracking_enabled = Column(Boolean, default=False)
     resource_provider = Column(String, nullable=True)
     resource_key = Column(String, nullable=True)
@@ -132,6 +132,7 @@ class ProcessSession(Base):
     session_duration = Column(Float, nullable=True)  # 세션 길이 (초 단위, 종료 시 계산)
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
     stamina_at_end = Column(Integer, nullable=True)  # 종료 시점 스태미나
+    resource_percent_at_end = Column(Float, nullable=True)  # 종료 시점 외부 리소스 백분율
 
     # Beholder metadata (nullable for legacy DB compatibility)
     session_status = Column(String, nullable=True)

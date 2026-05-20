@@ -414,6 +414,7 @@ def _serialize_session(session: models.ProcessSession, duration_seconds: float |
         "duration_seconds": round(duration, 3),
         "is_active": session.end_timestamp is None,
         "stamina_at_end": getattr(session, "stamina_at_end", None),
+        "resource_percent_at_end": getattr(session, "resource_percent_at_end", None),
     }
 
 

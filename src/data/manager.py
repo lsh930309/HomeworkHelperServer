@@ -4,6 +4,10 @@ import os
 from typing import List, Optional, Dict
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.common import copy_shortcut_file, get_shortcuts_directory, get_base_path
+from src.utils.resource_tracking import (
+    NIKKE_OUTPOST_LABEL,
+    is_nikke_outpost_resource,
+)
 
 class DataManager:
     """
@@ -269,6 +273,17 @@ class DataManager:
                 print(f"✅ original_launch_path 필드 추가: {process.original_launch_path}")
             else:
                 print(f"original_launch_path 필드 이미 존재: {process.original_launch_path}")
+
+            if (
+                is_nikke_outpost_resource(
+                    getattr(process, "resource_provider", None),
+                    getattr(process, "resource_key", None),
+                )
+                and getattr(process, "resource_label", None) != NIKKE_OUTPOST_LABEL
+            ):
+                process.resource_label = NIKKE_OUTPOST_LABEL
+                has_changes = True
+                print(f"✅ NIKKE resource_label 보정: {NIKKE_OUTPOST_LABEL}")
         
         if has_changes:
             print("\n마이그레이션 완료 - 변경사항을 저장합니다.")

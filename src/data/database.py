@@ -103,6 +103,7 @@ def auto_migrate_database():
         # ProcessSession 테이블 - 사용자 프리셋 ID 및 스태미나 정보
         ("process_sessions", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         ("process_sessions", "stamina_at_end", "INTEGER", None),
+        ("process_sessions", "resource_percent_at_end", "REAL", None),
         ("process_sessions", "process_name", "TEXT", None),
         ("process_sessions", "session_duration", "REAL", None),
         # Beholder session metadata (nullable for legacy DB compatibility)
@@ -262,6 +263,17 @@ def auto_migrate_database():
                 conn.commit()
                 if result.rowcount > 0:
                     print(f"[Migration] managed_processes: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+            if {"resource_provider", "resource_key", "resource_label"}.issubset(existing_columns):
+                result = conn.execute(text(
+                    "UPDATE managed_processes "
+                    "SET resource_label = '전초기지 방어 보상' "
+                    "WHERE resource_provider = 'nikke_blablalink' "
+                    "AND resource_key = 'nikke_outpost_storage' "
+                    "AND (resource_label IS NULL OR resource_label = '' OR resource_label = '보관함 용량')"
+                ))
+                conn.commit()
+                if result.rowcount > 0:
+                    print(f"[Migration] managed_processes: NIKKE resource_label {result.rowcount}개 보정 완료")
 
             # process_sessions 테이블
             existing_columns = [col['name'] for col in inspector.get_columns("process_sessions")]

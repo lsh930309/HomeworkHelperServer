@@ -10,13 +10,9 @@ from typing import Any, Optional
 import requests
 
 from src.utils.nikke_config import NikkeConfig
+from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_PROVIDER
 
 logger = logging.getLogger(__name__)
-
-
-NIKKE_PROVIDER = "nikke_blablalink"
-NIKKE_OUTPOST_RESOURCE_KEY = "nikke_outpost_storage"
-NIKKE_OUTPOST_LABEL = "보관함 용량"
 
 
 @dataclass
@@ -262,7 +258,7 @@ class NikkeService:
                 {"intl_open_id": role.intl_open_id, "nikke_area_id": role.nikke_area_id},
             )
         except Exception as exc:
-            logger.error("NIKKE 보관함 용량 조회 실패: %s", exc)
+            logger.error("NIKKE 전초기지 방어 보상 조회 실패: %s", exc)
             return GameResourceSnapshot(NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_OUTPOST_LABEL, None, "unavailable", now, str(exc))
 
         if self._is_auth_expired(body):

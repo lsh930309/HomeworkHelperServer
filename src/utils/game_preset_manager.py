@@ -9,6 +9,12 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from src.utils.resource_tracking import (
+    NIKKE_OUTPOST_LABEL,
+    NIKKE_OUTPOST_RESOURCE_KEY,
+    NIKKE_PROVIDER,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +32,7 @@ class GamePresetManager:
     # 사용자 프리셋 경로 - 실제 런타임 사용
     USER_CONFIG_DIR = Path(os.environ.get("APPDATA", "")) / "HomeworkHelper"
     USER_PRESET_FILE = USER_CONFIG_DIR / "game_presets_user.json"
-    CURRENT_SCHEMA_VERSION = 3
+    CURRENT_SCHEMA_VERSION = 4
     
     def __init__(self):
         """GamePresetManager 초기화"""
@@ -215,9 +221,11 @@ class GamePresetManager:
             migrated["is_hoyoverse"] = False
             migrated["hoyolab_game_id"] = None
             migrated["resource_tracking_enabled"] = True
-            migrated["resource_provider"] = "nikke_blablalink"
-            migrated["resource_key"] = "nikke_outpost_storage"
-            migrated["resource_label"] = "보관함 용량"
+            migrated["resource_provider"] = NIKKE_PROVIDER
+            migrated["resource_key"] = NIKKE_OUTPOST_RESOURCE_KEY
+            migrated["icon_path"] = "nikke_stamina.png"
+            migrated["icon_type"] = "system"
+            migrated["resource_label"] = NIKKE_OUTPOST_LABEL
 
         return migrated
 

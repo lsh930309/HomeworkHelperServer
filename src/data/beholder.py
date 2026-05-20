@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -803,6 +804,32 @@ def guard_process_session_update(db: Session, session: models.ProcessSession, co
                 safe_recommendation="저장을 차단했습니다. 정상 범위의 값을 다시 저장하세요.",
                 user_title="플레이 기록 값이 비정상입니다",
                 user_summary="저장하려는 스태미나 값이 음수라 기록을 망칠 수 있습니다.",
+                user_impact="이번 변경은 반영되지 않았고 기존 기록은 유지됩니다.",
+            )
+            raise BeholderBlocked(incident)
+    if "resource_percent_at_end" in columns:
+        proposed_values = operation.evidence.get("proposed_values") or {}
+        value = proposed_values.get("resource_percent_at_end", getattr(session, "resource_percent_at_end", None))
+        try:
+            percent = None if value is None else float(value)
+        except (TypeError, ValueError):
+            percent = None
+        if value is not None and (percent is None or not math.isfinite(percent) or percent < 0.0 or percent > 100.0):
+            if consume_override_token(db, operation.override_token, operation):
+                return
+            incident = create_incident(
+                db,
+                severity=SEVERITY_CRITICAL,
+                operation=operation,
+                target_summary=f"session_id={session.id}",
+                suspected_cause="세션 리소스 백분율이 정상 범위를 벗어나 저장되려 했습니다.",
+                current_state_summary=f"현재 resource_percent_at_end={value}",
+                proposed_change_summary="비정상 리소스 백분율 저장",
+                risk_score=88,
+                risk_factors=["invalid_resource_percent"],
+                safe_recommendation="저장을 차단했습니다. 0~100 범위의 값을 다시 저장하세요.",
+                user_title="플레이 기록 리소스 값이 비정상입니다",
+                user_summary="저장하려는 리소스 백분율이 0~100 범위를 벗어나 기록을 망칠 수 있습니다.",
                 user_impact="이번 변경은 반영되지 않았고 기존 기록은 유지됩니다.",
             )
             raise BeholderBlocked(incident)

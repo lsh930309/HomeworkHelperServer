@@ -19,6 +19,7 @@ from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons direc
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
+from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL
 import requests
 from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 
@@ -820,7 +821,7 @@ class ProcessDialog(QDialog):
         resource_tracking_enabled = tracking_enabled and tracking_target == "nikke_outpost_storage"
         resource_provider = "nikke_blablalink" if resource_tracking_enabled else None
         resource_key = "nikke_outpost_storage" if resource_tracking_enabled else None
-        resource_label = "보관함 용량" if resource_tracking_enabled else None
+        resource_label = NIKKE_OUTPOST_LABEL if resource_tracking_enabled else None
 
         # 프리셋 데이터 구성 (모든 필드 명시적 포함)
         preset_data = {
@@ -1020,7 +1021,7 @@ class ProcessDialog(QDialog):
         self.hoyolab_game_combo.addItem("(없음)", None)
         self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
         self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
-        self.hoyolab_game_combo.addItem("NIKKE - 보관함 용량", "nikke_outpost_storage")
+        self.hoyolab_game_combo.addItem(f"NIKKE - {NIKKE_OUTPOST_LABEL}", "nikke_outpost_storage")
         self.hoyolab_game_combo.setToolTip("추적할 HoYoLab 스태미나 또는 NIKKE ShiftyPad 리소스를 선택하세요.")
         hoyolab_game_layout.addWidget(self.hoyolab_game_combo)
         hoyolab_game_layout.addStretch()
@@ -1194,7 +1195,7 @@ class ProcessDialog(QDialog):
             )
 
     def _test_nikke_resource_connection(self):
-        """NIKKE ShiftyPad 보관함 용량 조회 테스트."""
+        """NIKKE ShiftyPad 전초기지 방어 보상 조회 테스트."""
         try:
             from src.services.nikke import get_nikke_service, NIKKE_OUTPOST_LABEL
 
@@ -1264,7 +1265,7 @@ class ProcessDialog(QDialog):
                     QMessageBox.warning(
                         self,
                         "조회 실패",
-                        "❌ NIKKE 보관함 용량 조회에 실패했습니다.\n\n"
+                        "❌ NIKKE 전초기지 방어 보상 조회에 실패했습니다.\n\n"
                         f"상태: {snapshot.status}\n"
                         f"메시지: {snapshot.message or 'BlablaLink 세션/대표 계정 상태를 확인하세요.'}",
                     )
@@ -1488,7 +1489,7 @@ class ProcessDialog(QDialog):
             resource_tracking_enabled = True
             resource_provider = "nikke_blablalink"
             resource_key = "nikke_outpost_storage"
-            resource_label = "보관함 용량"
+            resource_label = NIKKE_OUTPOST_LABEL
         elif tracking_checked:
             stamina_tracking_enabled = True
             hoyolab_game_id = tracking_target
@@ -2136,7 +2137,7 @@ class HoYoLabSettingsDialog(QDialog):
         nikke_group = QGroupBox("NIKKE / BlablaLink")
         nikke_layout = QVBoxLayout(nikke_group)
 
-        nikke_info = QLabel("ShiftyPad 보관함 용량 조회를 위한 BlablaLink 로그인 세션 쿠키를 관리합니다.")
+        nikke_info = QLabel("ShiftyPad 전초기지 방어 보상 조회를 위한 BlablaLink 로그인 세션 쿠키를 관리합니다.")
         nikke_info.setWordWrap(True)
         nikke_layout.addWidget(nikke_info)
 

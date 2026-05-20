@@ -1296,6 +1296,41 @@ def test_stamina_refresh_client_uses_hoyolab_specific_patch(monkeypatch):
     assert client.managed_processes == ["fresh-stamina"]
 
 
+def test_resource_session_refresh_client_uses_resource_specific_patch(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client._pending_beholder_overrides = {}
+    calls = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    assert client.update_session_resource(7, 12.5) is True
+
+    assert calls[0][0] == ("http://testserver/sessions/7/resource",)
+    assert calls[0][1]["params"] == {"resource_percent_at_end": 12.5}
+    assert calls[0][1]["headers"] == {
+        "X-HH-Beholder-Actor": "resource_slow_followup",
+        "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
+    }
+
+
 def test_hoyolab_reconcile_persists_only_final_stamina_fields():
     from src.core.hoyolab_reconcile import _StaminaPersistTask
     from src.data.data_models import ManagedProcess
@@ -1830,6 +1865,65 @@ def test_hoyolab_followup_session_stamina_rewrite_aborts_when_snapshot_fails(mon
     db.expire_all()
     unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
     assert unchanged.stamina_at_end == 100
+
+
+def test_resource_followup_session_percent_rewrite_is_allowed(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="nikke",
+        process_name="NIKKE",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        resource_percent_at_end=10.0,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    assert crud.update_session_resource(
+        db,
+        session.id,
+        12.5,
+        actor="resource_slow_followup",
+        operation_kind="resource_session_percent_rewrite",
+    ) is True
+
+    db.expire_all()
+    updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert updated.resource_percent_at_end == 12.5
+    assert beholder.active_incidents(db) == []
+
+
+def test_resource_session_percent_range_is_guarded(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="nikke",
+        process_name="NIKKE",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        resource_percent_at_end=10.0,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    with pytest.raises(beholder.BeholderBlocked) as exc_info:
+        crud.update_session_resource(db, session.id, 120.0)
+
+    assert "invalid_resource_percent" in exc_info.value.incident.risk_factors
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.resource_percent_at_end == 10.0
 
 
 def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeypatch):

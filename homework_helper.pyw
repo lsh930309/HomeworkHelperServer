@@ -875,6 +875,7 @@ def run_server_main():
             session_id=session_id,
             end_timestamp=end_data.end_timestamp,
             stamina_at_end=end_data.stamina_at_end,
+            resource_percent_at_end=end_data.resource_percent_at_end,
             actor=x_hh_beholder_actor or "process_monitor",
             operation_kind=x_hh_beholder_operation or "runtime_stop",
             close_reason=end_data.close_reason or "process_exit",
@@ -926,6 +927,29 @@ def run_server_main():
         if not success:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
         # 업데이트된 세션 반환
+        session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+        return session
+
+    @app.patch("/sessions/{session_id}/resource", response_model=schemas.ProcessSessionSchema)
+    def update_session_resource(
+        session_id: int,
+        resource_percent_at_end: float,
+        db: Session = Depends(get_db),
+        x_hh_beholder_actor: str | None = Header(None),
+        x_hh_beholder_operation: str | None = Header(None),
+        x_hh_beholder_override: str | None = Header(None),
+    ):
+        """세션의 종료 외부 리소스 백분율을 업데이트"""
+        success = crud.update_session_resource(
+            db=db,
+            session_id=session_id,
+            resource_percent_at_end=resource_percent_at_end,
+            actor=x_hh_beholder_actor or "resource_slow_followup",
+            operation_kind=x_hh_beholder_operation or "resource_session_percent_rewrite",
+            override_token=x_hh_beholder_override,
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
         session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
         return session
 
@@ -1014,6 +1038,35 @@ def ensure_process_table_schema():
                     conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_max INTEGER"))
                 if 'stamina_updated_at' not in existing_cols:
                     conn.execute(text("ALTER TABLE managed_processes ADD COLUMN stamina_updated_at REAL"))
+                if 'resource_tracking_enabled' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_tracking_enabled BOOLEAN DEFAULT 0"))
+                    existing_cols.add('resource_tracking_enabled')
+                if 'resource_provider' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_provider TEXT"))
+                    existing_cols.add('resource_provider')
+                if 'resource_key' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_key TEXT"))
+                    existing_cols.add('resource_key')
+                if 'resource_label' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_label TEXT"))
+                    existing_cols.add('resource_label')
+                if 'resource_percent' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_percent REAL"))
+                    existing_cols.add('resource_percent')
+                if 'resource_updated_at' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_updated_at REAL"))
+                    existing_cols.add('resource_updated_at')
+                if 'resource_status' not in existing_cols:
+                    conn.execute(text("ALTER TABLE managed_processes ADD COLUMN resource_status TEXT"))
+                    existing_cols.add('resource_status')
+                if {'resource_provider', 'resource_key', 'resource_label'}.issubset(existing_cols):
+                    conn.execute(text(
+                        "UPDATE managed_processes "
+                        "SET resource_label = '전초기지 방어 보상' "
+                        "WHERE resource_provider = 'nikke_blablalink' "
+                        "AND resource_key = 'nikke_outpost_storage' "
+                        "AND (resource_label IS NULL OR resource_label = '' OR resource_label = '보관함 용량')"
+                    ))
 
             # === global_settings 테이블 마이그레이션 ===
             gs_table_exists = conn.execute(
@@ -1078,6 +1131,15 @@ def ensure_process_table_schema():
                 if 'screenshot_trigger_vk' not in gs_existing_cols:
                     conn.execute(text("ALTER TABLE global_settings ADD COLUMN screenshot_trigger_vk INTEGER DEFAULT 178"))
                     print("[Migration] global_settings.screenshot_trigger_vk 컬럼 추가됨")
+
+            ps_table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='process_sessions'")
+            ).fetchone()
+            if ps_table_exists:
+                ps_existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(process_sessions)"))}
+                if 'resource_percent_at_end' not in ps_existing_cols:
+                    conn.execute(text("ALTER TABLE process_sessions ADD COLUMN resource_percent_at_end REAL"))
+                    print("[Migration] process_sessions.resource_percent_at_end 컬럼 추가됨")
 
             incident_table_exists = conn.execute(
                 text("SELECT name FROM sqlite_master WHERE type='table' AND name='beholder_incidents'")

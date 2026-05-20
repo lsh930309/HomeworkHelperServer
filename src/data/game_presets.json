@@ -1,5 +1,5 @@
 {
-    "version": 3,
+    "version": 4,
     "presets": [
         {
             "id": "honkai_starrail",
@@ -74,7 +74,7 @@
             "resource_tracking_enabled": true,
             "resource_provider": "nikke_blablalink",
             "resource_key": "nikke_outpost_storage",
-            "resource_label": "보관함 용량"
+            "resource_label": "전초기지 방어 보상"
         },
         {
             "id": "endfield",

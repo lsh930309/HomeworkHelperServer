@@ -3,6 +3,12 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
+from src.utils.resource_tracking import (
+    clamp_percent,
+    is_nikke_outpost_resource,
+    predict_nikke_outpost_percent,
+)
+
 
 def calculate_process_progress(process: Any, current_dt: datetime.datetime | None = None) -> dict[str, Any]:
     """Return a client-safe progress snapshot for a managed process."""
@@ -11,7 +17,19 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
         percent = getattr(process, "resource_percent", None)
         status = getattr(process, "resource_status", None)
         if percent is not None and status in (None, "ok"):
-            percentage = max(0.0, min(float(percent), 100.0))
+            if is_nikke_outpost_resource(
+                getattr(process, "resource_provider", None),
+                getattr(process, "resource_key", None),
+            ):
+                percentage = predict_nikke_outpost_percent(
+                    percent,
+                    getattr(process, "resource_updated_at", None),
+                    now=current_dt.timestamp(),
+                )
+            else:
+                percentage = clamp_percent(percent)
+            if percentage is None:
+                return {"kind": "none", "percentage": 0.0, "display_text": "계산 오류"}
             label = getattr(process, "resource_label", None) or "리소스"
             return {
                 "kind": "resource",

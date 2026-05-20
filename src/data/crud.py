@@ -852,6 +852,7 @@ def end_session(
     session_id: int,
     end_timestamp: float,
     stamina_at_end: Optional[int] = None,
+    resource_percent_at_end: Optional[float] = None,
     *,
     operation_kind: str = "runtime_stop",
     actor: str = "process_monitor",
@@ -872,6 +873,9 @@ def end_session(
         if stamina_at_end is not None:
             changed_fields.append("stamina_at_end")
             proposed_values["stamina_at_end"] = stamina_at_end
+        if resource_percent_at_end is not None:
+            changed_fields.append("resource_percent_at_end")
+            proposed_values["resource_percent_at_end"] = resource_percent_at_end
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
@@ -887,6 +891,8 @@ def end_session(
         beholder.guard_session_end(db, db_session, end_timestamp, operation)
         if stamina_at_end is not None:
             beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        if resource_percent_at_end is not None:
+            beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
@@ -895,6 +901,8 @@ def end_session(
         db_session.heartbeat_timestamp = end_timestamp
         if stamina_at_end is not None:
             db_session.stamina_at_end = stamina_at_end
+        if resource_percent_at_end is not None:
+            db_session.resource_percent_at_end = resource_percent_at_end
         db.commit()
         db.refresh(db_session)
     return db_session
@@ -958,6 +966,40 @@ def update_session_stamina(
         beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.stamina_at_end = stamina_at_end
+        db.commit()
+        db.refresh(db_session)
+        return True
+    return False
+
+
+@db_retry_on_lock
+def update_session_resource(
+    db: Session,
+    session_id: int,
+    resource_percent_at_end: float,
+    *,
+    actor: str = "resource_slow_followup",
+    operation_kind: str = "resource_session_percent_rewrite",
+    override_token: str | None = None,
+) -> bool:
+    """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
+    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+    if db_session:
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"resource_percent_at_end"}},
+            evidence={
+                "changed_fields": ["resource_percent_at_end"],
+                "context": {"session_id": session_id},
+                "proposed_values": {"resource_percent_at_end": resource_percent_at_end},
+            },
+            override_token=override_token,
+        )
+        beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
+        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
+        db_session.resource_percent_at_end = resource_percent_at_end
         db.commit()
         db.refresh(db_session)
         return True

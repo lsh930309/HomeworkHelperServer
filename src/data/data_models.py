@@ -4,6 +4,12 @@ import time
 import uuid # 프로세스 ID 생성을 위해 추가
 from typing import List, Optional, Dict, Any, Tuple
 
+from src.utils.resource_tracking import (
+    clamp_percent,
+    is_nikke_outpost_resource,
+    predict_nikke_outpost_percent,
+)
+
 SIDEBAR_MODE_ALWAYS = "always"
 SIDEBAR_MODE_GAME = "game"
 SIDEBAR_MODE_DISABLED = "disabled"
@@ -44,7 +50,7 @@ class ManagedProcess:
                  stamina_current: Optional[int] = None,
                  stamina_max: Optional[int] = None,
                  stamina_updated_at: Optional[float] = None,
-                 # 범용 게임 리소스 연동 필드 (예: NIKKE ShiftyPad 보관함 용량)
+                 # 범용 게임 리소스 연동 필드 (예: NIKKE ShiftyPad 전초기지 방어 보상)
                  resource_tracking_enabled: bool = False,
                  resource_provider: Optional[str] = None,
                  resource_key: Optional[str] = None,
@@ -162,10 +168,9 @@ class ManagedProcess:
             return None
         if self.resource_percent is None or self.resource_status not in (None, "ok"):
             return None
-        try:
-            return max(0.0, min(float(self.resource_percent), 100.0))
-        except (TypeError, ValueError):
-            return None
+        if is_nikke_outpost_resource(self.resource_provider, self.resource_key):
+            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at)
+        return clamp_percent(self.resource_percent)
     
     def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.
@@ -458,7 +463,8 @@ class ProcessSession:
                  end_timestamp: Optional[float] = None,
                  session_duration: Optional[float] = None,
                  user_preset_id: Optional[str] = None,
-                 stamina_at_end: Optional[int] = None):
+                 stamina_at_end: Optional[int] = None,
+                 resource_percent_at_end: Optional[float] = None):
         """프로세스 세션 인스턴스를 초기화합니다."""
         self.id = id
         self.process_id = process_id
@@ -468,6 +474,7 @@ class ProcessSession:
         self.session_duration = session_duration
         self.user_preset_id = user_preset_id
         self.stamina_at_end = stamina_at_end
+        self.resource_percent_at_end = resource_percent_at_end
 
     def __repr__(self):
         """ProcessSession 객체의 문자열 표현을 반환합니다."""
@@ -485,6 +492,7 @@ class ProcessSession:
             "session_duration": self.session_duration,
             "user_preset_id": self.user_preset_id,
             "stamina_at_end": self.stamina_at_end,
+            "resource_percent_at_end": self.resource_percent_at_end,
         }
 
     @classmethod
@@ -499,4 +507,5 @@ class ProcessSession:
             session_duration=data.get("session_duration"),
             user_preset_id=data.get("user_preset_id"),
             stamina_at_end=data.get("stamina_at_end"),
+            resource_percent_at_end=data.get("resource_percent_at_end"),
         )

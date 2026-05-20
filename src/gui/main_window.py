@@ -46,6 +46,7 @@ from src.core.launcher import Launcher
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
+from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
@@ -136,6 +137,11 @@ class MainWindow(QMainWindow):
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
         self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
+            self.data_manager,
+            self.process_monitor,
+            self,
+        )
+        self._nikke_resource_reconcile = NikkeResourceReconcileCoordinator(
             self.data_manager,
             self.process_monitor,
             self,
@@ -360,6 +366,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -1260,8 +1267,10 @@ class MainWindow(QMainWindow):
 
         for event in monitor_result.started:
             self._hoyolab_reconcile.handle_process_started(event)
+            self._nikke_resource_reconcile.handle_process_started(event)
         for event in monitor_result.stopped:
             self._hoyolab_reconcile.handle_process_stopped(event)
+            self._nikke_resource_reconcile.handle_process_stopped(event)
 
         if monitor_result.changed:
             status_bar = self.statusBar()
@@ -2288,6 +2297,8 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, '_hoyolab_reconcile'):
             self._hoyolab_reconcile.shutdown()
+        if hasattr(self, '_nikke_resource_reconcile'):
+            self._nikke_resource_reconcile.shutdown()
 
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()

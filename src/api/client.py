@@ -523,7 +523,13 @@ class ApiClient:
             print(f"세션 시작 실패: {e}")
             return None
 
-    def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Optional[ProcessSession]:
+    def end_session(
+        self,
+        session_id: int,
+        end_timestamp: float,
+        stamina_at_end: Optional[int] = None,
+        resource_percent_at_end: Optional[float] = None,
+    ) -> Optional[ProcessSession]:
         """프로세스 세션 종료"""
         try:
             data = {
@@ -532,6 +538,8 @@ class ApiClient:
             }
             if stamina_at_end is not None:
                 data["stamina_at_end"] = stamina_at_end
+            if resource_percent_at_end is not None:
+                data["resource_percent_at_end"] = resource_percent_at_end
             response = requests.put(
                 f"{self.base_url}/sessions/{session_id}/end",
                 json=data,
@@ -612,4 +620,20 @@ class ApiClient:
             return True
         except requests.RequestException as e:
             print(f"세션 스태미나 업데이트 실패: {e}")
+            return False
+
+    def update_session_resource(self, session_id: int, resource_percent_at_end: float) -> bool:
+        """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/sessions/{session_id}/resource",
+                params={"resource_percent_at_end": resource_percent_at_end},
+                headers=self._beholder_headers("resource_slow_followup", "resource_session_percent_rewrite"),
+                timeout=10
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("resource_slow_followup", "resource_session_percent_rewrite")
+            return True
+        except requests.RequestException as e:
+            print(f"세션 리소스 업데이트 실패: {e}")
             return False
