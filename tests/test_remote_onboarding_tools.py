@@ -49,6 +49,46 @@ def test_ensure_tailscale_installs_then_rechecks(monkeypatch):
     assert calls == {'install': 1, 'launch': 1, 'probe': 2}
 
 
+def test_tailscale_foundation_state_classifies_required_setup_steps():
+    import src.core.tailscale as tailscale
+
+    assert tailscale.classify_tailscale_state(installed=False, running=False, backend_state='missing', self_ips=()) == 'missing'
+    assert tailscale.classify_tailscale_state(installed=True, running=False, backend_state='NeedsLogin', self_ips=()) == 'needs_login'
+    assert tailscale.classify_tailscale_state(installed=True, running=False, backend_state='Stopped', self_ips=()) == 'stopped_or_down'
+    assert tailscale.classify_tailscale_state(installed=True, running=False, backend_state='Running', self_ips=()) == 'running_without_ip'
+    assert tailscale.classify_tailscale_state(installed=True, running=True, backend_state='Running', self_ips=('100.64.0.1',)) == 'ready'
+
+
+def test_tailscale_launch_and_down_use_discovered_executable_without_alias(monkeypatch):
+    import src.core.tailscale as tailscale
+
+    class Result:
+        returncode = 0
+        stdout = 'ok'
+        stderr = ''
+
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return Result()
+
+    exe = r'C:\Program Files\Tailscale\tailscale.exe'
+    monkeypatch.setattr(tailscale.platform, 'system', lambda: 'Windows')
+    monkeypatch.setattr(tailscale, '_tailscale_executable', lambda: exe)
+    monkeypatch.setattr(tailscale, '_run_subprocess', fake_run)
+
+    up_ok, up_method = tailscale._launch_tailscale()
+    down_ok, down_method = tailscale._down_tailscale()
+
+    assert up_ok is True
+    assert up_method == 'tailscale-up'
+    assert down_ok is True
+    assert down_method == 'tailscale-down'
+    assert [exe, 'up', '--accept-routes'] in calls
+    assert [exe, 'down'] in calls
+
+
 def test_windows_subprocess_kwargs_hide_console(monkeypatch):
     import src.core.tailscale as tailscale
 

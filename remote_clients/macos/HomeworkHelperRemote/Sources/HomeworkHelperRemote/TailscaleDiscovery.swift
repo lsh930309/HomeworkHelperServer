@@ -24,6 +24,27 @@ struct LocalTailscaleSnapshot: Equatable {
     let peers: [LocalTailscalePeer]
     let message: String
 
+    var foundationState: String {
+        if !installed { return "missing" }
+        if running && !selfIPs.isEmpty { return "ready" }
+        let normalized = backendState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let lowered = message.lowercased()
+        if lowered.contains("system extension") || lowered.contains("network extension") || lowered.contains("vpn") || lowered.contains("approval") || lowered.contains("승인") {
+            return "needs_system_approval"
+        }
+        if ["needslogin", "needs_login", "nostate"].contains(normalized) || lowered.contains("not logged") || lowered.contains("login") || lowered.contains("로그인") {
+            return "needs_login"
+        }
+        if ["stopped", "down"].contains(normalized) || lowered.contains("tailscale down") || lowered.contains("stopped") {
+            return "stopped_or_down"
+        }
+        if normalized == "running" && selfIPs.isEmpty { return "running_without_ip" }
+        if lowered.contains("not running") || lowered.contains("failed to start") || lowered.contains("gui failed to start") || lowered.contains("tailscaled") || lowered.contains("daemon") || lowered.contains("backend") {
+            return "app_launch_needed"
+        }
+        return "installed"
+    }
+
     var suggestedBaseURLs: [String] {
         peers.compactMap { peer in
             let name = "\(peer.hostname) \(peer.dnsName)".lowercased()
@@ -109,8 +130,9 @@ enum TailscaleDiscovery {
         }
 
         func environment(base: [String: String]) -> [String: String]? {
-            guard isShellBridge else { return nil }
             var environment = base
+            environment["TAILSCALE_BE_CLI"] = "1"
+            guard isShellBridge else { return environment }
             environment["TERM"] = environment["TERM"] ?? "dumb"
             environment["POWERLEVEL9K_DISABLE_GITSTATUS"] = "true"
             environment["ZSH_DISABLE_COMPFIX"] = "true"
@@ -157,7 +179,14 @@ enum TailscaleDiscovery {
                 }
                 let selfIPs = selfNode["TailscaleIPs"] as? [String] ?? []
                 let running = backendState.lowercased() == "running" && !selfIPs.isEmpty
-                return LocalTailscaleSnapshot(installed: true, running: running, backendState: backendState, selfIPs: selfIPs, selfHostname: selfNode["HostName"] as? String ?? "", peers: peers, message: running ? "tailscale 네트워크 사용 가능" : "tailscale 상태: \(backendState)")
+                let message = messageForFoundationState(
+                    installed: true,
+                    running: running,
+                    backendState: backendState,
+                    selfIPs: selfIPs,
+                    fallback: running ? "tailscale 네트워크 사용 가능" : "tailscale 상태: \(backendState)"
+                )
+                return LocalTailscaleSnapshot(installed: true, running: running, backendState: backendState, selfIPs: selfIPs, selfHostname: selfNode["HostName"] as? String ?? "", peers: peers, message: message)
             } catch {
                 lastError = "\(command.displayPath): \(error.localizedDescription)"
             }
@@ -260,6 +289,10 @@ enum TailscaleDiscovery {
 
 
     static func ensureReady() async -> LocalTailscaleSnapshot {
+        await activateNetwork()
+    }
+
+    static func activateNetwork() async -> LocalTailscaleSnapshot {
         let before = await status()
         if before.running && !before.selfIPs.isEmpty { return before }
 
@@ -271,10 +304,30 @@ enum TailscaleDiscovery {
         }
 
         _ = await launchTailscale()
+        let up = await runTailscaleControl(arguments: ["up", "--accept-routes"], hardTimeoutSeconds: 90)
         try? await Task.sleep(for: .seconds(2))
         let after = await status()
         if after.running && !after.selfIPs.isEmpty { return after }
-        return LocalTailscaleSnapshot(installed: after.installed, running: after.running, backendState: after.backendState, selfIPs: after.selfIPs, selfHostname: after.selfHostname, peers: after.peers, message: "tailscale 설치/실행 후에도 로그인 또는 System Extension 승인이 필요합니다. Tailscale 앱에서 승인을 완료한 뒤 다시 시도하세요.")
+        let detail = up.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = detail.isEmpty
+            ? messageForFoundationState(installed: after.installed, running: after.running, backendState: after.backendState, selfIPs: after.selfIPs, fallback: "tailscale 설치/실행 후에도 로그인 또는 System Extension 승인이 필요합니다. Tailscale 앱에서 승인을 완료한 뒤 다시 시도하세요.")
+            : detail
+        return LocalTailscaleSnapshot(installed: after.installed, running: after.running, backendState: after.backendState, selfIPs: after.selfIPs, selfHostname: after.selfHostname, peers: after.peers, message: fallback)
+    }
+
+    static func deactivateNetwork() async -> LocalTailscaleSnapshot {
+        let before = await status()
+        guard before.installed else {
+            return LocalTailscaleSnapshot(installed: false, running: false, backendState: "missing", selfIPs: [], selfHostname: "", peers: [], message: "Tailscale이 설치되어 있지 않아 비활성화할 네트워크가 없습니다.")
+        }
+        let down = await runTailscaleControl(arguments: ["down"], hardTimeoutSeconds: 45)
+        try? await Task.sleep(for: .seconds(1))
+        let after = await status()
+        if down.ok {
+            return LocalTailscaleSnapshot(installed: after.installed, running: after.running, backendState: after.backendState, selfIPs: after.selfIPs, selfHostname: after.selfHostname, peers: after.peers, message: "Tailscale 네트워크를 비활성화했습니다. 다시 연결하려면 Tailscale 활성화를 실행하세요.")
+        }
+        let detail = down.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return LocalTailscaleSnapshot(installed: after.installed, running: after.running, backendState: after.backendState, selfIPs: after.selfIPs, selfHostname: after.selfHostname, peers: after.peers, message: detail.isEmpty ? after.message : detail)
     }
 
     private static func installTailscale() async -> Bool {
@@ -294,6 +347,41 @@ enum TailscaleDiscovery {
             return true
         }
         return false
+    }
+
+    private static func runTailscaleControl(arguments: [String], hardTimeoutSeconds: Int) async -> (ok: Bool, message: String) {
+        var lastMessage = ""
+        for command in tailscaleCommands() {
+            do {
+                let result = try await runForResult(command: command, arguments: arguments, hardTimeoutSeconds: hardTimeoutSeconds)
+                let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if result.status == 0 {
+                    return (true, combined)
+                }
+                if !combined.isEmpty {
+                    lastMessage = "\(command.displayPath): \(combined)"
+                }
+            } catch {
+                lastMessage = "\(command.displayPath): \(error.localizedDescription)"
+            }
+        }
+        return (false, lastMessage)
+    }
+
+    private static func messageForFoundationState(installed: Bool, running: Bool, backendState: String, selfIPs: [String], fallback: String) -> String {
+        if !installed { return "Tailscale이 설치되어 있지 않습니다. 자동 설치를 실행하세요." }
+        if running && !selfIPs.isEmpty { return "tailscale 네트워크 사용 가능" }
+        let normalized = backendState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["needslogin", "needs_login", "nostate"].contains(normalized) {
+            return "Tailscale 실행은 확인됐지만 tailnet 로그인/계정 생성이 필요합니다. Tailscale 앱에서 로그인 후 다시 시도하세요."
+        }
+        if ["stopped", "down"].contains(normalized) {
+            return "Tailscale이 설치되어 있지만 네트워크가 down 상태입니다. Tailscale 활성화를 실행하세요."
+        }
+        if normalized == "running" && selfIPs.isEmpty {
+            return "Tailscale 상태는 Running이지만 self IP가 없습니다. 로그인/네트워크 상태를 확인하세요."
+        }
+        return fallback
     }
 
     private static func downloadLatestStablePackage() async -> URL? {
@@ -335,9 +423,9 @@ enum TailscaleDiscovery {
         // real executable paths, including the Tailscale.app bundled CLI entry,
         // before the login-shell bridge so connectivity logs stay shell-noise-free.
         for path in [
-            "/opt/homebrew/bin/tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
             "/usr/local/bin/tailscale",
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+            "/opt/homebrew/bin/tailscale"
         ] {
             appendDirect(path)
         }

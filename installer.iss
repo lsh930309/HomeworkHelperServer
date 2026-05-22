@@ -56,6 +56,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "tailscalebootstrap"; Description: "Tailscale 기반환경 자동 설치/실행 확인"; GroupDescription: "원격 연결 필수 구성요소:"
 
 [Files]
 ; PyInstaller onedir 결과물 전체 복사
@@ -116,6 +117,83 @@ begin
     Log('예약 작업 등록 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
   else
     Log('예약 작업 등록 실패. ResultCode=' + IntToStr(ResultCode));
+end;
+
+function TailscaleExePath(): String;
+var
+  Candidate: String;
+begin
+  Result := '';
+
+  Candidate := ExpandConstant('{autopf}\Tailscale\tailscale.exe');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+
+  Candidate := ExpandConstant('{pf32}\Tailscale\tailscale.exe');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+
+  Candidate := ExpandConstant('{localappdata}\Tailscale\tailscale.exe');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+end;
+
+procedure TryBootstrapTailscalePrerequisite();
+var
+  ScriptPath, Script: String;
+  ResultCode: Integer;
+begin
+  if TailscaleExePath() <> '' then
+  begin
+    Log('Tailscale already installed: ' + TailscaleExePath());
+  end;
+
+  ScriptPath := ExpandConstant('{tmp}\hh_bootstrap_tailscale.ps1');
+  Script :=
+    '$ErrorActionPreference = "Stop"' + #13#10 +
+    '$candidates = @(' + #13#10 +
+    '  (Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"),' + #13#10 +
+    '  (Join-Path ${env:ProgramFiles(x86)} "Tailscale\tailscale.exe"),' + #13#10 +
+    '  (Join-Path $env:LocalAppData "Tailscale\tailscale.exe")' + #13#10 +
+    ') | Where-Object { $_ -and (Test-Path $_) }' + #13#10 +
+    'if (-not $candidates) {' + #13#10 +
+    '  $listing = (Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/?v=latest" -UseBasicParsing).Content' + #13#10 +
+    '  $match = [regex]::Match($listing, "tailscale-setup-[0-9.]+-amd64\.msi")' + #13#10 +
+    '  if (-not $match.Success) { throw "Tailscale MSI download URL not found" }' + #13#10 +
+    '  $msi = Join-Path $env:TEMP $match.Value' + #13#10 +
+    '  Invoke-WebRequest -Uri ("https://pkgs.tailscale.com/stable/" + $match.Value) -OutFile $msi -UseBasicParsing' + #13#10 +
+    '  $install = Start-Process msiexec.exe -ArgumentList @("/i", $msi, "/qn", "/norestart") -Wait -PassThru' + #13#10 +
+    '  if ($install.ExitCode -ne 0 -and $install.ExitCode -ne 3010) { throw "Tailscale MSI install failed: $($install.ExitCode)" }' + #13#10 +
+    '}' + #13#10 +
+    '$exe = @(' + #13#10 +
+    '  (Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"),' + #13#10 +
+    '  (Join-Path ${env:ProgramFiles(x86)} "Tailscale\tailscale.exe"),' + #13#10 +
+    '  (Join-Path $env:LocalAppData "Tailscale\tailscale.exe")' + #13#10 +
+    ') | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1' + #13#10 +
+    'if ($exe) {' + #13#10 +
+    '  $p = Start-Process -FilePath $exe -ArgumentList @("up", "--accept-routes") -WindowStyle Hidden -PassThru' + #13#10 +
+    '  if (-not $p.WaitForExit(15000)) { try { $p.Kill() } catch {} }' + #13#10 +
+    '}';
+
+  SaveStringToFile(ScriptPath, Script, False);
+
+  Exec('powershell.exe',
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if ResultCode = 0 then
+    Log('Tailscale prerequisite bootstrap completed')
+  else
+    Log('Tailscale prerequisite bootstrap failed. Runtime app will show guided setup. ResultCode=' + IntToStr(ResultCode));
 end;
 
 procedure DeleteScheduledTasks();
@@ -264,6 +342,11 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
+
+  if WizardIsTaskSelected('tailscalebootstrap') then
+  begin
+    TryBootstrapTailscalePrerequisite();
+  end;
   
   // 마지막으로 프로세스가 종료되었는지 확인
   if IsAppRunning() then

@@ -24,14 +24,14 @@ from src.core.remote_debug_log import load_config as load_remote_log_config, sav
 from src.core.remote_power import ConfigurablePowerController
 from src.core.remote_power_setup import power_setup_status, register_public_key
 from src.core.process_progress import calculate_process_progress
-from src.core.tailscale import ensure_tailscale_ready, suggest_remote_base_urls, tailscale_status
+from src.core.tailscale import ensure_tailscale_ready, set_tailscale_network_enabled, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
 from src.core.remote_local_store import remote_store
 from src.data import beholder, crud, models, schemas
 from src.utils.game_preset_manager import GamePresetManager
 
 
-REMOTE_API_VERSION = "0.1.12"
+REMOTE_API_VERSION = "0.1.13"
 TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
 
@@ -352,6 +352,8 @@ def create_remote_router(
                 "installed": False,
                 "running": False,
                 "backend_state": "error",
+                "state": "missing",
+                "foundation_state": "missing",
                 "self_ips": [],
                 "self_hostname": "",
                 "self_node_id": "",
@@ -618,6 +620,8 @@ def create_remote_router(
             return method == "DELETE"
         if path.endswith("/remote/tailscale/ensure"):
             return method == "POST"
+        if path.endswith("/remote/tailscale/up") or path.endswith("/remote/tailscale/down"):
+            return method == "POST"
         return False
 
     def require_remote_auth(request: Request, authorization: str | None = Header(None)) -> None:
@@ -693,6 +697,7 @@ def create_remote_router(
                 "state": "ok" if tailscale_ready else "warning",
                 "color": "green" if tailscale_ready else "yellow",
                 "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
+                "foundation_state": tailscale_payload.get("foundation_state") or tailscale_payload.get("state") or ("ready" if tailscale_ready else "installed"),
                 "suggested_base_urls": _suggested_base_urls(tailscale_payload, ts_snapshot) if tailscale_ready else [],
                 "details": tailscale_payload,
             }
@@ -1072,6 +1077,32 @@ def create_remote_router(
                 "install_attempted": result.install_attempted,
                 "launch_attempted": result.launch_attempted,
             },
+        )
+        return result.as_dict()
+
+    @router.post("/tailscale/up")
+    def remote_tailscale_up():
+        result = set_tailscale_network_enabled(True)
+        write_remote_log("tailscale.up", ready=result.after.ready, method=result.method, message=result.message)
+        auditor.record(
+            command="tailscale.up",
+            accepted=bool(result.succeeded),
+            status="ready" if result.after.ready else result.after.foundation_state,
+            target=result.method,
+        )
+        return result.as_dict()
+
+    @router.post("/tailscale/down")
+    def remote_tailscale_down(request: Request):
+        if not _is_loopback_request(request):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tailscale down은 호스트 로컬 설정 화면에서만 실행할 수 있습니다.")
+        result = set_tailscale_network_enabled(False)
+        write_remote_log("tailscale.down", ready=result.after.ready, method=result.method, message=result.message)
+        auditor.record(
+            command="tailscale.down",
+            accepted=bool(result.succeeded),
+            status="down" if result.succeeded else result.after.foundation_state,
+            target=result.method,
         )
         return result.as_dict()
 

@@ -151,16 +151,22 @@ class RemoteSettingsDialog(QDialog):
         tailscale_refresh.clicked.connect(self._refresh_tailscale)
         ensure_button = QPushButton("설치/실행 확인")
         ensure_button.clicked.connect(self._ensure_tailscale)
+        tailscale_up_button = QPushButton("Tailscale 활성화")
+        tailscale_up_button.clicked.connect(self._tailscale_up)
+        tailscale_down_button = QPushButton("Tailscale 비활성화")
+        tailscale_down_button.clicked.connect(self._tailscale_down)
         power_refresh = QPushButton("전원 상태 확인")
         power_refresh.clicked.connect(self._refresh_power_setup)
 
         layout.addWidget(self.tailscale_summary_label, 0, 0)
         layout.addWidget(tailscale_refresh, 0, 1)
         layout.addWidget(ensure_button, 0, 2)
-        layout.addWidget(self.tailscale_health_text, 1, 0, 1, 3)
-        layout.addWidget(self.power_status_label, 2, 0)
-        layout.addWidget(power_refresh, 2, 1, 1, 2)
-        layout.addWidget(self.power_setup_text, 3, 0, 1, 3)
+        layout.addWidget(tailscale_up_button, 1, 1)
+        layout.addWidget(tailscale_down_button, 1, 2)
+        layout.addWidget(self.tailscale_health_text, 2, 0, 1, 3)
+        layout.addWidget(self.power_status_label, 3, 0)
+        layout.addWidget(power_refresh, 3, 1, 1, 2)
+        layout.addWidget(self.power_setup_text, 4, 0, 1, 3)
         layout.setColumnStretch(0, 1)
         root.addWidget(group)
 
@@ -261,6 +267,8 @@ class RemoteSettingsDialog(QDialog):
             self._apply_tailscale_payload(payload if isinstance(payload, dict) else {})
         elif task_name == "tailscale_ensure":
             self._apply_tailscale_ensure_payload(payload if isinstance(payload, dict) else {})
+        elif task_name in {"tailscale_up", "tailscale_down"}:
+            self._apply_tailscale_control_payload(payload if isinstance(payload, dict) else {})
         elif task_name == "power":
             self._apply_power_setup_payload(payload if isinstance(payload, dict) else {})
 
@@ -269,7 +277,7 @@ class RemoteSettingsDialog(QDialog):
             self.server_status_label.setText(f"원격 로그 설정 조회 실패: {exc}")
         elif task_name == "devices":
             self.pairing_status_label.setText(f"기기 목록 조회 실패: {exc}")
-        elif task_name in {"tailscale", "tailscale_ensure"}:
+        elif task_name in {"tailscale", "tailscale_ensure", "tailscale_up", "tailscale_down"}:
             self.tailscale_summary_label.setText("Tailscale: 조회 실패")
             self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
         elif task_name == "power":
@@ -426,11 +434,13 @@ class RemoteSettingsDialog(QDialog):
     def _apply_tailscale_payload(self, tailscale: dict) -> None:
         color = tailscale.get("color") or "unknown"
         state = tailscale.get("state") or "unknown"
+        foundation_state = tailscale.get("foundation_state") or "unknown"
         message = tailscale.get("message") or "tailscale 상태 미확인"
-        self.tailscale_summary_label.setText(f"Tailscale: {state} · {message}")
+        self.tailscale_summary_label.setText(f"Tailscale: {foundation_state} · {message}")
         self.tailscale_health_text.setPlainText(
             "Tailscale readiness\n"
             f"- state: {state}\n"
+            f"- foundation_state: {foundation_state}\n"
             f"- color: {color}\n"
             f"- message: {message}\n"
             f"- suggested_base_urls: {tailscale.get('suggested_base_urls')}\n"
@@ -448,6 +458,30 @@ class RemoteSettingsDialog(QDialog):
 
     def _apply_tailscale_ensure_payload(self, payload: dict) -> None:
         self.tailscale_summary_label.setText(f"Tailscale: {'ready' if payload.get('ready') else 'not ready'} · {payload.get('message')}")
+        self.tailscale_health_text.setPlainText(str(payload))
+
+    def _tailscale_up(self):
+        self.tailscale_summary_label.setText("Tailscale: 활성화 중...")
+        self.tailscale_health_text.setPlainText("설치된 Tailscale CLI 경로를 찾아 tailscale up --accept-routes를 실행합니다.")
+        def task():
+            response = requests.post(f"{self.base_url}/remote/tailscale/up", timeout=45)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("tailscale_up", task)
+
+    def _tailscale_down(self):
+        self.tailscale_summary_label.setText("Tailscale: 비활성화 중...")
+        self.tailscale_health_text.setPlainText("호스트 로컬에서 tailscale down을 실행해 Tailscale 네트워크만 비활성화합니다. 설치 제거는 하지 않습니다.")
+        def task():
+            response = requests.post(f"{self.base_url}/remote/tailscale/down", timeout=30)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("tailscale_down", task)
+
+    def _apply_tailscale_control_payload(self, payload: dict) -> None:
+        after = payload.get("after") if isinstance(payload.get("after"), dict) else {}
+        state = after.get("foundation_state") or after.get("state") or ("ready" if payload.get("ready") else "unknown")
+        self.tailscale_summary_label.setText(f"Tailscale: {state} · {payload.get('message')}")
         self.tailscale_health_text.setPlainText(str(payload))
 
     def _refresh_power_setup(self):

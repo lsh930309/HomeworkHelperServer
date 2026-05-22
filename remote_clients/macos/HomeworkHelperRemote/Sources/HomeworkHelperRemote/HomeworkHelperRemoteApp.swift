@@ -1166,8 +1166,16 @@ struct RemoteSettingsView: View {
 
             RemoteSettingsSection("Tailscale") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
+                    SettingsActionGrid {
+                        Button("Tailscale 기반환경 활성화") { Task { await viewModel.activateLocalTailscale() } }
+                            .disabled(viewModel.isLoading)
+                        Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
+                            .disabled(viewModel.isLoading)
+                        Button("Tailscale 네트워크 비활성화", role: .destructive) { Task { await viewModel.deactivateLocalTailscale() } }
+                            .disabled(viewModel.isLoading)
+                    }
                     if let local = viewModel.localTailscale {
+                        SidebarInfoRow(label: "기반환경", value: local.foundationState)
                         SidebarInfoRow(label: "로컬 상태", value: local.message)
                         if !local.selfIPs.isEmpty {
                             SidebarInfoRow(label: "이 Mac", value: local.selfIPs.joined(separator: ", "))

@@ -27,6 +27,8 @@ Security rules:
 
 - Do not expose the Remote Agent publicly without bearer-token auth and a private network boundary.
 - Prefer LAN firewall/Tailscale-style private routing over public port forwarding.
+- HomeworkHelper Remote assumes host and client are on the same Tailscale tailnet. The apps therefore treat Tailscale as a required foundation layer: missing clients are installed from the official package source where possible, installed clients are launched with the discovered executable path, and `tailscale up --accept-routes` / `tailscale down` are used for local activation/deactivation instead of relying on a shell alias.
+- First-time Tailscale account creation, login, macOS VPN/System Extension approval, and any auth-key/MDM policy rollout remain explicit user/admin approval steps.
 - `/remote/pair/start` is intended for loopback or trusted/authenticated setup.
 - The host does not expose arbitrary shell or power-execution endpoints.
 - If Tailscale/TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.

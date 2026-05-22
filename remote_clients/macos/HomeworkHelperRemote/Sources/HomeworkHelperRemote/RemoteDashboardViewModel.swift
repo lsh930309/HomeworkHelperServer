@@ -397,7 +397,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             : "SSH key 자동 등록/health 확인 필요"
         let powerDetail = "\(wakeDetail) · \(sshDetail)"
         return [
-            ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "Tailscale 찾기/자동 실행 필요", localTailscale?.running == true),
+            ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "기반환경 상태: \(localTailscale?.foundationState ?? "unknown") · Tailscale 설치/실행/로그인 필요", localTailscale?.running == true),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
             ("4. 전원 관리", powerDetail, powerHealthy),
@@ -1807,7 +1807,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func discoverTailscale() async {
         message = "Tailscale CLI 확인 중..."
-        let snapshot = await TailscaleDiscovery.ensureReady()
+        let snapshot = await TailscaleDiscovery.activateNetwork()
         localTailscale = snapshot
         if let url = snapshot.suggestedBaseURLs.first {
             baseURLText = url
@@ -1816,6 +1816,26 @@ final class RemoteDashboardViewModel: ObservableObject {
         } else {
             message = snapshot.message
         }
+    }
+
+    func activateLocalTailscale() async {
+        isLoading = true
+        defer { isLoading = false }
+        setupProgress = "Mac Tailscale 기반환경을 설치/실행/활성화하는 중..."
+        let snapshot = await TailscaleDiscovery.activateNetwork()
+        localTailscale = snapshot
+        setupProgress = snapshot.running ? "Mac Tailscale 활성화 완료: \(snapshot.selfIPs.joined(separator: ", "))" : snapshot.message
+        message = setupProgress
+    }
+
+    func deactivateLocalTailscale() async {
+        isLoading = true
+        defer { isLoading = false }
+        setupProgress = "Mac Tailscale 네트워크를 비활성화하는 중..."
+        let snapshot = await TailscaleDiscovery.deactivateNetwork()
+        localTailscale = snapshot
+        setupProgress = snapshot.message
+        message = setupProgress
     }
 
     func applySuggestedBaseURL(_ url: String) {

@@ -140,7 +140,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.12"
+    assert body["remote_api_version"] == "0.1.13"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -336,6 +336,73 @@ def test_remote_readiness_reports_tailscale_and_power_sections():
     assert body["power_readiness"]["supported_actions"] == []
     assert body["remote_connectivity"]["color"] == "green"
     assert set(body) >= {"beholder_health", "remote_connectivity", "server_mode_readiness", "power_readiness", "tailscale_readiness"}
+
+
+def test_remote_tailscale_control_routes_keep_down_local_only(monkeypatch):
+    import src.api.remote_routes as remote_routes
+
+    class Snapshot:
+        ready = True
+        foundation_state = "ready"
+
+        def as_dict(self):
+            return {
+                "installed": True,
+                "running": True,
+                "backend_state": "Running",
+                "state": "ready",
+                "foundation_state": "ready",
+                "self_ips": ["100.64.0.1"],
+                "self_hostname": "host",
+                "peers": [],
+                "message": "ready",
+            }
+
+    class Result:
+        def __init__(self, enabled: bool):
+            self.action = "up" if enabled else "down"
+            self.before = Snapshot()
+            self.after = Snapshot()
+            self.attempted = True
+            self.succeeded = True
+            self.method = "mock"
+            self.message = "mocked"
+
+        def as_dict(self):
+            return {
+                "action": self.action,
+                "attempted": self.attempted,
+                "succeeded": self.succeeded,
+                "ready": self.after.ready,
+                "method": self.method,
+                "message": self.message,
+                "before": self.before.as_dict(),
+                "after": self.after.as_dict(),
+            }
+
+    calls: list[bool] = []
+
+    def fake_control(enabled: bool):
+        calls.append(enabled)
+        return Result(enabled)
+
+    monkeypatch.setattr(remote_routes, "set_tailscale_network_enabled", fake_control)
+    local_client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(auth_token="secret-token")
+
+    up = local_client.post("/remote/tailscale/up", headers={"Authorization": "Bearer secret-token"})
+    down = local_client.post("/remote/tailscale/down", headers={"Authorization": "Bearer secret-token"})
+
+    assert up.status_code == 200
+    assert up.json()["action"] == "up"
+    assert down.status_code == 200
+    assert down.json()["action"] == "down"
+    assert calls == [True, False]
+    assert auditor.events[-2]["command"] == "tailscale.up"
+    assert auditor.events[-1]["command"] == "tailscale.down"
+
+    remote_client, *_ = _client_with_seed(auth_token="secret-token", client_address=("100.64.0.2", 54321))
+    rejected = remote_client.post("/remote/tailscale/down", headers={"Authorization": "Bearer secret-token"})
+    assert rejected.status_code == 403
 
 
 def test_remote_local_store_health_endpoint_reports_manifest_integrity():
