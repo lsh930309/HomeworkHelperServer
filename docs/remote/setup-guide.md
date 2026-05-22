@@ -27,6 +27,7 @@ Security rules:
 - Prefer LAN firewall/Tailscale-style private routing over public port forwarding.
 - `/remote/pair/start` is intended for loopback or trusted/authenticated setup.
 - The host does not expose arbitrary shell or power-execution endpoints.
+- If Tailscale/TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.
 
 ## 2. Pairing and tokens
 
