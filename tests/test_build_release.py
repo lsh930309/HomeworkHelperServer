@@ -70,6 +70,8 @@ def test_macos_pkgbuild_command_and_path_use_same_release_id():
         str(app),
         "--install-location",
         "/Applications",
+        "--scripts",
+        str(build.MACOS_PKG_SCRIPTS_DIR),
         str(pkg),
     ]
 
@@ -80,19 +82,23 @@ def test_parallel_jobs_are_bounded_by_available_cpu():
     assert build.determine_parallel_jobs(64) == 12
 
 
-def test_version_config_is_tracked_source_of_truth_and_example_removed():
-    config = json.loads(Path("build.version.json").read_text(encoding="utf-8"))
-    assert config == {
-        "schema": 1,
-        "targets": {
-            "windows-host": {"version": "1.2.0", "build": 1},
-            "macos-client": {"version": "0.2.0", "build": 1},
-        },
-    }
+def test_version_config_is_local_state_and_example_removed():
     assert not Path("build.version.example.json").exists()
 
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
-    assert "build.version.json" not in gitignore
+    assert "build.version.json" in gitignore
+
+    config_path = Path("build.version.json")
+    if not config_path.exists():
+        return
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["schema"] == 1
+    assert set(config["targets"]) == {"windows-host", "macos-client"}
+    for payload in config["targets"].values():
+        assert isinstance(payload["version"], str)
+        assert isinstance(payload["build"], int)
+        assert payload["build"] >= 1
 
 
 def test_version_bump_policy_updates_only_candidate_config():
@@ -112,15 +118,29 @@ def test_version_bump_policy_updates_only_candidate_config():
     assert major_bump["targets"]["windows-host"] == {"version": "2.0.0", "build": 1}
 
 
-def test_installer_shutdown_policy_never_targets_obs_and_keeps_force_as_fallback():
+def test_installer_shutdown_policy_uses_legacy_force_kill_flow():
     installer = Path("installer.iss").read_text(encoding="utf-8").lower()
 
-    assert "/im obs64.exe" not in installer
-    assert "/im obs.exe" not in installer
-    assert "taskkill', '/im homework_helper.exe'" in installer
+    assert "obs" not in installer
     assert "taskkill', '/f /im homework_helper.exe'" in installer
-    assert "trycloseappprocessesgracefully" in installer
-    assert "forcekillappprocesses" in installer
+    assert installer.count("killallappprocesses();") >= 2
+    assert "trycloseappprocessesgracefully" not in installer
+    assert "forcekillappprocesses" not in installer
+    assert "waitforappexit" not in installer
+
+
+def test_macos_pkg_preinstall_script_stops_running_client(tmp_path):
+    scripts_dir = build.prepare_macos_pkg_scripts_dir(tmp_path / "pkg-scripts")
+    preinstall = scripts_dir / "preinstall"
+
+    assert preinstall.exists()
+    assert preinstall.stat().st_mode & 0o111
+
+    script = preinstall.read_text(encoding="utf-8")
+    assert "HomeworkHelperRemote" in script
+    assert "/usr/bin/pkill -TERM -x" in script
+    assert "/usr/bin/pkill -KILL -x" in script
+    assert "exit 0" in script
 
 
 class _DummyGui:

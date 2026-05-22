@@ -54,6 +54,8 @@ MACOS_APP_NAME = "HomeworkHelperRemote.app"
 MACOS_APP_BUNDLE = DIST_DIR / "macos" / MACOS_APP_NAME
 MACOS_SWIFT_RELEASE_EXECUTABLE = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / ".build" / "release" / "HomeworkHelperRemote"
 MACOS_APP_EXECUTABLE = MACOS_APP_BUNDLE / "Contents" / "MacOS" / "HomeworkHelperRemote"
+MACOS_APP_PROCESS_NAME = "HomeworkHelperRemote"
+MACOS_PKG_SCRIPTS_DIR = BUILD_DIR / "macos-pkg-scripts"
 
 VERSION_SCHEMA = 1
 VERSION_BUMP_CHOICES = ("none", "build", "patch", "minor", "major")
@@ -1517,13 +1519,49 @@ def macos_pkg_path(version_info):
     return RELEASE_DIR / f"HomeworkHelperRemote_{version_info['string']}.pkg"
 
 
-def create_pkgbuild_command(app_bundle: Path, pkg_path: Path):
+def macos_pkg_preinstall_script(process_name: str = MACOS_APP_PROCESS_NAME) -> str:
+    """Return the PKG preinstall script that stops the running macOS client."""
+    return f"""#!/bin/sh
+set +e
+
+APP_PROCESS="{process_name}"
+
+/usr/bin/pkill -TERM -x "$APP_PROCESS" >/dev/null 2>&1 || true
+
+for _attempt in 1 2 3 4 5; do
+  if ! /usr/bin/pgrep -x "$APP_PROCESS" >/dev/null 2>&1; then
+    exit 0
+  fi
+  /bin/sleep 1
+done
+
+/usr/bin/pkill -KILL -x "$APP_PROCESS" >/dev/null 2>&1 || true
+exit 0
+"""
+
+
+def prepare_macos_pkg_scripts_dir(scripts_dir: Path | None = None) -> Path:
+    """Create pkgbuild scripts dir with a preinstall hook for in-place updates."""
+    scripts_dir = scripts_dir or MACOS_PKG_SCRIPTS_DIR
+    if scripts_dir.exists():
+        shutil.rmtree(scripts_dir)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    preinstall = scripts_dir / "preinstall"
+    preinstall.write_text(macos_pkg_preinstall_script(), encoding="utf-8")
+    preinstall.chmod(0o755)
+    return scripts_dir
+
+
+def create_pkgbuild_command(app_bundle: Path, pkg_path: Path, scripts_dir: Path | None = None):
+    scripts_dir = scripts_dir or MACOS_PKG_SCRIPTS_DIR
     return [
         "pkgbuild",
         "--component",
         str(app_bundle),
         "--install-location",
         "/Applications",
+        "--scripts",
+        str(scripts_dir),
         str(pkg_path),
     ]
 
@@ -1619,7 +1657,9 @@ def create_macos_pkg(gui, version_info):
     pkg_path = macos_pkg_path(version_info)
     if pkg_path.exists():
         pkg_path.unlink()
-    cmd = create_pkgbuild_command(MACOS_APP_BUNDLE, pkg_path)
+    scripts_dir = prepare_macos_pkg_scripts_dir()
+    gui.log(f"PKG preinstall script: {scripts_dir / 'preinstall'}")
+    cmd = create_pkgbuild_command(MACOS_APP_BUNDLE, pkg_path, scripts_dir)
     gui.log(f"PKG 명령: {' '.join(cmd)}\n")
     try:
         process = subprocess.run(
