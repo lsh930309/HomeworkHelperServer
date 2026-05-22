@@ -30,6 +30,48 @@ Last refreshed: 2026-05-22
 5. **incident ZIP을 repo에 커밋하지 않는다.**
    - ZIP에는 실제 사용자 DB와 로그가 들어 있다.
 
+## 2.1 SSH 실기기 testbench: 운영 호스트와 격리된 로직 테스트
+
+호스트 앱 업데이트 전후에 “실제 Windows 패키지 환경에서 Remote Agent 로직이 정상인지”만 빠르게 확인해야 할 때는 운영 앱을 직접 건드리지 말고 testbench 워크플로우를 쓴다.
+
+```bash
+./.venv/bin/python tools/ssh_host_testbench.py \
+  --host <tailscale-host-ip-or-name> \
+  --user <windows-user> \
+  --identity ~/.ssh/homeworkhelper_remote_ed25519
+```
+
+실제 연결 없이 AI coding agent가 수행할 작업과 제외 항목만 확인하려면:
+
+```bash
+./.venv/bin/python tools/ssh_host_testbench.py \
+  --dry-run \
+  --host <tailscale-host-ip-or-name> \
+  --user <windows-user> \
+  --identity ~/.ssh/homeworkhelper_remote_ed25519
+```
+
+testbench의 격리 원칙:
+
+- 설치된 패키지 폴더를 원격 `%TEMP%\HHHostTestbench\<session>` 아래로 shadow copy한다.
+- 실행 파일명은 `hh_testbench_<session>.exe`로 바꿔 실행한다.
+- `--testbench-server`로 GUI, 관리자 권한 전환, 단일 인스턴스 GUI 경로를 건너뛰고 FastAPI 서버만 띄운다.
+- `HH_API_PORT`, `HH_SERVER_MUTEX_NAME`, `HH_TEST_APPDATA_DIR`, `APPDATA`, `LOCALAPPDATA`를 세션별로 분리한다.
+- 운영 `homework_helper.exe`, 운영 DB, 운영 `%APPDATA%\HomeworkHelper`를 수정하지 않는다.
+- 종료 시 testbench가 시작한 PID만 종료하고, 기본값으로 원격 testbench temp root를 자동 삭제한다.
+- 결과는 현재 코드베이스의 `artifacts/ssh-host-testbench/<session>/summary.json` 및 `report.md`에 남긴다. `artifacts/`는 git ignore 대상이다.
+
+testbench가 다루는 범위는 **로직/API 동작 관측**이다. 다음은 원격 자동 테스트에서 제외하고, 사용자가 패키지 업데이트 후 직접 확인할 항목으로 보고한다.
+
+- 레지스트리 수정, 설치 프로그램 등록/삭제
+- UAC/admin 권한 전환 프롬프트
+- Windows scheduled task/service 등록
+- firewall/OpenSSH/Tailscale 시스템 설정 변경
+- 실제 sleep/restart/shutdown 전원 동작
+- 실제 게임, 브라우저, OBS 실행처럼 사용자 세션에 보이는 부작용
+
+주의: 이 testbench는 새 버전 코드가 Windows host에 pull/build/install된 뒤에 사용해야 한다. 구버전 패키지에는 `--testbench-server`와 testbench AppData/mutex 분리 기능이 없을 수 있다.
+
 ## 3. 준비물
 
 macOS 클라이언트에서 다음이 확인되어야 한다.

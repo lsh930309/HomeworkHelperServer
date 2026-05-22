@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-05-19
+Last refreshed: 2026-05-22
 
 HomeworkHelper exposes a local **Remote Agent** from the desktop app and controls it from native clients. The Remote Agent is local-first: it uses the existing FastAPI app, SQLite data, pairing tokens, and LAN/Tailscale-style private access rather than a hosted relay.
 
@@ -21,6 +21,8 @@ HH_REMOTE_REQUIRE_AUTH=1 \
 ./.venv/bin/python homework_helper.pyw --server
 ```
 
+`--server` is a server-only entrypoint: it starts the FastAPI Remote Agent without entering the GUI single-instance/admin prompt path. SSH real-device test sessions can use the stricter `--testbench-server` variant through `tools/ssh_host_testbench.py`, which shadow-copies the installed package, assigns a per-session port/mutex/AppData root, writes a local report under `artifacts/ssh-host-testbench/`, and cleans the remote temp root after the run.
+
 Security rules:
 
 - Do not expose the Remote Agent publicly without bearer-token auth and a private network boundary.
@@ -28,6 +30,7 @@ Security rules:
 - `/remote/pair/start` is intended for loopback or trusted/authenticated setup.
 - The host does not expose arbitrary shell or power-execution endpoints.
 - If Tailscale/TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.
+- For package-environment logic checks, prefer the isolated SSH testbench in `docs/remote/host-ssh-diagnostics-runbook.md` over probing or killing the production host process.
 
 ## 2. Pairing and tokens
 

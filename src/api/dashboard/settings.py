@@ -4,7 +4,9 @@
 import json
 import os
 
-SETTINGS_DIR = os.path.join(os.getenv('APPDATA', os.path.expanduser('~')), 'HomeworkHelper')
+from src.utils.app_paths import get_app_data_dir
+
+SETTINGS_DIR = get_app_data_dir()
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, 'dashboard_settings.json')
 
 DEFAULT_SETTINGS = {

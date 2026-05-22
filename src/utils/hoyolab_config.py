@@ -5,9 +5,10 @@ Windows DPAPI를 사용하여 HoYoLab 쿠키 정보를 안전하게 저장합니
 """
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Optional
+
+from src.utils.app_paths import get_app_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class HoYoLabConfig:
         CREDENTIALS_FILE: 암호화된 인증 정보 파일명
     """
     
-    CONFIG_DIR = Path(os.environ.get("APPDATA", "")) / "HomeworkHelper"
+    CONFIG_DIR = Path(get_app_data_dir())
     CREDENTIALS_FILE = "hoyolab_credentials.enc"
     
     def __init__(self):

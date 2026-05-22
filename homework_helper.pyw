@@ -15,6 +15,13 @@ import shutil
 import threading
 from typing import List, Optional, Dict, Any
 
+from src.utils.app_paths import (
+    get_app_data_dir,
+    get_server_mutex_name,
+    get_testbench_session_id,
+    is_testbench_mode,
+)
+
 # =============================================================================
 # [핵심 해결책] OS DPI 무시 + 사용자 지정 배율 적용
 # 절전 모드 복구 시 Qt가 배율을 착각하는 문제를 원천 차단
@@ -31,12 +38,7 @@ def get_user_scale_factor() -> float:
         # (QApplication 생성 전이므로 QSettings 사용 불가)
         import configparser
         
-        if sys.platform == "win32":
-            app_data = os.getenv('APPDATA', os.path.expanduser('~'))
-        else:
-            app_data = os.path.expanduser('~/.config')
-        
-        config_path = os.path.join(app_data, 'HomeworkHelper', 'display_settings.ini')
+        config_path = os.path.join(get_app_data_dir(), 'display_settings.ini')
         
         if os.path.exists(config_path):
             config = configparser.ConfigParser()
@@ -163,19 +165,6 @@ def wait_for_server_ready(max_wait_seconds: int = 10, base_url: str | None = Non
     print("API 서버가 시간 내에 응답하지 않았습니다.")
     return False
 
-def get_app_data_dir():
-    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
-    if os.name == 'nt':  # Windows
-        app_data = os.getenv('APPDATA')
-        if not app_data:
-            app_data = os.path.expanduser('~')
-    else:  # Linux/Mac
-        app_data = os.path.expanduser('~/.config')
-
-    app_dir = os.path.join(app_data, 'HomeworkHelper')
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
-
 def is_server_running() -> bool:
     """
     Windows Named Mutex를 사용하여 서버가 실행 중인지 확인합니다.
@@ -190,7 +179,7 @@ def is_server_running() -> bool:
         import win32api
         import winerror
 
-        mutex_name = "Local\\HomeworkHelperDBServerMutex"
+        mutex_name = get_server_mutex_name()
 
         # 뮤텍스 열기 시도 (이미 존재하면 서버 실행 중)
         try:
@@ -259,8 +248,10 @@ def _process_looks_like_homework_helper(proc: Any) -> bool:
         command_line = ""
     return (
         "homework_helper" in name
+        or "hh_testbench" in name
         or "homeworkhelper" in command_line
         or "homework_helper" in command_line
+        or "hh_testbench" in command_line
     )
 
 
@@ -403,6 +394,12 @@ def _multiprocessing_parent_pid() -> int | None:
         return None
     return None
 
+
+def _wants_server_only_mode(argv: list[str] | None = None) -> bool:
+    """Return True when this process should start only the FastAPI server."""
+    args = (argv or sys.argv)[1:]
+    return any(arg in {"--server", "--testbench-server", "--run-server"} for arg in args)
+
 def start_api_server() -> bool:
     """FastAPI 서버를 독립 프로세스로 실행합니다 (multiprocessing.Process 방식)."""
     global api_server_process
@@ -449,7 +446,11 @@ def start_api_server() -> bool:
         return False
 
 def run_server_main():
-    """'--run-server' 인자가 있을 때 uvicorn 서버를 실행하는 함수."""
+    """uvicorn 서버만 실행하는 함수.
+
+    GUI에서 multiprocessing으로 호출하거나, SSH testbench가 ``--testbench-server``
+    / ``--server`` 인자로 직접 실행한다.
+    """
     import signal
     import threading
     import logging
@@ -470,6 +471,7 @@ def run_server_main():
     log_file = os.path.join(data_dir, "db_server.log")
     metadata_file = os.path.join(data_dir, "db_server_meta.json")
     parent_process_id = _multiprocessing_parent_pid()
+    mutex_name = get_server_mutex_name()
 
     # 로깅 시스템 설정 (파일 기반, 순환 로그)
     logger = logging.getLogger('DBServer')
@@ -503,6 +505,7 @@ def run_server_main():
     logger.info(f"부모 GUI PID: {parent_process_id or 'unknown'}")
     logger.info(f"로그 파일: {log_file}")
     logger.info(f"데이터 디렉토리: {data_dir}")
+    logger.info(f"테스트벤치 모드: {is_testbench_mode()}")
 
     # Windows Named Mutex 생성 (프로세스 유일성 보장)
     server_mutex = None
@@ -510,7 +513,6 @@ def run_server_main():
         try:
             import win32event
             import win32api
-            mutex_name = "Local\\HomeworkHelperDBServerMutex"
             server_mutex = win32event.CreateMutex(None, False, mutex_name)
             if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
                 logger.error("서버가 이미 실행 중입니다! 중복 실행 불가.")
@@ -534,6 +536,12 @@ def run_server_main():
                     "started_at": time.time(),
                     "started_at_iso": datetime.datetime.now().isoformat(),
                     "api_port": resolve_api_port(),
+                    "server_mutex_name": mutex_name,
+                    "testbench_mode": is_testbench_mode(),
+                    "testbench_session_id": get_testbench_session_id(),
+                    "app_data_dir": app_data_dir,
+                    "data_dir": data_dir,
+                    "executable": sys.executable,
                     "argv": sys.argv,
                 },
                 f,
@@ -813,6 +821,8 @@ def run_server_main():
             "pid": os.getpid(),
             "host": api_host,
             "port": api_port,
+            "testbench_mode": is_testbench_mode(),
+            "testbench_session_id": get_testbench_session_id(),
             "server_time": time.time(),
         }
 
@@ -839,6 +849,8 @@ def run_server_main():
             "host": api_host,
             "port": api_port,
             "base_url": f"http://127.0.0.1:{api_port}",
+            "testbench_mode": is_testbench_mode(),
+            "testbench_session_id": get_testbench_session_id(),
             "db_ready": db_ready,
             "db_error": db_error,
             "db_probe_ms": round(db_probe_ms, 2),
@@ -1525,6 +1537,10 @@ if __name__ == "__main__":
     # PyInstaller 다중 프로세스 지원 (필수!)
     import multiprocessing
     multiprocessing.freeze_support()
+
+    if _wants_server_only_mode():
+        run_server_main()
+        sys.exit(0)
 
     # 디버깅: _MEIPASS 경로 확인
     if getattr(sys, 'frozen', False):

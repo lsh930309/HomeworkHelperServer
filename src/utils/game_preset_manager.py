@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from src.utils.app_paths import get_app_data_dir
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_LABEL,
     NIKKE_OUTPOST_RESOURCE_KEY,
@@ -30,7 +31,7 @@ class GamePresetManager:
     SYSTEM_PRESET_FILE = Path(__file__).parent.parent / "data" / "game_presets.json"
     
     # 사용자 프리셋 경로 - 실제 런타임 사용
-    USER_CONFIG_DIR = Path(os.environ.get("APPDATA", "")) / "HomeworkHelper"
+    USER_CONFIG_DIR = Path(get_app_data_dir())
     USER_PRESET_FILE = USER_CONFIG_DIR / "game_presets_user.json"
     CURRENT_SCHEMA_VERSION = 4
     

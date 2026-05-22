@@ -88,3 +88,18 @@ def test_api_server_lifecycle_recovers_stale_orphan_processes():
     assert "parent watchdog 시작" in source
     assert "os._exit(0)" in source
     assert "shutdown_api_resources(\"uvicorn_returned\")" in source
+
+
+def test_server_only_entrypoint_supports_ssh_testbench_before_gui_side_effects():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    main_tail = source[source.index('if __name__ == "__main__":') :]
+
+    assert "def _wants_server_only_mode" in source
+    assert '{"--server", "--testbench-server", "--run-server"}' in source
+    assert "run_server_main()" in main_tail
+    assert main_tail.index("multiprocessing.freeze_support()") < main_tail.index("if _wants_server_only_mode():")
+    assert main_tail.index("if _wants_server_only_mode():") < main_tail.index("cleanup_old_mei_folders()")
+    assert main_tail.index("if _wants_server_only_mode():") < main_tail.index("check_admin_requirement()")
+    assert "get_server_mutex_name()" in source
+    assert '"testbench_mode": is_testbench_mode()' in source
+    assert '"testbench_session_id": get_testbench_session_id()' in source

@@ -6,24 +6,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 import os
 import sys
+from src.utils.app_paths import get_app_data_dir
 
 """데이터베이스 파일 저장 경로 설정
 - 모든 환경: %APPDATA%/HomeworkHelper/homework_helper_data (권한 문제 방지)
 - 개발 환경에서도 동일한 경로 사용 (일관성 유지)
 """
-def get_app_data_dir():
-    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
-    if os.name == 'nt':  # Windows
-        app_data = os.getenv('APPDATA')
-        if not app_data:
-            # fallback: 사용자 홈 디렉토리
-            app_data = os.path.expanduser('~')
-    else:  # Linux/Mac (향후 대비)
-        app_data = os.path.expanduser('~/.config')
-
-    app_dir = os.path.join(app_data, 'HomeworkHelper')
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
 
 base_dir = get_app_data_dir()
 data_dir = os.path.join(base_dir, "homework_helper_data")

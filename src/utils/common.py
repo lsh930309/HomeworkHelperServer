@@ -4,6 +4,8 @@ import os
 import shutil
 from typing import Optional
 
+from src.utils.app_paths import get_app_data_dir
+
 # --- 추가: 실행 파일 기준 경로 반환 함수 ---
 def get_base_path() -> str:
     """PyInstaller 환경이면 실행 파일 위치, 아니면 프로젝트 루트 추정(이 파일의 상위 디렉토리)."""
@@ -22,19 +24,6 @@ def get_bundle_resource_path(relative_path: str) -> str:
     if not base_path:
         base_path = get_base_path()
     return os.path.join(base_path, relative_path)
-
-def get_app_data_dir():
-    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
-    if os.name == 'nt':  # Windows
-        app_data = os.getenv('APPDATA')
-        if not app_data:
-            app_data = os.path.expanduser('~')
-    else:  # Linux/Mac
-        app_data = os.path.expanduser('~/.config')
-
-    app_dir = os.path.join(app_data, 'HomeworkHelper')
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
 
 def get_shortcuts_directory() -> str:
     """homework_helper_data/shortcuts 디렉토리 경로를 반환합니다. (%APPDATA% 사용)"""

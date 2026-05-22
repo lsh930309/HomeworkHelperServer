@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+from src.utils.app_paths import get_app_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ except ImportError:  # pragma: no cover - Windows host dependency
 class NikkeConfig:
     """암호화된 BlablaLink/NIKKE 세션 정보 관리 클래스."""
 
-    CONFIG_DIR = Path(os.environ.get("APPDATA", "")) / "HomeworkHelper"
+    CONFIG_DIR = Path(get_app_data_dir())
     CREDENTIALS_FILE = "nikke_blabla_credentials.enc"
 
     def __init__(self):
