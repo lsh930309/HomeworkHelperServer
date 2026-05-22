@@ -3,6 +3,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 import os
 import sys
 
@@ -41,7 +42,15 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={
         "check_same_thread": False,
-    }
+        "timeout": 5,
+    },
+    # Desktop host processes can run for days and may be restarted out-of-band
+    # during packaging/update flows.  A pooled SQLite connection that is leaked
+    # or wedged in one long-lived process can make every DB-backed HTTP route
+    # wait forever even when the DB file itself is healthy.  NullPool keeps each
+    # request/session on a short-lived SQLite connection and bounds lock waits
+    # through the sqlite timeout/busy_timeout settings below.
+    poolclass=NullPool,
 )
 # 'engine'은 SQLAlchemy가 데이터베이스와 소통하는 핵심 통로입니다.
 # connect_args는 SQLite를 사용할 때만 필요한 옵션입니다.

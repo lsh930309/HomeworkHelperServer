@@ -1,6 +1,7 @@
 # 표준 라이브러리 import
 import sys
 import datetime
+import json
 import os
 import functools
 import ctypes
@@ -233,6 +234,175 @@ def is_server_running_pid_fallback() -> bool:
     except (ValueError, IOError):
         return False
 
+
+def _server_pid_file_path() -> str:
+    data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
+    return os.path.join(data_dir, "db_server.pid")
+
+
+def _read_server_pid_file() -> int | None:
+    try:
+        with open(_server_pid_file_path(), "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def _process_looks_like_homework_helper(proc: Any) -> bool:
+    try:
+        name = (proc.name() or "").lower()
+    except Exception:
+        name = ""
+    try:
+        command_line = " ".join(proc.cmdline()).lower()
+    except Exception:
+        command_line = ""
+    return (
+        "homework_helper" in name
+        or "homeworkhelper" in command_line
+        or "homework_helper" in command_line
+    )
+
+
+def _process_looks_like_homework_api_server(
+    proc: Any,
+    api_listener_pids: set[int] | None = None,
+) -> bool:
+    if not _process_looks_like_homework_helper(proc):
+        return False
+
+    try:
+        process_id = int(proc.pid)
+    except Exception:
+        process_id = None
+    if process_id is not None and api_listener_pids and process_id in api_listener_pids:
+        return True
+
+    try:
+        command_line = " ".join(proc.cmdline()).lower()
+    except Exception:
+        command_line = ""
+    return "--multiprocessing-fork" in command_line or "run_server_main" in command_line
+
+
+def _find_api_listener_pids(port: int | None = None) -> set[int]:
+    try:
+        import psutil
+    except Exception as exc:
+        print(f"API 포트 리스너 확인 실패(psutil 사용 불가): {exc}")
+        return set()
+
+    target_port = port or resolve_api_port()
+    pids: set[int] = set()
+    try:
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.status != psutil.CONN_LISTEN or not conn.laddr or not conn.pid:
+                continue
+            try:
+                local_port = conn.laddr.port
+            except AttributeError:
+                local_port = conn.laddr[1]
+            if local_port == target_port:
+                pids.add(int(conn.pid))
+    except Exception as exc:
+        print(f"API 포트 리스너 확인 중 오류: {exc}")
+    return pids
+
+
+def _terminate_process_id(
+    process_id: int,
+    timeout: float = 5.0,
+    api_listener_pids: set[int] | None = None,
+) -> bool:
+    """Terminate a stale HomeworkHelper API process and escalate only if needed."""
+    if process_id == os.getpid():
+        print(f"현재 프로세스 PID {process_id}는 종료 대상에서 제외합니다.")
+        return False
+
+    try:
+        import psutil
+    except Exception as exc:
+        print(f"psutil 사용 불가로 PID {process_id} 종료를 건너뜁니다: {exc}")
+        return False
+
+    try:
+        proc = psutil.Process(process_id)
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.Error as exc:
+        print(f"PID {process_id} 조회 실패: {exc}")
+        return False
+
+    if not _process_looks_like_homework_api_server(proc, api_listener_pids=api_listener_pids):
+        print(f"PID {process_id}는 HomeworkHelper API 서버로 확인되지 않아 종료하지 않습니다.")
+        return False
+
+    try:
+        print(f"기존 API 서버 PID {process_id} 종료 요청...")
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except psutil.TimeoutExpired:
+            print(f"PID {process_id}가 {timeout:.1f}초 내 종료되지 않아 강제 종료합니다.")
+            proc.kill()
+            proc.wait(timeout=timeout)
+        print(f"기존 API 서버 PID {process_id} 종료 확인.")
+        return True
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.Error as exc:
+        print(f"PID {process_id} 종료 실패: {exc}")
+        return False
+
+
+def _terminate_existing_api_server(timeout: float = 5.0) -> None:
+    """Stop stale API server processes before starting a fresh server."""
+    global api_server_process
+
+    known_pids: set[int] = set()
+    pid_file_pid = _read_server_pid_file()
+    if pid_file_pid:
+        known_pids.add(pid_file_pid)
+    api_listener_pids = _find_api_listener_pids(resolve_api_port())
+    known_pids.update(api_listener_pids)
+
+    if api_server_process and api_server_process.is_alive():
+        print(f"현재 GUI가 시작한 API 서버 PID {api_server_process.pid} 종료 요청...")
+        api_server_process.terminate()
+        api_server_process.join(timeout=timeout)
+        if api_server_process.is_alive():
+            print(f"API 서버 PID {api_server_process.pid}가 종료되지 않아 강제 종료합니다.")
+            api_server_process.kill()
+            api_server_process.join(timeout=timeout)
+        if api_server_process.pid and not api_server_process.is_alive():
+            known_pids.discard(api_server_process.pid)
+
+    for process_id in sorted(known_pids):
+        _terminate_process_id(
+            process_id,
+            timeout=timeout,
+            api_listener_pids=api_listener_pids,
+        )
+
+    try:
+        os.remove(_server_pid_file_path())
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"stale PID 파일 삭제 실패: {exc}")
+
+
+def _multiprocessing_parent_pid() -> int | None:
+    try:
+        import multiprocessing
+
+        parent = multiprocessing.parent_process()
+        if parent is not None and parent.pid:
+            return int(parent.pid)
+    except Exception:
+        return None
+    return None
+
 def start_api_server() -> bool:
     """FastAPI 서버를 독립 프로세스로 실행합니다 (multiprocessing.Process 방식)."""
     global api_server_process
@@ -244,24 +414,7 @@ def start_api_server() -> bool:
                 return True
 
             print("기존 API 서버가 응답하지 않습니다. 종료 후 재시작합니다...")
-            # 직접 참조가 있으면 terminate, 없으면 PID 파일로 종료
-            if api_server_process and api_server_process.is_alive():
-                api_server_process.terminate()
-                api_server_process.join(timeout=3)
-            else:
-                data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
-                pid_file = os.path.join(data_dir, "db_server.pid")
-                try:
-                    with open(pid_file, 'r') as f:
-                        old_pid = int(f.read().strip())
-                    os.kill(old_pid, signal.SIGTERM)
-                    time.sleep(0.5)
-                except Exception:
-                    pass
-                try:
-                    os.remove(pid_file)
-                except FileNotFoundError:
-                    pass
+            _terminate_existing_api_server(timeout=5.0)
 
         print("API 서버를 독립 프로세스로 시작합니다...")
 
@@ -315,6 +468,8 @@ def run_server_main():
     os.makedirs(data_dir, exist_ok=True)
     pid_file = os.path.join(data_dir, "db_server.pid")
     log_file = os.path.join(data_dir, "db_server.log")
+    metadata_file = os.path.join(data_dir, "db_server_meta.json")
+    parent_process_id = _multiprocessing_parent_pid()
 
     # 로깅 시스템 설정 (파일 기반, 순환 로그)
     logger = logging.getLogger('DBServer')
@@ -345,6 +500,7 @@ def run_server_main():
     logger.info("=" * 60)
     logger.info("서버 모드로 실행합니다.")
     logger.info(f"PID: {os.getpid()}")
+    logger.info(f"부모 GUI PID: {parent_process_id or 'unknown'}")
     logger.info(f"로그 파일: {log_file}")
     logger.info(f"데이터 디렉토리: {data_dir}")
 
@@ -370,8 +526,23 @@ def run_server_main():
         with open(pid_file, 'w') as f:
             f.write(str(os.getpid()))
         logger.info(f"PID 파일 생성: {pid_file}")
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "pid": os.getpid(),
+                    "parent_pid": parent_process_id,
+                    "started_at": time.time(),
+                    "started_at_iso": datetime.datetime.now().isoformat(),
+                    "api_port": resolve_api_port(),
+                    "argv": sys.argv,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        logger.info(f"서버 메타데이터 파일 생성: {metadata_file}")
     except Exception as e:
-        logger.error(f"PID 파일 생성 실패: {e}")
+        logger.error(f"PID/메타데이터 파일 생성 실패: {e}")
 
     # --- main.py의 내용을 여기로 통합 ---
     from fastapi import FastAPI, Depends, HTTPException, Header
@@ -450,41 +621,97 @@ def run_server_main():
     logger.info("주기적 WAL checkpoint 스레드 시작 (60초 간격)")
 
     # Graceful shutdown 핸들러
-    def shutdown_handler(signum, frame):
-        """종료 신호 처리 - 안전하게 종료"""
-        logger.info(f"서버 종료 신호 수신 (Signal: {signum}). 안전하게 종료합니다...")
+    shutdown_lock = threading.Lock()
+    shutdown_state = {"started": False}
+
+    def shutdown_api_resources(reason: str, signum: int | None = None) -> None:
+        """Flush DB state and remove lifecycle files exactly once."""
+        with shutdown_lock:
+            if shutdown_state["started"]:
+                return
+            shutdown_state["started"] = True
+
+        logger.info(f"서버 종료 절차 시작: {reason} (Signal: {signum})")
 
         try:
-            # 1. 최종 WAL checkpoint 수행
             logger.info("최종 WAL checkpoint 수행 중...")
             with engine.connect() as conn:
                 conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
                 conn.commit()
             logger.info("WAL checkpoint 완료")
+        except Exception as e:
+            logger.error(f"최종 WAL checkpoint 실패: {e}", exc_info=True)
 
-            # 2. 모든 데이터베이스 연결 종료
+        try:
             engine.dispose()
             logger.info("데이터베이스 연결 종료")
-
-            # 3. Mutex 해제 (프로세스 종료 시 자동 해제되지만 명시적으로 해제)
-            if server_mutex and os.name == 'nt':
-                try:
-                    import win32api
-                    win32api.CloseHandle(server_mutex)
-                    logger.info("Windows Named Mutex 해제")
-                except:
-                    pass
-
-            # 4. PID 파일 삭제
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
-                logger.info("PID 파일 삭제")
         except Exception as e:
-            logger.error(f"종료 처리 중 오류: {e}", exc_info=True)
+            logger.error(f"데이터베이스 연결 종료 실패: {e}", exc_info=True)
+
+        if server_mutex and os.name == 'nt':
+            try:
+                import win32api
+                win32api.CloseHandle(server_mutex)
+                logger.info("Windows Named Mutex 해제")
+            except Exception as e:
+                logger.warning(f"Windows Named Mutex 해제 실패: {e}")
+
+        for lifecycle_file, label in ((pid_file, "PID"), (metadata_file, "메타데이터")):
+            try:
+                if os.path.exists(lifecycle_file):
+                    os.remove(lifecycle_file)
+                    logger.info(f"{label} 파일 삭제: {lifecycle_file}")
+            except Exception as e:
+                logger.error(f"{label} 파일 삭제 실패: {e}", exc_info=True)
 
         logger.info("서버 종료 완료")
         logger.info("=" * 60)
+
+    def shutdown_handler(signum, frame):
+        """종료 신호 처리 - 안전하게 종료"""
+        shutdown_api_resources("signal", signum=signum)
         sys.exit(0)
+
+    def start_parent_watchdog(parent_pid: int | None) -> None:
+        if not parent_pid:
+            logger.info("부모 GUI PID를 확인할 수 없어 parent watchdog을 비활성화합니다.")
+            return
+
+        try:
+            import psutil
+            parent_create_time = psutil.Process(parent_pid).create_time()
+        except Exception as e:
+            parent_create_time = None
+            logger.warning(f"부모 GUI PID {parent_pid} 생성시각 확인 실패: {e}")
+
+        def watch_parent() -> None:
+            try:
+                import psutil
+                while True:
+                    time.sleep(5)
+                    try:
+                        parent = psutil.Process(parent_pid)
+                        if parent_create_time is not None and abs(parent.create_time() - parent_create_time) > 0.001:
+                            raise psutil.NoSuchProcess(parent_pid)
+                    except psutil.NoSuchProcess:
+                        logger.warning(
+                            "부모 GUI PID %s가 사라졌습니다. stale API 서버 방지를 위해 종료합니다.",
+                            parent_pid,
+                        )
+                        shutdown_api_resources(f"parent_pid_{parent_pid}_gone")
+                        os._exit(0)
+                    except Exception as e:
+                        logger.warning(f"부모 GUI PID {parent_pid} 확인 실패: {e}")
+            except Exception as e:
+                logger.error(f"parent watchdog 치명 오류: {e}", exc_info=True)
+
+        watchdog_thread = threading.Thread(
+            target=watch_parent,
+            name="api-parent-watchdog",
+            daemon=True,
+        )
+        watchdog_thread.start()
+        logger.info(f"parent watchdog 시작: parent_pid={parent_pid}")
 
     # Windows에서 Ctrl+C 처리
     if os.name == 'nt':
@@ -492,6 +719,8 @@ def run_server_main():
         signal.signal(signal.SIGTERM, shutdown_handler)
         signal.signal(signal.SIGBREAK, shutdown_handler)
         logger.info("종료 신호 핸들러 등록 완료 (SIGINT, SIGTERM, SIGBREAK)")
+
+    start_parent_watchdog(parent_process_id)
 
     api_host = resolve_api_bind_host()
     api_port = resolve_api_port()
@@ -1038,17 +1267,18 @@ def run_server_main():
     import uvicorn
     # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
     logger.info(f"API 서버 바인딩: {api_host}:{api_port}")
-    uvicorn.run(app, host=api_host, port=api_port, log_level="warning")
+    try:
+        uvicorn.run(app, host=api_host, port=api_port, log_level="warning")
+    finally:
+        shutdown_api_resources("uvicorn_returned")
 
 def stop_api_server():
     """독립 프로세스로 실행된 API 서버를 종료합니다."""
     global api_server_process
     if api_server_process and api_server_process.is_alive():
         print(f"API 서버(PID: {api_server_process.pid}) 종료 중...")
-        api_server_process.terminate()
-        api_server_process.join(timeout=5)
-        if api_server_process.is_alive():
-            api_server_process.kill()
+        _terminate_existing_api_server(timeout=5.0)
+        api_server_process = None
         print("API 서버 종료 완료.")
 
 def ensure_process_table_schema():

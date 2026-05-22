@@ -65,3 +65,26 @@ def test_gui_health_endpoint_contract_is_present():
     assert '"dashboard_static_ready": dashboard_static["ready"]' in source
     assert '"static_probe_ms": round(static_probe_ms, 2)' in source
     assert '"total_ms": round((time.perf_counter() - started_at) * 1000, 2)' in source
+
+
+def test_sqlite_engine_uses_short_lived_connections_for_host_stability():
+    source = Path("src/data/database.py").read_text(encoding="utf-8")
+
+    assert "from sqlalchemy.pool import NullPool" in source
+    assert "poolclass=NullPool" in source
+    assert '"timeout": 5' in source
+    assert "pooled SQLite connection" in source
+
+
+def test_api_server_lifecycle_recovers_stale_orphan_processes():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "def _terminate_existing_api_server" in source
+    assert "def _find_api_listener_pids" in source
+    assert "api_listener_pids = _find_api_listener_pids(resolve_api_port())" in source
+    assert "proc.kill()" in source
+    assert 'metadata_file = os.path.join(data_dir, "db_server_meta.json")' in source
+    assert "def start_parent_watchdog" in source
+    assert "parent watchdog 시작" in source
+    assert "os._exit(0)" in source
+    assert "shutdown_api_resources(\"uvicorn_returned\")" in source
