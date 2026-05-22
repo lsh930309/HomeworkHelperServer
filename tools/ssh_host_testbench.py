@@ -13,10 +13,13 @@ import argparse
 import base64
 import datetime as dt
 import json
+import os
 import random
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,14 +117,32 @@ def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> su
         "-Command",
         "-",
     ]
-    return subprocess.run(  # noqa: S603 - target/identity are explicit CLI inputs for an SSH support tool.
-        command,
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    # macOS OpenSSH -> Windows PowerShell can silently execute only the first
+    # stdin line when Python's subprocess.communicate(input=...) is used with
+    # ``powershell -Command -``.  A real shell redirection from a temporary local
+    # script file consistently delivers the whole script while still avoiding any
+    # remote file residue.
+    fd, script_path = tempfile.mkstemp(prefix="hh-host-testbench-", suffix=".ps1")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(script)
+            if not script.endswith("\n\n"):
+                handle.write("\n")
+        shell_command = " ".join(shlex.quote(part) for part in command) + " < " + shlex.quote(script_path)
+        return subprocess.run(  # noqa: S602,S603 - explicit support-tool command, every dynamic segment is shell-quoted.
+            shell_command,
+            shell=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            executable="/bin/zsh",
+        )
+    finally:
+        try:
+            os.remove(script_path)
+        except FileNotFoundError:
+            pass
 
 
 def _json_b64(payload: dict[str, Any]) -> str:
