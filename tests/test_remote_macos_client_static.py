@@ -96,6 +96,13 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
         'userCycleHours = "user_cycle_hours"',
+        'schemaVersion = "schema_version"',
+        'baseValue = "base_value"',
+        'maxValue = "max_value"',
+        'baseTimestamp = "base_timestamp"',
+        'recoverySecondsPerUnit = "recovery_seconds_per_unit"',
+        'fullRecoverySeconds = "full_recovery_seconds"',
+        'cycleSeconds = "cycle_seconds"',
         'staminaTrackingEnabled = "stamina_tracking_enabled"',
         'iconURL = "icon_url"',
         'iconURLs = "icon_urls"',
@@ -692,6 +699,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "trackBadgeDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
+    assert "allowProjection: false" in view_model
+    assert 'existing?.source == "server_tracked"' in view_model
+    assert "projectedProgress(from:" in view_model
+    assert 'case "linear_percent_fill"' in view_model
     assert "locallyPlayedToday" in view_model
     assert "Calendar.current.isDate" in view_model
     assert "staminaRecoverySecondsPerPoint" in view_model

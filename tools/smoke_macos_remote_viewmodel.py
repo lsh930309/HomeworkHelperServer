@@ -175,7 +175,7 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                     readyAt: Date().addingTimeInterval(7200).timeIntervalSince1970
                 )
                 viewModel.cycleProgressDisplayMode = .remaining
-                guard viewModel.progressMeterDisplayText(staminaProgress) == "44/240",
+                guard viewModel.progressMeterDisplayText(staminaProgress) == "서버 자원 표시",
                       viewModel.progressMeterDisplayText(cycleProgress) == "42%",
                       viewModel.trackBadgeDisplayText(staminaProgress) == "2시간",
                       viewModel.trackBadgeDisplayText(cycleProgress) == "2시간" else {

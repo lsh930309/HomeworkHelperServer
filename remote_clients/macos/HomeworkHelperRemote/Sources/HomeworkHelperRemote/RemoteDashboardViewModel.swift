@@ -1426,20 +1426,20 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func progressMeterDisplayText(_ progress: RemoteProcess.Progress) -> String {
-        if progress.kind == "stamina",
-           let current = progress.staminaCurrent,
-           let maximum = progress.staminaMax,
-           maximum > 0 {
-            return "\(current)/\(maximum)"
+        if (progress.kind == "stamina" || progress.kind == "resource"),
+           !progress.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return progress.displayText
         }
         return Self.percentageText(progress.percentage)
     }
 
     func trackBadgeDisplayText(_ progress: RemoteProcess.Progress) -> String {
-        if cycleProgressDisplayMode == .readyAt, let readyAt = progress.readyAt {
+        let projectedReadyAt = progress.readyAt ?? progress.projection?.readyAt
+        let projectedRemainingSeconds = progress.remainingSeconds ?? progress.projection?.remainingSeconds
+        if cycleProgressDisplayMode == .readyAt, let readyAt = projectedReadyAt {
             return "\(Self.formatCycleReadyAt(readyAt)) 완료"
         }
-        if let remainingSeconds = progress.remainingSeconds {
+        if let remainingSeconds = projectedRemainingSeconds {
             return Self.formatRemainingDuration(seconds: remainingSeconds)
         }
         return progress.displayText
@@ -1451,17 +1451,24 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func refreshLocalProcessDisplay() {
         guard !processes.isEmpty else { return }
+        let shouldProjectLocally = hostAvailabilityState != .online
         processes = processes.map {
             Self.processWithLocalProgress(
                 $0,
                 now: Date(),
-                recomputePlayedToday: hostAvailabilityState != .online
+                recomputePlayedToday: shouldProjectLocally,
+                allowProjection: shouldProjectLocally
             )
         }
     }
 
-    private static func processWithLocalProgress(_ process: RemoteProcess, now: Date, recomputePlayedToday: Bool) -> RemoteProcess {
-        let progress = localProgress(for: process, now: now) ?? process.progress
+    private static func processWithLocalProgress(
+        _ process: RemoteProcess,
+        now: Date,
+        recomputePlayedToday: Bool,
+        allowProjection: Bool
+    ) -> RemoteProcess {
+        let progress = allowProjection ? (localProgress(for: process, now: now) ?? process.progress) : process.progress
         let playedToday = recomputePlayedToday ? locallyPlayedToday(for: process, now: now) : process.playedToday
         let statusText = recomputePlayedToday && !process.isRunning ? (playedToday ? "오늘 실행" : "대기") : process.statusText
         return RemoteProcess(
@@ -1493,27 +1500,11 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private static func localProgress(for process: RemoteProcess, now: Date) -> RemoteProcess.Progress? {
         let existing = process.progress
-        if process.staminaTrackingEnabled,
-           (process.hoyolabGameID ?? existing?.hoyolabGameID) != nil,
-           let current = process.staminaCurrent ?? existing?.staminaCurrent,
-           let maximum = process.staminaMax ?? existing?.staminaMax,
-           maximum > 0 {
-            let elapsed = max(0, now.timeIntervalSince1970 - (process.staminaUpdatedAt ?? now.timeIntervalSince1970))
-            let recovered = Int(elapsed / Self.staminaRecoverySecondsPerPoint)
-            let predicted = min(maximum, max(0, current + recovered))
-            let remainingSeconds = max(0, (maximum - predicted) * Int(Self.staminaRecoverySecondsPerPoint))
-            return RemoteProcess.Progress(
-                kind: "stamina",
-                percentage: min(max((Double(predicted) / Double(maximum)) * 100.0, 0.0), 100.0),
-                displayText: "\(predicted)/\(maximum)",
-                staminaCurrent: predicted,
-                staminaMax: maximum,
-                hoyolabGameID: process.hoyolabGameID ?? existing?.hoyolabGameID,
-                resourceIconURL: existing?.resourceIconURL,
-                resourceIconURLs: existing?.resourceIconURLs,
-                remainingSeconds: remainingSeconds,
-                readyAt: now.addingTimeInterval(Double(remainingSeconds)).timeIntervalSince1970
-            )
+        if let existing, let projected = projectedProgress(from: existing, process: process, now: now) {
+            return projected
+        }
+        if existing?.source == "server_tracked" {
+            return existing
         }
 
         guard let lastPlayed = process.lastPlayedTimestamp,
@@ -1526,9 +1517,17 @@ final class RemoteDashboardViewModel: ObservableObject {
         let percentage = min(max((elapsed / cycleSeconds) * 100.0, 0.0), 100.0)
         let remainingSeconds = max(0, Int(cycleSeconds - elapsed))
         return RemoteProcess.Progress(
+            schemaVersion: existing?.schemaVersion ?? 1,
+            source: existing?.source ?? "timestamp_derived",
             kind: "cycle",
             percentage: percentage,
             displayText: Self.formatRemainingDuration(seconds: remainingSeconds),
+            status: existing?.status ?? "ok",
+            provider: existing?.provider,
+            key: existing?.key,
+            label: existing?.label,
+            updatedAt: existing?.updatedAt,
+            projection: existing?.projection,
             staminaCurrent: nil,
             staminaMax: nil,
             hoyolabGameID: existing?.hoyolabGameID,
@@ -1537,6 +1536,110 @@ final class RemoteDashboardViewModel: ObservableObject {
             remainingSeconds: remainingSeconds,
             readyAt: now.addingTimeInterval(Double(remainingSeconds)).timeIntervalSince1970
         )
+    }
+
+    private static func projectedProgress(
+        from progress: RemoteProcess.Progress,
+        process: RemoteProcess,
+        now: Date
+    ) -> RemoteProcess.Progress? {
+        guard let projection = progress.projection else { return nil }
+        let nowTimestamp = now.timeIntervalSince1970
+        switch projection.strategy {
+        case "linear_recovery":
+            guard let baseValue = projection.baseValue,
+                  let maxValue = projection.maxValue,
+                  maxValue > 0 else { return nil }
+            let baseTimestamp = projection.baseTimestamp ?? progress.updatedAt ?? nowTimestamp
+            let recoverySecondsPerUnit = projection.recoverySecondsPerUnit ?? Self.staminaRecoverySecondsPerPoint
+            guard recoverySecondsPerUnit > 0 else { return nil }
+            let elapsed = max(0, nowTimestamp - baseTimestamp)
+            let recovered = floor(elapsed / recoverySecondsPerUnit)
+            let projectedValue = min(maxValue, max(0, baseValue + recovered))
+            let remainingSeconds = max(0, Int((maxValue - projectedValue) * recoverySecondsPerUnit))
+            let readyAt = nowTimestamp + Double(remainingSeconds)
+            return RemoteProcess.Progress(
+                schemaVersion: progress.schemaVersion,
+                source: progress.source,
+                kind: progress.kind,
+                percentage: min(max((projectedValue / maxValue) * 100.0, 0.0), 100.0),
+                displayText: "\(Int(projectedValue))/\(Int(maxValue))",
+                status: progress.status,
+                provider: progress.provider,
+                key: progress.key,
+                label: progress.label,
+                updatedAt: progress.updatedAt,
+                projection: projection,
+                staminaCurrent: Int(projectedValue),
+                staminaMax: Int(maxValue),
+                hoyolabGameID: progress.hoyolabGameID ?? process.hoyolabGameID,
+                resourceIconURL: progress.resourceIconURL,
+                resourceIconURLs: progress.resourceIconURLs,
+                remainingSeconds: remainingSeconds,
+                readyAt: readyAt
+            )
+        case "linear_percent_fill":
+            guard let baseValue = projection.baseValue else { return nil }
+            let maxValue = projection.maxValue ?? 100.0
+            guard maxValue > 0 else { return nil }
+            let baseTimestamp = projection.baseTimestamp ?? progress.updatedAt ?? nowTimestamp
+            let fullRecoverySeconds = projection.fullRecoverySeconds ?? (24 * 60 * 60)
+            guard fullRecoverySeconds > 0 else { return nil }
+            let elapsed = max(0, nowTimestamp - baseTimestamp)
+            let projectedValue = min(maxValue, max(0, baseValue + (elapsed * maxValue / fullRecoverySeconds)))
+            let remainingSeconds = max(0, Int((maxValue - projectedValue) * fullRecoverySeconds / maxValue))
+            let readyAt = nowTimestamp + Double(remainingSeconds)
+            return RemoteProcess.Progress(
+                schemaVersion: progress.schemaVersion,
+                source: progress.source,
+                kind: progress.kind,
+                percentage: min(max(projectedValue, 0.0), 100.0),
+                displayText: String(format: "%.1f%%", min(max(projectedValue, 0.0), 100.0)),
+                status: progress.status,
+                provider: progress.provider,
+                key: progress.key,
+                label: progress.label,
+                updatedAt: progress.updatedAt,
+                projection: projection,
+                staminaCurrent: progress.staminaCurrent,
+                staminaMax: progress.staminaMax,
+                hoyolabGameID: progress.hoyolabGameID ?? process.hoyolabGameID,
+                resourceIconURL: progress.resourceIconURL,
+                resourceIconURLs: progress.resourceIconURLs,
+                remainingSeconds: remainingSeconds,
+                readyAt: readyAt
+            )
+        case "cycle_elapsed":
+            guard let baseTimestamp = projection.baseTimestamp,
+                  let cycleSeconds = projection.cycleSeconds,
+                  cycleSeconds > 0 else { return nil }
+            let elapsed = max(0, nowTimestamp - baseTimestamp)
+            let percentage = min(max((elapsed / cycleSeconds) * 100.0, 0.0), 100.0)
+            let remainingSeconds = max(0, Int(cycleSeconds - elapsed))
+            let readyAt = nowTimestamp + Double(remainingSeconds)
+            return RemoteProcess.Progress(
+                schemaVersion: progress.schemaVersion,
+                source: progress.source,
+                kind: progress.kind,
+                percentage: percentage,
+                displayText: Self.formatRemainingDuration(seconds: remainingSeconds),
+                status: progress.status,
+                provider: progress.provider,
+                key: progress.key,
+                label: progress.label,
+                updatedAt: progress.updatedAt,
+                projection: projection,
+                staminaCurrent: progress.staminaCurrent,
+                staminaMax: progress.staminaMax,
+                hoyolabGameID: progress.hoyolabGameID ?? process.hoyolabGameID,
+                resourceIconURL: progress.resourceIconURL,
+                resourceIconURLs: progress.resourceIconURLs,
+                remainingSeconds: remainingSeconds,
+                readyAt: readyAt
+            )
+        default:
+            return nil
+        }
     }
 
     private static func formatRemainingDuration(seconds: Int) -> String {
@@ -1899,7 +2002,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         do {
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
             if processes.isEmpty {
@@ -1919,7 +2022,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = try await service.beholderIncidents()
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
             if processes.isEmpty {
@@ -1952,7 +2055,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             if includeDevices {
                 applyDevices(try await service.devices())

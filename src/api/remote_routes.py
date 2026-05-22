@@ -32,7 +32,7 @@ from src.data import beholder, crud, models, schemas
 from src.utils.game_preset_manager import GamePresetManager
 
 
-REMOTE_API_VERSION = "0.1.14"
+REMOTE_API_VERSION = "0.2.0"
 TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
 
@@ -756,7 +756,8 @@ def create_remote_router(
         for process in process_source:
             last_played = getattr(process, "last_played_timestamp", None)
             stamina_updated = getattr(process, "stamina_updated_at", None)
-            for candidate in (last_played, stamina_updated):
+            resource_updated = getattr(process, "resource_updated_at", None)
+            for candidate in (last_played, stamina_updated, resource_updated):
                 if candidate is not None:
                     max_updated_at = max(max_updated_at, float(candidate))
             process_rows.append(
@@ -774,6 +775,13 @@ def create_remote_router(
                     "stamina_current": getattr(process, "stamina_current", None),
                     "stamina_max": getattr(process, "stamina_max", None),
                     "stamina_updated_at": stamina_updated,
+                    "resource_tracking_enabled": getattr(process, "resource_tracking_enabled", None),
+                    "resource_provider": getattr(process, "resource_provider", None),
+                    "resource_key": getattr(process, "resource_key", None),
+                    "resource_label": getattr(process, "resource_label", None),
+                    "resource_percent": getattr(process, "resource_percent", None),
+                    "resource_updated_at": resource_updated,
+                    "resource_status": getattr(process, "resource_status", None),
                 }
             )
 

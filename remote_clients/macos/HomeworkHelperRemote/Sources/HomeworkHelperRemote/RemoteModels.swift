@@ -327,9 +327,67 @@ extension RemotePowerConfigPayload {
 
 struct RemoteProcess: Codable, Identifiable {
     struct Progress: Codable {
+        struct Projection: Codable {
+            let strategy: String
+            let unit: String?
+            let baseValue: Double?
+            let maxValue: Double?
+            let baseTimestamp: Double?
+            let recoverySecondsPerUnit: Double?
+            let fullRecoverySeconds: Double?
+            let cycleSeconds: Double?
+            let remainingSeconds: Int?
+            let readyAt: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case strategy
+                case unit
+                case baseValue = "base_value"
+                case maxValue = "max_value"
+                case baseTimestamp = "base_timestamp"
+                case recoverySecondsPerUnit = "recovery_seconds_per_unit"
+                case fullRecoverySeconds = "full_recovery_seconds"
+                case cycleSeconds = "cycle_seconds"
+                case remainingSeconds = "remaining_seconds"
+                case readyAt = "ready_at"
+            }
+
+            init(
+                strategy: String,
+                unit: String? = nil,
+                baseValue: Double? = nil,
+                maxValue: Double? = nil,
+                baseTimestamp: Double? = nil,
+                recoverySecondsPerUnit: Double? = nil,
+                fullRecoverySeconds: Double? = nil,
+                cycleSeconds: Double? = nil,
+                remainingSeconds: Int? = nil,
+                readyAt: Double? = nil
+            ) {
+                self.strategy = strategy
+                self.unit = unit
+                self.baseValue = baseValue
+                self.maxValue = maxValue
+                self.baseTimestamp = baseTimestamp
+                self.recoverySecondsPerUnit = recoverySecondsPerUnit
+                self.fullRecoverySeconds = fullRecoverySeconds
+                self.cycleSeconds = cycleSeconds
+                self.remainingSeconds = remainingSeconds
+                self.readyAt = readyAt
+            }
+        }
+
+        let schemaVersion: Int
+        let source: String
         let kind: String
         let percentage: Double
         let displayText: String
+        let status: String?
+        let provider: String?
+        let key: String?
+        let label: String?
+        let updatedAt: Double?
+        let projection: Projection?
         let staminaCurrent: Int?
         let staminaMax: Int?
         let hoyolabGameID: String?
@@ -339,9 +397,17 @@ struct RemoteProcess: Codable, Identifiable {
         let readyAt: Double?
 
         enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case source
             case kind
             case percentage
             case displayText = "display_text"
+            case status
+            case provider
+            case key
+            case label
+            case updatedAt = "updated_at"
+            case projection
             case staminaCurrent = "stamina_current"
             case staminaMax = "stamina_max"
             case hoyolabGameID = "hoyolab_game_id"
@@ -349,6 +415,76 @@ struct RemoteProcess: Codable, Identifiable {
             case resourceIconURLs = "resource_icon_urls"
             case remainingSeconds = "remaining_seconds"
             case readyAt = "ready_at"
+        }
+
+        init(
+            schemaVersion: Int = 2,
+            source: String? = nil,
+            kind: String,
+            percentage: Double,
+            displayText: String,
+            status: String? = nil,
+            provider: String? = nil,
+            key: String? = nil,
+            label: String? = nil,
+            updatedAt: Double? = nil,
+            projection: Projection? = nil,
+            staminaCurrent: Int? = nil,
+            staminaMax: Int? = nil,
+            hoyolabGameID: String? = nil,
+            resourceIconURL: String? = nil,
+            resourceIconURLs: [String: String]? = nil,
+            remainingSeconds: Int? = nil,
+            readyAt: Double? = nil
+        ) {
+            self.schemaVersion = schemaVersion
+            self.source = source ?? Self.inferredSource(for: kind)
+            self.kind = kind
+            self.percentage = percentage
+            self.displayText = displayText
+            self.status = status
+            self.provider = provider
+            self.key = key
+            self.label = label
+            self.updatedAt = updatedAt
+            self.projection = projection
+            self.staminaCurrent = staminaCurrent
+            self.staminaMax = staminaMax
+            self.hoyolabGameID = hoyolabGameID
+            self.resourceIconURL = resourceIconURL
+            self.resourceIconURLs = resourceIconURLs
+            self.remainingSeconds = remainingSeconds
+            self.readyAt = readyAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let decodedKind = try container.decode(String.self, forKey: .kind)
+            schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            source = try container.decodeIfPresent(String.self, forKey: .source) ?? Self.inferredSource(for: decodedKind)
+            kind = decodedKind
+            percentage = try container.decode(Double.self, forKey: .percentage)
+            displayText = try container.decode(String.self, forKey: .displayText)
+            status = try container.decodeIfPresent(String.self, forKey: .status)
+            provider = try container.decodeIfPresent(String.self, forKey: .provider)
+            key = try container.decodeIfPresent(String.self, forKey: .key)
+            label = try container.decodeIfPresent(String.self, forKey: .label)
+            updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt)
+            projection = try container.decodeIfPresent(Projection.self, forKey: .projection)
+            staminaCurrent = try container.decodeIfPresent(Int.self, forKey: .staminaCurrent)
+            staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
+            hoyolabGameID = try container.decodeIfPresent(String.self, forKey: .hoyolabGameID)
+            resourceIconURL = try container.decodeIfPresent(String.self, forKey: .resourceIconURL)
+            resourceIconURLs = try container.decodeIfPresent([String: String].self, forKey: .resourceIconURLs)
+            remainingSeconds = try container.decodeIfPresent(Int.self, forKey: .remainingSeconds)
+            readyAt = try container.decodeIfPresent(Double.self, forKey: .readyAt)
+        }
+
+        private static func inferredSource(for kind: String) -> String {
+            if kind == "stamina" || kind == "resource" {
+                return "server_tracked"
+            }
+            return "timestamp_derived"
         }
     }
 

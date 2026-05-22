@@ -140,7 +140,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.14"
+    assert body["remote_api_version"] == "0.2.0"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -1319,6 +1319,23 @@ def test_remote_processes_include_progress_payload():
                 hoyolab_game_id="genshin",
                 stamina_current=80,
                 stamina_max=200,
+                stamina_updated_at=1778497000.0,
+                user_preset_id="honkai_starrail",
+            ),
+            models.Process(
+                id="game-resource",
+                name="Game Resource",
+                monitoring_path="/resource.exe",
+                launch_path="/resource.url",
+                last_played_timestamp=1778497000.0 - (12 * 3600),
+                user_cycle_hours=24,
+                resource_tracking_enabled=True,
+                resource_provider="nikke_blablalink",
+                resource_key="nikke_outpost_storage",
+                resource_label="전초기지 방어 보상",
+                resource_percent=25.0,
+                resource_updated_at=1778497000.0 - (12 * 3600),
+                resource_status="ok",
                 user_preset_id="honkai_starrail",
             ),
         ]
@@ -1327,26 +1344,38 @@ def test_remote_processes_include_progress_payload():
     body = client.get("/remote/processes").json()
     cycle = next(item for item in body if item["id"] == "game-progress")["progress"]
     stamina = next(item for item in body if item["id"] == "game-stamina")["progress"]
+    resource = next(item for item in body if item["id"] == "game-resource")["progress"]
 
+    assert cycle["schema_version"] == 2
+    assert cycle["source"] == "timestamp_derived"
     assert cycle["kind"] == "cycle"
     assert 49.0 <= cycle["percentage"] <= 51.0
     assert 43100 <= cycle["remaining_seconds"] <= 43300
     assert isinstance(cycle["ready_at"], float)
-    assert stamina == {
-        "kind": "stamina",
-        "percentage": 40.0,
-        "display_text": "80/200",
-        "stamina_current": 80,
-        "stamina_max": 200,
-        "hoyolab_game_id": "genshin",
-        "resource_icon_url": "/api/dashboard/resource-icons/game-stamina?size=32",
-        "resource_icon_urls": {
-            "32": "/api/dashboard/resource-icons/game-stamina?size=32",
-            "64": "/api/dashboard/resource-icons/game-stamina?size=64",
-            "128": "/api/dashboard/resource-icons/game-stamina?size=128",
-            "256": "/api/dashboard/resource-icons/game-stamina?size=256",
-        },
-    }
+    assert cycle["projection"]["strategy"] == "cycle_elapsed"
+    assert cycle["projection"]["cycle_seconds"] == 86400
+    assert stamina["schema_version"] == 2
+    assert stamina["source"] == "server_tracked"
+    assert stamina["kind"] == "stamina"
+    assert stamina["percentage"] == 40.0
+    assert stamina["display_text"] == "80/200"
+    assert stamina["stamina_current"] == 80
+    assert stamina["stamina_max"] == 200
+    assert stamina["hoyolab_game_id"] == "genshin"
+    assert stamina["projection"]["strategy"] == "linear_recovery"
+    assert stamina["projection"]["recovery_seconds_per_unit"] == 360
+    assert stamina["resource_icon_url"] == "/api/dashboard/resource-icons/game-stamina?size=32"
+    assert stamina["resource_icon_urls"]["128"] == "/api/dashboard/resource-icons/game-stamina?size=128"
+    assert resource["schema_version"] == 2
+    assert resource["source"] == "server_tracked"
+    assert resource["kind"] == "resource"
+    assert resource["percentage"] == 75.0
+    assert resource["display_text"] == "75.0%"
+    assert resource["provider"] == "nikke_blablalink"
+    assert resource["key"] == "nikke_outpost_storage"
+    assert resource["projection"]["strategy"] == "linear_percent_fill"
+    assert resource["projection"]["full_recovery_seconds"] == 86400
+    assert resource["resource_icon_urls"]["256"] == "/api/dashboard/resource-icons/game-resource?size=256"
 
 
 def test_remote_processes_include_card_state_payload():
@@ -1459,3 +1488,50 @@ def test_remote_status_revision_changes_for_hoyolab_stamina_updates():
     assert changed_status["updated_at"] == 1778497000.0
     assert changed_process["progress"]["stamina_current"] == 92
     assert changed_process["progress"]["display_text"] == "92/240"
+
+
+def test_remote_status_revision_changes_for_resource_updates():
+    base_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(
+                id="resource-game",
+                name="Resource Game",
+                monitoring_path="/game.exe",
+                launch_path="/game.url",
+                resource_tracking_enabled=True,
+                resource_provider="nikke_blablalink",
+                resource_key="nikke_outpost_storage",
+                resource_label="전초기지 방어 보상",
+                resource_percent=10.0,
+                resource_updated_at=1778496900.0,
+                resource_status="ok",
+            ),
+        ],
+    )
+    changed_client, *_ = _client_with_seed(
+        processes=[
+            models.Process(
+                id="resource-game",
+                name="Resource Game",
+                monitoring_path="/game.exe",
+                launch_path="/game.url",
+                resource_tracking_enabled=True,
+                resource_provider="nikke_blablalink",
+                resource_key="nikke_outpost_storage",
+                resource_label="전초기지 방어 보상",
+                resource_percent=12.5,
+                resource_updated_at=1778497000.0,
+                resource_status="ok",
+            ),
+        ],
+    )
+
+    base_status = base_client.get("/remote/status").json()
+    changed_status = changed_client.get("/remote/status").json()
+    changed_process = changed_client.get("/remote/processes").json()[0]
+
+    assert base_status["state_revision"] != changed_status["state_revision"]
+    assert changed_status["updated_at"] == 1778497000.0
+    assert changed_process["progress"]["source"] == "server_tracked"
+    assert changed_process["progress"]["kind"] == "resource"
+    assert changed_process["progress"]["key"] == "nikke_outpost_storage"

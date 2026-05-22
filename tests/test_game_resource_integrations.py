@@ -301,10 +301,14 @@ def test_process_progress_exposes_generic_resource_snapshot():
 
     progress = calculate_process_progress(process)
 
+    assert progress["schema_version"] == 2
+    assert progress["source"] == "server_tracked"
     assert progress["kind"] == "resource"
     assert progress["percentage"] == 5.5
     assert progress["display_text"] == "5.5%"
-    assert progress["resource_key"] == "nikke_outpost_storage"
+    assert progress["key"] == "nikke_outpost_storage"
+    assert progress["projection"]["strategy"] == "linear_percent_fill"
+    assert progress["projection"]["full_recovery_seconds"] == 24 * 60 * 60
 
 
 def test_nikke_outpost_resource_progress_predicts_24h_fill_rate():
@@ -326,9 +330,12 @@ def test_nikke_outpost_resource_progress_predicts_24h_fill_rate():
     half_day = dt.datetime(2026, 5, 20, 12, 0)
     progress = calculate_process_progress(process, current_dt=half_day)
 
+    assert progress["source"] == "server_tracked"
     assert progress["kind"] == "resource"
     assert progress["percentage"] == 75.0
     assert progress["display_text"] == "75.0%"
+    assert progress["projection"]["base_value"] == 25.0
+    assert progress["projection"]["ready_at"] == dt.datetime(2026, 5, 20, 18, 0).timestamp()
 
 
 def test_nikke_outpost_resource_progress_caps_at_100_percent():
@@ -352,6 +359,31 @@ def test_nikke_outpost_resource_progress_caps_at_100_percent():
 
     assert progress["percentage"] == 100.0
     assert progress["display_text"] == "100.0%"
+    assert progress["remaining_seconds"] == 0
+
+
+def test_tracked_resource_without_snapshot_does_not_fall_back_to_cycle():
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        last_played_timestamp=dt.datetime(2026, 5, 20, 0, 0).timestamp(),
+        user_cycle_hours=24,
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_status="auth_required",
+    )
+
+    progress = calculate_process_progress(process, current_dt=dt.datetime(2026, 5, 20, 12, 0))
+
+    assert progress["source"] == "server_tracked"
+    assert progress["kind"] == "resource"
+    assert progress["status"] == "auth_required"
+    assert progress["display_text"] == "동기화 필요"
+    assert "remaining_seconds" not in progress
 
 
 def test_nikke_resource_persist_task_updates_process_and_session_percent():
