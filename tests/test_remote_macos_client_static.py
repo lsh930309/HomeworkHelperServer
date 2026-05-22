@@ -579,9 +579,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let acceptedMarker" in local_ssh
     assert "static func command(for action: String)" in local_ssh
     assert "cmd /C" in local_ssh
-    assert "shutdown /s /t 0 && echo" in local_ssh
+    assert "shutdown /s /t 1 && echo \\(acceptedMarker)" in local_ssh
+    assert "shutdown /r /t 1 && echo \\(acceptedMarker)" in local_ssh
     assert "cmd /C echo \\(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0" in local_ssh
     assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
+    assert 'connectionClosingActions: Set<String> = ["sleep", "restart", "shutdown"]' in local_ssh
+    assert "if connectionClosingActions.contains(action)" in local_ssh
+    assert '"ServerAliveInterval=2"' in local_ssh
+    assert '"ServerAliveCountMax=2"' in local_ssh
     assert 'start "" rundll32.exe' not in local_ssh
     assert 'if action == "sleep", result.status == 0' not in local_ssh
     assert "combined.contains(Self.acceptedMarker)" in local_ssh
@@ -609,6 +614,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "localSSHHealthReady," in view_model
     assert "localSSHIdentityStatus" in view_model
     assert '"ssh_identity": identityStatus' in view_model
+    assert '"power.local_ssh.started"' in view_model
+    assert '"power.transition.accepted"' in view_model
+    assert "requestScheduledMirror(trigger: \"power.\\(action).accepted\"" in view_model
     assert "setup.effectiveAuthorizedKeysPath" in app
     assert "setup.authorizedKeysScope" in app
     assert "viewModel.localSSHHealthSummary" in app

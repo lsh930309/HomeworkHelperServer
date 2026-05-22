@@ -3,6 +3,7 @@ import Foundation
 enum LocalSSHPowerManager {
     static let acceptedMarker = "__HH_REMOTE_POWER_ACCEPTED__"
     static let healthMarker = "__HH_SSH_HEALTH_OK__"
+    private static let connectionClosingActions: Set<String> = ["sleep", "restart", "shutdown"]
 
     private struct ProcessResult {
         let status: Int32
@@ -30,9 +31,9 @@ enum LocalSSHPowerManager {
     static func command(for action: String) throws -> String {
         switch action {
         case "shutdown":
-            return "cmd /C shutdown /s /t 0 && echo \(acceptedMarker)"
+            return "cmd /C shutdown /s /t 1 && echo \(acceptedMarker)"
         case "restart":
-            return "cmd /C shutdown /r /t 0 && echo \(acceptedMarker)"
+            return "cmd /C shutdown /r /t 1 && echo \(acceptedMarker)"
         case "sleep":
             return "cmd /C echo \(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
         default:
@@ -43,7 +44,7 @@ enum LocalSSHPowerManager {
     static func run(action: String, config: RemotePowerConfigPayload) async throws -> String {
         let command = try command(for: action)
         var extraArgs: [String] = []
-        if action == "sleep" {
+        if connectionClosingActions.contains(action) {
             extraArgs = ["-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=2"]
         }
 

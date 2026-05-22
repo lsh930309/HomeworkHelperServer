@@ -202,8 +202,13 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 let shutdownCommand = try! LocalSSHPowerManager.command(for: "shutdown")
                 guard shutdownCommand.contains(LocalSSHPowerManager.acceptedMarker),
-                      shutdownCommand.contains("shutdown /s /t 0") else {
+                      shutdownCommand.contains("shutdown /s /t 1") else {
                     fatalError("shutdown command should require command success before the acceptance marker")
+                }
+                let restartCommand = try! LocalSSHPowerManager.command(for: "restart")
+                guard restartCommand.contains(LocalSSHPowerManager.acceptedMarker),
+                      restartCommand.contains("shutdown /r /t 1") else {
+                    fatalError("restart command should leave time for the acceptance marker after scheduling reboot")
                 }
 
                 smokeStep("confirmPairing")

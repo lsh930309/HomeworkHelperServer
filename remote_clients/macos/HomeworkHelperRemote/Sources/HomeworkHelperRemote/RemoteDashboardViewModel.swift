@@ -1122,7 +1122,21 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func beginPowerTransition(for action: String) {
         consecutiveMirrorFailures = 0
         applyConnectionDecision(supervisorDecision(.powerIntentAccepted(action: action)), updateMessage: false)
-        requestImmediateMirror(trigger: "power.\(action).accepted", syncScope: .revisionAware)
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.transition.accepted",
+                [
+                    "action": action,
+                    "availability_state": hostAvailabilityState.rawValue,
+                    "availability_label": hostAvailabilityState.label,
+                ]
+            )
+        }
+        if action == "wake" {
+            requestImmediateMirror(trigger: "power.\(action).accepted", syncScope: .revisionAware)
+        } else {
+            requestScheduledMirror(trigger: "power.\(action).accepted", syncScope: .revisionAware)
+        }
     }
 
     private func nextMirrorDelaySeconds() -> UInt64 {
@@ -1319,6 +1333,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func requestImmediateMirror(trigger: String, syncScope: RemotePayloadSyncScope = .revisionAware) {
         guard bootstrapEnabled, isPaired else { return }
         Task { [weak self] in
+            await self?.runMirrorRemoteState(trigger: trigger, syncScope: syncScope)
+        }
+    }
+
+    private func requestScheduledMirror(trigger: String, syncScope: RemotePayloadSyncScope = .revisionAware) {
+        guard bootstrapEnabled, isPaired else { return }
+        Task { [weak self] in
+            let seconds: UInt64 = await MainActor.run {
+                guard let self else { return 15 }
+                return self.nextMirrorDelaySeconds()
+            }
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
             await self?.runMirrorRemoteState(trigger: trigger, syncScope: syncScope)
         }
     }
@@ -2188,10 +2215,21 @@ final class RemoteDashboardViewModel: ObservableObject {
     @discardableResult
     func localSSH(_ action: String) async -> Bool {
         let identityStatus = powerConfig.localSSHIdentityStatus
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.local_ssh.started",
+                [
+                    "action": action,
+                    "host": powerConfig.sshHost,
+                    "user": powerConfig.sshUser,
+                    "ssh_identity": identityStatus,
+                ]
+            )
+        }
         do {
             message = try await LocalSSHPowerManager.run(action: action, config: powerConfig)
             if remoteDesktopLoggingEnabled {
-                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted", "ssh_identity": identityStatus])
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted", "ssh_identity": identityStatus, "message": message])
             }
             return true
         } catch {
