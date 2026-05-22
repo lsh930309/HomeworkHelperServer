@@ -57,6 +57,14 @@ struct RemoteStatus: Decodable {
         }
     }
 
+    struct Diagnostics: Decodable {
+        let durationMS: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case durationMS = "duration_ms"
+        }
+    }
+
     let app: String
     let remoteAPIVersion: String
     let serverTime: Double
@@ -66,6 +74,7 @@ struct RemoteStatus: Decodable {
     let capabilities: Capabilities
     let power: Power?
     let readiness: RemoteReadiness?
+    let diagnostics: Diagnostics?
 
     enum CodingKeys: String, CodingKey {
         case app
@@ -77,6 +86,7 @@ struct RemoteStatus: Decodable {
         case capabilities
         case power
         case readiness
+        case diagnostics
     }
 }
 
@@ -471,6 +481,9 @@ struct RemoteCommandResult: Decodable {
     let target: String?
     let status: String
     let message: String
+    let commandID: String?
+    let acceptedAt: Double?
+    let refreshAfterMS: Int?
 
     enum CodingKeys: String, CodingKey {
         case accepted
@@ -480,6 +493,9 @@ struct RemoteCommandResult: Decodable {
         case target
         case status
         case message
+        case commandID = "command_id"
+        case acceptedAt = "accepted_at"
+        case refreshAfterMS = "refresh_after_ms"
     }
 }
 

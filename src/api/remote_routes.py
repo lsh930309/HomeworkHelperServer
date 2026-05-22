@@ -8,6 +8,7 @@ import webbrowser
 import datetime
 import hashlib
 import json
+import uuid
 from collections import defaultdict
 from typing import Any, Callable, Iterable, Literal
 from urllib.parse import quote
@@ -31,7 +32,7 @@ from src.data import beholder, crud, models, schemas
 from src.utils.game_preset_manager import GamePresetManager
 
 
-REMOTE_API_VERSION = "0.1.13"
+REMOTE_API_VERSION = "0.1.14"
 TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
 
@@ -59,6 +60,9 @@ class RemoteCommandResult(BaseModel):
     target: str | None = None
     status: str
     message: str
+    command_id: str | None = None
+    accepted_at: float | None = None
+    refresh_after_ms: int | None = None
 
 
 class PairingConfirmRequest(BaseModel):
@@ -1339,6 +1343,9 @@ def create_remote_router(
             target=target,
             status=result_status,
             message="게임 실행 명령을 전달했습니다." if ok else "게임 실행 명령 전달에 실패했습니다.",
+            command_id=f"{command}:{uuid.uuid4().hex}",
+            accepted_at=now() if ok else None,
+            refresh_after_ms=750 if ok else None,
         )
 
     @router.get("/shortcuts")
@@ -1371,6 +1378,9 @@ def create_remote_router(
             target=getattr(shortcut, "url", None),
             status=result_status,
             message="웹 숏컷 열기 명령을 전달했습니다." if opened else "웹 숏컷 열기 명령 전달에 실패했습니다.",
+            command_id=f"shortcut.open:{uuid.uuid4().hex}",
+            accepted_at=now() if opened else None,
+            refresh_after_ms=750 if opened else None,
         )
 
     @router.get("/power/status")

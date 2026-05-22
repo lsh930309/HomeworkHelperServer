@@ -2,38 +2,78 @@ import Foundation
 import AppKit
 import SwiftUI
 
+private actor RemoteDashboardServiceGate {
+    private var locked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func waitForTurn() async {
+        if !locked {
+            locked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func finishTurn() {
+        if waiters.isEmpty {
+            locked = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+
+    func run<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await waitForTurn()
+        defer { finishTurn() }
+        return try await operation()
+    }
+}
+
 private actor RemoteDashboardService {
+    private static let gate = RemoteDashboardServiceGate()
     let client: RemoteAPIClient
 
     init(client: RemoteAPIClient) {
         self.client = client
     }
 
-    func status() async throws -> RemoteStatus { try await client.status() }
-    func readiness() async throws -> RemoteReadiness { try await client.readiness() }
-    func dashboardSummary() async throws -> RemoteDashboardSummary { try await client.dashboardSummary() }
-    func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await client.beholderIncidents() }
-    func gameLinks() async throws -> [RemoteGameLink] { try await client.gameLinks() }
-    func activeMobileSessions() async throws -> [RemoteMobileSession] { try await client.activeMobileSessions() }
-    func powerSetup() async throws -> RemotePowerSetupResponse { try await client.powerSetup() }
-    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
-    func processes() async throws -> [RemoteProcess] { try await client.processes() }
-    func devices() async throws -> [RemoteDevice] { try await client.devices() }
-    func startMobileSession(gameLinkID: String) async throws -> RemoteMobileSession { try await client.startMobileSession(gameLinkID: gameLinkID) }
-    func endMobileSession(sessionID: String) async throws -> RemoteMobileSession { try await client.endMobileSession(sessionID: sessionID) }
+    func status() async throws -> RemoteStatus { try await Self.gate.run { try await client.status() } }
+    func readiness() async throws -> RemoteReadiness { try await Self.gate.run { try await client.readiness() } }
+    func dashboardSummary() async throws -> RemoteDashboardSummary { try await Self.gate.run { try await client.dashboardSummary() } }
+    func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await Self.gate.run { try await client.beholderIncidents() } }
+    func gameLinks() async throws -> [RemoteGameLink] { try await Self.gate.run { try await client.gameLinks() } }
+    func activeMobileSessions() async throws -> [RemoteMobileSession] { try await Self.gate.run { try await client.activeMobileSessions() } }
+    func powerSetup() async throws -> RemotePowerSetupResponse { try await Self.gate.run { try await client.powerSetup() } }
+    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse {
+        try await Self.gate.run { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
+    }
+    func processes() async throws -> [RemoteProcess] { try await Self.gate.run { try await client.processes() } }
+    func devices() async throws -> [RemoteDevice] { try await Self.gate.run { try await client.devices() } }
+    func startMobileSession(gameLinkID: String) async throws -> RemoteMobileSession {
+        try await Self.gate.run { try await client.startMobileSession(gameLinkID: gameLinkID) }
+    }
+    func endMobileSession(sessionID: String) async throws -> RemoteMobileSession {
+        try await Self.gate.run { try await client.endMobileSession(sessionID: sessionID) }
+    }
     func createGameLink(processID: String, androidPackageName: String) async throws -> RemoteGameLink {
-        try await client.createGameLink(processID: processID, androidPackageName: androidPackageName)
+        try await Self.gate.run {
+            try await client.createGameLink(processID: processID, androidPackageName: androidPackageName)
+        }
     }
-    func launchProcess(id: String) async throws -> RemoteCommandResult { try await client.launchProcess(id: id) }
+    func launchProcess(id: String) async throws -> RemoteCommandResult { try await Self.gate.run { try await client.launchProcess(id: id) } }
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
-        try await client.confirmPairing(code: code, deviceName: deviceName)
+        try await Self.gate.run { try await client.confirmPairing(code: code, deviceName: deviceName) }
     }
-    func refreshToken() async throws -> PairingConfirmResponse { try await client.refreshToken() }
-    func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse { try await client.ensureServerTailscale() }
-    func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse { try await client.remoteLoggingConfig() }
-    func saveRemoteLoggingConfig(enabled: Bool) async throws -> RemoteLoggingConfigResponse { try await client.saveRemoteLoggingConfig(enabled: enabled) }
-    func revokeDevice(id: String) async throws -> RevokeDeviceResponse { try await client.revokeDevice(id: id) }
-    func purgeRevokedDevices() async throws -> PurgeDevicesResponse { try await client.purgeRevokedDevices() }
+    func refreshToken() async throws -> PairingConfirmResponse { try await Self.gate.run { try await client.refreshToken() } }
+    func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse { try await Self.gate.run { try await client.ensureServerTailscale() } }
+    func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse { try await Self.gate.run { try await client.remoteLoggingConfig() } }
+    func saveRemoteLoggingConfig(enabled: Bool) async throws -> RemoteLoggingConfigResponse {
+        try await Self.gate.run { try await client.saveRemoteLoggingConfig(enabled: enabled) }
+    }
+    func revokeDevice(id: String) async throws -> RevokeDeviceResponse { try await Self.gate.run { try await client.revokeDevice(id: id) } }
+    func purgeRevokedDevices() async throws -> PurgeDevicesResponse { try await Self.gate.run { try await client.purgeRevokedDevices() } }
 }
 
 
@@ -383,6 +423,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
     @Published var isLoading = false
+    @Published private(set) var pendingLaunchProcessIDs: Set<String> = []
     @Published var message = "Remote Agent에 연결하세요."
 
 
@@ -419,13 +460,13 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var hostStatusLabel: String {
         if !isPaired { return "페어링 해제됨" }
-        if isLoading, hostAvailabilityState == .online { return "동기화 중" }
+        if isLoading, hostAvailabilityState == .online, pendingLaunchProcessIDs.isEmpty { return "동기화 중" }
         if hostAvailabilityState == .authRejected { return RemoteHostAvailabilityState.authRejected.label }
         return hostAvailabilityState.label
     }
 
     var hostStatusColor: Color {
-        if isLoading, hostAvailabilityState == .online { return .blue }
+        if isLoading, hostAvailabilityState == .online, pendingLaunchProcessIDs.isEmpty { return .blue }
         return isPaired ? hostAvailabilityState.color : .secondary
     }
 
@@ -510,15 +551,25 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
-        hostAllowsRemoteCommands && !isLoading && !process.isRunning
+        hostAllowsRemoteCommands && !pendingLaunchProcessIDs.contains(process.id) && !process.isRunning
+    }
+
+    func isLaunchPending(_ process: RemoteProcess) -> Bool {
+        pendingLaunchProcessIDs.contains(process.id)
     }
 
     func processRuntimeHelp(_ process: RemoteProcess) -> String {
+        if isLaunchPending(process) {
+            return "실행 명령 전달 후 호스트 실행 상태를 빠르게 확인 중"
+        }
         let runningText = isProcessRunningCurrent(process) ? "실행 중" : (process.isRunning ? "마지막 동기화 기준 실행 중" : "대기")
         return "\(runningText) · \(process.playedToday ? "오늘 실행" : "오늘 미실행")"
     }
 
     func processStatusText(_ process: RemoteProcess) -> String {
+        if isLaunchPending(process) {
+            return "실행 확인 중"
+        }
         if hostAvailabilityState != .online, process.isRunning {
             return "마지막 동기화: 실행 중"
         }
@@ -531,8 +582,13 @@ final class RemoteDashboardViewModel: ObservableObject {
     private var localProgressTask: Task<Void, Never>?
     private var resumeObservers: [NSObjectProtocol] = []
     private var lastStateRevision: String?
+    private var unchangedRevisionPollCount = 0
+    private var slowStatusPollCount = 0
     private var consecutiveMirrorFailures = 0
     private var reconnectSchedule: [UInt64] = []
+    private var mirrorExecutionInProgress = false
+    private var pendingMirrorRequest: (trigger: String, syncScope: RemotePayloadSyncScope)?
+    private var launchChaseTasks: [String: Task<Void, Never>] = [:]
     private static let localProgressTickSeconds: UInt64 = 30
     private static let staminaRecoverySecondsPerPoint: Double = 360
     private static let disconnectingPowerActions: Set<String> = ["shutdown", "sleep", "restart"]
@@ -553,6 +609,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     deinit {
         mirrorTask?.cancel()
         localProgressTask?.cancel()
+        launchChaseTasks.values.forEach { $0.cancel() }
         RemoteGlobalShortcutRegistrar.shared.unregister()
         for observer in resumeObservers {
             NotificationCenter.default.removeObserver(observer)
@@ -633,7 +690,8 @@ final class RemoteDashboardViewModel: ObservableObject {
                 supportedActions: ["wake", "sleep", "restart", "shutdown"],
                 targetHost: "ui-test-host"
             ),
-            readiness: readiness
+            readiness: readiness,
+            diagnostics: nil
         )
         processes = Self.uiTestProcesses()
         dashboardSummary = RemoteDashboardSummary(
@@ -1064,6 +1122,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func beginPowerTransition(for action: String) {
         consecutiveMirrorFailures = 0
         applyConnectionDecision(supervisorDecision(.powerIntentAccepted(action: action)), updateMessage: false)
+        requestImmediateMirror(trigger: "power.\(action).accepted", syncScope: .revisionAware)
     }
 
     private func nextMirrorDelaySeconds() -> UInt64 {
@@ -1075,13 +1134,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             applyConnectionDecision(exhaustedDecision, updateMessage: false)
             return 60
         }
-        switch hostAvailabilityState {
-        case .offlineExpected, .agentUnavailable, .authRejected:
-            return 60
-        default:
-            if consecutiveMirrorFailures > 0 { return 60 }
-            return UInt64(mirrorPollIntervalSeconds)
-        }
+        return RemoteSmartPollController.steadyDelaySeconds(
+            availabilityState: hostAvailabilityState,
+            consecutiveMirrorFailures: consecutiveMirrorFailures,
+            userBaseIntervalSeconds: mirrorPollIntervalSeconds,
+            appIsActive: NSApp.isActive,
+            unchangedRevisionPollCount: unchangedRevisionPollCount,
+            slowStatusPollCount: slowStatusPollCount
+        )
     }
 
     private func isAuthFailure(_ error: Error) -> Bool {
@@ -1251,8 +1311,41 @@ final class RemoteDashboardViewModel: ObservableObject {
                 }
                 try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 guard !Task.isCancelled else { break }
-                await self?.mirrorRemoteState()
+                await self?.runMirrorRemoteState(trigger: "mirror", syncScope: .revisionAware)
             }
+        }
+    }
+
+    private func requestImmediateMirror(trigger: String, syncScope: RemotePayloadSyncScope = .revisionAware) {
+        guard bootstrapEnabled, isPaired else { return }
+        Task { [weak self] in
+            await self?.runMirrorRemoteState(trigger: trigger, syncScope: syncScope)
+        }
+    }
+
+    private func enqueuePendingMirror(trigger: String, syncScope: RemotePayloadSyncScope) {
+        if let pending = pendingMirrorRequest {
+            pendingMirrorRequest = (
+                trigger: "\(pending.trigger)+\(trigger)",
+                syncScope: pending.syncScope.merged(with: syncScope)
+            )
+        } else {
+            pendingMirrorRequest = (trigger: trigger, syncScope: syncScope)
+        }
+    }
+
+    private func runMirrorRemoteState(trigger: String, syncScope: RemotePayloadSyncScope) async {
+        guard !mirrorExecutionInProgress else {
+            enqueuePendingMirror(trigger: trigger, syncScope: syncScope)
+            return
+        }
+        mirrorExecutionInProgress = true
+        await mirrorRemoteState(trigger: trigger, syncScope: syncScope)
+        mirrorExecutionInProgress = false
+
+        if let pending = pendingMirrorRequest {
+            pendingMirrorRequest = nil
+            await runMirrorRemoteState(trigger: pending.trigger, syncScope: pending.syncScope)
         }
     }
 
@@ -1273,7 +1366,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         let decision = supervisorDecision(.clientResumed)
         applyConnectionDecision(decision, updateMessage: false)
         guard decision.shouldProbeImmediately, isPaired else { return }
-        await mirrorRemoteState()
+        await runMirrorRemoteState(trigger: "clientResumed", syncScope: .revisionAware)
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -1703,11 +1796,25 @@ final class RemoteDashboardViewModel: ObservableObject {
         await refresh(using: RemoteDashboardService(client: client), includeDevices: !tokenText.isEmpty)
     }
 
-    private func mirrorRemoteState() async {
+    private func updateSmartPollingSignals(latestStatus: RemoteStatus, willSyncPayload: Bool) {
+        if willSyncPayload || lastStateRevision == nil || latestStatus.stateRevision != lastStateRevision {
+            unchangedRevisionPollCount = 0
+        } else {
+            unchangedRevisionPollCount += 1
+        }
+
+        if RemoteSmartPollController.shouldTreatStatusAsSlow(durationMilliseconds: latestStatus.diagnostics?.durationMS) {
+            slowStatusPollCount += 1
+        } else {
+            slowStatusPollCount = 0
+        }
+    }
+
+    private func mirrorRemoteState(trigger: String = "mirror", syncScope: RemotePayloadSyncScope = .revisionAware) async {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
         let previousAvailabilityState = hostAvailabilityState
-        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "mirror", updateMessage: false) else {
+        guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: trigger, updateMessage: false) else {
             return
         }
         let latestStatus = evaluation.status
@@ -1716,7 +1823,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             decision: evaluation.decision
         )
         await applyReadiness(from: latestStatus, using: service)
-        guard evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
+        let revisionRequiresSync = evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil
+        let shouldSyncPayload = revisionRequiresSync || syncScope != .revisionAware
+        updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: shouldSyncPayload)
+        guard shouldSyncPayload else {
             refreshLocalProcessDisplay()
             if shouldRefreshSSHHealthAfterRecovery {
                 await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
@@ -1724,7 +1834,13 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         lastStateRevision = latestStatus.stateRevision
-        await syncRemotePayloads(using: service, client: client)
+        let effectiveSyncScope: RemotePayloadSyncScope = evaluation.decision.shouldForcePayloadSync ? .forceFull : syncScope
+        switch effectiveSyncScope {
+        case .revisionAware, .forceFull:
+            await syncRemotePayloads(using: service, client: client)
+        case .forceProcesses:
+            await syncRemoteProcesses(using: service, client: client)
+        }
         if shouldRefreshSSHHealthAfterRecovery {
             await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
         }
@@ -1749,6 +1865,24 @@ final class RemoteDashboardViewModel: ObservableObject {
             readiness = try? await service.readiness()
         } else {
             readiness = status.readiness
+        }
+    }
+
+    private func syncRemoteProcesses(using service: RemoteDashboardService, client: RemoteAPIClient) async {
+        do {
+            let remoteProcesses = try await service.processes()
+            RemoteClientCache.saveProcesses(remoteProcesses)
+            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false) }
+            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+        } catch {
+            if processes.isEmpty {
+                processes = RemoteClientCache.loadProcesses()
+            }
+            refreshLocalProcessDisplay()
+            handlePayloadSyncFailure(
+                error,
+                fallbackMessage: "Remote Agent 상태는 응답했지만 게임 실행 상태 동기화에 실패했습니다. 캐시 데이터와 standalone 진행률을 유지합니다. (\(error.localizedDescription))"
+            )
         }
     }
 
@@ -1779,6 +1913,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             // Keep refreshes sequential. The Remote Agent's file-backed device
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
+            updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: true)
             lastStateRevision = latestStatus.stateRevision
             await applyReadiness(from: latestStatus, using: service)
             dashboardSummary = try await service.dashboardSummary()
@@ -1887,17 +2022,65 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    private func startLaunchChase(processID: String, refreshAfterMilliseconds: Int?) {
+        launchChaseTasks[processID]?.cancel()
+        let delays = RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
+        launchChaseTasks[processID] = Task { [weak self] in
+            var resolved = false
+            for delay in delays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else { return }
+                await self?.runMirrorRemoteState(trigger: "launch.chase", syncScope: .forceProcesses)
+                guard !Task.isCancelled else { return }
+                if self?.isLaunchChaseResolved(processID: processID) == true {
+                    resolved = true
+                    break
+                }
+            }
+            self?.finishLaunchChase(processID: processID, resolved: resolved)
+        }
+    }
+
+    private func isLaunchChaseResolved(processID: String) -> Bool {
+        if hostAvailabilityState != .online { return true }
+        return processes.first { $0.id == processID }?.isRunning == true
+    }
+
+    private func finishLaunchChase(processID: String, resolved: Bool) {
+        pendingLaunchProcessIDs.remove(processID)
+        launchChaseTasks[processID] = nil
+        if resolved, hostAvailabilityState == .online {
+            message = "게임 실행 상태를 확인했습니다."
+        } else if hostAvailabilityState == .online {
+            message = "게임 실행 명령을 전달했습니다. 실행 상태는 다음 동기화에서 계속 확인합니다."
+        }
+    }
+
     func launch(_ process: RemoteProcess) async {
         guard isLaunchEnabled(process) else {
-            message = hostAvailabilityState == .online ? "이미 실행 중이거나 동기화 중입니다." : "호스트 연결이 복구된 뒤 실행할 수 있습니다. 캐시된 게임 상태는 standalone으로 계속 갱신합니다."
+            message = hostAvailabilityState == .online ? "이미 실행 중이거나 실행 확인 중입니다." : "호스트 연결이 복구된 뒤 실행할 수 있습니다. 캐시된 게임 상태는 standalone으로 계속 갱신합니다."
             return
         }
         guard let service else { return }
+        let processID = process.id
+        pendingLaunchProcessIDs.insert(processID)
         do {
             let result = try await service.launchProcess(id: process.id)
             message = result.message
-            await refresh()
+            if result.accepted {
+                startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
+            } else {
+                pendingLaunchProcessIDs.remove(processID)
+            }
         } catch {
+            pendingLaunchProcessIDs.remove(processID)
+            launchChaseTasks[processID]?.cancel()
+            launchChaseTasks[processID] = nil
+            if let client {
+                _ = await evaluateConnectivity(using: service, client: client, trigger: "launch.failure")
+            }
             message = error.localizedDescription
         }
     }

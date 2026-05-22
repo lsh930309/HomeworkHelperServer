@@ -35,6 +35,7 @@ LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
 REMOTE_CONNECTION_SUPERVISOR = MACOS_SOURCE_DIR / "RemoteConnectionSupervisor.swift"
+REMOTE_SMART_POLL_CONTROLLER = MACOS_SOURCE_DIR / "RemoteSmartPollController.swift"
 REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
 REMOTE_UI_TEST_FLAGS = MACOS_SOURCE_DIR / "RemoteUITestFlags.swift"
 REMOTE_GLOBAL_SHORTCUT_REGISTRAR = MACOS_SOURCE_DIR / "RemoteGlobalShortcutRegistrar.swift"
@@ -216,6 +217,20 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.processes.contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not populate seeded process list: \(viewModel.message)")
                 }
+                guard let launchProcess = viewModel.processes.first(where: { $0.id == "smoke-game" }) else {
+                    fatalError("seeded process missing before launch")
+                }
+                let hostLabelBeforeLaunch = viewModel.hostStatusLabel
+                smokeStep("launch command scoped mirror")
+                await viewModel.launch(launchProcess)
+                guard viewModel.hostStatusLabel == hostLabelBeforeLaunch,
+                      viewModel.hostStatusLabel == "페어링됨" else {
+                    fatalError("launch should not churn the host connection pill: before=\(hostLabelBeforeLaunch) after=\(viewModel.hostStatusLabel)")
+                }
+                guard viewModel.isLaunchPending(launchProcess) else {
+                    fatalError("launch should enter row-scoped pending state instead of global refresh")
+                }
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
                 guard viewModel.menuBarPresentationState() == .idle,
                       viewModel.menuBarIconSymbol(for: .idle) == "sparkles" else {
                     fatalError("online paired host without running games should use the idle menu bar icon")
@@ -449,6 +464,7 @@ def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_c
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_CLIENT_CACHE),
         str(REMOTE_CONNECTION_SUPERVISOR),
+        str(REMOTE_SMART_POLL_CONTROLLER),
         str(REMOTE_LOGIN_ITEM_MANAGER),
         str(REMOTE_UI_TEST_FLAGS),
         str(REMOTE_GLOBAL_SHORTCUT_REGISTRAR),
@@ -515,8 +531,8 @@ def main(argv: list[str] | None = None) -> int:
                 body={
                     "id": "smoke-game",
                     "name": "Smoke Game",
-                    "monitoring_path": "/Applications/Smoke.app",
-                    "launch_path": "/Applications/Smoke.app",
+                    "monitoring_path": "/bin/echo",
+                    "launch_path": "/bin/echo",
                     "preferred_launch_type": "direct",
                 },
             )

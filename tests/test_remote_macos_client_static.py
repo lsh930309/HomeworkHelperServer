@@ -58,11 +58,13 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         assert f"struct {model_name}" in models
 
     assert "struct Power: Decodable" in models
+    assert "struct Diagnostics: Decodable" in models
     assert "let readiness: RemoteReadiness?" in models
     assert "struct Metrics: Decodable" in models
     assert "struct Game: Decodable" in models
     assert "struct MobileMetrics: Decodable" in models
     assert "let power: Power?" in models
+    assert "let diagnostics: Diagnostics?" in models
 
     for coding_key in [
         'activeSessions = "active_sessions"',
@@ -89,6 +91,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'serverTime = "server_time"',
         'stateRevision = "state_revision"',
         'updatedAt = "updated_at"',
+        'durationMS = "duration_ms"',
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
@@ -105,6 +108,9 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'statusText = "status_text"',
         'targetID = "target_id"',
         'targetName = "target_name"',
+        'commandID = "command_id"',
+        'acceptedAt = "accepted_at"',
+        'refreshAfterMS = "refresh_after_ms"',
         'createdAt = "created_at"',
         'lastSeenAt = "last_seen_at"',
         'pcProcessID = "pc_process_id"',
@@ -241,6 +247,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     models = _read(SOURCE_ROOT / "RemoteModels.swift")
     cache = _read(SOURCE_ROOT / "RemoteClientCache.swift")
     supervisor = _read(SOURCE_ROOT / "RemoteConnectionSupervisor.swift")
+    smart_poll = _read(SOURCE_ROOT / "RemoteSmartPollController.swift")
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
     local_power = _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
@@ -345,7 +352,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "MenuBarGameStatusBadges(progress: process.progress, viewModel: viewModel)" in app
     assert "Task { await viewModel.launch(process) }" in app
     assert "MenuBarLaunchButton" in app
-    assert 'Image(systemName: "play.fill")' in app
+    assert 'Image(systemName: isPending ? "hourglass" : "play.fill")' in app
+    assert "isPending: viewModel.isLaunchPending(process)" in app
     assert ".frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)" in app
     assert ".buttonStyle(.plain)" in app
     assert "MenuBarHoverTintModifier" in app
@@ -481,6 +489,17 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "localTailscale?.peers.contains" in view_model
     assert "TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
+    assert "RemoteSmartPollController.steadyDelaySeconds" in view_model
+    assert "enum RemotePayloadSyncScope" in smart_poll
+    assert "launchChaseFallbackDelaysNanoseconds" in smart_poll
+    assert "slowStatusThresholdMilliseconds" in smart_poll
+    assert "appIsActive: NSApp.isActive" in view_model
+    assert "unchangedRevisionPollCount" in view_model
+    assert "slowStatusPollCount" in view_model
+    assert "requestImmediateMirror(trigger:" in view_model
+    assert 'trigger: "power.\\(action).accepted"' in view_model
+    assert "runMirrorRemoteState(trigger:" in view_model
+    assert "pendingMirrorRequest" in view_model
     assert "static let wakeReconnectSchedule" in supervisor
     assert "connectionLossReconnectSchedule" in supervisor
     assert "Remote Agent HTTP 첫 응답이 지연되고 있습니다" in supervisor
@@ -545,10 +564,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "latestStatus.stateRevision != lastStateRevision" in view_model
     assert "handleRemoteFailure(error)" in view_model
     assert "private actor RemoteDashboardService" in view_model
+    assert "private actor RemoteDashboardServiceGate" in view_model
+    assert "private static let gate = RemoteDashboardServiceGate()" in view_model
     assert "Keep refreshes sequential" in view_model
     assert "func isPowerActionEnabled(_ action: String) -> Bool" in view_model
     assert "func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool" in view_model
     assert "func isLaunchEnabled(_ process: RemoteProcess) -> Bool" in view_model
+    assert "func isLaunchPending(_ process: RemoteProcess) -> Bool" in view_model
+    assert "@Published private(set) var pendingLaunchProcessIDs" in view_model
     assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
     assert "disconnectingPowerActions" in view_model
     assert "isDisconnectedPowerState" in view_model
@@ -595,6 +618,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "!viewModel.isLaunchEnabled(process)" in app
     assert "viewModel.processStatusText(process)" in app
     assert "func launch(_ process: RemoteProcess) async" in view_model
+    launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
+    assert "await refresh()" not in launch_source
+    assert "startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)" in launch_source
+    assert "syncScope: .forceProcesses" in view_model
+    assert "syncRemoteProcesses(using: service, client: client)" in view_model
     assert "func power(_ action: String) async" in view_model
     assert "func confirmPairing() async" in view_model
     assert "func recoverPairing" in view_model

@@ -89,8 +89,9 @@ Main launch:
 
 1. User presses a game launch button.
 2. Client calls `POST /remote/processes/{id}/launch`.
-3. Client refreshes payloads after command acceptance.
-4. Failures are shown as user-visible messages; cached game state is not cleared on transient failures.
+3. Client keeps the host connection pill stable and marks only that game row as launch-pending.
+4. Client runs an immediate process-scoped mirror plus a short launch chase window; it does not call the global refresh path solely because launch was accepted.
+5. Failures are shown as user-visible messages; cached game state is not cleared on transient failures.
 
 ## 6. Connectivity supervisor contract
 

@@ -731,7 +731,7 @@ struct MenuBarGameRow: View {
                         .lineLimit(1)
                 }
             }
-            MenuBarLaunchButton(launch: launch, disabled: !viewModel.isLaunchEnabled(process))
+            MenuBarLaunchButton(launch: launch, disabled: !viewModel.isLaunchEnabled(process), isPending: viewModel.isLaunchPending(process))
         }
         .frame(height: RemotePopoverLayout.rowHeight, alignment: .center)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -741,6 +741,7 @@ struct MenuBarGameRow: View {
 struct MenuBarLaunchButton: View {
     let launch: () -> Void
     let disabled: Bool
+    let isPending: Bool
 
     @State private var isHovered = false
 
@@ -755,7 +756,7 @@ struct MenuBarLaunchButton: View {
                         RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
                             .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.42 : 0.26), lineWidth: 0.8)
                     )
-                Image(systemName: "play.fill")
+                Image(systemName: isPending ? "hourglass" : "play.fill")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : Color.white)
             }
@@ -773,7 +774,7 @@ struct MenuBarLaunchButton: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: isHovered)
-        .help("실행")
+        .help(isPending ? "실행 확인 중" : "실행")
         .disabled(disabled)
     }
 }

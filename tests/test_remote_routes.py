@@ -140,7 +140,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["remote_api_version"] == "0.1.13"
+    assert body["remote_api_version"] == "0.1.14"
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
@@ -202,6 +202,9 @@ def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boun
     assert body["accepted"] is True
     assert body["command"] == "process.launch.shortcut"
     assert body["target"] == "/Users/me/Desktop/Game.url"
+    assert body["command_id"].startswith("process.launch.shortcut:")
+    assert body["accepted_at"]
+    assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Users/me/Desktop/Game.url"]
     assert auditor.events[-1]["command"] == "process.launch.shortcut"
     assert auditor.events[-1]["accepted"] is True
@@ -624,6 +627,8 @@ def test_remote_launch_can_request_direct_mode_without_mutating_process_preferen
     body = response.json()
     assert body["command"] == "process.launch.direct"
     assert body["target"] == "/Applications/Game.app"
+    assert body["command_id"].startswith("process.launch.direct:")
+    assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Applications/Game.app"]
     assert auditor.events[-1]["metadata"] == {"mode": "direct"}
 
