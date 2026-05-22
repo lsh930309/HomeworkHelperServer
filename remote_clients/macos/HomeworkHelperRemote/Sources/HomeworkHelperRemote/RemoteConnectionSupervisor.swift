@@ -328,7 +328,7 @@ enum RemoteConnectionSupervisor {
                 return disconnectedDecision(
                     state: .agentUnavailable,
                     schedule: [],
-                    message: "Remote Agent HTTP 응답이 아직 없습니다. Windows 앱 서버 모드와 방화벽/포트 설정을 확인하세요."
+                    message: "Remote Agent HTTP 첫 응답이 아직 없습니다. Tailscale이 도달하는데도 계속 지연되면 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔는지 확인하세요."
                 )
             }
             return disconnectedDecision(
@@ -338,10 +338,16 @@ enum RemoteConnectionSupervisor {
             )
         default:
             let suffix = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " (\(detail))"
+            let baseMessage: String
+            if kind == .timedOut {
+                baseMessage = "Remote Agent HTTP 첫 응답이 지연되고 있습니다. Tailscale은 도달했지만 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔을 수 있습니다. 호스트에서 /api/gui/ping, /api/gui/health, /remote/status 응답 시간을 확인하세요."
+            } else {
+                baseMessage = "Remote Agent HTTP 상태 응답이 없습니다. Windows 앱 서버 모드와 방화벽/포트 8000을 확인하세요."
+            }
             return disconnectedDecision(
                 state: .agentUnavailable,
                 schedule: [],
-                message: "Remote Agent HTTP 상태 응답이 없습니다. Windows 앱 서버 모드와 방화벽/포트 8000을 확인하세요." + suffix
+                message: baseMessage + suffix
             )
         }
     }

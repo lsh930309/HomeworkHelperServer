@@ -668,14 +668,41 @@ def create_remote_router(
             "local_store_health": True,
         }
 
-    def _readiness_payload(power_status: dict[str, Any], *, active_beholder_incidents: int | None = None) -> dict[str, Any]:
-        tailscale_payload, ts_snapshot = _tailscale_snapshot_payload()
-        tailscale_ready = bool(tailscale_payload.get("installed") and tailscale_payload.get("running"))
+    def _readiness_payload(
+        power_status: dict[str, Any],
+        *,
+        active_beholder_incidents: int | None = None,
+        include_tailscale_details: bool = True,
+    ) -> dict[str, Any]:
+        tailscale_payload: dict[str, Any] = {}
+        ts_snapshot = None
+        if include_tailscale_details:
+            tailscale_payload, ts_snapshot = _tailscale_snapshot_payload()
+        tailscale_ready = bool(
+            include_tailscale_details
+            and tailscale_payload.get("installed")
+            and tailscale_payload.get("running")
+        )
         power_ready = bool(power_status.get("configured"))
         auth_ready = bool(require_auth or auth_token or device_registry.has_registered_devices())
         beholder_state = "ok" if not active_beholder_incidents else "warning"
         remote_state = "ok" if auth_ready else "warning"
-        server_state = "ok" if auth_ready and tailscale_ready else "warning"
+        server_state = "ok" if auth_ready and (tailscale_ready or not include_tailscale_details) else "warning"
+        if include_tailscale_details:
+            tailscale_section = {
+                "state": "ok" if tailscale_ready else "warning",
+                "color": "green" if tailscale_ready else "yellow",
+                "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
+                "suggested_base_urls": _suggested_base_urls(tailscale_payload, ts_snapshot) if tailscale_ready else [],
+                "details": tailscale_payload,
+            }
+        else:
+            tailscale_section = {
+                "state": "deferred",
+                "color": "yellow",
+                "message": "상세 Tailscale 점검은 /remote/readiness에서 확인하세요.",
+                "suggested_base_urls": [],
+            }
         return {
             "beholder_health": {
                 "state": beholder_state,
@@ -692,7 +719,13 @@ def create_remote_router(
             "server_mode_readiness": {
                 "state": server_state,
                 "color": "green" if server_state == "ok" else "yellow",
-                "message": "서버 모드 준비됨" if server_state == "ok" else "Tailscale 또는 페어링 준비가 더 필요합니다.",
+                "message": (
+                    "Remote Agent HTTP 응답 중"
+                    if server_state == "ok" and not include_tailscale_details
+                    else "서버 모드 준비됨"
+                    if server_state == "ok"
+                    else "Tailscale 또는 페어링 준비가 더 필요합니다."
+                ),
             },
             "power_readiness": {
                 "state": "ok" if power_ready else "warning",
@@ -702,21 +735,16 @@ def create_remote_router(
                 ),
                 "supported_actions": power_status.get("supported_actions") or [],
             },
-            "tailscale_readiness": {
-                "state": "ok" if tailscale_ready else "warning",
-                "color": "green" if tailscale_ready else "yellow",
-                "message": tailscale_payload.get("message") or "tailscale 상태 미확인",
-                "suggested_base_urls": _suggested_base_urls(tailscale_payload, ts_snapshot) if tailscale_ready else [],
-                "details": tailscale_payload,
-            },
+            "tailscale_readiness": tailscale_section,
         }
 
-    def _state_fingerprint(db: Session, power_status: dict[str, Any]) -> dict[str, Any]:
+    def _state_fingerprint(db: Session, power_status: dict[str, Any], *, processes: Iterable[Any] | None = None) -> dict[str, Any]:
         """Small, stable fingerprint for native-client revision-aware polling."""
 
         process_rows = []
         max_updated_at = 0.0
-        for process in crud.get_processes(db):
+        process_source = list(processes) if processes is not None else list(crud.get_processes(db))
+        for process in process_source:
             last_played = getattr(process, "last_played_timestamp", None)
             stamina_updated = getattr(process, "stamina_updated_at", None)
             for candidate in (last_played, stamina_updated):
@@ -824,8 +852,13 @@ def create_remote_router(
             "updated_at": max_updated_at,
         }
 
-    def _state_revision_payload(db: Session, power_status: dict[str, Any]) -> dict[str, Any]:
-        fingerprint = _state_fingerprint(db, power_status)
+    def _state_revision_payload(
+        db: Session,
+        power_status: dict[str, Any],
+        *,
+        processes: Iterable[Any] | None = None,
+    ) -> dict[str, Any]:
+        fingerprint = _state_fingerprint(db, power_status, processes=processes)
         canonical = json.dumps(fingerprint, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return {
             "state_revision": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
@@ -932,16 +965,45 @@ def create_remote_router(
 
     @router.get("/status")
     def remote_status(db: Session = Depends(get_db_dependency)):
+        handler_started_at = time.perf_counter()
+        diagnostics: dict[str, Any] = {"readiness_mode": "lightweight"}
+
+        process_started_at = time.perf_counter()
         processes = crud.get_processes(db)
+        diagnostics["processes_ms"] = round((time.perf_counter() - process_started_at) * 1000, 2)
+
+        shortcuts_started_at = time.perf_counter()
         shortcuts = crud.get_shortcuts(db)
+        diagnostics["shortcuts_ms"] = round((time.perf_counter() - shortcuts_started_at) * 1000, 2)
+
+        active_started_at = time.perf_counter()
         active_count = 0
         try:
-            active_count = len([session for session in crud.get_all_sessions(db) if session.end_timestamp is None])
+            active_count = db.query(models.ProcessSession).filter(models.ProcessSession.end_timestamp.is_(None)).count()
         except Exception:
             active_count = 0
+        diagnostics["active_sessions_ms"] = round((time.perf_counter() - active_started_at) * 1000, 2)
 
+        power_started_at = time.perf_counter()
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
-        revision_payload = _state_revision_payload(db, power_status)
+        diagnostics["power_status_ms"] = round((time.perf_counter() - power_started_at) * 1000, 2)
+
+        revision_started_at = time.perf_counter()
+        revision_payload = _state_revision_payload(db, power_status, processes=processes)
+        diagnostics["state_revision_ms"] = round((time.perf_counter() - revision_started_at) * 1000, 2)
+
+        beholder_started_at = time.perf_counter()
+        active_beholder_count = len(beholder.active_incidents(db))
+        diagnostics["beholder_ms"] = round((time.perf_counter() - beholder_started_at) * 1000, 2)
+
+        readiness_started_at = time.perf_counter()
+        readiness_payload = _readiness_payload(
+            power_status,
+            active_beholder_incidents=active_beholder_count,
+            include_tailscale_details=False,
+        )
+        diagnostics["readiness_ms"] = round((time.perf_counter() - readiness_started_at) * 1000, 2)
+        diagnostics["duration_ms"] = round((time.perf_counter() - handler_started_at) * 1000, 2)
         return {
             "app": "HomeworkHelper",
             "remote_api_version": REMOTE_API_VERSION,
@@ -959,7 +1021,8 @@ def create_remote_router(
             },
             "capabilities": _remote_capabilities(power_status),
             "power": power_status,
-            "readiness": _readiness_payload(power_status, active_beholder_incidents=len(beholder.active_incidents(db))),
+            "readiness": readiness_payload,
+            "diagnostics": diagnostics,
         }
 
     @router.get("/capabilities")

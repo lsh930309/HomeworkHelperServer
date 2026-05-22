@@ -1199,7 +1199,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .offlineExpected:
             return "호스트 Tailscale ping 응답이 없어 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다. 캐시 데이터는 standalone으로 유지합니다."
         case .agentUnavailable:
-            return "호스트 관리 계층은 확인됐지만 Windows Remote Agent HTTP 응답이 없습니다. Windows 앱 서버 모드와 방화벽/포트 8000을 확인하세요."
+            return "호스트 관리 계층은 확인됐지만 Windows Remote Agent HTTP 첫 응답이 지연되고 있습니다. 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔는지 확인하세요."
         case .waking:
             return "호스트 부팅을 기다리는 중입니다. 연결이 복구되면 자동으로 데이터를 다시 미러링합니다."
         case .restarting:
@@ -1640,11 +1640,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         let latestStatus = evaluation.status
-        if latestStatus.readiness == nil {
-            readiness = try? await service.readiness()
-        } else {
-            readiness = latestStatus.readiness
-        }
+        await applyReadiness(from: latestStatus, using: service)
         powerSetup = try? await service.powerSetup()
         fillDefaultSSHFields()
         if isPaired {
@@ -1719,9 +1715,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             previousState: previousAvailabilityState,
             decision: evaluation.decision
         )
-        if latestStatus.readiness == nil {
-            readiness = try? await service.readiness()
-        }
+        await applyReadiness(from: latestStatus, using: service)
         guard evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil else {
             refreshLocalProcessDisplay()
             if shouldRefreshSSHHealthAfterRecovery {
@@ -1748,6 +1742,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         powerSetup = try? await service.powerSetup()
         fillDefaultSSHFields()
         _ = await verifyLocalSSHHealth(updateMessage: false)
+    }
+
+    private func applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService) async {
+        if status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil {
+            readiness = try? await service.readiness()
+        } else {
+            readiness = status.readiness
+        }
     }
 
     private func syncRemotePayloads(using service: RemoteDashboardService, client: RemoteAPIClient) async {
@@ -1778,9 +1780,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
             lastStateRevision = latestStatus.stateRevision
-            if latestStatus.readiness == nil {
-                readiness = try? await service.readiness()
-            }
+            await applyReadiness(from: latestStatus, using: service)
             dashboardSummary = try await service.dashboardSummary()
             beholderIncidents = try await service.beholderIncidents()
             gameLinks = try await service.gameLinks()
@@ -2106,7 +2106,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         _ = applySmartThingsProbeResult(result, updateMessage: false)
         if let latestStatus = try? await service.status() {
             applyRemoteStatus(latestStatus)
-            readiness = latestStatus.readiness ?? readiness
+            await applyReadiness(from: latestStatus, using: service)
         }
         setupProgress = sshOnboardingReady
             ? (smartThingsDeviceCandidates.count > 1 && powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

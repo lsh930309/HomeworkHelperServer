@@ -159,6 +159,27 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["power"]["status"] == "client_managed"
     assert body["power"]["supported_actions"] == []
     assert body["power"]["target_host"] == ""
+    assert body["diagnostics"]["readiness_mode"] == "lightweight"
+    assert "duration_ms" in body["diagnostics"]
+    assert body["readiness"]["tailscale_readiness"]["state"] == "deferred"
+    assert "details" not in body["readiness"]["tailscale_readiness"]
+
+
+def test_remote_status_does_not_block_on_tailscale_probe():
+    def explode_tailscale_probe():
+        raise AssertionError("/remote/status must keep Tailscale detail checks out of the hot path")
+
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        auth_token="secret-token",
+        tailscale_probe=explode_tailscale_probe,
+    )
+
+    response = client.get("/remote/status", headers={"Authorization": "Bearer secret-token"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["readiness"]["server_mode_readiness"]["color"] == "green"
+    assert body["readiness"]["tailscale_readiness"]["message"] == "상세 Tailscale 점검은 /remote/readiness에서 확인하세요."
 
 
 def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boundary():

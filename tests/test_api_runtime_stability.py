@@ -55,6 +55,13 @@ def test_startup_defers_api_server_start_until_primary_instance():
 def test_gui_health_endpoint_contract_is_present():
     source = Path("homework_helper.pyw").read_text(encoding="utf-8")
 
+    assert '@app.middleware("http")' in source
+    assert "slow_api_request method=%s path=%s status=%s duration_ms=%.1f pid=%s thread=%s" in source
+    assert '@app.get("/api/gui/ping")' in source
+    assert '"server_time": time.time()' in source
     assert '@app.get("/api/gui/health")' in source
     assert '"db_ready": db_ready' in source
+    assert '"db_probe_ms": round(db_probe_ms, 2)' in source
     assert '"dashboard_static_ready": dashboard_static["ready"]' in source
+    assert '"static_probe_ms": round(static_probe_ms, 2)' in source
+    assert '"total_ms": round((time.perf_counter() - started_at) * 1000, 2)' in source

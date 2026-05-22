@@ -498,6 +498,33 @@ def run_server_main():
 
     app = FastAPI()
 
+    @app.middleware("http")
+    async def remote_diagnostics_middleware(request, call_next):
+        """Log slow local GUI/Remote Agent requests without touching secrets."""
+        path = request.url.path
+        should_trace = path.startswith("/api/gui/") or path.startswith("/remote/")
+        if not should_trace:
+            return await call_next(request)
+
+        started_at = time.perf_counter()
+        status_code: int | str = "error"
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            if duration_ms >= 1000:
+                logger.warning(
+                    "slow_api_request method=%s path=%s status=%s duration_ms=%.1f pid=%s thread=%s",
+                    request.method,
+                    path,
+                    status_code,
+                    duration_ms,
+                    os.getpid(),
+                    threading.get_ident(),
+                )
+
     class ProcessRuntimeStatePatch(BaseModel):
         last_played_timestamp: float | None = None
         stamina_current: int | None = None
@@ -550,18 +577,33 @@ def run_server_main():
         )
         return {"ready": ready, "path": str(static_path)}
 
+    @app.get("/api/gui/ping")
+    async def gui_ping():
+        return {
+            "ok": True,
+            "pid": os.getpid(),
+            "host": api_host,
+            "port": api_port,
+            "server_time": time.time(),
+        }
+
     @app.get("/api/gui/health")
     def gui_health():
+        started_at = time.perf_counter()
         db_ready = False
         db_error: str | None = None
+        db_started_at = time.perf_counter()
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             db_ready = True
         except Exception as e:
             db_error = str(e)
+        db_probe_ms = (time.perf_counter() - db_started_at) * 1000
 
+        static_started_at = time.perf_counter()
         dashboard_static = _dashboard_static_health()
+        static_probe_ms = (time.perf_counter() - static_started_at) * 1000
         return {
             "ok": db_ready,
             "pid": os.getpid(),
@@ -570,8 +612,11 @@ def run_server_main():
             "base_url": f"http://127.0.0.1:{api_port}",
             "db_ready": db_ready,
             "db_error": db_error,
+            "db_probe_ms": round(db_probe_ms, 2),
             "dashboard_static_ready": dashboard_static["ready"],
             "dashboard_static_path": dashboard_static["path"],
+            "static_probe_ms": round(static_probe_ms, 2),
+            "total_ms": round((time.perf_counter() - started_at) * 1000, 2),
         }
 
     # create / read / update / delete [managed processes]

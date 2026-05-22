@@ -467,6 +467,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
     assert "markHTTPAgentUnavailable" in view_model
+    assert "applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService)" in view_model
+    assert "status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil" in view_model
     assert "supervisorDecision(_ event: RemoteConnectionEvent)" in view_model
     assert "applyConnectionDecision(_ decision: RemoteConnectionDecision" in view_model
     assert "installClientResumeObservers" in view_model
@@ -481,6 +483,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
     assert "static let wakeReconnectSchedule" in supervisor
     assert "connectionLossReconnectSchedule" in supervisor
+    assert "Remote Agent HTTP 첫 응답이 지연되고 있습니다" in supervisor
+    assert "호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔을 수 있습니다" in supervisor
+    assert "/api/gui/ping, /api/gui/health, /remote/status" in supervisor
+    assert "Windows Remote Agent HTTP 첫 응답이 지연되고 있습니다" in view_model
     assert "호스트가 계속 응답하지 않습니다" in supervisor
     assert "서버 응답 없음 상태로 전환했습니다" in supervisor
     assert "Array(repeating: UInt64(1), count: 15)" in supervisor
