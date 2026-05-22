@@ -157,25 +157,43 @@ begin
   Result := (ResultCode = 0);
 end;
 
-// 모든 HomeworkHelper 관련 프로세스 종료
-procedure KillAllAppProcesses();
+// HomeworkHelper 메인 프로세스만 종료한다.
+// OBS(obs.exe/obs64.exe)는 녹화 세션 보호를 위해 인스톨러에서 종료하지 않는다.
+procedure TryCloseAppProcessesGracefully();
 var
   ResultCode: Integer;
 begin
-  // 메인 GUI 프로세스 종료
+  Exec('taskkill', '/IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure ForceKillAppProcesses();
+var
+  ResultCode: Integer;
+begin
   Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  
-  // 잠시 대기 (프로세스 종료 완료 대기)
-  Sleep(500);
-  
-  // 혹시 남아있을 수 있는 Python 서버 프로세스 종료 (같은 경로에서 실행된 경우)
-  // 참고: API 서버는 homework_helper.exe의 자식 프로세스로 실행되므로 부모 종료 시 함께 종료됨
 end;
 
 // HomeworkHelper 관련 프로세스가 실행 중인지 확인
 function IsAppRunning(): Boolean;
 begin
   Result := IsProcessRunning('homework_helper.exe');
+end;
+
+function WaitForAppExit(MaxAttempts: Integer; DelayMs: Integer): Boolean;
+var
+  Attempt: Integer;
+begin
+  Result := False;
+  for Attempt := 1 to MaxAttempts do
+  begin
+    if not IsAppRunning() then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(DelayMs);
+  end;
+  Result := not IsAppRunning();
 end;
 
 // 설치 전 실행 중인 프로세스 종료
@@ -195,20 +213,35 @@ begin
               '자동으로 종료하고 계속 진행하시겠습니까?',
               mbConfirmation, MB_YESNO) = IDYES then
     begin
-      // 프로세스 종료
-      KillAllAppProcesses();
-
-      // 종료 확인을 위해 잠시 대기
-      Sleep(1000);
+      // 먼저 강제 종료 없이 정상 종료를 요청한다.
+      TryCloseAppProcessesGracefully();
 
       // 아직도 실행 중인지 확인
-      if IsAppRunning() then
+      if not WaitForAppExit(8, 1000) then
       begin
-        MsgBox('프로그램을 종료하지 못했습니다.' + #13#10 +
-               '수동으로 HomeworkHelper를 종료한 후 설치를 다시 시도해주세요.',
-               mbError, MB_OK);
-        Result := False;
-        Exit;
+        if MsgBox('HomeworkHelper가 정상 종료되지 않았습니다.' + #13#10 + #13#10 +
+                  '강제로 종료하고 설치를 계속하시겠습니까?' + #13#10 +
+                  '(OBS 녹화 프로세스는 종료하지 않습니다.)',
+                  mbConfirmation, MB_YESNO) = IDYES then
+        begin
+          ForceKillAppProcesses();
+          if not WaitForAppExit(5, 1000) then
+          begin
+            MsgBox('프로그램을 종료하지 못했습니다.' + #13#10 +
+                   '수동으로 HomeworkHelper를 종료한 후 설치를 다시 시도해주세요.',
+                   mbError, MB_OK);
+            Result := False;
+            Exit;
+          end;
+        end
+        else
+        begin
+          MsgBox('설치가 취소되었습니다.' + #13#10 +
+                 'HomeworkHelper를 종료한 후 다시 시도해주세요.',
+                 mbInformation, MB_OK);
+          Result := False;
+          Exit;
+        end;
       end;
     end
     else
@@ -235,13 +268,16 @@ begin
   // 마지막으로 프로세스가 종료되었는지 확인
   if IsAppRunning() then
   begin
-    // 한 번 더 종료 시도
-    KillAllAppProcesses();
-    Sleep(1000);
+    // 한 번 더 정상 종료 시도 후, 설치 직전에는 HomeworkHelper만 강제 종료한다.
+    TryCloseAppProcessesGracefully();
     
-    if IsAppRunning() then
+    if not WaitForAppExit(5, 1000) then
     begin
-      Result := 'HomeworkHelper가 아직 실행 중입니다. 프로그램을 종료한 후 다시 시도해주세요.';
+      ForceKillAppProcesses();
+      if not WaitForAppExit(5, 1000) then
+      begin
+        Result := 'HomeworkHelper가 아직 실행 중입니다. 프로그램을 종료한 후 다시 시도해주세요.';
+      end;
     end;
   end;
 end;

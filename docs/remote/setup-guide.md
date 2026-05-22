@@ -74,7 +74,7 @@ Power boundary:
 - The host reports readiness and registers SSH public keys.
 - Wake/sleep/restart/shutdown are client-local side effects.
 - Clients without a direct local power adapter must keep power buttons disabled.
-- See `REMOTE_CONNECTION_SUPERVISOR.md` for power, OpenSSH, and SSH accepted-marker rules.
+- See `docs/remote/connection-supervisor-protocol.md` for power, OpenSSH, and SSH accepted-marker rules.
 
 ## 4. macOS client
 

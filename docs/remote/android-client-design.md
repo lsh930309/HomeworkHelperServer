@@ -197,7 +197,7 @@ Icon caching:
 
 ## 9. Connectivity model
 
-Android should share the supervisor concepts from `REMOTE_CONNECTION_SUPERVISOR.md`:
+Android should share the supervisor concepts from `docs/remote/connection-supervisor-protocol.md`:
 
 - `online`: Remote Agent and auth are OK.
 - `offlineExpected`: host/network likely unavailable.

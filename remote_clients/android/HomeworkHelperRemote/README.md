@@ -32,7 +32,7 @@ The APK is still produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 - `docs/remote/macos-client-architecture.md` — reference macOS client behavior and contracts.
 - `docs/remote/android-client-design.md` — Android rebuild UX/system design.
-- `REMOTE_CONNECTION_SUPERVISOR.md` — shared pairing, connectivity, power, OpenSSH, and SSH protocol rules.
+- `docs/remote/connection-supervisor-protocol.md` — shared pairing, connectivity, power, OpenSSH, and SSH protocol rules.
 
 Do not resurrect the deleted Android full-parity code. Rebuild Home/Games first, then add setup/support surfaces only as needed.
 

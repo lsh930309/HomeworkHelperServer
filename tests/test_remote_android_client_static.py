@@ -205,7 +205,7 @@ def test_android_v3_theme_assets_and_fake_smoke_contract_are_declared():
 def test_remote_docs_define_macos_reference_android_rebuild_and_shared_supervisor():
     macos = _read(Path("docs/remote/macos-client-architecture.md"))
     android = _read(Path("docs/remote/android-client-design.md"))
-    supervisor = _read(Path("REMOTE_CONNECTION_SUPERVISOR.md"))
+    supervisor = _read(Path("docs/remote/connection-supervisor-protocol.md"))
     setup = _read(Path("docs/remote/setup-guide.md"))
     android_readme = _read(ANDROID_ROOT / "README.md")
     root_readme = _read(Path("README.md"))
@@ -255,7 +255,7 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
         "Android client v3 game-first UX",
         "docs/remote/macos-client-architecture.md",
         "docs/remote/android-client-design.md",
-        "REMOTE_CONNECTION_SUPERVISOR.md",
+        "docs/remote/connection-supervisor-protocol.md",
         "Fake Remote Agent smoke is the default development loop",
     ]:
         assert marker in setup
@@ -269,7 +269,7 @@ def test_remote_docs_define_macos_reference_android_rebuild_and_shared_superviso
 
     assert "docs/remote/macos-client-architecture.md" in root_readme
     assert "docs/remote/android-client-design.md" in root_readme
-    assert "REMOTE_CONNECTION_SUPERVISOR.md" in root_readme
+    assert "docs/remote/connection-supervisor-protocol.md" in root_readme
 
 
 def test_legacy_android_completion_docs_and_claims_are_removed():

@@ -24,8 +24,8 @@ env/
 .env.*.local
 **/.env
 **/server/.env
-SmartThings_Token
 build.version.json
+SmartThings_Token
 
 # ===========================
 # PyInstaller 빌드 산출물
