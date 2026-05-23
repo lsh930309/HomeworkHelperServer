@@ -1395,6 +1395,57 @@ struct RemoteSettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            RemoteSettingsSection("Moonlight 원격 플레이") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("이번 단계는 Moonlight 앱과 저장된 Desktop host 후보를 읽기 전용으로 감지합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
+                    SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
+                    SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
+                    SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
+                    SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
+
+                    if viewModel.moonlightSelectableHosts.count > 1 {
+                        Picker("Moonlight host 선택", selection: $viewModel.selectedMoonlightHostUUID) {
+                            Text("자동 감지").tag("")
+                            ForEach(viewModel.moonlightSelectableHosts) { host in
+                                Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+
+                    if !viewModel.moonlightSnapshot.hosts.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("감지된 host")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            ForEach(viewModel.moonlightSnapshot.hosts) { host in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(host.displayTitle)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                    Text("\(host.appSummary) · \(host.addressSummary)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+
+                    SettingsActionGrid {
+                        Button("Moonlight 설정 다시 읽기") {
+                            viewModel.refreshMoonlightSnapshot()
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }

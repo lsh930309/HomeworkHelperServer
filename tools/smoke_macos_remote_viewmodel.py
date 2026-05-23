@@ -32,6 +32,7 @@ KEYCHAIN_TOKEN_STORE = MACOS_SOURCE_DIR / "KeychainTokenStore.swift"
 LOCAL_SSH_KEY_MANAGER = MACOS_SOURCE_DIR / "LocalSSHKeyManager.swift"
 LOCAL_POWER_WAKE_MANAGER = MACOS_SOURCE_DIR / "LocalPowerWakeManager.swift"
 LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
+LOCAL_MOONLIGHT_MANAGER = MACOS_SOURCE_DIR / "LocalMoonlightManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
 REMOTE_CONNECTION_SUPERVISOR = MACOS_SOURCE_DIR / "RemoteConnectionSupervisor.swift"
@@ -145,6 +146,9 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                       viewModel.menuBarRunningIconSymbol == "play.circle.fill",
                       viewModel.menuBarOfflineIconSymbol == "power.circle.fill" else {
                     fatalError("stateful menu bar icons should migrate the legacy idle icon and keep state defaults")
+                }
+                guard viewModel.moonlightSnapshot.readiness == .missingApp else {
+                    fatalError("smoke should use isolated Moonlight overrides instead of reading production Moonlight state")
                 }
                 viewModel.menuBarRunningIconSymbol = "moon.fill"
                 guard viewModel.menuBarIconSymbol(for: .running) == "moon.fill" else {
@@ -466,6 +470,7 @@ def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_c
         str(LOCAL_SSH_KEY_MANAGER),
         str(LOCAL_POWER_WAKE_MANAGER),
         str(LOCAL_SSH_POWER_MANAGER),
+        str(LOCAL_MOONLIGHT_MANAGER),
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_CLIENT_CACHE),
         str(REMOTE_CONNECTION_SUPERVISOR),
@@ -569,6 +574,8 @@ exit 0
             )
             fake_smartthings.chmod(0o755)
             smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"
+            env["HH_REMOTE_MOONLIGHT_APP_PATHS"] = str(temp_dir / "MissingMoonlight.app")
+            env["HH_REMOTE_MOONLIGHT_PREFS_PATH"] = str(temp_dir / "missing-moonlight.plist")
             offline_base_url = f"http://127.0.0.1:{_free_loopback_port()}"
             _compile_and_run_swift_smoke(base_url, offline_base_url, code, str(fake_smartthings), str(smoke_ssh_key), temp_dir, env)
             _assert_production_cache_unchanged(production_cache_signature)

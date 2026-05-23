@@ -101,6 +101,7 @@ private enum RemoteClientPreferences {
     private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
     private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
     private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
+    private static let selectedMoonlightHostUUIDKey = "remote.moonlight.selectedHostUUID"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -243,6 +244,19 @@ private enum RemoteClientPreferences {
     static func saveMirrorPollIntervalSeconds(_ seconds: Int) {
         defaults.set(min(60, max(1, seconds)), forKey: mirrorPollIntervalSecondsKey)
     }
+
+    static func loadSelectedMoonlightHostUUID() -> String {
+        defaults.string(forKey: selectedMoonlightHostUUIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static func saveSelectedMoonlightHostUUID(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: selectedMoonlightHostUUIDKey)
+            return
+        }
+        defaults.set(trimmed, forKey: selectedMoonlightHostUUIDKey)
+    }
 }
 
 enum RemoteMenuBarIconChoice {
@@ -324,8 +338,21 @@ private enum RemoteClientDesktopLogger {
 @MainActor
 final class RemoteDashboardViewModel: ObservableObject {
     @Published var baseURLText = RemoteClientPreferences.loadBaseURL() {
-        didSet { RemoteClientPreferences.saveBaseURL(baseURLText) }
+        didSet {
+            RemoteClientPreferences.saveBaseURL(baseURLText)
+            refreshMoonlightSnapshot()
+        }
     }
+    @Published var selectedMoonlightHostUUID = RemoteClientPreferences.loadSelectedMoonlightHostUUID() {
+        didSet {
+            RemoteClientPreferences.saveSelectedMoonlightHostUUID(selectedMoonlightHostUUID)
+            refreshMoonlightSnapshot()
+        }
+    }
+    @Published private(set) var moonlightSnapshot = LocalMoonlightManager.snapshot(
+        selectedHostUUID: RemoteClientPreferences.loadSelectedMoonlightHostUUID(),
+        baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host
+    )
     @Published var tokenText = "" {
         didSet {
             tokenStore.save(tokenText)
@@ -447,6 +474,29 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var moonlightSelectableHosts: [LocalMoonlightHostCandidate] {
+        moonlightSnapshot.usableHosts.filter { !$0.uuid.isEmpty }
+    }
+
+    var moonlightSelectedHostDisplay: String {
+        guard let target = moonlightSnapshot.targetHost else {
+            return moonlightSnapshot.readiness.label
+        }
+        return "\(target.displayTitle) · \(target.targetHostArgument)"
+    }
+
+    var moonlightInstallationDisplay: String {
+        guard let installation = moonlightSnapshot.installation else { return "미설치" }
+        return "\(installation.version) · \(installation.appPath)"
+    }
+
+    func refreshMoonlightSnapshot() {
+        moonlightSnapshot = LocalMoonlightManager.snapshot(
+            selectedHostUUID: selectedMoonlightHostUUID,
+            baseURLHost: URL(string: baseURLText)?.host
+        )
+    }
 
     var localSSHHealthReady: Bool {
         localSSHHealth?.authenticated == true

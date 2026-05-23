@@ -258,6 +258,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     tailscale = _read(SOURCE_ROOT / "TailscaleDiscovery.swift")
     local_ssh = _read(SOURCE_ROOT / "LocalSSHPowerManager.swift")
     local_power = _read(SOURCE_ROOT / "LocalPowerWakeManager.swift")
+    local_moonlight = _read(SOURCE_ROOT / "LocalMoonlightManager.swift")
     global_shortcut = _read(SOURCE_ROOT / "RemoteGlobalShortcutRegistrar.swift")
     packager = _read(Path("tools/package_macos_remote_app.py"))
 
@@ -561,6 +562,31 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "cmdKey | optionKey" in global_shortcut
     assert "⌘⌥G" in global_shortcut
     assert "HomeworkHelperRemoteGlobalShortcutPressed" in global_shortcut
+    assert "Moonlight 원격 플레이" in app
+    assert "Moonlight 설정 다시 읽기" in app
+    assert "스트리밍 실행은 아직 수행하지 않습니다" in app
+    assert "viewModel.moonlightSnapshot.readiness.label" in app
+    assert "$viewModel.selectedMoonlightHostUUID" in app
+    assert "viewModel.moonlightSelectableHosts" in app
+    assert "LocalMoonlightManager" in local_moonlight
+    assert "com.moonlight-stream.Moonlight" in local_moonlight
+    assert "HH_REMOTE_MOONLIGHT_APP_PATHS" in local_moonlight
+    assert "HH_REMOTE_MOONLIGHT_PREFS_PATH" in local_moonlight
+    assert "com.moonlight-stream.Moonlight.plist" in local_moonlight
+    assert '"hosts.size"' in local_moonlight
+    assert 'let prefix = "hosts.\\(index)"' in local_moonlight
+    assert '"\\(prefix).hostname"' in local_moonlight
+    assert '"\\(prefix).uuid"' in local_moonlight
+    assert 'prefix: "\\(prefix).apps"' in local_moonlight
+    assert 'caseInsensitiveCompare("Desktop")' in local_moonlight
+    assert "targetHostArgument" in local_moonlight
+    assert "srvcert" not in app
+    assert "macAddress" not in local_moonlight
+    assert "selectedMoonlightHostUUIDKey" in view_model
+    assert "remote.moonlight.selectedHostUUID" in view_model
+    assert "refreshMoonlightSnapshot" in view_model
+    assert "moonlightSnapshot" in view_model
+    assert "LocalMoonlightManager.snapshot" in view_model
 
     assert "RemoteClientPreferences" in view_model
     assert "UserDefaults.standard" in view_model

@@ -1,7 +1,7 @@
 # Moonlight/Apollo 원격 플레이 연동 Spike
 
-Last refreshed: 2026-05-23
-Status: Task 3 planning spike; implementation is not shipped yet
+Last refreshed: 2026-05-24
+Status: Phase 3A-1 Moonlight 감지/readiness shipped; stream start is not shipped yet
 
 ## 1. 결정 요약
 
@@ -187,6 +187,8 @@ popover에는 새 버튼을 추가하지 않는다. 설정 화면에만 extensio
 - 이 문서가 기준점이다.
 - macOS 설정 화면에 readiness section만 추가하는 것이 첫 구현 후보.
 - 실제 stream start는 아직 하지 않아도 된다.
+- 2026-05-24 기준 `LocalMoonlightManager`가 macOS Moonlight 앱과
+  `com.moonlight-stream.Moonlight.plist`의 host/app 후보를 read-only로 감지한다.
 
 ### Phase 3B: 수동 테스트 버튼
 
