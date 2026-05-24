@@ -97,6 +97,29 @@ struct LocalTailscalePingResult: Equatable {
 
     var attempted: Bool { outcome != .unavailable }
     var reachable: Bool { outcome == .reachable }
+    var directForStreaming: Bool {
+        guard reachable, !timedOut else { return false }
+        let lines = [stdout, stderr, message]
+            .joined(separator: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard let lastPathLine = lines.last(where: { $0.contains("pong") && $0.contains(" via ") }) else {
+            return false
+        }
+        if lastPathLine.contains("derp(") || lastPathLine.contains("peer-relay(") || lastPathLine.contains("relay ") {
+            return false
+        }
+        return !lines.contains { $0.contains("direct connection not established") }
+    }
+    var streamingRouteSummary: String {
+        let combined = [stdout, stderr, message]
+            .joined(separator: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return combined.last(where: { $0.localizedCaseInsensitiveContains(" via ") }) ?? message
+    }
 
     init(
         host: String,

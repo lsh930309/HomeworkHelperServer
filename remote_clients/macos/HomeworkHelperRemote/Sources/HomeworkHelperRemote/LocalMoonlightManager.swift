@@ -147,12 +147,14 @@ struct LocalMoonlightHostCandidate: Identifiable, Equatable {
         if parts[0] >= 224 { return false }
         return true
     }
+
 }
 
 enum LocalMoonlightReadiness: String, Equatable {
     case missingApp
     case missingConfig
     case noHosts
+    case needsTailscaleRegistration
     case ambiguous
     case ready
 
@@ -164,6 +166,8 @@ enum LocalMoonlightReadiness: String, Equatable {
             return "설정 없음"
         case .noHosts:
             return "Host 없음"
+        case .needsTailscaleRegistration:
+            return "Tailscale 등록 필요"
         case .ambiguous:
             return "Host 선택 필요"
         case .ready:
@@ -211,6 +215,31 @@ struct LocalMoonlightSnapshot: Equatable {
     var installed: Bool { installation != nil }
     var usableHosts: [LocalMoonlightHostCandidate] {
         hosts.filter { !$0.targetHostArgument.isEmpty && $0.hasDesktopApp }
+    }
+}
+
+struct LocalMoonlightCommandResult: Equatable {
+    let action: String
+    let executablePath: String
+    let arguments: [String]
+    let exitStatus: Int32?
+    let stdout: String
+    let stderr: String
+    let timedOut: Bool
+
+    var succeeded: Bool {
+        exitStatus == 0 && !timedOut
+    }
+
+    var outputSummary: String {
+        let combined = [stdout, stderr]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        if !combined.isEmpty { return combined }
+        if timedOut { return "\(action) 시간 초과" }
+        if let exitStatus { return "\(action) 종료 코드 \(exitStatus)" }
+        return "\(action) 실행 결과 없음"
     }
 }
 
@@ -285,7 +314,13 @@ enum LocalMoonlightManager {
             )
         }
 
-        if let match = uniqueMatch(usableHosts.filter { $0.matchesAnyAddress([baseURLHost ?? ""]) }) {
+        let normalizedBaseHost = normalizedHost(baseURLHost)
+        let usableBaseURLHost = normalizedBaseHost.flatMap { Self.isLoopbackHost($0) ? nil : $0 }
+        let usableHostNameHints = hostNameHints.compactMap(normalizedHost)
+        let usablePublicIPHints = publicIPHints.compactMap(normalizedHost).filter(isLikelyPublicIPv4)
+        let hasHomeworkHelperIdentityHints = usableBaseURLHost != nil || !usableHostNameHints.isEmpty || !usablePublicIPHints.isEmpty
+
+        if let match = uniqueMatch(usableHosts.filter { $0.matchesAnyAddress([usableBaseURLHost ?? ""]) }) {
             return readySnapshot(
                 installation: installation,
                 preferencesPath: preferencesPath,
@@ -324,6 +359,20 @@ enum LocalMoonlightManager {
             )
         }
 
+        if hasHomeworkHelperIdentityHints {
+            return LocalMoonlightSnapshot(
+                installation: installation,
+                preferencesPath: preferencesPath,
+                preferencesReadable: true,
+                hosts: hosts,
+                selectedHostUUID: selected,
+                targetHost: nil,
+                readiness: .needsTailscaleRegistration,
+                message: "HomeworkHelper host와 일치하는 Moonlight Desktop host를 찾지 못했습니다. 기존 설정은 수정하지 않고, Tailscale direct 경로로 새 host 등록을 준비하세요.",
+                publicIPCache: publicIPCache
+            )
+        }
+
         if usableHosts.count == 1, let host = usableHosts.first {
             return readySnapshot(
                 installation: installation,
@@ -357,6 +406,66 @@ enum LocalMoonlightManager {
             }
         }
         return nil
+    }
+
+    static func resolveHomebrewExecutablePath() -> String? {
+        firstExecutable(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
+    }
+
+    static func installViaHomebrew(timeoutSeconds: Int = 240) async -> LocalMoonlightCommandResult {
+        guard let brew = resolveHomebrewExecutablePath() else {
+            return LocalMoonlightCommandResult(
+                action: "brew install --cask moonlight",
+                executablePath: "brew",
+                arguments: ["install", "--cask", "moonlight"],
+                exitStatus: nil,
+                stdout: "",
+                stderr: "Homebrew를 찾지 못했습니다. https://brew.sh/ 설치 후 다시 시도하세요.",
+                timedOut: false
+            )
+        }
+        return await runCommand(
+            action: "brew install --cask moonlight",
+            executablePath: brew,
+            arguments: ["install", "--cask", "moonlight"],
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
+    static func pair(host: String, pin: String, installation: LocalMoonlightAppInstallation? = nil, timeoutSeconds: Int = 120) async -> LocalMoonlightCommandResult {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight pair", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight에 등록할 host가 비어 있습니다.", timedOut: false)
+        }
+        guard trimmedPin.count == 4, trimmedPin.allSatisfy(\.isNumber) else {
+            return LocalMoonlightCommandResult(action: "moonlight pair", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight pairing PIN은 4자리 숫자여야 합니다.", timedOut: false)
+        }
+        guard let executable = (installation ?? resolveInstallation())?.executablePath else {
+            return LocalMoonlightCommandResult(action: "moonlight pair", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 실행 파일을 찾지 못했습니다.", timedOut: false)
+        }
+        return await runCommand(
+            action: "moonlight pair",
+            executablePath: executable,
+            arguments: ["pair", trimmedHost, "--pin", trimmedPin],
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
+    static func listApps(host: String, installation: LocalMoonlightAppInstallation? = nil, timeoutSeconds: Int = 45) async -> LocalMoonlightCommandResult {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight list", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 앱 목록을 확인할 host가 비어 있습니다.", timedOut: false)
+        }
+        guard let executable = (installation ?? resolveInstallation())?.executablePath else {
+            return LocalMoonlightCommandResult(action: "moonlight list", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 실행 파일을 찾지 못했습니다.", timedOut: false)
+        }
+        return await runCommand(
+            action: "moonlight list",
+            executablePath: executable,
+            arguments: ["list", trimmedHost],
+            timeoutSeconds: timeoutSeconds
+        )
     }
 
     private static func uniqueMatch(_ matches: [LocalMoonlightHostCandidate]) -> LocalMoonlightHostCandidate? {
@@ -485,6 +594,11 @@ enum LocalMoonlightManager {
         return true
     }
 
+    private static func isLoopbackHost(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "localhost" || normalized == "::1" || normalized.hasPrefix("127.")
+    }
+
     private static func resolvePreferencesPath() -> String {
         let override = ProcessInfo.processInfo.environment[preferencesPathOverrideKey]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !override.isEmpty { return NSString(string: override).expandingTildeInPath }
@@ -511,6 +625,10 @@ enum LocalMoonlightManager {
             seen.insert(path)
             return true
         }
+    }
+
+    private static func firstExecutable(_ paths: [String]) -> String? {
+        paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private static func resolveInstallationCandidate(_ path: String) -> LocalMoonlightAppInstallation? {
@@ -571,6 +689,57 @@ enum LocalMoonlightManager {
             return nil
         default:
             return nil
+        }
+    }
+
+    private static func runCommand(action: String, executablePath: String, arguments: [String], timeoutSeconds: Int) async -> LocalMoonlightCommandResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let process = Process()
+                let output = Pipe()
+                let error = Pipe()
+                process.executableURL = URL(fileURLWithPath: executablePath)
+                process.arguments = arguments
+                process.standardOutput = output
+                process.standardError = error
+                do {
+                    try process.run()
+                    let timeoutLock = NSLock()
+                    var didTimeOut = false
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(max(1, timeoutSeconds))) {
+                        guard process.isRunning else { return }
+                        timeoutLock.lock()
+                        didTimeOut = true
+                        timeoutLock.unlock()
+                        process.terminate()
+                    }
+                    process.waitUntilExit()
+                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    timeoutLock.lock()
+                    let timedOut = didTimeOut
+                    timeoutLock.unlock()
+                    continuation.resume(returning: LocalMoonlightCommandResult(
+                        action: action,
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        exitStatus: process.terminationStatus,
+                        stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                        stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines),
+                        timedOut: timedOut
+                    ))
+                } catch {
+                    continuation.resume(returning: LocalMoonlightCommandResult(
+                        action: action,
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        exitStatus: nil,
+                        stdout: "",
+                        stderr: error.localizedDescription,
+                        timedOut: false
+                    ))
+                }
+            }
         }
     }
 }

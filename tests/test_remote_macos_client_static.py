@@ -566,6 +566,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "⌘⌥G" in global_shortcut
     assert "HomeworkHelperRemoteGlobalShortcutPressed" in global_shortcut
     assert "Moonlight 원격 플레이" in app
+    assert "기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다" in app
+    assert "Tailscale 등록 후보" in app
+    assert "Pairing PIN" in app
+    assert "Moonlight 설치" in app
+    assert "Tailscale Direct로 등록" in app
     assert "Moonlight 설정 다시 읽기" in app
     assert "호스트 공인 IP 갱신" in app
     assert "viewModel.moonlightPublicIPDisplay" in app
@@ -586,6 +591,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'prefix: "\\(prefix).apps"' in local_moonlight
     assert 'caseInsensitiveCompare("Desktop")' in local_moonlight
     assert "targetHostArgument" in local_moonlight
+    assert "needsTailscaleRegistration" in local_moonlight
+    assert "LocalMoonlightCommandResult" in local_moonlight
+    assert "installViaHomebrew" in local_moonlight
+    assert '["install", "--cask", "moonlight"]' in local_moonlight
+    assert "static func pair(host: String, pin: String" in local_moonlight
+    assert 'arguments: ["pair", trimmedHost, "--pin", trimmedPin]' in local_moonlight
+    assert "static func listApps(host: String" in local_moonlight
+    assert 'arguments: ["list", trimmedHost]' in local_moonlight
     assert "LocalMoonlightPublicIPCache" in local_moonlight
     assert "hostNameHints" in local_moonlight
     assert "publicIPHints" in local_moonlight
@@ -594,9 +607,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "currentEndpointHost" in tailscale
     assert "directEndpointHosts" in tailscale
     assert "publicEndpointHosts" in tailscale
+    assert "directForStreaming" in tailscale
+    assert "streamingRouteSummary" in tailscale
+    assert "derp(" in tailscale
+    assert "peer-relay(" in tailscale
     assert '"CurAddr"' in tailscale
     assert '"Addrs"' in tailscale
     assert "LocalSSHPowerManager.publicIP" in view_model
+    assert "installMoonlightViaHomebrew" in view_model
+    assert "registerMoonlightViaTailscaleDirect" in view_model
+    assert "generateMoonlightPairingPIN" in view_model
+    assert "moonlightTailscaleRegistrationPeer" in view_model
+    assert "Tailscale direct 경로 확인 중" in view_model
+    assert "호스트 Sunshine/Apollo PIN 화면" in view_model
     assert "moonlightPublicIPCacheKey" in view_model
     assert "remote.moonlight.hostPublicIPCache" in view_model
     assert "srvcert" not in app

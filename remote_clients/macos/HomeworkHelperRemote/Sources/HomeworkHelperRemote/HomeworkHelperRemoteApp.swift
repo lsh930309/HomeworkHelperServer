@@ -1292,19 +1292,33 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .moonlight) {
             RemoteSettingsSection("Moonlight 원격 플레이") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("이번 단계는 Moonlight 앱과 저장된 Desktop host 후보를 읽기 전용으로 감지합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
+                    Text("기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다. 매칭되지 않으면 Tailscale direct 등록을 준비합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
                     SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
+                    if !viewModel.moonlightSnapshot.installed {
+                        SidebarInfoRow(label: "Homebrew", value: viewModel.moonlightHomebrewDisplay, systemImage: "shippingbox")
+                    }
                     SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
                     SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
                     SidebarInfoRow(label: "호스트 공인 IP", value: viewModel.moonlightPublicIPDisplay, systemImage: "network")
+                    if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
+                        SidebarInfoRow(label: "Tailscale 등록 후보", value: viewModel.moonlightTailscaleRegistrationDisplay, systemImage: "network.badge.shield.half.filled")
+                        SidebarInfoRow(label: "Pairing PIN", value: viewModel.moonlightPairingPINDisplay, systemImage: "number")
+                    }
                     SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
                     if !viewModel.moonlightStalePublicIPWarning.isEmpty {
                         Text(viewModel.moonlightStalePublicIPWarning)
                             .font(.caption2)
                             .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                    if !viewModel.moonlightLastCommandSummary.isEmpty {
+                        Text(viewModel.moonlightLastCommandSummary)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(6)
                             .textSelection(.enabled)
                     }
 
@@ -1340,6 +1354,18 @@ struct RemoteSettingsView: View {
                     }
 
                     SettingsActionGrid {
+                        if !viewModel.moonlightSnapshot.installed {
+                            Button("Moonlight 설치") {
+                                Task { await viewModel.installMoonlightViaHomebrew() }
+                            }
+                            .disabled(!viewModel.moonlightCanInstallViaHomebrew)
+                        }
+                        if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
+                            Button("Tailscale Direct로 등록") {
+                                Task { await viewModel.registerMoonlightViaTailscaleDirect() }
+                            }
+                            .disabled(!viewModel.moonlightCanRegisterViaTailscale)
+                        }
                         Button("Moonlight 설정 다시 읽기") {
                             viewModel.refreshMoonlightSnapshot()
                         }

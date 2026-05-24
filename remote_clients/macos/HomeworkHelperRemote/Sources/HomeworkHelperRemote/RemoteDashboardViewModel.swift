@@ -379,6 +379,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host,
         publicIPCache: RemoteClientPreferences.loadMoonlightPublicIPCache()
     )
+    @Published private(set) var moonlightSetupInProgress = false
+    @Published private(set) var moonlightPairingPIN = ""
+    @Published private(set) var moonlightTailscalePing: LocalTailscalePingResult?
+    @Published private(set) var moonlightLastCommandSummary = ""
     @Published var tokenText = "" {
         didSet {
             tokenStore.save(tokenText)
@@ -526,6 +530,35 @@ final class RemoteDashboardViewModel: ObservableObject {
         return "\(installation.version) · \(installation.appPath)"
     }
 
+    var moonlightHomebrewDisplay: String {
+        LocalMoonlightManager.resolveHomebrewExecutablePath() ?? "Homebrew 없음"
+    }
+
+    var moonlightCanInstallViaHomebrew: Bool {
+        moonlightSnapshot.installation == nil && LocalMoonlightManager.resolveHomebrewExecutablePath() != nil && !moonlightSetupInProgress
+    }
+
+    var moonlightTailscaleRegistrationDisplay: String {
+        guard let peer = moonlightTailscaleRegistrationPeer() else {
+            if localTailscale?.running == true { return "등록 후보 없음" }
+            return "Tailscale 준비 필요"
+        }
+        let route = moonlightTailscalePing?.streamingRouteSummary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let routeSuffix = route.isEmpty ? "" : " · \(route)"
+        return "\(peer.hostname.isEmpty ? peer.dnsStem : peer.hostname) · \(moonlightTailscaleRegistrationHost(from: peer) ?? "-")\(routeSuffix)"
+    }
+
+    var moonlightCanRegisterViaTailscale: Bool {
+        moonlightSnapshot.installation != nil
+            && moonlightSnapshot.readiness != .ready
+            && moonlightTailscaleRegistrationPeer() != nil
+            && !moonlightSetupInProgress
+    }
+
+    var moonlightPairingPINDisplay: String {
+        moonlightPairingPIN.isEmpty ? "미시작" : moonlightPairingPIN
+    }
+
     var moonlightPublicIPDisplay: String {
         guard let cache = moonlightPublicIPCache else { return "미수집" }
         let formatted = Self.shortDateTimeFormatter.string(from: cache.collectedDate)
@@ -569,6 +602,79 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = "호스트 공인 IP를 갱신했습니다: \(ip)"
     }
 
+    func installMoonlightViaHomebrew() async {
+        guard !moonlightSetupInProgress else { return }
+        guard moonlightSnapshot.installation == nil else {
+            message = "Moonlight가 이미 설치되어 있습니다."
+            refreshMoonlightSnapshot()
+            return
+        }
+        moonlightSetupInProgress = true
+        moonlightLastCommandSummary = ""
+        message = "Homebrew로 Moonlight 설치 중..."
+        let result = await LocalMoonlightManager.installViaHomebrew()
+        moonlightLastCommandSummary = result.outputSummary
+        moonlightSetupInProgress = false
+        refreshMoonlightSnapshot()
+        if result.succeeded, moonlightSnapshot.installation != nil {
+            message = "Moonlight 설치를 확인했습니다. 이제 Tailscale Direct 등록 또는 기존 host 감지를 진행할 수 있습니다."
+        } else if result.succeeded {
+            message = "Moonlight 설치 명령은 완료됐지만 앱을 아직 찾지 못했습니다. 설치 위치를 확인한 뒤 설정을 다시 읽어 주세요."
+        } else {
+            message = "Moonlight 설치 실패: \(result.outputSummary)"
+        }
+    }
+
+    func registerMoonlightViaTailscaleDirect() async {
+        guard !moonlightSetupInProgress else { return }
+        guard let installation = moonlightSnapshot.installation else {
+            message = "Moonlight가 설치되어 있어야 Tailscale Direct 등록을 진행할 수 있습니다."
+            return
+        }
+        guard let peer = moonlightTailscaleRegistrationPeer(),
+              let targetHost = moonlightTailscaleRegistrationHost(from: peer) else {
+            message = "HomeworkHelper host와 연결된 Tailscale 등록 후보를 찾지 못했습니다."
+            return
+        }
+
+        moonlightSetupInProgress = true
+        moonlightLastCommandSummary = ""
+        moonlightTailscalePing = nil
+        message = "Tailscale direct 경로 확인 중: \(targetHost)"
+
+        let ping = await TailscaleDiscovery.ping(host: targetHost, timeoutSeconds: 5)
+        moonlightTailscalePing = ping
+        guard ping.directForStreaming else {
+            moonlightSetupInProgress = false
+            let route = ping.streamingRouteSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = "Moonlight 스트리밍용 Tailscale direct 연결을 확인하지 못했습니다. \(route.isEmpty ? ping.message : route)"
+            return
+        }
+
+        let pin = Self.generateMoonlightPairingPIN()
+        moonlightPairingPIN = pin
+        message = "Moonlight pairing 시작: 호스트 Sunshine/Apollo PIN 화면에서 \(pin)을 승인하세요."
+        let pairResult = await LocalMoonlightManager.pair(host: targetHost, pin: pin, installation: installation, timeoutSeconds: 120)
+        moonlightLastCommandSummary = pairResult.outputSummary
+        if pairResult.succeeded {
+            let listResult = await LocalMoonlightManager.listApps(host: targetHost, installation: installation, timeoutSeconds: 45)
+            let listSummary = listResult.outputSummary
+            moonlightLastCommandSummary = [pairResult.outputSummary, listSummary]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            refreshMoonlightSnapshot()
+            if listResult.succeeded {
+                message = "Moonlight Tailscale Direct 등록을 완료했고 앱 목록을 확인했습니다."
+            } else {
+                message = "Moonlight pairing은 완료됐지만 앱 목록 확인은 실패했습니다: \(listSummary)"
+            }
+        } else {
+            message = "Moonlight pairing 완료를 확인하지 못했습니다. 호스트에서 PIN 승인 상태를 확인하세요: \(pairResult.outputSummary)"
+        }
+        moonlightSetupInProgress = false
+    }
+
     private func saveMoonlightPublicIPCache(_ cache: LocalMoonlightPublicIPCache?) {
         moonlightPublicIPCache = cache
         RemoteClientPreferences.saveMoonlightPublicIPCache(cache)
@@ -602,6 +708,53 @@ final class RemoteDashboardViewModel: ObservableObject {
             return matched
         }
         return peers.count == 1 ? peers[0] : nil
+    }
+
+    private func moonlightTailscaleRegistrationPeer() -> LocalTailscalePeer? {
+        guard let localTailscale, localTailscale.running else { return nil }
+        let windowsPeers = localTailscale.peers.filter { peer in
+            peer.online
+                && peer.primaryIPv4 != nil
+                && (peer.os.lowercased().contains("windows")
+                    || "\(peer.hostname) \(peer.dnsName)".lowercased().contains("desktop"))
+        }
+        guard !windowsPeers.isEmpty else { return nil }
+
+        if let baseHost = URL(string: baseURLText)?.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !baseHost.isEmpty,
+           let matched = windowsPeers.first(where: { peer in
+               peer.ips.map { $0.lowercased() }.contains(baseHost)
+                   || peer.dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == baseHost
+                   || peer.dnsStem.lowercased() == baseHost
+           }) {
+            return matched
+        }
+
+        let hostDeviceHints = devices
+            .filter { $0.role == "host" }
+            .flatMap { device -> [String] in
+                [device.name, device.tailnetHostname ?? ""]
+            }
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for hint in hostDeviceHints {
+            if let matched = windowsPeers.first(where: { peerMatchesHostName($0, hint: hint) }) {
+                return matched
+            }
+        }
+
+        return windowsPeers.count == 1 ? windowsPeers[0] : nil
+    }
+
+    private func moonlightTailscaleRegistrationHost(from peer: LocalTailscalePeer) -> String? {
+        peer.primaryIPv4 ?? peer.dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).nilIfBlank
+    }
+
+    private func peerMatchesHostName(_ peer: LocalTailscalePeer, hint: String) -> Bool {
+        let normalizedHint = Self.canonicalHostToken(hint)
+        guard !normalizedHint.isEmpty else { return false }
+        return [peer.hostname, peer.dnsName, peer.dnsStem]
+            .map(Self.canonicalHostToken)
+            .contains(normalizedHint)
     }
 
     private func moonlightHostNameHints() -> [String] {
@@ -640,6 +793,21 @@ final class RemoteDashboardViewModel: ObservableObject {
             seen.insert(key)
             return trimmed
         }
+    }
+
+    private static func canonicalHostToken(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .split(separator: ".")
+            .first
+            .map(String.init)?
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "-") ?? ""
+    }
+
+    private static func generateMoonlightPairingPIN() -> String {
+        String(format: "%04d", Int.random(in: 0...9999))
     }
 
     var localSSHHealthReady: Bool {
