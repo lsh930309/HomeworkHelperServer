@@ -410,7 +410,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'MenuBarPowerButton(action: "wake", label: "전원 켜기"' in app
     assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
     assert 'MenuBarFooterButton(title: "설정", systemImage: "gearshape")' in app
-    assert 'MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise")' in app
+    assert '.help("새로고침")' in app
+    assert "MenuBarMoonlightButton(viewModel: viewModel)" in app
+    assert "struct MenuBarMoonlightButton" in app
+    assert "viewModel.moonlightFooterButtonTitle" in app
+    assert "viewModel.moonlightFooterButtonIcon" in app
     assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
     assert ".labelStyle(.iconOnly)" not in app
 
@@ -567,6 +571,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "HomeworkHelperRemoteGlobalShortcutPressed" in global_shortcut
     assert "Moonlight 원격 플레이" in app
     assert "기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다" in app
+    assert "Moonlight 실행 버튼 연동" in app
+    assert "$viewModel.moonlightBindingEnabled" in app
+    assert "연동 상태" in app
     assert "Tailscale 등록 후보" in app
     assert "Pairing PIN" in app
     assert "Moonlight 설치" in app
@@ -593,12 +600,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "targetHostArgument" in local_moonlight
     assert "needsTailscaleRegistration" in local_moonlight
     assert "LocalMoonlightCommandResult" in local_moonlight
+    assert "LocalMoonlightSessionSnapshot" in local_moonlight
     assert "installViaHomebrew" in local_moonlight
     assert '["install", "--cask", "moonlight"]' in local_moonlight
     assert "static func pair(host: String, pin: String" in local_moonlight
     assert 'arguments: ["pair", trimmedHost, "--pin", trimmedPin]' in local_moonlight
     assert "static func listApps(host: String" in local_moonlight
     assert 'arguments: ["list", trimmedHost]' in local_moonlight
+    assert "static func startDesktopStream" in local_moonlight
+    assert 'arguments = ["stream", trimmedHost, appName]' in local_moonlight
+    assert "static func quit(host: String" in local_moonlight
+    assert 'arguments: ["quit", trimmedHost]' in local_moonlight
+    assert "static func focusAndMoveToScreen" in local_moonlight
+    assert "AXIsProcessTrustedWithOptions" in local_moonlight
+    assert "kAXWindowsAttribute" in local_moonlight
+    assert "forceTerminate" in local_moonlight
     assert "LocalMoonlightPublicIPCache" in local_moonlight
     assert "hostNameHints" in local_moonlight
     assert "publicIPHints" in local_moonlight
@@ -616,6 +632,17 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "LocalSSHPowerManager.publicIP" in view_model
     assert "installMoonlightViaHomebrew" in view_model
     assert "registerMoonlightViaTailscaleDirect" in view_model
+    assert "moonlightBindingEnabledKey" in view_model
+    assert "remote.moonlight.bindingEnabled" in view_model
+    assert "toggleMoonlightDesktopSession" in view_model
+    assert "ensureMoonlightDesktopVisible" in view_model
+    assert "stopMoonlightDesktopSession" in view_model
+    assert "if moonlightSessionSnapshot.isRunning { return false }" in view_model
+    assert "앱 종료 fallback만 수행합니다" in view_model
+    assert "updateMoonlightPreferredScreen" in view_model
+    assert "focusMoonlightOnPreferredScreen" in view_model
+    assert "Accessibility 권한" in view_model
+    assert 'if moonlightBindingEnabled, moonlightSnapshot.readiness == .ready' in view_model
     assert "generateMoonlightPairingPIN" in view_model
     assert "moonlightTailscaleRegistrationPeer" in view_model
     assert "Tailscale direct 경로 확인 중" in view_model

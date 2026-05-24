@@ -103,6 +103,7 @@ private enum RemoteClientPreferences {
     private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
     private static let selectedMoonlightHostUUIDKey = "remote.moonlight.selectedHostUUID"
     private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
+    private static let moonlightBindingEnabledKey = "remote.moonlight.bindingEnabled"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -273,6 +274,14 @@ private enum RemoteClientPreferences {
             defaults.set(data, forKey: moonlightPublicIPCacheKey)
         }
     }
+
+    static func loadMoonlightBindingEnabled() -> Bool {
+        defaults.bool(forKey: moonlightBindingEnabledKey)
+    }
+
+    static func saveMoonlightBindingEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: moonlightBindingEnabledKey)
+    }
 }
 
 enum RemoteMenuBarIconChoice {
@@ -383,6 +392,11 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightPairingPIN = ""
     @Published private(set) var moonlightTailscalePing: LocalTailscalePingResult?
     @Published private(set) var moonlightLastCommandSummary = ""
+    @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
+    @Published var moonlightBindingEnabled = RemoteClientPreferences.loadMoonlightBindingEnabled() {
+        didSet { RemoteClientPreferences.saveMoonlightBindingEnabled(moonlightBindingEnabled) }
+    }
+    private var moonlightPreferredScreenFrame: CGRect?
     @Published var tokenText = "" {
         didSet {
             tokenStore.save(tokenText)
@@ -559,6 +573,37 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightPairingPIN.isEmpty ? "미시작" : moonlightPairingPIN
     }
 
+    var moonlightFooterButtonTitle: String {
+        if moonlightSetupInProgress { return "Moonlight..." }
+        if moonlightSessionSnapshot.isRunning { return "Moonlight OFF" }
+        return "Moonlight ON"
+    }
+
+    var moonlightFooterButtonIcon: String {
+        if moonlightSetupInProgress { return "hourglass" }
+        if moonlightSessionSnapshot.isRunning { return "moon.stars.slash" }
+        return "moon.stars.fill"
+    }
+
+    var moonlightFooterButtonDisabled: Bool {
+        if moonlightSetupInProgress { return true }
+        if moonlightSessionSnapshot.isRunning { return false }
+        return moonlightSnapshot.readiness != .ready
+    }
+
+    var moonlightBindingStatusDisplay: String {
+        let optIn = moonlightBindingEnabled ? "Opt-in ON" : "Opt-in OFF"
+        let session: String
+        if moonlightSessionSnapshot.isVisible {
+            session = "세션 창 표시 중"
+        } else if moonlightSessionSnapshot.isRunning {
+            session = "Moonlight 실행 중 · 창 미확인"
+        } else {
+            session = "세션 없음"
+        }
+        return "\(optIn) · \(session)"
+    }
+
     var moonlightPublicIPDisplay: String {
         guard let cache = moonlightPublicIPCache else { return "미수집" }
         let formatted = Self.shortDateTimeFormatter.string(from: cache.collectedDate)
@@ -571,6 +616,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightSnapshot.stalePublicIPWarning
     }
 
+    func updateMoonlightPreferredScreen(_ screen: NSScreen?) {
+        moonlightPreferredScreenFrame = (screen ?? NSScreen.main)?.visibleFrame
+    }
+
+    func refreshMoonlightSessionSnapshot() {
+        moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
+    }
+
     func refreshMoonlightSnapshot() {
         moonlightSnapshot = LocalMoonlightManager.snapshot(
             selectedHostUUID: selectedMoonlightHostUUID,
@@ -579,6 +632,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             publicIPHints: moonlightPublicIPHints(),
             publicIPCache: moonlightPublicIPCache
         )
+        refreshMoonlightSessionSnapshot()
     }
 
     func refreshMoonlightPublicIPViaSSH() async {
@@ -673,6 +727,120 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "Moonlight pairing 완료를 확인하지 못했습니다. 호스트에서 PIN 승인 상태를 확인하세요: \(pairResult.outputSummary)"
         }
         moonlightSetupInProgress = false
+    }
+
+    func toggleMoonlightDesktopSession() async {
+        guard !moonlightSetupInProgress else { return }
+        refreshMoonlightSessionSnapshot()
+        if moonlightSessionSnapshot.isRunning {
+            await stopMoonlightDesktopSession()
+            return
+        }
+        guard moonlightSnapshot.readiness == .ready else {
+            message = "Moonlight Desktop host가 준비된 뒤 사용할 수 있습니다. 설정 > Moonlight에서 readiness를 확인하세요."
+            return
+        }
+        if !moonlightBindingEnabled {
+            moonlightBindingEnabled = true
+        }
+        _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button")
+    }
+
+    private func ensureMoonlightDesktopVisible(trigger: String) async -> Bool {
+        guard moonlightBindingEnabled else { return false }
+        guard moonlightSnapshot.readiness == .ready,
+              let target = moonlightSnapshot.targetHost,
+              let installation = moonlightSnapshot.installation else {
+            message = "Moonlight Desktop host가 준비되지 않았습니다."
+            return false
+        }
+        guard ensureMoonlightAccessibilityIfNeeded() else { return false }
+
+        moonlightSetupInProgress = true
+        moonlightLastCommandSummary = ""
+        refreshMoonlightSessionSnapshot()
+
+        if !moonlightSessionSnapshot.isRunning {
+            let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
+            moonlightLastCommandSummary = start.outputSummary
+            guard start.succeeded else {
+                moonlightSetupInProgress = false
+                refreshMoonlightSessionSnapshot()
+                message = "\(trigger): Moonlight Desktop 시작 실패: \(start.outputSummary)"
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+
+        let focus = await focusMoonlightOnPreferredScreen()
+        moonlightLastCommandSummary = [moonlightLastCommandSummary, focus.outputSummary]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        moonlightSetupInProgress = false
+        refreshMoonlightSessionSnapshot()
+        if focus.succeeded || moonlightSessionSnapshot.isRunning {
+            message = "Moonlight Desktop 세션을 현재 화면으로 불러왔습니다."
+            return true
+        }
+        message = "\(trigger): Moonlight Desktop focus 실패: \(focus.outputSummary)"
+        return false
+    }
+
+    private func stopMoonlightDesktopSession() async {
+        moonlightSetupInProgress = true
+        moonlightLastCommandSummary = ""
+        let quit: LocalMoonlightCommandResult
+        if let target = moonlightSnapshot.targetHost {
+            quit = await LocalMoonlightManager.quit(host: target.targetHostArgument, installation: moonlightSnapshot.installation)
+        } else {
+            quit = LocalMoonlightCommandResult(
+                action: "moonlight quit",
+                executablePath: "",
+                arguments: [],
+                exitStatus: 0,
+                stdout: "Moonlight quit 대상 host를 찾지 못해 앱 종료 fallback만 수행합니다.",
+                stderr: "",
+                timedOut: false
+            )
+        }
+        let terminate = await LocalMoonlightManager.terminateRunningApplications()
+        moonlightLastCommandSummary = [quit.outputSummary, terminate.outputSummary]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        moonlightSetupInProgress = false
+        refreshMoonlightSessionSnapshot()
+        message = terminate.succeeded ? "Moonlight Desktop 세션을 종료했습니다." : "Moonlight 종료를 시도했습니다: \(terminate.outputSummary)"
+    }
+
+    private func focusMoonlightOnPreferredScreen() async -> LocalMoonlightCommandResult {
+        let requiresAccessibility = NSScreen.screens.count > 1
+        let frame = requiresAccessibility ? (moonlightPreferredScreenFrame ?? NSScreen.main?.visibleFrame) : nil
+        var last = LocalMoonlightManager.focusAndMoveToScreen(
+            visibleFrame: frame,
+            requireAccessibility: requiresAccessibility,
+            promptForAccessibility: false
+        )
+        if last.succeeded { return last }
+        for _ in 0..<6 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            last = LocalMoonlightManager.focusAndMoveToScreen(
+                visibleFrame: frame,
+                requireAccessibility: requiresAccessibility,
+                promptForAccessibility: false
+            )
+            if last.succeeded { return last }
+        }
+        return last
+    }
+
+    private func ensureMoonlightAccessibilityIfNeeded() -> Bool {
+        guard NSScreen.screens.count > 1 else { return true }
+        guard !LocalMoonlightManager.accessibilityPermissionReady(prompt: true) else { return true }
+        moonlightLastCommandSummary = "다중 디스플레이에서 Moonlight 창을 이동하려면 macOS Accessibility 권한이 필요합니다."
+        message = "다중 디스플레이에서 Moonlight 창을 현재 popover 화면으로 옮기려면 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용 권한을 허용해야 합니다."
+        return false
     }
 
     private func saveMoonlightPublicIPCache(_ cache: LocalMoonlightPublicIPCache?) {
@@ -2563,6 +2731,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = result.message
             if result.accepted {
                 startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
+                if moonlightBindingEnabled, moonlightSnapshot.readiness == .ready {
+                    _ = await ensureMoonlightDesktopVisible(trigger: "launch.\(processID)")
+                }
             } else {
                 pendingLaunchProcessIDs.remove(processID)
             }

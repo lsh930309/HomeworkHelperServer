@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ApplicationServices
 
 struct LocalMoonlightAppInstallation: Equatable {
     let appPath: String
@@ -243,6 +244,15 @@ struct LocalMoonlightCommandResult: Equatable {
     }
 }
 
+struct LocalMoonlightSessionSnapshot: Equatable {
+    let runningApplicationCount: Int
+    let hasVisibleWindow: Bool
+    let accessibilityTrusted: Bool
+
+    var isRunning: Bool { runningApplicationCount > 0 }
+    var isVisible: Bool { isRunning && hasVisibleWindow }
+}
+
 enum LocalMoonlightManager {
     private static let bundleIdentifier = "com.moonlight-stream.Moonlight"
     private static let appPathOverrideKey = "HH_REMOTE_MOONLIGHT_APP_PATHS"
@@ -468,6 +478,129 @@ enum LocalMoonlightManager {
         )
     }
 
+    @MainActor
+    static func sessionSnapshot() -> LocalMoonlightSessionSnapshot {
+        let runningApps = runningApplications()
+        return LocalMoonlightSessionSnapshot(
+            runningApplicationCount: runningApps.count,
+            hasVisibleWindow: hasVisibleWindow(for: runningApps),
+            accessibilityTrusted: accessibilityTrusted(prompt: false)
+        )
+    }
+
+    static func accessibilityPermissionReady(prompt: Bool) -> Bool {
+        accessibilityTrusted(prompt: prompt)
+    }
+
+    @MainActor
+    static func startDesktopStream(host: String, installation: LocalMoonlightAppInstallation? = nil, appName: String = "Desktop") -> LocalMoonlightCommandResult {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight stream", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight Desktop stream 대상 host가 비어 있습니다.", timedOut: false)
+        }
+        guard let executable = (installation ?? resolveInstallation())?.executablePath else {
+            return LocalMoonlightCommandResult(action: "moonlight stream", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 실행 파일을 찾지 못했습니다.", timedOut: false)
+        }
+        let arguments = ["stream", trimmedHost, appName]
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return LocalMoonlightCommandResult(
+                action: "moonlight stream",
+                executablePath: executable,
+                arguments: arguments,
+                exitStatus: 0,
+                stdout: "Moonlight Desktop stream 시작 요청을 보냈습니다. pid=\(process.processIdentifier)",
+                stderr: "",
+                timedOut: false
+            )
+        } catch {
+            return LocalMoonlightCommandResult(
+                action: "moonlight stream",
+                executablePath: executable,
+                arguments: arguments,
+                exitStatus: nil,
+                stdout: "",
+                stderr: error.localizedDescription,
+                timedOut: false
+            )
+        }
+    }
+
+    static func quit(host: String, installation: LocalMoonlightAppInstallation? = nil, timeoutSeconds: Int = 12) async -> LocalMoonlightCommandResult {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight quit", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight quit 대상 host가 비어 있습니다.", timedOut: false)
+        }
+        guard let executable = (installation ?? resolveInstallation())?.executablePath else {
+            return LocalMoonlightCommandResult(action: "moonlight quit", executablePath: "", arguments: [], exitStatus: nil, stdout: "", stderr: "Moonlight 실행 파일을 찾지 못했습니다.", timedOut: false)
+        }
+        return await runCommand(
+            action: "moonlight quit",
+            executablePath: executable,
+            arguments: ["quit", trimmedHost],
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
+    @MainActor
+    static func focusAndMoveToScreen(visibleFrame: CGRect?, requireAccessibility: Bool, promptForAccessibility: Bool) -> LocalMoonlightCommandResult {
+        let runningApps = runningApplications()
+        guard !runningApps.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "실행 중인 Moonlight 앱을 찾지 못했습니다.", timedOut: false)
+        }
+
+        if requireAccessibility && !accessibilityTrusted(prompt: promptForAccessibility) {
+            return LocalMoonlightCommandResult(action: "moonlight focus", executablePath: bundleIdentifier, arguments: [], exitStatus: nil, stdout: "", stderr: "다중 디스플레이에서 Moonlight 창을 이동하려면 macOS Accessibility 권한이 필요합니다.", timedOut: false)
+        }
+
+        var moved = false
+        if let visibleFrame {
+            moved = runningApps.contains { moveWindows(of: $0, to: visibleFrame) }
+        }
+        runningApps.forEach { app in
+            app.activate(options: [.activateAllWindows])
+        }
+        let hasWindow = hasVisibleWindow(for: runningApps)
+        let moveSuffix = visibleFrame == nil ? "" : (moved ? " · 대상 디스플레이로 이동" : " · 창 이동 미확인")
+        return LocalMoonlightCommandResult(
+            action: "moonlight focus",
+            executablePath: bundleIdentifier,
+            arguments: [],
+            exitStatus: hasWindow || moved ? 0 : nil,
+            stdout: "Moonlight 앱을 전면화했습니다\(moveSuffix).",
+            stderr: hasWindow || moved ? "" : "Moonlight 창을 아직 확인하지 못했습니다.",
+            timedOut: false
+        )
+    }
+
+    @MainActor
+    static func terminateRunningApplications(forceAfterSeconds: Double = 1.5) async -> LocalMoonlightCommandResult {
+        let apps = runningApplications()
+        guard !apps.isEmpty else {
+            return LocalMoonlightCommandResult(action: "moonlight terminate", executablePath: bundleIdentifier, arguments: [], exitStatus: 0, stdout: "종료할 Moonlight 앱이 없습니다.", stderr: "", timedOut: false)
+        }
+        apps.forEach { _ = $0.terminate() }
+        let nanoseconds = UInt64(max(0.1, forceAfterSeconds) * 1_000_000_000)
+        try? await Task.sleep(nanoseconds: nanoseconds)
+        let survivors = runningApplications()
+        survivors.forEach { _ = $0.forceTerminate() }
+        let remaining = runningApplications().count
+        return LocalMoonlightCommandResult(
+            action: "moonlight terminate",
+            executablePath: bundleIdentifier,
+            arguments: [],
+            exitStatus: remaining == 0 ? 0 : nil,
+            stdout: remaining == 0 ? "Moonlight 앱을 종료했습니다." : "Moonlight 종료를 요청했지만 일부 프로세스가 남아 있습니다.",
+            stderr: remaining == 0 ? "" : "remaining=\(remaining)",
+            timedOut: false
+        )
+    }
+
     private static func uniqueMatch(_ matches: [LocalMoonlightHostCandidate]) -> LocalMoonlightHostCandidate? {
         var seen = Set<String>()
         let unique = matches.filter { host in
@@ -690,6 +823,83 @@ enum LocalMoonlightManager {
         default:
             return nil
         }
+    }
+
+    @MainActor
+    private static func runningApplications() -> [NSRunningApplication] {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .filter { !$0.isTerminated }
+    }
+
+    @MainActor
+    private static func hasVisibleWindow(for apps: [NSRunningApplication]) -> Bool {
+        let pids = Set(apps.map(\.processIdentifier))
+        guard !pids.isEmpty,
+              let windowInfo = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], CGWindowID(0)) as? [[String: Any]] else {
+            return false
+        }
+        return windowInfo.contains { info in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t,
+                  pids.contains(ownerPID) else {
+                return false
+            }
+            let layer = info[kCGWindowLayer as String] as? Int ?? 0
+            let alpha = info[kCGWindowAlpha as String] as? Double ?? 1.0
+            return layer == 0 && alpha > 0
+        }
+    }
+
+    private static func accessibilityTrusted(prompt: Bool) -> Bool {
+        if prompt {
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            return AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        }
+        return AXIsProcessTrusted()
+    }
+
+    @MainActor
+    private static func moveWindows(of app: NSRunningApplication, to visibleFrame: CGRect) -> Bool {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var windowsValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+              let windows = windowsValue as? [AXUIElement],
+              !windows.isEmpty else {
+            return false
+        }
+
+        var didMove = false
+        for window in windows {
+            var size = CGSize(width: min(1280, visibleFrame.width * 0.9), height: min(720, visibleFrame.height * 0.9))
+            var sizeValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+               let sizeValue,
+               CFGetTypeID(sizeValue) == AXValueGetTypeID() {
+                let axSize = sizeValue as! AXValue
+                var currentSize = CGSize.zero
+                if AXValueGetValue(axSize, .cgSize, &currentSize), currentSize.width > 100, currentSize.height > 100 {
+                    size = currentSize
+                }
+            }
+
+            let clampedSize = CGSize(width: min(size.width, visibleFrame.width * 0.94), height: min(size.height, visibleFrame.height * 0.94))
+            if clampedSize != size {
+                var newSize = clampedSize
+                if let axNewSize = AXValueCreate(.cgSize, &newSize) {
+                    AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, axNewSize)
+                }
+            }
+
+            var target = CGPoint(
+                x: visibleFrame.midX - clampedSize.width / 2,
+                y: visibleFrame.midY - clampedSize.height / 2
+            )
+            if let axPosition = AXValueCreate(.cgPoint, &target),
+               AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, axPosition) == .success {
+                didMove = true
+            }
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        }
+        return didMove
     }
 
     private static func runCommand(action: String, executablePath: String, arguments: [String], timeoutSeconds: Int) async -> LocalMoonlightCommandResult {

@@ -251,8 +251,10 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
         installPopoverOutsideClickMonitor()
+        RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(button.window?.screen ?? NSScreen.main)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         DispatchQueue.main.async { [weak self] in
+            RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(self?.popover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
             self?.focusPopoverWindow()
         }
     }
@@ -317,6 +319,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         ))
         window.center()
         uiTestPopoverWindow = window
+        RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(window.screen ?? NSScreen.main)
         focusMainWindow(window)
         settleUITestPopoverWindow(preferred: window)
     }
@@ -873,6 +876,18 @@ struct MenuBarPopoverView: View {
                     Text("HomeworkHelper")
                         .font(.headline)
                     Spacer()
+                    Button {
+                        Task { await viewModel.refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption.bold())
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .menuBarHoverTint(disabled: viewModel.isLoading)
+                    .menuBarSuppressFocusRing()
+                    .disabled(viewModel.isLoading)
+                    .help("새로고침")
                     HostStatusPill(viewModel: viewModel)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -918,9 +933,7 @@ struct MenuBarPopoverView: View {
                     MenuBarFooterButton(title: "설정", systemImage: "gearshape") {
                         RemoteAppDelegate.openSettingsWindow()
                     }
-                    MenuBarFooterButton(title: "새로고침", systemImage: "arrow.clockwise") {
-                        Task { await viewModel.refresh() }
-                    }
+                    MenuBarMoonlightButton(viewModel: viewModel)
                     MenuBarFooterButton(title: "앱 종료", systemImage: "power") {
                         NSApp.terminate(nil)
                     }
@@ -980,6 +993,28 @@ struct MenuBarFooterButton: View {
         .foregroundStyle(.primary)
         .menuBarHoverTint()
         .menuBarSuppressFocusRing()
+    }
+}
+
+struct MenuBarMoonlightButton: View {
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        let disabled = viewModel.moonlightFooterButtonDisabled
+        Button {
+            Task { await viewModel.toggleMoonlightDesktopSession() }
+        } label: {
+            Label(viewModel.moonlightFooterButtonTitle, systemImage: viewModel.moonlightFooterButtonIcon)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+                .frame(maxWidth: .infinity, minHeight: 30)
+        }
+        .controlSize(.small)
+        .foregroundStyle(.primary)
+        .menuBarHoverTint(disabled: disabled)
+        .menuBarSuppressFocusRing()
+        .disabled(disabled)
+        .help(viewModel.moonlightBindingStatusDisplay)
     }
 }
 
@@ -1297,6 +1332,9 @@ struct RemoteSettingsView: View {
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
                     SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
+                    Toggle("Moonlight 실행 버튼 연동", isOn: $viewModel.moonlightBindingEnabled)
+                        .disabled(viewModel.moonlightSnapshot.readiness != .ready)
+                    SidebarInfoRow(label: "연동 상태", value: viewModel.moonlightBindingStatusDisplay, systemImage: "play.tv")
                     if !viewModel.moonlightSnapshot.installed {
                         SidebarInfoRow(label: "Homebrew", value: viewModel.moonlightHomebrewDisplay, systemImage: "shippingbox")
                     }
