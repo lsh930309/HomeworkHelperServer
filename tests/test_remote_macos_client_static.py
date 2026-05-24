@@ -411,6 +411,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
     assert 'MenuBarFooterButton(title: "설정", systemImage: "gearshape")' in app
     assert '.help("새로고침")' in app
+    header_source = app.split("struct MenuBarPopoverView", 1)[1].split("VStack(alignment: .leading, spacing: 6)", 1)[0]
+    assert 'Text("HomeworkHelper")' in header_source
+    assert '.help("새로고침")' in header_source
+    assert header_source.index('Text("HomeworkHelper")') < header_source.index('.help("새로고침")') < header_source.index("Spacer()")
+    assert ".buttonStyle(.plain)" not in header_source
     assert "MenuBarMoonlightButton(viewModel: viewModel)" in app
     assert "struct MenuBarMoonlightButton" in app
     assert "viewModel.moonlightFooterButtonTitle" in app
@@ -436,6 +441,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "measured.width * 1.06" in app
     assert "measured.height * 1.10" in app
     assert "SettingsActionGrid" in app
+    assert ".toggleStyle(.switch)" in app
+    assert "MenuBarIconPickerRow(title: \"대기 상태 아이콘\", selection: $viewModel.menuBarIdleIconSymbol)" in app
+    assert "MenuBarIconPickerRow(title: \"실행 중 아이콘\", selection: $viewModel.menuBarRunningIconSymbol)" in app
+    assert "MenuBarIconPickerRow(title: \"오프라인/Standalone 아이콘\", selection: $viewModel.menuBarOfflineIconSymbol)" in app
+    assert "struct MenuBarIconPickerRow" in app
+    assert ".frame(width: 220, alignment: .trailing)" in app
     assert ".padding(RemoteSettingsLayout.tabPadding)" in app
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
@@ -573,6 +584,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다" in app
     assert "Moonlight 실행 버튼 연동" in app
     assert "$viewModel.moonlightBindingEnabled" in app
+    assert "호스트 자동 깨우기 후 Moonlight 시작" in app
+    assert "$viewModel.moonlightAutoWakeBeforeStreamEnabled" in app
     assert "연동 상태" in app
     assert "Tailscale 등록 후보" in app
     assert "Pairing PIN" in app
@@ -582,7 +595,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "호스트 공인 IP 갱신" in app
     assert "viewModel.moonlightPublicIPDisplay" in app
     assert "viewModel.moonlightStalePublicIPWarning" in app
-    assert "스트리밍 실행은 아직 수행하지 않습니다" in app
+    assert "준비된 Desktop 세션은 popover에서 바로 실행합니다" in app
     assert "viewModel.moonlightSnapshot.readiness.label" in app
     assert "$viewModel.selectedMoonlightHostUUID" in app
     assert "viewModel.moonlightSelectableHosts" in app
@@ -634,10 +647,18 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "registerMoonlightViaTailscaleDirect" in view_model
     assert "moonlightBindingEnabledKey" in view_model
     assert "remote.moonlight.bindingEnabled" in view_model
+    assert "moonlightAutoWakeBeforeStreamEnabledKey" in view_model
+    assert "remote.moonlight.autoWakeBeforeStreamEnabled" in view_model
+    assert "PendingMoonlightWakeAction" in view_model
+    assert "prepareMoonlightAutoWake(action:" in view_model
+    assert "resumePendingMoonlightWakeActionIfReady" in view_model
+    assert "clearPendingMoonlightWakeActionIfBlocked" in view_model
+    assert "canAutoWakeHostForMoonlight" in view_model
     assert "toggleMoonlightDesktopSession" in view_model
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
     assert "if moonlightSessionSnapshot.isRunning { return false }" in view_model
+    assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
     assert "앱 종료 fallback만 수행합니다" in view_model
     assert "updateMoonlightPreferredScreen" in view_model
     assert "focusMoonlightOnPreferredScreen" in view_model
@@ -730,6 +751,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func launch(_ process: RemoteProcess) async" in view_model
     launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
     assert "await refresh()" not in launch_source
+    assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" in launch_source
     assert "startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)" in launch_source
     assert "syncScope: .forceProcesses" in view_model
     assert "syncRemoteProcesses(using: service, client: client)" in view_model
@@ -768,6 +790,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'processes.first?.id == "smoke-game"' in cache
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "Moonlight auto-wake should default to explicit opt-in" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline launch should stay disabled when Moonlight auto-wake is not explicitly enabled" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
@@ -863,9 +887,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "remote.menuBarRunningIconSymbol" in view_model
     assert "remote.menuBarOfflineIconSymbol" in view_model
     assert "remote.menuBarIconSymbol" in view_model
-    assert 'Picker("대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)' in app
-    assert 'Picker("실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)' in app
-    assert 'Picker("오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)' in app
+    assert 'MenuBarIconPickerRow(title: "대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)' in app
+    assert 'MenuBarIconPickerRow(title: "실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)' in app
+    assert 'MenuBarIconPickerRow(title: "오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)' in app
     assert "NSApp.currentEvent?.clickCount" not in app
     assert "popover.performClose(nil)" in app
     assert "window.orderOut(nil)" in app

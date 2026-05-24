@@ -1,7 +1,7 @@
 # Moonlight/Apollo 원격 플레이 연동 Spike
 
-Last refreshed: 2026-05-24
-Status: Phase 3C Moonlight Desktop ON/OFF runtime binding shipped; public IP/port-forwarding automation remains deferred
+Last refreshed: 2026-05-25
+Status: Phase 3C UX polish + optional auto-wake binding shipped; public IP/port-forwarding automation remains deferred
 
 ## 1. 결정 요약
 
@@ -16,8 +16,9 @@ Task 3의 초기 목표는 코드 구현이 아니라 **Moonlight/Apollo 연동 
 - Moonlight 스트림 진입은 macOS 클라이언트가 담당한다.
 - 사용자는 기존 popover의 **▶ 실행 버튼 하나**를 누른다.
 - 연동이 활성화되고 readiness가 통과한 경우에만 `게임 실행 + Desktop 스트림 시작`을 통합 실행한다.
-- popover 하단의 기존 새로고침 자리는 **Moonlight ON/OFF** 진입점으로 바꾸고, 새로고침은 연결 상태 badge 옆의 작은 icon-only 버튼으로 이동한다.
+- popover 하단의 기존 새로고침 자리는 **Moonlight ON/OFF** 진입점으로 바꾸고, 새로고침은 제목 오른쪽의 고정 icon-only 버튼으로 이동한다.
 - Moonlight runtime binding은 ready 환경에서 사용자가 명시적으로 켠 뒤 동작하는 **수동 Opt-in**으로 둔다.
+- Moonlight 자동 wake는 별도 **기본 OFF** 옵션으로 두며, 사용자가 켠 경우에만 꺼진 호스트를 깨운 뒤 Desktop stream 또는 게임 실행+stream을 이어간다.
 
 비목표:
 
@@ -141,13 +142,15 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
 3. 이미 Moonlight 앱/세션이 실행 중이면 현재 popover가 떠 있는 디스플레이로 focus/move한다.
 4. OFF를 누르면 readiness와 무관하게 `moonlight quit <host>` 후 Moonlight 앱 종료를 요청하고, host 식별이 불가능해도 앱 terminate fallback으로 정리한다.
 5. 다중 디스플레이에서 창을 특정 화면으로 이동해야 하는 경우 macOS Accessibility 권한이 없으면 시작을 막고 권한 허용 안내를 표시한다.
+6. 자동 wake 옵션이 켜져 있고 SmartThings wake가 준비된 경우, 호스트가 꺼짐/서버 응답 없음/재연결/부팅 대기 상태여도 ON 버튼 또는 게임 실행 버튼이 wake intent를 등록한다.
+7. wake intent 등록 후 기존 wake reconnect schedule로 온라인 복구를 기다리고, 온라인이 확인되면 저장된 pending action을 이어간다.
 
 ## 5. 설정 UX
 
 초기 spike에서는 설정 화면에만 extension section을 두는 방향이었지만,
 2026-05-24 runtime binding 이후 popover에는 독립적인 새 영역을 늘리지 않고
 기존 하단 중앙 버튼 슬롯을 재사용한 `Moonlight ON/OFF` 버튼만 둔다.
-기존 하단 `새로고침`은 popover 우측 상단 연결 badge 왼쪽의 작은 icon-only 버튼으로 이동한다.
+기존 하단 `새로고침`은 popover 제목 오른쪽의 작은 icon-only glass 버튼으로 이동한다.
 
 추천 설정 항목:
 
@@ -155,6 +158,10 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
   - Homebrew가 있는 경우 `brew install --cask moonlight`를 명시 버튼으로 제공.
   - Homebrew가 없으면 수동 설치 안내만 표시.
 - `Moonlight Desktop 연동 사용`
+- `호스트 자동 깨우기 후 Moonlight 시작`
+  - 기본값은 OFF.
+  - Moonlight readiness가 ready일 때만 켤 수 있다.
+  - 켜진 경우 SmartThings wake 준비 상태에서 offline/unavailable host에 대해 Moonlight ON과 게임 실행 버튼이 wake 후 이어가기 pending action을 등록한다.
 - `Moonlight 앱/CLI 경로`
   - 기본 탐지 후보: `/Applications/Moonlight.app`
   - CLI가 필요한 경우 사용자가 직접 경로 지정
@@ -196,6 +203,8 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
 | Desktop 앱 없음 | “Apollo/Sunshine에서 Desktop 앱 노출을 확인하세요.” |
 | Apollo permission 부족 | “Apollo client 권한에서 Launch Apps/Input 권한을 확인하세요.” |
 | 다중 디스플레이 + Accessibility 권한 없음 | Moonlight 시작/focus를 막고 시스템 설정 권한 안내 |
+| 자동 wake 실패 | pending action을 등록하지 않고 SmartThings wake 실패 메시지 표시 |
+| 자동 wake 후 온라인 복구 실패 | pending action을 해제하고 전원/네트워크 확인 안내 |
 | 스트림 종료 실패 | `moonlight quit` 후 앱 terminate/force-terminate fallback 결과를 사용자 메시지로 표시 |
 
 핵심 원칙:
@@ -204,6 +213,7 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
 - 게임 실행 accepted 후 stream 실패가 발생해도 row pending/chase 흐름은 유지한다.
 - extension 문제는 기본 HomeworkHelper Remote 신뢰도를 떨어뜨리지 않게 분리한다.
 - 게임 실행 버튼 override는 항상 host launch accepted 이후에만 Moonlight Desktop을 시작/focus한다.
+- 자동 wake는 명시 옵션이 켜진 경우에만 작동하며, 인증 거부/복구 실패 시 pending action을 안전하게 폐기한다.
 
 ## 8. 단계별 구현 후보
 
@@ -236,6 +246,9 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
 - 2026-05-24 기준 구현됨. `Moonlight 실행 버튼 연동`이 Opt-in ON이고
   readiness가 ready이면, host launch accepted 후 기존 launch chase와 별개로
   Moonlight Desktop session을 시작하거나 현재 popover 디스플레이로 focus한다.
+- 2026-05-25 기준 `호스트 자동 깨우기 후 Moonlight 시작` 옵션이 추가됨.
+  기본 OFF이며, ON이면 SmartThings wake 준비 상태에서 호스트가 꺼져 있어도
+  Moonlight ON 또는 게임 실행 버튼이 wake 후 pending action을 이어간다.
 
 ### Phase 3D: 종료/복귀 보조
 

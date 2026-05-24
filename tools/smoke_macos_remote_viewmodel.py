@@ -150,6 +150,9 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.moonlightSnapshot.readiness == .missingApp else {
                     fatalError("smoke should use isolated Moonlight overrides instead of reading production Moonlight state")
                 }
+                guard viewModel.moonlightAutoWakeBeforeStreamEnabled == false else {
+                    fatalError("Moonlight auto-wake should default to explicit opt-in")
+                }
                 viewModel.menuBarRunningIconSymbol = "moon.fill"
                 guard viewModel.menuBarIconSymbol(for: .running) == "moon.fill" else {
                     fatalError("running menu bar icon should be user-selectable")
@@ -229,6 +232,12 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard let launchProcess = viewModel.processes.first(where: { $0.id == "smoke-game" }) else {
                     fatalError("seeded process missing before launch")
                 }
+                viewModel.hostAvailabilityState = .offlineExpected
+                viewModel.moonlightAutoWakeBeforeStreamEnabled = false
+                guard !viewModel.isLaunchEnabled(launchProcess) else {
+                    fatalError("offline launch should stay disabled when Moonlight auto-wake is not explicitly enabled")
+                }
+                viewModel.hostAvailabilityState = .online
                 let hostLabelBeforeLaunch = viewModel.hostStatusLabel
                 smokeStep("launch command scoped mirror")
                 await viewModel.launch(launchProcess)

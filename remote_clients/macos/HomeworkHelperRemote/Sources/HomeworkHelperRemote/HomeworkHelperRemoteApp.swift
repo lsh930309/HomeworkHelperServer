@@ -875,19 +875,19 @@ struct MenuBarPopoverView: View {
                 HStack {
                     Text("HomeworkHelper")
                         .font(.headline)
-                    Spacer()
                     Button {
                         Task { await viewModel.refresh() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.caption.bold())
-                            .frame(width: 22, height: 22)
+                            .frame(width: 24, height: 22)
                     }
-                    .buttonStyle(.plain)
+                    .controlSize(.small)
                     .menuBarHoverTint(disabled: viewModel.isLoading)
                     .menuBarSuppressFocusRing()
                     .disabled(viewModel.isLoading)
                     .help("새로고침")
+                    Spacer()
                     HostStatusPill(viewModel: viewModel)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -1151,6 +1151,7 @@ struct RemoteSettingsView: View {
                     .tag(RemoteSettingsTab.app)
             }
             .remoteGlass(.settings)
+            .toggleStyle(.switch)
         }
         .padding()
         .frame(width: targetSize.width, height: targetSize.height)
@@ -1327,12 +1328,14 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .moonlight) {
             RemoteSettingsSection("Moonlight 원격 플레이") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다. 매칭되지 않으면 Tailscale direct 등록을 준비합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
+                    Text("기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다. 매칭되지 않으면 Tailscale direct 등록을 준비하고, 준비된 Desktop 세션은 popover에서 바로 실행합니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
                     SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
                     Toggle("Moonlight 실행 버튼 연동", isOn: $viewModel.moonlightBindingEnabled)
+                        .disabled(viewModel.moonlightSnapshot.readiness != .ready)
+                    Toggle("호스트 자동 깨우기 후 Moonlight 시작", isOn: $viewModel.moonlightAutoWakeBeforeStreamEnabled)
                         .disabled(viewModel.moonlightSnapshot.readiness != .ready)
                     SidebarInfoRow(label: "연동 상태", value: viewModel.moonlightBindingStatusDisplay, systemImage: "play.tv")
                     if !viewModel.moonlightSnapshot.installed {
@@ -1461,24 +1464,9 @@ struct RemoteSettingsView: View {
                     Text(viewModel.popoverGlassTransparency.description)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Picker("대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol) {
-                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
-                            Label(symbol, systemImage: symbol).tag(symbol)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    Picker("실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol) {
-                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
-                            Label(symbol, systemImage: symbol).tag(symbol)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    Picker("오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol) {
-                        ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
-                            Label(symbol, systemImage: symbol).tag(symbol)
-                        }
-                    }
-                    .pickerStyle(.menu)
+                    MenuBarIconPickerRow(title: "대기 상태 아이콘", selection: $viewModel.menuBarIdleIconSymbol)
+                    MenuBarIconPickerRow(title: "실행 중 아이콘", selection: $viewModel.menuBarRunningIconSymbol)
+                    MenuBarIconPickerRow(title: "오프라인/Standalone 아이콘", selection: $viewModel.menuBarOfflineIconSymbol)
                     Text("상태별 내장 SF Symbols를 메뉴바 아이콘으로 사용합니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -1490,6 +1478,27 @@ struct RemoteSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+}
+
+struct MenuBarIconPickerRow: View {
+    let title: LocalizedStringKey
+    @Binding var selection: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer()
+            Picker("", selection: $selection) {
+                ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
+                    Label(symbol, systemImage: symbol).tag(symbol)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 220, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
