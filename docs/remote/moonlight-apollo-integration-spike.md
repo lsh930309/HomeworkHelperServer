@@ -189,6 +189,8 @@ popover에는 새 버튼을 추가하지 않는다. 설정 화면에만 extensio
 - 실제 stream start는 아직 하지 않아도 된다.
 - 2026-05-24 기준 `LocalMoonlightManager`가 macOS Moonlight 앱과
   `com.moonlight-stream.Moonlight.plist`의 host/app 후보를 read-only로 감지한다.
+- 2026-05-24 기준 macOS 설정의 Android 탭은 Moonlight 전용 탭으로 교체했고,
+  Tailscale direct endpoint/SSH 공인 IP를 Moonlight host 자동 식별 보조 신호로 사용한다.
 
 ### Phase 3B: 수동 테스트 버튼
 

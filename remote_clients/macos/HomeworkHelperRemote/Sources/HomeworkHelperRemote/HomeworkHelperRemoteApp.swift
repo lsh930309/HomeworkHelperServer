@@ -1057,7 +1057,7 @@ enum RemoteSettingsTab: String, CaseIterable, Hashable {
     case connection
     case power
     case devices
-    case android
+    case moonlight
     case app
 }
 
@@ -1108,9 +1108,9 @@ struct RemoteSettingsView: View {
                 settingsDevicesTab
                     .tabItem { Label("기기", systemImage: "display.2") }
                     .tag(RemoteSettingsTab.devices)
-                settingsAndroidTab
-                    .tabItem { Label("Android", systemImage: "app.connected.to.app.below.fill") }
-                    .tag(RemoteSettingsTab.android)
+                settingsMoonlightTab
+                    .tabItem { Label("Moonlight", systemImage: "moon.stars") }
+                    .tag(RemoteSettingsTab.moonlight)
                 settingsAppTab
                     .tabItem { Label("앱", systemImage: "gearshape") }
                     .tag(RemoteSettingsTab.app)
@@ -1288,35 +1288,65 @@ struct RemoteSettingsView: View {
         }
     }
 
-    private var settingsAndroidTab: some View {
-        SettingsTabScrollView(tab: .android) {
-            RemoteSettingsSection("Android-PC 연결") {
+    private var settingsMoonlightTab: some View {
+        SettingsTabScrollView(tab: .moonlight) {
+            RemoteSettingsSection("Moonlight 원격 플레이") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Android 클라이언트가 준비될 때 사용할 매핑입니다. 기본 화면에서는 숨깁니다.")
+                    Text("이번 단계는 Moonlight 앱과 저장된 Desktop host 후보를 읽기 전용으로 감지합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    HStack {
-                        TextField("PC process ID", text: $viewModel.gameLinkProcessID)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("Android package", text: $viewModel.gameLinkAndroidPackage)
-                            .textFieldStyle(.roundedBorder)
-                        Button("연결 저장") { Task { await viewModel.createGameLink() } }
-                            .disabled(viewModel.gameLinkProcessID.isEmpty || viewModel.gameLinkAndroidPackage.isEmpty)
+                    SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
+                    SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
+                    SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
+                    SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
+                    SidebarInfoRow(label: "호스트 공인 IP", value: viewModel.moonlightPublicIPDisplay, systemImage: "network")
+                    SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
+                    if !viewModel.moonlightStalePublicIPWarning.isEmpty {
+                        Text(viewModel.moonlightStalePublicIPWarning)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
                     }
-                    ForEach(viewModel.gameLinks) { link in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(link.pcDisplayName ?? link.pcProcessID).font(.headline)
-                                Text(link.androidPackageName).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if let session = viewModel.activeMobileSession(for: link) {
-                                Button("모바일 종료") { Task { await viewModel.endMobileSession(session) } }
-                            } else {
-                                Button("모바일 시작") { Task { await viewModel.startMobileSession(link) } }
+
+                    if viewModel.moonlightSelectableHosts.count > 1 {
+                        Picker("Moonlight host 선택", selection: $viewModel.selectedMoonlightHostUUID) {
+                            Text("자동 감지").tag("")
+                            ForEach(viewModel.moonlightSelectableHosts) { host in
+                                Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
                             }
                         }
-                        Divider()
+                        .pickerStyle(.menu)
+                    }
+
+                    if !viewModel.moonlightSnapshot.hosts.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("감지된 host")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            ForEach(viewModel.moonlightSnapshot.hosts) { host in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(host.displayTitle)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                    Text("\(host.appSummary) · \(host.addressSummary)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+
+                    SettingsActionGrid {
+                        Button("Moonlight 설정 다시 읽기") {
+                            viewModel.refreshMoonlightSnapshot()
+                        }
+                        Button("호스트 공인 IP 갱신") {
+                            Task { await viewModel.refreshMoonlightPublicIPViaSSH() }
+                        }
+                        .disabled(!viewModel.powerConfig.localSSHConfigured)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1392,57 +1422,6 @@ struct RemoteSettingsView: View {
                     Text(viewModel.globalShortcutStatusMessage)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            RemoteSettingsSection("Moonlight 원격 플레이") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("이번 단계는 Moonlight 앱과 저장된 Desktop host 후보를 읽기 전용으로 감지합니다. 스트리밍 실행은 아직 수행하지 않습니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
-                    SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
-                    SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
-                    SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
-                    SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
-
-                    if viewModel.moonlightSelectableHosts.count > 1 {
-                        Picker("Moonlight host 선택", selection: $viewModel.selectedMoonlightHostUUID) {
-                            Text("자동 감지").tag("")
-                            ForEach(viewModel.moonlightSelectableHosts) { host in
-                                Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-
-                    if !viewModel.moonlightSnapshot.hosts.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("감지된 host")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            ForEach(viewModel.moonlightSnapshot.hosts) { host in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(host.displayTitle)
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                    Text("\(host.appSummary) · \(host.addressSummary)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                        .textSelection(.enabled)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
-
-                    SettingsActionGrid {
-                        Button("Moonlight 설정 다시 읽기") {
-                            viewModel.refreshMoonlightSnapshot()
-                        }
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

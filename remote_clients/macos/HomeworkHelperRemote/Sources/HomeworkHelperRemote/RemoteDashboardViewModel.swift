@@ -102,6 +102,7 @@ private enum RemoteClientPreferences {
     private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
     private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
     private static let selectedMoonlightHostUUIDKey = "remote.moonlight.selectedHostUUID"
+    private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -257,6 +258,21 @@ private enum RemoteClientPreferences {
         }
         defaults.set(trimmed, forKey: selectedMoonlightHostUUIDKey)
     }
+
+    static func loadMoonlightPublicIPCache() -> LocalMoonlightPublicIPCache? {
+        guard let data = defaults.data(forKey: moonlightPublicIPCacheKey) else { return nil }
+        return try? JSONDecoder().decode(LocalMoonlightPublicIPCache.self, from: data)
+    }
+
+    static func saveMoonlightPublicIPCache(_ cache: LocalMoonlightPublicIPCache?) {
+        guard let cache else {
+            defaults.removeObject(forKey: moonlightPublicIPCacheKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(cache) {
+            defaults.set(data, forKey: moonlightPublicIPCacheKey)
+        }
+    }
 }
 
 enum RemoteMenuBarIconChoice {
@@ -337,6 +353,14 @@ private enum RemoteClientDesktopLogger {
 
 @MainActor
 final class RemoteDashboardViewModel: ObservableObject {
+    private static let shortDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     @Published var baseURLText = RemoteClientPreferences.loadBaseURL() {
         didSet {
             RemoteClientPreferences.saveBaseURL(baseURLText)
@@ -349,9 +373,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             refreshMoonlightSnapshot()
         }
     }
+    @Published private(set) var moonlightPublicIPCache = RemoteClientPreferences.loadMoonlightPublicIPCache()
     @Published private(set) var moonlightSnapshot = LocalMoonlightManager.snapshot(
         selectedHostUUID: RemoteClientPreferences.loadSelectedMoonlightHostUUID(),
-        baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host
+        baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host,
+        publicIPCache: RemoteClientPreferences.loadMoonlightPublicIPCache()
     )
     @Published var tokenText = "" {
         didSet {
@@ -375,7 +401,14 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var smartThingsDevices: [String] = []
     @Published var smartThingsDeviceCandidates: [RemoteSmartThingsDeviceCandidate] = []
     @Published var readiness: RemoteReadiness?
-    @Published var localTailscale: LocalTailscaleSnapshot?
+    @Published var localTailscale: LocalTailscaleSnapshot? {
+        didSet {
+            if let localTailscale {
+                updateMoonlightPublicIPCacheFromTailscale(localTailscale)
+            }
+            refreshMoonlightSnapshot()
+        }
+    }
     @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
     @Published var setupProgress = "원격 설정 준비 전입니다."
     @Published var remoteDesktopLoggingEnabled = RemoteClientPreferences.loadDesktopLoggingEnabled()
@@ -391,7 +424,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses() {
         didSet { postMenuBarStatusDidChange() }
     }
-    @Published var devices: [RemoteDevice] = []
+    @Published var devices: [RemoteDevice] = [] {
+        didSet { refreshMoonlightSnapshot() }
+    }
     @Published var launchAtLoginEnabled = RemoteUITestFlags.skipExternalState ? false : RemoteLoginItemManager.isEnabled
     @Published var menuBarIdleIconSymbol = RemoteClientPreferences.loadMenuBarIdleIconSymbol() {
         didSet {
@@ -491,11 +526,120 @@ final class RemoteDashboardViewModel: ObservableObject {
         return "\(installation.version) · \(installation.appPath)"
     }
 
+    var moonlightPublicIPDisplay: String {
+        guard let cache = moonlightPublicIPCache else { return "미수집" }
+        let formatted = Self.shortDateTimeFormatter.string(from: cache.collectedDate)
+        let peer = cache.matchedPeerHostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let peerSuffix = peer.isEmpty ? "" : " · \(peer)"
+        return "\(cache.ip) · \(cache.source) · \(formatted)\(peerSuffix)"
+    }
+
+    var moonlightStalePublicIPWarning: String {
+        moonlightSnapshot.stalePublicIPWarning
+    }
+
     func refreshMoonlightSnapshot() {
         moonlightSnapshot = LocalMoonlightManager.snapshot(
             selectedHostUUID: selectedMoonlightHostUUID,
-            baseURLHost: URL(string: baseURLText)?.host
+            baseURLHost: URL(string: baseURLText)?.host,
+            hostNameHints: moonlightHostNameHints(),
+            publicIPHints: moonlightPublicIPHints(),
+            publicIPCache: moonlightPublicIPCache
         )
+    }
+
+    func refreshMoonlightPublicIPViaSSH() async {
+        guard powerConfig.localSSHConfigured else {
+            message = "SSH 전원 설정이 준비되어야 호스트 공인 IP를 수동 갱신할 수 있습니다."
+            return
+        }
+        message = "SSH로 호스트 공인 IP를 확인 중..."
+        let result = await LocalSSHPowerManager.publicIP(config: powerConfig, timeoutSeconds: 8)
+        guard let ip = result.ip else {
+            message = "호스트 공인 IP 확인 실패: \(result.message)"
+            return
+        }
+        let cache = LocalMoonlightPublicIPCache(
+            ip: ip,
+            source: "ssh",
+            collectedAt: Date().timeIntervalSince1970,
+            matchedPeerHostName: powerConfig.sshHost
+        )
+        saveMoonlightPublicIPCache(cache)
+        message = "호스트 공인 IP를 갱신했습니다: \(ip)"
+    }
+
+    private func saveMoonlightPublicIPCache(_ cache: LocalMoonlightPublicIPCache?) {
+        moonlightPublicIPCache = cache
+        RemoteClientPreferences.saveMoonlightPublicIPCache(cache)
+        refreshMoonlightSnapshot()
+    }
+
+    private func updateMoonlightPublicIPCacheFromTailscale(_ snapshot: LocalTailscaleSnapshot) {
+        let windowsPeers = snapshot.peers.filter { peer in
+            peer.os.lowercased().contains("windows") && !peer.publicEndpointHosts.isEmpty
+        }
+        guard let peer = preferredMoonlightEndpointPeer(from: windowsPeers),
+              let ip = peer.publicEndpointHosts.first else {
+            return
+        }
+        if moonlightPublicIPCache?.ip == ip, moonlightPublicIPCache?.source == "tailscale" {
+            return
+        }
+        saveMoonlightPublicIPCache(LocalMoonlightPublicIPCache(
+            ip: ip,
+            source: "tailscale",
+            collectedAt: Date().timeIntervalSince1970,
+            matchedPeerHostName: peer.hostname
+        ))
+    }
+
+    private func preferredMoonlightEndpointPeer(from peers: [LocalTailscalePeer]) -> LocalTailscalePeer? {
+        guard !peers.isEmpty else { return nil }
+        let currentTarget = moonlightSnapshot.targetHost?.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !currentTarget.isEmpty,
+           let matched = peers.first(where: { $0.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == currentTarget }) {
+            return matched
+        }
+        return peers.count == 1 ? peers[0] : nil
+    }
+
+    private func moonlightHostNameHints() -> [String] {
+        var hints: [String] = []
+        if let localTailscale {
+            for peer in localTailscale.peers {
+                hints.append(peer.hostname)
+                hints.append(peer.dnsName)
+                hints.append(peer.dnsStem)
+            }
+        }
+        for device in devices where device.role == "host" {
+            hints.append(device.name)
+            if let tailnetHostname = device.tailnetHostname { hints.append(tailnetHostname) }
+        }
+        return Self.uniqueNonEmpty(hints)
+    }
+
+    private func moonlightPublicIPHints() -> [String] {
+        var hints: [String] = []
+        if let moonlightPublicIPCache {
+            hints.append(moonlightPublicIPCache.ip)
+        }
+        if let localTailscale {
+            hints.append(contentsOf: localTailscale.peers.flatMap { $0.publicEndpointHosts })
+        }
+        return Self.uniqueNonEmpty(hints)
+    }
+
+    private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = trimmed.lowercased()
+            guard !trimmed.isEmpty, !seen.contains(key) else { return nil }
+            seen.insert(key)
+            return trimmed
+        }
     }
 
     var localSSHHealthReady: Bool {

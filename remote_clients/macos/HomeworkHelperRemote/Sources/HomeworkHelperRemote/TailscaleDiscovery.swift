@@ -7,11 +7,36 @@ struct LocalTailscalePeer: Identifiable, Equatable {
     let ips: [String]
     let online: Bool
     let os: String
+    let currentEndpointHost: String?
+    let directEndpointHosts: [String]
+    let relay: String?
+    let peerRelay: String?
 
     var primaryIPv4: String? { ips.first { $0.contains(".") } }
+    var dnsStem: String {
+        dnsName.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .split(separator: ".")
+            .first
+            .map(String.init) ?? ""
+    }
+    var publicEndpointHosts: [String] {
+        directEndpointHosts.filter(Self.isLikelyPublicIPv4)
+    }
     var suggestedBaseURL: String? {
         guard let ip = primaryIPv4 else { return nil }
         return "http://\(ip):8000"
+    }
+
+    private static func isLikelyPublicIPv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+        if parts[0] == 10 || parts[0] == 127 || parts[0] == 0 { return false }
+        if parts[0] == 172 && (16...31).contains(parts[1]) { return false }
+        if parts[0] == 192 && parts[1] == 168 { return false }
+        if parts[0] == 169 && parts[1] == 254 { return false }
+        if parts[0] == 100 && (64...127).contains(parts[1]) { return false }
+        if parts[0] >= 224 { return false }
+        return true
     }
 }
 
@@ -169,12 +194,21 @@ enum TailscaleDiscovery {
                 let peers = peersDict.values.compactMap { value -> LocalTailscalePeer? in
                     guard let item = value as? [String: Any] else { return nil }
                     let ips = item["TailscaleIPs"] as? [String] ?? []
+                    let currentEndpointHost = endpointHost(from: item["CurAddr"] as? String)
+                    let directEndpointHosts = uniqueEndpointHosts(
+                        ([currentEndpointHost].compactMap { $0 }) +
+                            ((item["Addrs"] as? [String] ?? []).compactMap(endpointHost(from:)))
+                    )
                     return LocalTailscalePeer(
                         hostname: item["HostName"] as? String ?? "",
                         dnsName: item["DNSName"] as? String ?? "",
                         ips: ips,
                         online: item["Online"] as? Bool ?? false,
-                        os: item["OS"] as? String ?? ""
+                        os: item["OS"] as? String ?? "",
+                        currentEndpointHost: currentEndpointHost,
+                        directEndpointHosts: directEndpointHosts,
+                        relay: item["Relay"] as? String,
+                        peerRelay: item["PeerRelay"] as? String
                     )
                 }
                 let selfIPs = selfNode["TailscaleIPs"] as? [String] ?? []
@@ -403,6 +437,28 @@ enum TailscaleDiscovery {
 
     private static func firstExecutable(_ paths: [String]) -> String? {
         paths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static func endpointHost(from value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("[") {
+            guard let end = trimmed.firstIndex(of: "]") else { return nil }
+            return String(trimmed[trimmed.index(after: trimmed.startIndex)..<end])
+        }
+        let parts = trimmed.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 2 { return String(parts[0]) }
+        return trimmed
+    }
+
+    private static func uniqueEndpointHosts(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return nil }
+            seen.insert(normalized)
+            return normalized
+        }
     }
 
     private static func escapeAppleScript(_ value: String) -> String {

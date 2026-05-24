@@ -104,6 +104,17 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(matched.targetHost?.uuid == "HOST-2", "base URL host should select HOST-2")
                 expect(matched.targetHost?.targetHostArgument == "HOST-2", "future stream target should prefer Moonlight uuid")
 
+                let matchedByName = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, hostNameHints: ["lsh-desktop"])
+                expect(matchedByName.readiness == .ready, "hostname hint should select matching Moonlight host")
+                expect(matchedByName.targetHost?.uuid == "HOST-2", "hostname hint should select HOST-2")
+
+                let matchedByPublicIP = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, publicIPHints: ["211.216.28.65"])
+                expect(matchedByPublicIP.readiness == .ready, "public IP hint should select matching Moonlight host")
+                expect(matchedByPublicIP.targetHost?.uuid == "HOST-2", "public IP hint should select HOST-2")
+
+                let stale = LocalMoonlightManager.snapshot(selectedHostUUID: "HOST-1", baseURLHost: nil, publicIPHints: ["211.216.28.65"])
+                expect(!stale.stalePublicIPWarning.isEmpty, "selected host should warn when collected public IP differs from saved remote address")
+
                 let selected = LocalMoonlightManager.snapshot(selectedHostUUID: "HOST-1", baseURLHost: "172.30.1.34")
                 expect(selected.readiness == .ready, "stored host selection should override auto-match")
                 expect(selected.targetHost?.uuid == "HOST-1", "stored host selection should select HOST-1")

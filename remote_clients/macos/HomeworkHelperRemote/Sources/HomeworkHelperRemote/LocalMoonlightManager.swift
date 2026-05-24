@@ -14,6 +14,17 @@ struct LocalMoonlightAppEntry: Equatable {
     let hidden: Bool
 }
 
+struct LocalMoonlightPublicIPCache: Codable, Equatable {
+    let ip: String
+    let source: String
+    let collectedAt: TimeInterval
+    let matchedPeerHostName: String
+
+    var collectedDate: Date {
+        Date(timeIntervalSince1970: collectedAt)
+    }
+}
+
 struct LocalMoonlightHostCandidate: Identifiable, Equatable {
     let uuid: String
     let hostname: String
@@ -77,10 +88,64 @@ struct LocalMoonlightHostCandidate: Identifiable, Equatable {
         return remoteAddress
     }
 
+    var publicStreamAddresses: [String] {
+        [manualAddress, remoteAddress]
+            .compactMap(Self.normalizedHost)
+            .filter(Self.isLikelyPublicIPv4)
+    }
+
+    func matchesHostNameHint(_ hint: String) -> Bool {
+        guard let normalized = Self.normalizedHost(hint) else { return false }
+        let canonical = Self.canonicalHostToken(normalized)
+        let hostnameMatch = Self.normalizedHost(hostname).map(Self.canonicalHostToken) == canonical
+        let stemMatch = Self.normalizedDNSStem(hostname).map(Self.canonicalHostToken) == canonical
+        return hostnameMatch || stemMatch
+    }
+
+    func matchesAnyAddress(_ values: [String]) -> Bool {
+        let normalizedValues = Set(values.compactMap(Self.normalizedHost))
+        let candidates = [hostname, localAddress, manualAddress, remoteAddress, ipv6Address].compactMap(Self.normalizedHost)
+        return candidates.contains { normalizedValues.contains($0) }
+    }
+
+    func matchesPublicIP(_ values: [String]) -> Bool {
+        let normalizedValues = Set(values.compactMap(Self.normalizedHost).filter(Self.isLikelyPublicIPv4))
+        guard !normalizedValues.isEmpty else { return false }
+        return publicStreamAddresses.contains { normalizedValues.contains($0) }
+    }
+
     private func labeledAddress(_ label: String, _ address: String, _ port: Int) -> String? {
         let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return "\(label): \(trimmed)\(port > 0 ? ":\(port)" : "")"
+    }
+
+    private static func normalizedHost(_ value: String?) -> String? {
+        let trimmed = (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedDNSStem(_ value: String?) -> String? {
+        normalizedHost(value)?.split(separator: ".").first.map(String.init)
+    }
+
+    private static func canonicalHostToken(_ value: String) -> String {
+        value.replacingOccurrences(of: "_", with: "-")
+    }
+
+    private static func isLikelyPublicIPv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+        if parts[0] == 10 || parts[0] == 127 || parts[0] == 0 { return false }
+        if parts[0] == 172 && (16...31).contains(parts[1]) { return false }
+        if parts[0] == 192 && parts[1] == 168 { return false }
+        if parts[0] == 169 && parts[1] == 254 { return false }
+        if parts[0] == 100 && (64...127).contains(parts[1]) { return false }
+        if parts[0] >= 224 { return false }
+        return true
     }
 }
 
@@ -116,6 +181,32 @@ struct LocalMoonlightSnapshot: Equatable {
     let targetHost: LocalMoonlightHostCandidate?
     let readiness: LocalMoonlightReadiness
     let message: String
+    let publicIPCache: LocalMoonlightPublicIPCache?
+    let stalePublicIPWarning: String
+
+    init(
+        installation: LocalMoonlightAppInstallation?,
+        preferencesPath: String,
+        preferencesReadable: Bool,
+        hosts: [LocalMoonlightHostCandidate],
+        selectedHostUUID: String,
+        targetHost: LocalMoonlightHostCandidate?,
+        readiness: LocalMoonlightReadiness,
+        message: String,
+        publicIPCache: LocalMoonlightPublicIPCache? = nil,
+        stalePublicIPWarning: String = ""
+    ) {
+        self.installation = installation
+        self.preferencesPath = preferencesPath
+        self.preferencesReadable = preferencesReadable
+        self.hosts = hosts
+        self.selectedHostUUID = selectedHostUUID
+        self.targetHost = targetHost
+        self.readiness = readiness
+        self.message = message
+        self.publicIPCache = publicIPCache
+        self.stalePublicIPWarning = stalePublicIPWarning
+    }
 
     var installed: Bool { installation != nil }
     var usableHosts: [LocalMoonlightHostCandidate] {
@@ -128,7 +219,13 @@ enum LocalMoonlightManager {
     private static let appPathOverrideKey = "HH_REMOTE_MOONLIGHT_APP_PATHS"
     private static let preferencesPathOverrideKey = "HH_REMOTE_MOONLIGHT_PREFS_PATH"
 
-    static func snapshot(selectedHostUUID: String, baseURLHost: String?) -> LocalMoonlightSnapshot {
+    static func snapshot(
+        selectedHostUUID: String,
+        baseURLHost: String?,
+        hostNameHints: [String] = [],
+        publicIPHints: [String] = [],
+        publicIPCache: LocalMoonlightPublicIPCache? = nil
+    ) -> LocalMoonlightSnapshot {
         let installation = resolveInstallation()
         let preferencesPath = resolvePreferencesPath()
         let selected = selectedHostUUID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,19 +279,48 @@ enum LocalMoonlightManager {
                 hosts: hosts,
                 selectedHostUUID: selected,
                 targetHost: host,
-                reason: "저장된 Moonlight host 선택값을 사용합니다."
+                reason: "저장된 Moonlight host 선택값을 사용합니다.",
+                publicIPCache: publicIPCache,
+                publicIPHints: publicIPHints
             )
         }
 
-        let matchedByRemoteHost = usableHosts.filter { matches(baseURLHost: baseURLHost, candidate: $0) }
-        if matchedByRemoteHost.count == 1, let host = matchedByRemoteHost.first {
+        if let match = uniqueMatch(usableHosts.filter { $0.matchesAnyAddress([baseURLHost ?? ""]) }) {
             return readySnapshot(
                 installation: installation,
                 preferencesPath: preferencesPath,
                 hosts: hosts,
                 selectedHostUUID: selected,
-                targetHost: host,
-                reason: "Remote Agent Base URL host와 일치하는 Moonlight host를 찾았습니다."
+                targetHost: match,
+                reason: "Remote Agent Base URL host와 일치하는 Moonlight host를 찾았습니다.",
+                publicIPCache: publicIPCache,
+                publicIPHints: publicIPHints
+            )
+        }
+
+        if let match = uniqueMatch(usableHosts.filter { host in hostNameHints.contains { host.matchesHostNameHint($0) } }) {
+            return readySnapshot(
+                installation: installation,
+                preferencesPath: preferencesPath,
+                hosts: hosts,
+                selectedHostUUID: selected,
+                targetHost: match,
+                reason: "Tailscale/Remote device hostname과 일치하는 Moonlight host를 찾았습니다.",
+                publicIPCache: publicIPCache,
+                publicIPHints: publicIPHints
+            )
+        }
+
+        if let match = uniqueMatch(usableHosts.filter { $0.matchesPublicIP(publicIPHints) }) {
+            return readySnapshot(
+                installation: installation,
+                preferencesPath: preferencesPath,
+                hosts: hosts,
+                selectedHostUUID: selected,
+                targetHost: match,
+                reason: "호스트 공인 IP와 일치하는 Moonlight host를 찾았습니다.",
+                publicIPCache: publicIPCache,
+                publicIPHints: publicIPHints
             )
         }
 
@@ -205,7 +331,9 @@ enum LocalMoonlightManager {
                 hosts: hosts,
                 selectedHostUUID: selected,
                 targetHost: host,
-                reason: "Desktop 앱이 있는 Moonlight host 후보가 1개입니다."
+                reason: "Desktop 앱이 있는 Moonlight host 후보가 1개입니다.",
+                publicIPCache: publicIPCache,
+                publicIPHints: publicIPHints
             )
         }
 
@@ -217,7 +345,8 @@ enum LocalMoonlightManager {
             selectedHostUUID: selected,
             targetHost: nil,
             readiness: .ambiguous,
-            message: "Desktop 앱이 있는 Moonlight host 후보가 \(usableHosts.count)개입니다. 사용할 host를 선택하세요."
+            message: "Desktop 앱이 있는 Moonlight host 후보가 \(usableHosts.count)개입니다. 사용할 host를 선택하세요.",
+            publicIPCache: publicIPCache
         )
     }
 
@@ -230,13 +359,34 @@ enum LocalMoonlightManager {
         return nil
     }
 
+    private static func uniqueMatch(_ matches: [LocalMoonlightHostCandidate]) -> LocalMoonlightHostCandidate? {
+        var seen = Set<String>()
+        let unique = matches.filter { host in
+            guard !seen.contains(host.id) else { return false }
+            seen.insert(host.id)
+            return true
+        }
+        return unique.count == 1 ? unique[0] : nil
+    }
+
+    private static func stalePublicIPWarning(for targetHost: LocalMoonlightHostCandidate, publicIPHints: [String]) -> String {
+        let publicHints = Set(publicIPHints.compactMap(normalizedHost).filter(isLikelyPublicIPv4))
+        guard !publicHints.isEmpty else { return "" }
+        let savedPublicAddresses = Set(targetHost.publicStreamAddresses)
+        guard !savedPublicAddresses.isEmpty else { return "" }
+        guard savedPublicAddresses.isDisjoint(with: publicHints) else { return "" }
+        return "현재 수집한 호스트 공인 IP와 Moonlight remote/manual 주소가 다릅니다. Moonlight host 주소가 오래되었을 수 있습니다."
+    }
+
     private static func readySnapshot(
         installation: LocalMoonlightAppInstallation?,
         preferencesPath: String,
         hosts: [LocalMoonlightHostCandidate],
         selectedHostUUID: String,
         targetHost: LocalMoonlightHostCandidate,
-        reason: String
+        reason: String,
+        publicIPCache: LocalMoonlightPublicIPCache?,
+        publicIPHints: [String]
     ) -> LocalMoonlightSnapshot {
         LocalMoonlightSnapshot(
             installation: installation,
@@ -246,7 +396,9 @@ enum LocalMoonlightManager {
             selectedHostUUID: selectedHostUUID,
             targetHost: targetHost,
             readiness: .ready,
-            message: "\(reason) \(targetHost.displayTitle)의 Desktop 스트림 후보를 확인했습니다."
+            message: "\(reason) \(targetHost.displayTitle)의 Desktop 스트림 후보를 확인했습니다.",
+            publicIPCache: publicIPCache,
+            stalePublicIPWarning: stalePublicIPWarning(for: targetHost, publicIPHints: publicIPHints)
         )
     }
 
@@ -313,25 +465,24 @@ enum LocalMoonlightManager {
         }
     }
 
-    private static func matches(baseURLHost: String?, candidate: LocalMoonlightHostCandidate) -> Bool {
-        guard let normalizedBaseHost = normalizedHost(baseURLHost), !normalizedBaseHost.isEmpty else { return false }
-        let values = [
-            candidate.hostname,
-            candidate.localAddress,
-            candidate.manualAddress,
-            candidate.remoteAddress,
-            candidate.ipv6Address
-        ]
-            .compactMap(normalizedHost)
-        return values.contains(normalizedBaseHost)
-    }
-
     private static func normalizedHost(_ value: String?) -> String? {
         let trimmed = (value ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             .lowercased()
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func isLikelyPublicIPv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+        if parts[0] == 10 || parts[0] == 127 || parts[0] == 0 { return false }
+        if parts[0] == 172 && (16...31).contains(parts[1]) { return false }
+        if parts[0] == 192 && parts[1] == 168 { return false }
+        if parts[0] == 169 && parts[1] == 254 { return false }
+        if parts[0] == 100 && (64...127).contains(parts[1]) { return false }
+        if parts[0] >= 224 { return false }
+        return true
     }
 
     private static func resolvePreferencesPath() -> String {

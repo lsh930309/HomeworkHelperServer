@@ -421,7 +421,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'Label("연결", systemImage: "link")' in app
     assert 'Label("전원", systemImage: "bolt")' in app
     assert 'Label("기기", systemImage: "display.2")' in app
-    assert 'Label("Android", systemImage: "app.connected.to.app.below.fill")' in app
+    assert 'Label("Moonlight", systemImage: "moon.stars")' in app
+    assert 'Label("Android", systemImage: "app.connected.to.app.below.fill")' not in app
     assert 'Label("앱", systemImage: "gearshape")' in app
     assert "RemoteSettingsContentSizePreferenceKey" in app
     assert "RemoteSettingsLayout" in app
@@ -536,7 +537,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "전원 설정 저장" not in app
     assert "기기 관리" in app
     assert "현재 토큰 갱신" in app
-    assert "Android-PC 연결" in app
+    assert "Android-PC 연결" not in app
+    assert "PC process ID" not in app
+    assert "Android package" not in app
     assert "로그인 시 실행" in app
     assert "로그인 자동 실행 시 창 표시" not in app
     assert "loginLaunchShowsWindow" not in app
@@ -564,6 +567,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "HomeworkHelperRemoteGlobalShortcutPressed" in global_shortcut
     assert "Moonlight 원격 플레이" in app
     assert "Moonlight 설정 다시 읽기" in app
+    assert "호스트 공인 IP 갱신" in app
+    assert "viewModel.moonlightPublicIPDisplay" in app
+    assert "viewModel.moonlightStalePublicIPWarning" in app
     assert "스트리밍 실행은 아직 수행하지 않습니다" in app
     assert "viewModel.moonlightSnapshot.readiness.label" in app
     assert "$viewModel.selectedMoonlightHostUUID" in app
@@ -580,6 +586,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'prefix: "\\(prefix).apps"' in local_moonlight
     assert 'caseInsensitiveCompare("Desktop")' in local_moonlight
     assert "targetHostArgument" in local_moonlight
+    assert "LocalMoonlightPublicIPCache" in local_moonlight
+    assert "hostNameHints" in local_moonlight
+    assert "publicIPHints" in local_moonlight
+    assert "matchesPublicIP" in local_moonlight
+    assert "stalePublicIPWarning" in local_moonlight
+    assert "currentEndpointHost" in tailscale
+    assert "directEndpointHosts" in tailscale
+    assert "publicEndpointHosts" in tailscale
+    assert '"CurAddr"' in tailscale
+    assert '"Addrs"' in tailscale
+    assert "LocalSSHPowerManager.publicIP" in view_model
+    assert "moonlightPublicIPCacheKey" in view_model
+    assert "remote.moonlight.hostPublicIPCache" in view_model
     assert "srvcert" not in app
     assert "macAddress" not in local_moonlight
     assert "selectedMoonlightHostUUIDKey" in view_model
