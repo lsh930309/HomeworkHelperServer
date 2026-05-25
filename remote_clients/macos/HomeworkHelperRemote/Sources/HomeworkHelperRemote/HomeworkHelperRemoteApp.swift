@@ -704,7 +704,12 @@ struct MenuBarGameRow: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
     let launch: () -> Void
 
+    private var isRunningAction: Bool {
+        process.isRunning
+    }
+
     var body: some View {
+        let stopAction: () -> Void = { Task { await viewModel.stop(process) } }
         HStack(alignment: .center, spacing: 8) {
             GameIconView(process: process, viewModel: viewModel, preferredSize: 256, displaySize: RemotePopoverLayout.gameIconSize)
                 .frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)
@@ -734,32 +739,64 @@ struct MenuBarGameRow: View {
                         .lineLimit(1)
                 }
             }
-            MenuBarLaunchButton(launch: launch, disabled: !viewModel.isLaunchEnabled(process), isPending: viewModel.isLaunchPending(process))
+            MenuBarProcessActionButton(
+                action: isRunningAction ? stopAction : launch,
+                disabled: isRunningAction ? !viewModel.isStopEnabled(process) : !viewModel.isLaunchEnabled(process),
+                isPending: isRunningAction ? viewModel.isStopPending(process) : viewModel.isLaunchPending(process),
+                style: isRunningAction ? .stop : .launch
+            )
         }
         .frame(height: RemotePopoverLayout.rowHeight, alignment: .center)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-struct MenuBarLaunchButton: View {
-    let launch: () -> Void
+enum MenuBarProcessActionStyle {
+    case launch
+    case stop
+
+    var icon: String {
+        switch self {
+        case .launch: return "play.fill"
+        case .stop: return "stop.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .launch: return .accentColor
+        case .stop: return .red
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .launch: return "실행"
+        case .stop: return "게임 종료"
+        }
+    }
+}
+
+struct MenuBarProcessActionButton: View {
+    let action: () -> Void
     let disabled: Bool
     let isPending: Bool
+    let style: MenuBarProcessActionStyle
 
     @State private var isHovered = false
 
     var body: some View {
         let active = isHovered && !disabled
 
-        Button(action: launch) {
+        Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
-                    .fill(disabled ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(active ? 1.0 : 0.86))
+                    .fill(disabled ? Color.secondary.opacity(0.12) : style.tint.opacity(active ? 1.0 : 0.86))
                     .overlay(
                         RoundedRectangle(cornerRadius: RemotePopoverLayout.gameTileCornerRadius, style: .continuous)
                             .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.42 : 0.26), lineWidth: 0.8)
                     )
-                Image(systemName: isPending ? "hourglass" : "play.fill")
+                Image(systemName: isPending ? "hourglass" : style.icon)
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : Color.white)
             }
@@ -777,7 +814,7 @@ struct MenuBarLaunchButton: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: isHovered)
-        .help(isPending ? "실행 확인 중" : "실행")
+        .help(isPending ? "\(style.help) 확인 중" : style.help)
         .disabled(disabled)
     }
 }
@@ -1093,6 +1130,7 @@ enum RemoteSettingsTab: String, CaseIterable, Hashable {
     case power
     case devices
     case moonlight
+    case schedule
     case app
 }
 
@@ -1146,6 +1184,9 @@ struct RemoteSettingsView: View {
                 settingsMoonlightTab
                     .tabItem { Label("Moonlight", systemImage: "moon.stars") }
                     .tag(RemoteSettingsTab.moonlight)
+                settingsScheduleTab
+                    .tabItem { Label("스케줄", systemImage: "calendar.badge.clock") }
+                    .tag(RemoteSettingsTab.schedule)
                 settingsAppTab
                     .tabItem { Label("앱", systemImage: "gearshape") }
                     .tag(RemoteSettingsTab.app)
@@ -1262,21 +1303,25 @@ struct RemoteSettingsView: View {
                         Button("전원 준비 확인") { Task { await viewModel.refreshPowerSetup() } }
                             .disabled(!viewModel.isPaired || viewModel.isLoading)
                     }
-                    if let setup = viewModel.powerSetup {
-                        SetupInstructionBlock(
-                            title: "호스트 SSH 준비",
-                            lines: [
-                                "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
-                                "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
-                                "authorized_keys: \(setup.effectiveAuthorizedKeysPath ?? setup.authorizedKeysPath)",
-                                "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")"
-                            ]
-                        )
+                    DisclosureGroup("전원 상세 진단") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let setup = viewModel.powerSetup {
+                                SetupInstructionBlock(
+                                    title: "호스트 SSH 준비",
+                                    lines: [
+                                        "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
+                                        "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
+                                        "authorized_keys: \(setup.effectiveAuthorizedKeysPath ?? setup.authorizedKeysPath)",
+                                        "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")"
+                                    ]
+                                )
+                            }
+                            if let key = viewModel.localSSHKey {
+                                SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
+                            }
+                            SidebarInfoRow(label: "SSH health", value: viewModel.localSSHHealthSummary)
+                        }
                     }
-                    if let key = viewModel.localSSHKey {
-                        SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
-                    }
-                    SidebarInfoRow(label: "SSH health", value: viewModel.localSSHHealthSummary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1341,28 +1386,6 @@ struct RemoteSettingsView: View {
                     if !viewModel.moonlightSnapshot.installed {
                         SidebarInfoRow(label: "Homebrew", value: viewModel.moonlightHomebrewDisplay, systemImage: "shippingbox")
                     }
-                    SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
-                    SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
-                    SidebarInfoRow(label: "호스트 공인 IP", value: viewModel.moonlightPublicIPDisplay, systemImage: "network")
-                    if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
-                        SidebarInfoRow(label: "Tailscale 등록 후보", value: viewModel.moonlightTailscaleRegistrationDisplay, systemImage: "network.badge.shield.half.filled")
-                        SidebarInfoRow(label: "Pairing PIN", value: viewModel.moonlightPairingPINDisplay, systemImage: "number")
-                    }
-                    SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
-                    if !viewModel.moonlightStalePublicIPWarning.isEmpty {
-                        Text(viewModel.moonlightStalePublicIPWarning)
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .textSelection(.enabled)
-                    }
-                    if !viewModel.moonlightLastCommandSummary.isEmpty {
-                        Text(viewModel.moonlightLastCommandSummary)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(6)
-                            .textSelection(.enabled)
-                    }
-
                     if viewModel.moonlightSelectableHosts.count > 1 {
                         Picker("Moonlight host 선택", selection: $viewModel.selectedMoonlightHostUUID) {
                             Text("자동 감지").tag("")
@@ -1373,23 +1396,48 @@ struct RemoteSettingsView: View {
                         .pickerStyle(.menu)
                     }
 
-                    if !viewModel.moonlightSnapshot.hosts.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("감지된 host")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            ForEach(viewModel.moonlightSnapshot.hosts) { host in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(host.displayTitle)
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                    Text("\(host.appSummary) · \(host.addressSummary)")
+                    DisclosureGroup("상세 진단") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
+                            SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
+                            SidebarInfoRow(label: "호스트 공인 IP", value: viewModel.moonlightPublicIPDisplay, systemImage: "network")
+                            if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
+                                SidebarInfoRow(label: "Tailscale 등록 후보", value: viewModel.moonlightTailscaleRegistrationDisplay, systemImage: "network.badge.shield.half.filled")
+                                SidebarInfoRow(label: "Pairing PIN", value: viewModel.moonlightPairingPINDisplay, systemImage: "number")
+                            }
+                            SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
+                            if !viewModel.moonlightStalePublicIPWarning.isEmpty {
+                                Text(viewModel.moonlightStalePublicIPWarning)
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .textSelection(.enabled)
+                            }
+                            if !viewModel.moonlightLastCommandSummary.isEmpty {
+                                Text(viewModel.moonlightLastCommandSummary)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(6)
+                                    .textSelection(.enabled)
+                            }
+                            if !viewModel.moonlightSnapshot.hosts.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("감지된 host")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                        .textSelection(.enabled)
+                                    ForEach(viewModel.moonlightSnapshot.hosts) { host in
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(host.displayTitle)
+                                                .font(.caption)
+                                                .fontWeight(.semibold)
+                                            Text("\(host.appSummary) · \(host.addressSummary)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                                .textSelection(.enabled)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                     }
@@ -1414,6 +1462,34 @@ struct RemoteSettingsView: View {
                             Task { await viewModel.refreshMoonlightPublicIPViaSSH() }
                         }
                         .disabled(!viewModel.powerConfig.localSSHConfigured)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var settingsScheduleTab: some View {
+        SettingsTabScrollView(tab: .schedule) {
+            RemoteSettingsSection("스마트 스케줄링") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Mac 클라이언트 앱이 실행 중일 때만 동작하는 로컬 매크로입니다. 정해진 요일/시간에 호스트 Wake와 Moonlight Desktop 시작을 조합합니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    SidebarInfoRow(label: "최근 동작", value: viewModel.smartScheduleLastEvent, systemImage: "clock.arrow.circlepath")
+                    if viewModel.smartScheduleRules.isEmpty {
+                        Text("등록된 스케줄이 없습니다.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach($viewModel.smartScheduleRules) { $rule in
+                        SmartScheduleRuleEditor(rule: $rule, viewModel: viewModel)
+                        Divider()
+                    }
+                    SettingsActionGrid {
+                        Button("평일 스케줄 추가") {
+                            viewModel.addDefaultSmartScheduleRule()
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1497,6 +1573,68 @@ struct MenuBarIconPickerRow: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .frame(width: 220, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SmartScheduleRuleEditor: View {
+    @Binding var rule: RemoteSmartScheduleRule
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    private let weekdayLabels: [(Int, String)] = [
+        (2, "월"), (3, "화"), (4, "수"), (5, "목"), (6, "금"), (7, "토"), (1, "일")
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("스케줄 이름", text: $rule.name)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("활성", isOn: $rule.enabled)
+                    .labelsHidden()
+                Button(role: .destructive) {
+                    viewModel.removeSmartScheduleRule(id: rule.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .help("스케줄 삭제")
+            }
+            HStack(spacing: 8) {
+                Text("시간")
+                TextField("시", value: $rule.hour, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 46)
+                Text(":")
+                    .foregroundStyle(.secondary)
+                TextField("분", value: $rule.minute, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 46)
+                Spacer()
+                Text("\(rule.weekdayDisplay) · \(rule.actionSummary)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 5) {
+                ForEach(weekdayLabels, id: \.0) { weekday, label in
+                    let selected = rule.weekdays.contains(weekday)
+                    Button(label) {
+                        viewModel.setSmartScheduleWeekday(ruleID: rule.id, weekday: weekday, enabled: !selected)
+                    }
+                    .controlSize(.small)
+                    .tint(selected ? .accentColor : .secondary)
+                    .help("\(label)요일 \(selected ? "해제" : "선택")")
+                }
+            }
+            Toggle("호스트 깨우기", isOn: $rule.wakeHost)
+            Toggle("Moonlight Desktop 시작", isOn: $rule.startMoonlight)
+            Picker("Moonlight 표시", selection: $rule.displayTarget) {
+                ForEach(RemoteSmartScheduleDisplayTarget.allCases) { target in
+                    Text(target.label).tag(target)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(!rule.startMoonlight)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

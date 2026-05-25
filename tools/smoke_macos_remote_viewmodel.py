@@ -153,6 +153,13 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.moonlightAutoWakeBeforeStreamEnabled == false else {
                     fatalError("Moonlight auto-wake should default to explicit opt-in")
                 }
+                viewModel.addDefaultSmartScheduleRule()
+                guard viewModel.smartScheduleRules.count == 1,
+                      viewModel.smartScheduleRules[0].weekdayDisplay == "월~금",
+                      viewModel.smartScheduleRules[0].wakeHost == true else {
+                    fatalError("default smart schedule should create a weekday wake macro")
+                }
+                viewModel.smartScheduleRules.removeAll()
                 viewModel.menuBarRunningIconSymbol = "moon.fill"
                 guard viewModel.menuBarIconSymbol(for: .running) == "moon.fill" else {
                     fatalError("running menu bar icon should be user-selectable")
@@ -342,6 +349,9 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 ]
                 guard viewModel.menuBarPresentationState() == .running else {
                     fatalError("online paired host with any running game should use the running menu bar icon")
+                }
+                guard viewModel.isStopEnabled(viewModel.processes[0]) else {
+                    fatalError("online running game should expose the remote stop action")
                 }
                 guard RemoteClientCache.loadProcesses().contains(where: { $0.id == "smoke-game" }) else {
                     fatalError("refresh did not write process snapshot cache")

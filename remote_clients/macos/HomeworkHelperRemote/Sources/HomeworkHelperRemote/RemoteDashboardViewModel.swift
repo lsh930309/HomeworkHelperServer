@@ -63,6 +63,7 @@ private actor RemoteDashboardService {
         }
     }
     func launchProcess(id: String) async throws -> RemoteCommandResult { try await Self.gate.run { try await client.launchProcess(id: id) } }
+    func stopProcess(id: String) async throws -> RemoteCommandResult { try await Self.gate.run { try await client.stopProcess(id: id) } }
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
         try await Self.gate.run { try await client.confirmPairing(code: code, deviceName: deviceName) }
     }
@@ -105,6 +106,7 @@ private enum RemoteClientPreferences {
     private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
     private static let moonlightBindingEnabledKey = "remote.moonlight.bindingEnabled"
     private static let moonlightAutoWakeBeforeStreamEnabledKey = "remote.moonlight.autoWakeBeforeStreamEnabled"
+    private static let smartScheduleRulesKey = "remote.smartSchedule.rules"
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -291,6 +293,26 @@ private enum RemoteClientPreferences {
     static func saveMoonlightAutoWakeBeforeStreamEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: moonlightAutoWakeBeforeStreamEnabledKey)
     }
+
+    static func loadSmartScheduleRules() -> [RemoteSmartScheduleRule] {
+        guard let data = defaults.data(forKey: smartScheduleRulesKey),
+              let rules = try? JSONDecoder().decode([RemoteSmartScheduleRule].self, from: data) else {
+            return []
+        }
+        return rules.map { rule in
+            var normalized = rule
+            normalized.hour = min(23, max(0, normalized.hour))
+            normalized.minute = min(59, max(0, normalized.minute))
+            normalized.weekdays = Array(Set(normalized.weekdays.filter { (1...7).contains($0) })).sorted()
+            return normalized
+        }
+    }
+
+    static func saveSmartScheduleRules(_ rules: [RemoteSmartScheduleRule]) {
+        if let data = try? JSONEncoder().encode(rules) {
+            defaults.set(data, forKey: smartScheduleRulesKey)
+        }
+    }
 }
 
 enum RemoteMenuBarIconChoice {
@@ -353,6 +375,72 @@ private enum PendingMoonlightWakeAction: Equatable {
         case .launch:
             return "게임 실행 + Moonlight Desktop 시작"
         }
+    }
+}
+
+enum RemoteSmartScheduleDisplayTarget: String, Codable, CaseIterable, Identifiable, Hashable {
+    case lastPopover
+    case main
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .lastPopover:
+            return "현재/최근 Popover 화면"
+        case .main:
+            return "메인 디스플레이"
+        }
+    }
+}
+
+struct RemoteSmartScheduleRule: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var enabled: Bool
+    var weekdays: [Int]
+    var hour: Int
+    var minute: Int
+    var wakeHost: Bool
+    var startMoonlight: Bool
+    var displayTarget: RemoteSmartScheduleDisplayTarget
+    var lastRunKey: String?
+
+    static func weekdayMorning() -> RemoteSmartScheduleRule {
+        RemoteSmartScheduleRule(
+            id: UUID().uuidString,
+            name: "평일 원격 플레이 준비",
+            enabled: true,
+            weekdays: [2, 3, 4, 5, 6],
+            hour: 9,
+            minute: 0,
+            wakeHost: true,
+            startMoonlight: false,
+            displayTarget: .lastPopover,
+            lastRunKey: nil
+        )
+    }
+
+    var clampedHour: Int { min(23, max(0, hour)) }
+    var clampedMinute: Int { min(59, max(0, minute)) }
+
+    var timeDisplay: String {
+        String(format: "%02d:%02d", clampedHour, clampedMinute)
+    }
+
+    var weekdayDisplay: String {
+        let names = [1: "일", 2: "월", 3: "화", 4: "수", 5: "목", 6: "금", 7: "토"]
+        let normalized = Set(weekdays.filter { (1...7).contains($0) })
+        if normalized == Set([2, 3, 4, 5, 6]) { return "월~금" }
+        if normalized == Set([1, 2, 3, 4, 5, 6, 7]) { return "매일" }
+        return (1...7).compactMap { normalized.contains($0) ? names[$0] : nil }.joined(separator: "·")
+    }
+
+    var actionSummary: String {
+        var actions: [String] = []
+        if wakeHost { actions.append("Wake") }
+        if startMoonlight { actions.append("Moonlight") }
+        return actions.isEmpty ? "동작 없음" : actions.joined(separator: " + ")
     }
 }
 
@@ -529,8 +617,20 @@ final class RemoteDashboardViewModel: ObservableObject {
             RemoteClientPreferences.saveMirrorPollIntervalSeconds(clamped)
         }
     }
+    @Published var smartScheduleRules = RemoteClientPreferences.loadSmartScheduleRules() {
+        didSet {
+            let normalized = Self.normalizedSmartScheduleRules(smartScheduleRules)
+            if normalized != smartScheduleRules {
+                smartScheduleRules = normalized
+                return
+            }
+            RemoteClientPreferences.saveSmartScheduleRules(smartScheduleRules)
+        }
+    }
+    @Published private(set) var smartScheduleLastEvent = "스케줄 대기 중"
     @Published var isLoading = false
     @Published private(set) var pendingLaunchProcessIDs: Set<String> = []
+    @Published private(set) var pendingStopProcessIDs: Set<String> = []
     @Published var message = "Remote Agent에 연결하세요."
 
 
@@ -602,13 +702,17 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var moonlightFooterButtonTitle: String {
         if moonlightSetupInProgress { return "Moonlight..." }
-        if moonlightSessionSnapshot.isRunning { return "Moonlight OFF" }
+        if moonlightSessionSnapshot.isVisible { return "Moonlight OFF" }
+        if moonlightSessionSnapshot.isRunning { return "Moonlight 보기" }
+        if canAutoWakeHostForMoonlight { return "Wake + Moonlight" }
         return "Moonlight ON"
     }
 
     var moonlightFooterButtonIcon: String {
         if moonlightSetupInProgress { return "hourglass" }
-        if moonlightSessionSnapshot.isRunning { return "moon.stars.slash" }
+        if moonlightSessionSnapshot.isVisible { return "moon.stars.slash" }
+        if moonlightSessionSnapshot.isRunning { return "rectangle.on.rectangle" }
+        if canAutoWakeHostForMoonlight { return "power.circle.fill" }
         return "moon.stars.fill"
     }
 
@@ -784,8 +888,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     func toggleMoonlightDesktopSession() async {
         guard !moonlightSetupInProgress else { return }
         refreshMoonlightSessionSnapshot()
-        if moonlightSessionSnapshot.isRunning {
+        if moonlightSessionSnapshot.isVisible {
             await stopMoonlightDesktopSession()
+            return
+        }
+        if moonlightSessionSnapshot.isRunning {
+            _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button.focus")
             return
         }
         guard moonlightSnapshot.readiness == .ready else {
@@ -802,12 +910,12 @@ final class RemoteDashboardViewModel: ObservableObject {
         _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button")
     }
 
-    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction) async {
+    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction, requiresAutoWakeOptIn: Bool = true) async {
         guard pendingMoonlightWakeAction == nil else {
             message = "이미 호스트 부팅 후 \(pendingMoonlightWakeAction?.label ?? "Moonlight 동작")을 기다리는 중입니다."
             return
         }
-        guard moonlightAutoWakeBeforeStreamEnabled else {
+        guard !requiresAutoWakeOptIn || moonlightAutoWakeBeforeStreamEnabled else {
             message = "호스트가 꺼져 있습니다. Moonlight 설정에서 자동 깨우기 옵션을 켜거나 먼저 전원 켜기를 실행하세요."
             return
         }
@@ -1231,6 +1339,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         if isLaunchPending(process) {
             return "실행 명령 전달 후 호스트 실행 상태를 빠르게 확인 중"
         }
+        if isStopPending(process) {
+            return "종료 명령 전달 후 호스트 실행 상태를 빠르게 확인 중"
+        }
         let runningText = isProcessRunningCurrent(process) ? "실행 중" : (process.isRunning ? "마지막 동기화 기준 실행 중" : "대기")
         return "\(runningText) · \(process.playedToday ? "오늘 실행" : "오늘 미실행")"
     }
@@ -1239,16 +1350,63 @@ final class RemoteDashboardViewModel: ObservableObject {
         if isLaunchPending(process) {
             return "실행 확인 중"
         }
+        if isStopPending(process) {
+            return "종료 확인 중"
+        }
         if hostAvailabilityState != .online, process.isRunning {
             return "마지막 동기화: 실행 중"
         }
         return process.statusText ?? "대기"
     }
 
+    func isStopEnabled(_ process: RemoteProcess) -> Bool {
+        process.isRunning
+            && hostAvailabilityState == .online
+            && (status?.capabilities.processStop ?? false)
+            && !pendingStopProcessIDs.contains(process.id)
+    }
+
+    func isStopPending(_ process: RemoteProcess) -> Bool {
+        pendingStopProcessIDs.contains(process.id)
+    }
+
+    func addDefaultSmartScheduleRule() {
+        smartScheduleRules.append(RemoteSmartScheduleRule.weekdayMorning())
+    }
+
+    func removeSmartScheduleRule(id: String) {
+        smartScheduleRules.removeAll { $0.id == id }
+    }
+
+    func setSmartScheduleWeekday(ruleID: String, weekday: Int, enabled: Bool) {
+        guard (1...7).contains(weekday),
+              let index = smartScheduleRules.firstIndex(where: { $0.id == ruleID }) else { return }
+        var weekdays = Set(smartScheduleRules[index].weekdays)
+        if enabled {
+            weekdays.insert(weekday)
+        } else {
+            weekdays.remove(weekday)
+        }
+        smartScheduleRules[index].weekdays = Array(weekdays).sorted()
+    }
+
+    private static func normalizedSmartScheduleRules(_ rules: [RemoteSmartScheduleRule]) -> [RemoteSmartScheduleRule] {
+        rules.map { rule in
+            var normalized = rule
+            normalized.name = normalized.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.name.isEmpty { normalized.name = "스마트 스케줄" }
+            normalized.hour = min(23, max(0, normalized.hour))
+            normalized.minute = min(59, max(0, normalized.minute))
+            normalized.weekdays = Array(Set(normalized.weekdays.filter { (1...7).contains($0) })).sorted()
+            return normalized
+        }
+    }
+
     private let tokenStore: any RemoteTokenStore
     private let bootstrapEnabled: Bool
     private var mirrorTask: Task<Void, Never>?
     private var localProgressTask: Task<Void, Never>?
+    private var smartScheduleTask: Task<Void, Never>?
     private var resumeObservers: [NSObjectProtocol] = []
     private var lastStateRevision: String?
     private var unchangedRevisionPollCount = 0
@@ -1258,6 +1416,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private var mirrorExecutionInProgress = false
     private var pendingMirrorRequest: (trigger: String, syncScope: RemotePayloadSyncScope)?
     private var launchChaseTasks: [String: Task<Void, Never>] = [:]
+    private var stopChaseTasks: [String: Task<Void, Never>] = [:]
     private static let localProgressTickSeconds: UInt64 = 30
     private static let staminaRecoverySecondsPerPoint: Double = 360
     private static let disconnectingPowerActions: Set<String> = ["shutdown", "sleep", "restart"]
@@ -1273,12 +1432,15 @@ final class RemoteDashboardViewModel: ObservableObject {
             applyUITestSnapshot()
         }
         updateGlobalShortcutRegistration()
+        startSmartScheduler()
     }
 
     deinit {
         mirrorTask?.cancel()
         localProgressTask?.cancel()
+        smartScheduleTask?.cancel()
         launchChaseTasks.values.forEach { $0.cancel() }
+        stopChaseTasks.values.forEach { $0.cancel() }
         RemoteGlobalShortcutRegistrar.shared.unregister()
         for observer in resumeObservers {
             NotificationCenter.default.removeObserver(observer)
@@ -1341,6 +1503,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             counts: RemoteStatus.Counts(processes: 4, shortcuts: 0, activeSessions: 0),
             capabilities: RemoteStatus.Capabilities(
                 processLaunch: true,
+                processStop: true,
                 shortcutOpen: true,
                 dashboardSummary: true,
                 beholderIncidents: true,
@@ -1541,6 +1704,76 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         globalShortcutStatusMessage = RemoteGlobalShortcutRegistrar.shared.setEnabled(popoverGlobalShortcutEnabled)
+    }
+
+    private func startSmartScheduler() {
+        guard bootstrapEnabled, smartScheduleTask == nil else { return }
+        smartScheduleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.evaluateSmartSchedules(now: Date())
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    private func evaluateSmartSchedules(now: Date) async {
+        guard !smartScheduleRules.isEmpty else { return }
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: now)
+        let hour = calendar.component(.hour, from: now)
+        let minute = calendar.component(.minute, from: now)
+        let runKey = Self.smartScheduleRunKey(for: now)
+
+        for rule in smartScheduleRules
+        where rule.enabled
+            && rule.weekdays.contains(weekday)
+            && rule.clampedHour == hour
+            && rule.clampedMinute == minute
+            && rule.lastRunKey != runKey
+            && (rule.wakeHost || rule.startMoonlight) {
+            markSmartScheduleRule(rule.id, lastRunKey: runKey)
+            await executeSmartSchedule(rule)
+        }
+    }
+
+    private static func smartScheduleRunKey(for date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        return String(format: "%04d-%02d-%02d %02d:%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0, components.hour ?? 0, components.minute ?? 0)
+    }
+
+    private func markSmartScheduleRule(_ id: String, lastRunKey: String) {
+        guard let index = smartScheduleRules.firstIndex(where: { $0.id == id }) else { return }
+        smartScheduleRules[index].lastRunKey = lastRunKey
+    }
+
+    private func executeSmartSchedule(_ rule: RemoteSmartScheduleRule) async {
+        smartScheduleLastEvent = "\(rule.name) 실행 중 · \(rule.timeDisplay)"
+        message = "스마트 스케줄 '\(rule.name)' 실행: \(rule.actionSummary)"
+
+        if rule.displayTarget == .main {
+            moonlightPreferredScreenFrame = NSScreen.main?.visibleFrame
+        }
+
+        if rule.startMoonlight {
+            if !moonlightBindingEnabled {
+                moonlightBindingEnabled = true
+            }
+            if hostAvailabilityState == .online {
+                _ = await ensureMoonlightDesktopVisible(trigger: "smartSchedule.\(rule.id)")
+            } else if rule.wakeHost {
+                await prepareMoonlightAutoWake(action: .streamOnly, requiresAutoWakeOptIn: false)
+            } else {
+                message = "스마트 스케줄 '\(rule.name)'은 Moonlight 시작을 요청했지만 호스트가 온라인이 아닙니다."
+            }
+        } else if rule.wakeHost {
+            if powerConfig.localWakeConfigured {
+                await power("wake")
+            } else {
+                message = "스마트 스케줄 '\(rule.name)'은 Wake를 요청했지만 SmartThings Wake 설정이 준비되지 않았습니다."
+            }
+        }
+
+        smartScheduleLastEvent = "\(rule.name) 마지막 실행 · \(Self.shortDateTimeFormatter.string(from: Date()))"
     }
 
     private func supervisorDecision(_ event: RemoteConnectionEvent) -> RemoteConnectionDecision {
@@ -2862,6 +3095,74 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "게임 실행 상태를 확인했습니다."
         } else if hostAvailabilityState == .online {
             message = "게임 실행 명령을 전달했습니다. 실행 상태는 다음 동기화에서 계속 확인합니다."
+        }
+    }
+
+    private func startStopChase(processID: String, refreshAfterMilliseconds: Int?) {
+        stopChaseTasks[processID]?.cancel()
+        let delays = RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
+        stopChaseTasks[processID] = Task { [weak self] in
+            var resolved = false
+            for delay in delays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else { return }
+                await self?.runMirrorRemoteState(trigger: "stop.chase", syncScope: .forceProcesses)
+                guard !Task.isCancelled else { return }
+                if self?.isStopChaseResolved(processID: processID) == true {
+                    resolved = true
+                    break
+                }
+            }
+            self?.finishStopChase(processID: processID, resolved: resolved)
+        }
+    }
+
+    private func isStopChaseResolved(processID: String) -> Bool {
+        if hostAvailabilityState != .online { return true }
+        return processes.first { $0.id == processID }?.isRunning != true
+    }
+
+    private func finishStopChase(processID: String, resolved: Bool) {
+        pendingStopProcessIDs.remove(processID)
+        stopChaseTasks[processID] = nil
+        if resolved, hostAvailabilityState == .online {
+            message = "게임 종료 상태를 확인했습니다."
+        } else if hostAvailabilityState == .online {
+            message = "게임 종료 명령을 전달했습니다. 종료 상태는 다음 동기화에서 계속 확인합니다."
+        }
+    }
+
+    func stop(_ process: RemoteProcess) async {
+        guard isStopEnabled(process) else {
+            message = hostAvailabilityState == .online ? "게임 종료를 요청할 수 없는 상태입니다." : "호스트 연결이 복구된 뒤 실행 중 게임을 종료할 수 있습니다."
+            return
+        }
+        guard let service else { return }
+        let processID = process.id
+        pendingStopProcessIDs.insert(processID)
+        do {
+            let result = try await service.stopProcess(id: process.id)
+            message = result.message
+            if result.accepted {
+                startStopChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
+            } else {
+                pendingStopProcessIDs.remove(processID)
+            }
+        } catch {
+            pendingStopProcessIDs.remove(processID)
+            stopChaseTasks[processID]?.cancel()
+            stopChaseTasks[processID] = nil
+            if case RemoteAPIError.http(let statusCode, _) = error, statusCode == 409 {
+                await runMirrorRemoteState(trigger: "stop.conflict", syncScope: .forceProcesses)
+                message = "호스트에서 실행 중인 게임 프로세스를 찾지 못했습니다. 상태를 다시 동기화했습니다."
+                return
+            }
+            if let client {
+                _ = await evaluateConnectivity(using: service, client: client, trigger: "stop.failure")
+            }
+            message = error.localizedDescription
         }
     }
 

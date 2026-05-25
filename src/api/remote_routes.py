@@ -10,9 +10,11 @@ import hashlib
 import json
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 from urllib.parse import quote
 
+import psutil
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -63,6 +65,15 @@ class RemoteCommandResult(BaseModel):
     command_id: str | None = None
     accepted_at: float | None = None
     refresh_after_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class RemoteProcessTerminationResult:
+    accepted: bool
+    status: str
+    message: str
+    target: str | None = None
+    pids: tuple[int, ...] = ()
 
 
 class PairingConfirmRequest(BaseModel):
@@ -297,10 +308,87 @@ def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> t
     return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), "auto")
 
 
+def _normalize_executable_path(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return os.path.normcase(os.path.abspath(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _terminate_matching_managed_processes(process: Any) -> RemoteProcessTerminationResult:
+    """Terminate running OS processes that match a managed process monitor path.
+
+    The GUI sidebar already performs a direct ``psutil.Process(pid).terminate()``
+    for the active PID.  The Remote API runs in the packaged API process, so it
+    cannot safely read the GUI process monitor cache; instead it narrows the
+    target to the managed process' monitoring executable path and lets the
+    normal host process monitor close DB sessions after the process exits.
+    """
+
+    target = getattr(process, "monitoring_path", None)
+    normalized_target = _normalize_executable_path(target)
+    if not normalized_target:
+        return RemoteProcessTerminationResult(
+            accepted=False,
+            status="missing_target",
+            message="종료할 모니터링 경로가 없습니다.",
+            target=target,
+        )
+
+    matches: list[psutil.Process] = []
+    for candidate in psutil.process_iter(["pid", "exe"]):
+        try:
+            if _normalize_executable_path(candidate.info.get("exe")) == normalized_target:
+                matches.append(candidate)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+            continue
+
+    if not matches:
+        return RemoteProcessTerminationResult(
+            accepted=False,
+            status="not_running",
+            message="실행 중인 게임 프로세스를 찾을 수 없습니다.",
+            target=target,
+        )
+
+    terminated: list[int] = []
+    errors: list[str] = []
+    for candidate in matches:
+        try:
+            candidate.terminate()
+            terminated.append(int(candidate.pid))
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            errors.append(f"PID {candidate.pid}: 권한 거부")
+        except Exception as exc:
+            errors.append(f"PID {candidate.pid}: {exc}")
+
+    if terminated:
+        suffix = f" 일부 실패: {'; '.join(errors)}" if errors else ""
+        return RemoteProcessTerminationResult(
+            accepted=True,
+            status="accepted",
+            message=f"게임 종료 명령을 전달했습니다.{suffix}",
+            target=target,
+            pids=tuple(terminated),
+        )
+
+    return RemoteProcessTerminationResult(
+        accepted=False,
+        status="failed",
+        message="게임 종료 명령 전달에 실패했습니다." if not errors else "; ".join(errors),
+        target=target,
+    )
+
+
 def create_remote_router(
     get_db_dependency: Callable[[], Iterable[Session]],
     *,
     launcher_factory: Callable[[bool], Any] | None = None,
+    process_terminator: Callable[[Any], RemoteProcessTerminationResult] | None = None,
     shortcut_opener: Callable[[str], bool] | None = None,
     power_controller: Any | None = None,
     auditor: Any | None = None,
@@ -319,6 +407,7 @@ def create_remote_router(
 
     router = APIRouter(prefix="/remote", tags=["remote"])
     launcher_factory = launcher_factory or (lambda run_as_admin: Launcher(run_as_admin=run_as_admin))
+    process_terminator = process_terminator or _terminate_matching_managed_processes
     shortcut_opener = shortcut_opener or webbrowser.open
     power_controller = power_controller or ConfigurablePowerController()
     auditor = auditor or RemoteAuditLogger()
@@ -661,6 +750,7 @@ def create_remote_router(
     def _remote_capabilities(power_status: dict[str, Any]) -> dict[str, bool]:
         return {
             "process_launch": True,
+            "process_stop": True,
             "shortcut_open": True,
             "dashboard_summary": True,
             "beholder_incidents": True,
@@ -1354,6 +1444,39 @@ def create_remote_router(
             command_id=f"{command}:{uuid.uuid4().hex}",
             accepted_at=now() if ok else None,
             refresh_after_ms=750 if ok else None,
+        )
+
+    @router.post("/processes/{process_id}/stop", response_model=RemoteCommandResult)
+    def stop_remote_process(process_id: str, db: Session = Depends(get_db_dependency)):
+        process = crud.get_process_by_id(db, process_id)
+        if process is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="프로세스를 찾을 수 없습니다.")
+
+        result = process_terminator(process)
+        command = "process.stop.terminate"
+        auditor.record(
+            command=command,
+            accepted=result.accepted,
+            status=result.status,
+            target_id=getattr(process, "id", process_id),
+            target_name=getattr(process, "name", None),
+            target=result.target,
+            metadata={"pids": list(result.pids)},
+        )
+        if result.status in {"missing_target", "not_running"}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.message)
+
+        return RemoteCommandResult(
+            accepted=result.accepted,
+            command=command,
+            target_id=getattr(process, "id", process_id),
+            target_name=getattr(process, "name", None),
+            target=result.target,
+            status=result.status,
+            message=result.message,
+            command_id=f"{command}:{uuid.uuid4().hex}",
+            accepted_at=now() if result.accepted else None,
+            refresh_after_ms=750 if result.accepted else None,
         )
 
     @router.get("/shortcuts")

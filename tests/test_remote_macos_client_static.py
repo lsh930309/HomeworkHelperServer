@@ -69,6 +69,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
     for coding_key in [
         'activeSessions = "active_sessions"',
         'processLaunch = "process_launch"',
+        'processStop = "process_stop"',
         'shortcutOpen = "shortcut_open"',
         'dashboardSummary = "dashboard_summary"',
         'beholderIncidents = "beholder_incidents"',
@@ -180,6 +181,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/tailscale/ensure',
         'remote/devices',
         'remote/processes/\\(pathSegment(id))/launch',
+        'remote/processes/\\(pathSegment(id))/stop',
         'remote/shortcuts/\\(id)/open',
         'remote/devices/\\(id)',
     ]:
@@ -193,6 +195,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func startMobileSession(gameLinkID: String' in client
     assert 'func endMobileSession(sessionID: String)' in client
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
+    assert 'func stopProcess(id: String) async throws -> RemoteCommandResult' in client
     assert 'func powerSetup() async throws -> RemotePowerSetupResponse' in client
     assert 'func registerPowerSSHKey(publicKey: String, label: String)' in client
     assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
@@ -359,9 +362,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "MenuBarGameRow(process: process, viewModel: viewModel)" in app
     assert "MenuBarGameStatusBadges(progress: process.progress, viewModel: viewModel)" in app
     assert "Task { await viewModel.launch(process) }" in app
-    assert "MenuBarLaunchButton" in app
-    assert 'Image(systemName: isPending ? "hourglass" : "play.fill")' in app
-    assert "isPending: viewModel.isLaunchPending(process)" in app
+    assert "MenuBarProcessActionButton" in app
+    assert 'Image(systemName: isPending ? "hourglass" : style.icon)' in app
+    assert "case stop" in app
+    assert "Task { await viewModel.stop(process) }" in app
+    assert "isPending: isRunningAction ? viewModel.isStopPending(process) : viewModel.isLaunchPending(process)" in app
     assert ".frame(width: RemotePopoverLayout.gameIconSize, height: RemotePopoverLayout.gameIconSize)" in app
     assert ".buttonStyle(.plain)" in app
     assert "MenuBarHoverTintModifier" in app
@@ -369,7 +374,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "MenuBarGameStatusBadges" in app
     assert "MenuBarProgressBadge" in app
     assert "MenuBarProgressMeter(progress: progress, viewModel: viewModel)" in app
-    row_source = app.split("struct MenuBarGameRow", 1)[1].split("struct MenuBarLaunchButton", 1)[0]
+    row_source = app.split("struct MenuBarGameRow", 1)[1].split("enum MenuBarProcessActionStyle", 1)[0]
     assert "ProgressView(" not in row_source
     assert ".truncationMode(.tail)" in row_source
     progress_meter_source = app.split("struct MenuBarProgressMeter", 1)[1].split("struct MenuBarProgressBadge", 1)[0]
@@ -431,11 +436,17 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'Label("전원", systemImage: "bolt")' in app
     assert 'Label("기기", systemImage: "display.2")' in app
     assert 'Label("Moonlight", systemImage: "moon.stars")' in app
+    assert 'Label("스케줄", systemImage: "calendar.badge.clock")' in app
     assert 'Label("Android", systemImage: "app.connected.to.app.below.fill")' not in app
     assert 'Label("앱", systemImage: "gearshape")' in app
     assert "RemoteSettingsContentSizePreferenceKey" in app
     assert "RemoteSettingsLayout" in app
     assert "RemoteSettingsSection" in app
+    assert "SmartScheduleRuleEditor" in app
+    assert "평일 스케줄 추가" in app
+    assert "RemoteSmartScheduleRule" in view_model
+    assert "remote.smartSchedule.rules" in view_model
+    assert "startSmartScheduler()" in view_model
     assert "static let contentWidth: CGFloat = 392" in app
     assert "static let maxWindowWidth: CGFloat = 480" in app
     assert "measured.width * 1.06" in app
@@ -694,7 +705,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool" in view_model
     assert "func isLaunchEnabled(_ process: RemoteProcess) -> Bool" in view_model
     assert "func isLaunchPending(_ process: RemoteProcess) -> Bool" in view_model
+    assert "func isStopEnabled(_ process: RemoteProcess) -> Bool" in view_model
+    assert "func isStopPending(_ process: RemoteProcess) -> Bool" in view_model
     assert "@Published private(set) var pendingLaunchProcessIDs" in view_model
+    assert "@Published private(set) var pendingStopProcessIDs" in view_model
     assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
     assert "disconnectingPowerActions" in view_model
     assert "isDisconnectedPowerState" in view_model
@@ -747,8 +761,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "shouldForcePayloadSync: false" in supervisor
     assert "!viewModel.isPowerActionEnabled(action)" in app
     assert "!viewModel.isLaunchEnabled(process)" in app
+    assert "!viewModel.isStopEnabled(process)" in app
     assert "viewModel.processStatusText(process)" in app
     assert "func launch(_ process: RemoteProcess) async" in view_model
+    assert "func stop(_ process: RemoteProcess) async" in view_model
     launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
     assert "await refresh()" not in launch_source
     assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" in launch_source

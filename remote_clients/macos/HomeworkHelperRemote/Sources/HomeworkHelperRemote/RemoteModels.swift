@@ -15,6 +15,7 @@ struct RemoteStatus: Decodable {
 
     struct Capabilities: Decodable {
         let processLaunch: Bool
+        let processStop: Bool
         let shortcutOpen: Bool
         let dashboardSummary: Bool
         let beholderIncidents: Bool
@@ -28,6 +29,7 @@ struct RemoteStatus: Decodable {
 
         enum CodingKeys: String, CodingKey {
             case processLaunch = "process_launch"
+            case processStop = "process_stop"
             case shortcutOpen = "shortcut_open"
             case dashboardSummary = "dashboard_summary"
             case beholderIncidents = "beholder_incidents"
@@ -38,6 +40,50 @@ struct RemoteStatus: Decodable {
             case authRequired = "auth_required"
             case beholder
             case pairing
+        }
+
+        init(
+            processLaunch: Bool,
+            processStop: Bool = false,
+            shortcutOpen: Bool,
+            dashboardSummary: Bool,
+            beholderIncidents: Bool,
+            gameLinks: Bool,
+            mobileSessions: Bool,
+            powerConfig: Bool,
+            powerControl: Bool,
+            beholder: Bool,
+            authRequired: Bool,
+            pairing: Bool
+        ) {
+            self.processLaunch = processLaunch
+            self.processStop = processStop
+            self.shortcutOpen = shortcutOpen
+            self.dashboardSummary = dashboardSummary
+            self.beholderIncidents = beholderIncidents
+            self.gameLinks = gameLinks
+            self.mobileSessions = mobileSessions
+            self.powerConfig = powerConfig
+            self.powerControl = powerControl
+            self.beholder = beholder
+            self.authRequired = authRequired
+            self.pairing = pairing
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            processLaunch = try container.decodeIfPresent(Bool.self, forKey: .processLaunch) ?? false
+            processStop = try container.decodeIfPresent(Bool.self, forKey: .processStop) ?? false
+            shortcutOpen = try container.decodeIfPresent(Bool.self, forKey: .shortcutOpen) ?? false
+            dashboardSummary = try container.decodeIfPresent(Bool.self, forKey: .dashboardSummary) ?? false
+            beholderIncidents = try container.decodeIfPresent(Bool.self, forKey: .beholderIncidents) ?? false
+            gameLinks = try container.decodeIfPresent(Bool.self, forKey: .gameLinks) ?? false
+            mobileSessions = try container.decodeIfPresent(Bool.self, forKey: .mobileSessions) ?? false
+            powerConfig = try container.decodeIfPresent(Bool.self, forKey: .powerConfig) ?? false
+            powerControl = try container.decodeIfPresent(Bool.self, forKey: .powerControl) ?? false
+            beholder = try container.decodeIfPresent(Bool.self, forKey: .beholder) ?? false
+            authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired) ?? false
+            pairing = try container.decodeIfPresent(Bool.self, forKey: .pairing) ?? false
         }
     }
 

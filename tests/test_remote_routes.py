@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.api.remote_routes import create_remote_router
+from src.api.remote_routes import RemoteProcessTerminationResult, create_remote_router
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_power import ConfigurablePowerController
 from src.core import remote_power_setup
@@ -48,6 +48,7 @@ def _client_with_seed(
     auth_token=None,
     device_registry=None,
     power_controller=None,
+    process_terminator=None,
     require_auth=False,
     client_address=("testclient", 50000),
     tailscale_probe=None,
@@ -121,6 +122,7 @@ def _client_with_seed(
             auditor=fake_auditor,
             device_registry=device_registry,
             power_controller=power_controller,
+            process_terminator=process_terminator,
             auth_token=auth_token,
             require_auth=require_auth,
             now=lambda: 1778497000.0,
@@ -144,6 +146,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["counts"]["processes"] == 1
     assert body["counts"]["shortcuts"] == 1
     assert body["capabilities"]["process_launch"] is True
+    assert body["capabilities"]["process_stop"] is True
     assert body["capabilities"]["shortcut_open"] is True
     assert body["capabilities"]["dashboard_summary"] is True
     assert body["capabilities"]["beholder_incidents"] is True
@@ -208,6 +211,69 @@ def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boun
     assert launcher.targets == ["/Users/me/Desktop/Game.url"]
     assert auditor.events[-1]["command"] == "process.launch.shortcut"
     assert auditor.events[-1]["accepted"] is True
+
+
+def test_remote_stop_terminates_only_managed_process_boundary():
+    terminations = []
+
+    def fake_terminator(process):
+        terminations.append((process.id, process.monitoring_path))
+        return RemoteProcessTerminationResult(
+            accepted=True,
+            status="accepted",
+            message="게임 종료 명령을 전달했습니다.",
+            target=process.monitoring_path,
+            pids=(1234,),
+        )
+
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="game-a",
+                name="Game A",
+                monitoring_path="/Applications/Game.app/Contents/MacOS/Game",
+                launch_path="/Users/me/Desktop/Game.url",
+            )
+        ],
+        process_terminator=fake_terminator,
+    )
+
+    response = client.post("/remote/processes/game-a/stop")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["command"] == "process.stop.terminate"
+    assert body["target"] == "/Applications/Game.app/Contents/MacOS/Game"
+    assert body["command_id"].startswith("process.stop.terminate:")
+    assert body["accepted_at"]
+    assert body["refresh_after_ms"] == 750
+    assert terminations == [("game-a", "/Applications/Game.app/Contents/MacOS/Game")]
+    assert auditor.events[-1]["command"] == "process.stop.terminate"
+    assert auditor.events[-1]["accepted"] is True
+    assert auditor.events[-1]["metadata"]["pids"] == [1234]
+
+
+def test_remote_stop_reports_stale_or_missing_runtime_as_conflict():
+    def fake_terminator(process):
+        return RemoteProcessTerminationResult(
+            accepted=False,
+            status="not_running",
+            message="실행 중인 게임 프로세스를 찾을 수 없습니다.",
+            target=process.monitoring_path,
+        )
+
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="game-a", name="Game A", monitoring_path="/game.exe")],
+        process_terminator=fake_terminator,
+    )
+
+    response = client.post("/remote/processes/game-a/stop")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "실행 중인 게임 프로세스를 찾을 수 없습니다."
+    assert auditor.events[-1]["command"] == "process.stop.terminate"
+    assert auditor.events[-1]["accepted"] is False
 
 
 def test_remote_dashboard_summary_exposes_read_only_analytics_under_remote_auth_boundary():

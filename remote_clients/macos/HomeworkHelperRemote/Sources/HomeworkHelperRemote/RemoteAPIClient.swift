@@ -96,6 +96,10 @@ struct RemoteAPIClient {
         return try await post("remote/processes/\(pathSegment(id))/launch", body: body)
     }
 
+    func stopProcess(id: String) async throws -> RemoteCommandResult {
+        try await post("remote/processes/\(pathSegment(id))/stop", body: Data("{}".utf8))
+    }
+
     func openShortcut(id: String) async throws -> RemoteCommandResult {
         try await post("remote/shortcuts/\(id)/open", body: Data("{}".utf8))
     }
