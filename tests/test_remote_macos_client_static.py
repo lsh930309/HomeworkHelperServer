@@ -425,6 +425,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "struct MenuBarMoonlightButton" in app
     assert "viewModel.moonlightFooterButtonTitle" in app
     assert "viewModel.moonlightFooterButtonIcon" in app
+    assert ".buttonStyle(.plain)" in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
+    assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
     assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
     assert ".labelStyle(.iconOnly)" not in app
 
@@ -597,6 +599,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "$viewModel.moonlightBindingEnabled" in app
     assert "호스트 자동 깨우기 후 Moonlight 시작" in app
     assert "$viewModel.moonlightAutoWakeBeforeStreamEnabled" in app
+    assert "손쉬운 사용" in app
+    assert "viewModel.macAccessibilityPermissionDisplay" in app
+    assert "viewModel.macAccessibilityPermissionGuidance" in app
+    assert "viewModel.requestMacAccessibilityPermission()" in app
+    assert "viewModel.openMacAccessibilitySettings()" in app
     assert "연동 상태" in app
     assert "Tailscale 등록 후보" in app
     assert "Pairing PIN" in app
@@ -660,6 +667,13 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "remote.moonlight.bindingEnabled" in view_model
     assert "moonlightAutoWakeBeforeStreamEnabledKey" in view_model
     assert "remote.moonlight.autoWakeBeforeStreamEnabled" in view_model
+    assert 'return "화면 켜기"' in view_model
+    assert 'return "화면 보기"' in view_model
+    assert 'return "화면 끄기"' in view_model
+    assert 'return "깨우기"' in view_model
+    assert 'return "준비 중"' in view_model
+    assert "macAccessibilityPermissionDisplay" in view_model
+    assert "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" in view_model
     assert "PendingMoonlightWakeAction" in view_model
     assert "prepareMoonlightAutoWake(action:" in view_model
     assert "resumePendingMoonlightWakeActionIfReady" in view_model

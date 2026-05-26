@@ -1035,21 +1035,54 @@ struct MenuBarFooterButton: View {
 
 struct MenuBarMoonlightButton: View {
     @ObservedObject var viewModel: RemoteDashboardViewModel
+    @State private var isHovered = false
+
+    private var iconTint: Color {
+        switch viewModel.moonlightFooterButtonIcon {
+        case "stop.circle.fill":
+            return .red
+        case "power.circle.fill":
+            return .orange
+        default:
+            return .primary
+        }
+    }
 
     var body: some View {
         let disabled = viewModel.moonlightFooterButtonDisabled
+        let active = isHovered && !disabled
         Button {
             Task { await viewModel.toggleMoonlightDesktopSession() }
         } label: {
-            Label(viewModel.moonlightFooterButtonTitle, systemImage: viewModel.moonlightFooterButtonIcon)
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
-                .frame(maxWidth: .infinity, minHeight: 30)
+            HStack(spacing: 5) {
+                Image(systemName: viewModel.moonlightFooterButtonIcon)
+                    .font(.caption.bold())
+                    .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : iconTint)
+                Text(viewModel.moonlightFooterButtonTitle)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(disabled ? Color.secondary.opacity(0.08) : Color.white.opacity(active ? 0.16 : 0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.28 : 0.16), lineWidth: 0.8)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .controlSize(.small)
-        .foregroundStyle(.primary)
-        .menuBarHoverTint(disabled: disabled)
+        .buttonStyle(.plain)
+        .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : Color.primary)
         .menuBarSuppressFocusRing()
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering && !disabled
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .disabled(disabled)
         .help(viewModel.moonlightBindingStatusDisplay)
     }
@@ -1378,6 +1411,11 @@ struct RemoteSettingsView: View {
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
                     SidebarInfoRow(label: "Moonlight", value: viewModel.moonlightInstallationDisplay, systemImage: "app")
+                    SidebarInfoRow(label: "손쉬운 사용", value: viewModel.macAccessibilityPermissionDisplay, systemImage: "accessibility")
+                    Text(viewModel.macAccessibilityPermissionGuidance)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                     Toggle("Moonlight 실행 버튼 연동", isOn: $viewModel.moonlightBindingEnabled)
                         .disabled(viewModel.moonlightSnapshot.readiness != .ready)
                     Toggle("호스트 자동 깨우기 후 Moonlight 시작", isOn: $viewModel.moonlightAutoWakeBeforeStreamEnabled)
@@ -1457,6 +1495,12 @@ struct RemoteSettingsView: View {
                         }
                         Button("Moonlight 설정 다시 읽기") {
                             viewModel.refreshMoonlightSnapshot()
+                        }
+                        Button("권한 요청") {
+                            viewModel.requestMacAccessibilityPermission()
+                        }
+                        Button("손쉬운 사용 설정 열기") {
+                            viewModel.openMacAccessibilitySettings()
                         }
                         Button("호스트 공인 IP 갱신") {
                             Task { await viewModel.refreshMoonlightPublicIPViaSSH() }

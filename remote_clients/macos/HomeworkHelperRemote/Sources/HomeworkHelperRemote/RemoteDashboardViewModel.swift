@@ -701,19 +701,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var moonlightFooterButtonTitle: String {
-        if moonlightSetupInProgress { return "Moonlight..." }
-        if moonlightSessionSnapshot.isVisible { return "Moonlight OFF" }
-        if moonlightSessionSnapshot.isRunning { return "Moonlight 보기" }
-        if canAutoWakeHostForMoonlight { return "Wake + Moonlight" }
-        return "Moonlight ON"
+        if moonlightSetupInProgress { return "준비 중" }
+        if moonlightSessionSnapshot.isVisible { return "화면 끄기" }
+        if moonlightSessionSnapshot.isRunning { return "화면 보기" }
+        if canAutoWakeHostForMoonlight { return "깨우기" }
+        return "화면 켜기"
     }
 
     var moonlightFooterButtonIcon: String {
         if moonlightSetupInProgress { return "hourglass" }
-        if moonlightSessionSnapshot.isVisible { return "moon.stars.slash" }
+        if moonlightSessionSnapshot.isVisible { return "stop.circle.fill" }
         if moonlightSessionSnapshot.isRunning { return "rectangle.on.rectangle" }
         if canAutoWakeHostForMoonlight { return "power.circle.fill" }
-        return "moon.stars.fill"
+        return "play.rectangle.fill"
     }
 
     var moonlightFooterButtonDisabled: Bool {
@@ -738,6 +738,35 @@ final class RemoteDashboardViewModel: ObservableObject {
             session = "세션 없음"
         }
         return "\(optIn) · \(session)"
+    }
+
+    var macAccessibilityPermissionDisplay: String {
+        LocalMoonlightManager.accessibilityPermissionReady(prompt: false)
+            ? "허용됨"
+            : "권한 필요 · 업데이트 후 재등록 필요 가능"
+    }
+
+    var macAccessibilityPermissionGuidance: String {
+        if LocalMoonlightManager.accessibilityPermissionReady(prompt: false) {
+            return "Moonlight 창 포커스/다중 디스플레이 이동 권한이 준비되어 있습니다."
+        }
+        return "macOS가 업데이트된 앱 번들을 별도 항목으로 판단하면 기존 손쉬운 사용 허용이 적용되지 않을 수 있습니다. 권한 요청 후에도 실패하면 기존 HomeworkHelper Remote 항목을 제거하고 새 앱을 다시 추가하세요."
+    }
+
+    func requestMacAccessibilityPermission() {
+        let trusted = LocalMoonlightManager.accessibilityPermissionReady(prompt: true)
+        if trusted {
+            message = "손쉬운 사용 권한이 이미 허용되어 있습니다."
+        } else {
+            message = "macOS 손쉬운 사용 권한 요청을 열었습니다. 권한이 갱신되지 않으면 기존 항목 제거 후 새 앱을 다시 추가하세요."
+        }
+        refreshMoonlightSessionSnapshot()
+    }
+
+    func openMacAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
+        message = "시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 HomeworkHelper Remote 권한을 확인하세요."
     }
 
     private var canAutoWakeHostForMoonlight: Bool {
@@ -1084,7 +1113,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard NSScreen.screens.count > 1 else { return true }
         guard !LocalMoonlightManager.accessibilityPermissionReady(prompt: true) else { return true }
         moonlightLastCommandSummary = "다중 디스플레이에서 Moonlight 창을 이동하려면 macOS Accessibility 권한이 필요합니다."
-        message = "다중 디스플레이에서 Moonlight 창을 현재 popover 화면으로 옮기려면 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용 권한을 허용해야 합니다."
+        message = "Moonlight 창을 현재 화면으로 옮기려면 손쉬운 사용 권한이 필요합니다. 업데이트 후 권한이 꼬이면 기존 항목 제거 후 새 앱을 다시 추가하세요."
         return false
     }
 
