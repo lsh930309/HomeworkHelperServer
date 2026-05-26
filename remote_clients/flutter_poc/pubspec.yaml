@@ -1,0 +1,20 @@
+name: homeworkhelper_flutter_poc
+description: Fixture-driven HomeworkHelper remote UI prototype.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/remote_processes.sample.json

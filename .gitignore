@@ -26,6 +26,7 @@ env/
 **/server/.env
 build.version.json
 SmartThings_Token
+.codeboarding
 
 # ===========================
 # PyInstaller 빌드 산출물

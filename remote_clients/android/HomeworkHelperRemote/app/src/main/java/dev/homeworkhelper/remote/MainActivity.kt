@@ -64,6 +64,7 @@ private fun HomeworkHelperRemoteApp(
             onTailscaleDisconnect = { viewModel.requestTailscaleDisconnect() },
             onTailscaleConnectOnForegroundChange = viewModel::updateTailscaleConnectOnForeground,
             onTailscaleDisconnectOnBackgroundChange = viewModel::updateTailscaleDisconnectOnBackground,
+            onRepairEnvironment = viewModel::repairEnvironment,
             onSshHostChange = viewModel::updateSshHost,
             onSshUserChange = viewModel::updateSshUser,
             onSshPortChange = viewModel::updateSshPort,

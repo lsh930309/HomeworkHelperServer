@@ -321,7 +321,11 @@ fun RemoteProgress.resolveAssetUrls(baseUrl: String): RemoteProgress {
 }
 
 fun resolveRemoteUrl(baseUrl: String, value: String?): String? {
-    val raw = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val raw = value
+        ?.trim()
+        ?.replace("&amp;", "&")
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
     if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
     val base = baseUrl.trim().trimEnd('/')
     return if (raw.startsWith('/')) "$base$raw" else "$base/$raw"

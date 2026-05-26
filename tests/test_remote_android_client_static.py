@@ -454,3 +454,97 @@ def test_android_shared_contract_parity_and_settings_hierarchy_are_present():
         "launch/stop",
     ]:
         assert marker in smoke
+
+
+def test_android_realhost_repair_and_resource_diagnostics_are_present():
+    sources = _android_sources()
+
+    for marker in [
+        "setupRepairInFlight",
+        "repairEnvironment",
+        "repairSshDefaults",
+        "shouldReplaceSshHost",
+        "sshHasKnownBadEndpoint",
+        "resetSshHealthTrust",
+        "127.0.0.1",
+        "fake-user",
+        "환경 자동 복구",
+        "전원 명령은 실행하지 않습니다.",
+        "테스트/loopback SSH 설정을 실제 host 후보로 복구했습니다.",
+        "lifecycle 자동화가 켜져 있으면",
+        "onRepairEnvironment",
+        'replace("&amp;", "&")',
+        "iconFailed",
+        "MaterialTheme.colorScheme.error",
+    ]:
+        assert marker in sources
+
+
+def test_android_realhost_diagnostic_tool_is_safe_and_redacted():
+    script = _read(Path("tools/diagnose_android_realhost.py"))
+
+    for marker in [
+        "diagnose_android_realhost.py",
+        "read-only by default",
+        "run-as",
+        "shared_prefs_redacted",
+        "asset_probe.json",
+        "cached_processes",
+        "uiautomator",
+        "screencap",
+        "logcat",
+        "SENSITIVE_KEY_PATTERN",
+        "--allow-ssh-register",
+        "host_power_commands",
+        "app_data_clear",
+        "device_revoke",
+        "ssh_registration_performed",
+        "Android real-host diagnostic bundle written",
+    ]:
+        assert marker in script
+
+    for forbidden in [
+        "pm clear",
+        "uninstall",
+        "revokeDevice",
+        "PowerAction",
+        "SmartThingsClient(",
+        "registerPowerSSHKey",
+    ]:
+        assert forbidden not in script
+
+
+def test_flutter_visual_poc_is_fixture_only_and_separate_from_production_android():
+    poc = Path("remote_clients/flutter_poc")
+    assert (poc / "README.md").exists()
+    assert (poc / "pubspec.yaml").exists()
+    assert (poc / "lib/main.dart").exists()
+    assert (poc / "assets/remote_processes.sample.json").exists()
+
+    readme = _read(poc / "README.md")
+    pubspec = _read(poc / "pubspec.yaml")
+    main = _read(poc / "lib/main.dart")
+    fixture = _read(poc / "assets/remote_processes.sample.json")
+
+    for marker in [
+        "생산 Android 클라이언트 교체가 아닌 UI 품질 비교용 POC",
+        "실제 host pair/token/SSH/Tailscale/SmartThings 상태를 건드리지 않고 fixture JSON만 렌더링합니다",
+        "remote_clients/android/HomeworkHelperRemote",
+    ]:
+        assert marker in readme
+
+    for marker in [
+        "homeworkhelper_flutter_poc",
+        "uses-material-design: true",
+        "assets/remote_processes.sample.json",
+    ]:
+        assert marker in pubspec
+
+    for marker in [
+        "FixtureHomeScreen",
+        "GlassPanel",
+        "PowerDock",
+        "server_tracked",
+        "timestamp_derived",
+    ]:
+        assert marker in main + fixture

@@ -69,6 +69,7 @@ fun SetupTab(
     onTailscaleDisconnect: () -> Unit,
     onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
     onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
+    onRepairEnvironment: () -> Unit,
     onSshHostChange: (String) -> Unit,
     onSshUserChange: (String) -> Unit,
     onSshPortChange: (String) -> Unit,
@@ -117,6 +118,7 @@ fun SetupTab(
                         onInstallTailscale = onInstallTailscale,
                         onEnsureTailscale = onEnsureTailscale,
                         onTailscaleConnect = onTailscaleConnect,
+                        onRepairEnvironment = onRepairEnvironment,
                     )
                     SetupSection.Power -> PowerSection(
                         state = state,
@@ -163,6 +165,7 @@ private fun ConnectionSection(
     onInstallTailscale: () -> Unit,
     onEnsureTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
+    onRepairEnvironment: () -> Unit,
 ) {
     var pairingCode by remember { mutableStateOf("") }
     SettingsCard(title = "연결/페어링", subtitle = "Remote Agent URL과 Android device token을 관리합니다.") {
@@ -176,6 +179,14 @@ private fun ConnectionSection(
             OutlinedButton(onClick = onRefreshToken, enabled = state.hasToken && !state.isDevicesBusy, modifier = Modifier.weight(1f)) { Text("토큰 갱신") }
             OutlinedButton(onClick = onClearToken, enabled = state.hasToken, modifier = Modifier.weight(1f)) { Text("로컬 토큰 삭제") }
         }
+        Button(
+            onClick = onRepairEnvironment,
+            enabled = state.baseUrl.isNotBlank() && !state.setupRepairInFlight,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (state.setupRepairInFlight) "환경 복구 중" else "환경 자동 복구")
+        }
+        Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     TailscaleFoundationSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onEnsureTailscale, onTailscaleConnect)
 }
@@ -343,6 +354,9 @@ private fun AppSection(
         ToggleRow("진단 섹션 표시", state.showDiagnostics, onShowDiagnosticsChange)
         ToggleRow("앱 실행 시 Tailscale ON 요청", state.automation.tailscaleAutomation.connectOnAppForeground, onTailscaleConnectOnForegroundChange)
         ToggleRow("앱 종료 시 Tailscale OFF 요청", state.automation.tailscaleAutomation.disconnectOnAppBackground, onTailscaleDisconnectOnBackgroundChange)
+        if (state.automation.tailscaleAutomation.connectOnAppForeground || state.automation.tailscaleAutomation.disconnectOnAppBackground) {
+            Text("주의: lifecycle 자동화가 켜져 있으면 앱 전환만으로 Tailscale VPN ON/OFF 요청이 발생할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
         Text("Tailscale ON/OFF는 Tailscale Android 앱의 외부 VPN broadcast를 요청하고 VPN 활성 여부를 감지합니다. 최초 로그인/권한 승인은 Tailscale 앱에서 직접 확인해야 할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }

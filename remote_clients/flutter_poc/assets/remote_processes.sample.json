@@ -1,0 +1,34 @@
+[
+  {
+    "id": "ww",
+    "name": "명조: 워더링 웨이브",
+    "status_text": "서버 추적 · 오늘 밤 10시 완료",
+    "progress": {"percentage": 34.0, "display_text": "34%", "source": "server_tracked"},
+    "is_running": false,
+    "played_today": true
+  },
+  {
+    "id": "hsr",
+    "name": "붕괴: 스타레일",
+    "status_text": "서버 추적 · 내일 밤 2시 완료",
+    "progress": {"percentage": 34.0, "display_text": "102/300", "source": "server_tracked"},
+    "is_running": false,
+    "played_today": true
+  },
+  {
+    "id": "nikke",
+    "name": "승리의 여신: 니케",
+    "status_text": "서버 추적 · 전초기지 방어 보상",
+    "progress": {"percentage": 33.7, "display_text": "33.7%", "source": "server_tracked"},
+    "is_running": true,
+    "played_today": true
+  },
+  {
+    "id": "zzz",
+    "name": "젠레스 존 제로",
+    "status_text": "로컬 예측 · 오늘 밤 9시 완료",
+    "progress": {"percentage": 36.7, "display_text": "88/240", "source": "timestamp_derived"},
+    "is_running": false,
+    "played_today": false
+  }
+]

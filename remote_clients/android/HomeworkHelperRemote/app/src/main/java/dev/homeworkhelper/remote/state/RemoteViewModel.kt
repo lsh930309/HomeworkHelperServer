@@ -75,6 +75,7 @@ data class RemoteUiState(
     val processStopEnabled: Boolean = false,
     val showDiagnostics: Boolean = false,
     val powerReadiness: RemotePowerReadiness? = null,
+    val setupRepairInFlight: Boolean = false,
     val automation: AutomationUiState = AutomationUiState(),
 ) {
     val canRefresh: Boolean
@@ -141,7 +142,7 @@ class RemoteViewModel(
     fun updateBaseUrl(value: String) {
         preferences.baseUrl = value
         _uiState.update { it.copy(baseUrl = value, userMessage = null) }
-        fillDefaultSshHost(value)
+        repairSshDefaults(reason = "URL 변경")
     }
 
     fun updateDeviceName(value: String) {
@@ -167,17 +168,20 @@ class RemoteViewModel(
     }
 
     fun updateSshHost(value: String) {
+        if (automationPreferences.sshHost != value.trim()) resetSshHealthTrust()
         automationPreferences.sshHost = value
         updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
     }
 
     fun updateSshUser(value: String) {
+        if (automationPreferences.sshUser != value.trim()) resetSshHealthTrust(resetFingerprint = false)
         automationPreferences.sshUser = value
         updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
     }
 
     fun updateSshPort(value: String) {
         val port = value.toIntOrNull() ?: return
+        if (automationPreferences.sshPort != port) resetSshHealthTrust()
         automationPreferences.sshPort = port
         updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
     }
@@ -483,7 +487,71 @@ class RemoteViewModel(
                 .onFailure { error ->
                     updateAutomation { it.copy(isTailscaleBusy = false) }
                     _uiState.update { it.copy(userMessage = error.message ?: "Tailscale 확인 실패") }
+            }
+        }
+    }
+
+    fun repairEnvironment() {
+        val baseUrl = _uiState.value.baseUrl.trim()
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(setupRepairInFlight = true, userMessage = "환경 자동 복구를 시작합니다. 전원 명령은 실행하지 않습니다.") }
+            updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
+            runCatching { repository().fetchHomeSnapshot() }
+                .onSuccess { snapshot ->
+                    val now = System.currentTimeMillis()
+                    preferences.cachedProcessesJson = snapshot.rawProcessesJson
+                    preferences.lastSyncMillis = now
+                    applyPowerDefaults(snapshot.powerReadiness)
+                    _uiState.update {
+                        it.copy(
+                            availability = RemoteAvailability.Online,
+                            isRefreshing = false,
+                            processes = snapshot.processes,
+                            hostMessage = snapshot.readiness?.remoteConnectivity?.message
+                                ?: snapshot.readiness?.serverModeReadiness?.message,
+                            lastSyncMillis = now,
+                            lastStateRevision = snapshot.status.stateRevision,
+                            hasToken = tokenStore.loadToken() != null,
+                            processLaunchEnabled = snapshot.status.processLaunch,
+                            processStopEnabled = snapshot.status.processStop,
+                            powerReadiness = snapshot.powerReadiness,
+                            automation = it.automation.copy(ssh = automationPreferences.loadSsh(), tailscale = tailscaleBinding.inspect()),
+                        )
+                    }
                 }
+                .onFailure { error ->
+                    repairSshDefaults(reason = "환경 자동 복구")
+                    _uiState.update { it.copy(userMessage = error.message ?: "Remote Agent 상태 조회 실패. 로컬 설정 복구만 적용했습니다.") }
+                }
+
+            val ssh = automationPreferences.loadSsh()
+            if (tokenStore.loadToken().isNullOrBlank()) {
+                _uiState.update {
+                    it.copy(
+                        setupRepairInFlight = false,
+                        userMessage = "환경 자동 복구: SSH host/user 후보를 정리했습니다. key 등록은 페어링 토큰 복구 후 가능합니다.",
+                    )
+                }
+                return@launch
+            }
+            if (sshHasKnownBadEndpoint(ssh)) {
+                _uiState.update {
+                    it.copy(
+                        setupRepairInFlight = false,
+                        userMessage = "환경 자동 복구: SSH host/user가 아직 유효하지 않습니다. Remote Agent URL과 host user를 확인하세요.",
+                    )
+                }
+                return@launch
+            }
+            try {
+                completeSshAutomation("환경 자동 복구")
+            } finally {
+                _uiState.update { it.copy(setupRepairInFlight = false) }
+            }
         }
     }
 
@@ -513,9 +581,10 @@ class RemoteViewModel(
 
     private fun maybeAutoCompleteSshAutomation(trigger: String) {
         val baseUrl = _uiState.value.baseUrl.trim()
+        repairSshDefaults(_uiState.value.powerReadiness, trigger)
         val ssh = automationPreferences.loadSsh()
         if (baseUrl.isBlank() || tokenStore.loadToken().isNullOrBlank()) return
-        if (ssh.host.isBlank() || ssh.user.isBlank() || ssh.healthOk || _uiState.value.automation.isSshBusy) return
+        if (sshHasKnownBadEndpoint(ssh) || ssh.healthOk || _uiState.value.automation.isSshBusy || _uiState.value.setupRepairInFlight) return
         val signature = listOf(baseUrl, ssh.host, ssh.user, ssh.port.toString(), ssh.publicKey.take(48)).joinToString("|")
         if (autoSshAttemptSignature == signature) return
         autoSshAttemptSignature = signature
@@ -676,21 +745,65 @@ class RemoteViewModel(
     }
 
     private fun applyPowerDefaults(powerReadiness: RemotePowerReadiness?) {
-        if (automationPreferences.sshUser.isBlank()) {
-            powerReadiness?.setup?.user?.takeIf { it.isNotBlank() }?.let { automationPreferences.sshUser = it }
-        }
-        if (automationPreferences.sshHost.isBlank()) {
-            fillDefaultSshHost(_uiState.value.baseUrl)
-        }
+        repairSshDefaults(powerReadiness, "전원 readiness")
     }
 
-    private fun fillDefaultSshHost(baseUrl: String) {
-        if (automationPreferences.sshHost.isNotBlank()) return
-        val host = runCatching { URI(baseUrl.trim()).host }.getOrNull().orEmpty()
-        if (host.isNotBlank()) {
-            automationPreferences.sshHost = host
-            updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+    private fun repairSshDefaults(powerReadiness: RemotePowerReadiness? = _uiState.value.powerReadiness, reason: String = "자동 복구"): Boolean {
+        val candidateUser = powerReadiness?.setup?.user?.trim().orEmpty()
+        val candidateHost = hostFromBaseUrl(_uiState.value.baseUrl)
+        var changed = false
+        if (shouldReplaceSshUser(automationPreferences.sshUser, candidateUser)) {
+            automationPreferences.sshUser = candidateUser
+            resetSshHealthTrust(resetFingerprint = false)
+            changed = true
         }
+        if (shouldReplaceSshHost(automationPreferences.sshHost, candidateHost)) {
+            automationPreferences.sshHost = candidateHost
+            resetSshHealthTrust()
+            changed = true
+        }
+        if (changed) {
+            autoSshAttemptSignature = null
+            updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
+            _uiState.update { it.copy(userMessage = "$reason: 테스트/loopback SSH 설정을 실제 host 후보로 복구했습니다.") }
+        }
+        return changed
+    }
+
+    private fun hostFromBaseUrl(baseUrl: String): String {
+        return runCatching { URI(baseUrl.trim()).host }.getOrNull().orEmpty()
+    }
+
+    private fun shouldReplaceSshHost(current: String, candidate: String): Boolean {
+        if (candidate.isBlank()) return false
+        val normalized = current.trim().lowercase()
+        if (normalized.isBlank()) return true
+        return normalized in setOf("127.0.0.1", "localhost", "0.0.0.0", "::1") || normalized.contains("fake")
+    }
+
+    private fun shouldReplaceSshUser(current: String, candidate: String): Boolean {
+        if (candidate.isBlank()) return false
+        val normalized = current.trim().lowercase()
+        return normalized.isBlank() || sshUserLooksSynthetic(normalized)
+    }
+
+    private fun sshHasKnownBadEndpoint(ssh: SshPowerPreferences): Boolean {
+        val host = ssh.host.trim().lowercase()
+        val user = ssh.user.trim().lowercase()
+        return host.isBlank() ||
+            user.isBlank() ||
+            host in setOf("127.0.0.1", "localhost", "0.0.0.0", "::1") ||
+            host.contains("fake") ||
+            sshUserLooksSynthetic(user)
+    }
+
+    private fun sshUserLooksSynthetic(value: String): Boolean {
+        return value == "fake" || value == "fake-user" || value == "test" || value.contains("fake")
+    }
+
+    private fun resetSshHealthTrust(resetFingerprint: Boolean = true) {
+        automationPreferences.sshHealthOk = false
+        if (resetFingerprint) automationPreferences.sshTrustedFingerprint = ""
     }
 
     private fun updateAutomation(transform: (AutomationUiState) -> AutomationUiState) {

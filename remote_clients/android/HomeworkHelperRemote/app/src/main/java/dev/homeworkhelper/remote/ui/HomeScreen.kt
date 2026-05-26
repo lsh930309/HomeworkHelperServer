@@ -308,6 +308,7 @@ private fun GameActionButton(
 private fun GameIcon(process: RemoteProcess) {
     val iconUrl = process.preferredIconUrl
     var iconLoaded by remember(iconUrl) { mutableStateOf(false) }
+    var iconFailed by remember(iconUrl) { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .size(54.dp)
@@ -317,9 +318,9 @@ private fun GameIcon(process: RemoteProcess) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = process.name.take(1).ifBlank { "G" },
+            text = if (iconFailed) "!" else process.name.take(1).ifBlank { "G" },
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (iconLoaded) 0f else 1f),
+            color = (if (iconFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onPrimaryContainer).copy(alpha = if (iconLoaded) 0f else 1f),
             fontWeight = FontWeight.Bold,
         )
         if (iconUrl != null) {
@@ -331,8 +332,8 @@ private fun GameIcon(process: RemoteProcess) {
                 contentDescription = "${process.name} 아이콘",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                onSuccess = { iconLoaded = true },
-                onError = { iconLoaded = false },
+                onSuccess = { iconLoaded = true; iconFailed = false },
+                onError = { iconLoaded = false; iconFailed = true },
             )
         }
     }
@@ -364,6 +365,7 @@ private fun ProgressLane(progress: RemoteProgress) {
 private fun ResourceIcon(progress: RemoteProgress) {
     val iconUrl = progress.preferredResourceIconUrl
     var iconLoaded by remember(iconUrl) { mutableStateOf(false) }
+    var iconFailed by remember(iconUrl) { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .size(28.dp)
@@ -372,7 +374,7 @@ private fun ResourceIcon(progress: RemoteProgress) {
         contentAlignment = Alignment.Center,
     ) {
         if (!iconLoaded) {
-            Text("↻", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(if (iconFailed) "!" else "↻", style = MaterialTheme.typography.labelMedium, color = if (iconFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSecondaryContainer)
         }
         if (iconUrl != null) {
             AsyncImage(
@@ -383,8 +385,8 @@ private fun ResourceIcon(progress: RemoteProgress) {
                 contentDescription = "진행도 리소스 아이콘",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.padding(4.dp).fillMaxSize(),
-                onSuccess = { iconLoaded = true },
-                onError = { iconLoaded = false },
+                onSuccess = { iconLoaded = true; iconFailed = false },
+                onError = { iconLoaded = false; iconFailed = true },
             )
         }
     }
