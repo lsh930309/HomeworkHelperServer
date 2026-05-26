@@ -912,18 +912,15 @@ struct MenuBarPopoverView: View {
                 HStack {
                     Text("HomeworkHelper")
                         .font(.headline)
-                    Button {
+                    MenuBarCTAButton(
+                        title: "",
+                        systemImage: "arrow.clockwise",
+                        disabled: viewModel.isLoading,
+                        layout: .iconOnly(width: 24, height: 22),
+                        help: "새로고침"
+                    ) {
                         Task { await viewModel.refresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption.bold())
-                            .frame(width: 24, height: 22)
                     }
-                    .controlSize(.small)
-                    .menuBarHoverTint(disabled: viewModel.isLoading)
-                    .menuBarSuppressFocusRing()
-                    .disabled(viewModel.isLoading)
-                    .help("새로고침")
                     Spacer()
                     HostStatusPill(viewModel: viewModel)
                 }
@@ -971,7 +968,7 @@ struct MenuBarPopoverView: View {
                         RemoteAppDelegate.openSettingsWindow()
                     }
                     MenuBarMoonlightButton(viewModel: viewModel)
-                    MenuBarFooterButton(title: "앱 종료", systemImage: "power") {
+                    MenuBarFooterButton(title: "앱 종료", systemImage: "power", tone: .destructive) {
                         NSApp.terminate(nil)
                     }
                 }
@@ -985,94 +982,62 @@ struct MenuBarPopoverView: View {
     }
 }
 
-struct MenuBarPowerButton: View {
-    let action: String
-    let label: String
-    let systemImage: String
-    @ObservedObject var viewModel: RemoteDashboardViewModel
+enum MenuBarCTAButtonLayout {
+    case horizontal(minHeight: CGFloat)
+    case vertical(minHeight: CGFloat)
+    case iconOnly(width: CGFloat, height: CGFloat)
 
-    var body: some View {
-        let disabled = viewModel.isLoading || !viewModel.isPowerActionEnabled(action)
-
-        Button {
-            Task { await viewModel.power(action) }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: systemImage)
-                    .font(.caption)
-                Text(label)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-            .frame(maxWidth: .infinity, minHeight: 46)
+    var cornerRadius: CGFloat {
+        switch self {
+        case .iconOnly:
+            return 7
+        case .horizontal, .vertical:
+            return 8
         }
-        .controlSize(.small)
-        .menuBarHoverTint(disabled: disabled)
-        .menuBarSuppressFocusRing()
-        .disabled(disabled)
-        .help(label)
     }
 }
 
-struct MenuBarFooterButton: View {
-    let title: LocalizedStringKey
+enum MenuBarCTAButtonTone {
+    case normal
+    case warning
+    case destructive
+
+    var iconColor: Color {
+        switch self {
+        case .normal:
+            return .primary
+        case .warning:
+            return .orange
+        case .destructive:
+            return .red
+        }
+    }
+}
+
+struct MenuBarCTAButton: View {
+    let title: String
     let systemImage: String
+    var disabled: Bool = false
+    var tone: MenuBarCTAButtonTone = .normal
+    var layout: MenuBarCTAButtonLayout = .horizontal(minHeight: 30)
+    var help: String? = nil
     let action: () -> Void
 
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, minHeight: 30)
-        }
-        .controlSize(.small)
-        .foregroundStyle(.primary)
-        .menuBarHoverTint()
-        .menuBarSuppressFocusRing()
-    }
-}
-
-struct MenuBarMoonlightButton: View {
-    @ObservedObject var viewModel: RemoteDashboardViewModel
     @State private var isHovered = false
 
-    private var iconTint: Color {
-        switch viewModel.moonlightFooterButtonIcon {
-        case "stop.circle.fill":
-            return .red
-        case "power.circle.fill":
-            return .orange
-        default:
-            return .primary
-        }
-    }
-
     var body: some View {
-        let disabled = viewModel.moonlightFooterButtonDisabled
         let active = isHovered && !disabled
-        Button {
-            Task { await viewModel.toggleMoonlightDesktopSession() }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: viewModel.moonlightFooterButtonIcon)
-                    .font(.caption.bold())
-                    .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : iconTint)
-                Text(viewModel.moonlightFooterButtonTitle)
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-            }
-            .frame(maxWidth: .infinity, minHeight: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(disabled ? Color.secondary.opacity(0.08) : Color.white.opacity(active ? 0.16 : 0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.28 : 0.16), lineWidth: 0.8)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        Button(action: action) {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                        .fill(disabled ? Color.secondary.opacity(0.08) : Color.white.opacity(active ? 0.16 : 0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(disabled ? 0.08 : active ? 0.28 : 0.16), lineWidth: 0.8)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : Color.primary)
@@ -1084,7 +1049,90 @@ struct MenuBarMoonlightButton: View {
         }
         .animation(.easeOut(duration: 0.12), value: isHovered)
         .disabled(disabled)
-        .help(viewModel.moonlightBindingStatusDisplay)
+        .help(help ?? title)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch layout {
+        case .horizontal(let minHeight):
+            HStack(spacing: 5) {
+                icon
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+        case .vertical(let minHeight):
+            VStack(spacing: 3) {
+                icon
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+        case .iconOnly(let width, let height):
+            icon
+                .frame(width: width, height: height)
+        }
+    }
+
+    private var icon: some View {
+        Image(systemName: systemImage)
+            .font(.caption.bold())
+            .foregroundStyle(disabled ? Color.secondary.opacity(0.65) : tone.iconColor)
+    }
+}
+
+struct MenuBarPowerButton: View {
+    let action: String
+    let label: String
+    let systemImage: String
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        let disabled = viewModel.isLoading || !viewModel.isPowerActionEnabled(action)
+        MenuBarCTAButton(
+            title: label,
+            systemImage: systemImage,
+            disabled: disabled,
+            tone: action == "shutdown" ? .destructive : .normal,
+            layout: .vertical(minHeight: 46),
+            help: label
+        ) {
+            Task { await viewModel.power(action) }
+        }
+    }
+}
+
+struct MenuBarFooterButton: View {
+    let title: String
+    let systemImage: String
+    var tone: MenuBarCTAButtonTone = .normal
+    let action: () -> Void
+
+    var body: some View {
+        MenuBarCTAButton(title: title, systemImage: systemImage, tone: tone, layout: .horizontal(minHeight: 30), action: action)
+    }
+}
+
+struct MenuBarMoonlightButton: View {
+    @ObservedObject var viewModel: RemoteDashboardViewModel
+
+    var body: some View {
+        let disabled = viewModel.moonlightFooterButtonDisabled
+        MenuBarCTAButton(
+            title: viewModel.moonlightFooterButtonTitle,
+            systemImage: viewModel.moonlightFooterButtonIcon,
+            disabled: disabled,
+            tone: viewModel.moonlightFooterButtonIcon == "stop.circle.fill" ? .destructive : .normal,
+            layout: .horizontal(minHeight: 30),
+            help: viewModel.moonlightBindingStatusDisplay
+        ) {
+            Task { await viewModel.toggleMoonlightDesktopSession() }
+        }
     }
 }
 
@@ -1417,8 +1465,6 @@ struct RemoteSettingsView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     Toggle("Moonlight 실행 버튼 연동", isOn: $viewModel.moonlightBindingEnabled)
-                        .disabled(viewModel.moonlightSnapshot.readiness != .ready)
-                    Toggle("호스트 자동 깨우기 후 Moonlight 시작", isOn: $viewModel.moonlightAutoWakeBeforeStreamEnabled)
                         .disabled(viewModel.moonlightSnapshot.readiness != .ready)
                     SidebarInfoRow(label: "연동 상태", value: viewModel.moonlightBindingStatusDisplay, systemImage: "play.tv")
                     if !viewModel.moonlightSnapshot.installed {

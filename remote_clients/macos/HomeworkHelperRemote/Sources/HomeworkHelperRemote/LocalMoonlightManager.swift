@@ -248,9 +248,12 @@ struct LocalMoonlightSessionSnapshot: Equatable {
     let runningApplicationCount: Int
     let hasVisibleWindow: Bool
     let accessibilityTrusted: Bool
+    let desktopStreamProcessCount: Int
 
     var isRunning: Bool { runningApplicationCount > 0 }
     var isVisible: Bool { isRunning && hasVisibleWindow }
+    var hasDesktopStreamSession: Bool { desktopStreamProcessCount > 0 }
+    var isDesktopStreamVisible: Bool { hasDesktopStreamSession && hasVisibleWindow }
 }
 
 enum LocalMoonlightManager {
@@ -479,12 +482,16 @@ enum LocalMoonlightManager {
     }
 
     @MainActor
-    static func sessionSnapshot() -> LocalMoonlightSessionSnapshot {
+    static func sessionSnapshot(targetHostArgument: String? = nil) -> LocalMoonlightSessionSnapshot {
         let runningApps = runningApplications()
         return LocalMoonlightSessionSnapshot(
             runningApplicationCount: runningApps.count,
             hasVisibleWindow: hasVisibleWindow(for: runningApps),
-            accessibilityTrusted: accessibilityTrusted(prompt: false)
+            accessibilityTrusted: accessibilityTrusted(prompt: false),
+            desktopStreamProcessCount: desktopStreamProcessCount(
+                for: runningApps,
+                targetHostArgument: targetHostArgument
+            )
         )
     }
 
@@ -847,6 +854,45 @@ enum LocalMoonlightManager {
             let alpha = info[kCGWindowAlpha as String] as? Double ?? 1.0
             return layer == 0 && alpha > 0
         }
+    }
+
+    @MainActor
+    private static func desktopStreamProcessCount(for apps: [NSRunningApplication], targetHostArgument: String?) -> Int {
+        apps.filter { app in
+            commandLineIndicatesDesktopStream(
+                processCommandLine(pid: app.processIdentifier),
+                targetHostArgument: targetHostArgument
+            )
+        }.count
+    }
+
+    private static func commandLineIndicatesDesktopStream(_ commandLine: String, targetHostArgument: String?) -> Bool {
+        let normalized = commandLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        guard normalized.contains("moonlight"), normalized.contains("stream"), normalized.contains("desktop") else {
+            return false
+        }
+        let target = targetHostArgument?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let target, !target.isEmpty else { return true }
+        return normalized.contains(target)
+    }
+
+    private static func processCommandLine(pid: pid_t) -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", "\(pid)", "-o", "command="]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return ""
+        }
+        return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
 
     private static func accessibilityTrusted(prompt: Bool) -> Bool {

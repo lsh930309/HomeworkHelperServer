@@ -150,9 +150,6 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.moonlightSnapshot.readiness == .missingApp else {
                     fatalError("smoke should use isolated Moonlight overrides instead of reading production Moonlight state")
                 }
-                guard viewModel.moonlightAutoWakeBeforeStreamEnabled == false else {
-                    fatalError("Moonlight auto-wake should default to explicit opt-in")
-                }
                 viewModel.addDefaultSmartScheduleRule()
                 guard viewModel.smartScheduleRules.count == 1,
                       viewModel.smartScheduleRules[0].weekdayDisplay == "월~금",
@@ -240,9 +237,8 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                     fatalError("seeded process missing before launch")
                 }
                 viewModel.hostAvailabilityState = .offlineExpected
-                viewModel.moonlightAutoWakeBeforeStreamEnabled = false
                 guard !viewModel.isLaunchEnabled(launchProcess) else {
-                    fatalError("offline launch should stay disabled when Moonlight auto-wake is not explicitly enabled")
+                    fatalError("offline launch should stay disabled; Moonlight ON no longer doubles as a host wake CTA")
                 }
                 viewModel.hostAvailabilityState = .online
                 let hostLabelBeforeLaunch = viewModel.hostStatusLabel

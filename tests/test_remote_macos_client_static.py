@@ -415,19 +415,26 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'MenuBarPowerButton(action: "wake", label: "전원 켜기"' in app
     assert 'MenuBarPowerButton(action: "shutdown", label: "시스템 종료"' in app
     assert 'MenuBarFooterButton(title: "설정", systemImage: "gearshape")' in app
-    assert '.help("새로고침")' in app
+    assert "struct MenuBarCTAButton" in app
+    assert "enum MenuBarCTAButtonLayout" in app
+    assert "enum MenuBarCTAButtonTone" in app
+    assert 'help: "새로고침"' in app
+    assert 'layout: .iconOnly(width: 24, height: 22)' in app
+    assert 'layout: .vertical(minHeight: 46)' in app
+    assert 'tone: action == "shutdown" ? .destructive : .normal' in app
+    assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power", tone: .destructive)' in app
     header_source = app.split("struct MenuBarPopoverView", 1)[1].split("VStack(alignment: .leading, spacing: 6)", 1)[0]
     assert 'Text("HomeworkHelper")' in header_source
-    assert '.help("새로고침")' in header_source
-    assert header_source.index('Text("HomeworkHelper")') < header_source.index('.help("새로고침")') < header_source.index("Spacer()")
-    assert ".buttonStyle(.plain)" not in header_source
+    assert 'help: "새로고침"' in header_source
+    assert header_source.index('Text("HomeworkHelper")') < header_source.index('help: "새로고침"') < header_source.index("Spacer()")
     assert "MenuBarMoonlightButton(viewModel: viewModel)" in app
     assert "struct MenuBarMoonlightButton" in app
     assert "viewModel.moonlightFooterButtonTitle" in app
     assert "viewModel.moonlightFooterButtonIcon" in app
-    assert ".buttonStyle(.plain)" in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
+    moonlight_button_source = app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
+    assert "MenuBarCTAButton(" in moonlight_button_source
+    assert ".buttonStyle(.plain)" in app.split("struct MenuBarCTAButton", 1)[1].split("struct MenuBarPowerButton", 1)[0]
     assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
-    assert 'MenuBarFooterButton(title: "앱 종료", systemImage: "power")' in app
     assert ".labelStyle(.iconOnly)" not in app
 
     assert "Settings {" in app
@@ -597,8 +604,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다" in app
     assert "Moonlight 실행 버튼 연동" in app
     assert "$viewModel.moonlightBindingEnabled" in app
-    assert "호스트 자동 깨우기 후 Moonlight 시작" in app
-    assert "$viewModel.moonlightAutoWakeBeforeStreamEnabled" in app
+    assert "호스트 자동 깨우기 후 Moonlight 시작" not in app
+    assert "$viewModel.moonlightAutoWakeBeforeStreamEnabled" not in app
     assert "손쉬운 사용" in app
     assert "viewModel.macAccessibilityPermissionDisplay" in app
     assert "viewModel.macAccessibilityPermissionGuidance" in app
@@ -632,6 +639,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "needsTailscaleRegistration" in local_moonlight
     assert "LocalMoonlightCommandResult" in local_moonlight
     assert "LocalMoonlightSessionSnapshot" in local_moonlight
+    assert "desktopStreamProcessCount" in local_moonlight
+    assert "hasDesktopStreamSession" in local_moonlight
+    assert "isDesktopStreamVisible" in local_moonlight
+    assert "targetHostArgument: String? = nil" in local_moonlight
+    assert "processCommandLine(pid:" in local_moonlight
+    assert "commandLineIndicatesDesktopStream" in local_moonlight
     assert "installViaHomebrew" in local_moonlight
     assert '["install", "--cask", "moonlight"]' in local_moonlight
     assert "static func pair(host: String, pin: String" in local_moonlight
@@ -665,24 +678,26 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "registerMoonlightViaTailscaleDirect" in view_model
     assert "moonlightBindingEnabledKey" in view_model
     assert "remote.moonlight.bindingEnabled" in view_model
-    assert "moonlightAutoWakeBeforeStreamEnabledKey" in view_model
-    assert "remote.moonlight.autoWakeBeforeStreamEnabled" in view_model
-    assert 'return "화면 켜기"' in view_model
-    assert 'return "화면 보기"' in view_model
-    assert 'return "화면 끄기"' in view_model
-    assert 'return "깨우기"' in view_model
-    assert 'return "준비 중"' in view_model
+    assert "moonlightAutoWakeBeforeStreamEnabledKey" not in view_model
+    assert "remote.moonlight.autoWakeBeforeStreamEnabled" not in view_model
+    assert '"Moonlight OFF" : "Moonlight ON"' in view_model
+    assert 'moonlightSessionSnapshot.isDesktopStreamVisible ? "stop.circle.fill" : "play.rectangle.fill"' in view_model
+    assert 'return "화면 켜기"' not in view_model
+    assert 'return "화면 보기"' not in view_model
+    assert 'return "화면 끄기"' not in view_model
+    assert 'return "깨우기"' not in view_model
+    assert 'return "준비 중"' not in view_model
     assert "macAccessibilityPermissionDisplay" in view_model
     assert "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" in view_model
     assert "PendingMoonlightWakeAction" in view_model
     assert "prepareMoonlightAutoWake(action:" in view_model
     assert "resumePendingMoonlightWakeActionIfReady" in view_model
     assert "clearPendingMoonlightWakeActionIfBlocked" in view_model
-    assert "canAutoWakeHostForMoonlight" in view_model
     assert "toggleMoonlightDesktopSession" in view_model
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
-    assert "if moonlightSessionSnapshot.isRunning { return false }" in view_model
+    assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopStreamSession" in view_model
+    assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
     assert "앱 종료 fallback만 수행합니다" in view_model
     assert "updateMoonlightPreferredScreen" in view_model
@@ -781,7 +796,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func stop(_ process: RemoteProcess) async" in view_model
     launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
     assert "await refresh()" not in launch_source
-    assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" in launch_source
+    assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" not in launch_source
     assert "startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)" in launch_source
     assert "syncScope: .forceProcesses" in view_model
     assert "syncRemoteProcesses(using: service, client: client)" in view_model
@@ -820,8 +835,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'processes.first?.id == "smoke-game"' in cache
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "Moonlight auto-wake should default to explicit opt-in" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline launch should stay disabled when Moonlight auto-wake is not explicitly enabled" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "Moonlight ON no longer doubles as a host wake CTA" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline launch should stay disabled; Moonlight ON no longer doubles as a host wake CTA" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))

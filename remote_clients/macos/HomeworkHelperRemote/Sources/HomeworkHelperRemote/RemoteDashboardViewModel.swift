@@ -105,7 +105,6 @@ private enum RemoteClientPreferences {
     private static let selectedMoonlightHostUUIDKey = "remote.moonlight.selectedHostUUID"
     private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
     private static let moonlightBindingEnabledKey = "remote.moonlight.bindingEnabled"
-    private static let moonlightAutoWakeBeforeStreamEnabledKey = "remote.moonlight.autoWakeBeforeStreamEnabled"
     private static let smartScheduleRulesKey = "remote.smartSchedule.rules"
 
     static func loadBaseURL() -> String {
@@ -286,14 +285,6 @@ private enum RemoteClientPreferences {
         defaults.set(enabled, forKey: moonlightBindingEnabledKey)
     }
 
-    static func loadMoonlightAutoWakeBeforeStreamEnabled() -> Bool {
-        defaults.bool(forKey: moonlightAutoWakeBeforeStreamEnabledKey)
-    }
-
-    static func saveMoonlightAutoWakeBeforeStreamEnabled(_ enabled: Bool) {
-        defaults.set(enabled, forKey: moonlightAutoWakeBeforeStreamEnabledKey)
-    }
-
     static func loadSmartScheduleRules() -> [RemoteSmartScheduleRule] {
         guard let data = defaults.data(forKey: smartScheduleRulesKey),
               let rules = try? JSONDecoder().decode([RemoteSmartScheduleRule].self, from: data) else {
@@ -366,14 +357,11 @@ enum CycleProgressDisplayMode: String, CaseIterable, Identifiable {
 
 private enum PendingMoonlightWakeAction: Equatable {
     case streamOnly
-    case launch(processID: String)
 
     var label: String {
         switch self {
         case .streamOnly:
             return "Moonlight Desktop 시작"
-        case .launch:
-            return "게임 실행 + Moonlight Desktop 시작"
         }
     }
 }
@@ -506,9 +494,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
     @Published var moonlightBindingEnabled = RemoteClientPreferences.loadMoonlightBindingEnabled() {
         didSet { RemoteClientPreferences.saveMoonlightBindingEnabled(moonlightBindingEnabled) }
-    }
-    @Published var moonlightAutoWakeBeforeStreamEnabled = RemoteClientPreferences.loadMoonlightAutoWakeBeforeStreamEnabled() {
-        didSet { RemoteClientPreferences.saveMoonlightAutoWakeBeforeStreamEnabled(moonlightAutoWakeBeforeStreamEnabled) }
     }
     private var moonlightPreferredScreenFrame: CGRect?
     private var pendingMoonlightWakeAction: PendingMoonlightWakeAction?
@@ -701,37 +686,28 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var moonlightFooterButtonTitle: String {
-        if moonlightSetupInProgress { return "준비 중" }
-        if moonlightSessionSnapshot.isVisible { return "화면 끄기" }
-        if moonlightSessionSnapshot.isRunning { return "화면 보기" }
-        if canAutoWakeHostForMoonlight { return "깨우기" }
-        return "화면 켜기"
+        moonlightSessionSnapshot.isDesktopStreamVisible ? "Moonlight OFF" : "Moonlight ON"
     }
 
     var moonlightFooterButtonIcon: String {
-        if moonlightSetupInProgress { return "hourglass" }
-        if moonlightSessionSnapshot.isVisible { return "stop.circle.fill" }
-        if moonlightSessionSnapshot.isRunning { return "rectangle.on.rectangle" }
-        if canAutoWakeHostForMoonlight { return "power.circle.fill" }
-        return "play.rectangle.fill"
+        moonlightSessionSnapshot.isDesktopStreamVisible ? "stop.circle.fill" : "play.rectangle.fill"
     }
 
     var moonlightFooterButtonDisabled: Bool {
         if moonlightSetupInProgress { return true }
         if pendingMoonlightWakeAction != nil { return true }
-        if moonlightSessionSnapshot.isRunning { return false }
-        guard moonlightSnapshot.readiness == .ready else { return true }
-        if hostAllowsRemoteCommands { return false }
-        return !canAutoWakeHostForMoonlight
+        return false
     }
 
     var moonlightBindingStatusDisplay: String {
         let optIn = moonlightBindingEnabled ? "Opt-in ON" : "Opt-in OFF"
         let session: String
-        if moonlightSessionSnapshot.isVisible {
-            session = "세션 창 표시 중"
+        if moonlightSessionSnapshot.isDesktopStreamVisible {
+            session = "Desktop 세션 표시 중"
+        } else if moonlightSessionSnapshot.hasDesktopStreamSession {
+            session = "Desktop 세션 실행 중 · 창 미표시"
         } else if moonlightSessionSnapshot.isRunning {
-            session = "Moonlight 실행 중 · 창 미확인"
+            session = "Moonlight 실행 중 · Desktop 세션 미확인"
         } else if let pendingMoonlightWakeAction {
             session = "호스트 부팅 후 \(pendingMoonlightWakeAction.label) 대기 중"
         } else {
@@ -769,15 +745,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = "시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 HomeworkHelper Remote 권한을 확인하세요."
     }
 
-    private var canAutoWakeHostForMoonlight: Bool {
-        moonlightAutoWakeBeforeStreamEnabled
-            && moonlightSnapshot.readiness == .ready
-            && powerConfig.localWakeConfigured
-            && isPaired
-            && pendingMoonlightWakeAction == nil
-            && isMoonlightAutoWakeEligibleState(hostAvailabilityState)
-    }
-
     private func isMoonlightAutoWakeEligibleState(_ state: RemoteHostAvailabilityState) -> Bool {
         switch state {
         case .offlineExpected, .agentUnavailable, .reconnecting, .waking:
@@ -806,7 +773,9 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func refreshMoonlightSessionSnapshot() {
-        moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
+        moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot(
+            targetHostArgument: moonlightSnapshot.targetHost?.targetHostArgument
+        )
     }
 
     func refreshMoonlightSnapshot() {
@@ -917,35 +886,19 @@ final class RemoteDashboardViewModel: ObservableObject {
     func toggleMoonlightDesktopSession() async {
         guard !moonlightSetupInProgress else { return }
         refreshMoonlightSessionSnapshot()
-        if moonlightSessionSnapshot.isVisible {
+        if moonlightSessionSnapshot.isDesktopStreamVisible {
             await stopMoonlightDesktopSession()
-            return
-        }
-        if moonlightSessionSnapshot.isRunning {
-            _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button.focus")
-            return
-        }
-        guard moonlightSnapshot.readiness == .ready else {
-            message = "Moonlight Desktop host가 준비된 뒤 사용할 수 있습니다. 설정 > Moonlight에서 readiness를 확인하세요."
             return
         }
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
-        if hostAvailabilityState != .online {
-            await prepareMoonlightAutoWake(action: .streamOnly)
-            return
-        }
         _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button")
     }
 
-    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction, requiresAutoWakeOptIn: Bool = true) async {
+    private func prepareMoonlightAutoWake(action: PendingMoonlightWakeAction) async {
         guard pendingMoonlightWakeAction == nil else {
             message = "이미 호스트 부팅 후 \(pendingMoonlightWakeAction?.label ?? "Moonlight 동작")을 기다리는 중입니다."
-            return
-        }
-        guard !requiresAutoWakeOptIn || moonlightAutoWakeBeforeStreamEnabled else {
-            message = "호스트가 꺼져 있습니다. Moonlight 설정에서 자동 깨우기 옵션을 켜거나 먼저 전원 켜기를 실행하세요."
             return
         }
         guard moonlightSnapshot.readiness == .ready else {
@@ -982,27 +935,14 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func resumePendingMoonlightWakeActionIfReady(trigger: String) async {
-        guard let action = pendingMoonlightWakeAction,
+        guard pendingMoonlightWakeAction != nil,
               hostAvailabilityState == .online else { return }
         pendingMoonlightWakeAction = nil
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
 
-        switch action {
-        case .streamOnly:
-            _ = await ensureMoonlightDesktopVisible(trigger: "\(trigger).autoWake.stream")
-        case .launch(let processID):
-            guard let process = processes.first(where: { $0.id == processID }) else {
-                message = "호스트는 온라인이 됐지만 실행할 게임(\(processID))을 찾지 못했습니다. 새로고침 후 다시 시도하세요."
-                return
-            }
-            if process.isRunning {
-                _ = await ensureMoonlightDesktopVisible(trigger: "\(trigger).autoWake.alreadyRunning.\(processID)")
-            } else {
-                await launch(process)
-            }
-        }
+        _ = await ensureMoonlightDesktopVisible(trigger: "\(trigger).autoWake.stream")
     }
 
     private func clearPendingMoonlightWakeActionIfBlocked() {
@@ -1022,6 +962,10 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func ensureMoonlightDesktopVisible(trigger: String) async -> Bool {
         guard moonlightBindingEnabled else { return false }
+        guard hostAvailabilityState == .online else {
+            message = "호스트와 정상 연결된 뒤 Moonlight ON을 사용할 수 있습니다. 호스트가 꺼져 있으면 전원 켜기를 먼저 실행하세요."
+            return false
+        }
         guard moonlightSnapshot.readiness == .ready,
               let target = moonlightSnapshot.targetHost,
               let installation = moonlightSnapshot.installation else {
@@ -1034,9 +978,18 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightLastCommandSummary = ""
         refreshMoonlightSessionSnapshot()
 
-        if !moonlightSessionSnapshot.isRunning {
+        if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopStreamSession {
+            let cleanup = await LocalMoonlightManager.terminateRunningApplications()
+            moonlightLastCommandSummary = cleanup.outputSummary
+            refreshMoonlightSessionSnapshot()
+        }
+
+        if !moonlightSessionSnapshot.hasDesktopStreamSession {
             let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
-            moonlightLastCommandSummary = start.outputSummary
+            moonlightLastCommandSummary = [moonlightLastCommandSummary, start.outputSummary]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
             guard start.succeeded else {
                 moonlightSetupInProgress = false
                 refreshMoonlightSessionSnapshot()
@@ -1044,6 +997,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 return false
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            refreshMoonlightSessionSnapshot()
         }
 
         let focus = await focusMoonlightOnPreferredScreen()
@@ -1053,7 +1007,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             .joined(separator: "\n")
         moonlightSetupInProgress = false
         refreshMoonlightSessionSnapshot()
-        if focus.succeeded || moonlightSessionSnapshot.isRunning {
+        if moonlightSessionSnapshot.isDesktopStreamVisible || (focus.succeeded && moonlightSessionSnapshot.hasDesktopStreamSession) {
             message = "Moonlight Desktop 세션을 현재 화면으로 불러왔습니다."
             return true
         }
@@ -1356,8 +1310,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
         guard !pendingLaunchProcessIDs.contains(process.id), !process.isRunning else { return false }
-        if hostAllowsRemoteCommands { return true }
-        return canAutoWakeHostForMoonlight
+        return hostAllowsRemoteCommands
     }
 
     func isLaunchPending(_ process: RemoteProcess) -> Bool {
@@ -1790,7 +1743,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             if hostAvailabilityState == .online {
                 _ = await ensureMoonlightDesktopVisible(trigger: "smartSchedule.\(rule.id)")
             } else if rule.wakeHost {
-                await prepareMoonlightAutoWake(action: .streamOnly, requiresAutoWakeOptIn: false)
+                await prepareMoonlightAutoWake(action: .streamOnly)
             } else {
                 message = "스마트 스케줄 '\(rule.name)'은 Moonlight 시작을 요청했지만 호스트가 온라인이 아닙니다."
             }
@@ -3198,10 +3151,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     func launch(_ process: RemoteProcess) async {
         guard isLaunchEnabled(process) else {
             message = hostAvailabilityState == .online ? "이미 실행 중이거나 실행 확인 중입니다." : "호스트 연결이 복구된 뒤 실행할 수 있습니다. 캐시된 게임 상태는 standalone으로 계속 갱신합니다."
-            return
-        }
-        if hostAvailabilityState != .online {
-            await prepareMoonlightAutoWake(action: .launch(processID: process.id))
             return
         }
         guard let service else { return }
