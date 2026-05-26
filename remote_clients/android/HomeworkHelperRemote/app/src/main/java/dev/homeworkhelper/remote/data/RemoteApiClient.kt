@@ -42,6 +42,12 @@ class RemoteApiClient(
             .toRemoteCommandResult()
     }
 
+    suspend fun stopProcess(id: String): RemoteCommandResult {
+        val encodedId = Uri.encode(id)
+        return JSONObject(request("remote/processes/$encodedId/stop", method = "POST", body = "{}"))
+            .toRemoteCommandResult()
+    }
+
     suspend fun powerStatus(): RemotePowerStatus {
         return JSONObject(request("remote/power/status")).toRemotePowerStatus()
     }
@@ -77,6 +83,26 @@ class RemoteApiClient(
             .toString()
         return JSONObject(request("remote/pair/confirm", method = "POST", body = payload))
             .toPairingConfirmResponse()
+    }
+
+    suspend fun refreshToken(): PairingConfirmResponse {
+        return JSONObject(request("remote/tokens/refresh", method = "POST", body = "{}"))
+            .toPairingConfirmResponse()
+    }
+
+    suspend fun devices(): List<RemoteDevice> {
+        return JSONObject(request("remote/devices")).toRemoteDevices()
+    }
+
+    suspend fun revokeDevice(id: String): RemoteDeviceRevokeResponse {
+        val encodedId = Uri.encode(id)
+        return JSONObject(request("remote/devices/$encodedId", method = "DELETE"))
+            .toRemoteDeviceRevokeResponse()
+    }
+
+    suspend fun purgeRevokedDevices(): PurgeDevicesResponse {
+        return JSONObject(request("remote/devices/revoked", method = "DELETE"))
+            .toPurgeDevicesResponse()
     }
 
     private suspend fun request(

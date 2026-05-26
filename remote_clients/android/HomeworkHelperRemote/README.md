@@ -1,8 +1,8 @@
 # HomeworkHelper Remote Android
 
-Status: v3 game-first UX in progress. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
+Status: v3 game-first UX active implementation. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
 
-The Android client is being rebuilt from `docs/remote/android-client-design.md`. The current v3 shape uses two bottom tabs: Home mirrors the macOS popover with registered game status, host/resource icons, badges, quick launch, pull-to-refresh, and a floating status message; Setup owns pairing/URL/token inputs, display preferences, power readiness, diagnostics, and fake Remote Agent smoke guidance.
+The Android client follows `docs/remote/android-client-design.md`. The current v3 shape uses two bottom tabs: Home mirrors the macOS popover with registered game status, host/resource icons, server-tracked/projection-aware resource progress, badges, quick launch/stop, pull-to-refresh, and a floating status message; Setup owns pairing/URL/token inputs, Tailscale foundation and lifecycle options, Android-local power automation, paired-device management, diagnostics, and fake Remote Agent smoke guidance.
 
 ## Preserved project contract
 
@@ -44,7 +44,18 @@ During Android iteration, prefer fake host validation before real-host pairing:
 python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ```
 
-The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator markers, and screenshots under `artifacts/android-device/`.
+The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator markers, launch/stop command checks, token/device endpoint checks, PNG icon hits, and screenshots under `artifacts/android-device/`.
+
+## Setup hierarchy and automation
+
+Setup is intentionally compact and mirrors the macOS settings hierarchy where Android has an equivalent:
+
+- **연결/페어링**: Remote Agent URL, device name, pairing code, token refresh/delete, Tailscale install/open/status, host tailnet URL probing, and VPN ON request.
+- **전원**: readiness, OpenSSH key/health setup, SmartThings PAT/OAuth and `PC 켜기` device auto-selection.
+- **기기**: paired-device refresh, revoke, and revoked-device cleanup.
+- **앱**: diagnostics toggle, optional Tailscale ON at app foreground, optional Tailscale OFF at app background, and manual VPN ON/OFF requests.
+
+Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN and then re-inspects Android VPN state. First-time account login, Android VPN consent, and Tailscale approval are still explicit user-confirmation steps.
 
 
 ## Local SmartThings wake defaults

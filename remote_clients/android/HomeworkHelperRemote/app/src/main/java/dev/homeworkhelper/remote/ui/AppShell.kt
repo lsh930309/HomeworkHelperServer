@@ -24,14 +24,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.homeworkhelper.remote.data.RemoteAvailability
+import dev.homeworkhelper.remote.data.RemoteDevice
 import dev.homeworkhelper.remote.data.RemoteProcess
 import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
 import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.state.RemoteUiState
 
-enum class RemoteTab(val label: String) {
-    Home("홈"),
-    Setup("설정"),
+enum class RemoteTab(val label: String, val icon: String) {
+    Home("홈", "🎮"),
+    Setup("설정", "⚙"),
 }
 
 @Composable
@@ -42,11 +43,21 @@ fun RemoteAppShell(
     onRefresh: () -> Unit,
     onPair: (String) -> Unit,
     onLaunch: (RemoteProcess) -> Unit,
+    onStopProcess: (RemoteProcess) -> Unit,
     onClearToken: () -> Unit,
+    onRefreshToken: () -> Unit,
+    onRefreshDevices: () -> Unit,
+    onRevokeDevice: (RemoteDevice) -> Unit,
+    onPurgeRevokedDevices: () -> Unit,
+    onShowDiagnosticsChange: (Boolean) -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
     onEnsureTailscale: () -> Unit,
+    onTailscaleConnect: () -> Unit,
+    onTailscaleDisconnect: () -> Unit,
+    onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
+    onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
     onSshHostChange: (String) -> Unit,
     onSshUserChange: (String) -> Unit,
     onSshPortChange: (String) -> Unit,
@@ -67,7 +78,7 @@ fun RemoteAppShell(
                     NavigationBarItem(
                         selected = selectedTab == tab,
                         onClick = { selectedTab = tab },
-                        icon = { Text(tabIcon(tab)) },
+                        icon = { Text(tab.icon) },
                         label = { Text(tab.label) },
                     )
                 }
@@ -84,6 +95,7 @@ fun RemoteAppShell(
                     state = state,
                     onRefresh = onRefresh,
                     onLaunch = onLaunch,
+                    onStopProcess = onStopProcess,
                     onPowerAction = onPowerAction,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -94,10 +106,19 @@ fun RemoteAppShell(
                     onDeviceNameChange = onDeviceNameChange,
                     onPair = onPair,
                     onClearToken = onClearToken,
+                    onRefreshToken = onRefreshToken,
+                    onRefreshDevices = onRefreshDevices,
+                    onRevokeDevice = onRevokeDevice,
+                    onPurgeRevokedDevices = onPurgeRevokedDevices,
+                    onShowDiagnosticsChange = onShowDiagnosticsChange,
                     onInspectTailscale = onInspectTailscale,
                     onOpenTailscale = onOpenTailscale,
                     onInstallTailscale = onInstallTailscale,
                     onEnsureTailscale = onEnsureTailscale,
+                    onTailscaleConnect = onTailscaleConnect,
+                    onTailscaleDisconnect = onTailscaleDisconnect,
+                    onTailscaleConnectOnForegroundChange = onTailscaleConnectOnForegroundChange,
+                    onTailscaleDisconnectOnBackgroundChange = onTailscaleDisconnectOnBackgroundChange,
                     onSshHostChange = onSshHostChange,
                     onSshUserChange = onSshUserChange,
                     onSshPortChange = onSshPortChange,
@@ -153,12 +174,5 @@ private fun FloatingStatusMessage(state: RemoteUiState, modifier: Modifier = Mod
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
         )
-    }
-}
-
-private fun tabIcon(tab: RemoteTab): String {
-    return when (tab) {
-        RemoteTab.Home -> "H"
-        RemoteTab.Setup -> "S"
     }
 }

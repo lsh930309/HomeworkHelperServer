@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +61,7 @@ fun HomeTab(
     state: RemoteUiState,
     onRefresh: () -> Unit,
     onLaunch: (RemoteProcess) -> Unit,
+    onStopProcess: (RemoteProcess) -> Unit,
     onPowerAction: (PowerAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -78,7 +80,7 @@ fun HomeTab(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 HomeHeroCard(state = state)
-                GameList(state = state, onLaunch = onLaunch)
+                GameList(state = state, onLaunch = onLaunch, onStopProcess = onStopProcess)
                 PowerQuickSection(state = state, onPowerAction = onPowerAction)
             }
         }
@@ -158,6 +160,7 @@ private fun statusTitle(availability: RemoteAvailability): String {
 private fun GameList(
     state: RemoteUiState,
     onLaunch: (RemoteProcess) -> Unit,
+    onStopProcess: (RemoteProcess) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -172,7 +175,7 @@ private fun GameList(
             EmptyGameList(state)
         } else {
             state.processes.forEach { process ->
-                GameCard(state = state, process = process, onLaunch = onLaunch)
+                GameCard(state = state, process = process, onLaunch = onLaunch, onStopProcess = onStopProcess)
             }
         }
     }
@@ -195,12 +198,21 @@ private fun GameCard(
     state: RemoteUiState,
     process: RemoteProcess,
     onLaunch: (RemoteProcess) -> Unit,
+    onStopProcess: (RemoteProcess) -> Unit,
 ) {
+    var pendingStop by remember(process.id) { mutableStateOf(false) }
     val launchEnabled = state.availability == RemoteAvailability.Online &&
         state.processLaunchEnabled &&
         state.launchInFlightId == null &&
+        state.stopInFlightId == null &&
         !state.isRefreshing &&
         !process.isRunning
+    val stopEnabled = state.availability == RemoteAvailability.Online &&
+        state.processStopEnabled &&
+        state.launchInFlightId == null &&
+        state.stopInFlightId == null &&
+        !state.isRefreshing &&
+        process.isRunning
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -224,13 +236,15 @@ private fun GameCard(
                     )
                     Text(process.safeStatusText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Button(
-                    onClick = { onLaunch(process) },
-                    enabled = launchEnabled,
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text(if (state.launchInFlightId == process.id) "실행 중..." else "실행")
-                }
+                GameActionButton(
+                    process = process,
+                    launchPending = state.launchInFlightId == process.id,
+                    stopPending = state.stopInFlightId == process.id,
+                    launchEnabled = launchEnabled,
+                    stopEnabled = stopEnabled,
+                    onLaunch = onLaunch,
+                    onStop = { pendingStop = true },
+                )
             }
             process.progress?.let { progress -> ProgressLane(progress) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -239,6 +253,53 @@ private fun GameCard(
                 if (process.playedToday) SmallBadge("오늘 실행", BadgeTone.Neutral)
                 if (state.availability != RemoteAvailability.Online) SmallBadge("stale", BadgeTone.Warning)
             }
+        }
+    }
+    if (pendingStop) {
+        AlertDialog(
+            onDismissRequest = { pendingStop = false },
+            title = { Text("${process.name} 중단") },
+            text = { Text("호스트에서 실행 중인 게임 프로세스를 종료합니다. 저장되지 않은 인게임 상태가 있다면 먼저 확인하세요.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingStop = false
+                        onStopProcess(process)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("중단") }
+            },
+            dismissButton = { TextButton(onClick = { pendingStop = false }) { Text("취소") } },
+        )
+    }
+}
+
+@Composable
+private fun GameActionButton(
+    process: RemoteProcess,
+    launchPending: Boolean,
+    stopPending: Boolean,
+    launchEnabled: Boolean,
+    stopEnabled: Boolean,
+    onLaunch: (RemoteProcess) -> Unit,
+    onStop: () -> Unit,
+) {
+    if (process.isRunning) {
+        Button(
+            onClick = onStop,
+            enabled = stopEnabled,
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+        ) {
+            Text(if (stopPending) "중단 중..." else "■ 중단")
+        }
+    } else {
+        Button(
+            onClick = { onLaunch(process) },
+            enabled = launchEnabled,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Text(if (launchPending) "실행 중..." else "▶ 실행")
         }
     }
 }
@@ -279,17 +340,19 @@ private fun GameIcon(process: RemoteProcess) {
 
 @Composable
 private fun ProgressLane(progress: RemoteProgress) {
+    val nowSeconds = System.currentTimeMillis() / 1000.0
+    val percentage = progress.projectedPercentage(nowSeconds)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ResourceIcon(progress)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             LinearProgressIndicator(
-                progress = { (progress.percentage / 100.0).toFloat().coerceIn(0f, 1f) },
+                progress = { (percentage / 100.0).toFloat().coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(999.dp)),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
             Text(
-                text = progress.displayText ?: "${progress.percentage.toInt()}%",
+                text = "${progress.projectedDisplayText(nowSeconds)} · ${progress.sourceLabel}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -344,7 +407,7 @@ private fun RunningBadge() {
 
 @Composable
 private fun ProgressBadge(progress: RemoteProgress) {
-    val text = progress.displayText ?: "${progress.percentage.toInt()}%"
+    val text = progress.projectedDisplayText()
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,

@@ -4,8 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.homeworkhelper.remote.state.RemoteViewModel
@@ -25,6 +29,18 @@ private fun HomeworkHelperRemoteApp(
     viewModel: RemoteViewModel = viewModel(factory = RemoteViewModelFactory(LocalContext.current)),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.onAppForeground()
+                Lifecycle.Event.ON_STOP -> viewModel.onAppBackground()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     RemoteTheme {
         RemoteAppShell(
             state = state,
@@ -33,11 +49,21 @@ private fun HomeworkHelperRemoteApp(
             onRefresh = viewModel::refresh,
             onPair = viewModel::pair,
             onLaunch = viewModel::launch,
+            onStopProcess = viewModel::stop,
             onClearToken = viewModel::clearLocalToken,
+            onRefreshToken = viewModel::refreshToken,
+            onRefreshDevices = { viewModel.refreshDevices() },
+            onRevokeDevice = viewModel::revokeDevice,
+            onPurgeRevokedDevices = viewModel::purgeRevokedDevices,
+            onShowDiagnosticsChange = viewModel::updateShowDiagnostics,
             onInspectTailscale = viewModel::inspectTailscale,
             onOpenTailscale = viewModel::openTailscaleApp,
             onInstallTailscale = viewModel::openTailscaleInstallPage,
             onEnsureTailscale = viewModel::ensureTailscaleAndProbe,
+            onTailscaleConnect = { viewModel.requestTailscaleConnect() },
+            onTailscaleDisconnect = { viewModel.requestTailscaleDisconnect() },
+            onTailscaleConnectOnForegroundChange = viewModel::updateTailscaleConnectOnForeground,
+            onTailscaleDisconnectOnBackgroundChange = viewModel::updateTailscaleDisconnectOnBackground,
             onSshHostChange = viewModel::updateSshHost,
             onSshUserChange = viewModel::updateSshUser,
             onSshPortChange = viewModel::updateSshPort,

@@ -29,8 +29,28 @@ class RemoteRepository(
         return api.launchProcess(id)
     }
 
+    suspend fun stopProcess(id: String): RemoteCommandResult {
+        return api.stopProcess(id)
+    }
+
     suspend fun confirmPairing(code: String, deviceName: String): PairingConfirmResponse {
         return api.confirmPairing(code, deviceName)
+    }
+
+    suspend fun refreshToken(): PairingConfirmResponse {
+        return api.refreshToken()
+    }
+
+    suspend fun devices(): List<RemoteDevice> {
+        return api.devices()
+    }
+
+    suspend fun revokeDevice(id: String): RemoteDeviceRevokeResponse {
+        return api.revokeDevice(id)
+    }
+
+    suspend fun purgeRevokedDevices(): PurgeDevicesResponse {
+        return api.purgeRevokedDevices()
     }
 
     suspend fun registerPowerSSHKey(publicKey: String, label: String): RemoteCommandResult {

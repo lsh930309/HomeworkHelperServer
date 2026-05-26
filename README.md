@@ -185,7 +185,7 @@ sequenceDiagram
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
 - **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: Kotlin + Jetpack Compose v3 게임 우선 UX. Home/Setup 구조로 게임 실행, 아이콘/배지, pull-to-refresh, floating status, 전원 readiness와 연결 설정을 분리
+- **Android 클라이언트**: Kotlin + Jetpack Compose v3 게임 우선 UX. Home/Setup 구조로 게임 실행·중단, 서버 추적/로컬 projection 진행률, 아이콘/배지, pull-to-refresh, floating status, 전원 readiness, 기기 관리, Tailscale lifecycle 설정을 분리
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---
@@ -243,7 +243,7 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 ./gradlew :app:assembleDebug
 ```
 
-현재 Android 앱은 v3 게임 우선 UX 상태다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
+현재 Android 앱은 v3 게임 우선 UX 상태다. Home은 게임 미러링과 실행/중단에 집중하고, Setup은 연결/페어링 · 전원 · 기기 · 앱 섹션으로 URL/token, Tailscale 기반환경, SmartThings/OpenSSH 전원 자동화, paired-device 관리, fake smoke 안내를 나눈다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
 
 ---
 
@@ -367,7 +367,7 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ## 🛰️ 원격 클라이언트
 
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기준 클라이언트이고, Android 클라이언트는 기존 구현을 제거한 뒤 v3 게임 우선 UX로 게임 미러링, 전원 readiness, 연결 설정을 분리하는 중이다.
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS 클라이언트는 기준 클라이언트이고, Android 클라이언트는 기존 구현을 제거한 뒤 v3 게임 우선 UX로 게임 미러링, 실행/중단, 전원 readiness, Tailscale 기반환경, 연결/기기 설정을 분리한다.
 
 ### Remote Agent 실행
 

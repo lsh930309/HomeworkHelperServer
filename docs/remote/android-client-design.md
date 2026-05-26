@@ -1,13 +1,13 @@
 # Android Remote Client Rebuild Design
 
-Last refreshed: 2026-05-19
-Status: Active v3 implementation design; existing Android full-parity code must not be resurrected
+Last refreshed: 2026-05-26
+Status: Active Android client implementation guide; existing Android full-parity code must not be resurrected
 
 ## 1. Decision
 
-The Android client will be rebuilt from a clean scaffold.
+The Android client is rebuilt around the shared Remote Agent contract and should now be completed by tightening parity with the macOS client's data rules, not by restoring the removed legacy Android architecture.
 
-Reason: the current Android code and documents describe a full-parity client, but the product direction has changed. The Android app should now mirror the macOS popover-first UX: the main screen is registered game status and quick launch. Pairing, power setup, diagnostics, Usage Access, and device management are supporting setup tasks, not the main experience.
+Reason: the current Android product direction is game-first remote control. The Android app should mirror the macOS popover-first UX: the main screen is registered game status plus quick launch/stop, while pairing, power setup, diagnostics, Tailscale lifecycle automation, and device management are supporting setup tasks.
 
 Keep:
 
@@ -35,15 +35,16 @@ Secondary jobs:
 - Pair this Android device with the Remote Agent.
 - Diagnose online/offline/auth state.
 - View readiness and cached game state when the host is unavailable.
-- Manage optional Android-PC mobile-session features.
+- Manage paired-device and token lifecycle tasks.
 - Provide optional Android-local power control through Tailscale app binding, SmartThings Wake, and OpenSSH.
+- Keep Android-only lifecycle automation explicit and reversible: app foreground may request Tailscale VPN ON, app background may request VPN OFF, but first login/VPN consent remains user-approved.
 
 Non-goals for the first rebuild pass:
 
 - Host-managed power side effects or `/remote/power/{action}` execution endpoints.
 - Background sync, notifications, or WorkManager.
 - Cloud relay or public Remote Agent exposure.
-- Recreating every macOS settings option.
+- Recreating macOS-specific Moonlight/AppKit/LoginItem settings.
 - Moonlight/Apollo integration.
 
 ## 3. UX structure
@@ -53,7 +54,7 @@ The Android home screen is the equivalent of the macOS popover.
 Recommended navigation:
 
 1. **Home / Games**: default screen, game mirror, quick launch, pull-to-refresh, status feedback.
-2. **Setup**: pairing, Remote Agent URL, auth recovery, display preferences, power readiness, diagnostics, fake smoke guidance.
+2. **Setup**: connection/pairing, power automation, paired devices, app behavior, diagnostics, fake smoke guidance.
 
 Bottom navigation should contain only user-action surfaces. Information-only Power/More tabs are consolidated into Setup sections.
 
@@ -73,7 +74,8 @@ Game list:
 - Game name, status text, progress meter/resource text.
 - Today-played indicator and running-state emphasis.
 - Primary `[실행]` button for `POST /remote/processes/{id}/launch`.
-- Disabled state with explicit reason when auth/offline/loading/running.
+- Running games replace the launch action with a red `[중단]` button backed by `POST /remote/processes/{id}/stop` and a confirmation dialog.
+- Disabled state with explicit reason when auth/offline/loading/in-flight.
 
 Feedback states:
 
@@ -81,7 +83,7 @@ Feedback states:
 - Empty: explain that host has no registered games or pairing is needed.
 - Offline: show cached games with stale marker.
 - Auth rejected: preserve cache; show pairing/token recovery CTA.
-- Launch accepted: show success message and refresh.
+- Launch/stop accepted: show success message and perform short command-chase refreshes so the card quickly mirrors host state.
 - Launch failed: show failure without clearing game list.
 
 Visual direction:
@@ -92,7 +94,14 @@ Visual direction:
 
 ## 5. Setup and support screen
 
-Setup screen:
+Setup screen sections:
+
+1. **연결/페어링**
+2. **전원**
+3. **기기**
+4. **앱**
+
+Setup screen responsibilities:
 
 - Remote Agent URL.
 - Device name.
@@ -102,7 +111,9 @@ Setup screen:
 - User-facing display preferences such as diagnostic section visibility.
 - Power readiness explanation and OpenSSH/setup details.
 - Tailscale app binding status and host tailnet URL probing.
+- Tailscale ON/OFF broadcast requests and optional foreground/background lifecycle automation.
 - SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
+- Paired device list, device revoke, and revoked-device cleanup.
 - Diagnostics and fake Remote Agent smoke guidance.
 
 Power UI policy:
@@ -112,6 +123,12 @@ Power UI policy:
 - Sleep/restart/shutdown are enabled only after that automatic SSH registration/health chain succeeds.
 - Restart/shutdown/sleep require a confirmation dialog; Wake may be one-tap.
 - It must not call removed or host-managed power execution endpoints.
+
+Tailscale UI policy:
+
+- If Tailscale is not installed, guide the user to install/open the official Android package.
+- If Tailscale is installed, Android may request VPN connect/disconnect through the installed app and then re-inspect VPN state.
+- The app must display that first-time Tailscale login, Android VPN consent, and account approval can require direct user confirmation in Tailscale.
 
 ## 6. Android implementation architecture
 
@@ -149,6 +166,7 @@ Required for Home:
 - `GET /remote/readiness`
 - `GET /remote/processes`
 - `POST /remote/processes/{id}/launch`
+- `POST /remote/processes/{id}/stop`
 
 Required for setup:
 
@@ -156,6 +174,7 @@ Required for setup:
 - `POST /remote/tokens/refresh`
 - `GET /remote/devices`
 - `DELETE /remote/devices/{id}`
+- `DELETE /remote/devices/revoked`
 
 Required for automation setup:
 
@@ -205,12 +224,14 @@ Android should share the supervisor concepts from `docs/remote/connection-superv
 - `authRejected`: token rejected.
 - transient loading/reconnecting states for UI feedback.
 
-Android reachability can start simple:
+Android reachability and state mirroring:
 
 - HTTP status probe first.
 - Friendly messages for timeout, DNS, connection refused, 401/403.
 - Preserve last successful game snapshot.
-- Add Tailscale-specific probes only after the core Home flow is stable.
+- When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
+- When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
+- Tailscale app binding is an environment-foundation helper, not a replacement network stack.
 
 ## 10. Verification plan
 
@@ -222,19 +243,20 @@ cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug -
 ./.venv/bin/python tools/check_android_apk_artifact.py
 ```
 
-Phase 1, Home implementation:
+Phase 1, Home and setup implementation:
 
-- Static test for required v3 endpoints, icon payload fields, pull-to-refresh, and no stale power endpoints.
+- Static test for required v3 endpoints, icon payload fields, pull-to-refresh, launch/stop, device/token actions, Tailscale lifecycle markers, and no stale power endpoints.
 - Unit/static checks for token store and process card labels.
 - APK build.
 - Fake Remote Agent serves PNG process/resource icons from `assets/` and smoke verifies image endpoint hits.
+- Fake Remote Agent smoke should also exercise launch/stop command flow and the compact Setup section hierarchy.
 
 Phase 2, physical device:
 
 - Pairing and process-list sync on a real device.
 - Cached game state survives app restart/offline host.
 - Launch command accepted against a test Remote Agent.
-- Usage Access/mobile-session checks only if those features are reintroduced.
+- Tailscale foreground/background automation, SmartThings wake, OpenSSH power actions, and device revoke should be verified with explicit user-approved real-device scenarios.
 
 ## 11. Open questions for implementation phase
 

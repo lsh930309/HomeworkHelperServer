@@ -22,8 +22,11 @@ RESOURCE_ICONS = {
 }
 
 LAUNCHES: list[str] = []
+STOPS: list[str] = []
 IMAGE_HITS: list[str] = []
 SSH_KEYS: list[str] = []
+TOKEN_REFRESHES: list[str] = []
+REVOKED_DEVICES: set[str] = set()
 
 
 def _process_icon_urls(process_id: str) -> dict[str, str]:
@@ -77,7 +80,7 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                     "state_revision": f"fake-android-v3-{len(LAUNCHES)}-{len(IMAGE_HITS)}",
                     "updated_at": now,
                     "counts": {"processes": 2, "shortcuts": 0, "active_sessions": 1 if LAUNCHES else 0},
-                    "capabilities": {"process_launch": True, "auth_required": False},
+                    "capabilities": {"process_launch": True, "process_stop": True, "auth_required": False},
                     "power": {
                         "configured": False,
                         "state": "client_managed",
@@ -111,6 +114,8 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/remote/processes":
+            fake_game_a_running = "fake-game-a" in LAUNCHES and "fake-game-a" not in STOPS
+            fake_running_game_running = "fake-game-running" not in STOPS
             self._json(
                 [
                     {
@@ -126,7 +131,7 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                         },
                         "icon_url": "/api/dashboard/icons/fake-game-a?size=128&format=png",
                         "icon_urls": _process_icon_urls("fake-game-a"),
-                        "is_running": False,
+                        "is_running": fake_game_a_running,
                         "played_today": True,
                     },
                     {
@@ -142,7 +147,7 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                         },
                         "icon_url": "/api/dashboard/icons/fake-game-running?size=128&format=png",
                         "icon_urls": _process_icon_urls("fake-game-running"),
-                        "is_running": True,
+                        "is_running": fake_running_game_running,
                         "played_today": True,
                     },
                 ]
@@ -173,6 +178,38 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/remote/devices":
+            self._json(
+                {
+                    "devices": [
+                        {
+                            "id": "android-device",
+                            "name": "Android Device",
+                            "platform": "android",
+                            "role": "client",
+                            "tailnet_ip": "100.64.0.20",
+                            "pairing_status": "paired" if "android-device" not in REVOKED_DEVICES else "revoked",
+                            "connectivity_state": "active",
+                            "health_message": "Fake Android device active",
+                            "can_revoke": True,
+                            "revoked_at": None,
+                        },
+                        {
+                            "id": "host:100.64.0.10",
+                            "name": "HomeworkHelper Host",
+                            "platform": "windows",
+                            "role": "host",
+                            "tailnet_ip": "100.64.0.10",
+                            "pairing_status": "host",
+                            "connectivity_state": "local",
+                            "health_message": "Fake host online",
+                            "can_revoke": False,
+                            "revoked_at": None,
+                        },
+                    ]
+                }
+            )
+            return
         if path.startswith("/api/dashboard/icons/"):
             process_id = path.removeprefix("/api/dashboard/icons/")
             self._png(GAME_ICONS.get(process_id, APP_ICON))
@@ -186,6 +223,8 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server API
         if self.path == "/remote/processes/fake-game-a/launch":
             LAUNCHES.append("fake-game-a")
+            if "fake-game-a" in STOPS:
+                STOPS.remove("fake-game-a")
             self._json(
                 {
                     "accepted": True,
@@ -195,11 +234,36 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                     "target": "fake://game-a",
                     "status": "accepted",
                     "message": "Fake Game A 실행 요청을 접수했습니다.",
+                    "command_id": "process.launch.shortcut:fake",
+                    "accepted_at": time.time(),
+                    "refresh_after_ms": 250,
+                }
+            )
+            return
+        if self.path in {"/remote/processes/fake-game-a/stop", "/remote/processes/fake-game-running/stop"}:
+            process_id = self.path.split("/")[3]
+            STOPS.append(process_id)
+            self._json(
+                {
+                    "accepted": True,
+                    "command": "process.stop.terminate",
+                    "target_id": process_id,
+                    "target_name": process_id,
+                    "target": f"fake://{process_id}",
+                    "status": "accepted",
+                    "message": f"{process_id} 중단 요청을 접수했습니다.",
+                    "command_id": "process.stop.terminate:fake",
+                    "accepted_at": time.time(),
+                    "refresh_after_ms": 250,
                 }
             )
             return
         if self.path == "/remote/pair/confirm":
             self._json({"id": "android-device", "name": "Android Device", "token": "fake-token"})
+            return
+        if self.path == "/remote/tokens/refresh":
+            TOKEN_REFRESHES.append("fake-token-refresh")
+            self._json({"id": "android-device", "name": "Android Device", "token": "fake-token-refreshed"})
             return
         if self.path == "/remote/power/ssh-key":
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -214,6 +278,19 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                 "message": "Fake Tailscale ready",
                 "suggested_base_urls": ["http://127.0.0.1:18080"],
             })
+            return
+        self._json({"error": "not found"}, status=404)
+
+    def do_DELETE(self) -> None:  # noqa: N802 - http.server API
+        if self.path == "/remote/devices/revoked":
+            removed = len(REVOKED_DEVICES)
+            REVOKED_DEVICES.clear()
+            self._json({"removed": removed})
+            return
+        if self.path.startswith("/remote/devices/") and self.path != "/remote/devices/revoked":
+            device_id = self.path.removeprefix("/remote/devices/")
+            REVOKED_DEVICES.add(device_id)
+            self._json({"revoked": True, "device_id": device_id})
             return
         self._json({"error": "not found"}, status=404)
 

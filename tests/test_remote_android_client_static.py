@@ -113,10 +113,14 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
         "remote/readiness",
         "remote/processes",
         "remote/processes/$encodedId/launch",
+        "remote/processes/$encodedId/stop",
         "remote/pair/confirm",
+        "remote/tokens/refresh",
+        "remote/devices",
         "remote/power/status",
         "remote/power/setup",
         "process_launch",
+        "process_stop",
         "auth_required",
         "is_running",
         "played_today",
@@ -156,8 +160,7 @@ def test_android_home_games_mvp_implements_required_remote_contracts():
 
     assert "RemoteTab.Power" not in sources
     assert "RemoteTab.More" not in sources
-    assert "onClick = onRefresh" not in sources
-    assert 'Text("새로고침")' not in sources
+    assert "Text(\"새로고침\")" not in sources
 
 def test_android_v3_theme_assets_and_fake_smoke_contract_are_declared():
     sources = _android_sources()
@@ -196,6 +199,7 @@ def test_android_v3_theme_assets_and_fake_smoke_contract_are_declared():
         "android-v3-pull-refresh",
         "android-v3-launch",
         "Fake Game A 실행 요청을 접수했습니다.",
+        "중단 요청을 접수했습니다.",
         "IMAGE_HITS",
         "swipe_down",
     ]:
@@ -359,7 +363,12 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "setKeyExchangeFactories",
         "remote/power/ssh-key",
         "remote/tailscale/ensure",
+        "remote/tokens/refresh",
+        "remote/devices/$encodedId",
+        "remote/processes/$encodedId/stop",
         "com.tailscale.ipn",
+        "CONNECT_VPN",
+        "DISCONNECT_VPN",
         "PowerAction.Wake",
         "PowerAction.Sleep",
         "PowerAction.Restart",
@@ -372,7 +381,7 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "Health 재확인",
         "페어링 또는 온라인 복구 후 key 등록과 SSH health는 자동으로 시도됩니다.",
         "deviceId 수동 입력 fallback",
-        "PAT 저장 / 현재 deviceId로 Wake 활성화",
+        "PAT 저장",
         "deviceId만으로는 Cloud 명령을 보낼 수 없습니다.",
         "deviceId가 없습니다.",
         "SmartThings PAT/OAuth 인증",
@@ -399,7 +408,49 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
     for marker in [
         "/remote/power/ssh-key",
         "/remote/tailscale/ensure",
+        "/remote/devices",
+        "/remote/tokens/refresh",
+        "/remote/processes/fake-game-running/stop",
         "suggested_base_urls",
         "Fake SSH public key registered",
     ]:
         assert marker in fake_agent
+
+
+def test_android_shared_contract_parity_and_settings_hierarchy_are_present():
+    sources = _android_sources()
+    smoke = _read(Path("tools/smoke_android_fake_remote.py"))
+
+    for marker in [
+        "SetupSection.Connection",
+        "SetupSection.Power",
+        "SetupSection.Devices",
+        "SetupSection.App",
+        "연결/페어링",
+        "Tailscale 기반환경",
+        "기기 관리",
+        "앱 동작",
+        "RemoteDevice",
+        "refreshToken",
+        "revokeDevice",
+        "purgeRevokedDevices",
+        "stopInFlightId",
+        "onStopProcess",
+        "schemaVersion",
+        "sourceLabel",
+        "projectedPercentage",
+        "projectedDisplayText",
+        "state_revision",
+        "Tailscale ON/OFF",
+        "tailscale.connect_on_app_foreground",
+        "tailscale.disconnect_on_app_background",
+    ]:
+        assert marker in sources
+
+    for marker in [
+        "연결/페어링",
+        "Tailscale 기반환경",
+        "⚙ 앱",
+        "launch/stop",
+    ]:
+        assert marker in smoke

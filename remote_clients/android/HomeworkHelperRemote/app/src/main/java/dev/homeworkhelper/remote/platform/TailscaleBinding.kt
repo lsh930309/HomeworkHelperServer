@@ -9,16 +9,19 @@ import android.net.Uri
 import android.os.Build
 
 private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
+private const val TAILSCALE_CONNECT_VPN = "com.tailscale.ipn.CONNECT_VPN"
+private const val TAILSCALE_DISCONNECT_VPN = "com.tailscale.ipn.DISCONNECT_VPN"
 
 data class TailscaleBindingState(
     val installed: Boolean = false,
     val vpnActive: Boolean = false,
     val suggestedBaseUrls: List<String> = emptyList(),
     val message: String = "Tailscale 상태를 아직 확인하지 않았습니다.",
+    val lastAutomationAction: String = "",
 )
 
 class TailscaleBinding(private val context: Context) {
-    fun inspect(): TailscaleBindingState {
+    fun inspect(lastAutomationAction: String = ""): TailscaleBindingState {
         val installed = isInstalled()
         val vpnActive = isVpnActive()
         return TailscaleBindingState(
@@ -26,9 +29,10 @@ class TailscaleBinding(private val context: Context) {
             vpnActive = vpnActive,
             message = when {
                 installed && vpnActive -> "Tailscale 앱과 VPN 연결을 감지했습니다."
-                installed -> "Tailscale 앱은 설치되어 있지만 VPN 활성 네트워크가 보이지 않습니다."
-                else -> "Tailscale 앱이 설치되어 있지 않습니다."
+                installed -> "Tailscale 앱은 설치되어 있지만 VPN 활성 네트워크가 보이지 않습니다. 자동 연결 또는 앱 열기를 시도할 수 있습니다."
+                else -> "Tailscale 앱이 설치되어 있지 않습니다. Play Store에서 먼저 설치하세요."
             },
+            lastAutomationAction = lastAutomationAction,
         )
     }
 
@@ -49,6 +53,23 @@ class TailscaleBinding(private val context: Context) {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             }
+    }
+
+    fun requestVpnConnect(): TailscaleBindingState {
+        return sendVpnBroadcast(TAILSCALE_CONNECT_VPN, "CONNECT_VPN")
+    }
+
+    fun requestVpnDisconnect(): TailscaleBindingState {
+        return sendVpnBroadcast(TAILSCALE_DISCONNECT_VPN, "DISCONNECT_VPN")
+    }
+
+    private fun sendVpnBroadcast(action: String, label: String): TailscaleBindingState {
+        if (!isInstalled()) {
+            return inspect("$label 실패: Tailscale 미설치")
+        }
+        val intent = Intent(action).setPackage(TAILSCALE_PACKAGE)
+        context.sendBroadcast(intent)
+        return inspect("$label broadcast 전송됨")
     }
 
     private fun isInstalled(): Boolean {

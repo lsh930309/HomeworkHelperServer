@@ -22,6 +22,10 @@ class RemotePreferences(context: Context) {
         get() = preferences.getLong(KEY_LAST_SYNC_MILLIS, 0L)
         set(value) = preferences.edit().putLong(KEY_LAST_SYNC_MILLIS, value).apply()
 
+    var showDiagnostics: Boolean
+        get() = preferences.getBoolean(KEY_SHOW_DIAGNOSTICS, true)
+        set(value) = preferences.edit().putBoolean(KEY_SHOW_DIAGNOSTICS, value).apply()
+
     fun cachedProcesses(): List<RemoteProcess> {
         return runCatching { RemoteProcess.listFromJson(cachedProcessesJson, baseUrl) }.getOrDefault(emptyList())
     }
@@ -31,5 +35,6 @@ class RemotePreferences(context: Context) {
         private const val KEY_DEVICE_NAME = "remote.device_name"
         private const val KEY_CACHED_PROCESSES = "remote.cached_processes_json"
         private const val KEY_LAST_SYNC_MILLIS = "remote.last_sync_millis"
+        private const val KEY_SHOW_DIAGNOSTICS = "remote.show_diagnostics"
     }
 }

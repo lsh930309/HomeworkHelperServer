@@ -14,6 +14,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
 DEFAULT_JAVA_HOME = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 DEFAULT_ANDROID_HOME = "/opt/homebrew/share/android-commandlinetools"
+DEFAULT_SANDBOX_HOME = Path("/private/tmp/homeworkhelper-android-verify-home")
+DEFAULT_GRADLE_HOME = Path("/private/tmp/homeworkhelper-android-gradle")
+DEFAULT_ANDROID_USER_HOME = Path("/private/tmp/homeworkhelper-android-user")
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,19 @@ def _env() -> dict[str, str]:
     env.setdefault("JAVA_HOME", DEFAULT_JAVA_HOME)
     env.setdefault("ANDROID_HOME", DEFAULT_ANDROID_HOME)
     env.setdefault("ANDROID_SDK_ROOT", env["ANDROID_HOME"])
+    DEFAULT_SANDBOX_HOME.mkdir(parents=True, exist_ok=True)
+    DEFAULT_GRADLE_HOME.mkdir(parents=True, exist_ok=True)
+    DEFAULT_ANDROID_USER_HOME.mkdir(parents=True, exist_ok=True)
+    env.setdefault("GRADLE_USER_HOME", str(DEFAULT_GRADLE_HOME))
+    env.setdefault("ANDROID_USER_HOME", str(DEFAULT_ANDROID_USER_HOME))
+    gradle_opts = env.get("GRADLE_OPTS", "")
+    for option in [
+        f"-Duser.home={DEFAULT_SANDBOX_HOME}",
+        "-Dkotlin.daemon.enabled=false",
+    ]:
+        if option not in gradle_opts:
+            gradle_opts = f"{gradle_opts} {option}".strip()
+    env["GRADLE_OPTS"] = gradle_opts
     return env
 
 

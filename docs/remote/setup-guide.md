@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-05-22
+Last refreshed: 2026-05-26
 
 HomeworkHelper exposes a local **Remote Agent** from the desktop app and controls it from native clients. The Remote Agent is local-first: it uses the existing FastAPI app, SQLite data, pairing tokens, and LAN/Tailscale-style private access rather than a hosted relay.
 
@@ -59,7 +59,7 @@ Core game-mirror and setup endpoints:
 
 - `GET /remote/status`, `GET /remote/capabilities`, `GET /remote/readiness`
 - `POST /remote/tokens/refresh`
-- `GET /remote/processes`, `POST /remote/processes/{id}/launch`
+- `GET /remote/processes`, `POST /remote/processes/{id}/launch`, `POST /remote/processes/{id}/stop`
 - `GET /remote/shortcuts`, `POST /remote/shortcuts/{id}/open`
 - `GET /remote/dashboard/summary`
 - `GET /remote/beholder/incidents`
@@ -96,7 +96,14 @@ Architecture reference: `docs/remote/macos-client-architecture.md`.
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch, pull-to-refresh, and a floating status message above bottom navigation. Setup owns URL/pairing/token inputs, display preferences, power readiness, diagnostics, and fake smoke guidance.
+The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch/stop, pull-to-refresh, and a floating status message above bottom navigation. Setup is split into compact **연결/페어링 · 전원 · 기기 · 앱** sections for URL/pairing/token inputs, Tailscale foundation checks, Android-local power automation, device management, app lifecycle options, diagnostics, and fake smoke guidance.
+
+Android-specific automation notes:
+
+- The app can request Tailscale VPN ON when it enters foreground and VPN OFF when it leaves foreground, but the setting is opt-in and first-time Tailscale login/VPN consent may still require direct user confirmation in the Tailscale app.
+- Wake uses SmartThings REST with PAT/OAuth authorization plus the `PC 켜기` target deviceId.
+- Sleep/restart/shutdown use the Android OpenSSH adapter after key registration and health marker verification.
+- Paired devices can be listed, revoked, and cleaned up from the Android Setup > 기기 section.
 
 ```bash
 cd remote_clients/android/HomeworkHelperRemote
@@ -128,6 +135,7 @@ python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ```
 
 Fake Remote Agent smoke is the default development loop. Physical-device real-host verification remains a later release gate after fake-host UI/API contracts pass.
+The fake smoke validates Home/Setup UI markers, PNG icon loading, launch/stop command acceptance, and token/device endpoint contracts before a real host is involved.
 
 Stateful client smoke isolation contract:
 

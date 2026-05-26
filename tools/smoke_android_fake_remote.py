@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from fake_android_remote_agent import FakeRemoteHandler, IMAGE_HITS, LAUNCHES
+from fake_android_remote_agent import FakeRemoteHandler, IMAGE_HITS, LAUNCHES, STOPS
 from http.server import ThreadingHTTPServer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -144,11 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         tap_text(args.serial, refreshed_xml, "설정")
         time.sleep(0.5)
         setup_xml = dump_ui(args.serial, "android-v3-setup", args.artifacts)
-        require_markers(setup_xml, ["연결 설정", "Remote Agent URL", "기기 이름", "6자리 페어링 코드", "페어링", "전원 준비 상태", "진단"])
-        adb(args.serial, ["shell", "input", "swipe", "500", "2300", "500", "900", "450"])
+        require_markers(setup_xml, ["연결/페어링", "Remote Agent URL", "기기 이름", "6자리 페어링 코드", "페어링", "Tailscale 기반환경", "전원", "기기", "앱"])
+        tap_text(args.serial, setup_xml, "⚙ 앱")
         time.sleep(0.5)
         setup_more_xml = dump_ui(args.serial, "android-v3-setup-sections", args.artifacts)
-        require_markers(setup_more_xml, ["Fake Remote Agent smoke", "PNG icon 전송"])
+        require_markers(setup_more_xml, ["앱 동작", "Tailscale", "Fake Remote Agent smoke", "launch/stop"])
 
         tap_text(args.serial, setup_more_xml, "홈")
         time.sleep(0.5)
@@ -159,6 +159,16 @@ def main(argv: list[str] | None = None) -> int:
         require_markers(launch_xml, ["Fake Game A 실행 요청을 접수했습니다.", "Fake Game A", "Fake Running Game", "연결됨"])
         if "fake-game-a" not in LAUNCHES:
             raise AssertionError("fake agent did not receive launch POST")
+        tap_text(args.serial, launch_xml, "■ 중단")
+        time.sleep(0.3)
+        confirm_xml = dump_ui(args.serial, "android-v3-stop-confirm", args.artifacts)
+        require_markers(confirm_xml, ["Fake Game A 중단", "중단", "취소"])
+        tap_text(args.serial, confirm_xml, "중단")
+        time.sleep(1.0)
+        stop_xml = dump_ui(args.serial, "android-v3-stop", args.artifacts)
+        require_markers(stop_xml, ["중단 요청을 접수했습니다.", "Fake Game A", "Fake Running Game", "연결됨"])
+        if "fake-game-a" not in STOPS:
+            raise AssertionError("fake agent did not receive stop POST")
         if not any("/api/dashboard/icons/" in hit for hit in IMAGE_HITS):
             raise AssertionError(f"process icon endpoint was not requested: {IMAGE_HITS}")
         if not any("/api/dashboard/resource-icons/" in hit for hit in IMAGE_HITS):
