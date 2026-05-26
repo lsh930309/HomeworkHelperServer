@@ -73,7 +73,7 @@ data class RemoteUiState(
     val lastStateRevision: String? = null,
     val processLaunchEnabled: Boolean = false,
     val processStopEnabled: Boolean = false,
-    val showDiagnostics: Boolean = true,
+    val showDiagnostics: Boolean = false,
     val powerReadiness: RemotePowerReadiness? = null,
     val automation: AutomationUiState = AutomationUiState(),
 ) {
@@ -220,7 +220,7 @@ class RemoteViewModel(
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isRefreshing = true, userMessage = null) }
+            _uiState.update { it.copy(isRefreshing = true, userMessage = successMessage) }
             runCatching { repository().fetchHomeSnapshot() }
                 .onSuccess { snapshot ->
                     val now = System.currentTimeMillis()
@@ -421,9 +421,9 @@ class RemoteViewModel(
     private fun startCommandChase(refreshAfterMs: Int?, message: String) {
         viewModelScope.launch {
             val delays = listOf((refreshAfterMs ?: 750).coerceIn(250, 3000), 1_250, 2_000)
-            delays.forEachIndexed { index, delayMs ->
+            delays.forEach { delayMs ->
                 delay(delayMs.toLong())
-                refreshWithMessage(if (index == 0) message else null)
+                refreshWithMessage(message)
             }
         }
     }

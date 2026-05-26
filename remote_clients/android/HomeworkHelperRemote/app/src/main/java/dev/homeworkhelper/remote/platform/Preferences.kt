@@ -23,7 +23,7 @@ class RemotePreferences(context: Context) {
         set(value) = preferences.edit().putLong(KEY_LAST_SYNC_MILLIS, value).apply()
 
     var showDiagnostics: Boolean
-        get() = preferences.getBoolean(KEY_SHOW_DIAGNOSTICS, true)
+        get() = preferences.getBoolean(KEY_SHOW_DIAGNOSTICS, false)
         set(value) = preferences.edit().putBoolean(KEY_SHOW_DIAGNOSTICS, value).apply()
 
     fun cachedProcesses(): List<RemoteProcess> {

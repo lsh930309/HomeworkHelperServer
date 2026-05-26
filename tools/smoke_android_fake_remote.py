@@ -88,7 +88,7 @@ def require_markers(xml: str, markers: list[str]) -> None:
 
 
 def tap_first_launch(serial: str | None, xml: str) -> None:
-    matches = re.findall(r'text="실행"[^>]*enabled="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+    matches = re.findall(r'text="(?:▶ )?실행"[^>]*enabled="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
     if not matches:
         raise AssertionError("no enabled launch button text found")
     x1, y1, x2, y2 = map(int, matches[0])
