@@ -10,6 +10,7 @@ fun localProperty(name: String, defaultValue: String = ""): String =
 
 fun localSecretFile(name: String): String =
     listOf(
+        rootProject.file("../../../local-artifacts/secrets/$name"),
         rootProject.file(name),
         rootProject.file("../../../$name"),
     )

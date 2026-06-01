@@ -37,6 +37,9 @@ import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 
+private const val TAILSCALE_CONNECT_TIMEOUT_MILLIS = 15_000L
+private const val TAILSCALE_CONNECT_POLL_MILLIS = 1_000L
+
 data class AutomationUiState(
     val tailscale: TailscaleBindingState = TailscaleBindingState(),
     val tailscaleAutomation: TailscaleAutomationPreferences = TailscaleAutomationPreferences(),
@@ -99,7 +102,9 @@ class RemoteViewModel(
     private val tailscaleBinding = TailscaleBinding(appContext)
     private val sshKeyStore = AndroidSSHKeyStore(automationPreferences)
     private val sshPowerManager = AndroidSSHPowerManager(automationPreferences)
+    private val smartThingsPatSeeded = automationPreferences.seedSmartThingsPatFromBuildConfig()
     private var autoSshAttemptSignature: String? = null
+    private var tailscaleConnectSequence: Int = 0
 
     private val _uiState = MutableStateFlow(
         RemoteUiState(
@@ -109,7 +114,11 @@ class RemoteViewModel(
             processes = preferences.cachedProcesses(),
             lastSyncMillis = preferences.lastSyncMillis,
             showDiagnostics = preferences.showDiagnostics,
-            userMessage = "Remote Agent URL과 페어링 코드가 있으면 바로 연결할 수 있습니다.",
+            userMessage = if (smartThingsPatSeeded) {
+                "로컬 SmartThings debug token을 앱 보안 저장소에 보관했습니다."
+            } else {
+                "Remote Agent URL과 페어링 코드가 있으면 바로 연결할 수 있습니다."
+            },
             automation = AutomationUiState(
                 tailscale = tailscaleBinding.inspect(),
                 tailscaleAutomation = automationPreferences.loadTailscaleAutomation(),
@@ -120,16 +129,12 @@ class RemoteViewModel(
     )
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
 
-    init {
-        if (_uiState.value.baseUrl.isNotBlank()) {
-            refresh()
-        }
-    }
-
     fun onAppForeground() {
         updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
         if (_uiState.value.automation.tailscaleAutomation.connectOnAppForeground) {
-            requestTailscaleConnect("앱 실행")
+            requestTailscaleConnect("앱 실행", refreshWhenReady = true)
+        } else if (_uiState.value.baseUrl.isNotBlank()) {
+            refresh()
         }
     }
 
@@ -285,32 +290,6 @@ class RemoteViewModel(
         }
     }
 
-    fun refreshToken() {
-        if (tokenStore.loadToken().isNullOrBlank()) {
-            _uiState.update { it.copy(userMessage = "갱신할 로컬 토큰이 없습니다. 먼저 페어링하세요.") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isDevicesBusy = true, userMessage = null) }
-            runCatching { repository().refreshToken() }
-                .onSuccess { response ->
-                    tokenStore.saveToken(response.token)
-                    _uiState.update {
-                        it.copy(
-                            isDevicesBusy = false,
-                            hasToken = true,
-                            userMessage = "'${response.name}' 디바이스 토큰을 갱신했습니다.",
-                        )
-                    }
-                    refreshDevices(updateMessage = false)
-                }
-                .onFailure { error ->
-                    _uiState.update { it.copy(isDevicesBusy = false) }
-                    applyFailure(error)
-                }
-        }
-    }
-
     fun refreshDevices(updateMessage: Boolean = true) {
         if (tokenStore.loadToken().isNullOrBlank()) {
             if (updateMessage) _uiState.update { it.copy(userMessage = "기기 목록을 보려면 먼저 페어링하세요.") }
@@ -438,12 +417,12 @@ class RemoteViewModel(
     }
 
     fun requestTailscaleConnect(trigger: String = "수동") {
-        updateAutomation { it.copy(tailscale = tailscaleBinding.requestVpnConnect()) }
-        _uiState.update { it.copy(userMessage = "$trigger Tailscale CONNECT_VPN 자동화를 요청했습니다. 최초 권한/로그인은 Tailscale 앱에서 승인해야 할 수 있습니다.") }
+        requestTailscaleConnect(trigger, refreshWhenReady = false)
     }
 
     fun requestTailscaleDisconnect(trigger: String = "수동") {
-        updateAutomation { it.copy(tailscale = tailscaleBinding.requestVpnDisconnect()) }
+        tailscaleConnectSequence += 1
+        updateAutomation { it.copy(isTailscaleBusy = false, tailscale = tailscaleBinding.requestVpnDisconnect()) }
         _uiState.update { it.copy(userMessage = "$trigger Tailscale DISCONNECT_VPN 자동화를 요청했습니다.") }
     }
 
@@ -457,38 +436,61 @@ class RemoteViewModel(
         _uiState.update { it.copy(userMessage = "Tailscale 설치 페이지를 열었습니다.") }
     }
 
-    fun ensureTailscaleAndProbe() {
-        if (_uiState.value.baseUrl.isBlank()) {
-            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
+    fun checkClientTailscaleAndRefresh() {
+        requestTailscaleConnect("클라이언트 확인", refreshWhenReady = true)
+    }
+
+    private fun requestTailscaleConnect(trigger: String, refreshWhenReady: Boolean) {
+        val initial = tailscaleBinding.requestVpnConnect()
+        val attempt = ++tailscaleConnectSequence
+        updateAutomation {
+            it.copy(
+                isTailscaleBusy = initial.installed && !initial.vpnActive,
+                tailscale = initial,
+            )
+        }
+        if (!initial.installed) {
+            _uiState.update { it.copy(userMessage = initial.message) }
             return
         }
+        _uiState.update { it.copy(userMessage = "$trigger Tailscale CONNECT_VPN 요청을 보냈고 Android-local VPN 활성화를 확인합니다.") }
         viewModelScope.launch {
-            updateAutomation { it.copy(isTailscaleBusy = true, tailscale = tailscaleBinding.inspect()) }
-            runCatching { repository().ensureTailscale() }
-                .onSuccess { result ->
-                    val acceptedUrl = result.suggestedBaseUrls.firstOrNull { candidate -> repository().probe(candidate) }
-                    if (acceptedUrl != null) {
-                        preferences.baseUrl = acceptedUrl
-                    }
-                    updateAutomation {
-                        it.copy(
-                            isTailscaleBusy = false,
-                            tailscale = tailscaleBinding.inspect().copy(suggestedBaseUrls = result.suggestedBaseUrls, message = result.message ?: it.tailscale.message),
-                        )
-                    }
-                    _uiState.update {
-                        it.copy(
-                            baseUrl = acceptedUrl ?: it.baseUrl,
-                            userMessage = acceptedUrl?.let { url -> "Tailscale URL을 확인하고 저장했습니다: $url" }
-                                ?: (result.message ?: "Tailscale 후보 URL을 확인했습니다."),
-                        )
-                    }
+            val finalState = waitForTailscaleActive(initial.lastAutomationAction.ifBlank { "CONNECT_VPN broadcast 전송됨" })
+            if (attempt != tailscaleConnectSequence) return@launch
+            updateAutomation { it.copy(isTailscaleBusy = false, tailscale = finalState) }
+            val baseUrl = _uiState.value.baseUrl.trim()
+            when {
+                finalState.vpnActive && refreshWhenReady && baseUrl.isNotBlank() -> {
+                    refreshWithMessage("Tailscale 연결 확인 후 게임 목록을 동기화했습니다.")
                 }
-                .onFailure { error ->
-                    updateAutomation { it.copy(isTailscaleBusy = false) }
-                    _uiState.update { it.copy(userMessage = error.message ?: "Tailscale 확인 실패") }
+                finalState.vpnActive -> {
+                    _uiState.update { it.copy(userMessage = "Android-local Tailscale VPN 활성화를 확인했습니다.") }
+                }
+                else -> {
+                    _uiState.update { it.copy(userMessage = finalState.message) }
+                }
             }
         }
+    }
+
+    private suspend fun waitForTailscaleActive(lastAutomationAction: String): TailscaleBindingState {
+        var latest = tailscaleBinding.inspect(lastAutomationAction)
+        if (!latest.installed) return latest
+        if (latest.vpnActive) {
+            return latest.copy(message = "Android-local Tailscale VPN 활성화를 확인했습니다.")
+        }
+        val deadlineMillis = System.currentTimeMillis() + TAILSCALE_CONNECT_TIMEOUT_MILLIS
+        while (System.currentTimeMillis() < deadlineMillis) {
+            delay(TAILSCALE_CONNECT_POLL_MILLIS)
+            latest = tailscaleBinding.inspect(lastAutomationAction)
+            updateAutomation { it.copy(tailscale = latest) }
+            if (latest.vpnActive) {
+                return latest.copy(message = "Android-local Tailscale VPN 활성화를 확인했습니다.")
+            }
+        }
+        return latest.copy(
+            message = "Tailscale CONNECT_VPN 요청 후에도 Android VPN 활성 네트워크가 감지되지 않았습니다. Tailscale 앱의 연결 상태를 직접 확인하세요.",
+        )
     }
 
     fun repairEnvironment() {
@@ -661,17 +663,6 @@ class RemoteViewModel(
         when (action) {
             PowerAction.Wake -> wakeWithSmartThings()
             PowerAction.Sleep, PowerAction.Restart, PowerAction.Shutdown -> executeSshPower(action)
-        }
-    }
-
-    fun clearLocalToken() {
-        tokenStore.clearToken()
-        _uiState.update {
-            it.copy(
-                hasToken = false,
-                availability = RemoteAvailability.AuthRejected,
-                userMessage = "로컬 토큰을 삭제했습니다. 호스트에서 기기를 revoke하려면 기기 탭을 확인하세요.",
-            )
         }
     }
 

@@ -69,7 +69,14 @@ class TailscaleBinding(private val context: Context) {
         }
         val intent = Intent(action).setPackage(TAILSCALE_PACKAGE)
         context.sendBroadcast(intent)
-        return inspect("$label broadcast 전송됨")
+        val inspected = inspect("$label broadcast 전송됨")
+        return inspected.copy(
+            message = if (inspected.vpnActive) {
+                "Tailscale $label 요청 후 VPN 활성 네트워크를 감지했습니다."
+            } else {
+                "Tailscale $label 요청을 보냈습니다. Android VPN 활성화까지 잠시 걸릴 수 있어 상태를 추적합니다."
+            },
+        )
     }
 
     private fun isInstalled(): Boolean {

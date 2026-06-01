@@ -50,23 +50,23 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 
 Setup is intentionally compact and mirrors the macOS settings hierarchy where Android has an equivalent:
 
-- **연결/페어링**: Remote Agent URL, device name, pairing code, token refresh/delete, Tailscale install/open/status, host tailnet URL probing, and VPN ON request.
+- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, Tailscale install/open/status, Android-local VPN readiness check, and VPN ON request.
 - **전원**: readiness, OpenSSH key/health setup, SmartThings PAT/OAuth and `PC 켜기` device auto-selection.
 - **기기**: paired-device refresh, revoke, and revoked-device cleanup.
 - **앱**: diagnostics toggle, optional Tailscale ON at app foreground, optional Tailscale OFF at app background, and manual VPN ON/OFF requests.
 
-Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN and then re-inspects Android VPN state. First-time account login, Android VPN consent, and Tailscale approval are still explicit user-confirmation steps.
+Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN, polls Android-local VPN state, and only then refreshes the host snapshot. The Android client does not call host-side Tailscale ensure/health mutation endpoints.
 
 
 ## Local SmartThings wake defaults
 
 The debug build has a personal default wake target for `PC 켜기` baked into BuildConfig.
 The `deviceId` selects the target only; SmartThings REST still requires an authenticated actor.
-Secrets must stay out of git: put a temporary local token in repo-root `SmartThings_Token` or the untracked `local.properties` file only when building a private APK.
+Secrets must stay out of git: prefer `local-artifacts/secrets/SmartThings_Token`, or use an untracked `local.properties` override only when building a private APK.
 
 SmartThings CLI can reuse an existing login or a PAT, but it does not mint PATs from the command line.
 Generate a short-lived PAT at `https://account.smartthings.com/tokens`, then either paste it into the Android app or keep it local for a private debug APK.
-The checked-in Gradle script reads `SmartThings_Token` first from the Android project root and then from the repository root; the file is ignored by git.
+The checked-in Gradle script reads `smartthings.pat` from Android `local.properties` first, then `local-artifacts/secrets/SmartThings_Token`, then legacy Android-project/repository-root `SmartThings_Token` files.
 For one-off CLI verification:
 
 ```bash

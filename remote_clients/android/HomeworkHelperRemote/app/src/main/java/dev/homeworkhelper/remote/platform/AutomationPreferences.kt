@@ -107,6 +107,13 @@ class AutomationPreferences(context: Context) {
         secureStore.save(KEY_ST_PAT, value.trim())
     }
 
+    fun seedSmartThingsPatFromBuildConfig(): Boolean {
+        val debugPat = BuildConfig.SMARTTHINGS_DEBUG_PAT.takeIf { it.isNotBlank() } ?: return false
+        if (secureStore.contains(KEY_ST_PAT)) return false
+        secureStore.save(KEY_ST_PAT, debugPat)
+        return true
+    }
+
     fun loadSmartThingsPat(): String? = secureStore.load(KEY_ST_PAT)?.takeIf { it.isNotBlank() }
         ?: BuildConfig.SMARTTHINGS_DEBUG_PAT.takeIf { it.isNotBlank() }
 

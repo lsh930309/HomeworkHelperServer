@@ -45,7 +45,7 @@ curl -X POST http://127.0.0.1:8000/remote/pair/start
 2. Enter Remote Agent URL, device name, and pairing code in the client.
 3. Client calls `POST /remote/pair/confirm` and stores the returned device token.
 4. Protected `/remote/*` endpoints use `Authorization: Bearer <token>`.
-5. Token refresh and device revocation use `/remote/tokens/refresh` and `/remote/devices*`.
+5. Android keeps the returned device token stable until explicit device revoke via `/remote/devices*`.
 
 Token storage requirements:
 
@@ -58,7 +58,6 @@ Token storage requirements:
 Core game-mirror and setup endpoints:
 
 - `GET /remote/status`, `GET /remote/capabilities`, `GET /remote/readiness`
-- `POST /remote/tokens/refresh`
 - `GET /remote/processes`, `POST /remote/processes/{id}/launch`, `POST /remote/processes/{id}/stop`
 - `GET /remote/shortcuts`, `POST /remote/shortcuts/{id}/open`
 - `GET /remote/dashboard/summary`
@@ -68,7 +67,6 @@ Core game-mirror and setup endpoints:
 - `POST /remote/mobile-sessions/start`, `POST /remote/mobile-sessions/end`
 - `GET /remote/devices`, `DELETE /remote/devices/{id}`, `DELETE /remote/devices/revoked`
 - `GET /remote/logging/config`, `PUT /remote/logging/config`
-- `POST /remote/tailscale/ensure`
 - `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
 
 Power boundary:
@@ -96,11 +94,11 @@ Architecture reference: `docs/remote/macos-client-architecture.md`.
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch/stop, pull-to-refresh, and a floating status message above bottom navigation. Setup is split into compact **연결/페어링 · 전원 · 기기 · 앱** sections for URL/pairing/token inputs, Tailscale foundation checks, Android-local power automation, device management, app lifecycle options, diagnostics, and fake smoke guidance.
+The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch/stop, pull-to-refresh, and a floating status message above bottom navigation. Setup is split into compact **연결/페어링 · 전원 · 기기 · 앱** sections for URL/pairing/stable token status, Tailscale foundation checks, Android-local power automation, device management, app lifecycle options, diagnostics, and fake smoke guidance.
 
 Android-specific automation notes:
 
-- The app can request Tailscale VPN ON when it enters foreground and VPN OFF when it leaves foreground, but the setting is opt-in and first-time Tailscale login/VPN consent may still require direct user confirmation in the Tailscale app.
+- The app can request Tailscale VPN ON when it enters foreground and VPN OFF when it leaves foreground, then polls Android-local VPN state before refreshing. Android does not call host-side Tailscale ensure endpoints.
 - Wake uses SmartThings REST with PAT/OAuth authorization plus the `PC 켜기` target deviceId.
 - Sleep/restart/shutdown use the Android OpenSSH adapter after key registration and health marker verification.
 - Paired devices can be listed, revoked, and cleaned up from the Android Setup > 기기 section.

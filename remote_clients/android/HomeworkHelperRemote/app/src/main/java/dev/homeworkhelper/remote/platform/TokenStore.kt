@@ -28,10 +28,7 @@ class AndroidTokenStore(context: Context) : TokenStore {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_LENGTH, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        }.getOrElse {
-            clearToken()
-            null
-        }
+        }.getOrNull()
     }
 
     override fun saveToken(token: String) {

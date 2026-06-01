@@ -26,10 +26,7 @@ class SecureStringStore(
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(GCM_TAG_LENGTH, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        }.getOrElse {
-            clear(key)
-            null
-        }
+        }.getOrNull()
     }
 
     fun save(key: String, value: String) {
@@ -43,6 +40,8 @@ class SecureStringStore(
     fun clear(key: String) {
         preferences.edit().remove(key).apply()
     }
+
+    fun contains(key: String): Boolean = preferences.contains(key)
 
     private fun secretKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }

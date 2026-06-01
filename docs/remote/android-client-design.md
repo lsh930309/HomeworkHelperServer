@@ -171,14 +171,12 @@ Required for Home:
 Required for setup:
 
 - `POST /remote/pair/confirm`
-- `POST /remote/tokens/refresh`
 - `GET /remote/devices`
 - `DELETE /remote/devices/{id}`
 - `DELETE /remote/devices/revoked`
 
 Required for automation setup:
 
-- `POST /remote/tailscale/ensure`
 - `GET /remote/power/status`
 - `GET /remote/power/setup`
 - `POST /remote/power/ssh-key`
@@ -229,9 +227,10 @@ Android reachability and state mirroring:
 - HTTP status probe first.
 - Friendly messages for timeout, DNS, connection refused, 401/403.
 - Preserve last successful game snapshot.
+- Preserve the paired device token until explicit device revoke; Android should not rotate or locally delete it as part of ordinary setup.
 - When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
 - When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
-- Tailscale app binding is an environment-foundation helper, not a replacement network stack.
+- Tailscale app binding is Android-local only: request the installed Tailscale app to connect, poll local VPN state, and never mutate host-side Tailscale health.
 
 ## 10. Verification plan
 

@@ -70,11 +70,6 @@ class RemoteApiClient(
         )
     }
 
-    suspend fun ensureTailscale(): RemoteTailscaleEnsure {
-        return JSONObject(request("remote/tailscale/ensure", method = "POST", body = "{}"))
-            .toRemoteTailscaleEnsure()
-    }
-
     suspend fun confirmPairing(code: String, deviceName: String): PairingConfirmResponse {
         val payload = JSONObject()
             .put("code", code)
@@ -82,11 +77,6 @@ class RemoteApiClient(
             .put("platform", "android")
             .toString()
         return JSONObject(request("remote/pair/confirm", method = "POST", body = payload))
-            .toPairingConfirmResponse()
-    }
-
-    suspend fun refreshToken(): PairingConfirmResponse {
-        return JSONObject(request("remote/tokens/refresh", method = "POST", body = "{}"))
             .toPairingConfirmResponse()
     }
 

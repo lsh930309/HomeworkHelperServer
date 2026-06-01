@@ -55,8 +55,6 @@ fun SetupTab(
     onBaseUrlChange: (String) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onPair: (String) -> Unit,
-    onClearToken: () -> Unit,
-    onRefreshToken: () -> Unit,
     onRefreshDevices: () -> Unit,
     onRevokeDevice: (RemoteDevice) -> Unit,
     onPurgeRevokedDevices: () -> Unit,
@@ -64,7 +62,7 @@ fun SetupTab(
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
-    onEnsureTailscale: () -> Unit,
+    onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
     onTailscaleDisconnect: () -> Unit,
     onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
@@ -111,12 +109,10 @@ fun SetupTab(
                         onBaseUrlChange = onBaseUrlChange,
                         onDeviceNameChange = onDeviceNameChange,
                         onPair = onPair,
-                        onClearToken = onClearToken,
-                        onRefreshToken = onRefreshToken,
                         onInspectTailscale = onInspectTailscale,
                         onOpenTailscale = onOpenTailscale,
                         onInstallTailscale = onInstallTailscale,
-                        onEnsureTailscale = onEnsureTailscale,
+                        onCheckClientTailscale = onCheckClientTailscale,
                         onTailscaleConnect = onTailscaleConnect,
                         onRepairEnvironment = onRepairEnvironment,
                     )
@@ -158,12 +154,10 @@ private fun ConnectionSection(
     onBaseUrlChange: (String) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onPair: (String) -> Unit,
-    onClearToken: () -> Unit,
-    onRefreshToken: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
-    onEnsureTailscale: () -> Unit,
+    onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
     onRepairEnvironment: () -> Unit,
 ) {
@@ -175,10 +169,7 @@ private fun ConnectionSection(
             OutlinedTextField(value = pairingCode, onValueChange = { pairingCode = it.filter(Char::isDigit).take(6) }, label = { Text("6자리 페어링 코드") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.weight(1f))
             Button(onClick = { onPair(pairingCode) }, enabled = !state.isPairing) { Text(if (state.isPairing) "페어링 중" else "페어링") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefreshToken, enabled = state.hasToken && !state.isDevicesBusy, modifier = Modifier.weight(1f)) { Text("토큰 갱신") }
-            OutlinedButton(onClick = onClearToken, enabled = state.hasToken, modifier = Modifier.weight(1f)) { Text("로컬 토큰 삭제") }
-        }
+        Text("페어링 토큰은 명시적 기기 revoke 전까지 유지됩니다. 네트워크 오류나 앱 재시작만으로 갱신/삭제하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Button(
             onClick = onRepairEnvironment,
             enabled = state.baseUrl.isNotBlank() && !state.setupRepairInFlight,
@@ -188,7 +179,7 @@ private fun ConnectionSection(
         }
         Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    TailscaleFoundationSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onEnsureTailscale, onTailscaleConnect)
+    TailscaleFoundationSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onCheckClientTailscale, onTailscaleConnect)
 }
 
 @Composable
@@ -197,11 +188,11 @@ private fun TailscaleFoundationSection(
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
-    onEnsureTailscale: () -> Unit,
+    onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
 ) {
     val tailscale = state.automation.tailscale
-    SettingsCard(title = "Tailscale 기반환경", subtitle = "설치/실행/VPN 상태를 확인하고 host tailnet URL을 찾습니다.") {
+    SettingsCard(title = "Tailscale 기반환경", subtitle = "Android 기기의 Tailscale 앱과 VPN 상태만 확인합니다.") {
         InfoRow("설치", if (tailscale.installed) "감지됨" else "없음")
         InfoRow("VPN", if (tailscale.vpnActive) "활성" else "미감지")
         Text(tailscale.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -218,7 +209,7 @@ private fun TailscaleFoundationSection(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON 요청") }
-            Button(onClick = onEnsureTailscale, enabled = !state.automation.isTailscaleBusy, modifier = Modifier.weight(1f)) { Text(if (state.automation.isTailscaleBusy) "확인 중" else "Host URL 확인") }
+            Button(onClick = onCheckClientTailscale, enabled = tailscale.installed && !state.automation.isTailscaleBusy, modifier = Modifier.weight(1f)) { Text(if (state.automation.isTailscaleBusy) "확인 중" else "클라이언트 확인") }
         }
     }
 }

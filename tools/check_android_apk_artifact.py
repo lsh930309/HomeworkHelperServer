@@ -22,6 +22,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
 DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+DEFAULT_BUILD_CONFIG = ANDROID_ROOT / "app" / "build" / "generated" / "source" / "buildConfig" / "debug" / "dev" / "homeworkhelper" / "remote" / "BuildConfig.java"
+LOCAL_SMARTTHINGS_TOKEN = PROJECT_ROOT / "local-artifacts" / "secrets" / "SmartThings_Token"
 DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
 EXPECTED_PACKAGE = "dev.homeworkhelper.remote"
 EXPECTED_VERSION_NAME = "0.1.0"
@@ -43,6 +45,7 @@ class ApkReport:
     min_sdk: str
     target_sdk: str
     permissions: set[str]
+    smartthings_debug_pat_length: int | None
 
 
 def _sdk_root() -> Path:
@@ -88,7 +91,17 @@ def inspect_apk(apk: Path, aapt: Path) -> ApkReport:
         min_sdk=_extract(r"sdkVersion:'([^']+)'", badging, "minSdk"),
         target_sdk=_extract(r"targetSdkVersion:'([^']+)'", badging, "targetSdk"),
         permissions=permissions,
+        smartthings_debug_pat_length=_smartthings_debug_pat_length(),
     )
+
+
+def _smartthings_debug_pat_length(build_config: Path = DEFAULT_BUILD_CONFIG) -> int | None:
+    if not build_config.exists():
+        return None
+    match = re.search(r'SMARTTHINGS_DEBUG_PAT = "([^"]*)";', build_config.read_text(encoding="utf-8"))
+    if not match:
+        return None
+    return len(match.group(1))
 
 
 def _print_report(report: ApkReport) -> None:
@@ -102,6 +115,8 @@ def _print_report(report: ApkReport) -> None:
     print("- permissions:")
     for permission in sorted(report.permissions):
         print(f"  - {permission}")
+    if report.smartthings_debug_pat_length is not None:
+        print(f"- smartthings_debug_pat_present: {report.smartthings_debug_pat_length > 0}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,6 +148,9 @@ def main(argv: list[str] | None = None) -> int:
         missing_permissions = sorted(EXPECTED_PERMISSIONS - report.permissions)
         if missing_permissions:
             failures.append(f"missing permissions: {', '.join(missing_permissions)}")
+        if LOCAL_SMARTTHINGS_TOKEN.exists() and LOCAL_SMARTTHINGS_TOKEN.stat().st_size > 0:
+            if not report.smartthings_debug_pat_length:
+                failures.append("local SmartThings token exists but generated BuildConfig.SMARTTHINGS_DEBUG_PAT is empty")
 
         if failures:
             print("Android APK artifact failed:")

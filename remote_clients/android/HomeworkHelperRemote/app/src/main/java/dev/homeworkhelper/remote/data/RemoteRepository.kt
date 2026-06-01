@@ -37,10 +37,6 @@ class RemoteRepository(
         return api.confirmPairing(code, deviceName)
     }
 
-    suspend fun refreshToken(): PairingConfirmResponse {
-        return api.refreshToken()
-    }
-
     suspend fun devices(): List<RemoteDevice> {
         return api.devices()
     }
@@ -57,11 +53,4 @@ class RemoteRepository(
         return api.registerPowerSSHKey(publicKey, label)
     }
 
-    suspend fun ensureTailscale(): RemoteTailscaleEnsure {
-        return api.ensureTailscale()
-    }
-
-    suspend fun probe(candidateBaseUrl: String): Boolean {
-        return runCatching { RemoteApiClient(candidateBaseUrl, token).status() }.isSuccess
-    }
 }
