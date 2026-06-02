@@ -26,6 +26,7 @@ DEFAULT_BUILD_CONFIG = ANDROID_ROOT / "app" / "build" / "generated" / "source" /
 LOCAL_SMARTTHINGS_TOKEN = PROJECT_ROOT / "local-artifacts" / "secrets" / "SmartThings_Token"
 DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
 EXPECTED_PACKAGE = "dev.homeworkhelper.remote"
+EXPECTED_VERSION_CODE = "1"
 EXPECTED_VERSION_NAME = "0.1.0"
 EXPECTED_MIN_SDK = "26"
 EXPECTED_TARGET_SDK = "36"
@@ -41,6 +42,7 @@ class ApkReport:
     apk: Path
     aapt: Path
     package_name: str
+    version_code: str
     version_name: str
     min_sdk: str
     target_sdk: str
@@ -87,6 +89,7 @@ def inspect_apk(apk: Path, aapt: Path) -> ApkReport:
         apk=apk,
         aapt=aapt,
         package_name=_extract(r"package: name='([^']+)'", badging, "package name"),
+        version_code=_extract(r"versionCode='([^']+)'", badging, "versionCode"),
         version_name=_extract(r"versionName='([^']+)'", badging, "versionName"),
         min_sdk=_extract(r"sdkVersion:'([^']+)'", badging, "minSdk"),
         target_sdk=_extract(r"targetSdkVersion:'([^']+)'", badging, "targetSdk"),
@@ -109,6 +112,7 @@ def _print_report(report: ApkReport) -> None:
     print(f"- apk: {report.apk}")
     print(f"- aapt: {report.aapt}")
     print(f"- package: {report.package_name}")
+    print(f"- version_code: {report.version_code}")
     print(f"- version_name: {report.version_name}")
     print(f"- min_sdk: {report.min_sdk}")
     print(f"- target_sdk: {report.target_sdk}")
@@ -123,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check the Android Remote debug APK packaged manifest contract.")
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK)
     parser.add_argument("--aapt", default=None)
+    parser.add_argument("--expected-version-code", default=EXPECTED_VERSION_CODE)
+    parser.add_argument("--expected-version-name", default=EXPECTED_VERSION_NAME)
+    parser.add_argument("--expected-min-sdk", default=EXPECTED_MIN_SDK)
+    parser.add_argument("--expected-target-sdk", default=EXPECTED_TARGET_SDK)
     args = parser.parse_args(argv)
 
     try:
@@ -139,12 +147,14 @@ def main(argv: list[str] | None = None) -> int:
         failures: list[str] = []
         if report.package_name != EXPECTED_PACKAGE:
             failures.append(f"expected package {EXPECTED_PACKAGE}, found {report.package_name}")
-        if report.version_name != EXPECTED_VERSION_NAME:
-            failures.append(f"expected versionName {EXPECTED_VERSION_NAME}, found {report.version_name}")
-        if report.min_sdk != EXPECTED_MIN_SDK:
-            failures.append(f"expected minSdk {EXPECTED_MIN_SDK}, found {report.min_sdk}")
-        if report.target_sdk != EXPECTED_TARGET_SDK:
-            failures.append(f"expected targetSdk {EXPECTED_TARGET_SDK}, found {report.target_sdk}")
+        if report.version_code != args.expected_version_code:
+            failures.append(f"expected versionCode {args.expected_version_code}, found {report.version_code}")
+        if report.version_name != args.expected_version_name:
+            failures.append(f"expected versionName {args.expected_version_name}, found {report.version_name}")
+        if report.min_sdk != args.expected_min_sdk:
+            failures.append(f"expected minSdk {args.expected_min_sdk}, found {report.min_sdk}")
+        if report.target_sdk != args.expected_target_sdk:
+            failures.append(f"expected targetSdk {args.expected_target_sdk}, found {report.target_sdk}")
         missing_permissions = sorted(EXPECTED_PERMISSIONS - report.permissions)
         if missing_permissions:
             failures.append(f"missing permissions: {', '.join(missing_permissions)}")

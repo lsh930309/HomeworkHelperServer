@@ -13,6 +13,7 @@ def _config():
         "targets": {
             "windows-host": {"version": "1.1.9", "build": 11},
             "macos-client": {"version": "0.2.0", "build": 3},
+            "android-client": {"version": "0.1.0", "build": 1},
         },
     }
 
@@ -94,7 +95,7 @@ def test_version_config_is_local_state_and_example_removed():
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
     assert config["schema"] == 1
-    assert set(config["targets"]) == {"windows-host", "macos-client"}
+    assert {"windows-host", "macos-client", "android-client"} <= set(config["targets"])
     for payload in config["targets"].values():
         assert isinstance(payload["version"], str)
         assert isinstance(payload["build"], int)
@@ -168,6 +169,7 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
         "HomeworkHelper_v1.2.0_b1_gabc1234_Setup.exe",
         "HomeworkHelper_v1.2.0_b1_gabc1234_Portable.zip",
         "HomeworkHelperRemote_v0.2.0_b1_gabc1234.pkg",
+        "HomeworkHelperRemoteAndroid_v0.1.0_b1_gabc1234.apk",
     ]:
         (release_dir / filename).write_text("artifact", encoding="utf-8")
     (release_dir / "notes.txt").write_text("keep", encoding="utf-8")
@@ -175,7 +177,7 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
     build.archive_old_files(_DummyGui(), {"target": "windows-host"}, prune_archives=False)
 
     archived = sorted(path.relative_to(archives_dir).as_posix() for path in archives_dir.rglob("*") if path.is_file())
-    assert len(archived) == 3
+    assert len(archived) == 4
     assert any(
         path.startswith("windows-host/installer/")
         and path.endswith("/HomeworkHelper_v1.2.0_b1_gabc1234_Setup.exe")
@@ -189,6 +191,11 @@ def test_release_archive_moves_root_artifacts_into_target_type_buckets(tmp_path,
     assert any(
         path.startswith("macos-client/pkg/")
         and path.endswith("/HomeworkHelperRemote_v0.2.0_b1_gabc1234.pkg")
+        for path in archived
+    )
+    assert any(
+        path.startswith("android-client/apk/")
+        and path.endswith("/HomeworkHelperRemoteAndroid_v0.1.0_b1_gabc1234.apk")
         for path in archived
     )
     assert (release_dir / "notes.txt").exists()

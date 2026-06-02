@@ -336,6 +336,9 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         'SmartThings_Token',
         'local-artifacts/secrets/$name',
         'localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")',
+        'homeworkhelper.android.debugStoreFile',
+        'signingConfigs',
+        'getByName("debug")',
         'buildConfig = true',
         'local.properties',
     ]:

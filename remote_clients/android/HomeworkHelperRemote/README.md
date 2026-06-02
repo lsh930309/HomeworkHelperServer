@@ -28,6 +28,36 @@ export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
 
 The APK is still produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
+## Wireless ADB build/install helper
+
+The repository root has `build_android_remote.py` for the host-side release loop:
+
+```bash
+./.venv/bin/python build_android_remote.py
+```
+
+Phone-side setup remains manual: enable Wi-Fi, Tailscale, Developer options >
+Wireless debugging, then open the pairing-code screen when pairing is needed.
+The script reads `tailscale status --json` and auto-selects the only registered
+Android peer even when that peer is currently offline. If multiple Android
+devices exist, specify one with `--tailscale-device <hostname>` or
+`HH_ANDROID_TAILSCALE_DEVICE=<hostname>`. `--device-ip`/`HH_ANDROID_DEVICE_IP`
+remain available as manual overrides. After the Tailscale IP is resolved, the
+script uses `adb mdns services` when available, otherwise prompts for the
+pair/connect ports shown on the phone, builds the debug APK with the
+`android-client` version target, copies it to `release/`, archives old Android
+APKs under `release/archives/android-client/apk/`, and runs `adb install -r`.
+
+The helper signs its debug APKs with a stable local keystore at
+`local-artifacts/android-signing/homeworkhelper-android-debug.keystore`
+(untracked). Before install it compares the installed package signature with the
+new APK. If an older app was signed with a different debug key, the default is a
+safe failure. For the one-time migration where app data loss is acceptable:
+
+```bash
+./.venv/bin/python build_android_remote.py --uninstall-on-signature-mismatch
+```
+
 ## Implementation source of truth
 
 - `docs/remote/macos-client-architecture.md` — reference macOS client behavior and contracts.
