@@ -18,6 +18,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import build
 from src.core.tailscale import TailscalePeer, TailscaleSnapshot, tailscale_status
@@ -44,6 +45,10 @@ ADB_TLS_PAIRING_SERVICE = "_adb-tls-pairing._tcp"
 ADB_TLS_CONNECT_SERVICE = "_adb-tls-connect._tcp"
 PACKAGE_NAME = "dev.homeworkhelper.remote"
 MAIN_ACTIVITY = f"{PACKAGE_NAME}/.MainActivity"
+REMOTE_AGENT_DEFAULT_SCHEME = "http"
+REMOTE_AGENT_DEFAULT_PORT = 8000
+REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY = "homeworkhelper.android.defaultRemoteBaseUrl"
+_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 
 @dataclass(frozen=True)
@@ -136,8 +141,41 @@ def android_release_apk_path(version_info: dict) -> Path:
     return build.RELEASE_DIR / build.release_filename(APK_PREFIX, version_info, "", "apk")
 
 
-def create_gradle_assemble_command(version_info: dict, *, debug_keystore: Path = DEFAULT_DEBUG_KEYSTORE) -> list[str]:
-    return [
+def normalize_remote_base_url(value: str) -> str:
+    candidate = value.strip().rstrip("/")
+    if not candidate:
+        return ""
+    if not _URL_SCHEME_RE.match(candidate):
+        candidate = f"{REMOTE_AGENT_DEFAULT_SCHEME}://{candidate}"
+
+    parsed = urlsplit(candidate)
+    if not parsed.scheme or not parsed.netloc:
+        return candidate
+
+    try:
+        has_port = parsed.port is not None
+    except ValueError:
+        has_port = ":" in parsed.netloc.rsplit("@", 1)[-1]
+    if has_port:
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query)).rstrip("/")
+
+    netloc = parsed.netloc
+    host_part = netloc.rsplit("@", 1)[-1]
+    if ":" in host_part and not host_part.startswith("["):
+        prefix = netloc[: -len(host_part)]
+        netloc = f"{prefix}[{host_part}]:{REMOTE_AGENT_DEFAULT_PORT}"
+    else:
+        netloc = f"{netloc}:{REMOTE_AGENT_DEFAULT_PORT}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", parsed.query)).rstrip("/")
+
+
+def create_gradle_assemble_command(
+    version_info: dict,
+    *,
+    debug_keystore: Path = DEFAULT_DEBUG_KEYSTORE,
+    default_remote_base_url: str = "",
+) -> list[str]:
+    command = [
         "./gradlew",
         ":app:assembleDebug",
         "--stacktrace",
@@ -148,6 +186,10 @@ def create_gradle_assemble_command(version_info: dict, *, debug_keystore: Path =
         f"-Phomeworkhelper.android.debugKeyAlias={DEBUG_KEY_ALIAS}",
         f"-Phomeworkhelper.android.debugKeyPassword={DEBUG_KEYSTORE_PASSWORD}",
     ]
+    normalized_base_url = normalize_remote_base_url(default_remote_base_url)
+    if normalized_base_url:
+        command.append(f"-P{REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY}={normalized_base_url}")
+    return command
 
 
 def keytool_path() -> str:
@@ -264,12 +306,20 @@ def archive_release_artifacts(
     return archived
 
 
-def build_android_apk(version_info: dict) -> None:
+def build_android_apk(version_info: dict, *, default_remote_base_url: str = "") -> None:
     readiness = [sys.executable, "tools/check_android_sdk_readiness.py"]
     _run(readiness, env=build_environment())
     debug_keystore = ensure_debug_keystore()
     print(f"  ✓ debug signing keystore: {debug_keystore}")
-    _run(create_gradle_assemble_command(version_info, debug_keystore=debug_keystore), cwd=ANDROID_ROOT, env=build_environment())
+    _run(
+        create_gradle_assemble_command(
+            version_info,
+            debug_keystore=debug_keystore,
+            default_remote_base_url=default_remote_base_url,
+        ),
+        cwd=ANDROID_ROOT,
+        env=build_environment(),
+    )
     if not DEFAULT_APK.exists():
         raise RuntimeError(f"Gradle build completed but APK was not found: {DEFAULT_APK}")
 
@@ -534,6 +584,26 @@ def resolve_tailscale_device_ip(selector: str | None = None) -> str:
     return device_ip
 
 
+def resolve_default_remote_base_url(host_url: str | None, host_tailscale_device: str | None) -> str:
+    if host_url and host_tailscale_device:
+        raise RuntimeError("--host-url과 --host-tailscale-device는 동시에 지정할 수 없습니다.")
+    if host_url:
+        return normalize_remote_base_url(host_url)
+    if not host_tailscale_device:
+        return ""
+
+    snapshot = tailscale_status(timeout_seconds=3.0, cache_ttl_seconds=0.0)
+    if not snapshot.installed:
+        raise RuntimeError(f"Tailscale CLI를 사용할 수 없습니다: {snapshot.message}")
+    peer = select_tailscale_peer(snapshot, host_tailscale_device)
+    host_ip = peer.primary_ipv4()
+    if not host_ip:
+        raise RuntimeError(f"Tailscale host peer에 IPv4가 없습니다: {describe_tailscale_peer(peer)}")
+    base_url = normalize_remote_base_url(host_ip)
+    print(f"  ✓ Tailscale host: {describe_tailscale_peer(peer)} → {base_url}")
+    return base_url
+
+
 def prompt_port(label: str, current: int | None) -> int | None:
     if current is not None:
         return current
@@ -601,6 +671,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and install the Android Remote client over wireless adb.")
     parser.add_argument("--device-ip", default=os.environ.get("HH_ANDROID_DEVICE_IP"), help="Stable device IP override. If omitted, the script resolves a Tailscale Android peer.")
     parser.add_argument("--tailscale-device", default=os.environ.get("HH_ANDROID_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector. If omitted, exactly one Android peer is auto-selected.")
+    parser.add_argument("--host-url", default=os.environ.get("HH_ANDROID_REMOTE_BASE_URL"), help="Remote Agent base URL or host/IP to seed into the Android app. Bare host/IP becomes http://<host>:8000. Env: HH_ANDROID_REMOTE_BASE_URL.")
+    parser.add_argument("--host-tailscale-device", default=os.environ.get("HH_ANDROID_HOST_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector for the Remote Agent host. The resolved IP becomes http://<ip>:8000. Env: HH_ANDROID_HOST_TAILSCALE_DEVICE.")
     parser.add_argument("--pair-port", type=int, default=None, help="Port shown by 'Pair device with pairing code'.")
     parser.add_argument("--connect-port", type=int, default=None, help="Wireless debugging connect port.")
     parser.add_argument("--pair-code", default=None, help="Optional six-digit pairing code. If omitted, adb prompts interactively.")
@@ -634,6 +706,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"- release_id: {version_info['string']}")
         if version_info["dirty"]:
             print("- warning: 작업 트리에 커밋되지 않은 변경이 있어 release_id에 _dirty가 붙었습니다.")
+        default_remote_base_url = resolve_default_remote_base_url(args.host_url, args.host_tailscale_device)
+        if default_remote_base_url:
+            print(f"- default Remote Agent URL: {default_remote_base_url}")
 
         print("\n== Archive old Android APKs ==")
         archived = archive_release_artifacts(
@@ -646,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  (아카이빙할 Android APK 없음)")
 
         print("\n== Build APK ==")
-        build_android_apk(version_info)
+        build_android_apk(version_info, default_remote_base_url=default_remote_base_url)
         release_apk = copy_release_apk(version_info)
         check_release_apk(release_apk, version_info)
 

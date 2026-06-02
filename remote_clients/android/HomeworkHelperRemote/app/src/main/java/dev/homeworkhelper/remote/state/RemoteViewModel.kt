@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dev.homeworkhelper.remote.BuildConfig
 import dev.homeworkhelper.remote.data.RemoteApiException
 import dev.homeworkhelper.remote.data.RemoteAvailability
 import dev.homeworkhelper.remote.data.RemoteDevice
@@ -39,6 +40,38 @@ import java.util.Date
 
 private const val TAILSCALE_CONNECT_TIMEOUT_MILLIS = 15_000L
 private const val TAILSCALE_CONNECT_POLL_MILLIS = 1_000L
+private const val REMOTE_AGENT_SCHEME = "http"
+private const val REMOTE_AGENT_PORT = 8000
+private val URL_SCHEME_PATTERN = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
+
+internal fun normalizeRemoteBaseUrl(value: String): String {
+    val trimmed = value.trim().trimEnd('/')
+    if (trimmed.isBlank()) return ""
+    val withScheme = if (URL_SCHEME_PATTERN.containsMatchIn(trimmed)) trimmed else "$REMOTE_AGENT_SCHEME://$trimmed"
+    val uri = runCatching { URI(withScheme) }.getOrNull() ?: return withScheme
+    val host = uri.host?.trim().orEmpty()
+    if (host.isBlank()) return withScheme
+    val port = if (uri.port > 0) uri.port else REMOTE_AGENT_PORT
+    val displayHost = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
+    val path = uri.rawPath?.takeIf { it.isNotBlank() && it != "/" }.orEmpty()
+    val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+    return "${uri.scheme.ifBlank { REMOTE_AGENT_SCHEME }}://$displayHost:$port$path$query"
+}
+
+internal fun remoteHostInputFromBaseUrl(baseUrl: String): String {
+    val normalized = normalizeRemoteBaseUrl(baseUrl)
+    if (normalized.isBlank()) return ""
+    val uri = runCatching { URI(normalized) }.getOrNull()
+    val host = uri?.host?.trim().orEmpty()
+    if (host.isBlank()) {
+        return normalized
+            .removePrefix("$REMOTE_AGENT_SCHEME://")
+            .removePrefix("https://")
+            .removeSuffix(":$REMOTE_AGENT_PORT")
+    }
+    val port = uri?.port ?: -1
+    return if (port > 0 && port != REMOTE_AGENT_PORT) "$host:$port" else host
+}
 
 data class AutomationUiState(
     val tailscale: TailscaleBindingState = TailscaleBindingState(),
@@ -105,20 +138,26 @@ class RemoteViewModel(
     private val smartThingsPatSeeded = automationPreferences.seedSmartThingsPatFromBuildConfig()
     private var autoSshAttemptSignature: String? = null
     private var tailscaleConnectSequence: Int = 0
+    private val storedBaseUrlAtLaunch = preferences.baseUrl
+    private val defaultRemoteBaseUrl = normalizeRemoteBaseUrl(BuildConfig.DEFAULT_REMOTE_BASE_URL)
+    private val initialBaseUrl = normalizeRemoteBaseUrl(storedBaseUrlAtLaunch.ifBlank { defaultRemoteBaseUrl })
+    private val defaultRemoteBaseUrlApplied = storedBaseUrlAtLaunch.isBlank() && initialBaseUrl.isNotBlank()
+
+    init {
+        if (initialBaseUrl != storedBaseUrlAtLaunch) {
+            preferences.baseUrl = initialBaseUrl
+        }
+    }
 
     private val _uiState = MutableStateFlow(
         RemoteUiState(
-            baseUrl = preferences.baseUrl,
+            baseUrl = initialBaseUrl,
             deviceName = preferences.deviceName.ifBlank { defaultDeviceName() },
             hasToken = tokenStore.loadToken() != null,
             processes = preferences.cachedProcesses(),
             lastSyncMillis = preferences.lastSyncMillis,
             showDiagnostics = preferences.showDiagnostics,
-            userMessage = if (smartThingsPatSeeded) {
-                "로컬 SmartThings debug token을 앱 보안 저장소에 보관했습니다."
-            } else {
-                "Remote Agent URL과 페어링 코드가 있으면 바로 연결할 수 있습니다."
-            },
+            userMessage = initialUserMessage(),
             automation = AutomationUiState(
                 tailscale = tailscaleBinding.inspect(),
                 tailscaleAutomation = automationPreferences.loadTailscaleAutomation(),
@@ -145,8 +184,9 @@ class RemoteViewModel(
     }
 
     fun updateBaseUrl(value: String) {
-        preferences.baseUrl = value
-        _uiState.update { it.copy(baseUrl = value, userMessage = null) }
+        val normalized = normalizeRemoteBaseUrl(value)
+        preferences.baseUrl = normalized
+        _uiState.update { it.copy(baseUrl = normalized, userMessage = null) }
         repairSshDefaults(reason = "URL 변경")
     }
 
@@ -272,16 +312,17 @@ class RemoteViewModel(
                 .onSuccess { response ->
                     preferences.deviceName = response.name.ifBlank { deviceName }
                     tokenStore.saveToken(response.token)
+                    val pairedName = response.name.ifBlank { deviceName }
                     _uiState.update {
                         it.copy(
                             isPairing = false,
-                            deviceName = response.name.ifBlank { deviceName },
+                            deviceName = pairedName,
                             hasToken = true,
-                            userMessage = "이 Android 기기를 페어링했습니다.",
+                            userMessage = "페어링 성공: $pairedName 등록 완료. 게임 목록을 동기화합니다.",
                         )
                     }
                     refreshDevices(updateMessage = false)
-                    refresh()
+                    refreshWithMessage("페어링 성공: $pairedName 등록 완료. 게임 목록을 동기화했습니다.")
                 }
                 .onFailure { error ->
                     _uiState.update { it.copy(isPairing = false) }
@@ -831,6 +872,15 @@ class RemoteViewModel(
             is RemoteApiException.AgentUnavailable -> "호스트는 있을 수 있지만 Remote Agent HTTP 서버에 연결할 수 없습니다."
             is RemoteApiException.HttpFailure -> "Remote Agent 오류: HTTP ${error.code}"
             else -> error.message ?: "Remote Agent에 연결하지 못했습니다."
+        }
+    }
+
+    private fun initialUserMessage(): String {
+        return when {
+            smartThingsPatSeeded && defaultRemoteBaseUrlApplied -> "로컬 SmartThings debug token과 빌드 기본 Remote Agent URL을 적용했습니다."
+            smartThingsPatSeeded -> "로컬 SmartThings debug token을 앱 보안 저장소에 보관했습니다."
+            defaultRemoteBaseUrlApplied -> "빌드 기본 Remote Agent URL을 적용했습니다. 페어링 코드만 입력하면 됩니다."
+            else -> "Host IP/hostname과 페어링 코드가 있으면 바로 연결할 수 있습니다."
         }
     }
 

@@ -25,6 +25,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +42,7 @@ import dev.homeworkhelper.remote.data.RemoteDevice
 import dev.homeworkhelper.remote.data.SMARTTHINGS_DEFAULT_WAKE_LABEL
 import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
 import dev.homeworkhelper.remote.state.RemoteUiState
+import dev.homeworkhelper.remote.state.remoteHostInputFromBaseUrl
 
 private enum class SetupSection(val label: String, val icon: String) {
     Connection("연결", "🔗"),
@@ -162,9 +164,26 @@ private fun ConnectionSection(
     onRepairEnvironment: () -> Unit,
 ) {
     var pairingCode by remember { mutableStateOf("") }
+    val hostInput = remoteHostInputFromBaseUrl(state.baseUrl)
+    LaunchedEffect(state.hasToken) {
+        if (state.hasToken) pairingCode = ""
+    }
     SettingsCard(title = "연결/페어링", subtitle = "Remote Agent URL과 Android device token을 관리합니다.") {
-        OutlinedTextField(value = state.baseUrl, onValueChange = onBaseUrlChange, label = { Text("Remote Agent URL") }, placeholder = { Text("http://100.x.y.z:8000") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = hostInput,
+            onValueChange = onBaseUrlChange,
+            label = { Text("Host IP / hostname") },
+            placeholder = { Text("100.x.y.z 또는 host.tailnet.ts.net") },
+            prefix = { Text("http://") },
+            suffix = { Text(":8000") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (state.baseUrl.isNotBlank()) {
+            Text("Remote Agent URL: ${state.baseUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         OutlinedTextField(value = state.deviceName, onValueChange = onDeviceNameChange, label = { Text("기기 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        InfoRow("페어링", if (state.hasToken) "완료" else "필요")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(value = pairingCode, onValueChange = { pairingCode = it.filter(Char::isDigit).take(6) }, label = { Text("6자리 페어링 코드") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.weight(1f))
             Button(onClick = { onPair(pairingCode) }, enabled = !state.isPairing) { Text(if (state.isPairing) "페어링 중" else "페어링") }

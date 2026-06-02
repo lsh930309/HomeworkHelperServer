@@ -44,6 +44,21 @@ def test_android_version_code_and_gradle_command_use_release_version():
     ]
 
 
+def test_gradle_command_can_seed_default_remote_agent_url():
+    info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
+
+    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="100.64.0.9")
+
+    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=http://100.64.0.9:8000" in command
+
+
+def test_remote_base_url_normalization_adds_fixed_scheme_and_port():
+    assert android_build.normalize_remote_base_url("") == ""
+    assert android_build.normalize_remote_base_url("100.64.0.9") == "http://100.64.0.9:8000"
+    assert android_build.normalize_remote_base_url("host.tailnet.ts.net:9000") == "http://host.tailnet.ts.net:9000"
+    assert android_build.normalize_remote_base_url("http://host.tailnet.ts.net") == "http://host.tailnet.ts.net:8000"
+
+
 def test_parse_and_choose_adb_mdns_ports_prefers_requested_ip_then_single_fallback():
     output = """
 List of discovered mdns services
@@ -115,6 +130,23 @@ def test_tailscale_peer_selection_accepts_hostname_dns_node_id_or_ip_selector():
         assert android_build.select_tailscale_peer(snapshot, selector).primary_ipv4() == "100.102.217.35"
 
 
+def test_default_remote_base_url_resolves_tailscale_host_selector(monkeypatch):
+    snapshot = _snapshot(
+        (
+            TailscalePeer("gaming-host", "gaming-host.tail.ts.net.", ("100.64.0.9",), True, "windows"),
+            TailscalePeer("s25-ultra", "s25-ultra.tail.ts.net.", ("100.102.217.35",), True, "android"),
+        )
+    )
+    monkeypatch.setattr(android_build, "tailscale_status", lambda **_kwargs: snapshot)
+
+    assert android_build.resolve_default_remote_base_url(None, "gaming-host") == "http://100.64.0.9:8000"
+
+
+def test_default_remote_base_url_rejects_ambiguous_sources():
+    with pytest.raises(RuntimeError, match="동시에"):
+        android_build.resolve_default_remote_base_url("100.64.0.9", "gaming-host")
+
+
 def test_install_signature_preflight_allows_matching_certificates(monkeypatch, tmp_path):
     apk = tmp_path / "candidate.apk"
     apk.write_text("apk", encoding="utf-8")
@@ -169,7 +201,7 @@ def test_main_does_not_save_version_when_install_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(build, "git_short_hash", lambda *args, **kwargs: "abc1234")
     monkeypatch.setattr(build, "git_worktree_dirty", lambda: False)
     monkeypatch.setattr(android_build, "archive_release_artifacts", lambda **_kwargs: [])
-    monkeypatch.setattr(android_build, "build_android_apk", lambda _version_info: None)
+    monkeypatch.setattr(android_build, "build_android_apk", lambda _version_info, **_kwargs: None)
     monkeypatch.setattr(android_build, "copy_release_apk", lambda _version_info: apk)
     monkeypatch.setattr(android_build, "check_release_apk", lambda _apk, _version_info: None)
     monkeypatch.setattr(android_build, "resolve_adb", lambda _explicit: "adb")
