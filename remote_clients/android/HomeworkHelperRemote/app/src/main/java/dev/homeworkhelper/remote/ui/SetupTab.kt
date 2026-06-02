@@ -218,6 +218,12 @@ private fun TailscaleFoundationSection(
         if (tailscale.lastAutomationAction.isNotBlank()) {
             Text("최근 자동화: ${tailscale.lastAutomationAction}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (tailscale.broadcastTarget.isNotBlank()) {
+            Text("Broadcast target: ${tailscale.broadcastTarget}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (tailscale.automationAttemptLimit > 0) {
+            Text("Retry: ${tailscale.automationAttempt}/${tailscale.automationAttemptLimit} · polling timeout=${tailscale.pollingTimedOut}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (tailscale.suggestedBaseUrls.isNotEmpty()) {
             Text("후보 URL: ${tailscale.suggestedBaseUrls.joinToString()}", style = MaterialTheme.typography.bodySmall)
         }
@@ -367,7 +373,7 @@ private fun AppSection(
         if (state.automation.tailscaleAutomation.connectOnAppForeground || state.automation.tailscaleAutomation.disconnectOnAppBackground) {
             Text("주의: lifecycle 자동화가 켜져 있으면 앱 전환만으로 Tailscale VPN ON/OFF 요청이 발생할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Text("Tailscale ON/OFF는 Tailscale Android 앱의 외부 VPN broadcast를 요청하고 VPN 활성 여부를 감지합니다. 최초 로그인/권한 승인은 Tailscale 앱에서 직접 확인해야 할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Tailscale ON/OFF는 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 sleep/wake 직후 race를 줄이기 위해 retry합니다. 최초 로그인/권한 승인은 Tailscale 앱에서 직접 확인해야 할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }
             OutlinedButton(onClick = onTailscaleDisconnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN OFF") }
@@ -402,6 +408,9 @@ private fun DiagnosticsSection(state: RemoteUiState) {
         InfoRow("SSH ready", state.automation.sshReady.toString())
         InfoRow("SmartThings ready", state.automation.wakeReady.toString())
         InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
+        InfoRow("Tailscale target", state.automation.tailscale.broadcastTarget.ifBlank { "none" })
+        InfoRow("Tailscale retry", "${state.automation.tailscale.automationAttempt}/${state.automation.tailscale.automationAttemptLimit}")
+        InfoRow("Tailscale timeout", state.automation.tailscale.pollingTimedOut.toString())
     }
 }
 
