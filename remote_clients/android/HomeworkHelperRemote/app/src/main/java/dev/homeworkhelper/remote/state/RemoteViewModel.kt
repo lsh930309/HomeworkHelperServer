@@ -185,7 +185,11 @@ class RemoteViewModel(
     }
 
     fun onAppBackground() {
-        if (_uiState.value.automation.tailscaleAutomation.disconnectOnAppBackground) {
+        val tailscaleAutomation = _uiState.value.automation.tailscaleAutomation
+        if (tailscaleAutomation.sleepSafeMode) {
+            return
+        }
+        if (tailscaleAutomation.disconnectOnAppBackground) {
             requestTailscaleDisconnect("앱 종료")
         }
     }
@@ -216,7 +220,27 @@ class RemoteViewModel(
     fun updateTailscaleDisconnectOnBackground(value: Boolean) {
         automationPreferences.tailscaleDisconnectOnAppBackground = value
         updateAutomation { it.copy(tailscaleAutomation = automationPreferences.loadTailscaleAutomation()) }
-        _uiState.update { it.copy(userMessage = if (value) "앱 종료 시 Tailscale DISCONNECT_VPN 자동화를 시도합니다." else "앱 종료 시 Tailscale 자동 비활성화를 껐습니다.") }
+        val sleepSafeMode = automationPreferences.tailscaleSleepSafeMode
+        val message = when {
+            value && sleepSafeMode -> "앱 종료 시 Tailscale OFF 요청을 저장했지만 Sleep-safe가 켜져 있어 실제 종료 시에는 실행하지 않습니다."
+            value -> "앱 종료 시 Tailscale DISCONNECT_VPN 자동화를 시도합니다. sleep/wake 후 자동 ON이 실패할 수 있습니다."
+            else -> "앱 종료 시 Tailscale 자동 비활성화를 껐습니다."
+        }
+        _uiState.update { it.copy(userMessage = message) }
+    }
+
+    fun updateTailscaleSleepSafeMode(value: Boolean) {
+        automationPreferences.tailscaleSleepSafeMode = value
+        updateAutomation { it.copy(tailscaleAutomation = automationPreferences.loadTailscaleAutomation()) }
+        _uiState.update {
+            it.copy(
+                userMessage = if (value) {
+                    "Sleep-safe가 켜졌습니다. 앱 종료 시 Tailscale OFF 요청을 보내지 않아 sleep/wake 연결 유지성을 우선합니다."
+                } else {
+                    "Sleep-safe를 껐습니다. 앱 종료 OFF가 켜져 있으면 sleep/wake 후 Tailscale broadcast 자동 ON이 실패할 수 있습니다."
+                },
+            )
+        }
     }
 
     fun updateSshHost(value: String) {
@@ -474,7 +498,12 @@ class RemoteViewModel(
     fun requestTailscaleDisconnect(trigger: String = "수동") {
         tailscaleConnectSequence += 1
         updateAutomation { it.copy(isTailscaleBusy = false, tailscale = tailscaleBinding.requestVpnDisconnect()) }
-        _uiState.update { it.copy(userMessage = "$trigger Tailscale DISCONNECT_VPN 자동화를 요청했습니다.") }
+        val warning = if (trigger == "수동") {
+            " sleep/wake 후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast를 받지 못할 수 있습니다."
+        } else {
+            ""
+        }
+        _uiState.update { it.copy(userMessage = "$trigger Tailscale DISCONNECT_VPN 자동화를 요청했습니다.$warning") }
     }
 
     fun openTailscaleApp() {
@@ -487,6 +516,16 @@ class RemoteViewModel(
         _uiState.update { it.copy(userMessage = "Tailscale 설치 페이지를 열었습니다.") }
     }
 
+    fun openTailscaleAppSettings() {
+        val opened = tailscaleBinding.openTailscaleAppSettings()
+        _uiState.update { it.copy(userMessage = if (opened) "Tailscale 앱 설정을 열었습니다. 배터리 제한 없음/절전 예외를 권장합니다." else "Tailscale 앱 설정을 열지 못했습니다.") }
+    }
+
+    fun openVpnSettings() {
+        val opened = tailscaleBinding.openVpnSettings()
+        _uiState.update { it.copy(userMessage = if (opened) "Android VPN 설정을 열었습니다. 필요하면 Always-on VPN을 Tailscale로 설정하세요." else "Android VPN 설정을 열지 못했습니다.") }
+    }
+
     fun checkClientTailscaleAndRefresh() {
         requestTailscaleConnect("클라이언트 확인", refreshWhenReady = true, initialDelayMillis = 0L)
     }
@@ -497,6 +536,15 @@ class RemoteViewModel(
         updateAutomation { it.copy(isTailscaleBusy = inspected.installed && !inspected.vpnActive, tailscale = inspected) }
         if (!inspected.installed) {
             _uiState.update { it.copy(userMessage = inspected.message) }
+            return
+        }
+        if (inspected.vpnActive) {
+            updateAutomation { it.copy(isTailscaleBusy = false, tailscale = inspected) }
+            if (refreshWhenReady && _uiState.value.baseUrl.trim().isNotBlank()) {
+                refreshWithMessage("Tailscale이 이미 활성 상태라 게임 목록을 동기화했습니다.")
+            } else {
+                _uiState.update { it.copy(userMessage = "Android-local Tailscale VPN이 이미 활성 상태입니다.") }
+            }
             return
         }
         val delayMessage = if (initialDelayMillis > 0L) " ${initialDelayMillis / 1000.0}초 후" else ""
@@ -549,7 +597,7 @@ class RemoteViewModel(
                 else -> {
                     _uiState.update {
                         it.copy(
-                            userMessage = "${finalState.message} 다시 VPN ON 요청을 시도하거나 Tailscale 앱을 열어 수동 상태를 확인하세요.",
+                            userMessage = "${finalState.message} Sleep-safe를 켜고, Tailscale을 Always-on VPN/배터리 제한 없음으로 설정하거나 Tailscale 앱을 열어 수동 상태를 확인하세요.",
                         )
                     }
                 }
@@ -583,7 +631,7 @@ class RemoteViewModel(
             }
         }
         return latest.copy(
-            message = "Tailscale CONNECT_VPN ${initial.automationAttempt}/${initial.automationAttemptLimit} 요청 후에도 Android VPN 활성 네트워크가 감지되지 않았습니다. target=${initial.broadcastTarget}.",
+            message = "Tailscale CONNECT_VPN ${initial.automationAttempt}/${initial.automationAttemptLimit} 요청 후에도 Android VPN 활성 네트워크가 감지되지 않았습니다. target=${initial.broadcastTarget}. sleep/wake 이후 Tailscale 앱 standby 상태에서는 broadcast 자동 ON이 제한될 수 있습니다.",
             pollingTimedOut = true,
         )
     }

@@ -23,6 +23,7 @@ data class SmartThingsPreferences(
 data class TailscaleAutomationPreferences(
     val connectOnAppForeground: Boolean = false,
     val disconnectOnAppBackground: Boolean = false,
+    val sleepSafeMode: Boolean = true,
 )
 
 class AutomationPreferences(context: Context) {
@@ -81,6 +82,10 @@ class AutomationPreferences(context: Context) {
         get() = preferences.getBoolean(KEY_TS_DISCONNECT_ON_BACKGROUND, false)
         set(value) = preferences.edit().putBoolean(KEY_TS_DISCONNECT_ON_BACKGROUND, value).apply()
 
+    var tailscaleSleepSafeMode: Boolean
+        get() = preferences.getBoolean(KEY_TS_SLEEP_SAFE_MODE, true)
+        set(value) = preferences.edit().putBoolean(KEY_TS_SLEEP_SAFE_MODE, value).apply()
+
     fun loadSsh(): SshPowerPreferences = SshPowerPreferences(
         host = sshHost,
         user = sshUser,
@@ -101,6 +106,7 @@ class AutomationPreferences(context: Context) {
     fun loadTailscaleAutomation(): TailscaleAutomationPreferences = TailscaleAutomationPreferences(
         connectOnAppForeground = tailscaleConnectOnAppForeground,
         disconnectOnAppBackground = tailscaleDisconnectOnAppBackground,
+        sleepSafeMode = tailscaleSleepSafeMode,
     )
 
     fun saveSmartThingsPat(value: String) {
@@ -146,5 +152,6 @@ class AutomationPreferences(context: Context) {
         private const val KEY_ST_LAST_VERIFIED = "smartthings.last_verified_millis"
         private const val KEY_TS_CONNECT_ON_FOREGROUND = "tailscale.connect_on_app_foreground"
         private const val KEY_TS_DISCONNECT_ON_BACKGROUND = "tailscale.disconnect_on_app_background"
+        private const val KEY_TS_SLEEP_SAFE_MODE = "tailscale.sleep_safe_mode"
     }
 }

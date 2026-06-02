@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 
 private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
 private const val TAILSCALE_RECEIVER_CLASS = "com.tailscale.ipn.IPNReceiver"
@@ -69,6 +70,22 @@ class TailscaleBinding(private val context: Context) {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             }
+    }
+
+    fun openTailscaleAppSettings(): Boolean {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$TAILSCALE_PACKAGE"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            context.startActivity(intent)
+        }.isSuccess
+    }
+
+    fun openVpnSettings(): Boolean {
+        val intent = Intent(Settings.ACTION_VPN_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            context.startActivity(intent)
+        }.isSuccess
     }
 
     fun requestVpnConnect(

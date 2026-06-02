@@ -64,11 +64,14 @@ fun SetupTab(
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
+    onOpenTailscaleSettings: () -> Unit,
+    onOpenVpnSettings: () -> Unit,
     onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
     onTailscaleDisconnect: () -> Unit,
     onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
     onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
+    onTailscaleSleepSafeModeChange: (Boolean) -> Unit,
     onRepairEnvironment: () -> Unit,
     onSshHostChange: (String) -> Unit,
     onSshUserChange: (String) -> Unit,
@@ -114,6 +117,8 @@ fun SetupTab(
                         onInspectTailscale = onInspectTailscale,
                         onOpenTailscale = onOpenTailscale,
                         onInstallTailscale = onInstallTailscale,
+                        onOpenTailscaleSettings = onOpenTailscaleSettings,
+                        onOpenVpnSettings = onOpenVpnSettings,
                         onCheckClientTailscale = onCheckClientTailscale,
                         onTailscaleConnect = onTailscaleConnect,
                         onRepairEnvironment = onRepairEnvironment,
@@ -139,10 +144,14 @@ fun SetupTab(
                     SetupSection.App -> AppSection(
                         state = state,
                         onShowDiagnosticsChange = onShowDiagnosticsChange,
+                        onOpenTailscale = onOpenTailscale,
+                        onOpenTailscaleSettings = onOpenTailscaleSettings,
+                        onOpenVpnSettings = onOpenVpnSettings,
                         onTailscaleConnect = onTailscaleConnect,
                         onTailscaleDisconnect = onTailscaleDisconnect,
                         onTailscaleConnectOnForegroundChange = onTailscaleConnectOnForegroundChange,
                         onTailscaleDisconnectOnBackgroundChange = onTailscaleDisconnectOnBackgroundChange,
+                        onTailscaleSleepSafeModeChange = onTailscaleSleepSafeModeChange,
                     )
                 }
             }
@@ -159,6 +168,8 @@ private fun ConnectionSection(
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
+    onOpenTailscaleSettings: () -> Unit,
+    onOpenVpnSettings: () -> Unit,
     onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
     onRepairEnvironment: () -> Unit,
@@ -198,7 +209,16 @@ private fun ConnectionSection(
         }
         Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    TailscaleFoundationSection(state, onInspectTailscale, onOpenTailscale, onInstallTailscale, onCheckClientTailscale, onTailscaleConnect)
+    TailscaleFoundationSection(
+        state,
+        onInspectTailscale,
+        onOpenTailscale,
+        onInstallTailscale,
+        onOpenTailscaleSettings,
+        onOpenVpnSettings,
+        onCheckClientTailscale,
+        onTailscaleConnect,
+    )
 }
 
 @Composable
@@ -207,6 +227,8 @@ private fun TailscaleFoundationSection(
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
+    onOpenTailscaleSettings: () -> Unit,
+    onOpenVpnSettings: () -> Unit,
     onCheckClientTailscale: () -> Unit,
     onTailscaleConnect: () -> Unit,
 ) {
@@ -231,6 +253,10 @@ private fun TailscaleFoundationSection(
             OutlinedButton(onClick = onInspectTailscale, modifier = Modifier.weight(1f)) { Text("상태") }
             OutlinedButton(onClick = onOpenTailscale, modifier = Modifier.weight(1f)) { Text("열기") }
             OutlinedButton(onClick = onInstallTailscale, modifier = Modifier.weight(1f)) { Text("설치") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onOpenTailscaleSettings, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
+            OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) { Text("VPN 설정") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON 요청") }
@@ -361,22 +387,42 @@ private fun DeviceRow(device: RemoteDevice, busy: Boolean, onRevokeDevice: (Remo
 private fun AppSection(
     state: RemoteUiState,
     onShowDiagnosticsChange: (Boolean) -> Unit,
+    onOpenTailscale: () -> Unit,
+    onOpenTailscaleSettings: () -> Unit,
+    onOpenVpnSettings: () -> Unit,
     onTailscaleConnect: () -> Unit,
     onTailscaleDisconnect: () -> Unit,
     onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
     onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
+    onTailscaleSleepSafeModeChange: (Boolean) -> Unit,
 ) {
+    val tailscaleAutomation = state.automation.tailscaleAutomation
+    val sleepSafeMode = tailscaleAutomation.sleepSafeMode
+    val lifecycleOffEffective = tailscaleAutomation.disconnectOnAppBackground && !sleepSafeMode
     SettingsCard(title = "앱 동작", subtitle = "진단 표시와 Android-local Tailscale lifecycle 자동화를 설정합니다.") {
         ToggleRow("진단 섹션 표시", state.showDiagnostics, onShowDiagnosticsChange)
-        ToggleRow("앱 실행 시 Tailscale ON 요청", state.automation.tailscaleAutomation.connectOnAppForeground, onTailscaleConnectOnForegroundChange)
-        ToggleRow("앱 종료 시 Tailscale OFF 요청", state.automation.tailscaleAutomation.disconnectOnAppBackground, onTailscaleDisconnectOnBackgroundChange)
-        if (state.automation.tailscaleAutomation.connectOnAppForeground || state.automation.tailscaleAutomation.disconnectOnAppBackground) {
+        ToggleRow("Sleep-safe Tailscale 유지", sleepSafeMode, onTailscaleSleepSafeModeChange)
+        Text("Sleep-safe가 켜져 있으면 앱 종료/백그라운드 진입 시 Tailscale OFF 요청을 보내지 않습니다. sleep/wake 이후 broadcast 자동 ON 실패를 피하기 위한 기본값입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ToggleRow("앱 실행 시 Tailscale ON 요청", tailscaleAutomation.connectOnAppForeground, onTailscaleConnectOnForegroundChange)
+        ToggleRow("앱 종료 시 Tailscale OFF 요청", tailscaleAutomation.disconnectOnAppBackground, onTailscaleDisconnectOnBackgroundChange, enabled = !sleepSafeMode)
+        if (sleepSafeMode && tailscaleAutomation.disconnectOnAppBackground) {
+            Text("Sleep-safe가 켜져 있어 앱 종료 OFF 요청은 저장되어 있어도 실행되지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (tailscaleAutomation.connectOnAppForeground || lifecycleOffEffective) {
             Text("주의: lifecycle 자동화가 켜져 있으면 앱 전환만으로 Tailscale VPN ON/OFF 요청이 발생할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Text("Tailscale ON/OFF는 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 sleep/wake 직후 race를 줄이기 위해 retry합니다. 최초 로그인/권한 승인은 Tailscale 앱에서 직접 확인해야 할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (lifecycleOffEffective) {
+            Text("앱 종료 OFF는 sleep/wake 이후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast 복구가 실패할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Text("Tailscale ON/OFF는 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. sleep/wake 안정성을 위해 Tailscale Always-on VPN과 배터리 제한 없음 설정을 권장합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }
             OutlinedButton(onClick = onTailscaleDisconnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN OFF") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onOpenTailscale, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("Tailscale 열기") }
+            OutlinedButton(onClick = onOpenTailscaleSettings, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
+            OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) { Text("VPN 설정") }
         }
     }
     if (state.showDiagnostics) DiagnosticsSection(state)
@@ -408,6 +454,8 @@ private fun DiagnosticsSection(state: RemoteUiState) {
         InfoRow("SSH ready", state.automation.sshReady.toString())
         InfoRow("SmartThings ready", state.automation.wakeReady.toString())
         InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
+        InfoRow("Tailscale sleep-safe", state.automation.tailscaleAutomation.sleepSafeMode.toString())
+        InfoRow("Tailscale auto OFF effective", (state.automation.tailscaleAutomation.disconnectOnAppBackground && !state.automation.tailscaleAutomation.sleepSafeMode).toString())
         InfoRow("Tailscale target", state.automation.tailscale.broadcastTarget.ifBlank { "none" })
         InfoRow("Tailscale retry", "${state.automation.tailscale.automationAttempt}/${state.automation.tailscale.automationAttemptLimit}")
         InfoRow("Tailscale timeout", state.automation.tailscale.pollingTimedOut.toString())
@@ -442,10 +490,10 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         Spacer(modifier = Modifier.padding(4.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
