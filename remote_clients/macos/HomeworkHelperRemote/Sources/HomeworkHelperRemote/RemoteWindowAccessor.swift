@@ -83,6 +83,15 @@ final class RemoteWindowDelegate: NSObject, NSWindowDelegate {
     }
 }
 
+final class RemoteSettingsWindowDelegate: NSObject, NSWindowDelegate {
+    static let shared = RemoteSettingsWindowDelegate()
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        RemoteAppDelegate.hideSettingsWindow(sender)
+        return false
+    }
+}
+
 struct RemoteWindowAccessor: NSViewRepresentable {
     let cardCount: Int
     let sidebarVisible: Bool
@@ -172,6 +181,8 @@ struct RemoteSettingsWindowAccessor: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.isMovableByWindowBackground = true
+        window.delegate = RemoteSettingsWindowDelegate.shared
+        RemoteAppDelegate.prepareSettingsWindow(window)
     }
 }
 
@@ -209,7 +220,9 @@ struct RemoteSettingsKeyboardShortcutBridge: NSViewRepresentable {
                 let isReturn = event.keyCode == 36 || event.keyCode == 76
                 let isCommandReturn = isReturn && event.modifierFlags.contains(.command)
                 if isEscape || isCommandReturn || (isReturn && !self.isEditingText(in: window)) {
-                    window.orderOut(nil)
+                    Task { @MainActor in
+                        RemoteAppDelegate.hideSettingsWindow(window)
+                    }
                     return nil
                 }
                 return event

@@ -294,8 +294,21 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "window.makeKeyAndOrderFront(nil)" in app
     assert "clickStatusItemForUITest()" in app
     assert "NSApp.activate(ignoringOtherApps: true)" in app
-    assert "NSApp.setActivationPolicy(.regular)" not in app
     assert "NSApp.setActivationPolicy(.accessory)" in app
+    assert "NSApp.setActivationPolicy(.regular)" in app
+    settings_open_source = app.split("static func openSettingsWindow()", 1)[1].split("static func prepareSettingsWindow", 1)[0]
+    assert "NSApp.setActivationPolicy(.regular)" in settings_open_source
+    assert "NSApp.setActivationPolicy(.accessory)" not in settings_open_source
+    assert "focusExistingSettingsWindow()" in settings_open_source
+    assert "guard NSApp.windows.contains(where:" not in settings_open_source
+    assert "static let settingsWindowIdentifier" in app
+    assert "static let settingsWindowTitle" in app
+    assert "static func prepareSettingsWindow(_ window: NSWindow)" in app
+    assert "static func hideSettingsWindow(_ window: NSWindow?)" in app
+    assert "restoreAccessoryIfNoVisibleUserWindows()" in app
+    assert "private static func focusExistingSettingsWindow() -> Bool" in app
+    assert "private static func settingsWindows() -> [NSWindow]" in app
+    assert "private static func isVisibleUserWindow(_ window: NSWindow) -> Bool" in app
     assert "NSPopover" in app
     assert "RemoteMenuBarPopoverPanel" not in app
     assert "MenuBarPopoverView" in app
@@ -470,6 +483,13 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".padding(RemoteSettingsLayout.tabPadding)" in app
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
+    assert "RemoteSettingsWindowDelegate" in window_accessor
+    assert "RemoteAppDelegate.prepareSettingsWindow(window)" in window_accessor
+    assert "RemoteAppDelegate.hideSettingsWindow(sender)" in window_accessor
+    assert "RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow)" in app
+    settings_keyboard_source = window_accessor.split("struct RemoteSettingsKeyboardShortcutBridge", 1)[1]
+    assert "RemoteAppDelegate.hideSettingsWindow(window)" in settings_keyboard_source
+    assert "window.orderOut(nil)" not in settings_keyboard_source
     assert "event.keyCode == 53" in window_accessor
     assert "isCommandReturn" in window_accessor
     assert "!self.isEditingText(in: window)" in window_accessor

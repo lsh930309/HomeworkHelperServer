@@ -31,6 +31,8 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     static let mainWindowTitle = "HomeworkHelper Remote"
     static let placeholderWindowIdentifier = "HomeworkHelperRemotePlaceholderWindow"
     static let placeholderWindowTitle = "HomeworkHelper Remote Hidden"
+    static let settingsWindowIdentifier = "HomeworkHelperRemoteSettingsWindow"
+    static let settingsWindowTitle = "HomeworkHelper Remote 설정"
 
     private static weak var shared: RemoteAppDelegate?
     private static var isOpeningMainWindow = false
@@ -406,11 +408,14 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     static func openSettingsWindow() {
         shared?.closePopoverForFocusLoss()
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        if focusExistingSettingsWindow() {
+            return
+        }
         NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings, object: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            guard NSApp.windows.contains(where: { $0.isVisible && $0.identifier?.rawValue != placeholderWindowIdentifier }) == false else {
+            if focusExistingSettingsWindow() {
                 return
             }
             if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
@@ -420,8 +425,70 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
     }
 
+    static func prepareSettingsWindow(_ window: NSWindow) {
+        let shouldFocus = window.identifier?.rawValue != settingsWindowIdentifier || !window.isVisible
+        window.identifier = NSUserInterfaceItemIdentifier(settingsWindowIdentifier)
+        window.title = settingsWindowTitle
+        window.isReleasedWhenClosed = false
+        NSApp.setActivationPolicy(.regular)
+        if shouldFocus {
+            NSApp.activate(ignoringOtherApps: true)
+            focusSettingsWindow(deduplicateSettingsWindows(preferred: window) ?? window)
+        } else {
+            _ = deduplicateSettingsWindows(preferred: window)
+        }
+    }
+
+    static func hideSettingsWindow(_ window: NSWindow?) {
+        if let window {
+            window.orderOut(nil)
+        } else {
+            settingsWindows().forEach { $0.orderOut(nil) }
+        }
+        restoreAccessoryIfNoVisibleUserWindows()
+    }
+
+    @discardableResult
+    private static func focusExistingSettingsWindow() -> Bool {
+        guard let window = deduplicateSettingsWindows() else { return false }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        focusSettingsWindow(window)
+        return true
+    }
+
     private static func mainWindows() -> [NSWindow] {
         NSApp.windows.filter(isMainWindowCandidate)
+    }
+
+    private static func settingsWindows() -> [NSWindow] {
+        NSApp.windows.filter(isSettingsWindowCandidate)
+    }
+
+    private static func deduplicateSettingsWindows(preferred preferredWindow: NSWindow? = nil) -> NSWindow? {
+        let candidates = settingsWindows()
+        guard !candidates.isEmpty else { return nil }
+        let keeper = preferredWindow.flatMap { preferred in
+            candidates.first { $0 === preferred }
+        } ?? candidates.first(where: { $0.isKeyWindow })
+            ?? candidates.first(where: { $0.isVisible })
+            ?? candidates[0]
+        for window in candidates where window !== keeper {
+            window.orderOut(nil)
+        }
+        return keeper
+    }
+
+    private static func focusSettingsWindow(_ window: NSWindow) {
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    private static func restoreAccessoryIfNoVisibleUserWindows() {
+        DispatchQueue.main.async {
+            guard NSApp.windows.contains(where: isVisibleUserWindow) == false else { return }
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private static func isMainWindowCandidate(_ window: NSWindow) -> Bool {
@@ -432,6 +499,20 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
         return window.identifier?.rawValue == mainWindowIdentifier
             || window.title == mainWindowTitle
+    }
+
+    private static func isSettingsWindowCandidate(_ window: NSWindow) -> Bool {
+        window.identifier?.rawValue == settingsWindowIdentifier
+            || window.title == settingsWindowTitle
+    }
+
+    private static func isVisibleUserWindow(_ window: NSWindow) -> Bool {
+        guard window.isVisible else { return false }
+        if window.identifier?.rawValue == placeholderWindowIdentifier || window.title == placeholderWindowTitle {
+            return false
+        }
+        let typeName = String(describing: type(of: window))
+        return typeName.contains("Popover") == false
     }
 }
 
@@ -1280,7 +1361,7 @@ struct RemoteSettingsView: View {
         .background(RemoteSettingsWindowAccessor(targetSize: targetSize))
         .background(RemoteSettingsKeyboardShortcutBridge())
         .onPreferenceChange(RemoteSettingsContentSizePreferenceKey.self) { measuredSizes = $0 }
-        .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
+        .onExitCommand { RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow) }
         .buttonStyle(.glass)
     }
 
