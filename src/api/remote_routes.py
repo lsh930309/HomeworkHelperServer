@@ -35,14 +35,17 @@ from src.utils.game_preset_manager import GamePresetManager
 
 
 REMOTE_API_VERSION = "0.2.0"
-TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _temporary_pairing_allowed_ips() -> set[str]:
     raw = os.environ.get("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS")
     if raw is None:
-        raw = TEMPORARY_MACBOOK_TAILSCALE_IP
+        return set()
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
@@ -395,6 +398,7 @@ def create_remote_router(
     device_registry: RemoteDeviceRegistry | None = None,
     auth_token: str | None = None,
     require_auth: bool = False,
+    public_direct: bool | None = None,
     now: Callable[[], float] | None = None,
     tailscale_probe: Callable[[], Any] | None = None,
 ) -> APIRouter:
@@ -413,6 +417,8 @@ def create_remote_router(
     auditor = auditor or RemoteAuditLogger()
     device_registry = device_registry or RemoteDeviceRegistry()
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
+    public_direct = _env_flag("HH_REMOTE_PUBLIC_DIRECT") if public_direct is None else bool(public_direct)
+    effective_require_auth = bool(require_auth or public_direct)
     now = now or time.time
     tailscale_probe = tailscale_probe or (lambda: tailscale_status(cache_ttl_seconds=30.0))
 
@@ -735,7 +741,7 @@ def create_remote_router(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="페어링 코드 발급은 로컬 요청 또는 인증된 디바이스에서만 가능합니다.",
             )
-        if not require_auth and not auth_token and not device_registry.has_registered_devices():
+        if not effective_require_auth and not auth_token and not device_registry.has_registered_devices():
             return
         if _is_valid_remote_token(request, authorization):
             return
@@ -759,7 +765,7 @@ def create_remote_router(
             "power_config": False,
             "power_control": False,
             "beholder": True,
-            "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
+            "auth_required": bool(effective_require_auth or auth_token or device_registry.has_registered_devices()),
             "pairing": True,
             "tailscale_discovery": True,
             "readiness": True,
@@ -782,7 +788,7 @@ def create_remote_router(
             and tailscale_payload.get("running")
         )
         power_ready = bool(power_status.get("configured"))
-        auth_ready = bool(require_auth or auth_token or device_registry.has_registered_devices())
+        auth_ready = bool(effective_require_auth or auth_token or device_registry.has_registered_devices())
         beholder_state = "ok" if not active_beholder_incidents else "warning"
         remote_state = "ok" if auth_ready else "warning"
         server_state = "ok" if auth_ready and (tailscale_ready or not include_tailscale_details) else "warning"
@@ -813,7 +819,7 @@ def create_remote_router(
                 "state": remote_state,
                 "color": "green" if remote_state == "ok" else "yellow",
                 "message": "Remote 인증/페어링 준비됨" if auth_ready else "첫 페어링 전에는 로컬 pair/start로 시작하세요.",
-                "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
+                "auth_required": bool(effective_require_auth or auth_token or device_registry.has_registered_devices()),
             },
             "server_mode_readiness": {
                 "state": server_state,
@@ -999,9 +1005,15 @@ def create_remote_router(
             platform=pair_request.platform,
             role="client",
             tailnet_binding=tailnet_binding,
+            source_ip=source_ip,
             now=now(),
         )
         if not device:
+            if device_registry.pairing_confirm_limited(source_ip, now=now()):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="페어링 코드 확인 실패가 너무 많습니다. 새 코드를 발급한 뒤 다시 시도하세요.",
+                )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="페어링 코드가 올바르지 않거나 만료되었습니다.")
         write_remote_log("pair.confirm", device_name=device.get("name"), platform=device.get("platform"))
         auditor.record(

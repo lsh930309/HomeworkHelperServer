@@ -50,6 +50,7 @@ def _client_with_seed(
     power_controller=None,
     process_terminator=None,
     require_auth=False,
+    public_direct=None,
     client_address=("testclient", 50000),
     tailscale_probe=None,
 ):
@@ -125,6 +126,7 @@ def _client_with_seed(
             process_terminator=process_terminator,
             auth_token=auth_token,
             require_auth=require_auth,
+            public_direct=public_direct,
             now=lambda: 1778497000.0,
             tailscale_probe=tailscale_probe,
         )
@@ -778,6 +780,14 @@ def test_remote_api_force_auth_blocks_before_first_pairing_when_bound_externally
     assert response.status_code == 401
 
 
+def test_remote_api_public_direct_blocks_before_first_pairing_when_bound_externally():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(public_direct=True)
+
+    response = client.get("/remote/status")
+
+    assert response.status_code == 401
+
+
 def test_pairing_code_registers_device_token_and_revoke_blocks_it():
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
@@ -873,7 +883,19 @@ def test_loopback_can_manage_remote_settings_after_pairing_without_bearer_token(
     assert revoked.status_code == 200
 
 
-def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
+def test_pairing_start_does_not_default_allow_current_macbook_tailscale_ip():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
+        client_address=("100.114.138.46", 50000),
+        require_auth=True,
+    )
+
+    pairing = client.post("/remote/pair/start")
+
+    assert pairing.status_code == 403
+
+
+def test_pairing_start_allows_explicit_dev_allowed_pairing_ip(monkeypatch):
+    monkeypatch.setenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "100.114.138.46")
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
         require_auth=True,
@@ -885,6 +907,31 @@ def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     assert pairing.status_code == 200
     assert pairing.json()["code"].isdigit()
     assert protected_without_token.status_code == 401
+
+
+def test_pairing_confirm_locks_after_repeated_source_failures():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
+
+    start = client.post("/remote/pair/start")
+    code = start.json()["code"]
+    for _index in range(4):
+        failed = client.post(
+            "/remote/pair/confirm",
+            json={"code": "000000", "device_name": "Android", "platform": "android"},
+        )
+        assert failed.status_code == 400
+
+    lock_trigger = client.post(
+        "/remote/pair/confirm",
+        json={"code": "000000", "device_name": "Android", "platform": "android"},
+    )
+    correct_after_lock = client.post(
+        "/remote/pair/confirm",
+        json={"code": code, "device_name": "Android", "platform": "android"},
+    )
+
+    assert lock_trigger.status_code == 429
+    assert correct_after_lock.status_code == 429
 
 
 def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
@@ -911,12 +958,17 @@ def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
                 ],
             }
 
+    host_client, _launcher, _opened_urls, _auditor, registry = _client_with_seed(
+        client_address=("127.0.0.1", 50000),
+        tailscale_probe=lambda: _Snapshot(),
+    )
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
+        device_registry=registry,
         tailscale_probe=lambda: _Snapshot(),
     )
 
-    start = client.post("/remote/pair/start")
+    start = host_client.post("/remote/pair/start")
     confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "MacBook", "platform": "macos"})
     token = confirm.json()["token"]
     accepted = client.get("/remote/status", headers={"Authorization": f"Bearer {token}"})

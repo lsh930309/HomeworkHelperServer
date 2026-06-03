@@ -1,8 +1,6 @@
 package dev.homeworkhelper.remote.state
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -52,6 +50,12 @@ private const val TAILSCALE_FOREGROUND_CONNECT_DELAY_MILLIS = 1_000L
 private const val REMOTE_AGENT_SCHEME = "http"
 private const val REMOTE_AGENT_PORT = 8000
 private val URL_SCHEME_PATTERN = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
+private val IPV4_PATTERN = Regex("""^\d{1,3}(?:\.\d{1,3}){3}$""")
+
+internal data class RemoteBaseUrlPolicy(
+    val allowed: Boolean,
+    val message: String,
+)
 
 internal fun normalizeRemoteBaseUrl(value: String): String {
     val trimmed = value.trim().trimEnd('/')
@@ -60,26 +64,68 @@ internal fun normalizeRemoteBaseUrl(value: String): String {
     val uri = runCatching { URI(withScheme) }.getOrNull() ?: return withScheme
     val host = uri.host?.trim().orEmpty()
     if (host.isBlank()) return withScheme
-    val port = if (uri.port > 0) uri.port else REMOTE_AGENT_PORT
+    val scheme = uri.scheme.ifBlank { REMOTE_AGENT_SCHEME }
+    val port = uri.port
     val displayHost = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
     val path = uri.rawPath?.takeIf { it.isNotBlank() && it != "/" }.orEmpty()
     val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
-    return "${uri.scheme.ifBlank { REMOTE_AGENT_SCHEME }}://$displayHost:$port$path$query"
+    val authority = if (port > 0) {
+        "$displayHost:$port"
+    } else if (scheme.lowercase() == "https") {
+        displayHost
+    } else {
+        "$displayHost:$REMOTE_AGENT_PORT"
+    }
+    return "$scheme://$authority$path$query"
 }
 
 internal fun remoteHostInputFromBaseUrl(baseUrl: String): String {
+    return normalizeRemoteBaseUrl(baseUrl)
+}
+
+internal fun validateRemoteBaseUrlPolicy(baseUrl: String): RemoteBaseUrlPolicy {
     val normalized = normalizeRemoteBaseUrl(baseUrl)
-    if (normalized.isBlank()) return ""
+    if (normalized.isBlank()) return RemoteBaseUrlPolicy(true, "")
     val uri = runCatching { URI(normalized) }.getOrNull()
-    val host = uri?.host?.trim().orEmpty()
-    if (host.isBlank()) {
-        return normalized
-            .removePrefix("$REMOTE_AGENT_SCHEME://")
-            .removePrefix("https://")
-            .removeSuffix(":$REMOTE_AGENT_PORT")
+        ?: return RemoteBaseUrlPolicy(false, "Remote Agent URL 형식이 올바르지 않습니다.")
+    val scheme = uri.scheme?.lowercase().orEmpty()
+    val host = uri.host?.trim().orEmpty()
+    if (scheme == "https") {
+        return RemoteBaseUrlPolicy(true, "Public HTTPS 직접접속 URL입니다.")
     }
-    val port = uri?.port ?: -1
-    return if (port > 0 && port != REMOTE_AGENT_PORT) "$host:$port" else host
+    if (scheme == "http" && isPrivateRemoteHost(host)) {
+        return RemoteBaseUrlPolicy(true, "Private HTTP 경로입니다. LAN, loopback, Tailscale 같은 사설망에서만 사용하세요.")
+    }
+    if (scheme == "http") {
+        return RemoteBaseUrlPolicy(false, "Public HTTP는 허용하지 않습니다. 외부 접속은 라우터/프록시에서 HTTPS로 종료한 URL을 사용하세요.")
+    }
+    return RemoteBaseUrlPolicy(false, "Remote Agent URL은 http 또는 https만 지원합니다.")
+}
+
+private fun isPrivateRemoteHost(host: String): Boolean {
+    val normalized = host.trim().trim('[', ']').lowercase()
+    if (normalized in setOf("localhost", "testclient")) return true
+    if (normalized.endsWith(".local")) return true
+    if (normalized.contains(":") && (
+            normalized == "::1" ||
+                normalized.startsWith("fe80:") ||
+                normalized.startsWith("fc") ||
+                normalized.startsWith("fd")
+            )
+    ) {
+        return true
+    }
+    if (!IPV4_PATTERN.matches(normalized)) return false
+    val octets = normalized.split(".").mapNotNull { it.toIntOrNull() }
+    if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+    val first = octets[0]
+    val second = octets[1]
+    return first == 10 ||
+        first == 127 ||
+        first == 192 && second == 168 ||
+        first == 172 && second in 16..31 ||
+        first == 169 && second == 254 ||
+        first == 100 && second in 64..127
 }
 
 data class AutomationUiState(
@@ -123,10 +169,12 @@ data class RemoteUiState(
     val showDiagnostics: Boolean = false,
     val powerReadiness: RemotePowerReadiness? = null,
     val setupRepairInFlight: Boolean = false,
+    val baseUrlSecurityMessage: String = "",
+    val baseUrlAllowed: Boolean = true,
     val automation: AutomationUiState = AutomationUiState(),
 ) {
     val canRefresh: Boolean
-        get() = baseUrl.isNotBlank() && !isRefreshing
+        get() = baseUrl.isNotBlank() && baseUrlAllowed && !isRefreshing
 
     val lastSyncLabel: String
         get() = if (lastSyncMillis <= 0L) {
@@ -173,6 +221,8 @@ class RemoteViewModel(
             lastSyncMillis = preferences.lastSyncMillis,
             showDiagnostics = preferences.showDiagnostics,
             userMessage = initialUserMessage(),
+            baseUrlSecurityMessage = validateRemoteBaseUrlPolicy(initialBaseUrl).message,
+            baseUrlAllowed = validateRemoteBaseUrlPolicy(initialBaseUrl).allowed,
             automation = AutomationUiState(
                 remoteNetwork = remoteNetworkController.initialState,
                 tailscale = tailscaleBinding.inspect(),
@@ -187,11 +237,7 @@ class RemoteViewModel(
     fun onAppForeground() {
         updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
         viewModelScope.launch {
-            val state = runCatching {
-                remoteNetworkController.inspect()
-            }.getOrElse {
-                remoteNetworkFailureState(it, "원격 네트워크 상태 확인")
-            }
+            val state = remoteNetworkController.inspect()
             updateAutomation { it.copy(remoteNetwork = state) }
         }
         if (_uiState.value.automation.tailscaleAutomation.connectOnAppForeground) {
@@ -217,8 +263,16 @@ class RemoteViewModel(
 
     fun updateBaseUrl(value: String) {
         val normalized = normalizeRemoteBaseUrl(value)
+        val policy = validateRemoteBaseUrlPolicy(normalized)
         preferences.baseUrl = normalized
-        _uiState.update { it.copy(baseUrl = normalized, userMessage = null) }
+        _uiState.update {
+            it.copy(
+                baseUrl = normalized,
+                baseUrlSecurityMessage = policy.message,
+                baseUrlAllowed = policy.allowed,
+                userMessage = if (policy.allowed) null else policy.message,
+            )
+        }
         repairSshDefaults(reason = "URL 변경")
     }
 
@@ -234,11 +288,7 @@ class RemoteViewModel(
 
     fun inspectRemoteNetwork() {
         viewModelScope.launch {
-            val state = runCatching {
-                remoteNetworkController.inspect()
-            }.getOrElse {
-                remoteNetworkFailureState(it, "원격 네트워크 상태 확인")
-            }
+            val state = remoteNetworkController.inspect()
             updateAutomation { it.copy(remoteNetwork = state) }
             _uiState.update { it.copy(userMessage = state.message) }
         }
@@ -250,19 +300,6 @@ class RemoteViewModel(
             if (ready) {
                 _uiState.update { it.copy(userMessage = _uiState.value.automation.remoteNetwork.message) }
             }
-        }
-    }
-
-    fun openRemoteNetworkAuth() {
-        val authUrl = _uiState.value.automation.remoteNetwork.authUrl.trim()
-        if (authUrl.isBlank()) {
-            _uiState.update { it.copy(userMessage = "열 수 있는 내장 tailnet 인증 URL이 없습니다.") }
-            return
-        }
-        runCatching {
-            appContext.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }.onFailure { error ->
-            _uiState.update { it.copy(userMessage = "내장 tailnet 인증 URL을 열 수 없습니다: ${error.message}") }
         }
     }
 
@@ -1038,33 +1075,30 @@ class RemoteViewModel(
     }
 
     private suspend fun ensureRemoteNetwork(reason: String): Boolean {
+        val policy = validateRemoteBaseUrlPolicy(_uiState.value.baseUrl)
+        if (!policy.allowed) {
+            val blocked = _uiState.value.automation.remoteNetwork.copy(
+                status = RemoteNetworkStatus.Unavailable,
+                message = policy.message,
+                lastAction = reason,
+            )
+            updateAutomation { it.copy(isRemoteNetworkBusy = false, remoteNetwork = blocked) }
+            _uiState.update { it.copy(baseUrlSecurityMessage = policy.message, baseUrlAllowed = false, userMessage = policy.message) }
+            return false
+        }
         val connecting = _uiState.value.automation.remoteNetwork.copy(
             status = RemoteNetworkStatus.Connecting,
             message = "$reason 원격 네트워크 연결을 확인합니다.",
             lastAction = reason,
         )
         updateAutomation { it.copy(isRemoteNetworkBusy = true, remoteNetwork = connecting) }
-        val state = runCatching {
-            remoteNetworkController.ensureConnected(reason)
-        }.getOrElse {
-            remoteNetworkFailureState(it, reason)
-        }
+        val state = remoteNetworkController.ensureConnected(reason)
         updateAutomation { it.copy(isRemoteNetworkBusy = false, remoteNetwork = state) }
         if (!state.ready) {
             _uiState.update { it.copy(userMessage = state.message) }
             return false
         }
         return true
-    }
-
-    private fun remoteNetworkFailureState(error: Throwable, lastAction: String): RemoteNetworkState {
-        val previous = _uiState.value.automation.remoteNetwork
-        val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
-        return previous.copy(
-            status = RemoteNetworkStatus.Unavailable,
-            message = "원격 네트워크 처리 실패: $detail",
-            lastAction = lastAction,
-        )
     }
 
     private fun inspectTailscalePreservingDiagnostics(previous: TailscaleBindingState): TailscaleBindingState {

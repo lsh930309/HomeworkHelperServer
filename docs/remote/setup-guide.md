@@ -21,15 +21,30 @@ HH_REMOTE_REQUIRE_AUTH=1 \
 ./.venv/bin/python homework_helper.pyw --server
 ```
 
+Public fixed-IP/domain access behind a router or reverse proxy:
+
+```bash
+HH_API_HOST=127.0.0.1 \
+HH_API_PORT=8000 \
+HH_REMOTE_PUBLIC_DIRECT=1 \
+./.venv/bin/python homework_helper.pyw --server
+```
+
+Terminate HTTPS at the router, Caddy, nginx, or another local reverse proxy and
+forward to the local HomeworkHelper server. Android public URLs must be
+`https://...`; plain `http://...` is only for loopback, LAN, link-local, or
+Tailscale `100.64.0.0/10` private routes.
+
 `--server` is a server-only entrypoint: it starts the FastAPI Remote Agent without entering the GUI single-instance/admin prompt path. SSH real-device test sessions can use the stricter `--testbench-server` variant through `tools/ssh_host_testbench.py`, which shadow-copies the installed package, assigns a per-session port/mutex/AppData root, writes a local report under `artifacts/ssh-host-testbench/`, and cleans the remote temp root after the run.
 
 Security rules:
 
-- Do not expose the Remote Agent publicly without bearer-token auth and a private network boundary.
-- Prefer LAN firewall/Tailscale-style private routing over public port forwarding.
-- HomeworkHelper Remote assumes host and client are on the same Tailscale tailnet. The apps therefore treat Tailscale as a required foundation layer: missing clients are installed from the official package source where possible, installed clients are launched with the discovered executable path, and `tailscale up --accept-routes` / `tailscale down` are used for local activation/deactivation instead of relying on a shell alias.
+- Do not expose the Remote Agent publicly without bearer-token auth and HTTPS termination.
+- Prefer LAN firewall/Tailscale-style private routing when possible. For fixed-IP direct access, use `HH_REMOTE_PUBLIC_DIRECT=1` and a TLS-terminating router/reverse proxy.
+- Tailscale remains a supported private-route fallback. It is not required when Android uses a public HTTPS Remote Agent URL.
 - First-time Tailscale account creation, login, macOS VPN/System Extension approval, and any auth-key/MDM policy rollout remain explicit user/admin approval steps.
-- `/remote/pair/start` is intended for loopback or trusted/authenticated setup.
+- `/remote/pair/start` is intended for loopback or trusted/authenticated setup. Android does not remotely issue the first pairing code; the user obtains it locally from the host and enters it on Android.
+- `/remote/pair/confirm` accepts the local code from the client, but repeated failed guesses are rate-limited for the active pairing window.
 - The host does not expose arbitrary shell or power-execution endpoints.
 - If Tailscale/TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.
 - For package-environment logic checks, prefer the isolated SSH testbench in `docs/remote/host-ssh-diagnostics-runbook.md` over probing or killing the production host process.

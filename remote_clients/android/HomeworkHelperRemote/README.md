@@ -36,19 +36,15 @@ The repository root has `build_android_remote.py` for the host-side release loop
 ./.venv/bin/python build_android_remote.py
 ```
 
-Phone-side setup remains manual: enable Wi-Fi, Tailscale, Developer options >
-Wireless debugging, then open the pairing-code screen when pairing is needed.
-The script reads `tailscale status --json` and auto-selects the only registered
-Android peer even when that peer is currently offline. If multiple Android
-devices exist, specify one with `--tailscale-device <hostname>` or
-`HH_ANDROID_TAILSCALE_DEVICE=<hostname>`. `--device-ip`/`HH_ANDROID_DEVICE_IP`
-remain available as manual overrides. After the Tailscale IP is resolved, the
-script uses `adb mdns services` when available, otherwise prompts for the
-pair/connect ports shown on the phone. It builds the gomobile tsnet AAR,
-assembles the debug APK with `homeworkhelper.android.remoteNetworkMode=embedded`
-and `homeworkhelper.android.embeddedTailnetAar`, copies it to `release/`,
-archives old Android APKs under `release/archives/android-client/apk/`, and
-runs `adb install -r`.
+Phone-side setup remains manual. For adb installation, enable a network path
+reachable from the Mac, Developer options > Wireless debugging, then open the
+pairing-code screen when pairing is needed. The script can still resolve a
+Tailscale Android peer for adb, but `--device-ip`/`HH_ANDROID_DEVICE_IP` remain
+available as manual overrides. The Android client itself is built as a
+lightweight direct-connection app: no Go/gomobile AAR or embedded tailnet bridge
+is generated. The script builds the debug APK with the `android-client` version
+target, copies it to `release/`, archives old Android APKs under
+`release/archives/android-client/apk/`, and runs `adb install -r`.
 
 The helper signs its debug APKs with a stable local keystore at
 `local-artifacts/android-signing/homeworkhelper-android-debug.keystore`
@@ -59,9 +55,6 @@ safe failure. For the one-time migration where app data loss is acceptable:
 ```bash
 ./.venv/bin/python build_android_remote.py --uninstall-on-signature-mismatch
 ```
-
-For a temporary legacy APK that uses only Android's system route and skips the
-native AAR build, pass `--system-route`.
 
 ## Implementation source of truth
 
@@ -85,50 +78,18 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 
 Setup is intentionally compact and mirrors the macOS settings hierarchy where Android has an equivalent:
 
-- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, app-only RemoteNetworkController status, Tailscale install/open/status fallback, Android-local VPN readiness check, and VPN ON request.
+- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, direct system-route status, Tailscale install/open/status fallback, Android-local VPN readiness check, and VPN ON request.
 - **전원**: readiness, OpenSSH key/health setup, SmartThings PAT/OAuth and `PC 켜기` device auto-selection.
 - **기기**: paired-device refresh, revoke, and revoked-device cleanup.
 - **앱**: diagnostics toggle, optional Tailscale ON at app foreground, optional Tailscale OFF at app background, and manual VPN ON/OFF requests.
 
 Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN, polls Android-local VPN state, and only then refreshes the host snapshot. The Android client does not call host-side Tailscale ensure/health mutation endpoints.
 
-The app-only embedded tailnet path is wired through `RemoteNetworkController`.
-The default `homeworkhelper.android.remoteNetworkMode=system` preserves the
-current Android system route and keeps the normal APK build free of native Go
-dependencies. Private debug builds can bundle an in-process tsnet node for
-HomeworkHelper HTTP and SSH calls. The root `build_android_remote.py` helper
-does this automatically; the manual commands are useful when iterating only on
-the native bridge:
-
-```bash
-./.venv/bin/python tools/build_android_tailnet_bridge.py
-
-cd remote_clients/android/HomeworkHelperRemote
-./gradlew :app:assembleDebug \
-  -Phomeworkhelper.android.remoteNetworkMode=embedded \
-  -Phomeworkhelper.android.embeddedTailnetAar="$PWD/../../../local-artifacts/android-tailnet/homeworkhelper-tailnet.aar"
-```
-
-The builder compiles `native/tailnetbridge` with gomobile into
-`local-artifacts/android-tailnet/homeworkhelper-tailnet.aar` using Android API
-26 so the AAR matches the app minSdk. The checked-in Kotlin wrapper is
-`dev.homeworkhelper.remote.platform.TsnetEmbeddedTailnetBridge`, and Gradle uses
-that class by default when `embedded` mode is selected. Optional local-only
-properties are:
-
-```properties
-homeworkhelper.android.remoteNetworkMode=embedded
-homeworkhelper.android.embeddedTailnetAar=/absolute/path/to/homeworkhelper-tailnet.aar
-homeworkhelper.android.embeddedTailnetControlUrl= # optional Headscale/control URL
-homeworkhelper.android.embeddedTailnetHostname= # optional stable node name
-```
-
-First login is interactive: the embedded node stores state under the app files
-directory and surfaces a Tailscale auth URL in Setup. Tap `인증 열기` to approve
-the node. Without the AAR, the app surfaces `unavailable` instead of pretending
-that the embedded path works. The official Tailscale app controls remain as a
-system-route fallback, not the primary path for embedded builds.
-
+The primary Remote Agent URL is a public HTTPS URL terminated by a router or
+reverse proxy, then forwarded to the local Windows HomeworkHelper server.
+Cleartext HTTP is accepted only for loopback, LAN, link-local, or Tailscale
+`100.64.0.0/10` private routes. Pairing codes are issued locally on the host;
+Android only confirms a code that the user already obtained from the host.
 
 ## Local SmartThings wake defaults
 

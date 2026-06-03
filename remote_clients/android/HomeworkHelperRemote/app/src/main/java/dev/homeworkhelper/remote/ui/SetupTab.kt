@@ -63,7 +63,6 @@ fun SetupTab(
     onShowDiagnosticsChange: (Boolean) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
-    onOpenRemoteNetworkAuth: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -119,7 +118,6 @@ fun SetupTab(
                         onPair = onPair,
                         onInspectRemoteNetwork = onInspectRemoteNetwork,
                         onEnsureRemoteNetwork = onEnsureRemoteNetwork,
-                        onOpenRemoteNetworkAuth = onOpenRemoteNetworkAuth,
                         onInspectTailscale = onInspectTailscale,
                         onOpenTailscale = onOpenTailscale,
                         onInstallTailscale = onInstallTailscale,
@@ -173,7 +171,6 @@ private fun ConnectionSection(
     onPair: (String) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
-    onOpenRemoteNetworkAuth: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -192,21 +189,26 @@ private fun ConnectionSection(
         OutlinedTextField(
             value = hostInput,
             onValueChange = onBaseUrlChange,
-            label = { Text("Host IP / hostname") },
-            placeholder = { Text("100.x.y.z 또는 host.tailnet.ts.net") },
-            prefix = { Text("http://") },
-            suffix = { Text(":8000") },
+            label = { Text("Remote Agent URL") },
+            placeholder = { Text("https://home.example.com 또는 http://100.x.y.z:8000") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         if (state.baseUrl.isNotBlank()) {
             Text("Remote Agent URL: ${state.baseUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (state.baseUrlSecurityMessage.isNotBlank()) {
+            Text(
+                state.baseUrlSecurityMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.baseUrlAllowed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            )
+        }
         OutlinedTextField(value = state.deviceName, onValueChange = onDeviceNameChange, label = { Text("기기 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         InfoRow("페어링", if (state.hasToken) "완료" else "필요")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(value = pairingCode, onValueChange = { pairingCode = it.filter(Char::isDigit).take(6) }, label = { Text("6자리 페어링 코드") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.weight(1f))
-            Button(onClick = { onPair(pairingCode) }, enabled = !state.isPairing) { Text(if (state.isPairing) "페어링 중" else "페어링") }
+            Button(onClick = { onPair(pairingCode) }, enabled = !state.isPairing && state.baseUrlAllowed) { Text(if (state.isPairing) "페어링 중" else "페어링") }
         }
         Text("페어링 토큰은 명시적 기기 revoke 전까지 유지됩니다. 네트워크 오류나 앱 재시작만으로 갱신/삭제하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Button(
@@ -218,7 +220,7 @@ private fun ConnectionSection(
         }
         Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork, onOpenRemoteNetworkAuth)
+    RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork)
     TailscaleFoundationSection(
         state,
         onInspectTailscale,
@@ -236,21 +238,13 @@ private fun RemoteNetworkFoundationSection(
     state: RemoteUiState,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
-    onOpenRemoteNetworkAuth: () -> Unit,
 ) {
     val remoteNetwork = state.automation.remoteNetwork
-    SettingsCard(title = "앱 전용 원격 네트워크", subtitle = "HomeworkHelper 내부 HTTP/SSH 호출이 사용할 네트워크 경로입니다.") {
+    SettingsCard(title = "원격 연결 경로", subtitle = "HomeworkHelper 내부 HTTP/SSH 호출은 Android system route를 사용합니다.") {
         InfoRow("Mode", remoteNetwork.mode.label)
         InfoRow("State", remoteNetwork.status.label)
         InfoRow("Engine", remoteNetwork.engine)
-        InfoRow("Bridge", if (remoteNetwork.bridgeAvailable) "available" else "not bundled")
         Text(remoteNetwork.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (remoteNetwork.authUrl.isNotBlank()) {
-            Text("Auth URL: ${remoteNetwork.authUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-            OutlinedButton(onClick = onOpenRemoteNetworkAuth, modifier = Modifier.fillMaxWidth()) {
-                Text("인증 열기")
-            }
-        }
         if (remoteNetwork.lastAction.isNotBlank()) {
             Text("최근 확인: ${remoteNetwork.lastAction}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -262,7 +256,7 @@ private fun RemoteNetworkFoundationSection(
                 Text("상태")
             }
         }
-        Text("내장 tailnet PoC는 Tailscale 앱 ON/OFF가 아니라 RemoteNetworkController를 통해 앱 기능 호출만 tailnet으로 보내는 경로를 우선합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("외부 접속은 public HTTPS URL을 사용하고, HTTP는 LAN/Tailscale 같은 private 경로에서만 허용합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -459,7 +453,7 @@ private fun AppSection(
         if (lifecycleOffEffective) {
             Text("앱 종료 OFF는 sleep/wake 이후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast 복구가 실패할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Text("Tailscale ON/OFF fallback은 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. 앱 전용 원격 네트워크가 준비되면 HomeworkHelper 기능 호출은 이 fallback에 의존하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Tailscale ON/OFF fallback은 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. 직접 HTTPS 연결을 사용할 때는 필수 조건이 아닙니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }
             OutlinedButton(onClick = onTailscaleDisconnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN OFF") }
@@ -500,7 +494,6 @@ private fun DiagnosticsSection(state: RemoteUiState) {
         InfoRow("SmartThings ready", state.automation.wakeReady.toString())
         InfoRow("Remote network mode", state.automation.remoteNetwork.mode.wireName)
         InfoRow("Remote network state", state.automation.remoteNetwork.status.label)
-        InfoRow("Remote network bridge", state.automation.remoteNetwork.bridgeAvailable.toString())
         InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
         InfoRow("Tailscale sleep-safe", state.automation.tailscaleAutomation.sleepSafeMode.toString())
         InfoRow("Tailscale auto OFF effective", (state.automation.tailscaleAutomation.disconnectOnAppBackground && !state.automation.tailscaleAutomation.sleepSafeMode).toString())

@@ -1,6 +1,6 @@
 # Android Remote Client Rebuild Design
 
-Last refreshed: 2026-06-03
+Last refreshed: 2026-05-26
 Status: Active Android client implementation guide; existing Android full-parity code must not be resurrected
 
 ## 1. Decision
@@ -38,7 +38,6 @@ Secondary jobs:
 - Manage paired-device and token lifecycle tasks.
 - Provide optional Android-local power control through Tailscale app binding, SmartThings Wake, and OpenSSH.
 - Keep Android-only lifecycle automation explicit and reversible: app foreground may request Tailscale VPN ON, app background may request VPN OFF, but first login/VPN consent remains user-approved.
-- Make HomeworkHelper HTTP/SSH calls feel like part of the Android client by allowing private builds to route those calls through an embedded tsnet node instead of requiring the user to operate both the client app and the external Tailscale app for ordinary app functions.
 
 Non-goals for the first rebuild pass:
 
@@ -114,7 +113,6 @@ Setup screen responsibilities:
 - App-only `RemoteNetworkController` status for HomeworkHelper HTTP/SSH calls.
 - Tailscale app binding status and host tailnet URL probing as an external fallback.
 - Tailscale ON/OFF broadcast requests and optional foreground/background lifecycle automation as explicit fallback controls.
-- Embedded tsnet auth URL display and `인증 열기` action when the app-only tailnet node needs interactive approval.
 - SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
 - Paired device list, device revoke, and revoked-device cleanup.
 - Diagnostics and fake Remote Agent smoke guidance.
@@ -129,8 +127,7 @@ Power UI policy:
 
 Tailscale UI policy:
 
-- The first-class connection surface is the app-only RemoteNetworkController. It can use the Android system route or a private embedded tailnet bridge selected by build config.
-- Embedded mode uses the checked-in Kotlin `TsnetEmbeddedTailnetBridge` wrapper plus an optional gomobile AAR. It should route Remote Agent HTTP and SSH sockets through tsnet while preserving the external Tailscale app controls as a manual/system fallback.
+- The first-class connection surface is the system-route RemoteNetworkController. Public access must use HTTPS, while cleartext HTTP is limited to loopback, LAN, link-local, or Tailscale `100.64.0.0/10` private routes.
 - If Tailscale is not installed, guide the user to install/open the official Android package.
 - If Tailscale is installed, Android may request VPN connect/disconnect through the installed app and then re-inspect VPN state.
 - The app must display that first-time Tailscale login, Android VPN consent, and account approval can require direct user confirmation in Tailscale.
@@ -151,27 +148,10 @@ app/src/main/java/dev/homeworkhelper/remote/
 ├── platform/Preferences.kt      # non-secret settings
 ├── platform/AutomationPreferences.kt # SSH/SmartThings/Tailscale local settings
 ├── platform/AndroidSSHPowerManager.kt # SSHJ health and power commands
-├── platform/RemoteNetworkController.kt # app-only network mode, HTTP/SSH transport hooks, embedded tailnet bridge boundary
-├── platform/TsnetEmbeddedTailnetBridge.kt # reflection wrapper around optional gomobile tsnet AAR
+├── platform/RemoteNetworkController.kt # system-route HTTP/SSH transport hooks and URL policy boundary
 ├── platform/TailscaleBinding.kt # app detection, launch/install, VPN-state adapter
 └── ui/                          # Home, Setup, shared components
 ```
-
-The optional native bridge source lives outside the production Kotlin tree:
-
-```text
-native/tailnetbridge/
-├── go.mod      # tailscale.com/tsnet + gomobile bind tool
-├── bridge.go   # Configure/Start/EnsureConnectedJson/StatusJson/RequestJson/OpenTcp/Read/Write/CloseConn/Stop
-└── bridge_test.go
-```
-
-`tools/build_android_tailnet_bridge.py` builds
-`local-artifacts/android-tailnet/homeworkhelper-tailnet.aar` with
-`gomobile bind -target=android/arm64 -androidapi=26
--javapkg=dev.homeworkhelper.remote.nativebridge`. The app includes that AAR
-only when `homeworkhelper.android.embeddedTailnetAar` is set, so default system
-route builds stay reproducible without Go/gomobile.
 
 Rules:
 
@@ -253,8 +233,7 @@ Android reachability and state mirroring:
 - Preserve the paired device token until explicit device revoke; Android should not rotate or locally delete it as part of ordinary setup.
 - When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
 - When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
-- Remote Agent HTTP and Android-local SSH should go through `RemoteNetworkController`; `homeworkhelper.android.remoteNetworkMode=system` preserves Android's system route, while `embedded` uses `TsnetEmbeddedTailnetBridge` by default and requires `homeworkhelper.android.embeddedTailnetAar` to bundle the native Go bridge.
-- Embedded tsnet state is persistent and non-ephemeral under the app files directory. The first run may return `needs_auth` with an auth URL; Setup must expose that URL and an open-auth action.
+- Remote Agent HTTP and Android-local SSH should go through `RemoteNetworkController`; production Android uses Android's system route and rejects public cleartext HTTP before pairing or command requests.
 - Tailscale app binding is Android-local only: request the installed Tailscale app to connect, poll local VPN state, and never mutate host-side Tailscale health.
 
 ## 10. Verification plan
@@ -263,9 +242,7 @@ Phase 0, rebuild scaffold:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-./.venv/bin/python tools/build_android_tailnet_bridge.py
 cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug --stacktrace
-cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug -Phomeworkhelper.android.remoteNetworkMode=embedded -Phomeworkhelper.android.embeddedTailnetAar="$PWD/../../../local-artifacts/android-tailnet/homeworkhelper-tailnet.aar" --stacktrace
 ./.venv/bin/python tools/check_android_apk_artifact.py
 ```
 

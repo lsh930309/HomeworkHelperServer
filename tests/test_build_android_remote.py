@@ -41,8 +41,6 @@ def test_android_version_code_and_gradle_command_use_release_version():
         "-Phomeworkhelper.android.debugStorePassword=android",
         "-Phomeworkhelper.android.debugKeyAlias=androiddebugkey",
         "-Phomeworkhelper.android.debugKeyPassword=android",
-        "-Phomeworkhelper.android.remoteNetworkMode=embedded",
-        f"-Phomeworkhelper.android.embeddedTailnetAar={android_build.DEFAULT_EMBEDDED_TAILNET_AAR}",
     ]
 
 
@@ -52,42 +50,21 @@ def test_gradle_command_can_seed_default_remote_agent_url():
     command = android_build.create_gradle_assemble_command(info, default_remote_base_url="100.64.0.9")
 
     assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=http://100.64.0.9:8000" in command
-    assert "-Phomeworkhelper.android.remoteNetworkMode=embedded" in command
 
 
-def test_gradle_command_can_build_legacy_system_route_apk():
+def test_gradle_command_accepts_public_https_remote_agent_url():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
 
-    command = android_build.create_gradle_assemble_command(info, embedded_tailnet_aar=None)
+    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="https://home.example.com")
 
-    assert "-Phomeworkhelper.android.remoteNetworkMode=embedded" not in command
-    assert not any("homeworkhelper.android.embeddedTailnetAar" in item for item in command)
+    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://home.example.com" in command
 
 
-def test_build_android_apk_generates_embedded_tailnet_aar_before_gradle(monkeypatch, tmp_path):
+def test_gradle_command_rejects_public_http_remote_agent_url():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
-    calls = []
-    aar = tmp_path / "tailnet.aar"
 
-    monkeypatch.setattr(android_build, "DEFAULT_APK", tmp_path / "app-debug.apk")
-    monkeypatch.setattr(android_build, "DEFAULT_EMBEDDED_TAILNET_AAR", aar)
-    monkeypatch.setattr(android_build, "ensure_debug_keystore", lambda: tmp_path / "debug.keystore")
-    monkeypatch.setattr(android_build, "build_environment", lambda: {})
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:2] == [android_build.sys.executable, str(android_build.EMBEDDED_TAILNET_BUILD_SCRIPT)]:
-            aar.write_text("aar", encoding="utf-8")
-        if command[:2] == ["./gradlew", ":app:assembleDebug"]:
-            android_build.DEFAULT_APK.write_text("apk", encoding="utf-8")
-
-    monkeypatch.setattr(android_build, "_run", fake_run)
-
-    android_build.build_android_apk(info)
-
-    assert calls[0] == [android_build.sys.executable, "tools/check_android_sdk_readiness.py"]
-    assert str(android_build.EMBEDDED_TAILNET_BUILD_SCRIPT) in calls[1]
-    assert f"-Phomeworkhelper.android.embeddedTailnetAar={aar}" in calls[2]
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        android_build.create_gradle_assemble_command(info, default_remote_base_url="http://home.example.com")
 
 
 def test_remote_base_url_normalization_adds_fixed_scheme_and_port():
@@ -95,6 +72,7 @@ def test_remote_base_url_normalization_adds_fixed_scheme_and_port():
     assert android_build.normalize_remote_base_url("100.64.0.9") == "http://100.64.0.9:8000"
     assert android_build.normalize_remote_base_url("host.tailnet.ts.net:9000") == "http://host.tailnet.ts.net:9000"
     assert android_build.normalize_remote_base_url("http://host.tailnet.ts.net") == "http://host.tailnet.ts.net:8000"
+    assert android_build.normalize_remote_base_url("https://home.example.com") == "https://home.example.com"
 
 
 def test_parse_and_choose_adb_mdns_ports_prefers_requested_ip_then_single_fallback():

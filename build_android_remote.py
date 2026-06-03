@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Build the Android Remote client, archive the APK, and install over wireless adb.
 
-The phone-side prerequisites remain intentionally manual: Wi-Fi, Tailscale,
-Wireless debugging, and first-time pairing-code consent must be enabled on the
-device. This script automates the host-side deterministic parts: Gradle build,
-release APK naming/archiving, adb pair/connect, and adb install.
+The phone-side prerequisites remain intentionally manual: an adb-reachable
+network path, Wireless debugging, and first-time pairing-code consent must be
+enabled on the device. Tailscale can still provide that adb path, but the APK
+itself is built as a lightweight direct-connection client. This script automates
+the host-side deterministic parts: Gradle build, release APK naming/archiving,
+adb pair/connect, and adb install.
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import re
 import shutil
@@ -34,8 +37,6 @@ DEFAULT_SANDBOX_HOME = Path("/private/tmp/homeworkhelper-android-build-home")
 DEFAULT_GRADLE_HOME = Path("/private/tmp/homeworkhelper-android-build-gradle")
 DEFAULT_ANDROID_USER_HOME = Path("/private/tmp/homeworkhelper-android-build-user")
 DEFAULT_DEBUG_KEYSTORE = PROJECT_ROOT / "local-artifacts" / "android-signing" / "homeworkhelper-android-debug.keystore"
-DEFAULT_EMBEDDED_TAILNET_AAR = PROJECT_ROOT / "local-artifacts" / "android-tailnet" / "homeworkhelper-tailnet.aar"
-EMBEDDED_TAILNET_BUILD_SCRIPT = PROJECT_ROOT / "tools" / "build_android_tailnet_bridge.py"
 DEBUG_KEYSTORE_PASSWORD = "android"
 DEBUG_KEY_ALIAS = "androiddebugkey"
 
@@ -50,9 +51,8 @@ MAIN_ACTIVITY = f"{PACKAGE_NAME}/.MainActivity"
 REMOTE_AGENT_DEFAULT_SCHEME = "http"
 REMOTE_AGENT_DEFAULT_PORT = 8000
 REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY = "homeworkhelper.android.defaultRemoteBaseUrl"
-REMOTE_NETWORK_MODE_GRADLE_PROPERTY = "homeworkhelper.android.remoteNetworkMode"
-EMBEDDED_TAILNET_AAR_GRADLE_PROPERTY = "homeworkhelper.android.embeddedTailnetAar"
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 @dataclass(frozen=True)
@@ -163,6 +163,9 @@ def normalize_remote_base_url(value: str) -> str:
     if has_port:
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query)).rstrip("/")
 
+    if parsed.scheme.lower() == "https":
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query)).rstrip("/")
+
     netloc = parsed.netloc
     host_part = netloc.rsplit("@", 1)[-1]
     if ":" in host_part and not host_part.startswith("["):
@@ -173,12 +176,47 @@ def normalize_remote_base_url(value: str) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, "", parsed.query)).rstrip("/")
 
 
+def is_private_remote_host(host: str) -> bool:
+    normalized = host.strip().strip("[]").lower()
+    if normalized in {"localhost", "testclient"} or normalized.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return bool(
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address in _TAILSCALE_CGNAT
+    )
+
+
+def public_cleartext_remote_base_url(value: str) -> bool:
+    normalized = normalize_remote_base_url(value)
+    if not normalized:
+        return False
+    parsed = urlsplit(normalized)
+    if parsed.scheme.lower() != "http":
+        return False
+    return not is_private_remote_host(parsed.hostname or "")
+
+
+def validate_remote_base_url_for_android(value: str) -> str:
+    normalized = normalize_remote_base_url(value)
+    if public_cleartext_remote_base_url(normalized):
+        raise RuntimeError(
+            "Android public 직접접속 URL은 HTTPS여야 합니다. "
+            f"public HTTP URL은 APK 기본값으로 주입할 수 없습니다: {normalized}"
+        )
+    return normalized
+
+
 def create_gradle_assemble_command(
     version_info: dict,
     *,
     debug_keystore: Path = DEFAULT_DEBUG_KEYSTORE,
     default_remote_base_url: str = "",
-    embedded_tailnet_aar: Path | None = DEFAULT_EMBEDDED_TAILNET_AAR,
 ) -> list[str]:
     command = [
         "./gradlew",
@@ -191,16 +229,9 @@ def create_gradle_assemble_command(
         f"-Phomeworkhelper.android.debugKeyAlias={DEBUG_KEY_ALIAS}",
         f"-Phomeworkhelper.android.debugKeyPassword={DEBUG_KEYSTORE_PASSWORD}",
     ]
-    normalized_base_url = normalize_remote_base_url(default_remote_base_url)
+    normalized_base_url = validate_remote_base_url_for_android(default_remote_base_url)
     if normalized_base_url:
         command.append(f"-P{REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY}={normalized_base_url}")
-    if embedded_tailnet_aar is not None:
-        command.extend(
-            [
-                f"-P{REMOTE_NETWORK_MODE_GRADLE_PROPERTY}=embedded",
-                f"-P{EMBEDDED_TAILNET_AAR_GRADLE_PROPERTY}={embedded_tailnet_aar}",
-            ]
-        )
     return command
 
 
@@ -318,39 +349,16 @@ def archive_release_artifacts(
     return archived
 
 
-def build_embedded_tailnet_aar(output: Path | None = None) -> Path:
-    output = output or DEFAULT_EMBEDDED_TAILNET_AAR
-    if not EMBEDDED_TAILNET_BUILD_SCRIPT.exists():
-        raise RuntimeError(f"내장 tailnet AAR 빌드 스크립트를 찾을 수 없습니다: {EMBEDDED_TAILNET_BUILD_SCRIPT}")
-    _run(
-        [sys.executable, str(EMBEDDED_TAILNET_BUILD_SCRIPT), "--output", str(output)],
-        env=build_environment(),
-    )
-    if not output.exists():
-        raise RuntimeError(f"내장 tailnet AAR 빌드가 끝났지만 산출물을 찾지 못했습니다: {output}")
-    return output
-
-
-def build_android_apk(
-    version_info: dict,
-    *,
-    default_remote_base_url: str = "",
-    include_embedded_tailnet: bool = True,
-) -> None:
+def build_android_apk(version_info: dict, *, default_remote_base_url: str = "") -> None:
     readiness = [sys.executable, "tools/check_android_sdk_readiness.py"]
     _run(readiness, env=build_environment())
     debug_keystore = ensure_debug_keystore()
     print(f"  ✓ debug signing keystore: {debug_keystore}")
-    embedded_tailnet_aar = None
-    if include_embedded_tailnet:
-        embedded_tailnet_aar = build_embedded_tailnet_aar()
-        print(f"  ✓ embedded tailnet AAR: {embedded_tailnet_aar}")
     _run(
         create_gradle_assemble_command(
             version_info,
             debug_keystore=debug_keystore,
             default_remote_base_url=default_remote_base_url,
-            embedded_tailnet_aar=embedded_tailnet_aar,
         ),
         cwd=ANDROID_ROOT,
         env=build_environment(),
@@ -623,7 +631,7 @@ def resolve_default_remote_base_url(host_url: str | None, host_tailscale_device:
     if host_url and host_tailscale_device:
         raise RuntimeError("--host-url과 --host-tailscale-device는 동시에 지정할 수 없습니다.")
     if host_url:
-        return normalize_remote_base_url(host_url)
+        return validate_remote_base_url_for_android(host_url)
     if not host_tailscale_device:
         return ""
 
@@ -634,7 +642,7 @@ def resolve_default_remote_base_url(host_url: str | None, host_tailscale_device:
     host_ip = peer.primary_ipv4()
     if not host_ip:
         raise RuntimeError(f"Tailscale host peer에 IPv4가 없습니다: {describe_tailscale_peer(peer)}")
-    base_url = normalize_remote_base_url(host_ip)
+    base_url = validate_remote_base_url_for_android(host_ip)
     print(f"  ✓ Tailscale host: {describe_tailscale_peer(peer)} → {base_url}")
     return base_url
 
@@ -706,7 +714,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and install the Android Remote client over wireless adb.")
     parser.add_argument("--device-ip", default=os.environ.get("HH_ANDROID_DEVICE_IP"), help="Stable device IP override. If omitted, the script resolves a Tailscale Android peer.")
     parser.add_argument("--tailscale-device", default=os.environ.get("HH_ANDROID_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector. If omitted, exactly one Android peer is auto-selected.")
-    parser.add_argument("--host-url", default=os.environ.get("HH_ANDROID_REMOTE_BASE_URL"), help="Remote Agent base URL or host/IP to seed into the Android app. Bare host/IP becomes http://<host>:8000. Env: HH_ANDROID_REMOTE_BASE_URL.")
+    parser.add_argument("--host-url", default=os.environ.get("HH_ANDROID_REMOTE_BASE_URL"), help="Remote Agent base URL or host/IP to seed into the Android app. Public URLs must be HTTPS; private bare host/IP becomes http://<host>:8000. Env: HH_ANDROID_REMOTE_BASE_URL.")
     parser.add_argument("--host-tailscale-device", default=os.environ.get("HH_ANDROID_HOST_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector for the Remote Agent host. The resolved IP becomes http://<ip>:8000. Env: HH_ANDROID_HOST_TAILSCALE_DEVICE.")
     parser.add_argument("--pair-port", type=int, default=None, help="Port shown by 'Pair device with pairing code'.")
     parser.add_argument("--connect-port", type=int, default=None, help="Wireless debugging connect port.")
@@ -720,7 +728,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--archive-days", type=int, default=90)
     parser.add_argument("--no-prune-archives", action="store_true")
     parser.add_argument("--no-install", action="store_true", help="Build/copy/check the release APK but do not run adb pair/connect/install.")
-    parser.add_argument("--system-route", action="store_true", help="Build the legacy system-route APK without generating or bundling the embedded tailnet AAR.")
     parser.add_argument(
         "--uninstall-on-signature-mismatch",
         action="store_true",
@@ -745,7 +752,6 @@ def main(argv: list[str] | None = None) -> int:
         default_remote_base_url = resolve_default_remote_base_url(args.host_url, args.host_tailscale_device)
         if default_remote_base_url:
             print(f"- default Remote Agent URL: {default_remote_base_url}")
-        print(f"- remote network mode: {'system route' if args.system_route else 'embedded tailnet'}")
 
         print("\n== Archive old Android APKs ==")
         archived = archive_release_artifacts(
@@ -758,11 +764,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  (아카이빙할 Android APK 없음)")
 
         print("\n== Build APK ==")
-        build_android_apk(
-            version_info,
-            default_remote_base_url=default_remote_base_url,
-            include_embedded_tailnet=not args.system_route,
-        )
+        build_android_apk(version_info, default_remote_base_url=default_remote_base_url)
         release_apk = copy_release_apk(version_info)
         check_release_apk(release_apk, version_info)
 
