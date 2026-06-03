@@ -188,8 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     checks.append(_run("macOS Swift build", ["swift", "build"], cwd=MACOS_CLIENT_DIR))
     checks.append(
         _run(
-            "Android assembleDebug",
-            ["./gradlew", ":app:assembleDebug", "--stacktrace"],
+            "Android assembleRelease",
+            ["./gradlew", ":app:assembleRelease", "--stacktrace"],
             cwd=ANDROID_CLIENT_DIR,
             env=_env_for_android(),
         )
@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.returncode == 0:
             _print_result(result)
             continue
-        if result.name == "Android assembleDebug" and _is_android_license_blocker(result):
+        if result.name == "Android assembleRelease" and _is_android_license_blocker(result):
             object.__setattr__(result, "status", "blocked: android-sdk-license")
             android_license_blockers.append(result)
             _print_result(result)

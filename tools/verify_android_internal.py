@@ -60,7 +60,7 @@ def main() -> int:
     steps = [
         Step("Android static contract", [sys.executable, "-m", "pytest", "tests/test_remote_android_client_static.py"]),
         Step("Android SDK readiness", [sys.executable, "tools/check_android_sdk_readiness.py"]),
-        Step("Gradle assembleDebug", ["./gradlew", ":app:assembleDebug", "--stacktrace"], cwd=ANDROID_ROOT),
+        Step("Gradle assembleRelease", ["./gradlew", ":app:assembleRelease", "--stacktrace"], cwd=ANDROID_ROOT),
         Step("APK artifact contract", [sys.executable, "tools/check_android_apk_artifact.py"]),
     ]
     for step in steps:

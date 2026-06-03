@@ -42,7 +42,7 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
         "Android APK artifact",
         "swift",
         "./gradlew",
-        ":app:assembleDebug",
+        ":app:assembleRelease",
         "--stacktrace",
         "branch discipline",
         "--require-branch",
@@ -180,7 +180,7 @@ def test_android_apk_artifact_check_pins_packaged_manifest_contract():
     artifact = _read(TOOLS / "check_android_apk_artifact.py")
 
     for marker in [
-        "app-debug.apk",
+        "app-release.apk",
         "aapt",
         "dump",
         "badging",

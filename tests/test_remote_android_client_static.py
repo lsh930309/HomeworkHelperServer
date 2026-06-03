@@ -307,7 +307,7 @@ def test_android_internal_verifier_remains_home_mvp_build_entrypoint():
     for marker in [
         "tests/test_remote_android_client_static.py",
         "tools/check_android_sdk_readiness.py",
-        ":app:assembleDebug",
+        ":app:assembleRelease",
         "tools/check_android_apk_artifact.py",
         "Android internal verification passed",
     ]:

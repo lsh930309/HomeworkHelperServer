@@ -5,8 +5,8 @@ The phone-side prerequisites remain intentionally manual: an adb-reachable
 network path, Wireless debugging, and first-time pairing-code consent must be
 enabled on the device. Tailscale can still provide that adb path, but the APK
 itself is built as a lightweight direct-connection client. This script automates
-the host-side deterministic parts: Gradle build, release APK naming/archiving,
-adb pair/connect, and adb install.
+the host-side deterministic parts: signed release Gradle build, release APK
+naming/archiving, adb pair/connect, and adb install.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from src.core.tailscale import TailscalePeer, TailscaleSnapshot, tailscale_statu
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
-DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
 DEFAULT_JAVA_HOME = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 DEFAULT_ANDROID_HOME = "/opt/homebrew/share/android-commandlinetools"
 DEFAULT_ADB = "/opt/homebrew/share/android-commandlinetools/platform-tools/adb"
@@ -220,7 +220,7 @@ def create_gradle_assemble_command(
 ) -> list[str]:
     command = [
         "./gradlew",
-        ":app:assembleDebug",
+        ":app:assembleRelease",
         "--stacktrace",
         f"-Phomeworkhelper.android.versionName={version_info['version']}",
         f"-Phomeworkhelper.android.versionCode={android_version_code(version_info)}",
@@ -353,7 +353,7 @@ def build_android_apk(version_info: dict, *, default_remote_base_url: str = "") 
     readiness = [sys.executable, "tools/check_android_sdk_readiness.py"]
     _run(readiness, env=build_environment())
     debug_keystore = ensure_debug_keystore()
-    print(f"  ✓ debug signing keystore: {debug_keystore}")
+    print(f"  ✓ local signing keystore: {debug_keystore}")
     _run(
         create_gradle_assemble_command(
             version_info,

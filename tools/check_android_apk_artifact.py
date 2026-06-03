@@ -21,8 +21,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
-DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
-DEFAULT_BUILD_CONFIG = ANDROID_ROOT / "app" / "build" / "generated" / "source" / "buildConfig" / "debug" / "dev" / "homeworkhelper" / "remote" / "BuildConfig.java"
+DEFAULT_APK = ANDROID_ROOT / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
+DEFAULT_BUILD_CONFIG = ANDROID_ROOT / "app" / "build" / "generated" / "source" / "buildConfig" / "release" / "dev" / "homeworkhelper" / "remote" / "BuildConfig.java"
 LOCAL_SMARTTHINGS_TOKEN = PROJECT_ROOT / "local-artifacts" / "secrets" / "SmartThings_Token"
 DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
 EXPECTED_PACKAGE = "dev.homeworkhelper.remote"
@@ -48,6 +48,7 @@ class ApkReport:
     target_sdk: str
     permissions: set[str]
     smartthings_debug_pat_length: int | None
+    debuggable: bool
 
 
 def _sdk_root() -> Path:
@@ -95,6 +96,7 @@ def inspect_apk(apk: Path, aapt: Path) -> ApkReport:
         target_sdk=_extract(r"targetSdkVersion:'([^']+)'", badging, "targetSdk"),
         permissions=permissions,
         smartthings_debug_pat_length=_smartthings_debug_pat_length(),
+        debuggable="application-debuggable" in badging,
     )
 
 
@@ -121,10 +123,11 @@ def _print_report(report: ApkReport) -> None:
         print(f"  - {permission}")
     if report.smartthings_debug_pat_length is not None:
         print(f"- smartthings_debug_pat_present: {report.smartthings_debug_pat_length > 0}")
+    print(f"- debuggable: {report.debuggable}")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check the Android Remote debug APK packaged manifest contract.")
+    parser = argparse.ArgumentParser(description="Check the Android Remote release APK packaged manifest contract.")
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK)
     parser.add_argument("--aapt", default=None)
     parser.add_argument("--expected-version-code", default=EXPECTED_VERSION_CODE)
@@ -155,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
             failures.append(f"expected minSdk {args.expected_min_sdk}, found {report.min_sdk}")
         if report.target_sdk != args.expected_target_sdk:
             failures.append(f"expected targetSdk {args.expected_target_sdk}, found {report.target_sdk}")
+        if report.debuggable:
+            failures.append("release APK must not be debuggable")
         missing_permissions = sorted(EXPECTED_PERMISSIONS - report.permissions)
         if missing_permissions:
             failures.append(f"missing permissions: {', '.join(missing_permissions)}")

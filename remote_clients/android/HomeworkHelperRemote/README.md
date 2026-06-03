@@ -23,10 +23,10 @@ cd remote_clients/android/HomeworkHelperRemote
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
-The APK is still produced at `app/build/outputs/apk/debug/app-debug.apk`.
+The APK is produced at `app/build/outputs/apk/release/app-release.apk`.
 
 ## Wireless ADB build/install helper
 
@@ -42,11 +42,11 @@ pairing-code screen when pairing is needed. The script can still resolve a
 Tailscale Android peer for adb, but `--device-ip`/`HH_ANDROID_DEVICE_IP` remain
 available as manual overrides. The Android client itself is built as a
 lightweight direct-connection app: no Go/gomobile AAR or embedded tailnet bridge
-is generated. The script builds the debug APK with the `android-client` version
+is generated. The script builds a signed release APK with the `android-client` version
 target, copies it to `release/`, archives old Android APKs under
 `release/archives/android-client/apk/`, and runs `adb install -r`.
 
-The helper signs its debug APKs with a stable local keystore at
+The helper signs APKs with a stable local keystore at
 `local-artifacts/android-signing/homeworkhelper-android-debug.keystore`
 (untracked). Before install it compares the installed package signature with the
 new APK. If an older app was signed with a different debug key, the default is a

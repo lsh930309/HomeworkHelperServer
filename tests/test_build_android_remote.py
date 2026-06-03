@@ -33,7 +33,7 @@ def test_android_version_code_and_gradle_command_use_release_version():
     assert android_build.android_release_apk_path(info).name == "HomeworkHelperRemoteAndroid_v0.1.2_b34_gabc1234.apk"
     assert android_build.create_gradle_assemble_command(info, debug_keystore=keystore) == [
         "./gradlew",
-        ":app:assembleDebug",
+        ":app:assembleRelease",
         "--stacktrace",
         "-Phomeworkhelper.android.versionName=0.1.2",
         "-Phomeworkhelper.android.versionCode=1020034",

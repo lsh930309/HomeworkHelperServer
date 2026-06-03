@@ -123,7 +123,7 @@ cd remote_clients/android/HomeworkHelperRemote
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
 Rebuild design: `docs/remote/android-client-design.md`.
@@ -142,7 +142,7 @@ Android v3/internal checks:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug --stacktrace
+cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleRelease --stacktrace
 ./.venv/bin/python tools/check_android_apk_artifact.py
 python tools/smoke_android_fake_remote.py --serial <adb-serial>
 ```

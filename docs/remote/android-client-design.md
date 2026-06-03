@@ -242,7 +242,7 @@ Phase 0, rebuild scaffold:
 
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleDebug --stacktrace
+cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleRelease --stacktrace
 ./.venv/bin/python tools/check_android_apk_artifact.py
 ```
 

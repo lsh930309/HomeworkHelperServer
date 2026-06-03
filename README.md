@@ -240,7 +240,7 @@ cd remote_clients/android/HomeworkHelperRemote
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
 현재 Android 앱은 v3 게임 우선 UX 상태다. Home은 게임 미러링과 실행/중단에 집중하고, Setup은 연결/페어링 · 전원 · 기기 · 앱 섹션으로 URL/token, Tailscale 기반환경, SmartThings/OpenSSH 전원 자동화, paired-device 관리, fake smoke 안내를 나눈다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
