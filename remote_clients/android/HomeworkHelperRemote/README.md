@@ -87,14 +87,40 @@ Setup is intentionally compact and mirrors the macOS settings hierarchy where An
 
 Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN, polls Android-local VPN state, and only then refreshes the host snapshot. The Android client does not call host-side Tailscale ensure/health mutation endpoints.
 
-The app-only embedded tailnet PoC is wired through `RemoteNetworkController`.
+The app-only embedded tailnet path is wired through `RemoteNetworkController`.
 The default `homeworkhelper.android.remoteNetworkMode=system` preserves the
-current Android system route. Private debug builds can set
-`homeworkhelper.android.remoteNetworkMode=embedded` and
-`homeworkhelper.android.embeddedTailnetBridgeClass=<class>` to provide an
-`EmbeddedTailnetBridge` implementation that opens HomeworkHelper HTTP/SSH
-connections through an in-process tailnet node. Without that bridge the app
-surfaces `unavailable` instead of pretending that the embedded path works.
+current Android system route and keeps the normal APK build free of native Go
+dependencies. Private debug builds can bundle an in-process tsnet node for
+HomeworkHelper HTTP and SSH calls:
+
+```bash
+./.venv/bin/python tools/build_android_tailnet_bridge.py
+
+cd remote_clients/android/HomeworkHelperRemote
+./gradlew :app:assembleDebug \
+  -Phomeworkhelper.android.remoteNetworkMode=embedded \
+  -Phomeworkhelper.android.embeddedTailnetAar="$PWD/../../../local-artifacts/android-tailnet/homeworkhelper-tailnet.aar"
+```
+
+The builder compiles `native/tailnetbridge` with gomobile into
+`local-artifacts/android-tailnet/homeworkhelper-tailnet.aar` using Android API
+26 so the AAR matches the app minSdk. The checked-in Kotlin wrapper is
+`dev.homeworkhelper.remote.platform.TsnetEmbeddedTailnetBridge`, and Gradle uses
+that class by default when `embedded` mode is selected. Optional local-only
+properties are:
+
+```properties
+homeworkhelper.android.remoteNetworkMode=embedded
+homeworkhelper.android.embeddedTailnetAar=/absolute/path/to/homeworkhelper-tailnet.aar
+homeworkhelper.android.embeddedTailnetControlUrl= # optional Headscale/control URL
+homeworkhelper.android.embeddedTailnetHostname= # optional stable node name
+```
+
+First login is interactive: the embedded node stores state under the app files
+directory and surfaces a Tailscale auth URL in Setup. Tap `인증 열기` to approve
+the node. Without the AAR, the app surfaces `unavailable` instead of pretending
+that the embedded path works. The official Tailscale app controls remain as a
+system-route fallback, not the primary path for embedded builds.
 
 
 ## Local SmartThings wake defaults

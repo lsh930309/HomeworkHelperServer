@@ -340,8 +340,15 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         'homeworkhelper.android.defaultRemoteBaseUrl',
         'REMOTE_NETWORK_MODE',
         'EMBEDDED_TAILNET_BRIDGE_CLASS',
+        'EMBEDDED_TAILNET_CONTROL_URL',
+        'EMBEDDED_TAILNET_HOSTNAME',
         'homeworkhelper.android.remoteNetworkMode',
         'homeworkhelper.android.embeddedTailnetBridgeClass',
+        'homeworkhelper.android.embeddedTailnetAar',
+        'homeworkhelper.android.embeddedTailnetControlUrl',
+        'homeworkhelper.android.embeddedTailnetHostname',
+        'implementation(files(embeddedTailnetAar))',
+        'TsnetEmbeddedTailnetBridge',
         'SmartThings_Token',
         'local-artifacts/secrets/$name',
         'localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")',
@@ -368,6 +375,16 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "RemoteHttpResponse",
         "EmbeddedTailnetBridge",
         "EmbeddedTailnetRemoteNetworkController",
+        "TsnetEmbeddedTailnetBridge",
+        "TSNET_BRIDGE_FACTORY_CLASS",
+        "dev.homeworkhelper.remote.nativebridge.tailnetbridge.Tailnetbridge",
+        "BuildConfig.EMBEDDED_TAILNET_CONTROL_URL",
+        "BuildConfig.EMBEDDED_TAILNET_HOSTNAME",
+        "ensureConnectedJson",
+        "requestJson",
+        "openTcp",
+        "openRemoteNetworkAuth",
+        "인증 열기",
         "RemoteNetworkUnavailableException",
         "ensureRemoteNetwork",
         "앱 전용 원격 네트워크",
@@ -442,6 +459,7 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "BuildConfig.DEFAULT_REMOTE_BASE_URL",
         "BuildConfig.REMOTE_NETWORK_MODE",
         "BuildConfig.EMBEDDED_TAILNET_BRIDGE_CLASS",
+        "RemoteNetworkUnavailableException(unavailableMessage(it))",
         "normalizeRemoteBaseUrl",
         "remoteHostInputFromBaseUrl",
         "빌드 기본 Remote Agent URL",
@@ -478,6 +496,71 @@ def test_android_power_automation_binds_tailscale_ssh_and_smartthings_autoselect
         "Fake SSH public key registered",
     ]:
         assert marker in fake_agent
+
+
+def test_android_embedded_tailnet_bridge_sources_and_builder_are_declared():
+    native_dir = ANDROID_ROOT / "native/tailnetbridge"
+    bridge_go = _read(native_dir / "bridge.go")
+    bridge_test = _read(native_dir / "bridge_test.go")
+    go_mod = _read(native_dir / "go.mod")
+    builder = _read(Path("tools/build_android_tailnet_bridge.py"))
+
+    for path in [
+        native_dir / "go.mod",
+        native_dir / "go.sum",
+        native_dir / "bridge.go",
+        native_dir / "bridge_test.go",
+        Path("tools/build_android_tailnet_bridge.py"),
+    ]:
+        assert path.exists()
+
+    for marker in [
+        "tailscale.com/tsnet",
+        "tailscale.com/ipn/ipnstate",
+        "EnsureConnectedJson",
+        "StatusJson",
+        "RequestJson",
+        "OpenTcp",
+        "Read",
+        "Write",
+        "CloseConn",
+        "ControlURL",
+        "Ephemeral:  false",
+        "UserLogf",
+        "server.Up(ctx)",
+        "LocalClient()",
+        "AuthURL",
+        "TailscaleIPs",
+    ]:
+        assert marker in bridge_go
+
+    for marker in [
+        "TestParseHeaders",
+        "TestEncodeStatusKeepsAuthURLReadable",
+    ]:
+        assert marker in bridge_test
+
+    for marker in [
+        "go 1.26.3",
+        "tool golang.org/x/mobile/cmd/gobind",
+        "tailscale.com v1.98.5",
+        "golang.org/x/mobile",
+    ]:
+        assert marker in go_mod
+
+    for marker in [
+        "gomobile",
+        "bind",
+        'DEFAULT_TARGET = "android/arm64"',
+        'DEFAULT_ANDROID_API = "26"',
+        'parser.add_argument("--androidapi", default=DEFAULT_ANDROID_API)',
+        "-javapkg=dev.homeworkhelper.remote.nativebridge",
+        "local-artifacts/android-tailnet/homeworkhelper-tailnet.aar",
+        "jni/arm64-v8a/libgojni.so",
+        "dev/homeworkhelper/remote/nativebridge/tailnetbridge/Bridge.class",
+        "homeworkhelper.android.embeddedTailnetAar",
+    ]:
+        assert marker in builder
 
 
 def test_android_shared_contract_parity_and_settings_hierarchy_are_present():

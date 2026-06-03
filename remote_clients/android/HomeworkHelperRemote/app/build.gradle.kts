@@ -37,6 +37,13 @@ val androidDebugStoreFile = localOrGradleProperty("homeworkhelper.android.debugS
 val androidDebugStorePassword = localOrGradleProperty("homeworkhelper.android.debugStorePassword", "android")
 val androidDebugKeyAlias = localOrGradleProperty("homeworkhelper.android.debugKeyAlias", "androiddebugkey")
 val androidDebugKeyPassword = localOrGradleProperty("homeworkhelper.android.debugKeyPassword", androidDebugStorePassword)
+val embeddedTailnetAar = localOrGradleProperty("homeworkhelper.android.embeddedTailnetAar")
+val embeddedTailnetBridgeClass = localOrGradleProperty(
+    "homeworkhelper.android.embeddedTailnetBridgeClass",
+    "dev.homeworkhelper.remote.platform.TsnetEmbeddedTailnetBridge",
+)
+val embeddedTailnetControlUrl = localOrGradleProperty("homeworkhelper.android.embeddedTailnetControlUrl")
+val embeddedTailnetHostname = localOrGradleProperty("homeworkhelper.android.embeddedTailnetHostname")
 
 plugins {
     id("com.android.application")
@@ -61,7 +68,9 @@ android {
         buildConfigField("String", "SMARTTHINGS_DEBUG_PAT", buildConfigString(localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")))
         buildConfigField("String", "DEFAULT_REMOTE_BASE_URL", buildConfigString(localOrGradleProperty("homeworkhelper.android.defaultRemoteBaseUrl")))
         buildConfigField("String", "REMOTE_NETWORK_MODE", buildConfigString(localOrGradleProperty("homeworkhelper.android.remoteNetworkMode", "system")))
-        buildConfigField("String", "EMBEDDED_TAILNET_BRIDGE_CLASS", buildConfigString(localOrGradleProperty("homeworkhelper.android.embeddedTailnetBridgeClass")))
+        buildConfigField("String", "EMBEDDED_TAILNET_BRIDGE_CLASS", buildConfigString(embeddedTailnetBridgeClass))
+        buildConfigField("String", "EMBEDDED_TAILNET_CONTROL_URL", buildConfigString(embeddedTailnetControlUrl))
+        buildConfigField("String", "EMBEDDED_TAILNET_HOSTNAME", buildConfigString(embeddedTailnetHostname))
     }
 
     signingConfigs {
@@ -97,6 +106,9 @@ kotlin {
 }
 
 dependencies {
+    if (embeddedTailnetAar.isNotBlank()) {
+        implementation(files(embeddedTailnetAar))
+    }
     implementation(platform("androidx.compose:compose-bom:2026.03.00"))
     implementation("androidx.activity:activity-compose:1.12.0")
     implementation("androidx.compose.material3:material3")

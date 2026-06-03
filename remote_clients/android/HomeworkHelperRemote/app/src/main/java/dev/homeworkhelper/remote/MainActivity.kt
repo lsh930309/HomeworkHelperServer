@@ -56,6 +56,7 @@ private fun HomeworkHelperRemoteApp(
             onShowDiagnosticsChange = viewModel::updateShowDiagnostics,
             onInspectRemoteNetwork = viewModel::inspectRemoteNetwork,
             onEnsureRemoteNetwork = viewModel::ensureRemoteNetworkFromUi,
+            onOpenRemoteNetworkAuth = viewModel::openRemoteNetworkAuth,
             onInspectTailscale = viewModel::inspectTailscale,
             onOpenTailscale = viewModel::openTailscaleApp,
             onInstallTailscale = viewModel::openTailscaleInstallPage,

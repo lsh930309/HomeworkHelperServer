@@ -1,6 +1,8 @@
 package dev.homeworkhelper.remote.state
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -240,6 +242,19 @@ class RemoteViewModel(
             if (ready) {
                 _uiState.update { it.copy(userMessage = _uiState.value.automation.remoteNetwork.message) }
             }
+        }
+    }
+
+    fun openRemoteNetworkAuth() {
+        val authUrl = _uiState.value.automation.remoteNetwork.authUrl.trim()
+        if (authUrl.isBlank()) {
+            _uiState.update { it.copy(userMessage = "열 수 있는 내장 tailnet 인증 URL이 없습니다.") }
+            return
+        }
+        runCatching {
+            appContext.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { error ->
+            _uiState.update { it.copy(userMessage = "내장 tailnet 인증 URL을 열 수 없습니다: ${error.message}") }
         }
     }
 

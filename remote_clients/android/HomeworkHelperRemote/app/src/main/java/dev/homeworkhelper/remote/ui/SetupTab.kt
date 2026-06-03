@@ -63,6 +63,7 @@ fun SetupTab(
     onShowDiagnosticsChange: (Boolean) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
+    onOpenRemoteNetworkAuth: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -118,6 +119,7 @@ fun SetupTab(
                         onPair = onPair,
                         onInspectRemoteNetwork = onInspectRemoteNetwork,
                         onEnsureRemoteNetwork = onEnsureRemoteNetwork,
+                        onOpenRemoteNetworkAuth = onOpenRemoteNetworkAuth,
                         onInspectTailscale = onInspectTailscale,
                         onOpenTailscale = onOpenTailscale,
                         onInstallTailscale = onInstallTailscale,
@@ -171,6 +173,7 @@ private fun ConnectionSection(
     onPair: (String) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
+    onOpenRemoteNetworkAuth: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -215,7 +218,7 @@ private fun ConnectionSection(
         }
         Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork)
+    RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork, onOpenRemoteNetworkAuth)
     TailscaleFoundationSection(
         state,
         onInspectTailscale,
@@ -233,6 +236,7 @@ private fun RemoteNetworkFoundationSection(
     state: RemoteUiState,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
+    onOpenRemoteNetworkAuth: () -> Unit,
 ) {
     val remoteNetwork = state.automation.remoteNetwork
     SettingsCard(title = "앱 전용 원격 네트워크", subtitle = "HomeworkHelper 내부 HTTP/SSH 호출이 사용할 네트워크 경로입니다.") {
@@ -243,6 +247,9 @@ private fun RemoteNetworkFoundationSection(
         Text(remoteNetwork.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (remoteNetwork.authUrl.isNotBlank()) {
             Text("Auth URL: ${remoteNetwork.authUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            OutlinedButton(onClick = onOpenRemoteNetworkAuth, modifier = Modifier.fillMaxWidth()) {
+                Text("인증 열기")
+            }
         }
         if (remoteNetwork.lastAction.isNotBlank()) {
             Text("최근 확인: ${remoteNetwork.lastAction}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
