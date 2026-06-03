@@ -161,18 +161,21 @@ class SystemRemoteNetworkController : RemoteNetworkController {
 
 class EmbeddedTailnetRemoteNetworkController(context: Context) : RemoteNetworkController {
     private val appContext = context.applicationContext
+    private val systemFallback = SystemRemoteNetworkController()
     override val mode: RemoteNetworkMode = RemoteNetworkMode.EmbeddedTailnet
     private val bridge: EmbeddedTailnetBridge? by lazy { loadBridge() }
     override val initialState: RemoteNetworkState
         get() = unavailableState("내장 tailnet bridge 초기화 대기")
 
     override suspend fun inspect(): RemoteNetworkState {
-        return bridge?.inspect() ?: unavailableState("내장 tailnet bridge class가 설정되지 않았습니다.")
+        return (bridge?.inspect() ?: unavailableState("내장 tailnet bridge class가 설정되지 않았습니다."))
+            .withSystemFallbackIfUnavailable("내장 tailnet 상태 확인")
     }
 
     override suspend fun ensureConnected(reason: String): RemoteNetworkState {
-        return bridge?.ensureConnected(reason)
-            ?: unavailableState("내장 tailnet bridge가 없어 $reason 연결을 시작할 수 없습니다.")
+        return (bridge?.ensureConnected(reason)
+            ?: unavailableState("내장 tailnet bridge가 없어 $reason 연결을 시작할 수 없습니다."))
+            .withSystemFallbackIfUnavailable(reason)
     }
 
     override suspend fun disconnect(): RemoteNetworkState {
@@ -187,8 +190,12 @@ class EmbeddedTailnetRemoteNetworkController(context: Context) : RemoteNetworkCo
         connectTimeoutMillis: Int,
         readTimeoutMillis: Int,
     ): RemoteHttpResponse {
-        val activeBridge = bridge ?: throw RemoteNetworkUnavailableException("내장 tailnet bridge가 빌드에 포함되지 않았습니다.")
-        return activeBridge.request(url, method, headers, body, connectTimeoutMillis, readTimeoutMillis)
+        val activeBridge = bridge ?: return systemFallback.request(url, method, headers, body, connectTimeoutMillis, readTimeoutMillis)
+        return try {
+            activeBridge.request(url, method, headers, body, connectTimeoutMillis, readTimeoutMillis)
+        } catch (error: IOException) {
+            systemFallback.request(url, method, headers, body, connectTimeoutMillis, readTimeoutMillis)
+        }
     }
 
     override fun openSocket(
@@ -198,8 +205,22 @@ class EmbeddedTailnetRemoteNetworkController(context: Context) : RemoteNetworkCo
         localAddress: InetAddress?,
         localPort: Int,
     ): Socket {
-        val activeBridge = bridge ?: throw RemoteNetworkUnavailableException("내장 tailnet bridge가 빌드에 포함되지 않았습니다.")
-        return activeBridge.openSocket(host, port, timeoutMillis, localAddress, localPort)
+        val activeBridge = bridge ?: return systemFallback.openSocket(host, port, timeoutMillis, localAddress, localPort)
+        return try {
+            activeBridge.openSocket(host, port, timeoutMillis, localAddress, localPort)
+        } catch (error: IOException) {
+            systemFallback.openSocket(host, port, timeoutMillis, localAddress, localPort)
+        }
+    }
+
+    private fun RemoteNetworkState.withSystemFallbackIfUnavailable(lastAction: String): RemoteNetworkState {
+        if (status != RemoteNetworkStatus.Unavailable) return this
+        return systemFallback.initialState.copy(
+            engine = "${systemFallback.initialState.engine} fallback / $engine",
+            message = "$message Android system route fallback을 사용합니다. 외부 Tailscale VPN이 켜져 있어야 합니다.",
+            lastAction = lastAction,
+            bridgeAvailable = bridgeAvailable,
+        )
     }
 
     private fun unavailableState(message: String): RemoteNetworkState {

@@ -187,7 +187,11 @@ class RemoteViewModel(
     fun onAppForeground() {
         updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
         viewModelScope.launch {
-            val state = remoteNetworkController.inspect()
+            val state = runCatching {
+                remoteNetworkController.inspect()
+            }.getOrElse {
+                remoteNetworkFailureState(it, "원격 네트워크 상태 확인")
+            }
             updateAutomation { it.copy(remoteNetwork = state) }
         }
         if (_uiState.value.automation.tailscaleAutomation.connectOnAppForeground) {
@@ -230,7 +234,11 @@ class RemoteViewModel(
 
     fun inspectRemoteNetwork() {
         viewModelScope.launch {
-            val state = remoteNetworkController.inspect()
+            val state = runCatching {
+                remoteNetworkController.inspect()
+            }.getOrElse {
+                remoteNetworkFailureState(it, "원격 네트워크 상태 확인")
+            }
             updateAutomation { it.copy(remoteNetwork = state) }
             _uiState.update { it.copy(userMessage = state.message) }
         }
@@ -1036,13 +1044,27 @@ class RemoteViewModel(
             lastAction = reason,
         )
         updateAutomation { it.copy(isRemoteNetworkBusy = true, remoteNetwork = connecting) }
-        val state = remoteNetworkController.ensureConnected(reason)
+        val state = runCatching {
+            remoteNetworkController.ensureConnected(reason)
+        }.getOrElse {
+            remoteNetworkFailureState(it, reason)
+        }
         updateAutomation { it.copy(isRemoteNetworkBusy = false, remoteNetwork = state) }
         if (!state.ready) {
             _uiState.update { it.copy(userMessage = state.message) }
             return false
         }
         return true
+    }
+
+    private fun remoteNetworkFailureState(error: Throwable, lastAction: String): RemoteNetworkState {
+        val previous = _uiState.value.automation.remoteNetwork
+        val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+        return previous.copy(
+            status = RemoteNetworkStatus.Unavailable,
+            message = "원격 네트워크 처리 실패: $detail",
+            lastAction = lastAction,
+        )
     }
 
     private fun inspectTailscalePreservingDiagnostics(previous: TailscaleBindingState): TailscaleBindingState {

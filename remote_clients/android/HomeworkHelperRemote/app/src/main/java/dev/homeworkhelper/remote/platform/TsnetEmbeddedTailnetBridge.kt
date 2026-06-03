@@ -35,7 +35,11 @@ class TsnetEmbeddedTailnetBridge(context: Context) : EmbeddedTailnetBridge {
     override suspend fun inspect(): RemoteNetworkState = withContext(Dispatchers.IO) {
         nativeBridge.fold(
             onSuccess = { bridge ->
-                bridge.decodeState(bridge.statusJson(TSNET_STATUS_TIMEOUT_MILLIS), "내장 tailnet 상태 확인")
+                runCatching {
+                    bridge.decodeState(bridge.statusJson(TSNET_STATUS_TIMEOUT_MILLIS), "내장 tailnet 상태 확인")
+                }.getOrElse {
+                    unavailableState(it, "내장 tailnet 상태 확인", bridgeAvailable = true)
+                }
             },
             onFailure = { unavailableState(it) },
         )
@@ -44,7 +48,11 @@ class TsnetEmbeddedTailnetBridge(context: Context) : EmbeddedTailnetBridge {
     override suspend fun ensureConnected(reason: String): RemoteNetworkState = withContext(Dispatchers.IO) {
         nativeBridge.fold(
             onSuccess = { bridge ->
-                bridge.decodeState(bridge.ensureConnectedJson(TSNET_CONNECT_TIMEOUT_MILLIS), reason)
+                runCatching {
+                    bridge.decodeState(bridge.ensureConnectedJson(TSNET_CONNECT_TIMEOUT_MILLIS), reason)
+                }.getOrElse {
+                    unavailableState(it, reason, bridgeAvailable = true)
+                }
             },
             onFailure = { unavailableState(it, reason) },
         )
@@ -53,15 +61,19 @@ class TsnetEmbeddedTailnetBridge(context: Context) : EmbeddedTailnetBridge {
     override suspend fun disconnect(): RemoteNetworkState = withContext(Dispatchers.IO) {
         nativeBridge.fold(
             onSuccess = { bridge ->
-                bridge.stop()
-                RemoteNetworkState(
-                    mode = RemoteNetworkMode.EmbeddedTailnet,
-                    status = RemoteNetworkStatus.Disabled,
-                    engine = "tsnet",
-                    message = "앱 내장 tailnet 노드를 중지했습니다.",
-                    lastAction = "내장 tailnet 중지",
-                    bridgeAvailable = true,
-                )
+                runCatching {
+                    bridge.stop()
+                    RemoteNetworkState(
+                        mode = RemoteNetworkMode.EmbeddedTailnet,
+                        status = RemoteNetworkStatus.Disabled,
+                        engine = "tsnet",
+                        message = "앱 내장 tailnet 노드를 중지했습니다.",
+                        lastAction = "내장 tailnet 중지",
+                        bridgeAvailable = true,
+                    )
+                }.getOrElse {
+                    unavailableState(it, "내장 tailnet 중지", bridgeAvailable = true)
+                }
             },
             onFailure = { unavailableState(it, "내장 tailnet 중지") },
         )
@@ -344,19 +356,26 @@ private fun String.toRemoteNetworkStatus(): RemoteNetworkStatus {
     }
 }
 
-private fun unavailableState(error: Throwable, lastAction: String = ""): RemoteNetworkState {
+private fun unavailableState(
+    error: Throwable,
+    lastAction: String = "",
+    bridgeAvailable: Boolean = false,
+): RemoteNetworkState {
     return RemoteNetworkState(
         mode = RemoteNetworkMode.EmbeddedTailnet,
         status = RemoteNetworkStatus.Unavailable,
         engine = "tsnet",
         message = unavailableMessage(error),
         lastAction = lastAction,
-        bridgeAvailable = false,
+        bridgeAvailable = bridgeAvailable,
     )
 }
 
 private fun unavailableMessage(error: Throwable): String {
     val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+    if (detail.lowercase(Locale.US).contains("netlinkrib: permission denied")) {
+        return "Android 권한 제한으로 내장 tailnet 초기화가 거부되었습니다: $detail"
+    }
     return "내장 tailnet AAR가 포함되지 않았거나 초기화에 실패했습니다: $detail"
 }
 
