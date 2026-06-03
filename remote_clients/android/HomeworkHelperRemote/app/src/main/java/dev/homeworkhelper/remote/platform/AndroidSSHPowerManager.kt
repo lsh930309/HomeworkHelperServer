@@ -12,13 +12,17 @@ import java.security.Security
 import java.security.PublicKey
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.util.concurrent.TimeUnit
+import javax.net.SocketFactory
 
 private const val SSH_HEALTH_MARKER = "__HH_SSH_HEALTH_OK__"
 private const val SSH_ACCEPTED_MARKER = "__HH_REMOTE_POWER_ACCEPTED__"
 private const val BOUNCY_CASTLE_PROVIDER = "BC"
 private const val PACKAGED_BOUNCY_CASTLE_CLASS = "org.bouncycastle.jce.provider.BouncyCastleProvider"
 
-class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
+class AndroidSSHPowerManager(
+    private val preferences: AutomationPreferences,
+    private val socketFactory: SocketFactory = SocketFactory.getDefault(),
+) {
     suspend fun health(config: SshPowerPreferences, privateKeyPem: String): SshCommandResult {
         return runCommand(config, privateKeyPem, "cmd /C echo $SSH_HEALTH_MARKER", SSH_HEALTH_MARKER, persistHealth = true)
     }
@@ -39,6 +43,7 @@ class AndroidSSHPowerManager(private val preferences: AutomationPreferences) {
         }
         var observedFingerprint: String? = null
         val client = SSHClient(androidCompatibleSshConfig())
+        client.setSocketFactory(socketFactory)
         try {
             client.addHostKeyVerifier(object : HostKeyVerifier {
                 override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {

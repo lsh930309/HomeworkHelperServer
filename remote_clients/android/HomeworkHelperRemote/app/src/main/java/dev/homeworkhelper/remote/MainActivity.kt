@@ -54,6 +54,8 @@ private fun HomeworkHelperRemoteApp(
             onRevokeDevice = viewModel::revokeDevice,
             onPurgeRevokedDevices = viewModel::purgeRevokedDevices,
             onShowDiagnosticsChange = viewModel::updateShowDiagnostics,
+            onInspectRemoteNetwork = viewModel::inspectRemoteNetwork,
+            onEnsureRemoteNetwork = viewModel::ensureRemoteNetworkFromUi,
             onInspectTailscale = viewModel::inspectTailscale,
             onOpenTailscale = viewModel::openTailscaleApp,
             onInstallTailscale = viewModel::openTailscaleInstallPage,

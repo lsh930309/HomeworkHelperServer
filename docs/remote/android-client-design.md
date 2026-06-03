@@ -110,8 +110,9 @@ Setup screen responsibilities:
 - Server reachability and auth guidance.
 - User-facing display preferences such as diagnostic section visibility.
 - Power readiness explanation and OpenSSH/setup details.
-- Tailscale app binding status and host tailnet URL probing.
-- Tailscale ON/OFF broadcast requests and optional foreground/background lifecycle automation.
+- App-only `RemoteNetworkController` status for HomeworkHelper HTTP/SSH calls.
+- Tailscale app binding status and host tailnet URL probing as an external fallback.
+- Tailscale ON/OFF broadcast requests and optional foreground/background lifecycle automation as explicit fallback controls.
 - SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
 - Paired device list, device revoke, and revoked-device cleanup.
 - Diagnostics and fake Remote Agent smoke guidance.
@@ -126,6 +127,7 @@ Power UI policy:
 
 Tailscale UI policy:
 
+- The first-class connection surface is the app-only RemoteNetworkController. It can use the Android system route or a private embedded tailnet bridge selected by build config.
 - If Tailscale is not installed, guide the user to install/open the official Android package.
 - If Tailscale is installed, Android may request VPN connect/disconnect through the installed app and then re-inspect VPN state.
 - The app must display that first-time Tailscale login, Android VPN consent, and account approval can require direct user confirmation in Tailscale.
@@ -146,6 +148,7 @@ app/src/main/java/dev/homeworkhelper/remote/
 ├── platform/Preferences.kt      # non-secret settings
 ├── platform/AutomationPreferences.kt # SSH/SmartThings/Tailscale local settings
 ├── platform/AndroidSSHPowerManager.kt # SSHJ health and power commands
+├── platform/RemoteNetworkController.kt # app-only network mode, HTTP/SSH transport hooks, embedded tailnet bridge boundary
 ├── platform/TailscaleBinding.kt # app detection, launch/install, VPN-state adapter
 └── ui/                          # Home, Setup, shared components
 ```
@@ -230,6 +233,7 @@ Android reachability and state mirroring:
 - Preserve the paired device token until explicit device revoke; Android should not rotate or locally delete it as part of ordinary setup.
 - When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
 - When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
+- Remote Agent HTTP and Android-local SSH should go through `RemoteNetworkController`; `homeworkhelper.android.remoteNetworkMode=system` preserves Android's system route, while `embedded` requires `homeworkhelper.android.embeddedTailnetBridgeClass` to provide an `EmbeddedTailnetBridge`.
 - Tailscale app binding is Android-local only: request the installed Tailscale app to connect, poll local VPN state, and never mutate host-side Tailscale health.
 
 ## 10. Verification plan

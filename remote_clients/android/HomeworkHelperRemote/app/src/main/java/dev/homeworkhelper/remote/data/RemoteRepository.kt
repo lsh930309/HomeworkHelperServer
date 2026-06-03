@@ -1,10 +1,14 @@
 package dev.homeworkhelper.remote.data
 
+import dev.homeworkhelper.remote.platform.RemoteHttpTransport
+import dev.homeworkhelper.remote.platform.SystemRemoteNetworkController
+
 class RemoteRepository(
     private val baseUrl: String,
     private val token: String?,
+    httpTransport: RemoteHttpTransport = SystemRemoteNetworkController(),
 ) {
-    private val api = RemoteApiClient(baseUrl, token)
+    private val api = RemoteApiClient(baseUrl, token, httpTransport)
 
     suspend fun fetchHomeSnapshot(): RemoteHomeSnapshot {
         val status = api.status()

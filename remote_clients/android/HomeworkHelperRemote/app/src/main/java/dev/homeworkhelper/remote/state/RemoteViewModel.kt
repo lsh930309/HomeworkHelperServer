@@ -21,6 +21,10 @@ import dev.homeworkhelper.remote.platform.AndroidSSHPowerManager
 import dev.homeworkhelper.remote.platform.AndroidTokenStore
 import dev.homeworkhelper.remote.platform.AutomationPreferences
 import dev.homeworkhelper.remote.platform.PowerAction
+import dev.homeworkhelper.remote.platform.RemoteNetworkControllers
+import dev.homeworkhelper.remote.platform.RemoteNetworkSocketFactory
+import dev.homeworkhelper.remote.platform.RemoteNetworkState
+import dev.homeworkhelper.remote.platform.RemoteNetworkStatus
 import dev.homeworkhelper.remote.platform.RemotePreferences
 import dev.homeworkhelper.remote.platform.SmartThingsPreferences
 import dev.homeworkhelper.remote.platform.SshPowerPreferences
@@ -77,10 +81,12 @@ internal fun remoteHostInputFromBaseUrl(baseUrl: String): String {
 }
 
 data class AutomationUiState(
+    val remoteNetwork: RemoteNetworkState = RemoteNetworkState(),
     val tailscale: TailscaleBindingState = TailscaleBindingState(),
     val tailscaleAutomation: TailscaleAutomationPreferences = TailscaleAutomationPreferences(),
     val ssh: SshPowerPreferences = SshPowerPreferences(),
     val smartThings: SmartThingsPreferences = SmartThingsPreferences(),
+    val isRemoteNetworkBusy: Boolean = false,
     val smartThingsCandidates: List<SmartThingsDeviceCandidate> = emptyList(),
     val isTailscaleBusy: Boolean = false,
     val isSshBusy: Boolean = false,
@@ -135,9 +141,13 @@ class RemoteViewModel(
     private val automationPreferences: AutomationPreferences = AutomationPreferences(context.applicationContext),
 ) : ViewModel() {
     private val appContext = context.applicationContext
+    private val remoteNetworkController = RemoteNetworkControllers.create(appContext)
     private val tailscaleBinding = TailscaleBinding(appContext)
     private val sshKeyStore = AndroidSSHKeyStore(automationPreferences)
-    private val sshPowerManager = AndroidSSHPowerManager(automationPreferences)
+    private val sshPowerManager = AndroidSSHPowerManager(
+        automationPreferences,
+        RemoteNetworkSocketFactory(remoteNetworkController),
+    )
     private val smartThingsPatSeeded = automationPreferences.seedSmartThingsPatFromBuildConfig()
     private var autoSshAttemptSignature: String? = null
     private var tailscaleConnectSequence: Int = 0
@@ -162,6 +172,7 @@ class RemoteViewModel(
             showDiagnostics = preferences.showDiagnostics,
             userMessage = initialUserMessage(),
             automation = AutomationUiState(
+                remoteNetwork = remoteNetworkController.initialState,
                 tailscale = tailscaleBinding.inspect(),
                 tailscaleAutomation = automationPreferences.loadTailscaleAutomation(),
                 ssh = automationPreferences.loadSsh(),
@@ -173,6 +184,10 @@ class RemoteViewModel(
 
     fun onAppForeground() {
         updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
+        viewModelScope.launch {
+            val state = remoteNetworkController.inspect()
+            updateAutomation { it.copy(remoteNetwork = state) }
+        }
         if (_uiState.value.automation.tailscaleAutomation.connectOnAppForeground) {
             requestTailscaleConnect(
                 "앱 실행",
@@ -209,6 +224,23 @@ class RemoteViewModel(
     fun updateShowDiagnostics(value: Boolean) {
         preferences.showDiagnostics = value
         _uiState.update { it.copy(showDiagnostics = value) }
+    }
+
+    fun inspectRemoteNetwork() {
+        viewModelScope.launch {
+            val state = remoteNetworkController.inspect()
+            updateAutomation { it.copy(remoteNetwork = state) }
+            _uiState.update { it.copy(userMessage = state.message) }
+        }
+    }
+
+    fun ensureRemoteNetworkFromUi() {
+        viewModelScope.launch {
+            val ready = ensureRemoteNetwork("수동 확인")
+            if (ready) {
+                _uiState.update { it.copy(userMessage = _uiState.value.automation.remoteNetwork.message) }
+            }
+        }
     }
 
     fun updateTailscaleConnectOnForeground(value: Boolean) {
@@ -301,6 +333,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshing = true, userMessage = successMessage) }
+            if (!ensureRemoteNetwork("게임 목록 동기화")) {
+                _uiState.update { it.copy(isRefreshing = false) }
+                return@launch
+            }
             runCatching { repository().fetchHomeSnapshot() }
                 .onSuccess { snapshot ->
                     val now = System.currentTimeMillis()
@@ -342,6 +378,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isPairing = true, userMessage = null) }
+            if (!ensureRemoteNetwork("페어링")) {
+                _uiState.update { it.copy(isPairing = false) }
+                return@launch
+            }
             runCatching { repository(tokenOverride = null).confirmPairing(code.trim(), deviceName) }
                 .onSuccess { response ->
                     preferences.deviceName = response.name.ifBlank { deviceName }
@@ -372,6 +412,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isDevicesBusy = true) }
+            if (!ensureRemoteNetwork("기기 목록 조회")) {
+                _uiState.update { it.copy(isDevicesBusy = false) }
+                return@launch
+            }
             runCatching { repository().devices() }
                 .onSuccess { devices ->
                     _uiState.update {
@@ -395,6 +439,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isDevicesBusy = true, userMessage = null) }
+            if (!ensureRemoteNetwork("기기 revoke")) {
+                _uiState.update { it.copy(isDevicesBusy = false) }
+                return@launch
+            }
             runCatching { repository().revokeDevice(device.id) }
                 .onSuccess { response ->
                     _uiState.update { it.copy(isDevicesBusy = false, userMessage = if (response.revoked) "'${device.name}' 기기를 revoke했습니다." else "기기 revoke 결과를 확인할 수 없습니다.") }
@@ -409,6 +457,10 @@ class RemoteViewModel(
     fun purgeRevokedDevices() {
         viewModelScope.launch {
             _uiState.update { it.copy(isDevicesBusy = true, userMessage = null) }
+            if (!ensureRemoteNetwork("폐기 기기 정리")) {
+                _uiState.update { it.copy(isDevicesBusy = false) }
+                return@launch
+            }
             runCatching { repository().purgeRevokedDevices() }
                 .onSuccess { response ->
                     _uiState.update { it.copy(isDevicesBusy = false, userMessage = "폐기된 기기 ${response.removed}개를 정리했습니다.") }
@@ -431,6 +483,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(launchInFlightId = process.id, userMessage = null) }
+            if (!ensureRemoteNetwork("게임 실행")) {
+                _uiState.update { it.copy(launchInFlightId = null) }
+                return@launch
+            }
             runCatching { repository().launchProcess(process.id) }
                 .onSuccess { result ->
                     _uiState.update {
@@ -459,6 +515,10 @@ class RemoteViewModel(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(stopInFlightId = process.id, userMessage = null) }
+            if (!ensureRemoteNetwork("게임 중단")) {
+                _uiState.update { it.copy(stopInFlightId = null) }
+                return@launch
+            }
             runCatching { repository().stopProcess(process.id) }
                 .onSuccess { result ->
                     _uiState.update {
@@ -645,6 +705,10 @@ class RemoteViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(setupRepairInFlight = true, userMessage = "환경 자동 복구를 시작합니다. 전원 명령은 실행하지 않습니다.") }
             updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
+            if (!ensureRemoteNetwork("환경 자동 복구")) {
+                _uiState.update { it.copy(setupRepairInFlight = false) }
+                return@launch
+            }
             runCatching { repository().fetchHomeSnapshot() }
                 .onSuccess { snapshot ->
                     val now = System.currentTimeMillis()
@@ -720,6 +784,7 @@ class RemoteViewModel(
             return
         }
         viewModelScope.launch {
+            if (!ensureRemoteNetwork("SSH health 확인")) return@launch
             updateAutomation { it.copy(isSshBusy = true) }
             val result = sshPowerManager.health(automationPreferences.loadSsh(), privateKey)
             updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
@@ -742,6 +807,7 @@ class RemoteViewModel(
     }
 
     private suspend fun completeSshAutomation(trigger: String) {
+        if (!ensureRemoteNetwork("$trigger SSH 자동화")) return
         updateAutomation { it.copy(isSshBusy = true) }
         _uiState.update { it.copy(userMessage = "$trigger SSH key 등록과 health 확인을 자동 진행합니다.") }
         val keyPair = sshKeyStore.ensureKeyPair()
@@ -854,6 +920,7 @@ class RemoteViewModel(
             return
         }
         viewModelScope.launch {
+            if (!ensureRemoteNetwork("${action.label} SSH 명령")) return@launch
             updateAutomation { it.copy(powerActionInFlight = action) }
             val result = sshPowerManager.executePowerAction(action, automationPreferences.loadSsh(), privateKey)
             updateAutomation { it.copy(powerActionInFlight = null) }
@@ -878,7 +945,7 @@ class RemoteViewModel(
     }
 
     private fun repository(tokenOverride: String? = tokenStore.loadToken()): RemoteRepository {
-        return RemoteRepository(_uiState.value.baseUrl.trim(), tokenOverride)
+        return RemoteRepository(_uiState.value.baseUrl.trim(), tokenOverride, remoteNetworkController)
     }
 
     private fun applyPowerDefaults(powerReadiness: RemotePowerReadiness?) {
@@ -945,6 +1012,22 @@ class RemoteViewModel(
 
     private fun updateAutomation(transform: (AutomationUiState) -> AutomationUiState) {
         _uiState.update { state -> state.copy(automation = transform(state.automation)) }
+    }
+
+    private suspend fun ensureRemoteNetwork(reason: String): Boolean {
+        val connecting = _uiState.value.automation.remoteNetwork.copy(
+            status = RemoteNetworkStatus.Connecting,
+            message = "$reason 원격 네트워크 연결을 확인합니다.",
+            lastAction = reason,
+        )
+        updateAutomation { it.copy(isRemoteNetworkBusy = true, remoteNetwork = connecting) }
+        val state = remoteNetworkController.ensureConnected(reason)
+        updateAutomation { it.copy(isRemoteNetworkBusy = false, remoteNetwork = state) }
+        if (!state.ready) {
+            _uiState.update { it.copy(userMessage = state.message) }
+            return false
+        }
+        return true
     }
 
     private fun inspectTailscalePreservingDiagnostics(previous: TailscaleBindingState): TailscaleBindingState {

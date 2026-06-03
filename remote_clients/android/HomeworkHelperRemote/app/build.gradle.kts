@@ -60,6 +60,8 @@ android {
         buildConfigField("String", "SMARTTHINGS_DEFAULT_LOCATION_ID", buildConfigString(localProperty("smartthings.locationId", "7bbf137d-1f96-4ad4-9e39-1cdab082d41a")))
         buildConfigField("String", "SMARTTHINGS_DEBUG_PAT", buildConfigString(localPropertyOrSecretFile("smartthings.pat", "SmartThings_Token")))
         buildConfigField("String", "DEFAULT_REMOTE_BASE_URL", buildConfigString(localOrGradleProperty("homeworkhelper.android.defaultRemoteBaseUrl")))
+        buildConfigField("String", "REMOTE_NETWORK_MODE", buildConfigString(localOrGradleProperty("homeworkhelper.android.remoteNetworkMode", "system")))
+        buildConfigField("String", "EMBEDDED_TAILNET_BRIDGE_CLASS", buildConfigString(localOrGradleProperty("homeworkhelper.android.embeddedTailnetBridgeClass")))
     }
 
     signingConfigs {

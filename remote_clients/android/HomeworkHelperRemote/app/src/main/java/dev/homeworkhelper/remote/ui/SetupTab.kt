@@ -61,6 +61,8 @@ fun SetupTab(
     onRevokeDevice: (RemoteDevice) -> Unit,
     onPurgeRevokedDevices: () -> Unit,
     onShowDiagnosticsChange: (Boolean) -> Unit,
+    onInspectRemoteNetwork: () -> Unit,
+    onEnsureRemoteNetwork: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -114,6 +116,8 @@ fun SetupTab(
                         onBaseUrlChange = onBaseUrlChange,
                         onDeviceNameChange = onDeviceNameChange,
                         onPair = onPair,
+                        onInspectRemoteNetwork = onInspectRemoteNetwork,
+                        onEnsureRemoteNetwork = onEnsureRemoteNetwork,
                         onInspectTailscale = onInspectTailscale,
                         onOpenTailscale = onOpenTailscale,
                         onInstallTailscale = onInstallTailscale,
@@ -165,6 +169,8 @@ private fun ConnectionSection(
     onBaseUrlChange: (String) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onPair: (String) -> Unit,
+    onInspectRemoteNetwork: () -> Unit,
+    onEnsureRemoteNetwork: () -> Unit,
     onInspectTailscale: () -> Unit,
     onOpenTailscale: () -> Unit,
     onInstallTailscale: () -> Unit,
@@ -209,6 +215,7 @@ private fun ConnectionSection(
         }
         Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+    RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork)
     TailscaleFoundationSection(
         state,
         onInspectTailscale,
@@ -219,6 +226,37 @@ private fun ConnectionSection(
         onCheckClientTailscale,
         onTailscaleConnect,
     )
+}
+
+@Composable
+private fun RemoteNetworkFoundationSection(
+    state: RemoteUiState,
+    onInspectRemoteNetwork: () -> Unit,
+    onEnsureRemoteNetwork: () -> Unit,
+) {
+    val remoteNetwork = state.automation.remoteNetwork
+    SettingsCard(title = "앱 전용 원격 네트워크", subtitle = "HomeworkHelper 내부 HTTP/SSH 호출이 사용할 네트워크 경로입니다.") {
+        InfoRow("Mode", remoteNetwork.mode.label)
+        InfoRow("State", remoteNetwork.status.label)
+        InfoRow("Engine", remoteNetwork.engine)
+        InfoRow("Bridge", if (remoteNetwork.bridgeAvailable) "available" else "not bundled")
+        Text(remoteNetwork.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (remoteNetwork.authUrl.isNotBlank()) {
+            Text("Auth URL: ${remoteNetwork.authUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        if (remoteNetwork.lastAction.isNotBlank()) {
+            Text("최근 확인: ${remoteNetwork.lastAction}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onEnsureRemoteNetwork, enabled = !state.automation.isRemoteNetworkBusy, modifier = Modifier.weight(1f)) {
+                Text(if (state.automation.isRemoteNetworkBusy) "연결 확인 중" else "연결 확인")
+            }
+            OutlinedButton(onClick = onInspectRemoteNetwork, enabled = !state.automation.isRemoteNetworkBusy, modifier = Modifier.weight(1f)) {
+                Text("상태")
+            }
+        }
+        Text("내장 tailnet PoC는 Tailscale 앱 ON/OFF가 아니라 RemoteNetworkController를 통해 앱 기능 호출만 tailnet으로 보내는 경로를 우선합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 @Composable
@@ -233,7 +271,7 @@ private fun TailscaleFoundationSection(
     onTailscaleConnect: () -> Unit,
 ) {
     val tailscale = state.automation.tailscale
-    SettingsCard(title = "Tailscale 기반환경", subtitle = "Android 기기의 Tailscale 앱과 VPN 상태만 확인합니다.") {
+    SettingsCard(title = "Tailscale 기반환경", subtitle = "외부 Tailscale 앱/VPN fallback 상태만 확인합니다.") {
         InfoRow("설치", if (tailscale.installed) "감지됨" else "없음")
         InfoRow("VPN", if (tailscale.vpnActive) "활성" else "미감지")
         Text(tailscale.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -399,7 +437,7 @@ private fun AppSection(
     val tailscaleAutomation = state.automation.tailscaleAutomation
     val sleepSafeMode = tailscaleAutomation.sleepSafeMode
     val lifecycleOffEffective = tailscaleAutomation.disconnectOnAppBackground && !sleepSafeMode
-    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 Android-local Tailscale lifecycle 자동화를 설정합니다.") {
+    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 외부 Tailscale lifecycle fallback 자동화를 설정합니다.") {
         ToggleRow("진단 섹션 표시", state.showDiagnostics, onShowDiagnosticsChange)
         ToggleRow("Sleep-safe Tailscale 유지", sleepSafeMode, onTailscaleSleepSafeModeChange)
         Text("Sleep-safe가 켜져 있으면 앱 종료/백그라운드 진입 시 Tailscale OFF 요청을 보내지 않습니다. sleep/wake 이후 broadcast 자동 ON 실패를 피하기 위한 기본값입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -414,7 +452,7 @@ private fun AppSection(
         if (lifecycleOffEffective) {
             Text("앱 종료 OFF는 sleep/wake 이후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast 복구가 실패할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Text("Tailscale ON/OFF는 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. sleep/wake 안정성을 위해 Tailscale Always-on VPN과 배터리 제한 없음 설정을 권장합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Tailscale ON/OFF fallback은 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. 앱 전용 원격 네트워크가 준비되면 HomeworkHelper 기능 호출은 이 fallback에 의존하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }
             OutlinedButton(onClick = onTailscaleDisconnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN OFF") }
@@ -453,6 +491,9 @@ private fun DiagnosticsSection(state: RemoteUiState) {
         InfoRow("State revision", state.lastStateRevision ?: "unknown")
         InfoRow("SSH ready", state.automation.sshReady.toString())
         InfoRow("SmartThings ready", state.automation.wakeReady.toString())
+        InfoRow("Remote network mode", state.automation.remoteNetwork.mode.wireName)
+        InfoRow("Remote network state", state.automation.remoteNetwork.status.label)
+        InfoRow("Remote network bridge", state.automation.remoteNetwork.bridgeAvailable.toString())
         InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
         InfoRow("Tailscale sleep-safe", state.automation.tailscaleAutomation.sleepSafeMode.toString())
         InfoRow("Tailscale auto OFF effective", (state.automation.tailscaleAutomation.disconnectOnAppBackground && !state.automation.tailscaleAutomation.sleepSafeMode).toString())

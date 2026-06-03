@@ -80,12 +80,21 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 
 Setup is intentionally compact and mirrors the macOS settings hierarchy where Android has an equivalent:
 
-- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, Tailscale install/open/status, Android-local VPN readiness check, and VPN ON request.
+- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, app-only RemoteNetworkController status, Tailscale install/open/status fallback, Android-local VPN readiness check, and VPN ON request.
 - **전원**: readiness, OpenSSH key/health setup, SmartThings PAT/OAuth and `PC 켜기` device auto-selection.
 - **기기**: paired-device refresh, revoke, and revoked-device cleanup.
 - **앱**: diagnostics toggle, optional Tailscale ON at app foreground, optional Tailscale OFF at app background, and manual VPN ON/OFF requests.
 
 Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN, polls Android-local VPN state, and only then refreshes the host snapshot. The Android client does not call host-side Tailscale ensure/health mutation endpoints.
+
+The app-only embedded tailnet PoC is wired through `RemoteNetworkController`.
+The default `homeworkhelper.android.remoteNetworkMode=system` preserves the
+current Android system route. Private debug builds can set
+`homeworkhelper.android.remoteNetworkMode=embedded` and
+`homeworkhelper.android.embeddedTailnetBridgeClass=<class>` to provide an
+`EmbeddedTailnetBridge` implementation that opens HomeworkHelper HTTP/SSH
+connections through an in-process tailnet node. Without that bridge the app
+surfaces `unavailable` instead of pretending that the embedded path works.
 
 
 ## Local SmartThings wake defaults

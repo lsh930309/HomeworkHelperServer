@@ -1,12 +1,13 @@
 package dev.homeworkhelper.remote.data
 
 import android.net.Uri
+import dev.homeworkhelper.remote.platform.RemoteHttpTransport
+import dev.homeworkhelper.remote.platform.SystemRemoteNetworkController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
 import java.net.ConnectException
-import java.net.HttpURLConnection
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -23,6 +24,7 @@ sealed class RemoteApiException(message: String, cause: Throwable? = null) : Exc
 class RemoteApiClient(
     private val baseUrl: String,
     private val bearerToken: String?,
+    private val httpTransport: RemoteHttpTransport = SystemRemoteNetworkController(),
 ) {
     suspend fun status(): RemoteStatus {
         return JSONObject(request("remote/status")).toRemoteStatus()
@@ -101,25 +103,17 @@ class RemoteApiClient(
         body: String? = null,
     ): String = withContext(Dispatchers.IO) {
         val url = endpoint(path)
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 5_000
-            readTimeout = 8_000
-            setRequestProperty("Accept", "application/json")
-            if (!bearerToken.isNullOrBlank()) {
-                setRequestProperty("Authorization", "Bearer $bearerToken")
-            }
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
-        }
         try {
-            if (body != null) {
-                connection.outputStream.use { stream -> stream.write(body.toByteArray(Charsets.UTF_8)) }
+            val headers = mutableMapOf("Accept" to "application/json")
+            if (!bearerToken.isNullOrBlank()) {
+                headers["Authorization"] = "Bearer $bearerToken"
             }
-            val code = connection.responseCode
-            val responseText = readBody(connection, code)
+            if (body != null) {
+                headers["Content-Type"] = "application/json; charset=utf-8"
+            }
+            val response = httpTransport.request(URL(url), method, headers, body, 5_000, 8_000)
+            val code = response.code
+            val responseText = response.body
             when {
                 code in 200..299 -> responseText
                 code == 401 || code == 403 -> throw RemoteApiException.AuthRejected()
@@ -140,8 +134,6 @@ class RemoteApiClient(
             throw RemoteApiException.AgentUnavailable(exception)
         } catch (exception: Exception) {
             throw RemoteApiException.DecodeFailure(exception)
-        } finally {
-            connection.disconnect()
         }
     }
 
@@ -151,8 +143,4 @@ class RemoteApiClient(
         return "$trimmedBase/$trimmedPath"
     }
 
-    private fun readBody(connection: HttpURLConnection, code: Int): String {
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        return stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-    }
 }
