@@ -34,6 +34,8 @@ DEFAULT_SANDBOX_HOME = Path("/private/tmp/homeworkhelper-android-build-home")
 DEFAULT_GRADLE_HOME = Path("/private/tmp/homeworkhelper-android-build-gradle")
 DEFAULT_ANDROID_USER_HOME = Path("/private/tmp/homeworkhelper-android-build-user")
 DEFAULT_DEBUG_KEYSTORE = PROJECT_ROOT / "local-artifacts" / "android-signing" / "homeworkhelper-android-debug.keystore"
+DEFAULT_EMBEDDED_TAILNET_AAR = PROJECT_ROOT / "local-artifacts" / "android-tailnet" / "homeworkhelper-tailnet.aar"
+EMBEDDED_TAILNET_BUILD_SCRIPT = PROJECT_ROOT / "tools" / "build_android_tailnet_bridge.py"
 DEBUG_KEYSTORE_PASSWORD = "android"
 DEBUG_KEY_ALIAS = "androiddebugkey"
 
@@ -48,6 +50,8 @@ MAIN_ACTIVITY = f"{PACKAGE_NAME}/.MainActivity"
 REMOTE_AGENT_DEFAULT_SCHEME = "http"
 REMOTE_AGENT_DEFAULT_PORT = 8000
 REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY = "homeworkhelper.android.defaultRemoteBaseUrl"
+REMOTE_NETWORK_MODE_GRADLE_PROPERTY = "homeworkhelper.android.remoteNetworkMode"
+EMBEDDED_TAILNET_AAR_GRADLE_PROPERTY = "homeworkhelper.android.embeddedTailnetAar"
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 
@@ -174,6 +178,7 @@ def create_gradle_assemble_command(
     *,
     debug_keystore: Path = DEFAULT_DEBUG_KEYSTORE,
     default_remote_base_url: str = "",
+    embedded_tailnet_aar: Path | None = DEFAULT_EMBEDDED_TAILNET_AAR,
 ) -> list[str]:
     command = [
         "./gradlew",
@@ -189,6 +194,13 @@ def create_gradle_assemble_command(
     normalized_base_url = normalize_remote_base_url(default_remote_base_url)
     if normalized_base_url:
         command.append(f"-P{REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY}={normalized_base_url}")
+    if embedded_tailnet_aar is not None:
+        command.extend(
+            [
+                f"-P{REMOTE_NETWORK_MODE_GRADLE_PROPERTY}=embedded",
+                f"-P{EMBEDDED_TAILNET_AAR_GRADLE_PROPERTY}={embedded_tailnet_aar}",
+            ]
+        )
     return command
 
 
@@ -306,16 +318,39 @@ def archive_release_artifacts(
     return archived
 
 
-def build_android_apk(version_info: dict, *, default_remote_base_url: str = "") -> None:
+def build_embedded_tailnet_aar(output: Path | None = None) -> Path:
+    output = output or DEFAULT_EMBEDDED_TAILNET_AAR
+    if not EMBEDDED_TAILNET_BUILD_SCRIPT.exists():
+        raise RuntimeError(f"내장 tailnet AAR 빌드 스크립트를 찾을 수 없습니다: {EMBEDDED_TAILNET_BUILD_SCRIPT}")
+    _run(
+        [sys.executable, str(EMBEDDED_TAILNET_BUILD_SCRIPT), "--output", str(output)],
+        env=build_environment(),
+    )
+    if not output.exists():
+        raise RuntimeError(f"내장 tailnet AAR 빌드가 끝났지만 산출물을 찾지 못했습니다: {output}")
+    return output
+
+
+def build_android_apk(
+    version_info: dict,
+    *,
+    default_remote_base_url: str = "",
+    include_embedded_tailnet: bool = True,
+) -> None:
     readiness = [sys.executable, "tools/check_android_sdk_readiness.py"]
     _run(readiness, env=build_environment())
     debug_keystore = ensure_debug_keystore()
     print(f"  ✓ debug signing keystore: {debug_keystore}")
+    embedded_tailnet_aar = None
+    if include_embedded_tailnet:
+        embedded_tailnet_aar = build_embedded_tailnet_aar()
+        print(f"  ✓ embedded tailnet AAR: {embedded_tailnet_aar}")
     _run(
         create_gradle_assemble_command(
             version_info,
             debug_keystore=debug_keystore,
             default_remote_base_url=default_remote_base_url,
+            embedded_tailnet_aar=embedded_tailnet_aar,
         ),
         cwd=ANDROID_ROOT,
         env=build_environment(),
@@ -685,6 +720,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--archive-days", type=int, default=90)
     parser.add_argument("--no-prune-archives", action="store_true")
     parser.add_argument("--no-install", action="store_true", help="Build/copy/check the release APK but do not run adb pair/connect/install.")
+    parser.add_argument("--system-route", action="store_true", help="Build the legacy system-route APK without generating or bundling the embedded tailnet AAR.")
     parser.add_argument(
         "--uninstall-on-signature-mismatch",
         action="store_true",
@@ -709,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
         default_remote_base_url = resolve_default_remote_base_url(args.host_url, args.host_tailscale_device)
         if default_remote_base_url:
             print(f"- default Remote Agent URL: {default_remote_base_url}")
+        print(f"- remote network mode: {'system route' if args.system_route else 'embedded tailnet'}")
 
         print("\n== Archive old Android APKs ==")
         archived = archive_release_artifacts(
@@ -721,7 +758,11 @@ def main(argv: list[str] | None = None) -> int:
             print("  (아카이빙할 Android APK 없음)")
 
         print("\n== Build APK ==")
-        build_android_apk(version_info, default_remote_base_url=default_remote_base_url)
+        build_android_apk(
+            version_info,
+            default_remote_base_url=default_remote_base_url,
+            include_embedded_tailnet=not args.system_route,
+        )
         release_apk = copy_release_apk(version_info)
         check_release_apk(release_apk, version_info)
 

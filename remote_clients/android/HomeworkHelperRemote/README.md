@@ -44,9 +44,11 @@ devices exist, specify one with `--tailscale-device <hostname>` or
 `HH_ANDROID_TAILSCALE_DEVICE=<hostname>`. `--device-ip`/`HH_ANDROID_DEVICE_IP`
 remain available as manual overrides. After the Tailscale IP is resolved, the
 script uses `adb mdns services` when available, otherwise prompts for the
-pair/connect ports shown on the phone, builds the debug APK with the
-`android-client` version target, copies it to `release/`, archives old Android
-APKs under `release/archives/android-client/apk/`, and runs `adb install -r`.
+pair/connect ports shown on the phone. It builds the gomobile tsnet AAR,
+assembles the debug APK with `homeworkhelper.android.remoteNetworkMode=embedded`
+and `homeworkhelper.android.embeddedTailnetAar`, copies it to `release/`,
+archives old Android APKs under `release/archives/android-client/apk/`, and
+runs `adb install -r`.
 
 The helper signs its debug APKs with a stable local keystore at
 `local-artifacts/android-signing/homeworkhelper-android-debug.keystore`
@@ -57,6 +59,9 @@ safe failure. For the one-time migration where app data loss is acceptable:
 ```bash
 ./.venv/bin/python build_android_remote.py --uninstall-on-signature-mismatch
 ```
+
+For a temporary legacy APK that uses only Android's system route and skips the
+native AAR build, pass `--system-route`.
 
 ## Implementation source of truth
 
@@ -91,7 +96,9 @@ The app-only embedded tailnet path is wired through `RemoteNetworkController`.
 The default `homeworkhelper.android.remoteNetworkMode=system` preserves the
 current Android system route and keeps the normal APK build free of native Go
 dependencies. Private debug builds can bundle an in-process tsnet node for
-HomeworkHelper HTTP and SSH calls:
+HomeworkHelper HTTP and SSH calls. The root `build_android_remote.py` helper
+does this automatically; the manual commands are useful when iterating only on
+the native bridge:
 
 ```bash
 ./.venv/bin/python tools/build_android_tailnet_bridge.py
