@@ -254,6 +254,7 @@ struct LocalMoonlightSessionSnapshot: Equatable {
     var isVisible: Bool { isRunning && hasVisibleWindow }
     var hasDesktopStreamSession: Bool { desktopStreamProcessCount > 0 }
     var isDesktopStreamVisible: Bool { hasDesktopStreamSession && hasVisibleWindow }
+    var hasDesktopSession: Bool { hasDesktopStreamSession || isVisible }
 }
 
 enum LocalMoonlightManager {

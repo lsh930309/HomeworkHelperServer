@@ -535,8 +535,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var hostConnectionState = "unknown"
     @Published var hostAvailabilityState: RemoteHostAvailabilityState = .unknown
     @Published var status: RemoteStatus?
-    @Published var dashboardSummary: RemoteDashboardSummary?
-    @Published var beholderIncidents: [RemoteBeholderIncident] = []
+    @Published var dashboardSummary: RemoteDashboardSummary? {
+        didSet { postMenuBarStatusDidChange() }
+    }
+    @Published var beholderIncidents: [RemoteBeholderIncident] = [] {
+        didSet { postMenuBarStatusDidChange() }
+    }
     @Published var gameLinks: [RemoteGameLink] = []
     @Published var mobileSessions: [RemoteMobileSession] = []
     @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses() {
@@ -577,7 +581,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
     @Published var showPlaySummary = RemoteClientPreferences.loadShowPlaySummary() {
-        didSet { RemoteClientPreferences.saveShowPlaySummary(showPlaySummary) }
+        didSet {
+            RemoteClientPreferences.saveShowPlaySummary(showPlaySummary)
+            postMenuBarStatusDidChange()
+            if showPlaySummary, dashboardSummary == nil {
+                Task { await refreshDashboardSummaryForDisplay() }
+            }
+        }
     }
     @Published var cycleProgressDisplayMode = RemoteClientPreferences.loadCycleProgressDisplayMode() {
         didSet { RemoteClientPreferences.saveCycleProgressDisplayMode(cycleProgressDisplayMode) }
@@ -686,11 +696,11 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var moonlightFooterButtonTitle: String {
-        moonlightSessionSnapshot.isDesktopStreamVisible ? "Moonlight OFF" : "Moonlight ON"
+        moonlightSessionSnapshot.hasDesktopSession ? "Moonlight OFF" : "Moonlight ON"
     }
 
     var moonlightFooterButtonIcon: String {
-        moonlightSessionSnapshot.isDesktopStreamVisible ? "stop.circle.fill" : "play.rectangle.fill"
+        moonlightSessionSnapshot.hasDesktopSession ? "stop.circle.fill" : "play.rectangle.fill"
     }
 
     var moonlightFooterButtonDisabled: Bool {
@@ -706,6 +716,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             session = "Desktop 세션 표시 중"
         } else if moonlightSessionSnapshot.hasDesktopStreamSession {
             session = "Desktop 세션 실행 중 · 창 미표시"
+        } else if moonlightSessionSnapshot.isVisible {
+            session = "Moonlight 창 표시 중 · Desktop 세션으로 간주"
         } else if moonlightSessionSnapshot.isRunning {
             session = "Moonlight 실행 중 · Desktop 세션 미확인"
         } else if let pendingMoonlightWakeAction {
@@ -886,12 +898,16 @@ final class RemoteDashboardViewModel: ObservableObject {
     func toggleMoonlightDesktopSession() async {
         guard !moonlightSetupInProgress else { return }
         refreshMoonlightSessionSnapshot()
-        if moonlightSessionSnapshot.isDesktopStreamVisible {
+        if moonlightSessionSnapshot.hasDesktopSession {
             await stopMoonlightDesktopSession()
             return
         }
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
+        }
+        guard hostAvailabilityState == .online else {
+            await prepareMoonlightAutoWake(action: .streamOnly)
+            return
         }
         _ = await ensureMoonlightDesktopVisible(trigger: "moonlight.button")
     }
@@ -962,10 +978,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func ensureMoonlightDesktopVisible(trigger: String) async -> Bool {
         guard moonlightBindingEnabled else { return false }
-        guard hostAvailabilityState == .online else {
-            message = "호스트와 정상 연결된 뒤 Moonlight ON을 사용할 수 있습니다. 호스트가 꺼져 있으면 전원 켜기를 먼저 실행하세요."
-            return false
-        }
+        guard hostAvailabilityState == .online else { return false }
         guard moonlightSnapshot.readiness == .ready,
               let target = moonlightSnapshot.targetHost,
               let installation = moonlightSnapshot.installation else {
@@ -978,13 +991,13 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightLastCommandSummary = ""
         refreshMoonlightSessionSnapshot()
 
-        if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopStreamSession {
+        if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession {
             let cleanup = await LocalMoonlightManager.terminateRunningApplications()
             moonlightLastCommandSummary = cleanup.outputSummary
             refreshMoonlightSessionSnapshot()
         }
 
-        if !moonlightSessionSnapshot.hasDesktopStreamSession {
+        if !moonlightSessionSnapshot.hasDesktopSession {
             let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
             moonlightLastCommandSummary = [moonlightLastCommandSummary, start.outputSummary]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1007,7 +1020,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             .joined(separator: "\n")
         moonlightSetupInProgress = false
         refreshMoonlightSessionSnapshot()
-        if moonlightSessionSnapshot.isDesktopStreamVisible || (focus.succeeded && moonlightSessionSnapshot.hasDesktopStreamSession) {
+        if moonlightSessionSnapshot.hasDesktopSession || focus.succeeded {
             message = "Moonlight Desktop 세션을 현재 화면으로 불러왔습니다."
             return true
         }
@@ -2918,6 +2931,18 @@ final class RemoteDashboardViewModel: ObservableObject {
             }
             refreshLocalProcessDisplay()
             handlePayloadSyncFailure(error)
+        }
+    }
+
+    private func refreshDashboardSummaryForDisplay() async {
+        guard showPlaySummary, dashboardSummary == nil, let service else { return }
+        do {
+            dashboardSummary = try await service.dashboardSummary()
+        } catch {
+            handlePayloadSyncFailure(
+                error,
+                fallbackMessage: "플레이 요약을 불러오지 못했습니다. 연결 상태를 확인한 뒤 새로고침하세요. (\(error.localizedDescription))"
+            )
         }
     }
 

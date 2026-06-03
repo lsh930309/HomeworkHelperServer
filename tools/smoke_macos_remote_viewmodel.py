@@ -142,12 +142,14 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 let store = SmokeInMemoryTokenStore()
                 let viewModel = RemoteDashboardViewModel(tokenStore: store)
+                viewModel.selectedMoonlightHostUUID = "smoke-moonlight-host"
                 guard viewModel.menuBarIdleIconSymbol == "sparkles",
                       viewModel.menuBarRunningIconSymbol == "play.circle.fill",
                       viewModel.menuBarOfflineIconSymbol == "power.circle.fill" else {
                     fatalError("stateful menu bar icons should migrate the legacy idle icon and keep state defaults")
                 }
-                guard viewModel.moonlightSnapshot.readiness == .missingApp else {
+                guard viewModel.moonlightSnapshot.readiness == .ready,
+                      viewModel.moonlightSnapshot.targetHost?.targetHostArgument == "smoke-moonlight-host" else {
                     fatalError("smoke should use isolated Moonlight overrides instead of reading production Moonlight state")
                 }
                 viewModel.addDefaultSmartScheduleRule()
@@ -238,7 +240,7 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 viewModel.hostAvailabilityState = .offlineExpected
                 guard !viewModel.isLaunchEnabled(launchProcess) else {
-                    fatalError("offline launch should stay disabled; Moonlight ON no longer doubles as a host wake CTA")
+                    fatalError("offline launch should stay disabled while Moonlight ON owns its wake-and-stream path")
                 }
                 viewModel.hostAvailabilityState = .online
                 let hostLabelBeforeLaunch = viewModel.hostStatusLabel
@@ -364,6 +366,16 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 await viewModel.power("wake")
                 guard viewModel.message.contains("wake 신호") else {
                     fatalError("offline local wake did not use SmartThings fallback: \(viewModel.message)")
+                }
+                smokeStep("offline moonlight wake")
+                viewModel.hostAvailabilityState = .offlineExpected
+                viewModel.hostConnectionState = "offline"
+                viewModel.moonlightBindingEnabled = false
+                await viewModel.toggleMoonlightDesktopSession()
+                guard viewModel.moonlightBindingEnabled,
+                      viewModel.moonlightFooterButtonDisabled,
+                      viewModel.message.contains("Wake 명령을 전달했습니다") else {
+                    fatalError("offline Moonlight ON should queue wake-and-stream instead of failing: \(viewModel.message)")
                 }
 
                 smokeStep("createGameLink")
@@ -588,9 +600,39 @@ exit 0
                 encoding="utf-8",
             )
             fake_smartthings.chmod(0o755)
+            fake_moonlight = temp_dir / "moonlight"
+            fake_moonlight.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_moonlight.chmod(0o755)
+            fake_moonlight_prefs = temp_dir / "moonlight.plist"
+            fake_moonlight_prefs.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>hosts.size</key>
+  <integer>1</integer>
+  <key>hosts.1.uuid</key>
+  <string>smoke-moonlight-host</string>
+  <key>hosts.1.hostname</key>
+  <string>smoke-host</string>
+  <key>hosts.1.localaddress</key>
+  <string>100.64.1.2</string>
+  <key>hosts.1.apps.size</key>
+  <integer>1</integer>
+  <key>hosts.1.apps.1.name</key>
+  <string>Desktop</string>
+  <key>hosts.1.apps.1.id</key>
+  <integer>0</integer>
+  <key>hosts.1.apps.1.hidden</key>
+  <false/>
+</dict>
+</plist>
+""",
+                encoding="utf-8",
+            )
             smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"
-            env["HH_REMOTE_MOONLIGHT_APP_PATHS"] = str(temp_dir / "MissingMoonlight.app")
-            env["HH_REMOTE_MOONLIGHT_PREFS_PATH"] = str(temp_dir / "missing-moonlight.plist")
+            env["HH_REMOTE_MOONLIGHT_APP_PATHS"] = str(fake_moonlight)
+            env["HH_REMOTE_MOONLIGHT_PREFS_PATH"] = str(fake_moonlight_prefs)
             offline_base_url = f"http://127.0.0.1:{_free_loopback_port()}"
             _compile_and_run_swift_smoke(base_url, offline_base_url, code, str(fake_smartthings), str(smoke_ssh_key), temp_dir, env)
             _assert_production_cache_unchanged(production_cache_signature)

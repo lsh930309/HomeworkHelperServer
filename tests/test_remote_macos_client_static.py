@@ -295,10 +295,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "clickStatusItemForUITest()" in app
     assert "NSApp.activate(ignoringOtherApps: true)" in app
     assert "NSApp.setActivationPolicy(.accessory)" in app
-    assert "NSApp.setActivationPolicy(.regular)" in app
+    assert "NSApp.setActivationPolicy(.regular)" not in app
     settings_open_source = app.split("static func openSettingsWindow()", 1)[1].split("static func prepareSettingsWindow", 1)[0]
-    assert "NSApp.setActivationPolicy(.regular)" in settings_open_source
-    assert "NSApp.setActivationPolicy(.accessory)" not in settings_open_source
+    assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
     assert "focusExistingSettingsWindow()" in settings_open_source
     assert "guard NSApp.windows.contains(where:" not in settings_open_source
     assert "static let settingsWindowIdentifier" in app
@@ -662,6 +661,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "desktopStreamProcessCount" in local_moonlight
     assert "hasDesktopStreamSession" in local_moonlight
     assert "isDesktopStreamVisible" in local_moonlight
+    assert "hasDesktopSession" in local_moonlight
     assert "targetHostArgument: String? = nil" in local_moonlight
     assert "processCommandLine(pid:" in local_moonlight
     assert "commandLineIndicatesDesktopStream" in local_moonlight
@@ -701,7 +701,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "moonlightAutoWakeBeforeStreamEnabledKey" not in view_model
     assert "remote.moonlight.autoWakeBeforeStreamEnabled" not in view_model
     assert '"Moonlight OFF" : "Moonlight ON"' in view_model
-    assert 'moonlightSessionSnapshot.isDesktopStreamVisible ? "stop.circle.fill" : "play.rectangle.fill"' in view_model
+    assert 'moonlightSessionSnapshot.hasDesktopSession ? "stop.circle.fill" : "play.rectangle.fill"' in view_model
     assert 'return "화면 켜기"' not in view_model
     assert 'return "화면 보기"' not in view_model
     assert 'return "화면 끄기"' not in view_model
@@ -716,7 +716,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "toggleMoonlightDesktopSession" in view_model
     assert "ensureMoonlightDesktopVisible" in view_model
     assert "stopMoonlightDesktopSession" in view_model
-    assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopStreamSession" in view_model
+    assert "if moonlightSessionSnapshot.isRunning && !moonlightSessionSnapshot.hasDesktopSession" in view_model
+    assert "await prepareMoonlightAutoWake(action: .streamOnly)" in view_model
     assert "hostAvailabilityState == .online" in view_model
     assert "if pendingMoonlightWakeAction != nil { return true }" in view_model
     assert "앱 종료 fallback만 수행합니다" in view_model
@@ -855,8 +856,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'processes.first?.id == "smoke-game"' in cache
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "Moonlight ON no longer doubles as a host wake CTA" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline launch should stay disabled; Moonlight ON no longer doubles as a host wake CTA" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "smoke-moonlight-host" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline moonlight wake" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline Moonlight ON should queue wake-and-stream instead of failing" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert "offline launch should stay disabled while Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))

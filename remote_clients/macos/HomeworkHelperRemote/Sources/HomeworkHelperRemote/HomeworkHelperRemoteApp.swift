@@ -276,6 +276,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     @objc private func menuBarStatusDidChange(_ notification: Notification) {
         configureStatusButton(statusItem?.button)
+        updatePopoverContentSize()
     }
 
     @objc private func globalShortcutPressed(_ notification: Notification) {
@@ -408,7 +409,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     static func openSettingsWindow() {
         shared?.closePopoverForFocusLoss()
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
         if focusExistingSettingsWindow() {
             return
@@ -430,7 +431,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         window.identifier = NSUserInterfaceItemIdentifier(settingsWindowIdentifier)
         window.title = settingsWindowTitle
         window.isReleasedWhenClosed = false
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         if shouldFocus {
             NSApp.activate(ignoringOtherApps: true)
             focusSettingsWindow(deduplicateSettingsWindows(preferred: window) ?? window)
@@ -451,7 +452,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     @discardableResult
     private static func focusExistingSettingsWindow() -> Bool {
         guard let window = deduplicateSettingsWindows() else { return false }
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
         focusSettingsWindow(window)
         return true
@@ -1212,6 +1213,7 @@ struct MenuBarMoonlightButton: View {
             layout: .horizontal(minHeight: 30),
             help: viewModel.moonlightBindingStatusDisplay
         ) {
+            viewModel.updateMoonlightPreferredScreen(NSApp.keyWindow?.screen ?? NSApp.mainWindow?.screen ?? NSScreen.main)
             Task { await viewModel.toggleMoonlightDesktopSession() }
         }
     }
