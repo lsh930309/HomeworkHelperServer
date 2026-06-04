@@ -144,5 +144,16 @@ def test_remote_server_mode_blocks_legacy_routes_for_non_loopback_clients():
 
     assert "async def remote_exposure_boundary_middleware(request, call_next):" in source
     assert "remote_exposed and not _request_from_loopback(request)" in source
-    assert 'path != "/remote" and not path.startswith("/remote/")' in source
+    assert 'path != "/remote"' in source
+    assert 'not path.startswith("/remote/")' in source
     assert "Remote server mode exposes only the authenticated /remote API" in source
+
+
+def test_remote_server_mode_keeps_dashboard_icon_routes_public_for_remote_clients():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "def _is_remote_public_icon_request(path: str, method: str) -> bool:" in source
+    assert 'method in {"GET", "HEAD"}' in source
+    assert 'path.startswith("/api/dashboard/icons/")' in source
+    assert 'path.startswith("/api/dashboard/resource-icons/")' in source
+    assert "not _is_remote_public_icon_request(path, request.method.upper())" in source

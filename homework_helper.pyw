@@ -868,13 +868,23 @@ def run_server_main():
     def _request_from_loopback(request) -> bool:
         return bool(request.client and request.client.host in loopback_hosts)
 
+    def _is_remote_public_icon_request(path: str, method: str) -> bool:
+        return method in {"GET", "HEAD"} and (
+            path.startswith("/api/dashboard/icons/")
+            or path.startswith("/api/dashboard/resource-icons/")
+        )
+
     @app.middleware("http")
     async def remote_exposure_boundary_middleware(request, call_next):
         """Expose only /remote/* to non-loopback peers when the API binds externally."""
 
         if remote_exposed and not _request_from_loopback(request):
             path = request.url.path
-            if path != "/remote" and not path.startswith("/remote/"):
+            if (
+                path != "/remote"
+                and not path.startswith("/remote/")
+                and not _is_remote_public_icon_request(path, request.method.upper())
+            ):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Remote server mode exposes only the authenticated /remote API to non-loopback clients."},
