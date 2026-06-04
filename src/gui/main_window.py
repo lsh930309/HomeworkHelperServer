@@ -808,7 +808,7 @@ class MainWindow(QMainWindow):
     def _set_window_icon(self):
         """창 아이콘을 설정합니다."""
         # .ico 파일 먼저 확인
-        icon_path_ico = get_bundle_resource_path(r"img\app_icon.ico")
+        icon_path_ico = get_bundle_resource_path(r"assets\icons\app\app_icon.ico")
         icon = QIcon(icon_path_ico)
         if os.path.exists(icon_path_ico) and not icon.isNull():
             self.setWindowIcon(icon)

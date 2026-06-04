@@ -650,6 +650,19 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    var pairingTokenStatusDisplay: String {
+        if !isPaired { return "토큰 없음" }
+        if hostAvailabilityState == .authRejected {
+            return "Keychain 토큰 보존됨 · 호스트 재확인 필요"
+        }
+        return "Keychain 토큰 저장됨"
+    }
+
+    var pairedDeviceIDDisplay: String {
+        let trimmed = pairedDeviceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "미등록" : trimmed
+    }
+
     var moonlightSelectableHosts: [LocalMoonlightHostCandidate] {
         moonlightSnapshot.usableHosts.filter { !$0.uuid.isEmpty }
     }
@@ -1939,7 +1952,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             if kind == .authRejected {
                 let decision = supervisorDecision(.httpStatusFailed(kind: kind))
                 applyConnectionDecision(decision, updateMessage: updateMessage)
-                clearPairingAfterHostRevocation(error)
+                preservePairingAfterAuthRejected(error, updateMessage: updateMessage)
                 evaluationLog.finalState = hostAvailabilityState.rawValue
                 evaluationLog.finalMessage = decision.message ?? message
                 writeConnectivityEvaluationLog(evaluationLog)
@@ -1969,7 +1982,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func handlePayloadSyncFailure(_ error: Error, fallbackMessage: String? = nil) {
         if isAuthFailure(error) {
-            clearPairingAfterHostRevocation(error)
+            preservePairingAfterAuthRejected(error)
             return
         }
         if processes.isEmpty {
@@ -1992,6 +2005,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             fields["bundle_git_dirty"] = ""
         }
         fields["base_url_host"] = client?.baseURL.host ?? ""
+        fields["token_present"] = String(isPaired)
+        fields["paired_device_id_present"] = String(!pairedDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         fields["availability_label"] = hostAvailabilityState.label
         RemoteClientDesktopLogger.write("connectivity.evaluate", fields)
     }
@@ -2123,7 +2138,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         consecutiveMirrorFailures += 1
         let kind = failureKind(for: error)
         if kind == .authRejected {
-            clearPairingAfterHostRevocation(error)
+            preservePairingAfterAuthRejected(error, updateMessage: updateMessage)
             return
         }
         let decision = supervisorDecision(.httpStatusFailed(kind: kind))
@@ -2649,7 +2664,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func connectionGuidance(for error: Error) -> String {
         let raw = error.localizedDescription
         if raw.contains("HTTP 401") || raw.contains("HTTP 403") {
-            return "호스트에서 이 Mac의 페어링이 해제되어 로컬 토큰을 삭제했습니다. 다시 페어링하세요. (\(raw))"
+            return "호스트가 저장된 토큰을 거부했습니다. 로컬 토큰과 페어링 캐시는 보존했으니 Windows 앱의 원격 설정에서 이 Mac의 디바이스 상태를 확인한 뒤 토큰 복구 또는 재페어링을 선택하세요. (\(raw))"
         }
         if raw.localizedCaseInsensitiveContains("could not connect") || raw.localizedCaseInsensitiveContains("timed out") || raw.localizedCaseInsensitiveContains("서버") {
             return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
@@ -2695,17 +2710,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = pairingRecoveryMessage
     }
 
-    private func clearPairingAfterHostRevocation(_ error: Error) {
-        RemoteClientPreferences.savePairedDeviceID("")
-        pairedDeviceID = ""
-        tokenStore.delete()
-        tokenText = ""
-        devices = []
+    private func preservePairingAfterAuthRejected(_ error: Error, updateMessage: Bool = true) {
         setHostAvailability(.authRejected, clearPairingRecovery: false)
         let guidance = connectionGuidance(for: error)
         pairingRecoveryMessage = guidance
         setupProgress = guidance
-        message = guidance
+        if updateMessage {
+            message = guidance
+        }
     }
 
     private func rememberPairedDeviceID(_ id: String) {
@@ -3473,8 +3485,22 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = localSSHHealthReady
                 ? "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
                 : "'\(response.name)' 디바이스 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(localSSHHealthSummary)"
-            if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("pairing.complete", ["device": response.name]) }
+            let tokenPersisted = tokenStore.load() == response.token
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write("pairing.complete", [
+                    "device": response.name,
+                    "token_present": String(!response.token.isEmpty),
+                    "token_persisted": String(tokenPersisted),
+                    "paired_device_id_present": String(!pairedDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                ])
+            }
             await refresh(using: pairedService, includeDevices: true)
+            if !tokenPersisted {
+                let warning = "페어링은 완료됐지만 Keychain 토큰 저장을 다시 읽어 확인하지 못했습니다. 앱을 종료하기 전에 [페어링 토큰 복구]를 실행하거나 다시 페어링하세요."
+                pairingRecoveryMessage = warning
+                setupProgress = warning
+                message = warning
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -3489,7 +3515,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             pairingRecoveryMessage = ""
             setupProgress = "현재 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
             message = "'\(response.name)' 디바이스 토큰을 갱신하고 Keychain에 저장했습니다."
+            let tokenPersisted = tokenStore.load() == response.token
             await refreshDevices()
+            if !tokenPersisted {
+                let warning = "토큰은 갱신됐지만 Keychain 저장 확인에 실패했습니다. 앱 재시작 전 다시 토큰 복구를 시도하세요."
+                pairingRecoveryMessage = warning
+                setupProgress = warning
+                message = warning
+            }
         } catch {
             message = error.localizedDescription
         }

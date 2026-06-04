@@ -261,6 +261,7 @@ enum LocalMoonlightManager {
     private static let bundleIdentifier = "com.moonlight-stream.Moonlight"
     private static let appPathOverrideKey = "HH_REMOTE_MOONLIGHT_APP_PATHS"
     private static let preferencesPathOverrideKey = "HH_REMOTE_MOONLIGHT_PREFS_PATH"
+    private static let ignoreRunningAppsKey = "HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"
 
     static func snapshot(
         selectedHostUUID: String,
@@ -835,7 +836,10 @@ enum LocalMoonlightManager {
 
     @MainActor
     private static func runningApplications() -> [NSRunningApplication] {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        if ProcessInfo.processInfo.environment[ignoreRunningAppsKey] == "1" {
+            return []
+        }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
             .filter { !$0.isTerminated }
     }
 

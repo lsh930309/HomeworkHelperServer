@@ -633,6 +633,7 @@ exit 0
             smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"
             env["HH_REMOTE_MOONLIGHT_APP_PATHS"] = str(fake_moonlight)
             env["HH_REMOTE_MOONLIGHT_PREFS_PATH"] = str(fake_moonlight_prefs)
+            env["HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"] = "1"
             offline_base_url = f"http://127.0.0.1:{_free_loopback_port()}"
             _compile_and_run_swift_smoke(base_url, offline_base_url, code, str(fake_smartthings), str(smoke_ssh_key), temp_dir, env)
             _assert_production_cache_unchanged(production_cache_signature)

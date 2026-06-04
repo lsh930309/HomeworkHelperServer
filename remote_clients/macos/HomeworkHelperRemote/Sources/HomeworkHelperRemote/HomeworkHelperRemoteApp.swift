@@ -1373,8 +1373,8 @@ struct RemoteSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Base URL", text: $viewModel.baseURLText)
                         .textFieldStyle(.roundedBorder)
-                    SecureField("Bearer token", text: $viewModel.tokenText)
-                        .textFieldStyle(.roundedBorder)
+                    SidebarInfoRow(label: "페어링 토큰", value: viewModel.pairingTokenStatusDisplay)
+                    SidebarInfoRow(label: "페어링 디바이스", value: viewModel.pairedDeviceIDDisplay)
                     TextField("디바이스 이름", text: $viewModel.deviceName)
                         .textFieldStyle(.roundedBorder)
                     HStack {

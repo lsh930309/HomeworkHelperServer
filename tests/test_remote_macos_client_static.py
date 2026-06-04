@@ -231,9 +231,27 @@ def test_macos_client_tailnet_device_management_is_read_only_and_self_sorted():
 
     assert 'private static let pairedDeviceIDKey = "remote.pairedDeviceID"' in view_model
     assert "rememberPairedDeviceID(response.id)" in view_model
-    assert 'RemoteClientPreferences.savePairedDeviceID("")' in view_model
-    assert "tokenStore.delete()" in view_model
-    assert "clearPairingAfterHostRevocation(error)" in view_model
+    clear_local_pairing = view_model[
+        view_model.index("func clearLocalPairing()") : view_model.index("private func preservePairingAfterAuthRejected")
+    ]
+    auth_rejected_pairing = view_model[
+        view_model.index("private func preservePairingAfterAuthRejected") : view_model.index("private func rememberPairedDeviceID")
+    ]
+    assert 'RemoteClientPreferences.savePairedDeviceID("")' in clear_local_pairing
+    assert "tokenStore.delete()" in clear_local_pairing
+    assert "preservePairingAfterAuthRejected(error" in view_model
+    assert "clearPairingAfterHostRevocation" not in view_model
+    assert 'RemoteClientPreferences.savePairedDeviceID("")' not in auth_rejected_pairing
+    assert "pairedDeviceID = \"\"" not in auth_rejected_pairing
+    assert "tokenStore.delete()" not in auth_rejected_pairing
+    assert "tokenText = \"\"" not in auth_rejected_pairing
+    assert "devices = []" not in auth_rejected_pairing
+    assert "로컬 토큰과 페어링 캐시는 보존" in view_model
+    assert "token_present" in view_model
+    assert "paired_device_id_present" in view_model
+    assert "token_persisted" in view_model
+    assert "pairingTokenStatusDisplay" in view_model
+    assert "pairedDeviceIDDisplay" in view_model
     assert "var sortedDevices: [RemoteDevice]" in view_model
     assert "func isCurrentDevice(_ device: RemoteDevice) -> Bool" in view_model
     assert 'if device.role == "host" { return 2 }' in view_model
@@ -582,6 +600,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "연결/페어링" in app
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
+    assert "페어링 토큰" in app
+    assert "페어링 디바이스" in app
+    assert "Bearer token" not in app
     assert "자동 설정 점검" in app
     assert "서버 Tailscale 확인/복구" in app
     assert "페어링 토큰 복구" in app
@@ -647,6 +668,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "com.moonlight-stream.Moonlight" in local_moonlight
     assert "HH_REMOTE_MOONLIGHT_APP_PATHS" in local_moonlight
     assert "HH_REMOTE_MOONLIGHT_PREFS_PATH" in local_moonlight
+    assert "HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS" in local_moonlight
     assert "com.moonlight-stream.Moonlight.plist" in local_moonlight
     assert '"hosts.size"' in local_moonlight
     assert 'let prefix = "hosts.\\(index)"' in local_moonlight
@@ -857,6 +879,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert '"HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache")' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "smoke-moonlight-host" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
+    assert '"HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"] = "1"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "offline moonlight wake" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "offline Moonlight ON should queue wake-and-stream instead of failing" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
