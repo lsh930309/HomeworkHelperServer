@@ -852,6 +852,42 @@ def test_pairing_start_is_limited_to_loopback_or_authenticated_devices():
     assert response.status_code == 403
 
 
+def test_pairing_start_does_not_allow_hardcoded_tailnet_ip_by_default(monkeypatch):
+    monkeypatch.delenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", raising=False)
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(client_address=("100.114.138.46", 50000))
+
+    response = client.post("/remote/pair/start")
+
+    assert response.status_code == 403
+
+
+def test_pairing_start_dev_tailnet_bypass_requires_explicit_env(monkeypatch):
+    monkeypatch.setenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "100.114.138.46")
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(client_address=("100.114.138.46", 50000))
+
+    response = client.post("/remote/pair/start")
+
+    assert response.status_code == 200
+    assert response.json()["code"].isdigit()
+
+
+def test_pairing_code_locks_after_repeated_wrong_attempts():
+    registry = RemoteDeviceRegistry(
+        path=Path(tempfile.mkdtemp(prefix="hh-remote-lockout-")) / "remote_devices.json",
+        max_failed_pairing_attempts=2,
+        pairing_lockout_seconds=60,
+    )
+    pairing = registry.start_pairing(now=1778497000.0)
+
+    assert registry.confirm_pairing(code="000000", device_name="MacBook", now=1778497001.0) is None
+    assert registry.confirm_pairing(code="111111", device_name="MacBook", now=1778497002.0) is None
+    assert registry.confirm_pairing(code=pairing["code"], device_name="MacBook", now=1778497003.0) is None
+    accepted = registry.confirm_pairing(code=pairing["code"], device_name="MacBook", now=1778497063.0)
+
+    assert accepted is not None
+    assert accepted["token"]
+
+
 def test_loopback_can_manage_remote_settings_after_pairing_without_bearer_token():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(client_address=("127.0.0.1", 50000))
 
@@ -873,7 +909,8 @@ def test_loopback_can_manage_remote_settings_after_pairing_without_bearer_token(
     assert revoked.status_code == 200
 
 
-def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
+def test_pairing_start_allows_dev_tailnet_ip_only_when_configured(monkeypatch):
+    monkeypatch.setenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "100.114.138.46")
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
         require_auth=True,
@@ -887,7 +924,9 @@ def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     assert protected_without_token.status_code == 401
 
 
-def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
+def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role(monkeypatch):
+    monkeypatch.setenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "100.114.138.46")
+
     class _Snapshot:
         def as_dict(self):
             return {

@@ -56,5 +56,5 @@ def write_event(event: str, **fields: Any) -> None:
         line = json.dumps({"ts": time.time(), "event": event, **fields}, ensure_ascii=False, sort_keys=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
-    except OSError:
+    except (OSError, TypeError, ValueError):
         return

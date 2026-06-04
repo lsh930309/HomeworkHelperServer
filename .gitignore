@@ -51,6 +51,8 @@ HomeworkHelper.zip
 # 스크린샷 로컬 설정
 # ===========================
 src/screenshot/_method.txt
+src/screenshot/**/*.png
+screenshots/**/*.png
 
 # ===========================
 # IDE 및 에디터
@@ -71,7 +73,6 @@ src/screenshot/_method.txt
 *.temp
 artifacts/
 local-artifacts/
-*.png
 
 # ===========================
 # 코드 서명 인증서

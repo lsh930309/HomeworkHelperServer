@@ -79,7 +79,7 @@ enum LocalSSHPowerManager {
         args.append("\(user)@\(host)")
         args.append(command)
 
-        let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
+        let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args, timeoutSeconds: 20)
         let combined = [result.stdout, result.stderr].joined(separator: "\n")
         guard combined.contains(Self.acceptedMarker) else {
             let detail = result.stderr.isEmpty ? result.stdout : result.stderr
@@ -108,7 +108,7 @@ enum LocalSSHPowerManager {
         ]
 
         do {
-            let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
+            let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args, timeoutSeconds: max(5, timeoutSeconds + 5))
             let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             let lowered = combined.lowercased()
             if result.status == 0 && combined.contains(healthMarker) {
@@ -154,7 +154,7 @@ enum LocalSSHPowerManager {
         ]
 
         do {
-            let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args)
+            let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args, timeoutSeconds: max(10, timeoutSeconds + 5))
             let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if let ip = firstIPv4(in: combined), isLikelyPublicIPv4(ip), result.status == 0 {
                 return PublicIPResult(host: host, ip: ip, message: "SSH로 호스트 공인 IP를 확인했습니다.", executablePath: "/usr/bin/ssh", exitStatus: result.status, stdout: result.stdout, stderr: result.stderr)
@@ -186,7 +186,7 @@ enum LocalSSHPowerManager {
         return true
     }
 
-    private static func runForResult(executable: String, arguments: [String]) async throws -> ProcessResult {
+    private static func runForResult(executable: String, arguments: [String], timeoutSeconds: Int = 20) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
@@ -196,12 +196,39 @@ enum LocalSSHPowerManager {
                 let error = Pipe()
                 process.standardOutput = output
                 process.standardError = error
+                var stdoutData = Data()
+                var stderrData = Data()
+                let outputGroup = DispatchGroup()
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stderrData = error.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
                 do {
                     try process.run()
+                    let timeoutLock = NSLock()
+                    var didTimeOut = false
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(max(1, timeoutSeconds))) {
+                        guard process.isRunning else { return }
+                        timeoutLock.lock()
+                        didTimeOut = true
+                        timeoutLock.unlock()
+                        process.terminate()
+                    }
                     process.waitUntilExit()
-                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    continuation.resume(returning: ProcessResult(status: process.terminationStatus, stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines), stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    outputGroup.wait()
+                    timeoutLock.lock()
+                    let timedOut = didTimeOut
+                    timeoutLock.unlock()
+                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+                    let timeoutMessage = timedOut ? "\nSSH command timed out after \(max(1, timeoutSeconds))s" : ""
+                    continuation.resume(returning: ProcessResult(status: process.terminationStatus, stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines), stderr: (stderr + timeoutMessage).trimmingCharacters(in: .whitespacesAndNewlines)))
                 } catch {
                     continuation.resume(throwing: error)
                 }

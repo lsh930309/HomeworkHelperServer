@@ -224,11 +224,25 @@ enum LocalPowerWakeManager {
                 let error = Pipe()
                 process.standardOutput = output
                 process.standardError = error
+                var stdoutData = Data()
+                var stderrData = Data()
+                let outputGroup = DispatchGroup()
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stderrData = error.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
                 do {
                     try process.run()
                     process.waitUntilExit()
-                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    outputGroup.wait()
+                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
                     continuation.resume(returning: ProcessResult(status: process.terminationStatus, stdout: stdout, stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
                 } catch {
                     continuation.resume(throwing: error)

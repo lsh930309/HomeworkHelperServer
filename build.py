@@ -294,7 +294,7 @@ def is_dark_mode():
         value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         winreg.CloseKey(key)
         return value == 0  # 0 = 다크 모드, 1 = 라이트 모드
-    except (FileNotFoundError, OSError, PermissionError) as e:
+    except (FileNotFoundError, ImportError, OSError, PermissionError) as e:
         print(f"[경고] 다크 모드 감지 실패: {e}")
         return False  # 기본값: 라이트 모드
 

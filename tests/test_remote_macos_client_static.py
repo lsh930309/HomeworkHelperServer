@@ -557,7 +557,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "window.orderOut(nil)" not in settings_keyboard_source
     assert "event.keyCode == 53" in window_accessor
     assert "isCommandReturn" in window_accessor
-    assert "!self.isEditingText(in: window)" in window_accessor
+    assert "event.keyCode == 36 || event.keyCode == 76" in window_accessor
+    assert "!self.isEditingText(in: window)" not in window_accessor
     assert "상태 동기화 주기" in app
     assert "$viewModel.mirrorPollIntervalSeconds" in app
     assert "in: 1...60" in app
@@ -953,6 +954,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "validatedCachedURL" in cache
     assert "decodedPixelDimension(data) >= preferredSize" in cache
+    assert "isSameOrigin(absolute, baseURL: baseURL)" in cache
     assert "displayThumbnailImage" in cache
     assert "displayScale()" in cache
     assert "func displayIconImage" in view_model
@@ -990,9 +992,15 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "Packaged apps do not inherit the user's interactive zsh aliases" in tailscale
     assert '["ping", "--timeout=\\(max(1, timeoutSeconds))s", trimmedHost]' in tailscale
     assert "hardTimeoutSeconds" in tailscale
+    assert "outputGroup.wait()" in tailscale
     assert "noReplySignalCount" in tailscale
     assert "isRuntimeUnavailableMessage" in tailscale
     assert "gui failed to start" in tailscale
+    assert "var id: String" in tailscale
+    assert "let id = UUID()" not in tailscale
+    assert "timeoutSeconds: 20" in local_ssh
+    assert "SSH command timed out after" in local_ssh
+    assert "privateKeyPath: privatePath" in _read(SOURCE_ROOT / "LocalSSHKeyManager.swift")
     assert "clierror" in tailscale
     assert "tailscale_executable_path" in view_model
     assert "tailscale_exit_status" in view_model

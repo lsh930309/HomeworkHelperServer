@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -48,18 +49,24 @@ class RemoteDeviceRegistry:
 
     path: Path = field(default_factory=lambda: remote_store().path("remote_devices.json"))
     code_ttl_seconds: int = 300
+    max_failed_pairing_attempts: int = 8
+    pairing_lockout_seconds: int = 60
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
 
     def start_pairing(self, *, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()
         code = f"{secrets.randbelow(1_000_000):06d}"
-        state = self._read()
-        state["active_pairing"] = {
-            "code_hash": _sha256(code),
-            "expires_at": now + self.code_ttl_seconds,
-            "created_at": now,
-        }
-        self._write(state)
-        return {"code": code, "expires_at": state["active_pairing"]["expires_at"]}
+        with self._lock:
+            state = self._read()
+            state["active_pairing"] = {
+                "code_hash": _sha256(code),
+                "expires_at": now + self.code_ttl_seconds,
+                "created_at": now,
+                "failed_attempts": 0,
+                "locked_until": None,
+            }
+            self._write(state)
+            return {"code": code, "expires_at": state["active_pairing"]["expires_at"]}
 
     def confirm_pairing(
         self,
@@ -72,58 +79,69 @@ class RemoteDeviceRegistry:
         now: float | None = None,
     ) -> dict[str, Any] | None:
         now = now or time.time()
-        state = self._read()
-        active = state.get("active_pairing") or {}
-        expires_at = float(active.get("expires_at") or 0)
-        if not active or expires_at < now:
-            return None
-        if not secrets.compare_digest(str(active.get("code_hash") or ""), _sha256(code)):
-            return None
+        with self._lock:
+            state = self._read()
+            active = state.get("active_pairing") or {}
+            expires_at = float(active.get("expires_at") or 0)
+            locked_until = float(active.get("locked_until") or 0)
+            if not active or expires_at < now or locked_until > now:
+                return None
+            if not secrets.compare_digest(str(active.get("code_hash") or ""), _sha256(code)):
+                active["failed_attempts"] = int(active.get("failed_attempts") or 0) + 1
+                active["last_failed_at"] = now
+                if active["failed_attempts"] >= self.max_failed_pairing_attempts:
+                    active["locked_until"] = now + self.pairing_lockout_seconds
+                state["active_pairing"] = active
+                self._write(state)
+                return None
 
-        token = secrets.token_urlsafe(32)
-        device = {
-            "id": str(uuid.uuid4()),
-            "name": device_name.strip() or "Unnamed device",
-            "platform": platform or "unknown",
-            "token_hash": _sha256(token),
-            "created_at": now,
-            "last_seen_at": None,
-            "last_source_ip": None,
-            "revoked_at": None,
-            "role": role or "client",
-            **_normalized_tailnet_binding(tailnet_binding),
-        }
-        devices = state.setdefault("devices", [])
-        devices.append(device)
-        state["active_pairing"] = None
-        self._write(state)
-        public = self._public_device(device)
-        public["token"] = token
-        return public
+            token = secrets.token_urlsafe(32)
+            device = {
+                "id": str(uuid.uuid4()),
+                "name": device_name.strip() or "Unnamed device",
+                "platform": platform or "unknown",
+                "token_hash": _sha256(token),
+                "created_at": now,
+                "last_seen_at": None,
+                "last_source_ip": None,
+                "revoked_at": None,
+                "role": role or "client",
+                **_normalized_tailnet_binding(tailnet_binding),
+            }
+            devices = state.setdefault("devices", [])
+            devices.append(device)
+            state["active_pairing"] = None
+            self._write(state)
+            public = self._public_device(device)
+            public["token"] = token
+            return public
 
     def has_active_devices(self) -> bool:
-        state = self._read()
-        return any(not device.get("revoked_at") for device in state.get("devices", []))
+        with self._lock:
+            state = self._read()
+            return any(not device.get("revoked_at") for device in state.get("devices", []))
 
     def has_registered_devices(self) -> bool:
-        return bool(self._read().get("devices", []))
+        with self._lock:
+            return bool(self._read().get("devices", []))
 
     def validate_token(self, token: str, *, now: float | None = None, source_ip: str | None = None) -> dict[str, Any] | None:
         now = now or time.time()
         token_hash = _sha256(token)
-        state = self._read()
-        matched: dict[str, Any] | None = None
-        for device in state.get("devices", []):
-            if device.get("revoked_at"):
-                continue
-            if secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
-                device["last_seen_at"] = now
-                self._observe_source_ip(device, source_ip)
-                matched = self._public_device(device)
-                break
-        if matched:
-            self._write(state)
-        return matched
+        with self._lock:
+            state = self._read()
+            matched: dict[str, Any] | None = None
+            for device in state.get("devices", []):
+                if device.get("revoked_at"):
+                    continue
+                if secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
+                    device["last_seen_at"] = now
+                    self._observe_source_ip(device, source_ip)
+                    matched = self._public_device(device)
+                    break
+            if matched:
+                self._write(state)
+            return matched
 
     def refresh_token(self, token: str, *, now: float | None = None, source_ip: str | None = None) -> dict[str, Any] | None:
         """Rotate an active device token and return the new bearer token.
@@ -134,61 +152,66 @@ class RemoteDeviceRegistry:
 
         now = now or time.time()
         token_hash = _sha256(token)
-        state = self._read()
-        for device in state.get("devices", []):
-            if device.get("revoked_at"):
-                continue
-            if not secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
-                continue
-            next_token = secrets.token_urlsafe(32)
-            device["token_hash"] = _sha256(next_token)
-            device["last_seen_at"] = now
-            self._observe_source_ip(device, source_ip)
-            device["token_refreshed_at"] = now
-            self._write(state)
-            public = self._public_device(device)
-            public["token"] = next_token
-            return public
-        return None
+        with self._lock:
+            state = self._read()
+            for device in state.get("devices", []):
+                if device.get("revoked_at"):
+                    continue
+                if not secrets.compare_digest(str(device.get("token_hash") or ""), token_hash):
+                    continue
+                next_token = secrets.token_urlsafe(32)
+                device["token_hash"] = _sha256(next_token)
+                device["last_seen_at"] = now
+                self._observe_source_ip(device, source_ip)
+                device["token_refreshed_at"] = now
+                self._write(state)
+                public = self._public_device(device)
+                public["token"] = next_token
+                return public
+            return None
 
     def list_devices(self) -> list[dict[str, Any]]:
-        return [self._public_device(device) for device in self._read().get("devices", [])]
+        with self._lock:
+            return [self._public_device(device) for device in self._read().get("devices", [])]
 
     def bind_tailnet_device(self, device_id: str, binding: dict[str, Any], *, now: float | None = None) -> bool:
         normalized = _normalized_tailnet_binding(binding)
         if not normalized.get("tailnet_ip"):
             return False
-        state = self._read()
-        for device in state.get("devices", []):
-            if device.get("id") != device_id:
-                continue
-            device.update(normalized)
-            device["tailnet_bound_at"] = now or time.time()
-            self._write(state)
-            return True
-        return False
+        with self._lock:
+            state = self._read()
+            for device in state.get("devices", []):
+                if device.get("id") != device_id:
+                    continue
+                device.update(normalized)
+                device["tailnet_bound_at"] = now or time.time()
+                self._write(state)
+                return True
+            return False
 
     def revoke_device(self, device_id: str, *, now: float | None = None) -> bool:
         now = now or time.time()
-        state = self._read()
-        changed = False
-        for device in state.get("devices", []):
-            if device.get("id") == device_id and not device.get("revoked_at"):
-                device["revoked_at"] = now
-                changed = True
-                break
-        if changed:
-            self._write(state)
-        return changed
+        with self._lock:
+            state = self._read()
+            changed = False
+            for device in state.get("devices", []):
+                if device.get("id") == device_id and not device.get("revoked_at"):
+                    device["revoked_at"] = now
+                    changed = True
+                    break
+            if changed:
+                self._write(state)
+            return changed
 
     def purge_revoked_devices(self) -> int:
-        state = self._read()
-        before = len(state.get("devices", []))
-        state["devices"] = [device for device in state.get("devices", []) if not device.get("revoked_at")]
-        removed = before - len(state["devices"])
-        if removed:
-            self._write(state)
-        return removed
+        with self._lock:
+            state = self._read()
+            before = len(state.get("devices", []))
+            state["devices"] = [device for device in state.get("devices", []) if not device.get("revoked_at")]
+            removed = before - len(state["devices"])
+            if removed:
+                self._write(state)
+            return removed
 
     def _read(self) -> dict[str, Any]:
         default = {"schema_version": 2, "active_pairing": None, "devices": []}

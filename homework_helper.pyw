@@ -229,6 +229,70 @@ def _server_pid_file_path() -> str:
     return os.path.join(data_dir, "db_server.pid")
 
 
+def _server_metadata_file_path() -> str:
+    data_dir = os.path.join(get_app_data_dir(), "homework_helper_data")
+    return os.path.join(data_dir, "db_server_meta.json")
+
+
+def _read_server_metadata_file() -> dict[str, Any] | None:
+    try:
+        with open(_server_metadata_file_path(), "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        return metadata if isinstance(metadata, dict) else None
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _process_create_time(process_id: int | None) -> float | None:
+    if not process_id:
+        return None
+    try:
+        import psutil
+
+        return float(psutil.Process(int(process_id)).create_time())
+    except Exception:
+        return None
+
+
+def _process_matches_create_time(process_id: int, expected_create_time: Any) -> bool:
+    actual_create_time = _process_create_time(process_id)
+    if actual_create_time is None:
+        return False
+    try:
+        expected = float(expected_create_time)
+    except (TypeError, ValueError):
+        return True
+    return abs(actual_create_time - expected) <= 0.001
+
+
+def _is_existing_api_server_reusable() -> bool:
+    """Do not reuse a healthy but orphaned API child from a previous GUI."""
+
+    metadata = _read_server_metadata_file()
+    if not metadata:
+        return True
+
+    parent_pid = metadata.get("parent_pid")
+    if not parent_pid:
+        return True
+
+    try:
+        parent_pid = int(parent_pid)
+    except (TypeError, ValueError):
+        return True
+
+    if parent_pid == os.getpid():
+        return True
+
+    if not _process_matches_create_time(parent_pid, metadata.get("parent_create_time")):
+        print(
+            f"기존 API 서버 parent_pid {parent_pid}가 사라졌거나 재사용된 PID입니다. "
+            "orphan 서버를 재사용하지 않고 재시작합니다."
+        )
+        return False
+    return True
+
+
 def _read_server_pid_file() -> int | None:
     try:
         with open(_server_pid_file_path(), "r", encoding="utf-8") as f:
@@ -440,11 +504,11 @@ def start_api_server() -> bool:
     try:
         # 이미 서버가 실행 중인지 확인
         if is_server_running():
-            if _is_existing_server_healthy():
+            if _is_existing_server_healthy() and _is_existing_api_server_reusable():
                 print("기존 API 서버가 정상 응답 중입니다. 재사용합니다.")
                 return True
 
-            print("기존 API 서버가 응답하지 않습니다. 종료 후 재시작합니다...")
+            print("기존 API 서버가 응답하지 않거나 현재 GUI에서 재사용할 수 없습니다. 종료 후 재시작합니다...")
             _terminate_existing_api_server(timeout=5.0)
 
         print("API 서버를 독립 프로세스로 시작합니다...")
@@ -580,6 +644,7 @@ def run_server_main():
                 {
                     "pid": os.getpid(),
                     "parent_pid": parent_process_id,
+                    "parent_create_time": _process_create_time(parent_process_id),
                     "started_at": time.time(),
                     "started_at_iso": datetime.datetime.now().isoformat(),
                     "api_port": resolve_api_port(),
@@ -797,6 +862,24 @@ def run_server_main():
         logger.warning(f"API 바인딩 메타데이터 갱신 실패: {e}")
 
     app = FastAPI()
+    loopback_hosts = {"127.0.0.1", "localhost", "::1", "testclient"}
+    remote_exposed = api_host not in {"127.0.0.1", "localhost", "::1"}
+
+    def _request_from_loopback(request) -> bool:
+        return bool(request.client and request.client.host in loopback_hosts)
+
+    @app.middleware("http")
+    async def remote_exposure_boundary_middleware(request, call_next):
+        """Expose only /remote/* to non-loopback peers when the API binds externally."""
+
+        if remote_exposed and not _request_from_loopback(request):
+            path = request.url.path
+            if path != "/remote" and not path.startswith("/remote/"):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Remote server mode exposes only the authenticated /remote API to non-loopback clients."},
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def remote_diagnostics_middleware(request, call_next):
@@ -912,6 +995,8 @@ def run_server_main():
             "host": api_host,
             "port": api_port,
             "base_url": f"http://127.0.0.1:{api_port}",
+            "bind_host": api_host,
+            "remote_exposed": remote_exposed,
             "testbench_mode": is_testbench_mode(),
             "testbench_session_id": get_testbench_session_id(),
             "db_ready": db_ready,
@@ -1325,7 +1410,6 @@ def run_server_main():
     app.include_router(dashboard_router)
     app.include_router(beholder_router)
 
-    loopback_hosts = {"127.0.0.1", "localhost", "::1"}
     remote_require_auth = (
         os.environ.get("HH_REMOTE_REQUIRE_AUTH", "").lower() in {"1", "true", "yes", "on"}
         or api_host not in loopback_hosts

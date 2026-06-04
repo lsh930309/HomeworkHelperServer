@@ -47,9 +47,8 @@ def fallback_png_bytes(name: str, size: int = 128) -> bytes | None:
     size = max(16, min(256, int(size or 128)))
     digest = hashlib.md5((name or "?").encode("utf-8")).digest()
     bg = (80 + digest[0] % 120, 80 + digest[1] % 120, 110 + digest[2] % 100, 255)
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
+
+    def solid_png_bytes() -> bytes:
         raw = b"".join(b"\x00" + bytes(bg) * size for _ in range(size))
         compressed = zlib.compress(raw)
 
@@ -59,20 +58,28 @@ def fallback_png_bytes(name: str, size: int = 128) -> bytes | None:
         header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
         return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
 
-    image = Image.new("RGBA", (size, size), bg)
-    draw = ImageDraw.Draw(image)
-    label = (name or "?").strip()[:1].upper() or "?"
     try:
-        font = ImageFont.truetype("Arial Unicode.ttf", max(12, int(size * 0.48)))
+        from PIL import Image, ImageDraw, ImageFont
     except Exception:
-        font = ImageFont.load_default()
-    bbox = draw.textbbox((0, 0), label, font=font)
-    x = (size - (bbox[2] - bbox[0])) / 2 - bbox[0]
-    y = (size - (bbox[3] - bbox[1])) / 2 - bbox[1]
-    draw.text((x, y), label, font=font, fill=(255, 255, 255, 235))
-    output = BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
+        return solid_png_bytes()
+
+    try:
+        image = Image.new("RGBA", (size, size), bg)
+        draw = ImageDraw.Draw(image)
+        label = (name or "?").strip()[:1].upper() or "?"
+        try:
+            font = ImageFont.truetype("Arial Unicode.ttf", max(12, int(size * 0.48)))
+        except Exception:
+            font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), label, font=font)
+        x = (size - (bbox[2] - bbox[0])) / 2 - bbox[0]
+        y = (size - (bbox[3] - bbox[1])) / 2 - bbox[1]
+        draw.text((x, y), label, font=font, fill=(255, 255, 255, 235))
+        output = BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return output.getvalue()
+    except Exception:
+        return solid_png_bytes()
 
 
 def ensure_cache_dir():

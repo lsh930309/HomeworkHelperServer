@@ -219,7 +219,7 @@ struct RemoteSettingsKeyboardShortcutBridge: NSViewRepresentable {
                 let isEscape = event.keyCode == 53
                 let isReturn = event.keyCode == 36 || event.keyCode == 76
                 let isCommandReturn = isReturn && event.modifierFlags.contains(.command)
-                if isEscape || isCommandReturn || (isReturn && !self.isEditingText(in: window)) {
+                if isEscape || isCommandReturn {
                     Task { @MainActor in
                         RemoteAppDelegate.hideSettingsWindow(window)
                     }
@@ -227,11 +227,6 @@ struct RemoteSettingsKeyboardShortcutBridge: NSViewRepresentable {
                 }
                 return event
             }
-        }
-
-        private func isEditingText(in window: NSWindow) -> Bool {
-            if window.firstResponder is NSTextView { return true }
-            return String(describing: type(of: window.firstResponder as Any)).contains("FieldEditor")
         }
     }
 }

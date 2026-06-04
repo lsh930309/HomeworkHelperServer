@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
     QRadioButton, QButtonGroup, QTextEdit, QGridLayout,
 )
-from PyQt6.QtCore import Qt, QTime, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
 
 # Local imports
@@ -50,6 +50,7 @@ class RemoteSettingsDialog(QDialog):
         self.data_manager = data_manager
         self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
         self._workers: list[_RemoteSettingsWorker] = []
+        self._closing_after_workers = False
         self.setWindowTitle("원격 설정")
         self.setMinimumWidth(680)
         self.resize(680, 520)
@@ -253,9 +254,37 @@ class RemoteSettingsDialog(QDialog):
         worker = _RemoteSettingsWorker(task_name, task, self)
         worker.succeeded.connect(self._on_worker_succeeded)
         worker.failed.connect(self._on_worker_failed)
-        worker.finished.connect(lambda w=worker: self._workers.remove(w) if w in self._workers else None)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         self._workers.append(worker)
         worker.start()
+
+    def _on_worker_finished(self, worker: _RemoteSettingsWorker) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+        if self._closing_after_workers and not self._workers:
+            QTimer.singleShot(0, lambda: QDialog.reject(self))
+
+    def _allow_close_after_workers(self) -> bool:
+        running = [worker for worker in self._workers if worker.isRunning()]
+        if not running:
+            return True
+        self._closing_after_workers = True
+        self.setEnabled(False)
+        self.server_status_label.setText("진행 중인 원격 설정 작업이 끝나면 창을 닫습니다...")
+        for worker in running:
+            worker.requestInterruption()
+            worker.quit()
+        return False
+
+    def reject(self) -> None:
+        if self._allow_close_after_workers():
+            super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self._allow_close_after_workers():
+            super().closeEvent(event)
+        else:
+            event.ignore()
 
     def _on_worker_succeeded(self, task_name: str, payload: object) -> None:
         if task_name == "logging":

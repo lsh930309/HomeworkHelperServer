@@ -61,6 +61,8 @@ def test_gui_health_endpoint_contract_is_present():
     assert '"server_time": time.time()' in source
     assert '@app.get("/api/gui/health")' in source
     assert '"db_ready": db_ready' in source
+    assert '"bind_host": api_host' in source
+    assert '"remote_exposed": remote_exposed' in source
     assert '"db_probe_ms": round(db_probe_ms, 2)' in source
     assert '"dashboard_static_ready": dashboard_static["ready"]' in source
     assert '"static_probe_ms": round(static_probe_ms, 2)' in source
@@ -81,9 +83,13 @@ def test_api_server_lifecycle_recovers_stale_orphan_processes():
 
     assert "def _terminate_existing_api_server" in source
     assert "def _find_api_listener_pids" in source
+    assert "def _is_existing_api_server_reusable" in source
+    assert "_is_existing_server_healthy() and _is_existing_api_server_reusable()" in source
+    assert "orphan 서버를 재사용하지 않고 재시작합니다." in source
     assert "api_listener_pids = _find_api_listener_pids(resolve_api_port())" in source
     assert "proc.kill()" in source
     assert 'metadata_file = os.path.join(data_dir, "db_server_meta.json")' in source
+    assert '"parent_create_time": _process_create_time(parent_process_id)' in source
     assert "def start_parent_watchdog" in source
     assert "parent watchdog 시작" in source
     assert "os._exit(0)" in source
@@ -131,3 +137,12 @@ def test_api_server_logs_and_records_effective_bind_host_for_diagnostics():
     assert "API 바인딩 설정 확인: remote_server_mode_enabled=" in source
     assert 'metadata["api_host"] = api_host' in source
     assert 'metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}' in source
+
+
+def test_remote_server_mode_blocks_legacy_routes_for_non_loopback_clients():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "async def remote_exposure_boundary_middleware(request, call_next):" in source
+    assert "remote_exposed and not _request_from_loopback(request)" in source
+    assert 'path != "/remote" and not path.startswith("/remote/")' in source
+    assert "Remote server mode exposes only the authenticated /remote API" in source

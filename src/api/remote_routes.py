@@ -35,14 +35,11 @@ from src.utils.game_preset_manager import GamePresetManager
 
 
 REMOTE_API_VERSION = "0.2.0"
-TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
 
 
 def _temporary_pairing_allowed_ips() -> set[str]:
-    raw = os.environ.get("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS")
-    if raw is None:
-        raw = TEMPORARY_MACBOOK_TAILSCALE_IP
+    raw = os.environ.get("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "")
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
@@ -111,6 +108,16 @@ def _model_dump(model: Any) -> dict[str, Any]:
     return dict(model)
 
 
+def _schema_from_attributes(schema_cls: type[Any], source: Any) -> dict[str, Any]:
+    """Serialize SQLAlchemy-ish objects under both Pydantic v1 and v2."""
+
+    if hasattr(schema_cls, "model_validate"):
+        return _model_dump(schema_cls.model_validate(source))
+    fields = getattr(schema_cls, "__fields__", {})
+    payload = {name: getattr(source, name, None) for name in fields}
+    return _model_dump(schema_cls(**payload))
+
+
 def _serialize_process(
     process: Any,
     *,
@@ -118,10 +125,7 @@ def _serialize_process(
     running_process_ids: set[str] | None = None,
     played_today_process_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    if hasattr(schemas.ProcessSchema, "model_validate"):
-        payload = _model_dump(schemas.ProcessSchema.model_validate(process))
-    else:
-        payload = _model_dump(schemas.ProcessSchema.from_orm(process))
+    payload = _schema_from_attributes(schemas.ProcessSchema, process)
     payload["progress"] = calculate_process_progress(process, current_dt=current_dt)
     process_id = str(payload.get("id") or getattr(process, "id", "") or "")
     if process_id and getattr(process, "user_preset_id", None):
@@ -156,21 +160,15 @@ def _resource_icon_urls(process_id: str) -> dict[str, str]:
 
 
 def _serialize_shortcut(shortcut: Any) -> dict[str, Any]:
-    if hasattr(schemas.WebShortcutSchema, "model_validate"):
-        return _model_dump(schemas.WebShortcutSchema.model_validate(shortcut))
-    return _model_dump(schemas.WebShortcutSchema.from_orm(shortcut))
+    return _schema_from_attributes(schemas.WebShortcutSchema, shortcut)
 
 
 def _serialize_game_platform_link(link: Any) -> dict[str, Any]:
-    if hasattr(schemas.GamePlatformLinkSchema, "model_validate"):
-        return _model_dump(schemas.GamePlatformLinkSchema.model_validate(link))
-    return _model_dump(schemas.GamePlatformLinkSchema.from_orm(link))
+    return _schema_from_attributes(schemas.GamePlatformLinkSchema, link)
 
 
 def _serialize_mobile_game_session(session: Any) -> dict[str, Any]:
-    if hasattr(schemas.MobileGameSessionSchema, "model_validate"):
-        return _model_dump(schemas.MobileGameSessionSchema.model_validate(session))
-    return _model_dump(schemas.MobileGameSessionSchema.from_orm(session))
+    return _schema_from_attributes(schemas.MobileGameSessionSchema, session)
 
 
 def _mobile_session_effective_end(session: Any, now_ts: float) -> float:

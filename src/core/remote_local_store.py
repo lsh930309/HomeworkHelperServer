@@ -2,13 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from src.data.database import data_dir
+
+
+_STORE_LOCKS_GUARD = threading.Lock()
+_STORE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _lock_for_path(path: Path) -> threading.RLock:
+    key = str(path.resolve() if path.exists() else path.absolute())
+    with _STORE_LOCKS_GUARD:
+        lock = _STORE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _STORE_LOCKS[key] = lock
+        return lock
 
 
 @dataclass(frozen=True)
@@ -51,13 +68,14 @@ class RemoteLocalStore:
 
     def write_json(self, filename: str, payload: dict[str, Any]) -> Path:
         path = self.path(filename)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            self._backup(path)
-        tmp = path.with_suffix(path.suffix + f".tmp.{int(time.time() * 1000)}")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
-        self._update_manifest(path)
+        with _lock_for_path(path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                self._backup(path)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp.replace(path)
+            self._update_manifest(path)
         return path
 
     def append_jsonl(self, filename: str, payload: dict[str, Any]) -> Path:
@@ -111,7 +129,7 @@ class RemoteLocalStore:
     def _backup(self, path: Path) -> None:
         backup_dir = self.root / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / f"{path.name}.{int(time.time() * 1000)}.bak"
+        backup = backup_dir / f"{path.name}.{int(time.time() * 1000)}.{uuid.uuid4().hex}.bak"
         shutil.copy2(path, backup)
         backups = sorted(backup_dir.glob(f"{path.name}.*.bak"), key=lambda item: item.stat().st_mtime, reverse=True)
         for old in backups[self.max_backups:]:
@@ -120,18 +138,19 @@ class RemoteLocalStore:
     def _update_manifest(self, path: Path) -> None:
         if path.name == "manifest.json" or not path.exists():
             return
-        manifest = self.manifest()
-        rel = path.name if path.parent == self.root else str(path.relative_to(self.root))
-        manifest.setdefault("files", {})[rel] = {
-            "sha256": self._sha256(path),
-            "size": path.stat().st_size,
-            "updated_at": time.time(),
-        }
         manifest_path = self.root / "manifest.json"
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = manifest_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(manifest_path)
+        with _lock_for_path(manifest_path):
+            manifest = self.manifest()
+            rel = path.name if path.parent == self.root else str(path.relative_to(self.root))
+            manifest.setdefault("files", {})[rel] = {
+                "sha256": self._sha256(path),
+                "size": path.stat().st_size,
+                "updated_at": time.time(),
+            }
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = manifest_path.with_name(f".{manifest_path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+            tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp.replace(manifest_path)
 
     @staticmethod
     def _sha256(path: Path) -> str:

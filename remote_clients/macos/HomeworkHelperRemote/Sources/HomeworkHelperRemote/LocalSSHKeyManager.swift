@@ -15,11 +15,11 @@ enum LocalSSHKeyManager {
         let publicPath = privatePath + ".pub"
         let fm = FileManager.default
         if fm.fileExists(atPath: privatePath), fm.fileExists(atPath: publicPath) {
-            return LocalSSHKeyPair(privateKeyPath: privateKeyPath, publicKeyPath: publicPath, publicKey: try String(contentsOfFile: publicPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), created: false)
+            return LocalSSHKeyPair(privateKeyPath: privatePath, publicKeyPath: publicPath, publicKey: try String(contentsOfFile: publicPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), created: false)
         }
         try fm.createDirectory(atPath: (privatePath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try await runSSHKeygen(privatePath: privatePath)
-        return LocalSSHKeyPair(privateKeyPath: privateKeyPath, publicKeyPath: publicPath, publicKey: try String(contentsOfFile: publicPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), created: true)
+        return LocalSSHKeyPair(privateKeyPath: privatePath, publicKeyPath: publicPath, publicKey: try String(contentsOfFile: publicPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), created: true)
     }
 
     private static func expandTilde(_ path: String) -> String {

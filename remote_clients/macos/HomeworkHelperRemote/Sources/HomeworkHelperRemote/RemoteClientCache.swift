@@ -134,7 +134,9 @@ struct RemoteClientCache {
 
     static func remoteIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 256) -> URL? {
         guard let raw = bestURL(from: process.iconURLs, preferredSize: preferredSize) ?? process.iconURL, !raw.isEmpty else { return nil }
-        if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
+        if let absolute = URL(string: raw), absolute.scheme != nil {
+            return isSameOrigin(absolute, baseURL: baseURL) ? absolute : nil
+        }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         let path = raw.hasPrefix("/") ? raw : "/\(raw)"
         let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
@@ -145,13 +147,29 @@ struct RemoteClientCache {
 
     static func remoteResourceIconURL(for process: RemoteProcess, baseURL: URL, preferredSize: Int = 128) -> URL? {
         guard let raw = bestURL(from: process.progress?.resourceIconURLs, preferredSize: preferredSize) ?? process.progress?.resourceIconURL, !raw.isEmpty else { return nil }
-        if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
+        if let absolute = URL(string: raw), absolute.scheme != nil {
+            return isSameOrigin(absolute, baseURL: baseURL) ? absolute : nil
+        }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         let path = raw.hasPrefix("/") ? raw : "/\(raw)"
         let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         components.path = String(parts[0])
         components.query = parts.count > 1 ? String(parts[1]) : nil
         return components.url
+    }
+
+    private static func isSameOrigin(_ url: URL, baseURL: URL) -> Bool {
+        url.scheme?.lowercased() == baseURL.scheme?.lowercased()
+            && url.host?.lowercased() == baseURL.host?.lowercased()
+            && (url.port ?? defaultPort(for: url.scheme)) == (baseURL.port ?? defaultPort(for: baseURL.scheme))
+    }
+
+    private static func defaultPort(for scheme: String?) -> Int? {
+        switch scheme?.lowercased() {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
     }
 
     private static func bestURL(from variants: [String: String]?, preferredSize: Int) -> String? {

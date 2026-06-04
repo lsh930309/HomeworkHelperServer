@@ -640,6 +640,16 @@ def _invalid_process_values(
             if value is not None and (not _is_number(value) or float(value) < 0):
                 invalid.append(field)
 
+    if "resource_updated_at" in changed_fields:
+        value = update_data.get("resource_updated_at")
+        if value is not None and (not _is_number(value) or float(value) < 0):
+            invalid.append("resource_updated_at")
+
+    if "resource_percent" in changed_fields:
+        value = update_data.get("resource_percent")
+        if value is not None and (not _is_number(value) or not (0 <= float(value) <= 100)):
+            invalid.append("resource_percent")
+
     for field in ("stamina_current", "stamina_max"):
         if field in changed_fields:
             value = update_data.get(field)

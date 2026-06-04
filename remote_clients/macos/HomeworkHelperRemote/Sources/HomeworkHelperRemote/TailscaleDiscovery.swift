@@ -1,7 +1,6 @@
 import Foundation
 
 struct LocalTailscalePeer: Identifiable, Equatable {
-    let id = UUID()
     let hostname: String
     let dnsName: String
     let ips: [String]
@@ -12,6 +11,14 @@ struct LocalTailscalePeer: Identifiable, Equatable {
     let relay: String?
     let peerRelay: String?
 
+    var id: String {
+        let dns = dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+        if !dns.isEmpty { return dns }
+        let host = hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !host.isEmpty { return host }
+        if let ip = primaryIPv4 { return ip }
+        return ips.joined(separator: ",")
+    }
     var primaryIPv4: String? { ips.first { $0.contains(".") } }
     var dnsStem: String {
         dnsName.trimmingCharacters(in: CharacterSet(charactersIn: "."))
@@ -559,11 +566,19 @@ enum TailscaleDiscovery {
                 process.environment = command.environment(base: ProcessInfo.processInfo.environment)
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
+                var outputData = Data()
+                let outputGroup = DispatchGroup()
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
                 do {
                     try process.run()
                     process.waitUntilExit()
+                    outputGroup.wait()
                     if process.terminationStatus == 0 {
-                        continuation.resume(returning: pipe.fileHandleForReading.readDataToEndOfFile())
+                        continuation.resume(returning: outputData)
                     } else {
                         continuation.resume(throwing: NSError(domain: "TailscaleDiscovery", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "tailscale status 실패 (\(command.displayPath))"]))
                     }
@@ -583,11 +598,19 @@ enum TailscaleDiscovery {
                 process.arguments = arguments
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
+                var outputData = Data()
+                let outputGroup = DispatchGroup()
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
                 do {
                     try process.run()
                     process.waitUntilExit()
+                    outputGroup.wait()
                     if process.terminationStatus == 0 {
-                        continuation.resume(returning: pipe.fileHandleForReading.readDataToEndOfFile())
+                        continuation.resume(returning: outputData)
                     } else {
                         continuation.resume(throwing: NSError(domain: "TailscaleDiscovery", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "\(executable) 실행 실패"]))
                     }
@@ -610,6 +633,19 @@ enum TailscaleDiscovery {
                 process.environment = command.environment(base: ProcessInfo.processInfo.environment)
                 process.standardOutput = output
                 process.standardError = error
+                var stdoutData = Data()
+                var stderrData = Data()
+                let outputGroup = DispatchGroup()
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
+                outputGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stderrData = error.fileHandleForReading.readDataToEndOfFile()
+                    outputGroup.leave()
+                }
                 do {
                     try process.run()
                     let timeoutLock = NSLock()
@@ -624,8 +660,9 @@ enum TailscaleDiscovery {
                         }
                     }
                     process.waitUntilExit()
-                    let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    outputGroup.wait()
+                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
                     timeoutLock.lock()
                     let timedOut = didTimeOut
                     timeoutLock.unlock()
