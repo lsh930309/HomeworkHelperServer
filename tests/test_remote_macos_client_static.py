@@ -297,6 +297,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "homeworkHelperRemoteMenuBarStatusDidChange" in app
     assert "homeworkHelperRemoteMenuBarIconDidChange" in app
     assert "homeworkHelperRemoteGlobalShortcutPressed" in app
+    assert "installMoonlightStateObservers()" in app
+    assert "NSWorkspace.didActivateApplicationNotification" in app
+    assert "NSWorkspace.didLaunchApplicationNotification" in app
+    assert "NSWorkspace.didTerminateApplicationNotification" in app
+    assert "moonlightApplicationStateChanged" in app
+    assert "app.bundleIdentifier == Self.moonlightBundleIdentifier" in app
     assert "statusItemClicked(_ sender: Any?)" in app
     assert "sendAction(on: [.leftMouseDown])" in app
     assert "installStatusItemClickMonitor()" in app
@@ -353,6 +359,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "showPopoverFromStatusItem()" in app
     assert "popover.contentSize = currentPopoverContentSize()" in app
     assert "popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)" in app
+    show_popover_body = app.split("private func showPopover(relativeTo button: NSStatusBarButton)", 1)[1].split("private func focusPopoverWindow", 1)[0]
+    assert "RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()" in show_popover_body
     assert "popover.behavior = .transient" in app
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
@@ -506,6 +514,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteSettingsContentSizePreferenceKey" in app
     assert "RemoteSettingsLayout" in app
     assert "RemoteSettingsSection" in app
+    assert "static let controlWidth: CGFloat = 220" in app
+    assert "struct SettingsControlRow" in app
+    assert "struct SettingsToggleRow" in app
+    assert ".frame(width: controlWidth, alignment: .trailing)" in app
     assert "SmartScheduleRuleEditor" in app
     assert "평일 스케줄 추가" in app
     assert "RemoteSmartScheduleRule" in view_model
@@ -517,11 +529,15 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "measured.height * 1.10" in app
     assert "SettingsActionGrid" in app
     assert ".toggleStyle(.switch)" in app
+    assert 'SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)' in app
+    assert 'SettingsToggleRow(title: "Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)' in app
+    assert 'SettingsControlRow("Moonlight host 선택")' in app
+    assert 'SettingsControlRow("Moonlight 표시")' in app
     assert "MenuBarIconPickerRow(title: \"대기 상태 아이콘\", selection: $viewModel.menuBarIdleIconSymbol)" in app
     assert "MenuBarIconPickerRow(title: \"실행 중 아이콘\", selection: $viewModel.menuBarRunningIconSymbol)" in app
     assert "MenuBarIconPickerRow(title: \"오프라인/Standalone 아이콘\", selection: $viewModel.menuBarOfflineIconSymbol)" in app
     assert "struct MenuBarIconPickerRow" in app
-    assert ".frame(width: 220, alignment: .trailing)" in app
+    assert "SettingsControlRow(title)" in app
     assert ".padding(RemoteSettingsLayout.tabPadding)" in app
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
@@ -554,7 +570,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "loadPopoverGlassTransparency" in view_model
     assert "savePopoverGlassTransparency" in view_model
     assert "@Published var popoverGlassTransparency" in view_model
-    assert 'Picker("Popover 투명도", selection: $viewModel.popoverGlassTransparency)' in app
+    assert 'SettingsControlRow("Popover 투명도")' in app
+    assert 'Picker("", selection: $viewModel.popoverGlassTransparency)' in app
     assert "ForEach(RemotePopoverGlassTransparency.allCases)" in app
     assert ".remoteGlass(.popover, variant: viewModel.popoverGlassTransparency.glass)" in app
     assert "RemoteHostAvailabilityState" in supervisor
@@ -713,9 +730,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "LocalMoonlightCommandResult" in local_moonlight
     assert "LocalMoonlightSessionSnapshot" in local_moonlight
     assert "desktopStreamProcessCount" in local_moonlight
+    assert "hasFocusedApplication" in local_moonlight
+    assert "apps.contains { $0.isActive }" in local_moonlight
     assert "hasDesktopStreamSession" in local_moonlight
     assert "isDesktopStreamVisible" in local_moonlight
     assert "hasDesktopSession" in local_moonlight
+    assert "hasDesktopStreamSession || isVisible" in local_moonlight
     assert "targetHostArgument: String? = nil" in local_moonlight
     assert "processCommandLine(pid:" in local_moonlight
     assert "commandLineIndicatesDesktopStream" in local_moonlight
@@ -756,6 +776,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "remote.moonlight.autoWakeBeforeStreamEnabled" not in view_model
     assert '"Moonlight OFF" : "Moonlight ON"' in view_model
     assert 'moonlightSessionSnapshot.hasDesktopSession ? "stop.circle.fill" : "play.rectangle.fill"' in view_model
+    moonlight_session_property = view_model.split("@Published private(set) var moonlightSessionSnapshot", 1)[1].split("@Published var moonlightBindingEnabled", 1)[0]
+    assert "oldValue != moonlightSessionSnapshot" in moonlight_session_property
+    assert "postMenuBarStatusDidChange()" in moonlight_session_property
+    assert "defer { refreshMoonlightSessionSnapshot() }" in view_model
+    assert "refreshMoonlightSessionSnapshot()" in view_model.split("private func mirrorRemoteState", 1)[1].split("private func shouldRefreshLocalSSHHealthAfterOnlineRecovery", 1)[0]
     assert 'return "화면 켜기"' not in view_model
     assert 'return "화면 보기"' not in view_model
     assert 'return "화면 끄기"' not in view_model
@@ -1006,6 +1031,19 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "gamecontroller.fill" in view_model
     assert "play.circle.fill" in view_model
     assert "power.circle.fill" in view_model
+    for symbol in [
+        "arcade.stick.console.fill",
+        "play.rectangle.fill",
+        "moon.stars.fill",
+        "server.rack",
+        "terminal",
+        "wrench.and.screwdriver.fill",
+        "display.2",
+        "network",
+        "paperplane.fill",
+        "xmark.circle.fill",
+    ]:
+        assert symbol in view_model
     assert "wifi.slash" not in view_model
     assert "remote.menuBarIdleIconSymbol" in view_model
     assert "remote.menuBarRunningIconSymbol" in view_model

@@ -247,13 +247,14 @@ struct LocalMoonlightCommandResult: Equatable {
 struct LocalMoonlightSessionSnapshot: Equatable {
     let runningApplicationCount: Int
     let hasVisibleWindow: Bool
+    let hasFocusedApplication: Bool
     let accessibilityTrusted: Bool
     let desktopStreamProcessCount: Int
 
     var isRunning: Bool { runningApplicationCount > 0 }
-    var isVisible: Bool { isRunning && hasVisibleWindow }
+    var isVisible: Bool { isRunning && (hasVisibleWindow || hasFocusedApplication) }
     var hasDesktopStreamSession: Bool { desktopStreamProcessCount > 0 }
-    var isDesktopStreamVisible: Bool { hasDesktopStreamSession && hasVisibleWindow }
+    var isDesktopStreamVisible: Bool { hasDesktopStreamSession && (hasVisibleWindow || hasFocusedApplication) }
     var hasDesktopSession: Bool { hasDesktopStreamSession || isVisible }
 }
 
@@ -489,6 +490,7 @@ enum LocalMoonlightManager {
         return LocalMoonlightSessionSnapshot(
             runningApplicationCount: runningApps.count,
             hasVisibleWindow: hasVisibleWindow(for: runningApps),
+            hasFocusedApplication: hasFocusedApplication(for: runningApps),
             accessibilityTrusted: accessibilityTrusted(prompt: false),
             desktopStreamProcessCount: desktopStreamProcessCount(
                 for: runningApps,
@@ -859,6 +861,11 @@ enum LocalMoonlightManager {
             let alpha = info[kCGWindowAlpha as String] as? Double ?? 1.0
             return layer == 0 && alpha > 0
         }
+    }
+
+    @MainActor
+    private static func hasFocusedApplication(for apps: [NSRunningApplication]) -> Bool {
+        apps.contains { $0.isActive }
     }
 
     @MainActor

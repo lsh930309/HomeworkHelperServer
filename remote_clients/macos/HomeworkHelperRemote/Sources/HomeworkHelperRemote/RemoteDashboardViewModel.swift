@@ -311,15 +311,53 @@ enum RemoteMenuBarIconChoice {
     static let runningDefaultSymbol = "play.circle.fill"
     static let offlineDefaultSymbol = "power.circle.fill"
     static let symbols = [
-        "gamecontroller.fill",
-        "desktopcomputer",
-        "menubar.rectangle",
-        "play.circle.fill",
-        "power.circle.fill",
+        "app.fill",
+        "arcade.stick.console.fill",
+        "antenna.radiowaves.left.and.right",
         "bolt.circle.fill",
-        "sparkles",
+        "bolt.fill",
+        "bolt.horizontal.circle.fill",
+        "checkmark.circle.fill",
+        "circle",
+        "circle.dashed",
         "circle.fill",
+        "gamecontroller.fill",
+        "gamecontroller",
+        "gauge.with.dots.needle.67percent",
+        "gearshape.fill",
+        "hammer.fill",
+        "headphones",
+        "house.fill",
+        "keyboard",
+        "link.circle.fill",
+        "lock.fill",
+        "laptopcomputer",
+        "macbook",
+        "menubar.rectangle",
         "moon.fill",
+        "moon.stars.fill",
+        "network",
+        "paperplane.fill",
+        "play.circle",
+        "play.circle.fill",
+        "play.rectangle.fill",
+        "play.tv",
+        "power",
+        "power.circle",
+        "power.circle.fill",
+        "server.rack",
+        "shield.fill",
+        "sparkles",
+        "star.circle.fill",
+        "sun.max.fill",
+        "terminal",
+        "tv",
+        "wifi",
+        "wrench.and.screwdriver.fill",
+        "xmark.circle.fill",
+        "desktopcomputer",
+        "display",
+        "display.2",
         "exclamationmark.circle.fill",
     ]
 }
@@ -491,7 +529,13 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightPairingPIN = ""
     @Published private(set) var moonlightTailscalePing: LocalTailscalePingResult?
     @Published private(set) var moonlightLastCommandSummary = ""
-    @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
+    @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot() {
+        didSet {
+            if oldValue != moonlightSessionSnapshot {
+                postMenuBarStatusDidChange()
+            }
+        }
+    }
     @Published var moonlightBindingEnabled = RemoteClientPreferences.loadMoonlightBindingEnabled() {
         didSet { RemoteClientPreferences.saveMoonlightBindingEnabled(moonlightBindingEnabled) }
     }
@@ -2824,6 +2868,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func refresh() async {
+        refreshMoonlightSessionSnapshot()
+        defer { refreshMoonlightSessionSnapshot() }
         guard bootstrapEnabled else {
             applyUITestSnapshot()
             return
@@ -2850,6 +2896,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func mirrorRemoteState(trigger: String = "mirror", syncScope: RemotePayloadSyncScope = .revisionAware) async {
+        refreshMoonlightSessionSnapshot()
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
         let previousAvailabilityState = hostAvailabilityState
@@ -2867,6 +2914,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: shouldSyncPayload)
         guard shouldSyncPayload else {
             refreshLocalProcessDisplay()
+            refreshMoonlightSessionSnapshot()
             if shouldRefreshSSHHealthAfterRecovery {
                 await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
             }
@@ -2887,6 +2935,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
         clearPendingMoonlightWakeActionIfBlocked()
+        refreshMoonlightSessionSnapshot()
     }
 
     private func shouldRefreshLocalSSHHealthAfterOnlineRecovery(

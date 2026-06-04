@@ -41,6 +41,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     static let settingsWindowTitle = "HomeworkHelper Remote 설정"
 
     private static weak var shared: RemoteAppDelegate?
+    private static let moonlightBundleIdentifier = "com.moonlight-stream.Moonlight"
     private static var isOpeningMainWindow = false
     private static var uiTestMainWindow: NSWindow?
     private static var uiTestPopoverWindow: NSWindow?
@@ -75,6 +76,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             name: .homeworkHelperRemoteGlobalShortcutPressed,
             object: nil
         )
+        installMoonlightStateObservers()
         Task {
             await RemoteSharedModel.viewModel.bootstrap()
         }
@@ -105,6 +107,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -126,6 +129,22 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         popover.delegate = self
         popover.contentViewController = Self.makePopoverController()
         updatePopoverContentSize()
+    }
+
+    private func installMoonlightStateObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification
+        ] {
+            center.addObserver(
+                self,
+                selector: #selector(moonlightApplicationStateChanged(_:)),
+                name: name,
+                object: nil
+            )
+        }
     }
 
     private func configureStatusButton(_ button: NSStatusBarButton?) {
@@ -279,6 +298,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
         updatePopoverContentSize()
         NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
@@ -288,6 +308,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         DispatchQueue.main.async { [weak self] in
             RemoteSharedModel.viewModel.updateMoonlightPreferredScreen(self?.popover.contentViewController?.view.window?.screen ?? button.window?.screen ?? NSScreen.main)
+            RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
             self?.focusPopoverWindow()
         }
     }
@@ -312,6 +333,14 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
 
     @objc private func globalShortcutPressed(_ notification: Notification) {
         showPopoverFromStatusItem()
+    }
+
+    @objc private func moonlightApplicationStateChanged(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.bundleIdentifier == Self.moonlightBundleIdentifier else {
+            return
+        }
+        RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
     }
 
     static func showPrimaryInterface() {
@@ -1106,6 +1135,9 @@ struct MenuBarPopoverView: View {
             .buttonStyle(.glass)
             .frame(width: RemotePopoverLayout.contentWidth(processes: viewModel.displayProcesses) - 20)
         }
+        .onAppear {
+            viewModel.refreshMoonlightSessionSnapshot()
+        }
     }
 }
 
@@ -1345,6 +1377,7 @@ enum RemoteSettingsTab: String, CaseIterable, Hashable {
 
 enum RemoteSettingsLayout {
     static let contentWidth: CGFloat = 392
+    static let controlWidth: CGFloat = 220
     static let tabPadding: CGFloat = 12
     static let sectionSpacing: CGFloat = 12
     static let windowHorizontalInset: CGFloat = 34
@@ -1592,20 +1625,26 @@ struct RemoteSettingsView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                    Toggle("Moonlight 실행 버튼 연동", isOn: $viewModel.moonlightBindingEnabled)
-                        .disabled(viewModel.moonlightSnapshot.readiness != .ready)
+                    SettingsToggleRow(
+                        title: "Moonlight 실행 버튼 연동",
+                        isOn: $viewModel.moonlightBindingEnabled,
+                        disabled: viewModel.moonlightSnapshot.readiness != .ready
+                    )
                     SidebarInfoRow(label: "연동 상태", value: viewModel.moonlightBindingStatusDisplay, systemImage: "play.tv")
                     if !viewModel.moonlightSnapshot.installed {
                         SidebarInfoRow(label: "Homebrew", value: viewModel.moonlightHomebrewDisplay, systemImage: "shippingbox")
                     }
                     if viewModel.moonlightSelectableHosts.count > 1 {
-                        Picker("Moonlight host 선택", selection: $viewModel.selectedMoonlightHostUUID) {
-                            Text("자동 감지").tag("")
-                            ForEach(viewModel.moonlightSelectableHosts) { host in
-                                Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
+                        SettingsControlRow("Moonlight host 선택") {
+                            Picker("", selection: $viewModel.selectedMoonlightHostUUID) {
+                                Text("자동 감지").tag("")
+                                ForEach(viewModel.moonlightSelectableHosts) { host in
+                                    Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
+                                }
                             }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
                         }
-                        .pickerStyle(.menu)
                     }
 
                     DisclosureGroup("상세 진단") {
@@ -1719,42 +1758,52 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .app) {
             RemoteSettingsSection("앱 동작") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("로그인 시 실행", isOn: Binding(
-                        get: { viewModel.launchAtLoginEnabled },
-                        set: { enabled in viewModel.setLaunchAtLogin(enabled) }
-                    ))
-                    Toggle("플레이 요약 표시", isOn: $viewModel.showPlaySummary)
-                    HStack {
-                        Text("상태 동기화 주기")
-                        Spacer()
-                        TextField("초", value: $viewModel.mirrorPollIntervalSeconds, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 58)
-                        Text("초")
-                            .foregroundStyle(.secondary)
-                        Stepper(
-                            "상태 동기화 주기",
-                            value: $viewModel.mirrorPollIntervalSeconds,
-                            in: 1...60,
-                            step: 1
+                    SettingsToggleRow(
+                        title: "로그인 시 실행",
+                        isOn: Binding(
+                            get: { viewModel.launchAtLoginEnabled },
+                            set: { enabled in viewModel.setLaunchAtLogin(enabled) }
                         )
-                        .labelsHidden()
+                    )
+                    SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)
+                    SettingsControlRow("상태 동기화 주기") {
+                        HStack(spacing: 6) {
+                            TextField("초", value: $viewModel.mirrorPollIntervalSeconds, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 58)
+                            Text("초")
+                                .foregroundStyle(.secondary)
+                            Stepper(
+                                "상태 동기화 주기",
+                                value: $viewModel.mirrorPollIntervalSeconds,
+                                in: 1...60,
+                                step: 1
+                            )
+                            .labelsHidden()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     Text("1~60초 사이에서 1초 단위로 조정합니다. 기본값은 5초입니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Picker("비 HoYoLab 진행률 표시", selection: $viewModel.cycleProgressDisplayMode) {
-                        ForEach(CycleProgressDisplayMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
+                    SettingsControlRow("비 HoYoLab 진행률 표시") {
+                        Picker("", selection: $viewModel.cycleProgressDisplayMode) {
+                            ForEach(CycleProgressDisplayMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
-                    Picker("Popover 투명도", selection: $viewModel.popoverGlassTransparency) {
-                        ForEach(RemotePopoverGlassTransparency.allCases) { option in
-                            Text(option.label).tag(option)
+                    SettingsControlRow("Popover 투명도") {
+                        Picker("", selection: $viewModel.popoverGlassTransparency) {
+                            ForEach(RemotePopoverGlassTransparency.allCases) { option in
+                                Text(option.label).tag(option)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
                     Text(viewModel.popoverGlassTransparency.description)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -1764,7 +1813,7 @@ struct RemoteSettingsView: View {
                     Text("상태별 내장 SF Symbols를 메뉴바 아이콘으로 사용합니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Toggle("Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)
+                    SettingsToggleRow(title: "Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)
                     Text(viewModel.globalShortcutStatusMessage)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -1780,9 +1829,7 @@ struct MenuBarIconPickerRow: View {
     @Binding var selection: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text(title)
-            Spacer()
+        SettingsControlRow(title) {
             Picker("", selection: $selection) {
                 ForEach(RemoteMenuBarIconChoice.symbols, id: \.self) { symbol in
                     Label(symbol, systemImage: symbol).tag(symbol)
@@ -1790,9 +1837,8 @@ struct MenuBarIconPickerRow: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .frame(width: 220, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1844,15 +1890,18 @@ struct SmartScheduleRuleEditor: View {
                     .help("\(label)요일 \(selected ? "해제" : "선택")")
                 }
             }
-            Toggle("호스트 깨우기", isOn: $rule.wakeHost)
-            Toggle("Moonlight Desktop 시작", isOn: $rule.startMoonlight)
-            Picker("Moonlight 표시", selection: $rule.displayTarget) {
-                ForEach(RemoteSmartScheduleDisplayTarget.allCases) { target in
-                    Text(target.label).tag(target)
+            SettingsToggleRow(title: "호스트 깨우기", isOn: $rule.wakeHost)
+            SettingsToggleRow(title: "Moonlight Desktop 시작", isOn: $rule.startMoonlight)
+            SettingsControlRow("Moonlight 표시") {
+                Picker("", selection: $rule.displayTarget) {
+                    ForEach(RemoteSmartScheduleDisplayTarget.allCases) { target in
+                        Text(target.label).tag(target)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .disabled(!rule.startMoonlight)
             }
-            .pickerStyle(.menu)
-            .disabled(!rule.startMoonlight)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1916,6 +1965,44 @@ struct SettingsActionGrid<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SettingsControlRow<Control: View>: View {
+    private let title: LocalizedStringKey
+    private let controlWidth: CGFloat
+    private let control: Control
+
+    init(_ title: LocalizedStringKey, controlWidth: CGFloat = RemoteSettingsLayout.controlWidth, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.controlWidth = controlWidth
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            control
+                .frame(width: controlWidth, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+struct SettingsToggleRow: View {
+    let title: LocalizedStringKey
+    @Binding var isOn: Bool
+    var disabled = false
+
+    var body: some View {
+        SettingsControlRow(title) {
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(disabled)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
     }
 }
 
