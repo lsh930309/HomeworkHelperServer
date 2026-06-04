@@ -129,6 +129,14 @@ def test_installer_shutdown_policy_uses_legacy_force_kill_flow():
     assert "waitforappexit" not in installer
 
 
+def test_installer_removes_old_pyinstaller_onedir_payload_before_copy():
+    installer = Path("installer.iss").read_text(encoding="utf-8").lower()
+
+    assert "[installdelete]" in installer
+    assert 'type: files; name: "{app}\\{#myappexename}"' in installer
+    assert 'type: filesandordirs; name: "{app}\\_internal"' in installer
+
+
 def test_macos_pkg_preinstall_script_stops_running_client(tmp_path):
     scripts_dir = build.prepare_macos_pkg_scripts_dir(tmp_path / "pkg-scripts")
     preinstall = scripts_dir / "preinstall"

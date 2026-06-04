@@ -75,6 +75,12 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; 설치 완료 후 프로그램 실행 옵션
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+[InstallDelete]
+; PyInstaller onedir 업데이트 시 이전 _internal 잔여 모듈이 새 exe와 섞이면
+; 런타임 entrypoint/모듈 버전이 불일치할 수 있으므로 새 파일 복사 전에 제거합니다.
+Type: files; Name: "{app}\{#MyAppExeName}"
+Type: filesandordirs; Name: "{app}\_internal"
+
 [UninstallDelete]
 ; 앱이 생성한 데이터는 사용자 AppData에 있으므로 여기서는 삭제하지 않음
 ; 필요 시 사용자에게 안내 메시지만 표시

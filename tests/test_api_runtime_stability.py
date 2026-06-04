@@ -103,3 +103,26 @@ def test_server_only_entrypoint_supports_ssh_testbench_before_gui_side_effects()
     assert "get_server_mutex_name()" in source
     assert '"testbench_mode": is_testbench_mode()' in source
     assert '"testbench_session_id": get_testbench_session_id()' in source
+
+
+def test_gui_parent_passes_remote_server_mode_bind_host_to_api_child():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "def _desired_child_api_bind_host()" in source
+    assert '"remote_server_mode_enabled"' in source
+    assert 'return "0.0.0.0", "remote_server_mode_enabled"' in source
+    assert 'os.environ["HH_API_HOST"] = child_bind_host' in source
+    assert "api_server_process.start()" in source
+    assert source.index('os.environ["HH_API_HOST"] = child_bind_host') < source.index(
+        "api_server_process.start()"
+    )
+    assert 'os.environ.pop("HH_API_HOST", None)' in source
+
+
+def test_api_server_logs_and_records_effective_bind_host_for_diagnostics():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert "API 바인딩 설정 확인: HH_API_HOST=" in source
+    assert "API 바인딩 설정 확인: remote_server_mode_enabled=" in source
+    assert 'metadata["api_host"] = api_host' in source
+    assert 'metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}' in source

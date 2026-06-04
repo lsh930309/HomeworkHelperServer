@@ -400,6 +400,30 @@ def _wants_server_only_mode(argv: list[str] | None = None) -> bool:
     args = (argv or sys.argv)[1:]
     return any(arg in {"--server", "--testbench-server", "--run-server"} for arg in args)
 
+
+def _desired_child_api_bind_host() -> tuple[str | None, str]:
+    """Return the bind host that the GUI parent should pass to the API child."""
+    explicit_host = os.environ.get("HH_API_HOST")
+    if explicit_host:
+        return explicit_host, "HH_API_HOST"
+
+    try:
+        from src.data import crud
+        from src.data.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            settings = crud.get_settings(db)
+            if bool(getattr(settings, "remote_server_mode_enabled", False)):
+                return "0.0.0.0", "remote_server_mode_enabled"
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"리모트 서버 모드 설정 확인 실패: {exc}")
+
+    return None, "default_loopback"
+
+
 def start_api_server() -> bool:
     """FastAPI 서버를 독립 프로세스로 실행합니다 (multiprocessing.Process 방식)."""
     global api_server_process
@@ -419,11 +443,23 @@ def start_api_server() -> bool:
         # daemon=True: 부모 프로세스(GUI) 종료 시 서버도 자동 종료
         #              SQLite WAL 모드가 DB 무결성 보장
         import multiprocessing
-        api_server_process = multiprocessing.Process(
-            target=run_server_main,
-            daemon=True
-        )
-        api_server_process.start()
+        child_bind_host, child_bind_source = _desired_child_api_bind_host()
+        env_had_api_host = "HH_API_HOST" in os.environ
+        previous_api_host = os.environ.get("HH_API_HOST")
+        if child_bind_host and not env_had_api_host:
+            os.environ["HH_API_HOST"] = child_bind_host
+        print(f"API 서버 child 바인딩 요청: {child_bind_host or '127.0.0.1'} ({child_bind_source})")
+        try:
+            api_server_process = multiprocessing.Process(
+                target=run_server_main,
+                daemon=True
+            )
+            api_server_process.start()
+        finally:
+            if env_had_api_host:
+                os.environ["HH_API_HOST"] = previous_api_host or ""
+            else:
+                os.environ.pop("HH_API_HOST", None)
         print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
 
         # 서버가 준비될 때까지 대기
@@ -597,11 +633,14 @@ def run_server_main():
     def resolve_api_bind_host() -> str:
         explicit_host = os.environ.get("HH_API_HOST")
         if explicit_host:
+            logger.info(f"API 바인딩 설정 확인: HH_API_HOST={explicit_host}")
             return explicit_host
         db = SessionLocal()
         try:
             settings = crud.get_settings(db)
-            if bool(getattr(settings, "remote_server_mode_enabled", False)):
+            remote_server_mode_enabled = bool(getattr(settings, "remote_server_mode_enabled", False))
+            logger.info(f"API 바인딩 설정 확인: remote_server_mode_enabled={remote_server_mode_enabled}")
+            if remote_server_mode_enabled:
                 return "0.0.0.0"
         except Exception as e:
             logger.error(f"리모트 서버 모드 설정 확인 실패: {e}", exc_info=True)
@@ -732,6 +771,19 @@ def run_server_main():
 
     api_host = resolve_api_bind_host()
     api_port = resolve_api_port()
+    try:
+        if os.path.exists(metadata_file):
+            with open(metadata_file, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        else:
+            metadata = {}
+        metadata["api_host"] = api_host
+        metadata["api_port"] = api_port
+        metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"API 바인딩 메타데이터 갱신 실패: {e}")
 
     app = FastAPI()
 
