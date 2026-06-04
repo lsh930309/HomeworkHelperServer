@@ -185,7 +185,6 @@ sequenceDiagram
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
 - **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: 안정화 전까지 개발을 중단했으며 워크스페이스의 클라이언트 소스·빌드·검증 자료를 제거함
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---
@@ -232,10 +231,6 @@ open dist/macos/HomeworkHelperRemote.app
 ```
 
 macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
-
-### Option 5: Android Remote Client
-
-Android 클라이언트 개발은 안정화 전까지 중단됐으며, 관련 소스/빌드/검증 자료는 현재 워크스페이스에서 제거됐다.
 
 ---
 
@@ -359,7 +354,7 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ## 🛰️ 원격 클라이언트
 
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 활성 기준 클라이언트는 macOS 클라이언트이며, Android 클라이언트 개발은 안정화 전까지 중단됐다.
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 활성 기준 클라이언트는 macOS 클라이언트다.
 
 ### Remote Agent 실행
 

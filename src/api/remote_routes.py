@@ -986,7 +986,7 @@ def create_remote_router(
             "code": pairing["code"],
             "expires_at": pairing["expires_at"],
             "ttl_seconds": device_registry.code_ttl_seconds,
-            "message": "macOS/Android 앱에서 이 코드를 입력해 페어링을 완료하세요.",
+            "message": "macOS 앱에서 이 코드를 입력해 페어링을 완료하세요.",
         }
 
     @router.post("/pair/confirm")

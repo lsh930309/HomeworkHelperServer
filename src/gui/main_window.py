@@ -867,7 +867,7 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(dialog)
         layout.setSpacing(10)
-        layout.addWidget(QLabel("macOS/Android 리모트 클라이언트에서 아래 6자리 코드를 입력하세요."))
+        layout.addWidget(QLabel("macOS 리모트 클라이언트에서 아래 6자리 코드를 입력하세요."))
 
         code_edit = QLineEdit(str(pairing.get("code") or ""))
         code_edit.setReadOnly(True)

@@ -10,7 +10,7 @@ Keep user intent and product policy in the main HomeworkHelper database:
 - managed process definitions
 - web shortcuts
 - play/mobile session records
-- Android-PC game link metadata
+- mobile/game-link metadata
 
 These records are part of the normal application domain and should continue to flow through the existing CRUD/API paths.
 

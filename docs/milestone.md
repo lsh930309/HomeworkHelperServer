@@ -272,12 +272,12 @@ flowchart TB
 
 ---
 
-## 🌐 Phase 2: 서버 아키텍처 + Android MVP + 클라우드 마이그레이션
+## 🌐 Phase 2: 서버 아키텍처 + 클라우드 마이그레이션
 
-**목표**: MVP를 기반으로 서버 아키텍처 구축 + Android 앱 개발 + 클라우드 배포
+**목표**: MVP를 기반으로 서버 아키텍처 구축 + 클라우드 배포
 **예상 기간**: 4-5개월
-**핵심 기술**: FastAPI, PostgreSQL, Docker, Android (Kotlin), AWS/GCP
-**난이도**: ⭐⭐⭐⭐ (High) - 서버/모바일/클라우드 복합 작업
+**핵심 기술**: FastAPI, PostgreSQL, Docker, AWS/GCP
+**난이도**: ⭐⭐⭐⭐ (High) - 서버/클라우드 복합 작업
 
 ### 2.1 로컬 서버 아키텍처 구축
 
@@ -286,14 +286,7 @@ flowchart TB
 - **PostgreSQL 데이터베이스 스키마 설계**
 - **JWT 인증 시스템**
 
-### 2.2 Android 앱 MVP
-
-- **Android 프로젝트 셋업** (Kotlin, MVVM)
-- **게임 프로세스 모니터링** (UsageStatsManager)
-- **서버 동기화 기능** (Retrofit)
-- **알림 시스템**
-
-### 2.3 클라우드 마이그레이션
+### 2.2 클라우드 마이그레이션
 
 - **클라우드 제공자 선택** (AWS/GCP/Vercel)
 - **Docker 컨테이너 배포**
@@ -302,7 +295,6 @@ flowchart TB
 
 **결과물**:
 - 클라우드 배포된 FastAPI 서버
-- Android 앱 APK
 - VM → 클라우드 마이그레이션 완료
 
 ---
@@ -374,7 +366,7 @@ flowchart TB
 
 ### Phase 2 성공 기준
 - [ ] 클라우드 배포 완료 (Uptime ≥ 99%)
-- [ ] Android 앱 서버 동기화 성공률 ≥ 95%
+- [ ] 원격 대시보드 응답 성공률 ≥ 95%
 
 ### Phase 3 성공 기준
 - [ ] AI 행동 분류 정확도 ≥ 70%
@@ -459,7 +451,6 @@ flowchart LR
 ### Phase 2 관련
 - [FastAPI 공식 문서](https://fastapi.tiangolo.com/)
 - [Docker 공식 문서](https://docs.docker.com/)
-- [Android UsageStatsManager](https://developer.android.com/reference/android/app/usage/UsageStatsManager)
 
 ### Phase 3 관련
 - [XGBoost 공식 문서](https://xgboost.readthedocs.io/)

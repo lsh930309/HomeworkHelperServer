@@ -10,7 +10,7 @@
 - `근거`에는 재현 가능한 증거를 적는다. 예: `src/gui/main_window.py:23`, `rg -n "PyQt6|pyqtSignal|pyqtSlot" ... 결과 0건`, `pytest tests/test_gui_layout.py -q 통과`, `Windows 수동 스모크: 트레이 토글 확인`.
 - 증거가 간접적이거나 불충분하면 체크하지 말고 `근거: 증거 불충분 - ...`로 남긴다.
 - 목표는 프레임워크 이전이며 UI/UX 재설계가 아니다. 기존 창/트레이/사이드바/알림/스레드 구조와 사용자 동작 계약을 보존한다.
-- 호스트 앱 범위는 `homework_helper.pyw`, `src/gui/**`, PyQt 의존 `src/core/**`, `src/utils/**`, 관련 테스트/빌드/문서다. `remote_clients/macos`, `remote_clients/android`, Tauri/React preview 자체는 PyQt6 사용 지점이 아니므로 별도 기능 변경 대상이 아니다.
+- 호스트 앱 범위는 `homework_helper.pyw`, `src/gui/**`, PyQt 의존 `src/core/**`, `src/utils/**`, 관련 테스트/빌드/문서다. `remote_clients/macos`, Tauri/React preview 자체는 PyQt6 사용 지점이 아니므로 별도 기능 변경 대상이 아니다.
 - Qt for Python 공식 문서 기준으로 PySide6 기본 import는 `from PySide6...`, 시그널/슬롯 데코레이터는 `Signal`/`Slot`이다. PyInstaller는 Qt 의존성을 대체로 분석하지만, Qt 모듈/플러그인 포함 여부는 빌드 산출물로 검증한다.
 
 ## 현재 탐색 스냅샷
@@ -52,7 +52,7 @@
   - 작업 요약: _TODO_
   - 근거: _TODO_
 
-- [ ] 마이그레이션 범위에서 remote macOS/Android 클라이언트와 Tauri/React preview 기능 변경을 제외하고, 호스트 앱 PyQt6 의존 제거에만 집중한다.
+- [ ] 마이그레이션 범위에서 remote macOS 클라이언트와 Tauri/React preview 기능 변경을 제외하고, 호스트 앱 PyQt6 의존 제거에만 집중한다.
   - 작업 요약: _TODO_
   - 근거: _TODO_
 

@@ -4,7 +4,6 @@
 
 - Windows: `windows-host` — PyInstaller onedir, Portable ZIP, Inno Setup installer
 - macOS: `macos-client` — Swift release build, `.app` bundle, `.pkg` installer
-- Android 클라이언트 빌드/검증 트랙은 안정화 전까지 중단되어 현재 워크스페이스에서 제거됐다.
 
 ## 버전 source of truth
 

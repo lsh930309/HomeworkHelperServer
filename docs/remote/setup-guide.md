@@ -89,13 +89,7 @@ The macOS client is the reference native client. Its main UX is a menu-bar popov
 
 Architecture reference: `docs/remote/macos-client-architecture.md`.
 
-## 5. Android client status
-
-Android client development is suspended until the host app and macOS reference client are stable again. The Android source tree, Flutter POC, APK build helper, Android-specific tests, and Android device smoke tools are intentionally absent from the workspace.
-
-Host-side mobile/game-link API fields may still exist for data compatibility, but they are not an active Android client implementation contract.
-
-## 6. Verification
+## 5. Verification
 
 Remote route/static checks:
 

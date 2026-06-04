@@ -326,12 +326,6 @@ git add server/requirements.txt
 git commit -m "chore: update server dependencies"
 ```
 
-### Phase 1 Android 개발 시
-```bash
-# Android Studio에서 Gradle Sync 자동 수행
-# build.gradle 파일이 Git에 포함되어 있음
-```
-
 ---
 
 ## 🔐 보안 주의사항
@@ -340,7 +334,7 @@ git commit -m "chore: update server dependencies"
 - `.env` 파일 (환경 변수, 비밀 키)
 - `.claude/settings.local.json` (개인별 경로)
 - 데이터베이스 파일 (`*.db`, `*.sqlite`)
-- 빌드 결과물 (`dist/`, `build/`, `*.apk`, `*.exe`)
+- 빌드 결과물 (`dist/`, `build/`, `*.exe`)
 
 ### Git에 커밋해야 할 것
 - `.claude/settings.json` (프로젝트 공통 설정)

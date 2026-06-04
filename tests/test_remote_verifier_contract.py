@@ -48,6 +48,55 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
     assert "Android APK" not in verifier
 
 
+def test_android_client_artifacts_stay_removed_from_active_workspace():
+    forbidden_paths = [
+        Path("remote_clients/android"),
+        Path("android"),
+        Path("build_android_remote.py"),
+        Path("tests/test_build_android_remote.py"),
+        Path("tests/test_remote_android_client_static.py"),
+        TOOLS / "verify_android_device.py",
+        TOOLS / "verify_android_internal.py",
+        TOOLS / "smoke_android_remote_e2e.py",
+        TOOLS / "smoke_android_fake_remote.py",
+        TOOLS / "fake_android_remote_agent.py",
+        TOOLS / "diagnose_android_realhost.py",
+    ]
+    for path in forbidden_paths:
+        assert not path.exists(), f"{path} should not return to the active workspace"
+
+    active_docs = [
+        Path("README.md"),
+        Path("PROJECT_WORK_PRIORITIES.md"),
+        Path("docs/guides/build-guide.md"),
+        Path("docs/remote/setup-guide.md"),
+        Path("docs/remote/connection-supervisor-protocol.md"),
+        Path("docs/git-workflow.md"),
+        Path("docs/dev-setup-guide.md"),
+        Path("docs/milestone.md"),
+        Path("docs/architecture.md"),
+    ]
+    forbidden_doc_markers = [
+        "Android Remote Client",
+        "Android 클라이언트",
+        "Android 앱",
+        "Android APK",
+        "remote_clients/android",
+        "android-client",
+        "gradlew",
+        "Gradle Sync",
+        "*.apk",
+    ]
+    for path in active_docs:
+        text = _read(path)
+        for marker in forbidden_doc_markers:
+            assert marker not in text, f"{marker!r} should not appear in {path}"
+
+    version_config = Path("build.version.json")
+    if version_config.exists():
+        assert "android-client" not in _read(version_config)
+
+
 def test_remote_verifier_branch_discipline_passes_when_refs_match(monkeypatch):
     verifier = _load_verifier_module()
 

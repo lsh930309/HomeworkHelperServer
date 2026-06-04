@@ -24,12 +24,7 @@
 - macOS 클라이언트만으로 원격 게임 환경에 빠르게 전환할 수 있도록 Moonlight client 바인딩을 검토한다.
 - Sunshine/스트리밍 실행 상태와 HomeworkHelper Remote UX를 자연스럽게 연결하는 최소 확장 지점을 찾는다.
 
-## 4. Android 클라이언트 완성
-
-- 현재 Android v3 game-first 방향을 유지하면서 페어링, 게임 실행, 전원 readiness, 실기기 검증 루프를 완성한다.
-- macOS 기준 클라이언트와 공유 가능한 계약은 유지하되 Android 고유 제약을 별도 처리한다.
-
-## 5. 호스트 GUI 마이그레이션
+## 4. 호스트 GUI 마이그레이션
 
 - 단기적으로는 기존 PySide6 마이그레이션 계획을 우선 검토/정리한다.
 - Flutter 전환은 macOS 클라이언트 수준의 유려한 UI/UX를 호스트에도 전파할 수 있는지 장기 기술 검토 항목으로 분리한다.

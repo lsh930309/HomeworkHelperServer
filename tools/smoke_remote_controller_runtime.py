@@ -3,7 +3,7 @@
 
 This intentionally starts ``homework_helper.run_server_main()`` in a subprocess
 instead of mounting the router in FastAPI's TestClient.  It verifies the path
-used by native macOS/Android clients: HTTP status, loopback pairing, token
+used by the native macOS client: HTTP status, loopback pairing, token
 requirement after first device registration, and authenticated device listing.
 """
 

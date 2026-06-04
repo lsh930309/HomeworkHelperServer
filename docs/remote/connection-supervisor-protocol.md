@@ -5,7 +5,7 @@ Status: Shared protocol reference for the active macOS client
 
 ## 1. Purpose
 
-This document defines the active Remote Client connectivity protocol. Android client development is currently suspended, so macOS is the reference implementation.
+This document defines the active Remote Client connectivity protocol. macOS is the reference implementation.
 
 The supervisor is a reducer: it accepts typed evidence and returns UI state, reconnect schedule guidance, and payload-sync hints. It must not directly perform HTTP, Tailscale, SSH, SmartThings, or AppKit side effects.
 

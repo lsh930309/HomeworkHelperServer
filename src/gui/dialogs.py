@@ -74,7 +74,7 @@ class RemoteSettingsDialog(QDialog):
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
 
-        headline = QLabel("macOS/Android 리모트 클라이언트에서 입력할 6자리 코드")
+        headline = QLabel("macOS 리모트 클라이언트에서 입력할 6자리 코드")
         headline.setWordWrap(True)
         layout.addWidget(headline)
 

@@ -26,7 +26,6 @@ Task 3의 초기 목표는 코드 구현이 아니라 **Moonlight/Apollo 연동 
 - Moonlight pairing을 앱이 완전 자동화하지 않는다.
 - 방화벽, 드라이버, 가상 디스플레이, Apollo/Sunshine 설치를 강제로 자동 설정하지 않는다.
 - 공인 IP/포트포워딩/UPnP 자동화는 우선 보류하고, v1에서는 Tailscale direct 경로만 사용한다.
-- Android 클라이언트 연동은 이번 task 범위가 아니다.
 
 ## 2. 현재 HomeworkHelper 기준점
 
@@ -224,7 +223,7 @@ extension이 켜져 있고 readiness가 `ready`인 경우:
 - 실제 stream start는 아직 하지 않아도 된다.
 - 2026-05-24 기준 `LocalMoonlightManager`가 macOS Moonlight 앱과
   `com.moonlight-stream.Moonlight.plist`의 host/app 후보를 read-only로 감지한다.
-- 2026-05-24 기준 macOS 설정의 Android 탭은 Moonlight 전용 탭으로 교체했고,
+- 2026-05-24 기준 macOS 설정의 Moonlight 탭은
   Tailscale direct endpoint/SSH 공인 IP를 Moonlight host 자동 식별 보조 신호로 사용한다.
 - 2026-05-24 기준 기존 Moonlight host가 HomeworkHelper host와 매칭되면 read-only로 유지하고,
   매칭되지 않을 때만 Tailscale direct 등록 후보/PIN pairing/`list` 확인 보조를 제공한다.

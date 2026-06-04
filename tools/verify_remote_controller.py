@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Run the active Remote Controller verification lane.
 
-Android client development is suspended, so this verifier intentionally covers
-the host Remote Agent and macOS reference client only.
+This verifier covers the host Remote Agent and macOS reference client.
 """
 
 from __future__ import annotations
