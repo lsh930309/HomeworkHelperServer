@@ -95,7 +95,6 @@ git push origin main
 
 **예시**:
 - `bugfix/123-fix-database-connection` - DB 연결 오류 수정
-- `bugfix/456-android-crash` - Android 앱 크래시 수정
 
 #### Hotfix 브랜치
 **네이밍 규칙**: `hotfix/{version}-{description}`
@@ -144,7 +143,6 @@ git push origin develop
 
 **스코프 (Scope)** (선택):
 - `server`: 백엔드 서버
-- `android`: Android 앱
 - `pc`: PC 클라이언트
 - `db`: 데이터베이스
 - `docker`: Docker 관련
@@ -159,12 +157,6 @@ POST /api/v1/sessions 엔드포인트 구현
 - JWT 인증 적용
 
 Closes #123
-```
-
-```
-fix(android): UsageStatsManager 권한 체크 로직 수정
-
-Android 8.0 이하에서 권한 체크 오류 수정
 ```
 
 ---
@@ -221,11 +213,11 @@ main
 ### 옵션 A: 모노레포 (Monorepo) - 현재 방식 ⭐
 **장점**:
 - 단일 저장소에서 모든 코드 관리
-- PC/서버/Android 코드 동기화 용이
+- PC/서버/macOS 클라이언트 코드 동기화 용이
 - 공통 문서, 이슈 관리 편리
 
 **단점 및 해결책**:
-- ~~저장소 크기 증가 (특히 Android APK, YOLO 모델 파일)~~ → **Git LFS 도입으로 해결** (아래 참조)
+- ~~저장소 크기 증가 (특히 YOLO 모델 파일)~~ → **Git LFS 도입으로 해결** (아래 참조)
 - 브랜치 복잡도 증가 → 작은 단위 브랜치 전략으로 완화
 
 **⚠️ 필수: Git LFS 즉시 도입**
@@ -235,7 +227,7 @@ main
 - AI 모델: `*.pt`, `*.onnx`, `*.pkl`, `*.h5`
 - 폰트: `*.otf`, `*.ttf`
 - 이미지/아이콘: `*.png`, `*.jpg` (큰 파일만)
-- 빌드 결과물: `*.apk`, `*.exe` (릴리스용, GitHub Releases 권장)
+- 빌드 결과물: `*.exe`, `*.pkg` (릴리스용, GitHub Releases 권장)
 
 **설정 방법**:
 ```bash
@@ -260,7 +252,7 @@ git commit -m "chore: Git LFS 설정 추가"
 HomeworkHelperServer/
 ├── pc/                 # PC 클라이언트 (Python)
 ├── server/             # FastAPI 백엔드
-├── android/            # Android 앱 (Kotlin)
+├── remote_clients/     # 네이티브 원격 클라이언트
 ├── models/             # AI 모델 (YOLO, XGBoost)
 ├── docs/               # 문서
 └── docker-compose.yml  # Docker 설정
@@ -270,7 +262,7 @@ HomeworkHelperServer/
 **구조**:
 - `HomeworkHelper-PC` (PC 클라이언트)
 - `HomeworkHelper-Server` (백엔드)
-- `HomeworkHelper-Android` (Android 앱)
+- `HomeworkHelper-Remote` (네이티브 원격 클라이언트)
 
 **장점**: 각 컴포넌트 독립 관리
 **단점**: 동기화 어려움, 이슈 관리 분산
@@ -306,7 +298,7 @@ HomeworkHelperServer/
 
 **예시**:
 - `v0.1.0`: Phase 0 첫 릴리스
-- `v1.0.0`: Phase 1 완료 (VM 서버 + Android MVP)
+- `v1.0.0`: Phase 1 완료 (VM 서버 + 원격 클라이언트 MVP)
 - `v1.1.0`: Phase 1 마이너 업데이트 (Label Studio 완성)
 - `v2.0.0`: Phase 2 완료 (클라우드 마이그레이션 + YOLO)
 
@@ -408,7 +400,7 @@ pre-commit install
 
 ### main 브랜치
 - 자동 릴리스 생성
-- GitHub Releases에 빌드 파일 업로드 (PC: EXE, Android: APK)
+- GitHub Releases에 빌드 파일 업로드 (PC: EXE, macOS: PKG)
 - 클라우드 자동 배포 (Phase 2부터)
 
 ---

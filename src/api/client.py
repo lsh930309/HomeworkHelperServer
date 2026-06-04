@@ -2,8 +2,8 @@
 
 import requests
 from typing import Any, List, Optional
-import os
 import uuid
+from src.api.runtime_config import resolve_local_api_base_url
 from src.data import beholder
 from src.data.data_models import ManagedProcess, WebShortcut, GlobalSettings, ProcessSession
 
@@ -21,19 +21,26 @@ class ApiClient:
     FastAPI 서버와 통신하여 데이터를 CRUD하는 클라이언트.
     기존 DataManager의 역할을 대체합니다.
     """
-    def __init__(self, base_url: str = "http://127.0.0.1:8000"):
-        # 패키지 환경에서 동적으로 선택된 포트를 우선 사용
-        dyn_port = os.environ.get("HH_API_PORT")
-        if dyn_port:
-            base_url = f"http://127.0.0.1:{dyn_port}"
-        self.base_url = base_url
+    _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+
+    def __init__(self, base_url: str = _DEFAULT_BASE_URL):
+        # 패키지/스모크 환경에서 동적으로 선택된 포트를 한 곳에서 해석합니다.
+        self.base_url = (
+            resolve_local_api_base_url()
+            if base_url == self._DEFAULT_BASE_URL
+            else resolve_local_api_base_url(base_url)
+        )
         self.app_instance_id = str(uuid.uuid4())
         self.latest_beholder_incident: dict[str, Any] | None = None
+        self.last_connection_error: str | None = None
+        self.connection_errors: list[str] = []
+        self.initial_load_errors: list[str] = []
         self._pending_beholder_overrides: dict[tuple[str, str], str] = {}
         # 최초 실행 시, 서버에서 모든 데이터를 가져와 내부 변수에 저장합니다.
         self.managed_processes: List[ManagedProcess] = self._fetch_all_processes()
         self.web_shortcuts: List[WebShortcut] = self._fetch_all_web_shortcuts()
         self.global_settings: GlobalSettings = self._fetch_global_settings()
+        self.initial_load_errors = list(self.connection_errors)
 
 
     def _raise_for_status(self, response: requests.Response) -> None:
@@ -47,6 +54,11 @@ class ApiClient:
                 self.latest_beholder_incident = incident
                 raise BeholderIncidentRequired(response, incident)
         response.raise_for_status()
+
+    def _record_connection_error(self, context: str, error: Exception) -> None:
+        message = f"{context}: {error}"
+        self.last_connection_error = message
+        self.connection_errors.append(message)
 
     def pop_latest_beholder_incident(self) -> dict[str, Any] | None:
         incident = self.latest_beholder_incident
@@ -161,6 +173,7 @@ class ApiClient:
             # JSON 딕셔너리 리스트를 ManagedProcess 객체 리스트로 변환
             return [ManagedProcess.from_dict(p) for p in processes_data]
         except requests.RequestException as e:
+            self._record_connection_error("프로세스 목록 로드 실패", e)
             print(f"프로세스 목록을 불러오는 데 실패했습니다: {e}")
             return []
 
@@ -248,6 +261,15 @@ class ApiClient:
         stamina_payload = {key: value for key, value in stamina_payload.items() if value is not None}
         if stamina_payload:
             payloads.append(stamina_payload)
+        resource_payload = {
+            "resource_percent": getattr(updated_process, "resource_percent", None),
+            "resource_updated_at": getattr(updated_process, "resource_updated_at", None),
+            "resource_status": getattr(updated_process, "resource_status", None),
+            "resource_label": getattr(updated_process, "resource_label", None),
+        }
+        resource_payload = {key: value for key, value in resource_payload.items() if value is not None}
+        if resource_payload:
+            payloads.append(resource_payload)
         if not payloads:
             return True
         try:
@@ -266,6 +288,62 @@ class ApiClient:
             print(f"프로세스 런타임 상태 저장에 실패했습니다: {e}")
             return False
 
+    def update_process_stamina(
+        self,
+        process_id: str,
+        stamina_current: int,
+        stamina_max: int,
+        stamina_updated_at: float,
+    ) -> bool:
+        """Persist only HoYoLab stamina fields after slow follow-up reconciliation."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/processes/{process_id}/stamina",
+                json={
+                    "stamina_current": stamina_current,
+                    "stamina_max": stamina_max,
+                    "stamina_updated_at": stamina_updated_at,
+                },
+                headers=self._beholder_headers("hoyolab_slow_followup", "process_stamina_refresh"),
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("hoyolab_slow_followup", "process_stamina_refresh")
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException as e:
+            print(f"프로세스 스태미나 저장에 실패했습니다: {e}")
+            return False
+
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: float | None,
+        resource_updated_at: float | None,
+        resource_status: str | None,
+        resource_label: str | None = None,
+    ) -> bool:
+        """Persist only generic external resource fields."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/processes/{process_id}/resource",
+                json={
+                    "resource_percent": resource_percent,
+                    "resource_updated_at": resource_updated_at,
+                    "resource_status": resource_status,
+                    "resource_label": resource_label,
+                },
+                headers=self._beholder_headers("resource_tracker", "process_resource_update"),
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("resource_tracker", "process_resource_update")
+            self.managed_processes = self._fetch_all_processes()
+            return True
+        except requests.RequestException as e:
+            print(f"프로세스 리소스 저장에 실패했습니다: {e}")
+            return False
+
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 단일 프로세스를 찾습니다 (내부 메모리에서)."""
         for p in self.managed_processes:
@@ -282,6 +360,7 @@ class ApiClient:
             shortcuts_data = response.json()
             return [WebShortcut.from_dict(sc) for sc in shortcuts_data]
         except requests.RequestException as e:
+            self._record_connection_error("웹 바로가기 목록 로드 실패", e)
             print(f"웹 바로 가기 목록을 불러오는 데 실패했습니다: {e}")
             return []
 
@@ -385,6 +464,7 @@ class ApiClient:
             self._raise_for_status(response)
             return GlobalSettings.from_dict(response.json())
         except requests.RequestException as e:
+            self._record_connection_error("전역 설정 로드 실패", e)
             print(f"전역 설정을 불러오는 데 실패했습니다: {e}")
             return GlobalSettings()
         
@@ -393,7 +473,7 @@ class ApiClient:
         try:
             payload = updated_settings.to_dict()
             request = requests.put
-            if actor in {"sidebar_settings_dialog", "global_settings_dialog"}:
+            if actor in {"sidebar_settings_dialog", "global_settings_dialog", "remote_settings_dialog"}:
                 owned_fields = beholder.allowed_settings_fields_for_actor(actor)
                 payload = {key: value for key, value in payload.items() if key in owned_fields}
                 request = requests.patch
@@ -443,7 +523,13 @@ class ApiClient:
             print(f"세션 시작 실패: {e}")
             return None
 
-    def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Optional[ProcessSession]:
+    def end_session(
+        self,
+        session_id: int,
+        end_timestamp: float,
+        stamina_at_end: Optional[int] = None,
+        resource_percent_at_end: Optional[float] = None,
+    ) -> Optional[ProcessSession]:
         """프로세스 세션 종료"""
         try:
             data = {
@@ -452,6 +538,8 @@ class ApiClient:
             }
             if stamina_at_end is not None:
                 data["stamina_at_end"] = stamina_at_end
+            if resource_percent_at_end is not None:
+                data["resource_percent_at_end"] = resource_percent_at_end
             response = requests.put(
                 f"{self.base_url}/sessions/{session_id}/end",
                 json=data,
@@ -532,4 +620,20 @@ class ApiClient:
             return True
         except requests.RequestException as e:
             print(f"세션 스태미나 업데이트 실패: {e}")
+            return False
+
+    def update_session_resource(self, session_id: int, resource_percent_at_end: float) -> bool:
+        """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/sessions/{session_id}/resource",
+                params={"resource_percent_at_end": resource_percent_at_end},
+                headers=self._beholder_headers("resource_slow_followup", "resource_session_percent_rewrite"),
+                timeout=10
+            )
+            self._raise_for_status(response)
+            self._clear_pending_override("resource_slow_followup", "resource_session_percent_rewrite")
+            return True
+        except requests.RequestException as e:
+            print(f"세션 리소스 업데이트 실패: {e}")
             return False

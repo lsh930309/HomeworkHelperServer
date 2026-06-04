@@ -1,9 +1,10 @@
 import os
 from pathlib import Path
+from types import MethodType, SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel
 
@@ -112,6 +113,200 @@ def test_global_settings_derives_sidebar_mode_from_legacy_bool():
     assert ranged.sidebar_trigger_y_end == 0.8
     assert ranged.sidebar_handle_auto_hide is False
 
+    remote_default = GlobalSettings.from_dict({})
+    assert remote_default.remote_server_mode_enabled is False
+    remote_enabled = GlobalSettings.from_dict({"remote_server_mode_enabled": True})
+    assert remote_enabled.remote_server_mode_enabled is True
+
+
+def test_main_window_settings_menu_exposes_remote_settings_dialog():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+    dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
+
+    assert "def _text_menu_action" in source
+    assert "setIconVisibleInMenu(False)" in source
+    assert '_text_menu_action("앱 설정...", self.open_global_settings_dialog)' in source
+    assert '_text_menu_action("원격 설정...", self.open_remote_settings_dialog)' in source
+    assert '_text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)' in source
+    assert '_text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)' not in source
+    assert source.index('_text_menu_action("앱 설정..."') < source.index('_text_menu_action("원격 설정..."')
+    assert source.index('_text_menu_action("원격 설정..."') < source.index('_text_menu_action("사이드바 설정..."')
+    assert "open_remote_settings_dialog" in source
+    assert "RemoteSettingsDialog" in source
+    assert 'QAction("리모트 페어링 코드 발급(&P)", self)' not in source
+    assert '/remote/pair/start' in source
+    assert "class RemoteSettingsDialog" in dialog_source
+    remote_dialog_source = dialog_source[
+        dialog_source.index("class RemoteSettingsDialog"):
+        dialog_source.index("class NumericTableWidgetItem")
+    ]
+    assert "remote_server_mode_checkbox" in dialog_source
+    assert "QTabWidget" not in remote_dialog_source
+    assert "_RemoteSettingsWorker" in dialog_source
+    assert "_schedule_initial_refreshes" in remote_dialog_source
+    assert "setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)" in remote_dialog_source
+    assert "setMaximumHeight(150)" not in remote_dialog_source
+    assert "ScrollBarAlwaysOff" in remote_dialog_source
+    assert "_fit_devices_table_to_rows" in remote_dialog_source
+    assert "Tailnet 기기" in remote_dialog_source
+    assert "can_revoke" in remote_dialog_source
+    assert "_start_worker(\"devices\"" in remote_dialog_source
+    assert "_start_worker(\"tailscale\"" in remote_dialog_source
+    assert "_start_worker(\"power\"" in remote_dialog_source
+    assert "devices_table" in dialog_source
+    assert "tailscale_health_text" in dialog_source
+    assert "power_setup_text" in dialog_source
+    assert "/remote/power/setup" in dialog_source
+    assert "/remote/power/ssh-key" not in dialog_source
+    assert "/remote/power/config" not in dialog_source
+    assert "/remote/power/smartthings/devices" not in dialog_source
+    assert "smartthings_device_id_edit" not in dialog_source
+    assert "smartthings_device_combo" not in dialog_source
+    assert "SSH public key 승인/등록" not in dialog_source
+    assert "전원 설정 저장" not in dialog_source
+    assert "호스트 전원 준비 상태" in dialog_source
+    assert "클라이언트가 SmartThings/OpenSSH 직접 경로" in dialog_source
+
+
+def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
+    source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
+    dialog_source = source[source.index("class HoYoLabSettingsDialog"):]
+
+    assert 'setWindowTitle("자원 추적 설정")' in dialog_source
+    assert "HoYoLabAdvancedCredentialsDialog" in source
+    assert "NikkeAdvancedSessionDialog" in source
+    assert "hoyolab_advanced_btn" in dialog_source
+    assert "nikke_advanced_btn" in dialog_source
+    assert "check_cookies_btn" in dialog_source
+    assert "cookie_check_status_label" in dialog_source
+    assert "QDialogButtonBox.StandardButton.Close" in dialog_source
+    assert "self.ltuid_edit" not in dialog_source
+    assert "self.ltoken_edit" not in dialog_source
+    assert "self.ltmid_edit" not in dialog_source
+    assert "save_credentials(int(cookies.get(\"ltuid\"))" in dialog_source
+
+
+def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned(monkeypatch):
+    app = _qapp()
+    import src.gui.dialogs as dialogs
+
+    monkeypatch.setattr(dialogs.RemoteSettingsDialog, "_schedule_initial_refreshes", lambda self: None)
+    dialog = dialogs.RemoteSettingsDialog(_FakeApiClient([]))
+    try:
+        assert dialog.pairing_code_edit.alignment() & Qt.AlignmentFlag.AlignLeft
+        assert dialog.devices_table.columnCount() == 8
+        assert dialog.devices_table.isColumnHidden(0)
+        assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert dialog.devices_table.maximumHeight() > 1000
+
+        dialog._populate_devices([])
+        empty_height = dialog.devices_table.height()
+        dialog._populate_devices([
+            {"id": f"device-{index}", "name": f"Device {index}", "platform": "macOS"}
+            for index in range(4)
+        ])
+        app.processEvents()
+
+        assert dialog.devices_table.rowCount() == 4
+        assert dialog.devices_table.height() > empty_height
+        assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is True
+        expected_min = (
+            dialog.devices_table.horizontalHeader().height()
+            + sum(dialog.devices_table.rowHeight(row) for row in range(dialog.devices_table.rowCount()))
+            + dialog.devices_table.frameWidth() * 2
+        )
+        assert dialog.devices_table.height() >= expected_min
+
+        dialog._populate_devices([
+            {"id": "host:100.1.2.3", "name": "Host", "role": "host", "tailnet_ip": "100.1.2.3", "can_revoke": False}
+        ])
+        assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is False
+        assert dialog.devices_table.item(0, 5).text() == "-"
+        assert dialog.devices_table.item(0, 6).text() == "-"
+        assert not bool(dialog.devices_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsSelectable)
+        assert not bool(dialog.devices_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEnabled)
+
+        dialog._populate_devices([
+            {
+                "id": "device-a",
+                "name": "MacBook",
+                "role": "client",
+                "tailnet_ip": "100.114.138.46",
+                "pairing_status": "paired",
+                "connectivity_state": "stale_or_offline",
+                "health_message": "debug detail",
+                "can_revoke": True,
+            }
+        ])
+        assert dialog.devices_table.item(0, 5).text() == "페어링됨"
+        assert dialog.devices_table.item(0, 5).toolTip() == "paired"
+        assert dialog.devices_table.item(0, 6).text() == "대기/오프라인"
+        assert dialog.devices_table.item(0, 6).toolTip() == "debug detail"
+
+        dialog._populate_devices([
+            {"id": "tailnet:100.2.2.2", "name": "Zeta", "role": "unknown", "tailnet_ip": "100.2.2.2", "pairing_status": "tailnet_unpaired", "can_revoke": False},
+            {"id": "device-b", "name": "Beta", "role": "client", "tailnet_ip": "100.1.1.2", "pairing_status": "paired", "can_revoke": True},
+            {"id": "host:100.1.1.1", "name": "Host", "role": "host", "tailnet_ip": "100.1.1.1", "can_revoke": False},
+            {"id": "device-a", "name": "Alpha", "role": "client", "tailnet_ip": "100.1.1.3", "pairing_status": "paired", "can_revoke": True},
+        ])
+        assert [dialog.devices_table.item(row, 2).text() for row in range(dialog.devices_table.rowCount())] == ["Host", "Alpha", "Beta", "Zeta"]
+        assert dialog.devices_table.item(1, 0).data(Qt.ItemDataRole.UserRole) is True
+        assert dialog.devices_table.item(3, 0).data(Qt.ItemDataRole.UserRole) is False
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_menu_bar_dropdown_actions_are_text_only(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        dropdown_actions = []
+        for top_level_action in window.menuBar().actions():
+            menu = top_level_action.menu()
+            if menu is not None:
+                dropdown_actions.extend(action for action in menu.actions() if not action.isSeparator())
+
+        assert dropdown_actions
+        assert all(not action.isIconVisibleInMenu() for action in dropdown_actions)
+    finally:
+        _stop_window(window, app)
+
+
+def test_main_window_uses_icon_only_remote_readiness_indicators():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+
+    assert "showMessage(" not in source
+    assert '("beholder", "●")' in source
+    assert '("remote", "●")' in source
+    assert '("admin", "●")' in source
+    assert "remoteReadiness_server" not in source
+    assert "remoteReadiness_power" not in source
+    assert "remoteReadiness_tailscale" not in source
+    assert "QGraphicsDropShadowEffect" in source
+
+
+def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
+    dialog_source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
+    launcher_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    global_dialog_source = dialog_source[
+        dialog_source.index("class GlobalSettingsDialog"):
+        dialog_source.index("class WebShortcutDialog")
+    ]
+    remote_dialog_source = dialog_source[
+        dialog_source.index("class RemoteSettingsDialog"):
+        dialog_source.index("class NumericTableWidgetItem")
+    ]
+
+    assert "remote_server_mode_checkbox" not in global_dialog_source
+    assert "remote_server_mode_checkbox" in remote_dialog_source
+    assert "updated.remote_server_mode_enabled = getattr(self.current_settings" in global_dialog_source
+    assert "def resolve_api_bind_host" in launcher_source
+    assert '"0.0.0.0"' in launcher_source
+    assert "remote_server_mode_enabled" in launcher_source
+
 
 def _stop_window(window, app):
     for attr in (
@@ -194,12 +389,14 @@ def test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen(monk
         screen = window.screen() or QApplication.primaryScreen()
         max_width = int(screen.availableGeometry().width() * window._SCREEN_SIZE_RATIO)
         assert window.width() <= max(max_width, window._MIN_WINDOW_WIDTH)
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
         assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     finally:
         _stop_window(window, app)
 
 
-def test_restore_window_state_does_not_leave_fixed_size(monkeypatch, tmp_path):
+def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(
@@ -213,10 +410,37 @@ def test_restore_window_state_does_not_leave_fixed_size(monkeypatch, tmp_path):
         window._restore_window_state()
         app.processEvents()
 
-        assert window.maximumWidth() > window.width()
-        assert window.maximumHeight() > window.height()
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
     finally:
         _stop_window(window, app)
+
+
+def test_relative_window_anchor_keeps_bottom_right_across_height_changes():
+    import src.gui.main_window as main_window
+
+    virtual_available = QRect(0, 0, 2560, 1560)
+    window_rect = QRect(2200, 1260, 360, 300)
+
+    anchor = main_window.MainWindow._window_anchor_from_rect(
+        window_rect,
+        virtual_available,
+        "Moonlight",
+    )
+
+    assert anchor["horizontal"] == "right"
+    assert anchor["vertical"] == "bottom"
+    assert anchor["right_gap"] == 0
+    assert anchor["bottom_gap"] == 0
+
+    physical_available = QRect(0, 0, 2560, 1400)
+    restored = main_window.MainWindow._position_from_window_anchor(
+        anchor,
+        physical_available,
+        QSize(360, 300),
+    )
+
+    assert restored == QPoint(2200, 1100)
 
 
 def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
@@ -246,6 +470,32 @@ def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
 
         assert opened == [shortcut.url]
         assert marked == [shortcut.id]
+    finally:
+        _stop_window(window, app)
+
+
+def test_dashboard_button_uses_data_manager_base_url(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    data_manager = _FakeApiClient([])
+    data_manager.base_url = "http://127.0.0.1:43210"
+    window = main_window.MainWindow(data_manager)
+    opened = []
+    health_urls = []
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "dashboard_static_ready": True}
+
+    monkeypatch.setattr(main_window.requests, "get", lambda url, **_kwargs: health_urls.append(url) or _Response())
+    window.open_webpage = lambda url: opened.append(url)
+    try:
+        window._open_dashboard()
+
+        assert health_urls == ["http://127.0.0.1:43210/api/gui/health"]
+        assert opened == ["http://127.0.0.1:43210/dashboard"]
     finally:
         _stop_window(window, app)
 
@@ -310,6 +560,96 @@ def test_sidebar_activates_when_running_cache_already_exists_without_monitor_cha
         assert window._is_game_mode_active is True
     finally:
         _stop_window(window, app)
+
+
+def test_game_mode_hide_keeps_qt_application_alive(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="game", name="Running Game", monitoring_path="game.exe", launch_path="game.exe")
+    data_manager = _FakeApiClient([process])
+    data_manager.global_settings.hide_on_game = True
+    window = main_window.MainWindow(data_manager)
+    hide_reasons = []
+
+    class _TrayProbe:
+        def hide_window_to_tray(self, reason):
+            hide_reasons.append(reason)
+            window.hide()
+
+        def is_tray_icon_visible(self):
+            return True
+
+        def handle_window_close_event(self, event):
+            event.ignore()
+            self.hide_window_to_tray("window_close")
+
+    try:
+        # Simulate a regressed/alternate startup path where the QApplication
+        # default would quit when the host window is hidden after game launch.
+        app.setQuitOnLastWindowClosed(True)
+        window.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, True)
+        window.tray_manager = _TrayProbe()
+        window._sidebar_controller = _Noop()
+        window._is_game_mode_active = False
+        window.process_monitor.active_monitored_processes[process.id] = {
+            "pid": 4321,
+            "exe": process.monitoring_path,
+            "start_time_approx": 100.0,
+            "session_id": 1,
+        }
+        window.process_monitor.check_and_update_statuses = lambda: ProcessMonitorTickResult(changed=False)
+
+        window.run_process_monitor_check()
+
+        assert hide_reasons == ["game_started"]
+        assert app.quitOnLastWindowClosed() is False
+        assert window.testAttribute(Qt.WidgetAttribute.WA_QuitOnClose) is False
+        assert window._is_game_mode_active is True
+    finally:
+        _stop_window(window, app)
+
+
+def test_default_volume_retry_does_not_crash_when_audio_session_is_late(monkeypatch):
+    _qapp()
+    import src.gui.main_window as main_window
+
+    process = ManagedProcess(
+        id="game",
+        name="Running Game",
+        monitoring_path="game.exe",
+        launch_path="game.exe",
+        default_volume=50,
+        default_muted=False,
+    )
+    probe = SimpleNamespace(
+        _volume_applied_pids={},
+        _volume_retry_tokens={},
+        _mute_retry_tokens={},
+        data_manager=SimpleNamespace(managed_processes=[process]),
+    )
+    probe._get_active_pid = lambda process_id: 4321
+    probe._sync_default_volume_state = MethodType(main_window.MainWindow._sync_default_volume_state, probe)
+    scheduled = []
+
+    def fail_volume(_pid, _level):
+        return False
+
+    def fail_mute(_pid, _muted):
+        raise RuntimeError("late audio session")
+
+    monkeypatch.setattr(main_window.audio_control, "set_app_volume", fail_volume)
+    monkeypatch.setattr(main_window.audio_control, "set_mute", fail_mute)
+    monkeypatch.setattr(
+        main_window.QTimer,
+        "singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+
+    probe._sync_default_volume_state(process, 4321)
+
+    assert [delay for delay, _callback in scheduled] == [500, 1000]
+    assert probe._volume_retry_tokens == {"game": 1}
+    assert probe._mute_retry_tokens == {"game": 1}
 
 
 def test_sidebar_controller_can_enable_trigger_after_game_started_with_sidebar_disabled(monkeypatch):

@@ -4,10 +4,10 @@
 PyQt6
 
 # === Windows ===
-pywin32
-winshell
+pywin32; platform_system == "Windows"
+winshell; platform_system == "Windows"
 psutil
-pycaw
+pycaw; platform_system == "Windows"
 
 # === API Server ===
 fastapi
@@ -22,8 +22,8 @@ requests
 jsonschema
 
 # === Windows Notifications ===
-Windows-Toasts
-winrt-Windows.Gaming.Input
+Windows-Toasts; platform_system == "Windows"
+winrt-Windows.Gaming.Input; platform_system == "Windows"
 websocket-client
 
 # === Screenshot ===

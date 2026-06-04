@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -36,7 +37,15 @@ PROCESS_SESSIONS_TABLE = "process_sessions"
 PROCESS_FIELDS = {column.name for column in models.Process.__table__.columns}
 WEB_SHORTCUT_FIELDS = {column.name for column in models.WebShortcut.__table__.columns}
 SESSION_FIELDS = {column.name for column in models.ProcessSession.__table__.columns}
-PROCESS_RUNTIME_FIELDS = {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}
+PROCESS_RUNTIME_FIELDS = {
+    "last_played_timestamp",
+    "stamina_current",
+    "stamina_max",
+    "stamina_updated_at",
+    "resource_percent",
+    "resource_updated_at",
+    "resource_status",
+}
 PROCESS_EDITOR_FIELDS = PROCESS_FIELDS - PROCESS_RUNTIME_FIELDS
 WEB_SHORTCUT_RUNTIME_FIELDS = {"last_reset_timestamp"}
 WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
@@ -44,7 +53,7 @@ WEB_SHORTCUT_EDITOR_FIELDS = WEB_SHORTCUT_FIELDS - WEB_SHORTCUT_RUNTIME_FIELDS
 RUNTIME_SETTINGS_FIELDS = {
     "theme", "always_on_top", "hide_on_game", "run_as_admin", "run_on_startup",
     "sidebar_enabled", "sidebar_mode", "sidebar_handle_auto_hide",
-    "screenshot_enabled", "recording_enabled",
+    "screenshot_enabled", "recording_enabled", "remote_server_mode_enabled",
 }
 SIDEBAR_SETTINGS_FIELDS = {
     "sidebar_enabled", "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
@@ -125,6 +134,7 @@ FIELD_LABELS: dict[str, str] = {
     "screenshot_gamepad_trigger": "게임패드 스크린샷 트리거",
     "screenshot_disable_gamebar": "Xbox Game Bar 비활성화",
     "recording_enabled": "녹화 사용",
+    "remote_server_mode_enabled": "리모트 서버 모드",
     "obs_host": "OBS 호스트",
     "obs_password": "OBS 비밀번호",
     "obs_exe_path": "OBS 실행 파일",
@@ -166,6 +176,8 @@ def allowed_settings_fields_for_actor(actor: str | None) -> set[str]:
         return set(SIDEBAR_SETTINGS_FIELDS)
     if actor == "global_settings_dialog":
         return set(GLOBAL_DIALOG_FIELDS)
+    if actor == "remote_settings_dialog":
+        return {"remote_server_mode_enabled"}
     if actor in {"settings_full_update", "settings_migration", "api_settings_put"}:
         return all_fields
     return set()
@@ -195,6 +207,7 @@ def _actor_label(actor: str | None) -> str:
         "legacy_process_monitor": "기존 GUI 실행 감지기",
         "global_settings_dialog": "기존 GUI 전역 설정 창",
         "sidebar_settings_dialog": "기존 GUI 사이드바 설정 창",
+        "remote_settings_dialog": "기존 GUI 원격 설정 창",
         "hoyolab_slow_followup": "HoYoLab 지연 반영 재확인",
         "runtime_stamina_tracker": "스태미나 런타임 보정",
     }.get(actor or "", actor or "알 수 없는 경로")
@@ -627,6 +640,16 @@ def _invalid_process_values(
             if value is not None and (not _is_number(value) or float(value) < 0):
                 invalid.append(field)
 
+    if "resource_updated_at" in changed_fields:
+        value = update_data.get("resource_updated_at")
+        if value is not None and (not _is_number(value) or float(value) < 0):
+            invalid.append("resource_updated_at")
+
+    if "resource_percent" in changed_fields:
+        value = update_data.get("resource_percent")
+        if value is not None and (not _is_number(value) or not (0 <= float(value) <= 100)):
+            invalid.append("resource_percent")
+
     for field in ("stamina_current", "stamina_max"):
         if field in changed_fields:
             value = update_data.get(field)
@@ -791,6 +814,32 @@ def guard_process_session_update(db: Session, session: models.ProcessSession, co
                 safe_recommendation="저장을 차단했습니다. 정상 범위의 값을 다시 저장하세요.",
                 user_title="플레이 기록 값이 비정상입니다",
                 user_summary="저장하려는 스태미나 값이 음수라 기록을 망칠 수 있습니다.",
+                user_impact="이번 변경은 반영되지 않았고 기존 기록은 유지됩니다.",
+            )
+            raise BeholderBlocked(incident)
+    if "resource_percent_at_end" in columns:
+        proposed_values = operation.evidence.get("proposed_values") or {}
+        value = proposed_values.get("resource_percent_at_end", getattr(session, "resource_percent_at_end", None))
+        try:
+            percent = None if value is None else float(value)
+        except (TypeError, ValueError):
+            percent = None
+        if value is not None and (percent is None or not math.isfinite(percent) or percent < 0.0 or percent > 100.0):
+            if consume_override_token(db, operation.override_token, operation):
+                return
+            incident = create_incident(
+                db,
+                severity=SEVERITY_CRITICAL,
+                operation=operation,
+                target_summary=f"session_id={session.id}",
+                suspected_cause="세션 리소스 백분율이 정상 범위를 벗어나 저장되려 했습니다.",
+                current_state_summary=f"현재 resource_percent_at_end={value}",
+                proposed_change_summary="비정상 리소스 백분율 저장",
+                risk_score=88,
+                risk_factors=["invalid_resource_percent"],
+                safe_recommendation="저장을 차단했습니다. 0~100 범위의 값을 다시 저장하세요.",
+                user_title="플레이 기록 리소스 값이 비정상입니다",
+                user_summary="저장하려는 리소스 백분율이 0~100 범위를 벗어나 기록을 망칠 수 있습니다.",
                 user_impact="이번 변경은 반영되지 않았고 기존 기록은 유지됩니다.",
             )
             raise BeholderBlocked(incident)

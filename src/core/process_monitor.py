@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Protocol
 from src.data.data_models import ManagedProcess
+from src.utils.resource_tracking import (
+    NIKKE_OUTPOST_CORRECTION_THRESHOLD_PERCENT,
+    clamp_percent,
+    is_nikke_outpost_resource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +32,26 @@ class ProcessesDataPort(Protocol):
     managed_processes: list[ManagedProcess]
     def update_process(self, updated_process: ManagedProcess) -> bool: ...
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool: ...
+    def update_process_stamina(self, process_id: str, stamina_current: int, stamina_max: int, stamina_updated_at: float) -> bool: ...
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: Optional[float],
+        resource_updated_at: Optional[float],
+        resource_status: Optional[str],
+        resource_label: Optional[str] = None,
+    ) -> bool: ...
     def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Any: ...
-    def end_session(self, session_id: int, end_timestamp: float, stamina_at_end: Optional[int] = None) -> Any: ...
+    def end_session(
+        self,
+        session_id: int,
+        end_timestamp: float,
+        stamina_at_end: Optional[int] = None,
+        resource_percent_at_end: Optional[float] = None,
+    ) -> Any: ...
     def get_last_session(self, process_id: str) -> Any: ...
     def update_session_stamina(self, session_id: int, stamina_at_end: int) -> bool: ...
+    def update_session_resource(self, session_id: int, resource_percent_at_end: float) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -44,10 +65,21 @@ class ProcessLifecycleEvent:
     pid: Optional[int] = None
     stamina_at_end: Optional[int] = None
     stamina_max: Optional[int] = None
+    resource_tracking_enabled: bool = False
+    resource_provider: Optional[str] = None
+    resource_key: Optional[str] = None
+    resource_percent_at_end: Optional[float] = None
 
     def is_hoyoverse_game(self) -> bool:
         """현재 lifecycle 이벤트가 HoYoLab 기반 스태미나 추적 대상인지 반환합니다."""
         return self.stamina_tracking_enabled and self.hoyolab_game_id is not None
+
+    def is_nikke_outpost_resource_game(self) -> bool:
+        """현재 lifecycle 이벤트가 NIKKE 전초기지 방어 보상 추적 대상인지 반환합니다."""
+        return bool(
+            self.resource_tracking_enabled
+            and is_nikke_outpost_resource(self.resource_provider, self.resource_key)
+        )
 
 
 @dataclass(frozen=True)
@@ -148,6 +180,40 @@ class ProcessMonitor:
             logger.warning("HoYoLab 서비스를 로드할 수 없습니다.")
             return None
 
+    def _persist_stamina_state(self, process: ManagedProcess) -> bool:
+        """Persist only HoYoLab stamina fields when a full runtime patch is unnecessary."""
+        if (
+            process.stamina_current is None
+            or process.stamina_max is None
+            or process.stamina_updated_at is None
+        ):
+            return True
+        if hasattr(self.data_manager, "update_process_stamina"):
+            return self.data_manager.update_process_stamina(
+                process.id,
+                process.stamina_current,
+                process.stamina_max,
+                process.stamina_updated_at,
+            )
+        return self.data_manager.update_process_runtime_state(process)
+
+    def _persist_resource_state(self, process: ManagedProcess) -> bool:
+        """Persist only external resource fields when a full runtime patch is unnecessary."""
+        if (
+            process.resource_updated_at is None
+            or process.resource_status is None
+        ):
+            return True
+        if hasattr(self.data_manager, "update_process_resource"):
+            return self.data_manager.update_process_resource(
+                process.id,
+                process.resource_percent,
+                process.resource_updated_at,
+                process.resource_status,
+                process.resource_label,
+            )
+        return self.data_manager.update_process_runtime_state(process)
+
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
         """실행 파일 경로를 비교 가능한 절대 경로 형태로 정규화합니다."""
         if not path: 
@@ -213,6 +279,8 @@ class ProcessMonitor:
                             # 호요버스 게임인 경우 스태미나 보정 체크 (세션 시작 전에 수행)
                             if managed_proc.is_hoyoverse_game() and managed_proc.stamina_tracking_enabled:
                                 self._calibrate_stamina_on_game_start(managed_proc)
+                            if getattr(managed_proc, "is_external_resource_game", lambda: False)():
+                                self._calibrate_external_resource_on_game_start(managed_proc)
 
                             # 세션 시작 기록
                             session = self.data_manager.start_session(
@@ -236,6 +304,9 @@ class ProcessMonitor:
                                     stamina_tracking_enabled=managed_proc.stamina_tracking_enabled,
                                     hoyolab_game_id=managed_proc.hoyolab_game_id,
                                     pid=actual_process_instance.pid,
+                                    resource_tracking_enabled=getattr(managed_proc, "resource_tracking_enabled", False),
+                                    resource_provider=getattr(managed_proc, "resource_provider", None),
+                                    resource_key=getattr(managed_proc, "resource_key", None),
                                 )
                             )
                             logger.info(f"Process STARTED: '{managed_proc.name}' (PID: {actual_process_instance.pid}, Session ID: {session.id if session else 'N/A'})")
@@ -261,15 +332,27 @@ class ProcessMonitor:
                     if managed_proc.is_hoyoverse_game():
                         stamina_at_end = self._update_stamina_on_game_exit(managed_proc)
                         _debug_log(f"[스태미나 조회] '{managed_proc.name}' - stamina_at_end={stamina_at_end}")
+                    resource_percent_at_end = None
+                    if getattr(managed_proc, "is_external_resource_game", lambda: False)():
+                        resource_percent_at_end = self._update_external_resource_on_game_exit(managed_proc)
 
                     # 세션 종료 기록 (스태미나 값 포함)
                     session_id = cached_info.get('session_id')
                     _debug_log(f"[세션 종료] '{managed_proc.name}' - session_id={session_id}, stamina_at_end={stamina_at_end}")
                     if session_id:
-                        ended_session = self.data_manager.end_session(session_id, termination_time, stamina_at_end)
+                        if resource_percent_at_end is not None:
+                            ended_session = self.data_manager.end_session(
+                                session_id,
+                                termination_time,
+                                stamina_at_end,
+                                resource_percent_at_end=resource_percent_at_end,
+                            )
+                        else:
+                            ended_session = self.data_manager.end_session(session_id, termination_time, stamina_at_end)
                         if ended_session:
                             stamina_info = f", Stamina: {stamina_at_end}" if stamina_at_end is not None else ""
-                            logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info})")
+                            resource_info = f", Resource: {resource_percent_at_end:.1f}%" if resource_percent_at_end is not None else ""
+                            logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session ID: {session_id}, Duration: {ended_session.session_duration:.2f}s{stamina_info}{resource_info})")
                         else:
                             logger.info(f"Process STOPPED: '{managed_proc.name}' (Was PID: {cached_info.get('pid')}, Session end recording failed)")
                             managed_proc.last_played_timestamp = previous_last_played
@@ -298,6 +381,10 @@ class ProcessMonitor:
                             hoyolab_game_id=managed_proc.hoyolab_game_id,
                             stamina_at_end=stamina_at_end,
                             stamina_max=managed_proc.stamina_max,
+                            resource_tracking_enabled=getattr(managed_proc, "resource_tracking_enabled", False),
+                            resource_provider=getattr(managed_proc, "resource_provider", None),
+                            resource_key=getattr(managed_proc, "resource_key", None),
+                            resource_percent_at_end=resource_percent_at_end,
                         )
                     )
                     changed_occurred = True
@@ -352,6 +439,103 @@ class ProcessMonitor:
             logger.error(f"[HoYoLab] '{process.name}' 스태미나 조회 실패: {e}")
             return None
 
+    def _update_external_resource_on_game_exit(self, process: ManagedProcess) -> Optional[float]:
+        """게임 종료 시 범용 외부 리소스 스냅샷을 갱신하고 세션 종료값을 반환합니다."""
+        provider = getattr(process, "resource_provider", None)
+        resource_key = getattr(process, "resource_key", None)
+        if not is_nikke_outpost_resource(provider, resource_key):
+            logger.debug("지원하지 않는 외부 리소스 추적 대상: provider=%s key=%s", provider, resource_key)
+            return None
+
+        try:
+            from src.services.nikke import get_nikke_service
+
+            snapshot = get_nikke_service().get_outpost_storage()
+            process.resource_label = snapshot.label
+            process.resource_status = snapshot.status
+            process.resource_updated_at = snapshot.updated_at.timestamp()
+            if snapshot.percent is not None:
+                process.resource_percent = snapshot.percent
+            logger.info(
+                "[NIKKE] '%s' %s 업데이트: status=%s percent=%s",
+                process.name,
+                snapshot.label,
+                snapshot.status,
+                snapshot.percent,
+            )
+            return snapshot.percent if snapshot.status == "ok" and snapshot.percent is not None else None
+        except Exception as exc:
+            logger.error("[NIKKE] '%s' 리소스 조회 실패: %s", process.name, exc)
+            process.resource_status = "unavailable"
+            process.resource_updated_at = time.time()
+            return None
+
+    def _calibrate_external_resource_on_game_start(self, process: ManagedProcess) -> None:
+        """게임 시작 시 외부 리소스 예측값을 실제 API 값으로 보정합니다."""
+        if not is_nikke_outpost_resource(
+            getattr(process, "resource_provider", None),
+            getattr(process, "resource_key", None),
+        ):
+            return
+
+        try:
+            from src.services.nikke import get_nikke_service
+
+            logger.info("[NIKKE] '%s' 리소스 보정 체크 중...", process.name)
+            predicted_before_fetch = process.get_resource_percentage()
+            snapshot = get_nikke_service().get_outpost_storage()
+            if snapshot.status != "ok" or snapshot.percent is None:
+                logger.info(
+                    "[NIKKE] '%s' 리소스 보정 스킵: status=%s message=%s",
+                    process.name,
+                    snapshot.status,
+                    snapshot.message,
+                )
+                process.resource_label = snapshot.label
+                process.resource_status = snapshot.status
+                process.resource_updated_at = snapshot.updated_at.timestamp()
+                self._persist_resource_state(process)
+                return
+
+            actual_percent = clamp_percent(snapshot.percent)
+            if actual_percent is None:
+                return
+
+            if predicted_before_fetch is None:
+                process.resource_label = snapshot.label
+                process.resource_percent = actual_percent
+                process.resource_status = snapshot.status
+                process.resource_updated_at = snapshot.updated_at.timestamp()
+                self._persist_resource_state(process)
+                logger.info("[NIKKE] '%s' 리소스 초기화: %.1f%%", process.name, actual_percent)
+                return
+
+            difference = actual_percent - predicted_before_fetch
+            if abs(difference) > NIKKE_OUTPOST_CORRECTION_THRESHOLD_PERCENT:
+                last_session = self.data_manager.get_last_session(process.id)
+                previous_value = getattr(last_session, "resource_percent_at_end", None) if last_session else None
+                if last_session and previous_value is not None and hasattr(self.data_manager, "update_session_resource"):
+                    corrected_percent = clamp_percent(float(previous_value) + difference)
+                    if corrected_percent is not None:
+                        self.data_manager.update_session_resource(last_session.id, corrected_percent)
+                        logger.info(
+                            "[NIKKE] '%s' 리소스 보정: 예상 %.1f%% → 실제 %.1f%% "
+                            "(이전 세션 종료값 %.1f%% → %.1f%%)",
+                            process.name,
+                            predicted_before_fetch,
+                            actual_percent,
+                            float(previous_value),
+                            corrected_percent,
+                        )
+
+            process.resource_label = snapshot.label
+            process.resource_percent = actual_percent
+            process.resource_status = snapshot.status
+            process.resource_updated_at = snapshot.updated_at.timestamp()
+            self._persist_resource_state(process)
+        except Exception as exc:
+            logger.error("[NIKKE] '%s' 리소스 보정 실패: %s", process.name, exc)
+
     def _calibrate_stamina_on_game_start(self, process: ManagedProcess) -> None:
         """게임 시작 시 스태미나 보정
 
@@ -397,7 +581,7 @@ class ProcessMonitor:
                 process.stamina_current = actual_current
                 process.stamina_max = stamina.max
                 process.stamina_updated_at = stamina.updated_at.timestamp()
-                self.data_manager.update_process_runtime_state(process)
+                self._persist_stamina_state(process)
                 logger.info(f"[HoYoLab] '{process.name}' 스태미나 초기화: {actual_current}/{stamina.max}")
                 _debug_log(f"[보정 초기화] '{process.name}' - 첫 스태미나 설정: {actual_current}/{stamina.max}")
                 return
@@ -446,7 +630,7 @@ class ProcessMonitor:
             process.stamina_current = actual_current
             process.stamina_max = stamina.max
             process.stamina_updated_at = stamina.updated_at.timestamp()
-            self.data_manager.update_process_runtime_state(process)
+            self._persist_stamina_state(process)
             _debug_log(f"[보정 업데이트] '{process.name}' - 스태미나 정보 저장 완료")
 
         except Exception as e:

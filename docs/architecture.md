@@ -56,7 +56,7 @@ graph LR
 2. **배포 Phase (최후반)**: 서버 분리 및 배포
    - 백엔드 로직을 서버로 이전
    - 클라우드/VM 배포
-   - 멀티플랫폼 지원 (Android, iOS 등)
+   - 웹/원격 대시보드 확장 검토
 
 ---
 
@@ -318,10 +318,9 @@ CREATE TABLE settings (
 - CI/CD 파이프라인 구축
 - 모니터링 시스템 (Prometheus, Grafana)
 
-#### 멀티플랫폼 (보류)
-- Android 앱 개발
-- iOS 앱 개발 (선택)
+#### 원격 대시보드 (보류)
 - 웹 대시보드
+- macOS Remote Client 경험 확장
 
 ---
 

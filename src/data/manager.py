@@ -4,6 +4,10 @@ import os
 from typing import List, Optional, Dict
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.common import copy_shortcut_file, get_shortcuts_directory, get_base_path
+from src.utils.resource_tracking import (
+    NIKKE_OUTPOST_LABEL,
+    is_nikke_outpost_resource,
+)
 
 class DataManager:
     """
@@ -113,6 +117,45 @@ class DataManager:
                 return True
         print(f"Process with ID {updated_process.id} not found for update.")
         return False
+
+    def update_process_stamina(
+        self,
+        process_id: str,
+        stamina_current: int,
+        stamina_max: int,
+        stamina_updated_at: float,
+    ) -> bool:
+        """HoYoLab 재동기화가 갱신한 스태미나 필드만 저장합니다."""
+        process = self.get_process_by_id(process_id)
+        if process is None:
+            print(f"Process with ID {process_id} not found for stamina update.")
+            return False
+        process.stamina_current = stamina_current
+        process.stamina_max = stamina_max
+        process.stamina_updated_at = stamina_updated_at
+        self.save_managed_processes()
+        return True
+
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: float | None,
+        resource_updated_at: float | None,
+        resource_status: str | None,
+        resource_label: str | None = None,
+    ) -> bool:
+        """외부 리소스 추적기가 갱신한 리소스 필드만 저장합니다."""
+        process = self.get_process_by_id(process_id)
+        if process is None:
+            print(f"Process with ID {process_id} not found for resource update.")
+            return False
+        process.resource_percent = resource_percent
+        process.resource_updated_at = resource_updated_at
+        process.resource_status = resource_status
+        if resource_label is not None:
+            process.resource_label = resource_label
+        self.save_managed_processes()
+        return True
 
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 프로세스를 찾아 반환합니다."""
@@ -230,6 +273,17 @@ class DataManager:
                 print(f"✅ original_launch_path 필드 추가: {process.original_launch_path}")
             else:
                 print(f"original_launch_path 필드 이미 존재: {process.original_launch_path}")
+
+            if (
+                is_nikke_outpost_resource(
+                    getattr(process, "resource_provider", None),
+                    getattr(process, "resource_key", None),
+                )
+                and getattr(process, "resource_label", None) != NIKKE_OUTPOST_LABEL
+            ):
+                process.resource_label = NIKKE_OUTPOST_LABEL
+                has_changes = True
+                print(f"✅ NIKKE resource_label 보정: {NIKKE_OUTPOST_LABEL}")
         
         if has_changes:
             print("\n마이그레이션 완료 - 변경사항을 저장합니다.")

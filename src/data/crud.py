@@ -213,6 +213,51 @@ def update_process_stamina(
 
 
 @db_retry_on_lock
+def update_process_resource(
+    db: Session,
+    process_id: str,
+    *,
+    resource_percent: float | None,
+    resource_updated_at: float | None,
+    resource_status: str | None,
+    resource_label: str | None = None,
+    actor: str = "resource_tracker",
+    operation_kind: str = "process_resource_update",
+    override_token: str | None = None,
+):
+    db_process = get_process_by_id(db, process_id)
+    if db_process:
+        update_data = {
+            "resource_percent": resource_percent,
+            "resource_updated_at": resource_updated_at,
+            "resource_status": resource_status,
+            "resource_label": resource_label,
+        }
+        update_data = {key: value for key, value in update_data.items() if value is not None}
+        changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
+            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"resource_percent", "resource_updated_at", "resource_status", "resource_label"}},
+            evidence={
+                "changed_fields": sorted(changed),
+                "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
+                "proposed_values": {key: update_data.get(key) for key in sorted(changed)},
+            },
+            override_token=override_token,
+        )
+        beholder.guard_process_update(db, db_process, update_data, operation, changed)
+        if changed:
+            _backup_model_snapshot_or_raise(db_process, table=beholder.MANAGED_PROCESSES_TABLE, reason=operation_kind)
+        for key, value in update_data.items():
+            setattr(db_process, key, value)
+        db.commit()
+        db.refresh(db_process)
+    return db_process
+
+
+@db_retry_on_lock
 def update_process_runtime_state(
     db: Session,
     process_id: str,
@@ -221,6 +266,10 @@ def update_process_runtime_state(
     stamina_current: int | None = None,
     stamina_max: int | None = None,
     stamina_updated_at: float | None = None,
+    resource_percent: float | None = None,
+    resource_updated_at: float | None = None,
+    resource_status: str | None = None,
+    resource_label: str | None = None,
     actor: str = "process_monitor",
     operation_kind: str = "process_runtime_state_update",
     override_token: str | None = None,
@@ -232,6 +281,10 @@ def update_process_runtime_state(
             "stamina_current": stamina_current,
             "stamina_max": stamina_max,
             "stamina_updated_at": stamina_updated_at,
+            "resource_percent": resource_percent,
+            "resource_updated_at": resource_updated_at,
+            "resource_status": resource_status,
+            "resource_label": resource_label,
         }
         update_data = {key: value for key, value in update_data.items() if value is not None}
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
@@ -239,7 +292,18 @@ def update_process_runtime_state(
             kind=operation_kind,
             actor=actor,
             allowed_tables={beholder.MANAGED_PROCESSES_TABLE},
-            allowed_columns={beholder.MANAGED_PROCESSES_TABLE: {"last_played_timestamp", "stamina_current", "stamina_max", "stamina_updated_at"}},
+            allowed_columns={
+                beholder.MANAGED_PROCESSES_TABLE: {
+                    "last_played_timestamp",
+                    "stamina_current",
+                    "stamina_max",
+                    "stamina_updated_at",
+                    "resource_percent",
+                    "resource_updated_at",
+                    "resource_status",
+                    "resource_label",
+                }
+            },
             evidence={
                 "changed_fields": sorted(changed),
                 "context": {"process_id": process_id, "process_name": getattr(db_process, "name", None)},
@@ -526,6 +590,107 @@ def get_app_runtime_heartbeat(db: Session) -> models.AppRuntimeHeartbeat | None:
     return db.query(models.AppRuntimeHeartbeat).filter(models.AppRuntimeHeartbeat.id == 1).first()
 
 
+
+def get_game_platform_links(db: Session):
+    return db.query(models.GamePlatformLink).order_by(models.GamePlatformLink.updated_at.desc()).all()
+
+
+def get_game_platform_link_by_id(db: Session, link_id: str):
+    return db.query(models.GamePlatformLink).filter(models.GamePlatformLink.id == link_id).first()
+
+
+@db_retry_on_lock
+def create_game_platform_link(
+    db: Session,
+    link: schemas.GamePlatformLinkCreate,
+    *,
+    timestamp: float | None = None,
+):
+    link_data = _dump_schema(link)
+    provided_id = link_data.pop("id", None)
+    link_id = provided_id if provided_id else str(uuid.uuid4())
+    now = float(timestamp or time.time())
+    link_data["pc_process_id"] = str(link_data.get("pc_process_id") or "").strip()
+    link_data["android_package_name"] = str(link_data.get("android_package_name") or "").strip()
+    if not link_data["pc_process_id"]:
+        raise ValueError("pc_process_id가 필요합니다.")
+    if not link_data["android_package_name"]:
+        raise ValueError("android_package_name이 필요합니다.")
+    if not link_data.get("sync_strategy"):
+        link_data["sync_strategy"] = "manual"
+    db_link = models.GamePlatformLink(id=link_id, created_at=now, updated_at=now, **link_data)
+    db.add(db_link)
+    db.commit()
+    db.refresh(db_link)
+    return db_link
+
+
+def get_active_mobile_game_sessions(db: Session):
+    return (
+        db.query(models.MobileGameSession)
+        .filter(models.MobileGameSession.status == "active")
+        .order_by(models.MobileGameSession.started_at.desc())
+        .all()
+    )
+
+
+def get_mobile_game_session_by_id(db: Session, session_id: str):
+    return db.query(models.MobileGameSession).filter(models.MobileGameSession.id == session_id).first()
+
+
+@db_retry_on_lock
+def start_mobile_game_session(
+    db: Session,
+    *,
+    game_link_id: str,
+    source: str = "manual",
+    started_at: float | None = None,
+    timestamp: float | None = None,
+):
+    link = get_game_platform_link_by_id(db, game_link_id)
+    if link is None:
+        raise ValueError("연결된 Android-PC game link를 찾을 수 없습니다.")
+    now = float(timestamp or time.time())
+    start_time = float(started_at or now)
+    session = models.MobileGameSession(
+        id=str(uuid.uuid4()),
+        game_link_id=link.id,
+        pc_process_id=link.pc_process_id,
+        pc_display_name=link.pc_display_name,
+        android_package_name=link.android_package_name,
+        source=str(source or "manual"),
+        status="active",
+        started_at=start_time,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@db_retry_on_lock
+def end_mobile_game_session(
+    db: Session,
+    *,
+    session_id: str,
+    ended_at: float | None = None,
+    timestamp: float | None = None,
+):
+    session = get_mobile_game_session_by_id(db, session_id)
+    if session is None or session.status != "active":
+        return None
+    now = float(timestamp or time.time())
+    end_time = float(ended_at or now)
+    session.ended_at = end_time
+    session.duration_seconds = max(0.0, end_time - float(session.started_at))
+    session.status = "ended"
+    session.updated_at = now
+    db.commit()
+    db.refresh(session)
+    return session
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):
@@ -687,6 +852,7 @@ def end_session(
     session_id: int,
     end_timestamp: float,
     stamina_at_end: Optional[int] = None,
+    resource_percent_at_end: Optional[float] = None,
     *,
     operation_kind: str = "runtime_stop",
     actor: str = "process_monitor",
@@ -707,6 +873,9 @@ def end_session(
         if stamina_at_end is not None:
             changed_fields.append("stamina_at_end")
             proposed_values["stamina_at_end"] = stamina_at_end
+        if resource_percent_at_end is not None:
+            changed_fields.append("resource_percent_at_end")
+            proposed_values["resource_percent_at_end"] = resource_percent_at_end
         operation = beholder.BeholderOperation(
             kind=operation_kind,
             actor=actor,
@@ -722,6 +891,8 @@ def end_session(
         beholder.guard_session_end(db, db_session, end_timestamp, operation)
         if stamina_at_end is not None:
             beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
+        if resource_percent_at_end is not None:
+            beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.end_timestamp = end_timestamp
         db_session.session_duration = end_timestamp - db_session.start_timestamp
@@ -730,6 +901,8 @@ def end_session(
         db_session.heartbeat_timestamp = end_timestamp
         if stamina_at_end is not None:
             db_session.stamina_at_end = stamina_at_end
+        if resource_percent_at_end is not None:
+            db_session.resource_percent_at_end = resource_percent_at_end
         db.commit()
         db.refresh(db_session)
     return db_session
@@ -793,6 +966,40 @@ def update_session_stamina(
         beholder.guard_process_session_update(db, db_session, {"stamina_at_end"}, operation)
         _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
         db_session.stamina_at_end = stamina_at_end
+        db.commit()
+        db.refresh(db_session)
+        return True
+    return False
+
+
+@db_retry_on_lock
+def update_session_resource(
+    db: Session,
+    session_id: int,
+    resource_percent_at_end: float,
+    *,
+    actor: str = "resource_slow_followup",
+    operation_kind: str = "resource_session_percent_rewrite",
+    override_token: str | None = None,
+) -> bool:
+    """세션의 종료 외부 리소스 백분율을 업데이트합니다."""
+    db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
+    if db_session:
+        operation = beholder.BeholderOperation(
+            kind=operation_kind,
+            actor=actor,
+            allowed_tables={beholder.PROCESS_SESSIONS_TABLE},
+            allowed_columns={beholder.PROCESS_SESSIONS_TABLE: {"resource_percent_at_end"}},
+            evidence={
+                "changed_fields": ["resource_percent_at_end"],
+                "context": {"session_id": session_id},
+                "proposed_values": {"resource_percent_at_end": resource_percent_at_end},
+            },
+            override_token=override_token,
+        )
+        beholder.guard_process_session_update(db, db_session, {"resource_percent_at_end"}, operation)
+        _backup_model_snapshot_or_raise(db_session, table=beholder.PROCESS_SESSIONS_TABLE, reason=operation_kind)
+        db_session.resource_percent_at_end = resource_percent_at_end
         db.commit()
         db.refresh(db_session)
         return True

@@ -1108,6 +1108,48 @@ def test_dialog_settings_save_sends_only_actor_owned_fields(monkeypatch):
     assert "theme" not in seen_payloads[0]
 
 
+def test_remote_settings_dialog_can_save_only_remote_server_mode(monkeypatch):
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.global_settings = GlobalSettings()
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    seen_payloads = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return GlobalSettings(remote_server_mode_enabled=True).to_dict()
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        seen_payloads.append(kwargs.get("json") or {})
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    settings = GlobalSettings(remote_server_mode_enabled=True, theme="dark")
+    assert client.save_global_settings(settings, actor="remote_settings_dialog") is True
+
+    assert seen_payloads[0]["remote_server_mode_enabled"] is True
+    assert "theme" not in seen_payloads[0]
+    assert client.global_settings.remote_server_mode_enabled is True
+
+
+def test_remote_settings_dialog_has_user_facing_actor_label():
+    from src.data import beholder
+
+    assert beholder._actor_label("remote_settings_dialog") == "기존 GUI 원격 설정 창"
+
+
 def test_settings_override_returns_after_first_consumed_guard(monkeypatch):
     from src.data import beholder as beholder_mod
 
@@ -1208,6 +1250,161 @@ def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
         {"stamina_current": 120, "stamina_max": 100, "stamina_updated_at": 124.0},
     ]
     assert client.managed_processes == ["fresh"]
+
+
+def test_stamina_refresh_client_uses_hoyolab_specific_patch(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.managed_processes = []
+    client.web_shortcuts = []
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+    monkeypatch.setattr(ApiClient, "_fetch_all_processes", lambda self: ["fresh-stamina"])
+    calls = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    assert client.update_process_stamina("game-a", 92, 240, 1778497000.0) is True
+
+    assert calls[0][0] == ("http://testserver/processes/game-a/stamina",)
+    assert calls[0][1]["json"] == {
+        "stamina_current": 92,
+        "stamina_max": 240,
+        "stamina_updated_at": 1778497000.0,
+    }
+    assert calls[0][1]["headers"] == {
+        "X-HH-Beholder-Actor": "hoyolab_slow_followup",
+        "X-HH-Beholder-Operation": "process_stamina_refresh",
+    }
+    assert client.managed_processes == ["fresh-stamina"]
+
+
+def test_resource_session_refresh_client_uses_resource_specific_patch(monkeypatch):
+    from src.api.client import ApiClient
+
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client._pending_beholder_overrides = {}
+    calls = []
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    import src.api.client as client_mod
+
+    def _patch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _Response()
+
+    monkeypatch.setattr(client_mod.requests, "patch", _patch)
+
+    assert client.update_session_resource(7, 12.5) is True
+
+    assert calls[0][0] == ("http://testserver/sessions/7/resource",)
+    assert calls[0][1]["params"] == {"resource_percent_at_end": 12.5}
+    assert calls[0][1]["headers"] == {
+        "X-HH-Beholder-Actor": "resource_slow_followup",
+        "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
+    }
+
+
+def test_hoyolab_reconcile_persists_only_final_stamina_fields():
+    from src.core.hoyolab_reconcile import _StaminaPersistTask
+    from src.data.data_models import ManagedProcess
+
+    process = ManagedProcess(
+        id="game-a",
+        name="Game A",
+        monitoring_path="/games/a.exe",
+        launch_path="/games/a.exe",
+        last_played_timestamp=123.0,
+        stamina_tracking_enabled=True,
+        hoyolab_game_id="genshin",
+        stamina_current=100,
+        stamina_max=240,
+        stamina_updated_at=1000.0,
+    )
+
+    class FakeDataManager:
+        runtime_updates = []
+        stamina_updates = []
+        session_updates = []
+
+        def get_process_by_id(self, process_id):
+            assert process_id == "game-a"
+            return process
+
+        def update_process_runtime_state(self, updated_process):
+            self.runtime_updates.append(updated_process)
+            return True
+
+        def update_process_stamina(self, process_id, stamina_current, stamina_max, stamina_updated_at):
+            self.stamina_updates.append((process_id, stamina_current, stamina_max, stamina_updated_at))
+            return True
+
+        def update_session_stamina(self, session_id, stamina_at_end):
+            self.session_updates.append((session_id, stamina_at_end))
+            return True
+
+    class Finished:
+        def __init__(self):
+            self.payloads = []
+
+        def emit(self, *args):
+            self.payloads.append(args)
+
+    class Signals:
+        def __init__(self):
+            self.finished = Finished()
+
+    data_manager = FakeDataManager()
+    signals = Signals()
+    task = _StaminaPersistTask(
+        process_id="game-a",
+        process_name="Game A",
+        session_id=7,
+        lifecycle_token=1,
+        request_seq=1,
+        fetched_current=90,
+        fetched_max=240,
+        fetched_at=1778497000.0,
+        exit_timestamp=1778497000.0,
+        allow_session_correction=True,
+        applied_session_stamina=100,
+        data_manager=data_manager,
+        should_abort=lambda: False,
+        signals=signals,
+    )
+
+    task.run()
+
+    assert data_manager.stamina_updates == [("game-a", 90, 240, 1778497000.0)]
+    assert data_manager.runtime_updates == []
+    assert data_manager.session_updates == [(7, 90)]
+    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
 
 
 def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
@@ -1668,6 +1865,65 @@ def test_hoyolab_followup_session_stamina_rewrite_aborts_when_snapshot_fails(mon
     db.expire_all()
     unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
     assert unchanged.stamina_at_end == 100
+
+
+def test_resource_followup_session_percent_rewrite_is_allowed(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="nikke",
+        process_name="NIKKE",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        resource_percent_at_end=10.0,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    assert crud.update_session_resource(
+        db,
+        session.id,
+        12.5,
+        actor="resource_slow_followup",
+        operation_kind="resource_session_percent_rewrite",
+    ) is True
+
+    db.expire_all()
+    updated = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert updated.resource_percent_at_end == 12.5
+    assert beholder.active_incidents(db) == []
+
+
+def test_resource_session_percent_range_is_guarded(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    session = models.ProcessSession(
+        process_id="nikke",
+        process_name="NIKKE",
+        start_timestamp=dt.datetime(2026, 5, 8, 12, 0).timestamp(),
+        end_timestamp=dt.datetime(2026, 5, 8, 13, 0).timestamp(),
+        session_duration=3600,
+        resource_percent_at_end=10.0,
+        session_status="closed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    with pytest.raises(beholder.BeholderBlocked) as exc_info:
+        crud.update_session_resource(db, session.id, 120.0)
+
+    assert "invalid_resource_percent" in exc_info.value.incident.risk_factors
+    db.expire_all()
+    unchanged = db.query(models.ProcessSession).filter_by(id=session.id).one()
+    assert unchanged.resource_percent_at_end == 10.0
 
 
 def test_process_monitor_does_not_persist_stop_state_after_blocked_close(monkeypatch):

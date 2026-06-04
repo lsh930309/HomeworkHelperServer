@@ -4,14 +4,15 @@
 import os
 import hashlib
 import re
+import struct
+import zlib
+from io import BytesIO
 from pathlib import Path
 
+from src.utils.app_paths import get_app_data_dir
+
 # 아이콘 캐시 디렉토리
-ICON_CACHE_DIR = os.path.join(
-    os.getenv('APPDATA', os.path.expanduser('~')), 
-    'HomeworkHelper', 
-    'icon_cache'
-)
+ICON_CACHE_DIR = os.path.join(get_app_data_dir(), 'icon_cache')
 
 def generate_game_color(index: int, total: int) -> str:
     """HSL 기반 동적 색상 생성 (Hue 균등분할, S=80%, L=55%)"""
@@ -41,6 +42,46 @@ def get_color_for_game(name: str, index: int = 0, total: int = 10) -> str:
     return generate_game_color(hash_val % total, total)
 
 
+def fallback_png_bytes(name: str, size: int = 128) -> bytes | None:
+    """Generate a simple PNG fallback for native clients that cannot render SVG."""
+    size = max(16, min(256, int(size or 128)))
+    digest = hashlib.md5((name or "?").encode("utf-8")).digest()
+    bg = (80 + digest[0] % 120, 80 + digest[1] % 120, 110 + digest[2] % 100, 255)
+
+    def solid_png_bytes() -> bytes:
+        raw = b"".join(b"\x00" + bytes(bg) * size for _ in range(size))
+        compressed = zlib.compress(raw)
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+        header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return solid_png_bytes()
+
+    try:
+        image = Image.new("RGBA", (size, size), bg)
+        draw = ImageDraw.Draw(image)
+        label = (name or "?").strip()[:1].upper() or "?"
+        try:
+            font = ImageFont.truetype("Arial Unicode.ttf", max(12, int(size * 0.48)))
+        except Exception:
+            font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), label, font=font)
+        x = (size - (bbox[2] - bbox[0])) / 2 - bbox[0]
+        y = (size - (bbox[3] - bbox[1])) / 2 - bbox[1]
+        draw.text((x, y), label, font=font, fill=(255, 255, 255, 235))
+        output = BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return output.getvalue()
+    except Exception:
+        return solid_png_bytes()
+
+
 def ensure_cache_dir():
     """캐시 디렉토리 생성"""
     os.makedirs(ICON_CACHE_DIR, exist_ok=True)
@@ -49,7 +90,7 @@ def ensure_cache_dir():
 def get_cached_icon_path(process_id: str, size: int = None) -> Path:
     """캐시된 아이콘 경로 반환 (버전 포함)"""
     # 아이콘 추출 방식 변경 시 버전 업데이트하여 캐시 무효화
-    version = "v5_multires"
+    version = "v6_jumbo"
     cache_key = safe_icon_cache_key(process_id)
 
     if size is None:

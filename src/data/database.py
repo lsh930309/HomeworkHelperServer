@@ -3,26 +3,15 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 import os
 import sys
+from src.utils.app_paths import get_app_data_dir
 
 """데이터베이스 파일 저장 경로 설정
 - 모든 환경: %APPDATA%/HomeworkHelper/homework_helper_data (권한 문제 방지)
 - 개발 환경에서도 동일한 경로 사용 (일관성 유지)
 """
-def get_app_data_dir():
-    """애플리케이션 데이터 디렉토리 경로 반환 (%APPDATA%/HomeworkHelper)"""
-    if os.name == 'nt':  # Windows
-        app_data = os.getenv('APPDATA')
-        if not app_data:
-            # fallback: 사용자 홈 디렉토리
-            app_data = os.path.expanduser('~')
-    else:  # Linux/Mac (향후 대비)
-        app_data = os.path.expanduser('~/.config')
-
-    app_dir = os.path.join(app_data, 'HomeworkHelper')
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
 
 base_dir = get_app_data_dir()
 data_dir = os.path.join(base_dir, "homework_helper_data")
@@ -41,7 +30,15 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={
         "check_same_thread": False,
-    }
+        "timeout": 5,
+    },
+    # Desktop host processes can run for days and may be restarted out-of-band
+    # during packaging/update flows.  A pooled SQLite connection that is leaked
+    # or wedged in one long-lived process can make every DB-backed HTTP route
+    # wait forever even when the DB file itself is healthy.  NullPool keeps each
+    # request/session on a short-lived SQLite connection and bounds lock waits
+    # through the sqlite timeout/busy_timeout settings below.
+    poolclass=NullPool,
 )
 # 'engine'은 SQLAlchemy가 데이터베이스와 소통하는 핵심 통로입니다.
 # connect_args는 SQLite를 사용할 때만 필요한 옵션입니다.
@@ -87,6 +84,14 @@ def auto_migrate_database():
         ("managed_processes", "stamina_current", "INTEGER", None),
         ("managed_processes", "stamina_max", "INTEGER", None),
         ("managed_processes", "stamina_updated_at", "REAL", None),
+        # Process 테이블 - 범용 외부 리소스 필드
+        ("managed_processes", "resource_tracking_enabled", "INTEGER", "0"),
+        ("managed_processes", "resource_provider", "TEXT", None),
+        ("managed_processes", "resource_key", "TEXT", None),
+        ("managed_processes", "resource_label", "TEXT", None),
+        ("managed_processes", "resource_percent", "REAL", None),
+        ("managed_processes", "resource_updated_at", "REAL", None),
+        ("managed_processes", "resource_status", "TEXT", None),
         # Process 테이블 - 사용자 프리셋 ID
         ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         # GlobalSettings 테이블 - 스태미나 알림 설정
@@ -95,6 +100,7 @@ def auto_migrate_database():
         # ProcessSession 테이블 - 사용자 프리셋 ID 및 스태미나 정보
         ("process_sessions", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
         ("process_sessions", "stamina_at_end", "INTEGER", None),
+        ("process_sessions", "resource_percent_at_end", "REAL", None),
         ("process_sessions", "process_name", "TEXT", None),
         ("process_sessions", "session_duration", "REAL", None),
         # Beholder session metadata (nullable for legacy DB compatibility)
@@ -143,6 +149,8 @@ def auto_migrate_database():
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
+        # Remote server mode
+        ("global_settings", "remote_server_mode_enabled", "INTEGER", "0"),
         # Beholder incident UX / resolution metadata
         ("beholder_incidents", "user_title", "TEXT", None),
         ("beholder_incidents", "user_summary", "TEXT", None),
@@ -167,6 +175,55 @@ def auto_migrate_database():
                 "last_heartbeat_at REAL, "
                 "last_shutdown_at REAL"
                 ")"
+            ))
+            conn.commit()
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS game_platform_links ("
+                "id TEXT PRIMARY KEY, "
+                "pc_process_id TEXT NOT NULL, "
+                "pc_display_name TEXT, "
+                "android_package_name TEXT NOT NULL, "
+                "android_launch_intent_uri TEXT, "
+                "android_store_url TEXT, "
+                "platform_account_hint TEXT, "
+                "hoyolab_game_id TEXT, "
+                "sync_strategy TEXT NOT NULL DEFAULT 'manual', "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_game_platform_links_pc_process_id "
+                "ON game_platform_links (pc_process_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_game_platform_links_android_package_name "
+                "ON game_platform_links (android_package_name)"
+            ))
+            conn.commit()
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS mobile_game_sessions ("
+                "id TEXT PRIMARY KEY, "
+                "game_link_id TEXT NOT NULL, "
+                "pc_process_id TEXT NOT NULL, "
+                "pc_display_name TEXT, "
+                "android_package_name TEXT NOT NULL, "
+                "source TEXT NOT NULL DEFAULT 'manual', "
+                "status TEXT NOT NULL DEFAULT 'active', "
+                "started_at REAL NOT NULL, "
+                "ended_at REAL, "
+                "duration_seconds REAL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_mobile_game_sessions_status_started_at "
+                "ON mobile_game_sessions (status, started_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_mobile_game_sessions_game_link_id "
+                "ON mobile_game_sessions (game_link_id)"
             ))
             conn.commit()
             for table_name, column_name, column_type, default_value in migrations:
@@ -203,6 +260,17 @@ def auto_migrate_database():
                 conn.commit()
                 if result.rowcount > 0:
                     print(f"[Migration] managed_processes: {result.rowcount}개 행의 game_schema_id → user_preset_id 복사 완료")
+            if {"resource_provider", "resource_key", "resource_label"}.issubset(existing_columns):
+                result = conn.execute(text(
+                    "UPDATE managed_processes "
+                    "SET resource_label = '전초기지 방어 보상' "
+                    "WHERE resource_provider = 'nikke_blablalink' "
+                    "AND resource_key = 'nikke_outpost_storage' "
+                    "AND (resource_label IS NULL OR resource_label = '' OR resource_label = '보관함 용량')"
+                ))
+                conn.commit()
+                if result.rowcount > 0:
+                    print(f"[Migration] managed_processes: NIKKE resource_label {result.rowcount}개 보정 완료")
 
             # process_sessions 테이블
             existing_columns = [col['name'] for col in inspector.get_columns("process_sessions")]

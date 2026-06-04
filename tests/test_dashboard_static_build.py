@@ -81,3 +81,14 @@ def test_pyinstaller_spec_maps_dashboard_build_output_to_packaged_static_dir():
     assert "collect_tree('build/dashboard-static', 'src/api/dashboard/static')" in spec
     assert "'api/dashboard/frontend'" in spec
     assert "'api/dashboard/static'" in spec
+
+
+def test_host_window_icon_uses_current_packaged_asset():
+    main_window = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+    spec = Path("homework_helper.spec").read_text(encoding="utf-8")
+    installer = Path("installer.iss").read_text(encoding="utf-8")
+
+    assert 'get_bundle_resource_path(r"assets\\icons\\app\\app_icon.ico")' in main_window
+    assert r"img\app_icon.ico" not in main_window
+    assert "assets/icons/app/app_icon.ico" in spec
+    assert r"assets\icons\app\app_icon.ico" in installer

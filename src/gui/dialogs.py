@@ -10,15 +10,533 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup, QTextEdit, QGridLayout,
 )
-from PyQt6.QtCore import Qt, QTime
+from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
 
 # Local imports
 from src.data.data_models import ManagedProcess, GlobalSettings
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
+from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL
+import requests
+from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
+
+
+class _RemoteSettingsWorker(QThread):
+    """Run a remote-settings HTTP/probe task without blocking dialog creation."""
+
+    succeeded = pyqtSignal(str, object)
+    failed = pyqtSignal(str, object)
+
+    def __init__(self, task_name: str, task, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.task_name = task_name
+        self._task = task
+
+    def run(self):
+        try:
+            self.succeeded.emit(self.task_name, self._task())
+        except Exception as exc:
+            self.failed.emit(self.task_name, exc)
+
+
+class RemoteSettingsDialog(QDialog):
+    """Compact remote setup dialog for server-mode, pairing, device and readiness tasks."""
+
+    def __init__(self, data_manager, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.data_manager = data_manager
+        self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
+        self._workers: list[_RemoteSettingsWorker] = []
+        self._closing_after_workers = False
+        self.setWindowTitle("원격 설정")
+        self.setMinimumWidth(680)
+        self.resize(680, 520)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        self._build_pairing_section(root)
+        self._build_server_section(root)
+        self._build_status_section(root)
+        self._build_devices_section(root)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.button_box.rejected.connect(self.reject)
+        root.addWidget(self.button_box)
+
+        self._schedule_initial_refreshes()
+
+    def _build_pairing_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("페어링")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+
+        headline = QLabel("macOS 리모트 클라이언트에서 입력할 6자리 코드")
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+
+        code_row = QHBoxLayout()
+        self.pairing_code_edit = QLineEdit()
+        self.pairing_code_edit.setReadOnly(True)
+        self.pairing_code_edit.setPlaceholderText("코드 발급")
+        self.pairing_code_edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        code_font = self.pairing_code_edit.font()
+        code_font.setPointSize(max(code_font.pointSize() + 10, 20))
+        code_font.setBold(True)
+        self.pairing_code_edit.setFont(code_font)
+        self.pairing_code_edit.setMinimumHeight(44)
+        issue_button = QPushButton("발급")
+        issue_button.clicked.connect(self._issue_pairing_code)
+        copy_button = QPushButton("복사")
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.pairing_code_edit.text()))
+        code_row.addWidget(self.pairing_code_edit, 1)
+        code_row.addWidget(issue_button)
+        code_row.addWidget(copy_button)
+        layout.addLayout(code_row)
+
+        self.pairing_status_label = QLabel("최초 페어링 성공 후에는 명시적 언페어링 전까지 token으로 자동 연결됩니다.")
+        self.pairing_status_label.setWordWrap(True)
+        layout.addWidget(self.pairing_status_label)
+        root.addWidget(group)
+
+    def _build_server_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("호스트 서버")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.remote_server_mode_checkbox = QCheckBox(f"리모트 서버 모드로 시작 (0.0.0.0:{resolve_api_port()})")
+        self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
+        self.remote_server_mode_checkbox.setToolTip("다음 앱 실행부터 Tailscale/LAN 클라이언트 접속을 허용합니다.")
+        save_button = QPushButton("서버 모드 저장")
+        save_button.clicked.connect(self._save_server_mode)
+        self.remote_desktop_log_checkbox = QCheckBox("원격 진단 로그를 바탕 화면에 저장")
+        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/Tailscale/전원 설정 이벤트를 JSONL로 기록합니다.")
+        log_button = QPushButton("로그 저장")
+        log_button.clicked.connect(self._save_remote_logging_config)
+        self.server_status_label = QLabel("서버 모드 변경은 앱 재시작 후 적용됩니다. 로그 설정을 불러오는 중...")
+        self.server_status_label.setWordWrap(True)
+
+        layout.addWidget(self.remote_server_mode_checkbox, 0, 0)
+        layout.addWidget(save_button, 0, 1)
+        layout.addWidget(self.remote_desktop_log_checkbox, 1, 0)
+        layout.addWidget(log_button, 1, 1)
+        layout.addWidget(self.server_status_label, 2, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_status_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("연결/전원 상태")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.tailscale_summary_label = QLabel("Tailscale: 확인 대기")
+        self.tailscale_summary_label.setWordWrap(True)
+        self.power_status_label = QLabel("전원 준비: 확인 대기")
+        self.power_status_label.setWordWrap(True)
+        self.tailscale_health_text = QTextEdit()
+        self.tailscale_health_text.setReadOnly(True)
+        self.tailscale_health_text.setMaximumHeight(78)
+        self.tailscale_health_text.setPlainText("Tailscale 상태를 불러오는 중...")
+        self.power_setup_text = QTextEdit()
+        self.power_setup_text.setReadOnly(True)
+        self.power_setup_text.setMaximumHeight(94)
+        self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
+
+        tailscale_refresh = QPushButton("Tailscale 새로고침")
+        tailscale_refresh.clicked.connect(self._refresh_tailscale)
+        ensure_button = QPushButton("설치/실행 확인")
+        ensure_button.clicked.connect(self._ensure_tailscale)
+        tailscale_up_button = QPushButton("Tailscale 활성화")
+        tailscale_up_button.clicked.connect(self._tailscale_up)
+        tailscale_down_button = QPushButton("Tailscale 비활성화")
+        tailscale_down_button.clicked.connect(self._tailscale_down)
+        power_refresh = QPushButton("전원 상태 확인")
+        power_refresh.clicked.connect(self._refresh_power_setup)
+
+        layout.addWidget(self.tailscale_summary_label, 0, 0)
+        layout.addWidget(tailscale_refresh, 0, 1)
+        layout.addWidget(ensure_button, 0, 2)
+        layout.addWidget(tailscale_up_button, 1, 1)
+        layout.addWidget(tailscale_down_button, 1, 2)
+        layout.addWidget(self.tailscale_health_text, 2, 0, 1, 3)
+        layout.addWidget(self.power_status_label, 3, 0)
+        layout.addWidget(power_refresh, 3, 1, 1, 2)
+        layout.addWidget(self.power_setup_text, 4, 0, 1, 3)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_devices_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("Tailnet 기기")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+        self.devices_table = QTableWidget(0, 8)
+        self.devices_table.setHorizontalHeaderLabels(["ID", "역할", "이름", "Tailnet IP", "OS", "페어링", "통신 상태", "마지막 통신"])
+        self.devices_table.setColumnHidden(0, True)
+        self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.devices_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.devices_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        if self.devices_table.horizontalHeader():
+            self.devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        buttons = QHBoxLayout()
+        refresh_button = QPushButton("새로고침")
+        refresh_button.clicked.connect(self._refresh_devices)
+        self.revoke_button = QPushButton("선택 언페어링")
+        self.revoke_button.clicked.connect(self._revoke_selected_device)
+        purge_button = QPushButton("폐기 목록 정리")
+        purge_button.clicked.connect(self._purge_revoked_devices)
+        buttons.addWidget(refresh_button)
+        buttons.addWidget(self.revoke_button)
+        buttons.addWidget(purge_button)
+        buttons.addStretch(1)
+        layout.addWidget(self.devices_table)
+        layout.addLayout(buttons)
+        root.addWidget(group)
+
+    def _device_sort_key_for_host(self, device: dict) -> tuple[int, str, str]:
+        pairing_status = str(device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired"))
+        role = str(device.get("role") or "unknown")
+        if role == "host":
+            rank = 0
+        elif pairing_status == "paired":
+            rank = 1
+        elif pairing_status == "tailnet_unpaired":
+            rank = 2
+        elif pairing_status == "revoked":
+            rank = 3
+        else:
+            rank = 2
+        name = str(
+            device.get("name")
+            or device.get("tailnet_hostname")
+            or device.get("tailnet_dns_name")
+            or device.get("tailnet_ip")
+            or device.get("id")
+            or ""
+        ).casefold()
+        return (rank, name, str(device.get("tailnet_ip") or device.get("id") or ""))
+
+    def _fit_devices_table_to_rows(self) -> None:
+        """Show every paired-device row without an internal vertical scrollbar."""
+        header = self.devices_table.horizontalHeader()
+        header_height = header.height() if header and not header.isHidden() else 0
+        visible_rows = max(self.devices_table.rowCount(), 1)
+        rows_height = sum(
+            self.devices_table.rowHeight(row)
+            for row in range(self.devices_table.rowCount())
+        )
+        if self.devices_table.rowCount() == 0:
+            rows_height = self.devices_table.verticalHeader().defaultSectionSize()
+        frame_height = self.devices_table.frameWidth() * 2
+        horizontal_scroll_height = (
+            self.devices_table.horizontalScrollBar().sizeHint().height()
+            if self.devices_table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            else 0
+        )
+        target_height = header_height + rows_height + frame_height + horizontal_scroll_height
+        self.devices_table.setFixedHeight(max(target_height, header_height + frame_height + visible_rows))
+        self.adjustSize()
+
+    def _schedule_initial_refreshes(self) -> None:
+        self._refresh_remote_logging_config()
+        self._refresh_devices()
+        self._refresh_tailscale()
+        self._refresh_power_setup()
+
+    def _start_worker(self, task_name: str, task) -> None:
+        worker = _RemoteSettingsWorker(task_name, task, self)
+        worker.succeeded.connect(self._on_worker_succeeded)
+        worker.failed.connect(self._on_worker_failed)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_worker_finished(self, worker: _RemoteSettingsWorker) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+        if self._closing_after_workers and not self._workers:
+            QTimer.singleShot(0, lambda: QDialog.reject(self))
+
+    def _allow_close_after_workers(self) -> bool:
+        running = [worker for worker in self._workers if worker.isRunning()]
+        if not running:
+            return True
+        self._closing_after_workers = True
+        self.setEnabled(False)
+        self.server_status_label.setText("진행 중인 원격 설정 작업이 끝나면 창을 닫습니다...")
+        for worker in running:
+            worker.requestInterruption()
+            worker.quit()
+        return False
+
+    def reject(self) -> None:
+        if self._allow_close_after_workers():
+            super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self._allow_close_after_workers():
+            super().closeEvent(event)
+        else:
+            event.ignore()
+
+    def _on_worker_succeeded(self, task_name: str, payload: object) -> None:
+        if task_name == "logging":
+            self._apply_remote_logging_config(payload if isinstance(payload, dict) else {})
+        elif task_name == "devices":
+            devices = payload if isinstance(payload, list) else []
+            self._populate_devices(devices)
+        elif task_name == "tailscale":
+            self._apply_tailscale_payload(payload if isinstance(payload, dict) else {})
+        elif task_name == "tailscale_ensure":
+            self._apply_tailscale_ensure_payload(payload if isinstance(payload, dict) else {})
+        elif task_name in {"tailscale_up", "tailscale_down"}:
+            self._apply_tailscale_control_payload(payload if isinstance(payload, dict) else {})
+        elif task_name == "power":
+            self._apply_power_setup_payload(payload if isinstance(payload, dict) else {})
+
+    def _on_worker_failed(self, task_name: str, exc: object) -> None:
+        if task_name == "logging":
+            self.server_status_label.setText(f"원격 로그 설정 조회 실패: {exc}")
+        elif task_name == "devices":
+            self.pairing_status_label.setText(f"기기 목록 조회 실패: {exc}")
+        elif task_name in {"tailscale", "tailscale_ensure", "tailscale_up", "tailscale_down"}:
+            self.tailscale_summary_label.setText("Tailscale: 조회 실패")
+            self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
+        elif task_name == "power":
+            self.power_status_label.setText("전원 준비: 조회 실패")
+            self.power_setup_text.setPlainText(f"전원 준비 상태 조회 실패: {exc}")
+
+    def _refresh_remote_logging_config(self):
+        self.server_status_label.setText("원격 로그 설정을 불러오는 중...")
+        def task():
+            response = requests.get(f"{self.base_url}/remote/logging/config", timeout=5)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("logging", task)
+
+    def _apply_remote_logging_config(self, payload: dict) -> None:
+        self.remote_desktop_log_checkbox.setChecked(bool(payload.get("enabled")))
+        self.server_status_label.setText(f"원격 로그: {payload.get('path') or '경로 미확인'}")
+
+    def _save_remote_logging_config(self):
+        try:
+            response = requests.put(
+                f"{self.base_url}/remote/logging/config",
+                json={"enabled": self.remote_desktop_log_checkbox.isChecked()},
+                timeout=5,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            self._apply_remote_logging_config(payload)
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "로그 설정 실패", str(exc))
+
+    def _save_server_mode(self):
+        previous = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
+        updated = GlobalSettings.from_dict(self.data_manager.global_settings.to_dict())
+        updated.remote_server_mode_enabled = self.remote_server_mode_checkbox.isChecked()
+        if self.data_manager.save_global_settings(updated, actor="remote_settings_dialog"):
+            self.server_status_label.setText("저장되었습니다. 앱 재시작 후 API 바인딩에 적용됩니다.")
+            if previous != self.remote_server_mode_checkbox.isChecked():
+                QMessageBox.information(
+                    self,
+                    "재시작 필요",
+                    "리모트 서버 모드 설정이 변경되었습니다.\n\nAPI 서버 바인딩 주소를 적용하려면 앱을 재시작해주세요.",
+                )
+        else:
+            QMessageBox.warning(self, "저장 실패", "리모트 서버 모드 설정 저장에 실패했습니다.")
+
+    def _issue_pairing_code(self):
+        try:
+            response = requests.post(f"{self.base_url}/remote/pair/start", timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+            self.pairing_code_edit.setText(str(payload.get("code") or ""))
+            self.pairing_code_edit.selectAll()
+            self.pairing_status_label.setText(f"코드 발급 완료. 만료: {payload.get('expires_at')}")
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "페어링 코드 발급 실패", str(exc))
+
+    def _refresh_devices(self):
+        self.pairing_status_label.setText("페어링된 기기 목록을 불러오는 중...")
+        def task():
+            response = requests.get(f"{self.base_url}/remote/devices", timeout=5)
+            response.raise_for_status()
+            return response.json().get("devices", [])
+        self._start_worker("devices", task)
+
+    def _populate_devices(self, devices: list) -> None:
+        pairing_labels = {
+            "paired": "페어링됨",
+            "revoked": "폐기됨",
+            "host": "호스트",
+            "tailnet_unpaired": "미페어링",
+        }
+        connectivity_labels = {
+            "active": "정상",
+            "local": "로컬",
+            "revoked": "폐기됨",
+            "tailnet_online": "Tailnet 온라인",
+            "tailnet_online_unpaired": "Tailnet 온라인",
+            "tailnet_offline": "Tailnet 오프라인",
+            "tailnet_offline_unpaired": "Tailnet 오프라인",
+            "stale_or_offline": "대기/오프라인",
+            "unknown": "미확인",
+        }
+        self.devices_table.setRowCount(0)
+        for device in sorted(devices, key=self._device_sort_key_for_host):
+            row = self.devices_table.rowCount()
+            self.devices_table.insertRow(row)
+            pairing_status = device.get("pairing_status") or ("revoked" if device.get("revoked_at") else "paired")
+            connectivity_state = device.get("connectivity_state") or ""
+            is_host_self = device.get("role") == "host"
+            values = [
+                device.get("id") or "",
+                device.get("role") or "unknown",
+                device.get("name") or "",
+                device.get("tailnet_ip") or "",
+                device.get("tailnet_os") or device.get("platform") or "",
+                "-" if is_host_self else pairing_labels.get(pairing_status, pairing_status),
+                "-" if is_host_self else connectivity_labels.get(connectivity_state, connectivity_state),
+                str(device.get("last_seen_at") or ""),
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if is_host_self:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, bool(device.get("can_revoke", not device.get("revoked_at"))))
+                if col == 5:
+                    item.setToolTip(str(pairing_status))
+                elif col == 6:
+                    item.setToolTip(str(device.get("health_message") or connectivity_state))
+                self.devices_table.setItem(row, col, item)
+        self._fit_devices_table_to_rows()
+        self.pairing_status_label.setText(f"Tailnet/페어링 기기 {len(devices)}개")
+
+    def _revoke_selected_device(self):
+        row = self.devices_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "선택 필요", "언페어링할 기기를 선택하세요.")
+            return
+        item = self.devices_table.item(row, 0)
+        device_id = item.text() if item else ""
+        can_revoke = bool(item.data(Qt.ItemDataRole.UserRole)) if item else False
+        if not can_revoke:
+            QMessageBox.information(self, "언페어링 불가", "Host, 폐기된 기기 또는 아직 페어링되지 않은 tailnet 기기는 언페어링 대상이 아닙니다.")
+            return
+        if not device_id:
+            return
+        try:
+            response = requests.delete(f"{self.base_url}/remote/devices/{device_id}", timeout=5)
+            response.raise_for_status()
+            self._refresh_devices()
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "언페어링 실패", str(exc))
+
+    def _purge_revoked_devices(self):
+        try:
+            response = requests.delete(f"{self.base_url}/remote/devices/revoked", timeout=5)
+            response.raise_for_status()
+            removed = response.json().get("removed", 0)
+            self.pairing_status_label.setText(f"폐기된 기기 {removed}개를 정리했습니다.")
+            self._refresh_devices()
+        except requests.RequestException as exc:
+            QMessageBox.warning(self, "기기 정리 실패", str(exc))
+
+    def _refresh_tailscale(self):
+        self.tailscale_summary_label.setText("Tailscale: 확인 중...")
+        self.tailscale_health_text.setPlainText("Tailscale 상태를 불러오는 중...")
+        def task():
+            response = requests.get(f"{self.base_url}/remote/readiness", timeout=5)
+            response.raise_for_status()
+            return response.json().get("tailscale_readiness", {})
+        self._start_worker("tailscale", task)
+
+    def _apply_tailscale_payload(self, tailscale: dict) -> None:
+        color = tailscale.get("color") or "unknown"
+        state = tailscale.get("state") or "unknown"
+        foundation_state = tailscale.get("foundation_state") or "unknown"
+        message = tailscale.get("message") or "tailscale 상태 미확인"
+        self.tailscale_summary_label.setText(f"Tailscale: {foundation_state} · {message}")
+        self.tailscale_health_text.setPlainText(
+            "Tailscale readiness\n"
+            f"- state: {state}\n"
+            f"- foundation_state: {foundation_state}\n"
+            f"- color: {color}\n"
+            f"- message: {message}\n"
+            f"- suggested_base_urls: {tailscale.get('suggested_base_urls')}\n"
+            f"- details: {tailscale.get('details')}\n"
+        )
+
+    def _ensure_tailscale(self):
+        self.tailscale_summary_label.setText("Tailscale: 설치/실행 확인 중...")
+        self.tailscale_health_text.setPlainText("설치/실행 확인은 시간이 걸릴 수 있습니다. 창은 계속 사용할 수 있습니다.")
+        def task():
+            response = requests.post(f"{self.base_url}/remote/tailscale/ensure", timeout=30)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("tailscale_ensure", task)
+
+    def _apply_tailscale_ensure_payload(self, payload: dict) -> None:
+        self.tailscale_summary_label.setText(f"Tailscale: {'ready' if payload.get('ready') else 'not ready'} · {payload.get('message')}")
+        self.tailscale_health_text.setPlainText(str(payload))
+
+    def _tailscale_up(self):
+        self.tailscale_summary_label.setText("Tailscale: 활성화 중...")
+        self.tailscale_health_text.setPlainText("설치된 Tailscale CLI 경로를 찾아 tailscale up --accept-routes를 실행합니다.")
+        def task():
+            response = requests.post(f"{self.base_url}/remote/tailscale/up", timeout=45)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("tailscale_up", task)
+
+    def _tailscale_down(self):
+        self.tailscale_summary_label.setText("Tailscale: 비활성화 중...")
+        self.tailscale_health_text.setPlainText("호스트 로컬에서 tailscale down을 실행해 Tailscale 네트워크만 비활성화합니다. 설치 제거는 하지 않습니다.")
+        def task():
+            response = requests.post(f"{self.base_url}/remote/tailscale/down", timeout=30)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("tailscale_down", task)
+
+    def _apply_tailscale_control_payload(self, payload: dict) -> None:
+        after = payload.get("after") if isinstance(payload.get("after"), dict) else {}
+        state = after.get("foundation_state") or after.get("state") or ("ready" if payload.get("ready") else "unknown")
+        self.tailscale_summary_label.setText(f"Tailscale: {state} · {payload.get('message')}")
+        self.tailscale_health_text.setPlainText(str(payload))
+
+    def _refresh_power_setup(self):
+        self.power_status_label.setText("전원 준비: 확인 중...")
+        self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
+        def task():
+            response = requests.get(f"{self.base_url}/remote/power/setup", timeout=5)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("power", task)
+
+    def _apply_power_setup_payload(self, payload: dict) -> None:
+        ssh_service = payload.get("ssh_service") or {}
+        firewall = payload.get("firewall") or {}
+        self.power_status_label.setText(payload.get("message") or "전원 준비 상태 확인 완료")
+        self.power_setup_text.setPlainText(
+            "호스트 전원 준비 상태\n"
+            f"- host: {payload.get('host_platform')} / user: {payload.get('user')}\n"
+            f"- authorized_keys: {payload.get('effective_authorized_keys_path') or payload.get('authorized_keys_path')} (exists={payload.get('authorized_keys_exists')})\n"
+            f"- SSH scope: {payload.get('authorized_keys_scope') or 'user'}"
+            f"{' / Administrators' if payload.get('administrators_authorized_keys_active') else ''}\n"
+            f"- OpenSSH Server: running={ssh_service.get('running')} start_type={ssh_service.get('start_type')} message={ssh_service.get('message')}\n"
+            f"- Firewall: enabled={firewall.get('enabled')} message={firewall.get('message')}\n"
+            "클라이언트가 SmartThings/OpenSSH 직접 경로로 전원 제어를 수행합니다. "
+            "SSH public key 등록은 페어링한 클라이언트의 자동 설정 흐름이 수행합니다."
+        )
 
 class NumericTableWidgetItem(QTableWidgetItem):
     """ QTableWidgetItem that allows numeric sorting. """
@@ -354,11 +872,19 @@ class ProcessDialog(QDialog):
             except ValueError:
                 pass
 
-        # 호요버스 설정
-        is_hoyoverse = hasattr(self, 'stamina_tracking_checkbox') and self.stamina_tracking_checkbox.isChecked()
-        hoyolab_game_id = None
-        if is_hoyoverse and hasattr(self, 'hoyolab_game_combo'):
-            hoyolab_game_id = self.hoyolab_game_combo.currentData()
+        # 자원 추적 설정
+        tracking_target = self.hoyolab_game_combo.currentData() if hasattr(self, 'hoyolab_game_combo') else None
+        tracking_enabled = bool(
+            hasattr(self, 'stamina_tracking_checkbox')
+            and self.stamina_tracking_checkbox.isChecked()
+            and tracking_target is not None
+        )
+        is_hoyoverse = tracking_enabled and tracking_target in {"honkai_starrail", "zenless_zone_zero"}
+        hoyolab_game_id = tracking_target if is_hoyoverse else None
+        resource_tracking_enabled = tracking_enabled and tracking_target == "nikke_outpost_storage"
+        resource_provider = "nikke_blablalink" if resource_tracking_enabled else None
+        resource_key = "nikke_outpost_storage" if resource_tracking_enabled else None
+        resource_label = NIKKE_OUTPOST_LABEL if resource_tracking_enabled else None
 
         # 프리셋 데이터 구성 (모든 필드 명시적 포함)
         preset_data = {
@@ -381,7 +907,11 @@ class ProcessDialog(QDialog):
             "stamina_name": None,
             "stamina_max_default": None,
             "stamina_recovery_minutes": None,
-            "launcher_patterns": None
+            "launcher_patterns": None,
+            "resource_tracking_enabled": resource_tracking_enabled,
+            "resource_provider": resource_provider,
+            "resource_key": resource_key,
+            "resource_label": resource_label
         }
 
         # 4. 프리셋 저장
@@ -452,18 +982,22 @@ class ProcessDialog(QDialog):
             if idx >= 0:
                 self.launch_type_combo.setCurrentIndex(idx)
 
-        # 호요버스 게임 설정
-        if preset.get("is_hoyoverse", False):
-            if hasattr(self, 'stamina_tracking_checkbox'):
-                self.stamina_tracking_checkbox.setChecked(True)
+        # 스태미나/리소스 추적 대상 자동 선택
+        selected_tracking_target = None
+        if preset.get("is_hoyoverse", False) and preset.get("hoyolab_game_id"):
+            selected_tracking_target = preset.get("hoyolab_game_id")
+        elif (
+            preset.get("resource_tracking_enabled")
+            and preset.get("resource_provider") == "nikke_blablalink"
+            and preset.get("resource_key") == "nikke_outpost_storage"
+        ):
+            selected_tracking_target = "nikke_outpost_storage"
 
-            # 호요랩 게임 자동 선택
-            if hasattr(self, 'hoyolab_game_combo'):
-                hid = preset.get("hoyolab_game_id")
-                if hid:
-                    index = self.hoyolab_game_combo.findData(hid)
-                    if index >= 0:
-                        self.hoyolab_game_combo.setCurrentIndex(index)
+        if hasattr(self, 'hoyolab_game_combo'):
+            index = self.hoyolab_game_combo.findData(selected_tracking_target) if selected_tracking_target else 0
+            self.hoyolab_game_combo.setCurrentIndex(index if index >= 0 else 0)
+        if hasattr(self, 'stamina_tracking_checkbox'):
+            self.stamina_tracking_checkbox.setChecked(bool(selected_tracking_target))
 
     # _on_save_as_preset_clicked 메서드는 위에서 재정의됨 (직접 코드 삭제 대신 위쪽 청크에서 덮어쓰거나 빈 메서드로 대체 필요하지만,
     # multi_replace는 덮어쓰기이므로, 기존 _on_save_as_preset_clicked 메서드 전체를 이 청크로 대체하는 게 나을 수도 있음.
@@ -532,32 +1066,33 @@ class ProcessDialog(QDialog):
 
     def _setup_stamina_section(self):
         """스태미나 추적 섹션 설정 (호요버스 게임 전용)"""
-        self.stamina_group_box = QGroupBox("스태미나 자동 추적 (호요버스 게임)")
+        self.stamina_group_box = QGroupBox("스태미나/리소스 자동 추적")
         stamina_layout = QVBoxLayout()
 
         # 스태미나 자동 추적 활성화 체크박스
         self.stamina_tracking_checkbox = QCheckBox("스태미나 자동 추적 활성화")
         self.stamina_tracking_checkbox.setToolTip(
-            "게임 종료 시 HoYoLab API를 통해 스태미나(개척력/배터리)를 자동으로 조회합니다."
+            "게임 종료 시 HoYoLab 또는 BlablaLink API를 통해 스태미나/리소스를 자동으로 조회합니다."
         )
         self.stamina_tracking_checkbox.toggled.connect(self._on_stamina_tracking_toggled)
         stamina_layout.addWidget(self.stamina_tracking_checkbox)
 
         # 호요버스 게임 선택 콤보박스
         hoyolab_game_layout = QHBoxLayout()
-        hoyolab_game_layout.addWidget(QLabel("추적할 게임:"))
+        hoyolab_game_layout.addWidget(QLabel("추적 대상:"))
         self.hoyolab_game_combo = QComboBox()
         self.hoyolab_game_combo.addItem("(없음)", None)
         self.hoyolab_game_combo.addItem("붕괴: 스타레일", "honkai_starrail")
         self.hoyolab_game_combo.addItem("젠레스 존 제로", "zenless_zone_zero")
-        self.hoyolab_game_combo.setToolTip("스태미나를 추적할 호요버스 게임을 선택하세요.")
+        self.hoyolab_game_combo.addItem(f"NIKKE - {NIKKE_OUTPOST_LABEL}", "nikke_outpost_storage")
+        self.hoyolab_game_combo.setToolTip("추적할 HoYoLab 스태미나 또는 NIKKE ShiftyPad 리소스를 선택하세요.")
         hoyolab_game_layout.addWidget(self.hoyolab_game_combo)
         hoyolab_game_layout.addStretch()
         stamina_layout.addLayout(hoyolab_game_layout)
 
         # 스태미나 조회 테스트 버튼
-        self.stamina_test_button = QPushButton("스태미나 조회 테스트")
-        self.stamina_test_button.setToolTip("HoYoLab API 연결을 테스트하고 현재 스태미나를 조회합니다.")
+        self.stamina_test_button = QPushButton("조회 테스트")
+        self.stamina_test_button.setToolTip("HoYoLab/BlablaLink API 연결을 테스트하고 현재 값을 조회합니다.")
         self.stamina_test_button.clicked.connect(self._test_stamina_connection)
         stamina_layout.addWidget(self.stamina_test_button)
 
@@ -582,7 +1117,11 @@ class ProcessDialog(QDialog):
         # 호요랩 게임 콤보박스에서 선택된 게임 사용
         game_id = self.hoyolab_game_combo.currentData()
         if not game_id:
-            QMessageBox.warning(self, "오류", "추적할 호요버스 게임을 선택해주세요.")
+            QMessageBox.warning(self, "오류", "추적 대상을 선택해주세요.")
+            return
+
+        if game_id == "nikke_outpost_storage":
+            self._test_nikke_resource_connection()
             return
 
         try:
@@ -650,10 +1189,16 @@ class ProcessDialog(QDialog):
                             self.existing_process.stamina_max = stamina_info.max
                             self.existing_process.stamina_updated_at = stamina_info.updated_at.timestamp()
 
-                            # API를 통해 전체 프로세스 업데이트
+                            # API를 통해 스태미나 런타임 필드만 업데이트
                             parent_window = self.parent()
                             if parent_window and hasattr(parent_window, 'data_manager'):
-                                result = parent_window.data_manager.update_process(self.existing_process)
+                                updater = getattr(parent_window.data_manager, 'update_process_stamina', None)
+                                result = bool(updater and updater(
+                                    self.existing_process.id,
+                                    stamina_info.current,
+                                    stamina_info.max,
+                                    stamina_info.updated_at.timestamp(),
+                                ))
                                 if result:
                                     save_result = "\n\n💾 스태미나 정보가 저장되었습니다."
                                     # GUI 새로고침
@@ -687,7 +1232,7 @@ class ProcessDialog(QDialog):
                         "• HoYoLab 쿠키가 만료되었습니다.\n"
                         "• 해당 게임을 플레이하지 않았습니다.\n"
                         "• API 서버에 문제가 있습니다.\n\n"
-                        "HoYoLab 설정에서 쿠키를 다시 설정해보세요."
+                        "자원 추적 설정에서 쿠키를 다시 설정해보세요."
                     )
             except Exception as e:
                 QMessageBox.warning(
@@ -711,6 +1256,86 @@ class ProcessDialog(QDialog):
                 "오류",
                 f"스태미나 테스트 중 오류가 발생했습니다:\n{str(e)}"
             )
+
+    def _test_nikke_resource_connection(self):
+        """NIKKE ShiftyPad 전초기지 방어 보상 조회 테스트."""
+        try:
+            from src.services.nikke import get_nikke_service, NIKKE_OUTPOST_LABEL
+
+            service = get_nikke_service()
+            if not service.is_configured():
+                reply = QMessageBox.question(
+                    self,
+                    "인증 정보 없음",
+                    "BlablaLink/NIKKE 인증 정보가 설정되지 않았습니다.\n"
+                    "자원 추적 설정을 여시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    from src.gui.dialogs import HoYoLabSettingsDialog
+
+                    dialog = HoYoLabSettingsDialog(self)
+                    dialog.exec()
+                    if not service.is_configured():
+                        return
+                else:
+                    return
+
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents()
+            try:
+                snapshot = service.get_outpost_storage()
+                if snapshot.status == "ok" and snapshot.percent is not None:
+                    save_result = ""
+                    if self.existing_process:
+                        self.existing_process.resource_tracking_enabled = True
+                        self.existing_process.resource_provider = snapshot.provider
+                        self.existing_process.resource_key = snapshot.resource_key
+                        self.existing_process.resource_label = snapshot.label
+                        self.existing_process.resource_percent = snapshot.percent
+                        self.existing_process.resource_updated_at = snapshot.updated_at.timestamp()
+                        self.existing_process.resource_status = snapshot.status
+                        parent_window = self.parent()
+                        if parent_window and hasattr(parent_window, "data_manager"):
+                            updater = getattr(parent_window.data_manager, "update_process_resource", None)
+                            if updater and updater(
+                                self.existing_process.id,
+                                snapshot.percent,
+                                snapshot.updated_at.timestamp(),
+                                snapshot.status,
+                                snapshot.label,
+                            ):
+                                save_result = "\n\n💾 리소스 정보가 저장되었습니다."
+                                if hasattr(parent_window, "populate_process_list"):
+                                    parent_window.populate_process_list()
+                            else:
+                                save_result = "\n\n⚠️ 리소스 정보 저장 실패"
+                        else:
+                            save_result = "\n\n💾 리소스 정보가 임시 저장되었습니다."
+                    else:
+                        save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
+
+                    QMessageBox.information(
+                        self,
+                        "NIKKE 리소스 조회 성공",
+                        f"✅ {NIKKE_OUTPOST_LABEL} 조회 성공!\n\n"
+                        f"{NIKKE_OUTPOST_LABEL}: {snapshot.percent:.1f}%\n"
+                        f"조회 시각: {snapshot.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"{save_result}",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "조회 실패",
+                        "❌ NIKKE 전초기지 방어 보상 조회에 실패했습니다.\n\n"
+                        f"상태: {snapshot.status}\n"
+                        f"메시지: {snapshot.message or 'BlablaLink 세션/대표 계정 상태를 확인하세요.'}",
+                    )
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"NIKKE 리소스 테스트 중 오류가 발생했습니다:\n{str(e)}")
 
     def populate_fields_from_existing_process(self):
         if not self.existing_process:
@@ -747,19 +1372,27 @@ class ProcessDialog(QDialog):
                     logger.debug(f"프리셋 자동 선택: {self.existing_process.user_preset_id}")
                     break
 
-        # 호요랩 게임 선택 로드 (스태미나 추적보다 먼저 설정)
-        if hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
+        # 추적 대상 로드 (체크박스보다 먼저 설정)
+        selected_tracking_target = None
+        if getattr(self.existing_process, 'resource_provider', None) == 'nikke_blablalink' and getattr(self.existing_process, 'resource_key', None) == 'nikke_outpost_storage':
+            selected_tracking_target = 'nikke_outpost_storage'
+        elif hasattr(self.existing_process, 'hoyolab_game_id') and self.existing_process.hoyolab_game_id:
+            selected_tracking_target = self.existing_process.hoyolab_game_id
+
+        if selected_tracking_target:
             for i in range(self.hoyolab_game_combo.count()):
-                if self.hoyolab_game_combo.itemData(i) == self.existing_process.hoyolab_game_id:
+                if self.hoyolab_game_combo.itemData(i) == selected_tracking_target:
                     self.hoyolab_game_combo.setCurrentIndex(i)
                     break
         else:
-            # hoyolab_game_id가 None이면 '(없음)' 선택
             self.hoyolab_game_combo.setCurrentIndex(0)
 
-        # 스태미나 추적 필드 로드 (콤보박스 설정 후 체크박스 설정)
-        if hasattr(self.existing_process, 'stamina_tracking_enabled'):
-            self.stamina_tracking_checkbox.setChecked(self.existing_process.stamina_tracking_enabled)
+        # 스태미나/리소스 추적 필드 로드 (콤보박스 설정 후 체크박스 설정)
+        tracking_enabled = bool(
+            getattr(self.existing_process, 'stamina_tracking_enabled', False)
+            or getattr(self.existing_process, 'resource_tracking_enabled', False)
+        )
+        self.stamina_tracking_checkbox.setChecked(tracking_enabled)
 
         # 체크박스 상태에 따라 콤보박스 활성화/비활성화
         self._on_stamina_tracking_toggled(self.stamina_tracking_checkbox.isChecked())
@@ -905,14 +1538,24 @@ class ProcessDialog(QDialog):
         preset_data = self.preset_combo.currentData()
         user_preset_id = preset_data.get("id") if preset_data else None
 
-        # 스태미나 추적 필드
-        hoyolab_game_id = self.hoyolab_game_combo.currentData()
-        # hoyolab_game_id가 None이면 스태미나 추적도 자동으로 비활성화
-        stamina_tracking_enabled = self.stamina_tracking_checkbox.isChecked() and hoyolab_game_id is not None
+        # 스태미나/리소스 추적 필드
+        tracking_target = self.hoyolab_game_combo.currentData()
+        tracking_checked = self.stamina_tracking_checkbox.isChecked() and tracking_target is not None
+        hoyolab_game_id = None
+        stamina_tracking_enabled = False
+        resource_tracking_enabled = False
+        resource_provider = None
+        resource_key = None
+        resource_label = None
 
-        # 스태미나 추적이 비활성화되면 hoyolab_game_id도 null로 설정
-        if not stamina_tracking_enabled:
-            hoyolab_game_id = None
+        if tracking_checked and tracking_target == "nikke_outpost_storage":
+            resource_tracking_enabled = True
+            resource_provider = "nikke_blablalink"
+            resource_key = "nikke_outpost_storage"
+            resource_label = NIKKE_OUTPOST_LABEL
+        elif tracking_checked:
+            stamina_tracking_enabled = True
+            hoyolab_game_id = tracking_target
 
         return {
             "name": name,
@@ -926,6 +1569,10 @@ class ProcessDialog(QDialog):
             "user_preset_id": user_preset_id,
             "stamina_tracking_enabled": stamina_tracking_enabled,
             "hoyolab_game_id": hoyolab_game_id,
+            "resource_tracking_enabled": resource_tracking_enabled,
+            "resource_provider": resource_provider,
+            "resource_key": resource_key,
+            "resource_label": resource_label,
         }
 
 class GlobalSettingsDialog(QDialog):
@@ -1157,6 +1804,7 @@ class GlobalSettingsDialog(QDialog):
         updated.run_on_startup = self.run_on_startup_checkbox.isChecked()
         updated.always_on_top = self.current_settings.always_on_top  # 메뉴바 체크박스로 관리
         updated.run_as_admin = self.run_as_admin_checkbox.isChecked()
+        updated.remote_server_mode_enabled = getattr(self.current_settings, 'remote_server_mode_enabled', False)
         updated.notify_on_mandatory_time = self.notify_on_mandatory_time_checkbox.isChecked()
         updated.notify_on_cycle_deadline = self.notify_on_cycle_deadline_checkbox.isChecked()
         updated.notify_on_sleep_correction = self.notify_on_sleep_correction_checkbox.isChecked()
@@ -1260,107 +1908,329 @@ class WebShortcutDialog(QDialog):
         return None
 
 
-class HoYoLabSettingsDialog(QDialog):
-    """HoYoLab 인증 정보 설정 다이얼로그
+class HoYoLabAdvancedCredentialsDialog(QDialog):
+    """HoYoLab 쿠키를 수동 확인/수정하는 고급 다이얼로그."""
 
-    브라우저 쿠키 자동 추출 또는 수동 입력을 통해 HoYoLab 인증 정보를 설정합니다.
-    """
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("HoYoLab 설정")
-        self.setMinimumWidth(450)
+        self.setWindowTitle("HoYoLab 고급 인증 정보")
+        self.setMinimumWidth(520)
+        self._existing_credentials: dict[str, Any] = {}
+
+        layout = QVBoxLayout(self)
+        info = QLabel("자동 추출이 실패했거나 저장된 HoYoLab 쿠키를 직접 수정해야 할 때만 사용하세요.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.ltuid_field = QLineEdit()
+        self.ltuid_field.setPlaceholderText("숫자로 된 사용자 ID")
+        self.ltoken_field = QLineEdit()
+        self.ltoken_field.setPlaceholderText("ltoken_v2 쿠키 값")
+        self.ltoken_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ltmid_field = QLineEdit()
+        self.ltmid_field.setPlaceholderText("ltmid_v2 쿠키 값 (없으면 비워도 됨)")
+        self.ltmid_field.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("LTUID:", self.ltuid_field)
+        form.addRow("LTOKEN_V2:", self.ltoken_field)
+        form.addRow("LTMID_V2:", self.ltmid_field)
+        layout.addLayout(form)
+
+        self.show_tokens_checkbox = QCheckBox("토큰 값 표시")
+        self.show_tokens_checkbox.toggled.connect(self._toggle_token_visibility)
+        layout.addWidget(self.show_tokens_checkbox)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self._save_credentials)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._load_existing_credentials()
+
+    def _toggle_token_visibility(self, checked: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        self.ltoken_field.setEchoMode(mode)
+        self.ltmid_field.setEchoMode(mode)
+
+    def _load_existing_credentials(self) -> None:
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+
+            self._existing_credentials = HoYoLabConfig().load_credentials() or {}
+            if self._existing_credentials:
+                self.ltuid_field.setText(str(self._existing_credentials.get("ltuid", "")))
+                self.ltoken_field.setText(str(self._existing_credentials.get("ltoken_v2", "")))
+                self.ltmid_field.setText(str(self._existing_credentials.get("ltmid_v2", "")))
+                self.status_label.setText("저장된 HoYoLab 쿠키를 불러왔습니다.")
+                self.status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.status_label.setText("저장된 HoYoLab 쿠키가 없습니다.")
+                self.status_label.setStyleSheet("color: #ffcc00;")
+        except Exception as exc:
+            self.status_label.setText(f"⚠️ HoYoLab 쿠키 로드 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ffcc00;")
+
+    def _save_credentials(self) -> None:
+        ltuid_text = self.ltuid_field.text().strip()
+        ltoken = self.ltoken_field.text().strip()
+        ltmid = self.ltmid_field.text().strip()
+        if not ltuid_text or not ltoken:
+            self.status_label.setText("❌ LTUID와 LTOKEN_V2는 필수입니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+        try:
+            ltuid = int(ltuid_text)
+        except ValueError:
+            self.status_label.setText("❌ LTUID는 숫자여야 합니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+
+        try:
+            from src.utils.hoyolab_config import HoYoLabConfig
+            from src.services.hoyolab import reset_hoyolab_service
+
+            config = HoYoLabConfig()
+            if config.save_credentials(
+                ltuid,
+                ltoken,
+                ltmid,
+                starrail_uid=self._existing_credentials.get("starrail_uid"),
+                zzz_uid=self._existing_credentials.get("zzz_uid"),
+            ):
+                reset_hoyolab_service()
+                self.accept()
+            else:
+                self.status_label.setText("❌ HoYoLab 쿠키 저장에 실패했습니다.")
+                self.status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.status_label.setText(f"❌ HoYoLab 쿠키 저장 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ff6666;")
+
+
+class NikkeAdvancedSessionDialog(QDialog):
+    """BlablaLink 쿠키와 ShiftyPad 대표 계정 cache를 수동 확인/수정합니다."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("NIKKE / BlablaLink 고급 인증 정보")
+        self.setMinimumWidth(620)
+
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            "자동 추출이 실패했거나 저장된 BlablaLink 쿠키를 직접 수정해야 할 때만 사용하세요. "
+            "쿠키는 name=value 형식으로 한 줄씩 입력하거나, 세미콜론으로 구분된 Cookie header를 붙여넣을 수 있습니다."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        self.cookie_text = QTextEdit()
+        self.cookie_text.setPlaceholderText("session_id=...\napi_cookie=...")
+        self.cookie_text.setMinimumHeight(120)
+        self.open_id_field = QLineEdit()
+        self.open_id_field.setPlaceholderText("선택: ShiftyPad intl_open_id cache")
+        self.area_id_field = QLineEdit()
+        self.area_id_field.setPlaceholderText("선택: ShiftyPad 서버 area_id cache")
+        form.addRow("Cookies:", self.cookie_text)
+        form.addRow("intl_open_id:", self.open_id_field)
+        form.addRow("nikke_area_id:", self.area_id_field)
+        layout.addLayout(form)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self._save_session)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._load_existing_session()
+
+    def _load_existing_session(self) -> None:
+        try:
+            from src.utils.nikke_config import NikkeConfig
+
+            session = NikkeConfig().load_session() or {}
+            cookies = session.get("cookies") or {}
+            self.cookie_text.setPlainText("\n".join(f"{key}={value}" for key, value in sorted(cookies.items())))
+            if session.get("intl_open_id"):
+                self.open_id_field.setText(str(session.get("intl_open_id")))
+            if session.get("nikke_area_id") is not None:
+                self.area_id_field.setText(str(session.get("nikke_area_id")))
+            if cookies:
+                self.status_label.setText("저장된 BlablaLink 쿠키를 불러왔습니다.")
+                self.status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.status_label.setText("저장된 BlablaLink 쿠키가 없습니다.")
+                self.status_label.setStyleSheet("color: #ffcc00;")
+        except Exception as exc:
+            self.status_label.setText(f"⚠️ BlablaLink 쿠키 로드 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ffcc00;")
+
+    @staticmethod
+    def _parse_cookie_text(raw_text: str) -> dict[str, str]:
+        cookies: dict[str, str] = {}
+        for chunk in raw_text.replace(";", "\n").splitlines():
+            line = chunk.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key:
+                cookies[key] = value
+        return cookies
+
+    def _save_session(self) -> None:
+        cookies = self._parse_cookie_text(self.cookie_text.toPlainText())
+        if not cookies:
+            self.status_label.setText("❌ 저장할 BlablaLink 쿠키가 없습니다.")
+            self.status_label.setStyleSheet("color: #ff6666;")
+            return
+        area_id = self.area_id_field.text().strip() or None
+        open_id = self.open_id_field.text().strip() or None
+        try:
+            from src.utils.nikke_config import NikkeConfig
+            from src.services.nikke import reset_nikke_service
+
+            if NikkeConfig().save_session(cookies, intl_open_id=open_id, nikke_area_id=area_id):
+                reset_nikke_service()
+                self.accept()
+            else:
+                self.status_label.setText("❌ BlablaLink 쿠키 저장에 실패했습니다.")
+                self.status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.status_label.setText(f"❌ BlablaLink 쿠키 저장 실패: {exc}")
+            self.status_label.setStyleSheet("color: #ff6666;")
+
+
+class HoYoLabSettingsDialog(QDialog):
+    """자원 추적용 HoYoLab/BlablaLink 인증 정보 설정 다이얼로그."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("자원 추적 설정")
+        self.setMinimumWidth(500)
 
         layout = QVBoxLayout(self)
 
-        # 안내 문구
         info_label = QLabel(
-            "HoYoLab 게임 스태미나(개척력/배터리) 조회를 위해\n"
-            "HoYoLab 쿠키 정보가 필요합니다."
+            "게임 스태미나/리소스 자동 추적을 위해 HoYoLab 또는 BlablaLink 로그인 쿠키가 필요합니다.\n"
+            "일반적으로 브라우저 자동 추출을 사용하고, 직접 수정이 필요할 때만 고급 설정을 여세요."
         )
-
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
 
+        self._build_hoyolab_section(layout)
+        self._build_nikke_section(layout)
 
-        # 자동 추출 버튼
-        auto_group = QGroupBox("자동 추출")
-        auto_layout = QVBoxLayout()
+        status_group = QGroupBox("유효성 검사")
+        status_layout = QVBoxLayout(status_group)
+        self.check_cookies_btn = QPushButton("쿠키 유효성 검사")
+        self.check_cookies_btn.setToolTip("저장된 HoYoLab/BlablaLink 쿠키로 실제 읽기 전용 조회가 가능한지 확인합니다.")
+        self.cookie_check_status_label = QLabel("저장된 쿠키를 검사하려면 버튼을 누르세요.")
+        self.cookie_check_status_label.setWordWrap(True)
+        status_layout.addWidget(self.check_cookies_btn)
+        status_layout.addWidget(self.cookie_check_status_label)
+        layout.addWidget(status_group)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
+        self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
+        self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
+        self.extract_nikke_chrome_btn.clicked.connect(lambda: self._extract_nikke_cookies("chrome"))
+        self.extract_nikke_edge_btn.clicked.connect(lambda: self._extract_nikke_cookies("edge"))
+        self.extract_nikke_firefox_btn.clicked.connect(lambda: self._extract_nikke_cookies("firefox"))
+        self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
+        self.open_nikke_btn.clicked.connect(self._open_nikke)
+        self.hoyolab_advanced_btn.clicked.connect(self._open_hoyolab_advanced)
+        self.nikke_advanced_btn.clicked.connect(self._open_nikke_advanced)
+        self.clear_btn.clicked.connect(self._clear_credentials)
+        self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
+        self.check_cookies_btn.clicked.connect(self._check_cookie_availability)
+
+        self._update_status()
+        self._update_nikke_status()
+
+    def _build_hoyolab_section(self, root: QVBoxLayout) -> None:
+        auto_group = QGroupBox("HoYoLab")
+        auto_layout = QVBoxLayout(auto_group)
+
+        info = QLabel("스타레일/젠레스 존 제로 스태미나 조회를 위한 HoYoLab 쿠키를 관리합니다.")
+        info.setWordWrap(True)
+        auto_layout.addWidget(info)
 
         extract_btn_layout = QHBoxLayout()
         self.extract_chrome_btn = QPushButton("크롬에서 추출")
         self.extract_edge_btn = QPushButton("엣지에서 추출")
         self.extract_firefox_btn = QPushButton("파이어폭스에서 추출")
-
         extract_btn_layout.addWidget(self.extract_chrome_btn)
         extract_btn_layout.addWidget(self.extract_edge_btn)
         extract_btn_layout.addWidget(self.extract_firefox_btn)
         auto_layout.addLayout(extract_btn_layout)
 
-        # HoYoLab 로그인 버튼
-        login_btn_layout = QHBoxLayout()
-        self.open_hoyolab_btn = QPushButton("호요랩 로그인 열기")
-        self.show_guide_btn = QPushButton("📖 수동 추출 가이드")
-        login_btn_layout.addWidget(self.open_hoyolab_btn)
-        login_btn_layout.addWidget(self.show_guide_btn)
-        auto_layout.addLayout(login_btn_layout)
+        button_layout = QHBoxLayout()
+        self.open_hoyolab_btn = QPushButton("HoYoLab 로그인 열기")
+        self.hoyolab_advanced_btn = QPushButton("고급")
+        self.clear_btn = QPushButton("HoYoLab 인증 삭제")
+        self.clear_btn.setStyleSheet("color: #ff6666;")
+        button_layout.addWidget(self.open_hoyolab_btn)
+        button_layout.addWidget(self.hoyolab_advanced_btn)
+        button_layout.addWidget(self.clear_btn)
+        auto_layout.addLayout(button_layout)
 
         self.extract_status_label = QLabel("")
+        self.extract_status_label.setWordWrap(True)
         auto_layout.addWidget(self.extract_status_label)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        auto_layout.addWidget(self.status_label)
 
-        auto_group.setLayout(auto_layout)
-        layout.addWidget(auto_group)
+        root.addWidget(auto_group)
 
-        # 수동 입력
-        manual_group = QGroupBox("수동 입력 (고급)")
-        manual_layout = QFormLayout()
+    def _build_nikke_section(self, root: QVBoxLayout) -> None:
+        nikke_group = QGroupBox("NIKKE / BlablaLink")
+        nikke_layout = QVBoxLayout(nikke_group)
 
-        self.ltuid_edit = QLineEdit()
-        self.ltuid_edit.setPlaceholderText("숫자로 된 사용자 ID")
-        self.ltoken_edit = QLineEdit()
-        self.ltoken_edit.setPlaceholderText("ltoken_v2 쿠키 값")
-        self.ltmid_edit = QLineEdit()
-        self.ltmid_edit.setPlaceholderText("ltmid_v2 쿠키 값")
+        nikke_info = QLabel("ShiftyPad 전초기지 방어 보상 조회를 위한 BlablaLink 로그인 세션 쿠키를 관리합니다.")
+        nikke_info.setWordWrap(True)
+        nikke_layout.addWidget(nikke_info)
 
-        manual_layout.addRow("LTUID:", self.ltuid_edit)
-        manual_layout.addRow("LTOKEN_V2:", self.ltoken_edit)
-        manual_layout.addRow("LTMID_V2:", self.ltmid_edit)
+        nikke_extract_layout = QHBoxLayout()
+        self.extract_nikke_chrome_btn = QPushButton("크롬에서 추출")
+        self.extract_nikke_edge_btn = QPushButton("엣지에서 추출")
+        self.extract_nikke_firefox_btn = QPushButton("파이어폭스에서 추출")
+        nikke_extract_layout.addWidget(self.extract_nikke_chrome_btn)
+        nikke_extract_layout.addWidget(self.extract_nikke_edge_btn)
+        nikke_extract_layout.addWidget(self.extract_nikke_firefox_btn)
+        nikke_layout.addLayout(nikke_extract_layout)
 
-        manual_group.setLayout(manual_layout)
-        layout.addWidget(manual_group)
+        nikke_button_layout = QHBoxLayout()
+        self.open_nikke_btn = QPushButton("BlablaLink 열기")
+        self.nikke_advanced_btn = QPushButton("고급")
+        self.clear_nikke_btn = QPushButton("NIKKE 인증 삭제")
+        self.clear_nikke_btn.setStyleSheet("color: #ff6666;")
+        nikke_button_layout.addWidget(self.open_nikke_btn)
+        nikke_button_layout.addWidget(self.nikke_advanced_btn)
+        nikke_button_layout.addWidget(self.clear_nikke_btn)
+        nikke_layout.addLayout(nikke_button_layout)
 
-        # 상태 표시
-        self.status_label = QLabel()
-        self._update_status()
-        layout.addWidget(self.status_label)
+        self.nikke_status_label = QLabel("")
+        self.nikke_status_label.setWordWrap(True)
+        nikke_layout.addWidget(self.nikke_status_label)
 
-        # 버튼박스
-        button_layout = QHBoxLayout()
-        self.clear_btn = QPushButton("인증 정보 삭제")
-        self.clear_btn.setStyleSheet("color: #ff6666;")
-        button_layout.addWidget(self.clear_btn)
-        button_layout.addStretch()
-
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_layout.addWidget(self.button_box)
-        layout.addLayout(button_layout)
-
-        # 시그널 연결
-        self.extract_chrome_btn.clicked.connect(lambda: self._extract_cookies("chrome"))
-        self.extract_edge_btn.clicked.connect(lambda: self._extract_cookies("edge"))
-        self.extract_firefox_btn.clicked.connect(lambda: self._extract_cookies("firefox"))
-        self.open_hoyolab_btn.clicked.connect(self._open_hoyolab)
-        self.show_guide_btn.clicked.connect(self._show_manual_guide)
-        self.clear_btn.clicked.connect(self._clear_credentials)
-        self.button_box.accepted.connect(self._save_and_accept)
-        self.button_box.rejected.connect(self.reject)
-
-        # 기존 설정 로드
-        self._load_existing_credentials()
+        root.addWidget(nikke_group)
 
     def _update_status(self):
-        """현재 인증 상태 업데이트"""
+        """현재 HoYoLab 인증 상태 업데이트"""
         try:
             from src.utils.hoyolab_config import HoYoLabConfig
             config = HoYoLabConfig()
@@ -1371,61 +2241,169 @@ class HoYoLabSettingsDialog(QDialog):
                 self.status_label.setText("❌ HoYoLab 인증 정보가 없습니다.")
                 self.status_label.setStyleSheet("color: #ff6666;")
         except Exception as e:
-            self.status_label.setText(f"⚠️ 상태 확인 실패: {e}")
+            self.status_label.setText(f"⚠️ HoYoLab 상태 확인 실패: {e}")
             self.status_label.setStyleSheet("color: #ffcc00;")
 
-    def _load_existing_credentials(self):
-        """기존 저장된 인증 정보 로드"""
-        try:
-            from src.utils.hoyolab_config import HoYoLabConfig
-            config = HoYoLabConfig()
-            creds = config.load_credentials()
-            if creds:
-                self.ltuid_edit.setText(str(creds.get("ltuid", "")))
-                # 보안상 토큰은 마스킹
-                if creds.get("ltoken_v2"):
-                    self.ltoken_edit.setText("••••••••")
-                    self.ltoken_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
-                if creds.get("ltmid_v2"):
-                    self.ltmid_edit.setText("••••••••")
-                    self.ltmid_edit.setToolTip("저장된 토큰이 있습니다. 변경하려면 새 값을 입력하세요.")
-        except Exception:
-            pass
-
     def _extract_cookies(self, browser: str):
-        """브라우저에서 쿠키 자동 추출"""
+        """브라우저에서 HoYoLab 쿠키를 추출하고 즉시 저장합니다."""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            from src.utils.hoyolab_config import HoYoLabConfig
+            from src.services.hoyolab import reset_hoyolab_service
+
+            extractor = BrowserCookieExtractor()
+            if not extractor.is_available(browser):
+                self.extract_status_label.setText(
+                    f"❌ {browser} 쿠키 추출을 사용할 수 없습니다. Firefox 프로필 또는 Chrome/Edge 복호화 의존성을 확인하세요."
+                )
+                self.extract_status_label.setStyleSheet("color: #ff6666;")
+                return
+
+            self.extract_status_label.setText(f"{browser}에서 HoYoLab 쿠키 추출 중...")
+            self.extract_status_label.repaint()
+
+            cookies = extractor.extract_from_browser(browser, provider="hoyolab")
+            if cookies:
+                config = HoYoLabConfig()
+                ltmid = cookies.get("ltmid_v2", "")
+                if config.save_credentials(int(cookies.get("ltuid")), cookies.get("ltoken_v2", ""), ltmid):
+                    reset_hoyolab_service()
+                    self.extract_status_label.setText(f"✅ {browser}에서 HoYoLab 쿠키를 추출해 저장했습니다.")
+                    self.extract_status_label.setStyleSheet("color: #44cc44;")
+                    self._update_status()
+                else:
+                    self.extract_status_label.setText("❌ HoYoLab 쿠키 저장 실패")
+                    self.extract_status_label.setStyleSheet("color: #ff6666;")
+            else:
+                self.extract_status_label.setText(
+                    f"❌ {browser}에서 HoYoLab 쿠키를 찾을 수 없습니다. HoYoLab에 로그인한 후 다시 시도하세요."
+                )
+                self.extract_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.extract_status_label.setText(f"❌ HoYoLab 추출 실패: {e}")
+            self.extract_status_label.setStyleSheet("color: #ff6666;")
+
+    def _update_nikke_status(self):
+        """현재 NIKKE/BlablaLink 인증 상태 업데이트"""
+        try:
+            from src.utils.nikke_config import NikkeConfig
+
+            config = NikkeConfig()
+            if config.is_configured():
+                self.nikke_status_label.setText("✅ NIKKE/BlablaLink 인증 정보가 설정되어 있습니다.")
+                self.nikke_status_label.setStyleSheet("color: #44cc44;")
+            else:
+                self.nikke_status_label.setText("❌ NIKKE/BlablaLink 인증 정보가 없습니다.")
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.nikke_status_label.setText(f"⚠️ NIKKE 상태 확인 실패: {e}")
+            self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+
+    def _extract_nikke_cookies(self, browser: str):
+        """브라우저에서 BlablaLink 쿠키 자동 추출"""
+        try:
+            from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+            from src.utils.nikke_config import NikkeConfig
+            from src.services.nikke import NikkeService, reset_nikke_service
+
+            extractor = BrowserCookieExtractor()
+            if not extractor.is_available(browser):
+                self.nikke_status_label.setText(
+                    f"❌ {browser} 쿠키 추출을 사용할 수 없습니다. Firefox 프로필 또는 Chrome/Edge 복호화 의존성을 확인하세요."
+                )
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+                return
+
+            self.nikke_status_label.setText(f"{browser}에서 BlablaLink 쿠키 추출 중...")
+            self.nikke_status_label.repaint()
+
+            extracted = extractor.extract_from_browser(browser, provider="nikke_blablalink")
+            cookies = (extracted or {}).get("cookies") if isinstance(extracted, dict) else None
+            if cookies:
+                config = NikkeConfig()
+                if config.save_session(cookies):
+                    reset_nikke_service()
+                    self.nikke_status_label.setText("BlablaLink 쿠키 저장 완료. ShiftyPad 대표 계정/서버 정보 확인 중...")
+                    self.nikke_status_label.repaint()
+
+                    role = NikkeService(config=config).get_role_info(refresh=True)
+                    reset_nikke_service()
+                    if role:
+                        self.nikke_status_label.setText(
+                            f"✅ {browser}에서 BlablaLink 쿠키와 ShiftyPad 대표 계정 정보를 확인했습니다. "
+                            f"서버={role.nikke_area_id}, open_id={self._mask_identifier(role.intl_open_id)}"
+                        )
+                        self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                    else:
+                        self.nikke_status_label.setText(
+                            f"⚠️ {browser}에서 BlablaLink 쿠키는 저장했지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다.\n"
+                            "BlablaLink에서 ShiftyPad를 열어 대표 계정이 보이는지 확인한 뒤 다시 추출하세요."
+                        )
+                        self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+                else:
+                    self.nikke_status_label.setText("❌ BlablaLink 쿠키 저장 실패")
+                    self.nikke_status_label.setStyleSheet("color: #ff6666;")
+            else:
+                self.nikke_status_label.setText(
+                    f"❌ {browser}에서 BlablaLink 쿠키를 찾을 수 없습니다. BlablaLink/ShiftyPad에 로그인한 후 다시 시도하세요."
+                )
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as e:
+            self.nikke_status_label.setText(f"❌ NIKKE 추출 실패: {e}")
+            self.nikke_status_label.setStyleSheet("color: #ff6666;")
+
+    @staticmethod
+    def _mask_identifier(value: str) -> str:
+        text = str(value or "")
+        if len(text) <= 4:
+            return "••••"
+        return f"{text[:2]}•••{text[-2:]}"
+
+    def _open_hoyolab_advanced(self) -> None:
+        dialog = HoYoLabAdvancedCredentialsDialog(self)
+        if dialog.exec():
+            self._update_status()
+            self.extract_status_label.setText("✅ HoYoLab 고급 인증 정보가 저장되었습니다.")
+            self.extract_status_label.setStyleSheet("color: #44cc44;")
+
+    def _open_nikke_advanced(self) -> None:
+        dialog = NikkeAdvancedSessionDialog(self)
+        if dialog.exec():
+            self._update_nikke_status()
+            self.nikke_status_label.setText("✅ NIKKE/BlablaLink 고급 인증 정보가 저장되었습니다.")
+            self.nikke_status_label.setStyleSheet("color: #44cc44;")
+
+    def _open_nikke(self):
+        """BlablaLink 로그인 웹사이트 열기"""
         try:
             from src.utils.browser_cookie_extractor import BrowserCookieExtractor
 
-            extractor = BrowserCookieExtractor()
-            if not extractor.is_available():
-                QMessageBox.warning(
-                    self, "라이브러리 없음",
-                    "쿠키 추출을 위한 라이브러리(pywin32, pycryptodome)가 설치되지 않았습니다."
-                )
-                return
+            BrowserCookieExtractor().open_nikke_login()
+            self.nikke_status_label.setText("브라우저에서 BlablaLink에 로그인한 후 쿠키를 추출하세요.")
+        except Exception:
+            import webbrowser
 
-            self.extract_status_label.setText(f"{browser}에서 쿠키 추출 중...")
-            self.extract_status_label.repaint()
+            webbrowser.open("https://www.blablalink.com/login")
 
-            cookies = extractor.extract_from_browser(browser)
+    def _clear_nikke_credentials(self):
+        """저장된 NIKKE/BlablaLink 인증 정보 삭제"""
+        reply = QMessageBox.question(
+            self, "NIKKE 인증 정보 삭제",
+            "저장된 NIKKE/BlablaLink 인증 정보를 삭제하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                from src.utils.nikke_config import NikkeConfig
+                from src.services.nikke import reset_nikke_service
 
-            if cookies:
-                self.ltuid_edit.setText(str(cookies.get("ltuid", "")))
-                self.ltoken_edit.setText(cookies.get("ltoken_v2", ""))
-                self.ltmid_edit.setText(cookies.get("ltmid_v2", ""))
-                self.extract_status_label.setText(f"✅ {browser}에서 쿠키 추출 성공!")
-                self.extract_status_label.setStyleSheet("color: #44cc44;")
-            else:
-                self.extract_status_label.setText(
-                    f"❌ {browser}에서 HoYoLab 쿠키를 찾을 수 없습니다.\n"
-                    "HoYoLab에 로그인한 후 다시 시도하세요."
-                )
-                self.extract_status_label.setStyleSheet("color: #ff6666;")
-
-        except Exception as e:
-            self.extract_status_label.setText(f"❌ 추출 실패: {e}")
-            self.extract_status_label.setStyleSheet("color: #ff6666;")
+                NikkeConfig().clear_session()
+                reset_nikke_service()
+                self._update_nikke_status()
+                self.cookie_check_status_label.setText("NIKKE/BlablaLink 인증 정보가 삭제되었습니다.")
+            except Exception as e:
+                QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
 
     def _open_hoyolab(self):
         """HoYoLab 웹사이트 열기"""
@@ -1434,55 +2412,14 @@ class HoYoLabSettingsDialog(QDialog):
             extractor = BrowserCookieExtractor()
             extractor.open_hoyolab_login()
             self.extract_status_label.setText("브라우저에서 HoYoLab에 로그인한 후 쿠키를 추출하세요.")
-        except Exception as e:
+        except Exception:
             import webbrowser
             webbrowser.open("https://www.hoyolab.com/home")
 
-    def _show_manual_guide(self):
-        """수동 쿠키 추출 가이드 표시"""
-        guide_text = """<h3>수동 쿠키 추출 가이드</h3>
-
-<p>자동 추출이 실패할 경우 아래 방법으로 직접 쿠키를 추출할 수 있습니다.</p>
-
-<h4>1. HoYoLab 로그인</h4>
-<ol>
-<li><a href="https://www.hoyolab.com">www.hoyolab.com</a>에 접속하여 로그인합니다.</li>
-</ol>
-
-<h4>2. 개발자 도구 열기</h4>
-<ol>
-<li>F12 키를 눌러 개발자 도구를 엽니다.</li>
-<li><b>Application</b> 탭 (또는 Storage 탭)을 클릭합니다.</li>
-<li>좌측 메뉴에서 <b>Cookies → www.hoyolab.com</b>을 선택합니다.</li>
-</ol>
-
-<h4>3. 쿠키 값 복사</h4>
-<p>아래 3개의 쿠키를 찾아 값을 복사하세요:</p>
-<ul>
-<li><b>ltuid_v2</b> (또는 ltuid) → LTUID 필드에 입력</li>
-<li><b>ltoken_v2</b> (또는 ltoken) → LTOKEN_V2 필드에 입력</li>
-<li><b>ltmid_v2</b> (또는 ltmid) → LTMID_V2 필드에 입력</li>
-</ul>
-
-<h4>⚠️ 주의사항</h4>
-<ul>
-<li>쿠키 값은 절대 다른 사람과 공유하지 마세요!</li>
-<li>쿠키가 유출되면 계정 보안이 위험해집니다.</li>
-<li>이 앱은 쿠키를 로컬에만 저장하며 외부 서버로 전송하지 않습니다.</li>
-</ul>
-"""
-        msg = QMessageBox(self)
-        msg.setWindowTitle("수동 쿠키 추출 가이드")
-        msg.setTextFormat(Qt.TextFormat.RichText)
-        msg.setText(guide_text)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.exec()
-
-
     def _clear_credentials(self):
-        """저장된 인증 정보 삭제"""
+        """저장된 HoYoLab 인증 정보 삭제"""
         reply = QMessageBox.question(
-            self, "인증 정보 삭제",
+            self, "HoYoLab 인증 정보 삭제",
             "저장된 HoYoLab 인증 정보를 삭제하시겠습니까?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -1490,53 +2427,76 @@ class HoYoLabSettingsDialog(QDialog):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 from src.utils.hoyolab_config import HoYoLabConfig
-                config = HoYoLabConfig()
-                config.clear_credentials()
+                from src.services.hoyolab import reset_hoyolab_service
 
-                self.ltuid_edit.clear()
-                self.ltoken_edit.clear()
-                self.ltmid_edit.clear()
+                HoYoLabConfig().clear_credentials()
+                reset_hoyolab_service()
                 self._update_status()
-
-                QMessageBox.information(self, "완료", "인증 정보가 삭제되었습니다.")
+                self.cookie_check_status_label.setText("HoYoLab 인증 정보가 삭제되었습니다.")
             except Exception as e:
                 QMessageBox.warning(self, "오류", f"삭제 실패: {e}")
 
-    def _save_and_accept(self):
-        """인증 정보 저장"""
-        ltuid_str = self.ltuid_edit.text().strip()
-        ltoken = self.ltoken_edit.text().strip()
-        ltmid = self.ltmid_edit.text().strip()
-
-        # 마스킹된 값인지 확인 (변경 안 한 경우)
-        if ltoken == "••••••••" or ltmid == "••••••••":
-            self.accept()  # 변경 없이 닫기
-            return
-
-        if not ltuid_str or not ltoken or not ltmid:
-            QMessageBox.warning(
-                self, "입력 오류",
-                "모든 필드를 입력하거나 자동 추출을 사용하세요."
-            )
-            return
-
+    def _check_cookie_availability(self) -> None:
+        self.check_cookies_btn.setEnabled(False)
+        self.cookie_check_status_label.setText("HoYoLab/BlablaLink 쿠키 유효성 검사 중...")
+        self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
+        QApplication.processEvents()
         try:
-            ltuid = int(ltuid_str)
-        except ValueError:
-            QMessageBox.warning(self, "입력 오류", "LTUID는 숫자여야 합니다.")
-            return
-
-        try:
-            from src.utils.hoyolab_config import HoYoLabConfig
-            from src.services.hoyolab import reset_hoyolab_service
-
-            config = HoYoLabConfig()
-            if config.save_credentials(ltuid, ltoken, ltmid):
-                reset_hoyolab_service()  # 서비스 인스턴스 리셋
-                QMessageBox.information(self, "저장 완료", "HoYoLab 인증 정보가 저장되었습니다.")
-                self.accept()
+            lines = [self._check_hoyolab_availability(), self._check_nikke_availability()]
+            self.cookie_check_status_label.setText("\n".join(lines))
+            if all(line.startswith("✅") for line in lines):
+                self.cookie_check_status_label.setStyleSheet("color: #44cc44;")
+            elif any(line.startswith("✅") for line in lines):
+                self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
             else:
-                QMessageBox.warning(self, "저장 실패", "인증 정보 저장에 실패했습니다.")
+                self.cookie_check_status_label.setStyleSheet("color: #ff6666;")
+        finally:
+            self.check_cookies_btn.setEnabled(True)
 
-        except Exception as e:
-            QMessageBox.warning(self, "오류", f"저장 실패: {e}")
+    def _check_hoyolab_availability(self) -> str:
+        try:
+            from src.services.hoyolab import HoYoLabService
+            from src.utils.hoyolab_config import HoYoLabConfig
+
+            if not HoYoLabConfig().is_configured():
+                return "❌ HoYoLab: 저장된 쿠키가 없습니다."
+            service = HoYoLabService()
+            try:
+                if not service.is_available():
+                    return "❌ HoYoLab: genshin.py 라이브러리를 사용할 수 없습니다."
+                starrail = service.get_stamina("honkai_starrail")
+                zzz = service.get_stamina("zenless_zone_zero")
+                results = []
+                if starrail:
+                    results.append(f"스타레일 {starrail.current}/{starrail.max}")
+                if zzz:
+                    results.append(f"젠레스 존 제로 {zzz.current}/{zzz.max}")
+                if results:
+                    return "✅ HoYoLab: " + ", ".join(results)
+                return "⚠️ HoYoLab: 쿠키는 저장되어 있지만 스태미나 조회에 실패했습니다."
+            finally:
+                service.close()
+        except Exception as exc:
+            return f"❌ HoYoLab: 검사 실패 - {exc}"
+
+    def _check_nikke_availability(self) -> str:
+        try:
+            from src.services.nikke import NikkeService, NIKKE_OUTPOST_LABEL
+            from src.utils.nikke_config import NikkeConfig
+
+            config = NikkeConfig()
+            if not config.is_configured():
+                return "❌ BlablaLink: 저장된 쿠키가 없습니다."
+            service = NikkeService(config=config)
+            ok, message = service.check_login()
+            if not ok:
+                return f"❌ BlablaLink: 로그인 세션 확인 실패 ({message})"
+            role = service.get_role_info(refresh=True)
+            if not role:
+                return "⚠️ BlablaLink: 로그인은 유효하지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다."
+            snapshot = service.get_outpost_storage()
+            if snapshot.status == "ok" and snapshot.percent is not None:
+                return f"✅ BlablaLink: {NIKKE_OUTPOST_LABEL} {snapshot.percent:.1f}% (서버={role.nikke_area_id})"
+            return f"⚠️ BlablaLink: 대표 계정 확인됨, 리소스 조회 실패 ({snapshot.status})"
+        except Exception as exc:
+            return f"❌ BlablaLink: 검사 실패 - {exc}"

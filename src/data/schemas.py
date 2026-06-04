@@ -20,6 +20,14 @@ class ProcessSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 범용 외부 리소스 필드
+    resource_tracking_enabled: bool = False
+    resource_provider: Optional[str] = None
+    resource_key: Optional[str] = None
+    resource_label: Optional[str] = None
+    resource_percent: Optional[float] = None
+    resource_updated_at: Optional[float] = None
+    resource_status: Optional[str] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False
@@ -46,6 +54,14 @@ class ProcessCreateSchema(BaseModel):
     stamina_current: Optional[int] = None
     stamina_max: Optional[int] = None
     stamina_updated_at: Optional[float] = None
+    # 범용 외부 리소스 필드
+    resource_tracking_enabled: bool = False
+    resource_provider: Optional[str] = None
+    resource_key: Optional[str] = None
+    resource_label: Optional[str] = None
+    resource_percent: Optional[float] = None
+    resource_updated_at: Optional[float] = None
+    resource_status: Optional[str] = None
     # 앱 볼륨 제어
     default_volume: Optional[int] = None
     default_muted: bool = False
@@ -117,6 +133,8 @@ class GlobalSettingsSchema(BaseModel):
     obs_watch_output_dir: bool = True
     obs_recording_output_dir: str = ""
     recording_hold_threshold_ms: int = 800
+    # Remote server mode
+    remote_server_mode_enabled: bool = False
 
 
 class ProcessSessionCreate(BaseModel):
@@ -135,6 +153,7 @@ class ProcessSessionUpdate(BaseModel):
     end_timestamp: float
     session_duration: float
     stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
+    resource_percent_at_end: Optional[float] = None  # 종료 시점 외부 리소스 백분율
     close_reason: Optional[str] = None
 
 
@@ -148,12 +167,53 @@ class ProcessSessionSchema(BaseModel):
     session_duration: Optional[float] = None
     user_preset_id: Optional[str] = None  # 사용자 설정 프리셋 ID
     stamina_at_end: Optional[int] = None  # 종료 시점 스태미나
+    resource_percent_at_end: Optional[float] = None  # 종료 시점 외부 리소스 백분율
     session_status: Optional[str] = None
     session_owner: Optional[str] = None
     heartbeat_timestamp: Optional[float] = None
     lease_token: Optional[str] = None
     close_reason: Optional[str] = None
     guard_flags: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+class GamePlatformLinkBase(BaseModel):
+    pc_process_id: str
+    pc_display_name: Optional[str] = None
+    android_package_name: str
+    android_launch_intent_uri: Optional[str] = None
+    android_store_url: Optional[str] = None
+    platform_account_hint: Optional[str] = None
+    hoyolab_game_id: Optional[str] = None
+    sync_strategy: str = "manual"
+
+
+class GamePlatformLinkCreate(GamePlatformLinkBase):
+    id: Optional[str] = None
+
+
+class GamePlatformLinkSchema(GamePlatformLinkBase):
+    id: str
+    created_at: float
+    updated_at: float
+
+    class Config:
+        from_attributes = True
+
+class MobileGameSessionSchema(BaseModel):
+    id: str
+    game_link_id: str
+    pc_process_id: str
+    pc_display_name: Optional[str] = None
+    android_package_name: str
+    source: str = "manual"
+    status: str = "active"
+    started_at: float
+    ended_at: Optional[float] = None
+    duration_seconds: Optional[float] = None
+    created_at: float
+    updated_at: float
 
     class Config:
         from_attributes = True

@@ -1,157 +1,121 @@
 # 빌드 가이드
 
-## 📦 자동 빌드 스크립트 사용법
+`build.py`는 현재 OS에 맞는 배포 타깃을 자동 선택하는 단일 빌드 진입점이다.
 
-### 1. 사전 준비
+- Windows: `windows-host` — PyInstaller onedir, Portable ZIP, Inno Setup installer
+- macOS: `macos-client` — Swift release build, `.app` bundle, `.pkg` installer
 
-PyInstaller 설치:
-```bash
-pip install pyinstaller
+## 버전 source of truth
+
+`build.version.json`이 추적되는 버전 기준 파일이다.
+
+```json
+{
+  "schema": 1,
+  "targets": {
+    "windows-host": {"version": "1.2.0", "build": 1},
+    "macos-client": {"version": "0.2.0", "build": 1}
+  }
+}
 ```
 
-### 2. 빌드 실행
+릴리스 ID 형식은 다음과 같다.
 
-프로젝트 루트에서 다음 명령 실행:
+```text
+v{semver}_b{build}_g{git-hash}[_dirty]
+```
+
+예시:
+
+```text
+HomeworkHelper_v1.2.0_b2_gabc1234_Setup.exe
+HomeworkHelper_v1.2.0_b2_gabc1234_Portable.zip
+HomeworkHelperRemote_v0.2.0_b2_gabc1234.pkg
+```
+
+## 기본 실행
+
 ```bash
+# 현재 OS 기준 타깃 자동 선택, GUI 버전 확인 사용
 python build.py
+
+# 콘솔/CI 환경
+python build.py --no-gui
+
+# 타깃 강제 지정
+python build.py --target windows-host --no-gui
+python build.py --target macos-client --no-gui
 ```
 
-### 3. 빌드 프로세스
+## 버전 증가 정책
 
-스크립트는 다음 단계를 자동으로 수행합니다:
+빌드 시작 시 후보 버전을 만들고, 실제 빌드 산출물이 생성된 경우에만 `build.version.json`에 저장한다. 실패한 빌드는 버전 파일을 갱신하지 않는다.
 
-```
-1. [준비 단계]
-   - release/ 폴더 생성 (없으면)
-   - 기존 homework_helper.exe 백업 (타임스탬프로 자동 이름 변경)
-
-2. [빌드 산출물 정리]
-   - build/ 폴더 삭제 (이전 빌드 캐시)
-   - dist/ 폴더 삭제 (이전 산출물)
-
-3. [PyInstaller 빌드]
-   - 단일 실행파일(.exe) 생성
-   - 리소스 파일 포함 (font/, img/)
-   - 필요한 모듈 자동 포함
-
-4. [최종 파일 복사]
-   - dist/homework_helper.exe → release/homework_helper.exe
-
-5. [정리]
-   - build/, dist/ 폴더 자동 삭제
+```bash
+python build.py --bump build   # 기본값: 같은 semver에서 build +1
+python build.py --bump patch   # patch +1, build=1
+python build.py --bump minor   # minor +1, patch=0, build=1
+python build.py --bump major   # major +1, minor=0, patch=0, build=1
+python build.py --bump none    # 현재 파일 값을 그대로 사용
 ```
 
-### 4. 빌드 결과
+GUI 빌드에서는 후보 버전을 한 번 더 확인하고 방향키로 semver를 조정할 수 있다. 동일 semver의 build 번호는 자동으로 계산한다.
 
-**최종 실행파일 경로:**
-```
-release/homework_helper.exe
-```
+## Archive 관리
 
-**이전 버전 백업 (예시):**
-```
-release/homework_helper_25-01-15-143022.exe  (2025-01-15 14:30:22에 생성된 버전)
-release/homework_helper_25-01-14-091545.exe  (2025-01-14 09:15:45에 생성된 버전)
+빌드 시작 시 `release/` 루트의 기존 배포 산출물은 아래 구조로 이동한다.
+
+```text
+release/archives/{target}/{artifact_type}/{YY-MM-DD}/{artifact}
 ```
 
-### 5. 출력 예시
+기본 pruning 정책:
 
-```
-============================================================
-  숙제 관리자 빌드 스크립트
-============================================================
-프로젝트 경로: C:\vscode\project\HomeworkHelperServer
-빌드 대상: homework_helper.pyw
+- target/type별 최신 10개 보존
+- 90일 초과 산출물 삭제
 
-============================================================
-  준비 단계
-============================================================
-[OK] release 폴더 확인
-[OK] 이전 버전 백업: homework_helper_25-01-15-143022.exe
+옵션:
 
-============================================================
-  빌드 산출물 정리
-============================================================
-[OK] 삭제: build/
-[OK] 삭제: dist/
-
-============================================================
-  PyInstaller 빌드 시작
-============================================================
-빌드 명령:
-python -m PyInstaller --name homework_helper --windowed --onefile ...
-
-... (PyInstaller 출력) ...
-
-[OK] 빌드 성공!
-
-============================================================
-  최종 실행파일 복사
-============================================================
-[OK] 복사 완료: homework_helper.exe -> release/
-  파일 크기: 45.32 MB
-
-============================================================
-  빌드 산출물 정리
-============================================================
-[OK] 삭제: build/
-[OK] 삭제: dist/
-
-============================================================
-  빌드 완료!
-============================================================
-[OK] 실행파일 경로: C:\vscode\project\HomeworkHelperServer\release\homework_helper.exe
-[OK] 이전 버전들: C:\vscode\project\HomeworkHelperServer\release/ 폴더 참조
-
-============================================================
+```bash
+python build.py --archive-keep 20 --archive-days 180
+python build.py --no-prune-archives
 ```
 
-## 🔧 빌드 설정 수정
+## 선택적 GitHub Release 게시
 
-`build.py` 파일 상단의 설정 섹션에서 변경 가능:
+`--publish-release`는 기본 비활성화이다. 활성화해도 조건이 맞지 않으면 빌드 실패로 처리하지 않고 게시만 건너뛴다.
 
-```python
-# ==================== 설정 ====================
-# 빌드 대상
-MAIN_SCRIPT = "homework_helper.pyw"
-APP_NAME = "homework_helper"
+필요 조건:
 
-# 포함할 리소스
-DATAS = [
-    ("font", "font"),
-    ("img", "img"),
-]
+- `gh` CLI 사용 가능
+- 작업 트리가 깨끗함
+- 현재 릴리스 ID를 포함한 산출물이 존재함
 
-# Hidden imports
-HIDDEN_IMPORTS = [
-    "uvicorn",
-    "fastapi",
-    # ... 추가 모듈
-]
-# ================================================
+태그 형식:
+
+```text
+hh-{target}-v{semver}-b{build}
 ```
 
-## 📝 주의사항
+예시:
 
-1. **PyInstaller 버전**: Python 3.13과 호환되는 최신 버전 사용 권장
-2. **리소스 파일**: `font/`, `img/` 폴더가 프로젝트 루트에 존재해야 함
-3. **의존성**: `requirements.txt`의 모든 패키지가 설치되어 있어야 함
-4. **관리자 권한**: 빌드 시 관리자 권한 불필요
+```bash
+python build.py --no-gui --publish-release
+```
 
-## 🐛 문제 해결
+## Windows 인스톨러 종료 정책
 
-### "ModuleNotFoundError" 발생 시
-`build.py`의 `HIDDEN_IMPORTS` 리스트에 누락된 모듈 추가
+인스톨러는 업데이트 전 `homework_helper.exe`만 종료 대상으로 삼는다.
 
-### 빌드는 되지만 실행 안 됨
-1. `--onefile` 대신 `--onedir` 모드로 테스트 (build.py 111라인 수정)
-2. 콘솔 창 표시: `--windowed` 제거 (디버깅용)
+1. 먼저 강제 종료 없이 `taskkill /IM homework_helper.exe`로 정상 종료를 요청한다.
+2. 일정 시간 후에도 남아 있으면 사용자 확인을 받아 `taskkill /F /IM homework_helper.exe`를 fallback으로 사용한다.
+3. OBS(`obs.exe`, `obs64.exe`)는 종료하지 않는다.
 
-### 파일 크기가 너무 큼
-- `--onedir` 모드 사용 고려
-- `--exclude-module` 옵션으로 불필요한 모듈 제외
+## 검증
 
-## 📚 참고 자료
+빌드 로직 변경 후 최소 검증:
 
-- [PyInstaller 공식 문서](https://pyinstaller.org/)
-- [PyInstaller 옵션 설명](https://pyinstaller.org/en/stable/usage.html)
+```bash
+./.venv/bin/python -m py_compile build.py
+./.venv/bin/python -m pytest tests/test_build_release.py -q
+```

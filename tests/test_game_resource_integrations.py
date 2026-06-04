@@ -1,0 +1,516 @@
+import json
+import sqlite3
+import time
+import datetime as dt
+from pathlib import Path
+
+import pytest
+
+from src.core.process_progress import calculate_process_progress
+from src.data.data_models import ManagedProcess
+from src.utils.game_preset_manager import GamePresetManager
+from src.utils.icon_helper import resolve_preset_icon_path
+from src.services.nikke import NikkeService
+from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+
+
+def _create_firefox_cookie_db(path: Path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE moz_cookies (
+                host TEXT,
+                name TEXT,
+                value TEXT,
+                path TEXT,
+                expiry INTEGER,
+                lastAccessed INTEGER,
+                creationTime INTEGER
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO moz_cookies VALUES (?, ?, ?, '/', ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+
+
+def test_firefox_hoyolab_cookie_extraction_accepts_missing_ltmid(monkeypatch, tmp_path):
+    appdata = tmp_path / "AppData" / "Roaming"
+    firefox_root = appdata / "Mozilla" / "Firefox"
+    profile = firefox_root / "Profiles" / "abc.default-release"
+    (firefox_root / "profiles.ini").parent.mkdir(parents=True, exist_ok=True)
+    (firefox_root / "profiles.ini").write_text(
+        "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/abc.default-release\nDefault=1\n",
+        encoding="utf-8",
+    )
+    future = int(time.time()) + 86400
+    _create_firefox_cookie_db(
+        profile / "cookies.sqlite",
+        [
+            (".hoyolab.com", "ltuid_v2", "12345", future, 10, 1),
+            (".hoyolab.com", "ltoken_v2", "token-value", future, 11, 1),
+        ],
+    )
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    extracted = BrowserCookieExtractor().extract_from_browser("firefox", provider="hoyolab")
+
+    assert extracted is not None
+    assert extracted["ltuid"] == 12345
+    assert extracted["ltoken_v2"] == "token-value"
+    assert "ltmid_v2" not in extracted
+
+
+def test_firefox_nikke_cookie_extraction_keeps_all_blabla_cookies(monkeypatch, tmp_path):
+    appdata = tmp_path / "AppData" / "Roaming"
+    firefox_root = appdata / "Mozilla" / "Firefox"
+    profile = firefox_root / "Profiles" / "abc.default-release"
+    (firefox_root / "profiles.ini").parent.mkdir(parents=True, exist_ok=True)
+    (firefox_root / "profiles.ini").write_text(
+        "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/abc.default-release\nDefault=1\n",
+        encoding="utf-8",
+    )
+    future = int(time.time()) + 86400
+    _create_firefox_cookie_db(
+        profile / "cookies.sqlite",
+        [
+            (".blablalink.com", "session_id", "abc", future, 10, 1),
+            ("api.blablalink.com", "api_cookie", "def", future, 11, 1),
+        ],
+    )
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    extracted = BrowserCookieExtractor().extract_from_browser("firefox", provider="nikke_blablalink")
+
+    assert extracted is not None
+    assert extracted["cookies"] == {"api_cookie": "def", "session_id": "abc"}
+    assert "api_cookie=def" in extracted["cookie_header"]
+    assert "session_id=abc" in extracted["cookie_header"]
+
+
+def test_nikke_login_button_uses_blabla_login(monkeypatch):
+    opened = []
+
+    monkeypatch.setattr("src.utils.browser_cookie_extractor.webbrowser.open", lambda url: opened.append(url))
+
+    BrowserCookieExtractor().open_nikke_login()
+
+    assert opened == ["https://www.blablalink.com/login"]
+
+
+def test_nikke_factory_preset_enables_resource_tracking():
+    data = json.loads(Path("src/data/game_presets.json").read_text(encoding="utf-8"))
+    nikke = next(preset for preset in data["presets"] if preset["id"] == "nikke")
+
+    assert data["version"] == 4
+    assert nikke["is_hoyoverse"] is False
+    assert nikke["hoyolab_game_id"] is None
+    assert nikke["icon_path"] == "nikke_stamina.png"
+    assert nikke["icon_type"] == "system"
+    assert nikke["resource_tracking_enabled"] is True
+    assert nikke["resource_provider"] == "nikke_blablalink"
+    assert nikke["resource_key"] == "nikke_outpost_storage"
+    assert nikke["resource_label"] == "전초기지 방어 보상"
+    assert resolve_preset_icon_path("nikke_stamina.png", "system")
+
+
+def test_game_preset_schema_migrates_legacy_nikke_to_resource_mode(monkeypatch, tmp_path):
+    preset_path = tmp_path / "game_presets_user.json"
+    preset_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "presets": [
+                    {
+                        "id": "nikke",
+                        "display_name": "승리의 여신: 니케",
+                        "exe_patterns": ["nikke.exe"],
+                        "is_hoyoverse": False,
+                        "hoyolab_game_id": None,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(GamePresetManager, "USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(GamePresetManager, "USER_PRESET_FILE", preset_path)
+
+    manager = GamePresetManager()
+    nikke = manager.get_preset_by_id("nikke")
+    saved = json.loads(preset_path.read_text(encoding="utf-8"))
+
+    assert saved["version"] == GamePresetManager.CURRENT_SCHEMA_VERSION
+    assert nikke["resource_tracking_enabled"] is True
+    assert nikke["resource_provider"] == "nikke_blablalink"
+    assert nikke["resource_key"] == "nikke_outpost_storage"
+    assert nikke["resource_label"] == "전초기지 방어 보상"
+    assert nikke["icon_path"] == "nikke_stamina.png"
+    assert nikke["icon_type"] == "system"
+
+
+def test_resource_label_is_part_of_runtime_persistence_stream():
+    crud_source = Path("src/data/crud.py").read_text(encoding="utf-8")
+    api_client_source = Path("src/api/client.py").read_text(encoding="utf-8")
+    entrypoint_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+
+    assert '"resource_label": resource_label' in crud_source
+    assert '{"resource_percent", "resource_updated_at", "resource_status", "resource_label"}' in crud_source
+    assert '"resource_label": getattr(updated_process, "resource_label", None)' in api_client_source
+    assert "resource_label: str | None = None" in entrypoint_source
+
+
+class _FakeNikkeConfig:
+    def __init__(self, payload):
+        self.payload = payload
+        self.updated_role = None
+
+    def is_configured(self):
+        return bool(self.payload)
+
+    def load_session(self):
+        return self.payload
+
+    def update_role(self, *, intl_open_id, nikke_area_id):
+        self.updated_role = (intl_open_id, nikke_area_id)
+        return True
+
+
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+def test_nikke_outpost_storage_parses_shiftypad_daily_progress(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}, "intl_open_id": "open-1", "nikke_area_id": 1})
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse({"code": 0, "data": {"daily_progress": [{"outpost_battle_storage_fullness": 0.055}]}})
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+
+    snapshot = NikkeService(config=config).get_outpost_storage()
+
+    assert snapshot.status == "ok"
+    assert snapshot.percent == 5.5
+    assert calls[0][1]["json"] == {"intl_open_id": "open-1", "nikke_area_id": 1}
+
+
+def test_nikke_outpost_storage_marks_auth_expired(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}, "intl_open_id": "open-1", "nikke_area_id": 1})
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse({"code": 300001, "msg": "game not login"})
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+
+    snapshot = NikkeService(config=config).get_outpost_storage()
+
+    assert snapshot.status == "auth_expired"
+    assert snapshot.percent is None
+
+
+def test_nikke_role_discovery_combines_user_info_and_saved_role(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    post_calls = []
+    get_calls = []
+
+    def fake_post(url, **kwargs):
+        post_calls.append((url, kwargs))
+        if url.endswith("user/CheckLogin"):
+            return _FakeResponse({"code": 0, "msg": "ok"})
+        if url.endswith("ugc/proxy/standalonesite/User/GetUserInfoNew"):
+            return _FakeResponse({"code": 0, "data": {"info": {"intl_openid": "global-open-42"}}})
+        raise AssertionError(f"unexpected POST: {url}")
+
+    def fake_get(url, **kwargs):
+        get_calls.append((url, kwargs))
+        if url.endswith("game/proxy/Game/GetSavedRoleInfo"):
+            return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": "1", "role_id": "10105414"}}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    role = NikkeService(config=config).get_role_info(refresh=True)
+
+    assert role is not None
+    assert role.intl_open_id == "42"
+    assert role.nikke_area_id == 1
+    assert config.updated_role == ("42", 1)
+    assert any(url.endswith("game/proxy/Game/GetSavedRoleInfo") for url, _kwargs in get_calls)
+    assert all(not url.endswith("game/proxy/Game/GetSavedRoleInfo") for url, _kwargs in post_calls)
+
+
+def test_nikke_outpost_storage_discovers_role_before_daily_progress(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    daily_payloads = []
+
+    def fake_post(url, **kwargs):
+        if url.endswith("user/CheckLogin"):
+            return _FakeResponse({"code": 0, "msg": "ok"})
+        if url.endswith("ugc/proxy/standalonesite/User/GetUserInfoNew"):
+            return _FakeResponse({"code": 0, "data": {"info": {"intl_openid": "nikke-open-1"}}})
+        if url.endswith("game/proxy/Game/GetUserDailyContentsProgress"):
+            daily_payloads.append(kwargs["json"])
+            return _FakeResponse({"code": 0, "data": {"daily_progress": [{"outpost_battle_storage_fullness": 0.055}]}})
+        raise AssertionError(f"unexpected POST: {url}")
+
+    def fake_get(url, **kwargs):
+        if url.endswith("game/proxy/Game/GetSavedRoleInfo"):
+            return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": 1}}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    snapshot = NikkeService(config=config).get_outpost_storage()
+
+    assert snapshot.status == "ok"
+    assert snapshot.percent == 5.5
+    assert daily_payloads == [{"intl_open_id": "1", "nikke_area_id": 1}]
+
+
+def test_process_progress_exposes_generic_resource_snapshot():
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_percent=5.5,
+        resource_status="ok",
+    )
+
+    progress = calculate_process_progress(process)
+
+    assert progress["schema_version"] == 2
+    assert progress["source"] == "server_tracked"
+    assert progress["kind"] == "resource"
+    assert progress["percentage"] == 5.5
+    assert progress["display_text"] == "5.5%"
+    assert progress["key"] == "nikke_outpost_storage"
+    assert progress["projection"]["strategy"] == "linear_percent_fill"
+    assert progress["projection"]["full_recovery_seconds"] == 24 * 60 * 60
+
+
+def test_nikke_outpost_resource_progress_predicts_24h_fill_rate():
+    updated_at = dt.datetime(2026, 5, 20, 0, 0).timestamp()
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_percent=25.0,
+        resource_updated_at=updated_at,
+        resource_status="ok",
+    )
+
+    half_day = dt.datetime(2026, 5, 20, 12, 0)
+    progress = calculate_process_progress(process, current_dt=half_day)
+
+    assert progress["source"] == "server_tracked"
+    assert progress["kind"] == "resource"
+    assert progress["percentage"] == 75.0
+    assert progress["display_text"] == "75.0%"
+    assert progress["projection"]["base_value"] == 25.0
+    assert progress["projection"]["ready_at"] == dt.datetime(2026, 5, 20, 18, 0).timestamp()
+
+
+def test_nikke_outpost_resource_progress_caps_at_100_percent():
+    updated_at = dt.datetime(2026, 5, 20, 0, 0).timestamp()
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_percent=90.0,
+        resource_updated_at=updated_at,
+        resource_status="ok",
+    )
+
+    next_day = dt.datetime(2026, 5, 21, 0, 0)
+    progress = calculate_process_progress(process, current_dt=next_day)
+
+    assert progress["percentage"] == 100.0
+    assert progress["display_text"] == "100.0%"
+    assert progress["remaining_seconds"] == 0
+
+
+def test_tracked_resource_without_snapshot_does_not_fall_back_to_cycle():
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        last_played_timestamp=dt.datetime(2026, 5, 20, 0, 0).timestamp(),
+        user_cycle_hours=24,
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_status="auth_required",
+    )
+
+    progress = calculate_process_progress(process, current_dt=dt.datetime(2026, 5, 20, 12, 0))
+
+    assert progress["source"] == "server_tracked"
+    assert progress["kind"] == "resource"
+    assert progress["status"] == "auth_required"
+    assert progress["display_text"] == "동기화 필요"
+    assert "remaining_seconds" not in progress
+
+
+def test_nikke_resource_persist_task_updates_process_and_session_percent():
+    from src.core.resource_reconcile import _ResourcePersistTask
+
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_percent=10.0,
+        resource_updated_at=1000.0,
+        resource_status="ok",
+    )
+
+    class FakeDataManager:
+        process_updates = []
+        session_updates = []
+
+        def get_process_by_id(self, process_id):
+            assert process_id == "nikke"
+            return process
+
+        def update_process_resource(self, process_id, percent, updated_at, status, label):
+            self.process_updates.append((process_id, percent, updated_at, status, label))
+            return True
+
+        def update_session_resource(self, session_id, resource_percent_at_end):
+            self.session_updates.append((session_id, resource_percent_at_end))
+            return True
+
+    class Finished:
+        def __init__(self):
+            self.payloads = []
+
+        def emit(self, *args):
+            self.payloads.append(args)
+
+    class Signals:
+        def __init__(self):
+            self.finished = Finished()
+
+    data_manager = FakeDataManager()
+    signals = Signals()
+    task = _ResourcePersistTask(
+        process_id="nikke",
+        process_name="NIKKE",
+        session_id=7,
+        lifecycle_token=1,
+        request_seq=1,
+        fetched_percent=20.0,
+        fetched_label="전초기지 방어 보상",
+        fetched_status="ok",
+        fetched_at=3600.0,
+        exit_timestamp=0.0,
+        allow_session_correction=True,
+        applied_session_percent=10.0,
+        data_manager=data_manager,
+        should_abort=lambda: False,
+        signals=signals,
+    )
+
+    task.run()
+
+    assert data_manager.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
+    assert data_manager.session_updates == [(7, pytest.approx(15.8333333333))]
+    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+
+
+def test_process_monitor_calibrates_nikke_resource_session_on_start(monkeypatch):
+    from src.core.process_monitor import ProcessMonitor
+    import src.services.nikke as nikke_module
+
+    now = time.time()
+    process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_label="전초기지 방어 보상",
+        resource_percent=10.0,
+        resource_updated_at=now,
+        resource_status="ok",
+    )
+
+    class LastSession:
+        id = 7
+        resource_percent_at_end = 10.0
+
+    class FakeDataManager:
+        resource_updates = []
+        session_updates = []
+
+        def get_last_session(self, process_id):
+            assert process_id == "nikke"
+            return LastSession()
+
+        def update_session_resource(self, session_id, resource_percent_at_end):
+            self.session_updates.append((session_id, resource_percent_at_end))
+            return True
+
+        def update_process_resource(self, process_id, percent, updated_at, status, label):
+            self.resource_updates.append((process_id, percent, updated_at, status, label))
+            return True
+
+    class FakeService:
+        def get_outpost_storage(self):
+            return nikke_module.GameResourceSnapshot(
+                provider="nikke_blablalink",
+                resource_key="nikke_outpost_storage",
+                label="전초기지 방어 보상",
+                percent=20.0,
+                status="ok",
+                updated_at=dt.datetime.fromtimestamp(now + 1),
+            )
+
+    monkeypatch.setattr(nikke_module, "get_nikke_service", lambda: FakeService())
+
+    data_manager = FakeDataManager()
+    ProcessMonitor(data_manager)._calibrate_external_resource_on_game_start(process)
+
+    assert data_manager.session_updates == [(7, pytest.approx(20.0, abs=0.01))]
+    assert data_manager.resource_updates == [("nikke", 20.0, pytest.approx(now + 1), "ok", "전초기지 방어 보상")]

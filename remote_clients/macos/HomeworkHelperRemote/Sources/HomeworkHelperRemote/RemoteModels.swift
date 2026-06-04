@@ -1,0 +1,1008 @@
+import Foundation
+
+struct RemoteStatus: Decodable {
+    struct Counts: Decodable {
+        let processes: Int
+        let shortcuts: Int
+        let activeSessions: Int
+
+        enum CodingKeys: String, CodingKey {
+            case processes
+            case shortcuts
+            case activeSessions = "active_sessions"
+        }
+    }
+
+    struct Capabilities: Decodable {
+        let processLaunch: Bool
+        let processStop: Bool
+        let shortcutOpen: Bool
+        let dashboardSummary: Bool
+        let beholderIncidents: Bool
+        let gameLinks: Bool
+        let mobileSessions: Bool
+        let powerConfig: Bool
+        let powerControl: Bool
+        let beholder: Bool
+        let authRequired: Bool
+        let pairing: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case processLaunch = "process_launch"
+            case processStop = "process_stop"
+            case shortcutOpen = "shortcut_open"
+            case dashboardSummary = "dashboard_summary"
+            case beholderIncidents = "beholder_incidents"
+            case gameLinks = "game_links"
+            case mobileSessions = "mobile_sessions"
+            case powerConfig = "power_config"
+            case powerControl = "power_control"
+            case authRequired = "auth_required"
+            case beholder
+            case pairing
+        }
+
+        init(
+            processLaunch: Bool,
+            processStop: Bool = false,
+            shortcutOpen: Bool,
+            dashboardSummary: Bool,
+            beholderIncidents: Bool,
+            gameLinks: Bool,
+            mobileSessions: Bool,
+            powerConfig: Bool,
+            powerControl: Bool,
+            beholder: Bool,
+            authRequired: Bool,
+            pairing: Bool
+        ) {
+            self.processLaunch = processLaunch
+            self.processStop = processStop
+            self.shortcutOpen = shortcutOpen
+            self.dashboardSummary = dashboardSummary
+            self.beholderIncidents = beholderIncidents
+            self.gameLinks = gameLinks
+            self.mobileSessions = mobileSessions
+            self.powerConfig = powerConfig
+            self.powerControl = powerControl
+            self.beholder = beholder
+            self.authRequired = authRequired
+            self.pairing = pairing
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            processLaunch = try container.decodeIfPresent(Bool.self, forKey: .processLaunch) ?? false
+            processStop = try container.decodeIfPresent(Bool.self, forKey: .processStop) ?? false
+            shortcutOpen = try container.decodeIfPresent(Bool.self, forKey: .shortcutOpen) ?? false
+            dashboardSummary = try container.decodeIfPresent(Bool.self, forKey: .dashboardSummary) ?? false
+            beholderIncidents = try container.decodeIfPresent(Bool.self, forKey: .beholderIncidents) ?? false
+            gameLinks = try container.decodeIfPresent(Bool.self, forKey: .gameLinks) ?? false
+            mobileSessions = try container.decodeIfPresent(Bool.self, forKey: .mobileSessions) ?? false
+            powerConfig = try container.decodeIfPresent(Bool.self, forKey: .powerConfig) ?? false
+            powerControl = try container.decodeIfPresent(Bool.self, forKey: .powerControl) ?? false
+            beholder = try container.decodeIfPresent(Bool.self, forKey: .beholder) ?? false
+            authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired) ?? false
+            pairing = try container.decodeIfPresent(Bool.self, forKey: .pairing) ?? false
+        }
+    }
+
+    struct Power: Decodable {
+        let configured: Bool
+        let state: String?
+        let status: String?
+        let supportedActions: [String]
+        let targetHost: String?
+
+        enum CodingKeys: String, CodingKey {
+            case configured
+            case state
+            case status
+            case supportedActions = "supported_actions"
+            case targetHost = "target_host"
+        }
+    }
+
+    struct Diagnostics: Decodable {
+        let durationMS: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case durationMS = "duration_ms"
+        }
+    }
+
+    let app: String
+    let remoteAPIVersion: String
+    let serverTime: Double
+    let stateRevision: String?
+    let updatedAt: Double?
+    let counts: Counts
+    let capabilities: Capabilities
+    let power: Power?
+    let readiness: RemoteReadiness?
+    let diagnostics: Diagnostics?
+
+    enum CodingKeys: String, CodingKey {
+        case app
+        case remoteAPIVersion = "remote_api_version"
+        case serverTime = "server_time"
+        case stateRevision = "state_revision"
+        case updatedAt = "updated_at"
+        case counts
+        case capabilities
+        case power
+        case readiness
+        case diagnostics
+    }
+}
+
+struct RemoteReadiness: Decodable {
+    struct Section: Decodable {
+        let state: String
+        let color: String
+        let message: String
+        let activeIncidents: Int?
+        let authRequired: Bool?
+        let supportedActions: [String]?
+        let suggestedBaseURLs: [String]?
+        let details: TailscaleDetails?
+
+        enum CodingKeys: String, CodingKey {
+            case state
+            case color
+            case message
+            case activeIncidents = "active_incidents"
+            case authRequired = "auth_required"
+            case supportedActions = "supported_actions"
+            case suggestedBaseURLs = "suggested_base_urls"
+            case details
+        }
+    }
+
+    struct TailscaleDetails: Decodable {
+        let installed: Bool
+        let running: Bool
+        let backendState: String
+        let selfIPs: [String]
+        let selfHostname: String
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case installed
+            case running
+            case backendState = "backend_state"
+            case selfIPs = "self_ips"
+            case selfHostname = "self_hostname"
+            case message
+        }
+    }
+
+    let beholderHealth: Section
+    let remoteConnectivity: Section
+    let serverModeReadiness: Section
+    let powerReadiness: Section
+    let tailscaleReadiness: Section
+
+    enum CodingKeys: String, CodingKey {
+        case beholderHealth = "beholder_health"
+        case remoteConnectivity = "remote_connectivity"
+        case serverModeReadiness = "server_mode_readiness"
+        case powerReadiness = "power_readiness"
+        case tailscaleReadiness = "tailscale_readiness"
+    }
+}
+
+struct RemotePowerConfigPayload: Codable {
+    var smartthingsDeviceID: String = ""
+    var smartthingsCLIPath: String = ""
+    var sshHost: String = ""
+    var sshPort: Int = 22
+    var sshUser: String = ""
+    var sshKeyPath: String = ""
+    var statusTimeoutSeconds: Double = 4.0
+
+    enum CodingKeys: String, CodingKey {
+        case smartthingsDeviceID = "smartthings_device_id"
+        case smartthingsCLIPath = "smartthings_cli_path"
+        case sshHost = "ssh_host"
+        case sshPort = "ssh_port"
+        case sshUser = "ssh_user"
+        case sshKeyPath = "ssh_key_path"
+        case statusTimeoutSeconds = "status_timeout_seconds"
+    }
+}
+
+
+struct RemotePowerSetupResponse: Decodable {
+    struct SSHService: Decodable {
+        let available: Bool
+        let running: Bool
+        let startType: String
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case available
+            case running
+            case startType = "start_type"
+            case message
+        }
+    }
+
+    struct Firewall: Decodable {
+        let available: Bool
+        let enabled: Bool
+        let message: String
+    }
+
+    let hostPlatform: String
+    let user: String
+    let authorizedKeysPath: String
+    let authorizedKeysExists: Bool
+    let effectiveAuthorizedKeysPath: String?
+    let authorizedKeysScope: String?
+    let userAuthorizedKeysPath: String?
+    let userAuthorizedKeysExists: Bool?
+    let adminAuthorizedKeysPath: String?
+    let adminAuthorizedKeysExists: Bool?
+    let sshdConfigPath: String?
+    let sshdConfigAdminMatch: Bool?
+    let currentUserIsAdmin: Bool?
+    let administratorsAuthorizedKeysActive: Bool?
+    let sshService: SSHService
+    let firewall: Firewall
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case hostPlatform = "host_platform"
+        case user
+        case authorizedKeysPath = "authorized_keys_path"
+        case authorizedKeysExists = "authorized_keys_exists"
+        case effectiveAuthorizedKeysPath = "effective_authorized_keys_path"
+        case authorizedKeysScope = "authorized_keys_scope"
+        case userAuthorizedKeysPath = "user_authorized_keys_path"
+        case userAuthorizedKeysExists = "user_authorized_keys_exists"
+        case adminAuthorizedKeysPath = "admin_authorized_keys_path"
+        case adminAuthorizedKeysExists = "admin_authorized_keys_exists"
+        case sshdConfigPath = "sshd_config_path"
+        case sshdConfigAdminMatch = "sshd_config_admin_match"
+        case currentUserIsAdmin = "current_user_is_admin"
+        case administratorsAuthorizedKeysActive = "administrators_authorized_keys_active"
+        case sshService = "ssh_service"
+        case firewall
+        case message
+    }
+}
+
+struct RemoteSSHKeyRegistrationResponse: Decodable {
+    let registered: Bool
+    let alreadyPresent: Bool
+    let authorizedKeysPath: String
+    let effectiveAuthorizedKeysPath: String?
+    let authorizedKeysScope: String?
+    let administratorsAuthorizedKeysActive: Bool?
+    let aclRepairAttempted: Bool?
+    let aclRepairOK: Bool?
+    let aclMessage: String?
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case registered
+        case alreadyPresent = "already_present"
+        case authorizedKeysPath = "authorized_keys_path"
+        case effectiveAuthorizedKeysPath = "effective_authorized_keys_path"
+        case authorizedKeysScope = "authorized_keys_scope"
+        case administratorsAuthorizedKeysActive = "administrators_authorized_keys_active"
+        case aclRepairAttempted = "acl_repair_attempted"
+        case aclRepairOK = "acl_repair_ok"
+        case aclMessage = "acl_message"
+        case message
+    }
+}
+
+struct RemoteSmartThingsDeviceCandidate: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let raw: String
+}
+
+struct RemoteSmartThingsDevicesResponse: Decodable {
+    let available: Bool
+    let devices: [String]
+    let deviceCandidates: [RemoteSmartThingsDeviceCandidate]
+    let message: String
+    let cliPath: String?
+    let installAttempted: Bool?
+    let installSucceeded: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case devices
+        case deviceCandidates = "device_candidates"
+        case message
+        case cliPath = "cli_path"
+        case installAttempted = "install_attempted"
+        case installSucceeded = "install_succeeded"
+    }
+}
+
+extension RemotePowerConfigPayload {
+    static func isHostAuthorizedKeysPath(_ path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lowered = trimmed.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if lowered == "authorized_keys" || lowered.hasSuffix("/authorized_keys") { return true }
+        if trimmed.range(of: #"^[A-Za-z]:[/\\]"#, options: .regularExpression) != nil { return true }
+        return trimmed.contains("\\")
+    }
+
+    func normalizedLocalSSHKeyPath(defaultPath: String = LocalSSHKeyManager.defaultPrivateKeyPath) -> String {
+        let trimmed = sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || Self.isHostAuthorizedKeysPath(trimmed) {
+            return defaultPath
+        }
+        return trimmed
+    }
+
+    var localSSHIdentityStatus: String {
+        let trimmed = sshKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "default-private-key" }
+        if Self.isHostAuthorizedKeysPath(trimmed) { return "host-authorized-keys-rejected" }
+        return "configured-private-key"
+    }
+
+    var localSSHKeyFileExists: Bool {
+        let expanded = NSString(string: normalizedLocalSSHKeyPath()).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory) && !isDirectory.boolValue
+    }
+
+    var localWakeConfigured: Bool {
+        let cliPath = smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && (cliPath.isEmpty || LocalPowerWakeManager.isLocalSmartThingsCLIPath(cliPath) || LocalPowerWakeManager.resolveSmartThingsCLIPath(cliPath) != nil)
+    }
+
+    var localSSHConfigured: Bool {
+        !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !sshUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !normalizedLocalSSHKeyPath().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && localSSHKeyFileExists
+        && sshPort > 0
+    }
+}
+
+struct RemoteProcess: Codable, Identifiable {
+    struct Progress: Codable {
+        struct Projection: Codable {
+            let strategy: String
+            let unit: String?
+            let baseValue: Double?
+            let maxValue: Double?
+            let baseTimestamp: Double?
+            let recoverySecondsPerUnit: Double?
+            let fullRecoverySeconds: Double?
+            let cycleSeconds: Double?
+            let remainingSeconds: Int?
+            let readyAt: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case strategy
+                case unit
+                case baseValue = "base_value"
+                case maxValue = "max_value"
+                case baseTimestamp = "base_timestamp"
+                case recoverySecondsPerUnit = "recovery_seconds_per_unit"
+                case fullRecoverySeconds = "full_recovery_seconds"
+                case cycleSeconds = "cycle_seconds"
+                case remainingSeconds = "remaining_seconds"
+                case readyAt = "ready_at"
+            }
+
+            init(
+                strategy: String,
+                unit: String? = nil,
+                baseValue: Double? = nil,
+                maxValue: Double? = nil,
+                baseTimestamp: Double? = nil,
+                recoverySecondsPerUnit: Double? = nil,
+                fullRecoverySeconds: Double? = nil,
+                cycleSeconds: Double? = nil,
+                remainingSeconds: Int? = nil,
+                readyAt: Double? = nil
+            ) {
+                self.strategy = strategy
+                self.unit = unit
+                self.baseValue = baseValue
+                self.maxValue = maxValue
+                self.baseTimestamp = baseTimestamp
+                self.recoverySecondsPerUnit = recoverySecondsPerUnit
+                self.fullRecoverySeconds = fullRecoverySeconds
+                self.cycleSeconds = cycleSeconds
+                self.remainingSeconds = remainingSeconds
+                self.readyAt = readyAt
+            }
+        }
+
+        let schemaVersion: Int
+        let source: String
+        let kind: String
+        let percentage: Double
+        let displayText: String
+        let status: String?
+        let provider: String?
+        let key: String?
+        let label: String?
+        let updatedAt: Double?
+        let projection: Projection?
+        let staminaCurrent: Int?
+        let staminaMax: Int?
+        let hoyolabGameID: String?
+        let resourceIconURL: String?
+        let resourceIconURLs: [String: String]?
+        let remainingSeconds: Int?
+        let readyAt: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case source
+            case kind
+            case percentage
+            case displayText = "display_text"
+            case status
+            case provider
+            case key
+            case label
+            case updatedAt = "updated_at"
+            case projection
+            case staminaCurrent = "stamina_current"
+            case staminaMax = "stamina_max"
+            case hoyolabGameID = "hoyolab_game_id"
+            case resourceIconURL = "resource_icon_url"
+            case resourceIconURLs = "resource_icon_urls"
+            case remainingSeconds = "remaining_seconds"
+            case readyAt = "ready_at"
+        }
+
+        init(
+            schemaVersion: Int = 2,
+            source: String? = nil,
+            kind: String,
+            percentage: Double,
+            displayText: String,
+            status: String? = nil,
+            provider: String? = nil,
+            key: String? = nil,
+            label: String? = nil,
+            updatedAt: Double? = nil,
+            projection: Projection? = nil,
+            staminaCurrent: Int? = nil,
+            staminaMax: Int? = nil,
+            hoyolabGameID: String? = nil,
+            resourceIconURL: String? = nil,
+            resourceIconURLs: [String: String]? = nil,
+            remainingSeconds: Int? = nil,
+            readyAt: Double? = nil
+        ) {
+            self.schemaVersion = schemaVersion
+            self.source = source ?? Self.inferredSource(for: kind)
+            self.kind = kind
+            self.percentage = percentage
+            self.displayText = displayText
+            self.status = status
+            self.provider = provider
+            self.key = key
+            self.label = label
+            self.updatedAt = updatedAt
+            self.projection = projection
+            self.staminaCurrent = staminaCurrent
+            self.staminaMax = staminaMax
+            self.hoyolabGameID = hoyolabGameID
+            self.resourceIconURL = resourceIconURL
+            self.resourceIconURLs = resourceIconURLs
+            self.remainingSeconds = remainingSeconds
+            self.readyAt = readyAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let decodedKind = try container.decode(String.self, forKey: .kind)
+            schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            source = try container.decodeIfPresent(String.self, forKey: .source) ?? Self.inferredSource(for: decodedKind)
+            kind = decodedKind
+            percentage = try container.decode(Double.self, forKey: .percentage)
+            displayText = try container.decode(String.self, forKey: .displayText)
+            status = try container.decodeIfPresent(String.self, forKey: .status)
+            provider = try container.decodeIfPresent(String.self, forKey: .provider)
+            key = try container.decodeIfPresent(String.self, forKey: .key)
+            label = try container.decodeIfPresent(String.self, forKey: .label)
+            updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt)
+            projection = try container.decodeIfPresent(Projection.self, forKey: .projection)
+            staminaCurrent = try container.decodeIfPresent(Int.self, forKey: .staminaCurrent)
+            staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
+            hoyolabGameID = try container.decodeIfPresent(String.self, forKey: .hoyolabGameID)
+            resourceIconURL = try container.decodeIfPresent(String.self, forKey: .resourceIconURL)
+            resourceIconURLs = try container.decodeIfPresent([String: String].self, forKey: .resourceIconURLs)
+            remainingSeconds = try container.decodeIfPresent(Int.self, forKey: .remainingSeconds)
+            readyAt = try container.decodeIfPresent(Double.self, forKey: .readyAt)
+        }
+
+        private static func inferredSource(for kind: String) -> String {
+            if kind == "stamina" || kind == "resource" {
+                return "server_tracked"
+            }
+            return "timestamp_derived"
+        }
+    }
+
+    let processID: String?
+    let name: String
+    let monitoringPath: String?
+    let launchPath: String?
+    let preferredLaunchType: String?
+    let lastPlayedTimestamp: Double?
+    let userCycleHours: Int?
+    let staminaTrackingEnabled: Bool
+    let hoyolabGameID: String?
+    let staminaCurrent: Int?
+    let staminaMax: Int?
+    let staminaUpdatedAt: Double?
+    let progress: Progress?
+    let iconURL: String?
+    let iconURLs: [String: String]?
+    let isRunning: Bool
+    let playedToday: Bool
+    let statusText: String?
+
+    var id: String { processID ?? name }
+
+    enum CodingKeys: String, CodingKey {
+        case processID = "id"
+        case name
+        case monitoringPath = "monitoring_path"
+        case launchPath = "launch_path"
+        case preferredLaunchType = "preferred_launch_type"
+        case lastPlayedTimestamp = "last_played_timestamp"
+        case userCycleHours = "user_cycle_hours"
+        case staminaTrackingEnabled = "stamina_tracking_enabled"
+        case hoyolabGameID = "hoyolab_game_id"
+        case staminaCurrent = "stamina_current"
+        case staminaMax = "stamina_max"
+        case staminaUpdatedAt = "stamina_updated_at"
+        case progress
+        case iconURL = "icon_url"
+        case iconURLs = "icon_urls"
+        case isRunning = "is_running"
+        case playedToday = "played_today"
+        case statusText = "status_text"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        processID = try container.decodeIfPresent(String.self, forKey: .processID)
+        name = try container.decode(String.self, forKey: .name)
+        monitoringPath = try container.decodeIfPresent(String.self, forKey: .monitoringPath)
+        launchPath = try container.decodeIfPresent(String.self, forKey: .launchPath)
+        preferredLaunchType = try container.decodeIfPresent(String.self, forKey: .preferredLaunchType)
+        lastPlayedTimestamp = try container.decodeIfPresent(Double.self, forKey: .lastPlayedTimestamp)
+        userCycleHours = try container.decodeIfPresent(Int.self, forKey: .userCycleHours)
+        staminaTrackingEnabled = try container.decodeIfPresent(Bool.self, forKey: .staminaTrackingEnabled) ?? false
+        hoyolabGameID = try container.decodeIfPresent(String.self, forKey: .hoyolabGameID)
+        staminaCurrent = try container.decodeIfPresent(Int.self, forKey: .staminaCurrent)
+        staminaMax = try container.decodeIfPresent(Int.self, forKey: .staminaMax)
+        staminaUpdatedAt = try container.decodeIfPresent(Double.self, forKey: .staminaUpdatedAt)
+        progress = try container.decodeIfPresent(Progress.self, forKey: .progress)
+        iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
+        iconURLs = try container.decodeIfPresent([String: String].self, forKey: .iconURLs)
+        isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning) ?? false
+        playedToday = try container.decodeIfPresent(Bool.self, forKey: .playedToday) ?? false
+        statusText = try container.decodeIfPresent(String.self, forKey: .statusText)
+    }
+
+    init(
+        processID: String?,
+        name: String,
+        monitoringPath: String?,
+        launchPath: String?,
+        preferredLaunchType: String?,
+        lastPlayedTimestamp: Double?,
+        userCycleHours: Int?,
+        staminaTrackingEnabled: Bool,
+        hoyolabGameID: String?,
+        staminaCurrent: Int?,
+        staminaMax: Int?,
+        staminaUpdatedAt: Double?,
+        progress: Progress?,
+        iconURL: String?,
+        iconURLs: [String: String]?,
+        isRunning: Bool,
+        playedToday: Bool,
+        statusText: String?
+    ) {
+        self.processID = processID
+        self.name = name
+        self.monitoringPath = monitoringPath
+        self.launchPath = launchPath
+        self.preferredLaunchType = preferredLaunchType
+        self.lastPlayedTimestamp = lastPlayedTimestamp
+        self.userCycleHours = userCycleHours
+        self.staminaTrackingEnabled = staminaTrackingEnabled
+        self.hoyolabGameID = hoyolabGameID
+        self.staminaCurrent = staminaCurrent
+        self.staminaMax = staminaMax
+        self.staminaUpdatedAt = staminaUpdatedAt
+        self.progress = progress
+        self.iconURL = iconURL
+        self.iconURLs = iconURLs
+        self.isRunning = isRunning
+        self.playedToday = playedToday
+        self.statusText = statusText
+    }
+}
+
+struct RemoteShortcut: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let url: String
+    let refreshTime: String?
+    let lastResetTimestamp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case url
+        case refreshTime = "refresh_time_str"
+        case lastResetTimestamp = "last_reset_timestamp"
+    }
+}
+
+struct RemoteCommandResult: Decodable {
+    let accepted: Bool
+    let command: String
+    let targetID: String?
+    let targetName: String?
+    let target: String?
+    let status: String
+    let message: String
+    let commandID: String?
+    let acceptedAt: Double?
+    let refreshAfterMS: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case command
+        case targetID = "target_id"
+        case targetName = "target_name"
+        case target
+        case status
+        case message
+        case commandID = "command_id"
+        case acceptedAt = "accepted_at"
+        case refreshAfterMS = "refresh_after_ms"
+    }
+}
+
+struct RemoteOnboardingBundle: Decodable {
+    let readiness: RemoteReadiness?
+    let powerSetup: RemotePowerSetupResponse?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case readiness
+        case powerSetup = "power_setup"
+        case message
+    }
+}
+
+struct PairingConfirmResponse: Decodable {
+    let id: String
+    let name: String
+    let platform: String?
+    let token: String
+    let onboarding: RemoteOnboardingBundle?
+}
+
+struct RemoteDevice: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let platform: String?
+    let role: String?
+    let tailnetIP: String?
+    let tailnetHostname: String?
+    let tailnetOS: String?
+    let pairingStatus: String?
+    let connectivityState: String?
+    let healthMessage: String?
+    let canRevoke: Bool?
+    let createdAt: Double?
+    let lastSeenAt: Double?
+    let tokenRefreshedAt: Double?
+    let revokedAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case platform
+        case role
+        case tailnetIP = "tailnet_ip"
+        case tailnetHostname = "tailnet_hostname"
+        case tailnetOS = "tailnet_os"
+        case pairingStatus = "pairing_status"
+        case connectivityState = "connectivity_state"
+        case healthMessage = "health_message"
+        case canRevoke = "can_revoke"
+        case createdAt = "created_at"
+        case lastSeenAt = "last_seen_at"
+        case tokenRefreshedAt = "token_refreshed_at"
+        case revokedAt = "revoked_at"
+    }
+}
+
+struct RemoteDevicesResponse: Decodable {
+    let devices: [RemoteDevice]
+}
+
+struct RemoteTailscalePeer: Decodable, Identifiable {
+    let hostname: String
+    let dnsName: String
+    let ips: [String]
+    let online: Bool
+    let os: String
+    let primaryIPv4: String?
+
+    var id: String { "\(hostname)-\(primaryIPv4 ?? dnsName)" }
+
+    enum CodingKeys: String, CodingKey {
+        case hostname
+        case dnsName = "dns_name"
+        case ips
+        case online
+        case os
+        case primaryIPv4 = "primary_ipv4"
+    }
+}
+
+struct RemoteTailscaleSnapshot: Decodable {
+    let installed: Bool
+    let running: Bool
+    let backendState: String
+    let selfIPs: [String]
+    let selfHostname: String
+    let peers: [RemoteTailscalePeer]
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case installed
+        case running
+        case backendState = "backend_state"
+        case selfIPs = "self_ips"
+        case selfHostname = "self_hostname"
+        case peers
+        case message
+    }
+}
+
+struct RemoteTailscaleEnsureResponse: Decodable {
+    let ready: Bool
+    let installAttempted: Bool
+    let launchAttempted: Bool
+    let method: String
+    let message: String
+    let before: RemoteTailscaleSnapshot
+    let after: RemoteTailscaleSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case ready
+        case installAttempted = "install_attempted"
+        case launchAttempted = "launch_attempted"
+        case method
+        case message
+        case before
+        case after
+    }
+}
+
+struct RemoteCapabilitiesResponse: Decodable {
+    let remoteAPIVersion: String
+    let stateRevision: String?
+    let updatedAt: Double?
+    let capabilities: RemoteStatus.Capabilities
+    let power: RemoteStatus.Power?
+
+    enum CodingKeys: String, CodingKey {
+        case remoteAPIVersion = "remote_api_version"
+        case stateRevision = "state_revision"
+        case updatedAt = "updated_at"
+        case capabilities
+        case power
+    }
+}
+
+struct RemoteGameLink: Decodable, Identifiable {
+    let id: String
+    let pcProcessID: String
+    let pcDisplayName: String?
+    let androidPackageName: String
+    let androidLaunchIntentURI: String?
+    let androidStoreURL: String?
+    let platformAccountHint: String?
+    let hoyolabGameID: String?
+    let syncStrategy: String
+    let createdAt: Double
+    let updatedAt: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pcProcessID = "pc_process_id"
+        case pcDisplayName = "pc_display_name"
+        case androidPackageName = "android_package_name"
+        case androidLaunchIntentURI = "android_launch_intent_uri"
+        case androidStoreURL = "android_store_url"
+        case platformAccountHint = "platform_account_hint"
+        case hoyolabGameID = "hoyolab_game_id"
+        case syncStrategy = "sync_strategy"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct RemoteGameLinksResponse: Decodable {
+    let links: [RemoteGameLink]
+    let count: Int
+}
+
+struct RemoteMobileSession: Decodable, Identifiable {
+    let id: String
+    let gameLinkID: String
+    let pcProcessID: String
+    let pcDisplayName: String?
+    let androidPackageName: String
+    let source: String
+    let status: String
+    let startedAt: Double
+    let endedAt: Double?
+    let durationSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case gameLinkID = "game_link_id"
+        case pcProcessID = "pc_process_id"
+        case pcDisplayName = "pc_display_name"
+        case androidPackageName = "android_package_name"
+        case source
+        case status
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSeconds = "duration_seconds"
+    }
+}
+
+struct RemoteMobileSessionsResponse: Decodable {
+    let sessions: [RemoteMobileSession]
+    let count: Int
+}
+
+struct RemoteDashboardSummary: Decodable {
+    struct Range: Decodable {
+        let start: String
+        let end: String
+    }
+
+    struct Game: Decodable {
+        let displayName: String
+        let totalSeconds: Double
+        let sessionCount: Int
+
+        enum CodingKeys: String, CodingKey {
+            case displayName = "display_name"
+            case totalSeconds = "total_seconds"
+            case sessionCount = "session_count"
+        }
+    }
+
+    struct Metrics: Decodable {
+        let totalSeconds: Double
+        let dailyAverageSeconds: Double
+        let playedDays: Int
+        let sessionCount: Int
+        let topGame: Game?
+
+        enum CodingKeys: String, CodingKey {
+            case totalSeconds = "total_seconds"
+            case dailyAverageSeconds = "daily_average_seconds"
+            case playedDays = "played_days"
+            case sessionCount = "session_count"
+            case topGame = "top_game"
+        }
+    }
+
+    struct MobileMetrics: Decodable {
+        struct Game: Decodable {
+            let displayName: String
+            let androidPackageName: String
+            let totalSeconds: Double
+            let sessionCount: Int
+            let activeSessionCount: Int
+
+            enum CodingKeys: String, CodingKey {
+                case displayName = "display_name"
+                case androidPackageName = "android_package_name"
+                case totalSeconds = "total_seconds"
+                case sessionCount = "session_count"
+                case activeSessionCount = "active_session_count"
+            }
+        }
+
+        let totalSeconds: Double
+        let activeSeconds: Double
+        let sessionCount: Int
+        let activeSessionCount: Int
+        let sourceBreakdown: [String: Int]
+        let topGame: Game?
+
+        enum CodingKeys: String, CodingKey {
+            case totalSeconds = "total_seconds"
+            case activeSeconds = "active_seconds"
+            case sessionCount = "session_count"
+            case activeSessionCount = "active_session_count"
+            case sourceBreakdown = "source_breakdown"
+            case topGame = "top_game"
+        }
+    }
+
+    let range: Range
+    let metrics: Metrics
+    let mobileMetrics: MobileMetrics?
+
+    enum CodingKeys: String, CodingKey {
+        case range
+        case metrics
+        case mobileMetrics = "mobile_metrics"
+    }
+}
+
+struct RemoteBeholderIncident: Decodable, Identifiable {
+    let id: Int
+    let severity: String
+    let status: String
+    let userTitle: String
+    let userSummary: String?
+    let riskScore: Int
+    let riskLabels: [String]
+    let createdAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case severity
+        case status
+        case userTitle = "user_title"
+        case userSummary = "user_summary"
+        case riskScore = "risk_score"
+        case riskLabels = "risk_labels"
+        case createdAt = "created_at"
+    }
+}
+
+struct RemoteBeholderIncidentsResponse: Decodable {
+    let incidents: [RemoteBeholderIncident]
+    let count: Int
+}
+
+struct RevokeDeviceResponse: Decodable {
+    let revoked: Bool
+    let deviceID: String
+
+    enum CodingKeys: String, CodingKey {
+        case revoked
+        case deviceID = "device_id"
+    }
+}
+
+
+struct RemoteLoggingConfigResponse: Decodable {
+    let enabled: Bool
+    let path: String
+}
+
+struct PurgeDevicesResponse: Decodable {
+    let removed: Int
+}

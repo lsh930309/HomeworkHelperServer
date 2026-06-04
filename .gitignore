@@ -24,6 +24,9 @@ env/
 .env.*.local
 **/.env
 **/server/.env
+build.version.json
+SmartThings_Token
+.codeboarding
 
 # ===========================
 # PyInstaller 빌드 산출물
@@ -32,21 +35,6 @@ build/
 dist/
 installer_output/
 release/
-
-# ===========================
-# Android
-# ===========================
-android/.gradle/
-android/.idea/
-android/local.properties
-android/*.iml
-android/build/
-android/app/build/
-android/captures/
-android/.externalNativeBuild/
-android/.cxx/
-*.apk
-*.aab
 
 # ===========================
 # 데이터 및 로그
@@ -63,6 +51,8 @@ HomeworkHelper.zip
 # 스크린샷 로컬 설정
 # ===========================
 src/screenshot/_method.txt
+src/screenshot/**/*.png
+screenshots/**/*.png
 
 # ===========================
 # IDE 및 에디터
@@ -105,3 +95,7 @@ certs/.thumbprint
 node_modules/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Swift Package Manager build artifacts
+**/.build/
+**/.swiftpm/

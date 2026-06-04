@@ -33,6 +33,15 @@ class Process(Base):
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
     stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
 
+    # 범용 외부 리소스 연동 필드 (예: NIKKE ShiftyPad 전초기지 방어 보상)
+    resource_tracking_enabled = Column(Boolean, default=False)
+    resource_provider = Column(String, nullable=True)
+    resource_key = Column(String, nullable=True)
+    resource_label = Column(String, nullable=True)
+    resource_percent = Column(Float, nullable=True)
+    resource_updated_at = Column(Float, nullable=True)
+    resource_status = Column(String, nullable=True)
+
     # 앱 볼륨 제어
     default_volume = Column(Integer, nullable=True)   # 0~100, None이면 미설정
     default_muted = Column(Boolean, nullable=False, default=False)
@@ -107,6 +116,8 @@ class GlobalSettings(Base):
     obs_watch_output_dir = Column(Boolean, default=True)
     obs_recording_output_dir = Column(String, default="")
     recording_hold_threshold_ms = Column(Integer, default=800)
+    # Remote server mode
+    remote_server_mode_enabled = Column(Boolean, default=False)
 
 
 class ProcessSession(Base):
@@ -121,6 +132,7 @@ class ProcessSession(Base):
     session_duration = Column(Float, nullable=True)  # 세션 길이 (초 단위, 종료 시 계산)
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
     stamina_at_end = Column(Integer, nullable=True)  # 종료 시점 스태미나
+    resource_percent_at_end = Column(Float, nullable=True)  # 종료 시점 외부 리소스 백분율
 
     # Beholder metadata (nullable for legacy DB compatibility)
     session_status = Column(String, nullable=True)
@@ -160,6 +172,49 @@ class BeholderIncident(Base):
     resolved_at = Column(Float, nullable=True)
     override_token = Column(String, nullable=True, index=True)
     override_used_at = Column(Float, nullable=True)
+
+
+class GamePlatformLink(Base):
+    """Mapping between a HomeworkHelper PC process and an Android launch target."""
+    __tablename__ = "game_platform_links"
+    __table_args__ = (
+        Index("ix_game_platform_links_pc_process_id", "pc_process_id"),
+        Index("ix_game_platform_links_android_package_name", "android_package_name"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    pc_process_id = Column(String, nullable=False)
+    pc_display_name = Column(String, nullable=True)
+    android_package_name = Column(String, nullable=False)
+    android_launch_intent_uri = Column(String, nullable=True)
+    android_store_url = Column(String, nullable=True)
+    platform_account_hint = Column(String, nullable=True)
+    hoyolab_game_id = Column(String, nullable=True)
+    sync_strategy = Column(String, nullable=False, default="manual")
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
+class MobileGameSession(Base):
+    """Android/mobile play session linked back to a HomeworkHelper PC process."""
+    __tablename__ = "mobile_game_sessions"
+    __table_args__ = (
+        Index("ix_mobile_game_sessions_status_started_at", "status", "started_at"),
+        Index("ix_mobile_game_sessions_game_link_id", "game_link_id"),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    game_link_id = Column(String, nullable=False)
+    pc_process_id = Column(String, nullable=False)
+    pc_display_name = Column(String, nullable=True)
+    android_package_name = Column(String, nullable=False)
+    source = Column(String, nullable=False, default="manual")
+    status = Column(String, nullable=False, default="active")
+    started_at = Column(Float, nullable=False)
+    ended_at = Column(Float, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
 
 
 class AppRuntimeHeartbeat(Base):

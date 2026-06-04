@@ -14,9 +14,9 @@
 
 **게임 일일 루틴 자동 관리 시스템**
 
-프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • RESTful API
+프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • Remote Agent • macOS 클라이언트 • RESTful API
 
-[다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
+[다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [원격 클라이언트](#-원격-클라이언트) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
 
 </div>
 
@@ -29,6 +29,7 @@
 - [주요 기능](#-주요-기능)
 - [설치 방법](#-설치-방법)
 - [사용 가이드](#-사용-가이드)
+- [원격 클라이언트](#-원격-클라이언트)
 - [프로젝트 구조](#-프로젝트-구조)
 - [모듈 설명](#-모듈-설명)
 - [API 문서](#-api-문서)
@@ -40,7 +41,7 @@
 
 ## 🎯 개요
 
-HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows용 데스크톱 애플리케이션입니다.
+HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows 데스크톱 애플리케이션이며, Remote Agent를 통해 macOS 네이티브 클라이언트에서도 주요 제어 기능을 사용할 수 있습니다.
 
 ### 해결하는 문제
 
@@ -53,7 +54,7 @@ HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows용 
 ### 핵심 가치
 
 - **자동화**: 프로세스 모니터링, 세션 트래킹, 알림 발송을 자동으로 처리
-- **확장성**: RESTful API로 외부 도구와 연동 가능
+- **확장성**: RESTful API와 Remote Agent로 외부 도구·네이티브 클라이언트 연동 가능
 - **안정성**: SQLite WAL 모드, 자동 재시도 로직으로 데이터 손실 방지
 - **편의성**: 시스템 트레이 상주, 원클릭 실행, 커스터마이징 가능한 알림
 
@@ -179,6 +180,13 @@ sequenceDiagram
 - **창 위치 기억**: 마지막 창 위치 자동 복원
 - **마그넷 스냅**: 화면 가장자리 자동 정렬
 
+### 🛰️ Remote Agent & 네이티브 클라이언트
+
+- **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
+- **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
+- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
+- **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
+
 ---
 
 ## 🚀 설치 방법
@@ -213,6 +221,16 @@ pip install -r requirements.txt
 # 4. 프로그램 실행
 python homework_helper.pyw
 ```
+
+### Option 4: macOS Remote Client
+
+```bash
+swift build --package-path remote_clients/macos/HomeworkHelperRemote
+./.venv/bin/python tools/package_macos_remote_app.py
+open dist/macos/HomeworkHelperRemote.app
+```
+
+macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
 
 ---
 
@@ -334,6 +352,37 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ---
 
+## 🛰️ 원격 클라이언트
+
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 활성 기준 클라이언트는 macOS 클라이언트다.
+
+### Remote Agent 실행
+
+```bash
+HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.pyw --server
+```
+
+- 로컬 개발만 할 때는 `./.venv/bin/python homework_helper.pyw --server`로 충분하다.
+- 외부 기기에서 접속하려면 LAN/Tailscale URL을 사용하고 `HH_REMOTE_REQUIRE_AUTH=1`을 유지한다.
+- 최초 pairing code는 host loopback에서 `curl -X POST http://127.0.0.1:8000/remote/pair/start`로 발급한다.
+
+### 문서
+
+- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS client build 절차
+- `docs/remote/macos-client-architecture.md` — macOS 기준 클라이언트 구조/계약
+- `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
+- `docs/remote/connection-supervisor-protocol.md` — 공통 pairing/connectivity/power/OpenSSH 프로토콜
+
+### 핵심 검증 명령
+
+```bash
+./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py
+swift build --package-path remote_clients/macos/HomeworkHelperRemote
+./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
+```
+
+---
+
 ## 📁 프로젝트 구조
 
 ```
@@ -348,6 +397,7 @@ HomeworkHelperServer/
 ├── 🔧 src/                       # 소스 코드
 │   ├── api/                      # API 레이어
 │   │   ├── client.py             # FastAPI 서버와 통신
+│   │   ├── remote_routes.py      # Remote Agent API 라우터
 │   │   └── dashboard/            # 웹 대시보드 (FastAPI 라우터·템플릿·정적 파일)
 │   │
 │   ├── core/                     # 핵심 로직
@@ -377,7 +427,7 @@ HomeworkHelperServer/
 │   │   ├── gui_notification_handler.py  # GUI 알림 핸들러
 │   │   ├── main_window.py       # 메인 윈도우
 │   │   ├── preset_editor_dialog.py      # 게임 프리셋 편집기
-│   │   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
+│   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
 │   │   ├── tray_manager.py      # 시스템 트레이 관리
 │   │   └── volume_panel.py      # 게임별 볼륨 조절 팝오버 패널
 │   │
@@ -411,11 +461,18 @@ HomeworkHelperServer/
 │   ├── architecture.md          # 아키텍처 가이드
 │   ├── milestone.md             # 마일스톤 로드맵
 │   ├── git-workflow.md          # Git 워크플로우
+│   ├── remote/                  # Remote Agent/클라이언트 운영·설계 문서
+│   │   ├── setup-guide.md
+│   │   ├── macos-client-architecture.md
+│   │   └── remote-storage-policy.md
 │   ├── guides/                  # 사용 가이드
 │   │   ├── build-guide.md
 │   │   └── multi-pc-sync-guide.md
 │   ├── archive/                 # 과거 작업 기록
 │   └── archived/                # 보류된 문서
+│
+├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
+│   └── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
 │
 ├── 🎨 assets/                    # 리소스
 │   ├── icons/                   # 아이콘
@@ -664,22 +721,33 @@ PUT    /settings               # 전역 설정 수정
 
 ### 핵심 라이브러리
 
-| 라이브러리 | 버전 | 용도 |
-|----------|------|------|
-| **Python** | 3.11+ | 메인 런타임 |
-| **FastAPI** | 0.116 | RESTful API 서버 |
-| **SQLAlchemy** | 2.0 | ORM 및 데이터베이스 관리 |
-| **PyQt6** | 6.9 | GUI 프레임워크 |
-| **psutil** | 7.1 | 프로세스 모니터링 |
-| **uvicorn** | 0.35 | ASGI 서버 |
-| **Pydantic** | 2.11 | 데이터 검증 |
-| **requests** | 2.32 | HTTP 클라이언트 |
-| **genshin** | 1.6+ | HoYoLab API |
-| **obsws-python** | 1.7+ | OBS WebSocket 5.x 클라이언트 |
-| **winshell** | 0.6 | Windows 특수 폴더 / 휴지통 이동 |
-| **mss** | 9.x | 고속 스크린샷 캡처 |
-| **PyInstaller** | 6.x | 실행 파일 빌드 |
-| **tqdm** | 4.67 | 진행률 표시 |
+정확한 설치 목록은 `requirements.txt`를 기준으로 관리합니다.
+Windows 전용 패키지는 platform marker로 제한되어 macOS/Linux 설치 시 자동으로 제외됩니다.
+
+| 분류 | 라이브러리 | 버전 제약 | 용도 |
+|------|------------|-----------|------|
+| 런타임 | **Python** | 3.11+ | 메인 런타임 |
+| GUI | **PyQt6** | `requirements.txt` | 데스크톱 GUI 프레임워크 |
+| Windows | **pywin32** | `requirements.txt` | Windows API / GDI 캡처 / 레지스트리 연동 |
+| Windows | **winshell** | `requirements.txt` | 시작 프로그램 폴더 조회, 휴지통 이동 |
+| Windows | **psutil** | `requirements.txt` | 프로세스 모니터링 |
+| Windows | **pycaw** | `requirements.txt` | Windows 앱 볼륨 제어 |
+| API 서버 | **FastAPI** | `requirements.txt` | RESTful API 서버 |
+| API 서버 | **uvicorn** | `requirements.txt` | ASGI 서버 |
+| 데이터 | **SQLAlchemy** | `requirements.txt` | ORM 및 SQLite 데이터베이스 관리 |
+| 데이터 | **pydantic** | `requirements.txt` | API / 설정 데이터 검증 |
+| 네트워크 | **requests** | `requirements.txt` | HTTP 클라이언트, 외부 리소스 조회 |
+| 데이터 검증 | **jsonschema** | `requirements.txt` | JSON 스키마 검증 |
+| 알림 / 입력 | **Windows-Toasts** | `requirements.txt` | Windows 토스트 알림 |
+| 알림 / 입력 | **winrt-Windows.Gaming.Input** | `requirements.txt` | Windows 게임 입력 WinRT 바인딩 |
+| 녹화 | **websocket-client** | `requirements.txt` | OBS WebSocket 5.x 프로토콜 클라이언트 |
+| 스크린샷 / 아이콘 | **mss** | `requirements.txt` | 고속 스크린샷 캡처 |
+| 스크린샷 / 아이콘 | **Pillow** | `requirements.txt` | 이미지 처리 및 아이콘 변환 |
+| 자원 추적 | **genshin** | 1.6+ | HoYoLab 스태미나 / 리소스 API |
+| 자원 추적 | **pycryptodome** | 3.20+ | 브라우저 쿠키 DB 복호화 |
+| 빌드 / 개발 | **pyinstaller** | `requirements.txt` | Windows 실행 파일 빌드 |
+| 빌드 / 개발 | **pytest** | `requirements.txt` | 테스트 실행 |
+| 빌드 / 개발 | **tqdm** | `requirements.txt` | 빌드 / 마이그레이션 진행률 표시 |
 
 ### 데이터베이스
 
@@ -694,26 +762,29 @@ PUT    /settings               # 전역 설정 수정
 ### 빌드하기
 
 ```bash
-# 빌드 스크립트 실행 (Windows)
+# 현재 OS에 맞는 타깃 자동 선택
 python build.py
 
-# 버전 선택 (방향키로 조작)
-# - 좌/우: 자릿수 이동
-# - 상/하: 숫자 증가/감소
-# - Enter: 확정
+# CI/터미널 환경에서는 GUI 없이 실행
+python build.py --no-gui
+
+# 버전 증가 정책
+# - 기본값: --bump build
+# - 선택지: none, build, patch, minor, major
 
 # 빌드 산출물
-# - release/HomeworkHelper_vX.Y.Z.timestamp_Setup.exe (인스톨러)
-# - release/HomeworkHelper_vX.Y.Z.timestamp_Portable.zip (Portable)
+# - release/HomeworkHelper_vX.Y.Z_bN_gHASH_Setup.exe
+# - release/HomeworkHelper_vX.Y.Z_bN_gHASH_Portable.zip
+# - release/HomeworkHelperRemote_vX.Y.Z_bN_gHASH.pkg
 ```
 
 **빌드 스크립트 특징:**
-- 이전 버전 자동 아카이빙 (`release/archives/`)
-- PyInstaller 빌드 (onedir 모드)
-- ZIP 압축 (Portable 버전)
-- Inno Setup 인스톨러 생성
-- **tqdm 진행률 표시** (빌드, 압축, 인스톨러 생성)
-- **실시간 출력** (ANSI escape 코드로 잔상 방지)
+- `build.version.json` 기반 host/client 버전 관리 및 성공 시 저장
+- OS 자동 감지: Windows는 host, macOS는 remote client 패키지 빌드
+- GUI 버전 확인 및 콘솔(`--no-gui`) 빌드 지원
+- 이전 산출물 target/type/date별 archive 이동 및 자동 pruning
+- Windows: PyInstaller onedir, Portable ZIP, Inno Setup 인스톨러
+- macOS: Swift release build, `.app` 번들, `.pkg` 생성
 
 ### 개발 환경 설정
 
