@@ -277,11 +277,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serial", help="specific adb serial")
     parser.add_argument("--package", default=DEFAULT_PACKAGE)
     parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
-    parser.add_argument(
-        "--allow-ssh-register",
-        action="store_true",
-        help="Record that host SSH key registration is user-approved; this diagnostic still performs no host mutation by itself.",
-    )
     args = parser.parse_args(argv)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -300,8 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             "host_power_commands": False,
             "app_data_clear": False,
             "device_revoke": False,
-            "allow_ssh_register": args.allow_ssh_register,
-            "ssh_registration_performed": False,
+            "host_https_delegated_power_mutation": False,
         },
         "package_metadata": package_metadata(args.adb, args.serial, args.package),
     }

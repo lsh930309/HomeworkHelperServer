@@ -141,14 +141,17 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
         dialog_source.index("class NumericTableWidgetItem")
     ]
     assert "remote_server_mode_checkbox" in dialog_source
-    assert "QTabWidget" not in remote_dialog_source
+    assert "QTabWidget" in remote_dialog_source
+    assert 'self.tabs.addTab(main_page, "직접 연결")' in remote_dialog_source
+    assert 'self.tabs.addTab(legacy_page, "Legacy Tailscale")' in remote_dialog_source
+    assert "QScrollArea" not in remote_dialog_source
     assert "_RemoteSettingsWorker" in dialog_source
     assert "_schedule_initial_refreshes" in remote_dialog_source
     assert "setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)" in remote_dialog_source
     assert "setMaximumHeight(150)" not in remote_dialog_source
-    assert "ScrollBarAlwaysOff" in remote_dialog_source
+    assert "ScrollBarAsNeeded" in remote_dialog_source
     assert "_fit_devices_table_to_rows" in remote_dialog_source
-    assert "Tailnet 기기" in remote_dialog_source
+    assert "원격 기기" in remote_dialog_source
     assert "can_revoke" in remote_dialog_source
     assert "_start_worker(\"devices\"" in remote_dialog_source
     assert "_start_worker(\"remote_access\"" in remote_dialog_source
@@ -163,7 +166,7 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "remote_access_details_text" in dialog_source
     assert "tailscale_health_text" in dialog_source
     assert "power_setup_text" in dialog_source
-    assert "/remote/power/setup" in dialog_source
+    assert "/remote/power/status" in dialog_source
     assert "/remote/power/ssh-key" not in dialog_source
     assert "/remote/power/config" not in dialog_source
     assert "/remote/power/smartthings/devices" not in dialog_source
@@ -172,7 +175,7 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "SSH public key 승인/등록" not in dialog_source
     assert "전원 설정 저장" not in dialog_source
     assert "호스트 전원 준비 상태" in dialog_source
-    assert "클라이언트가 SmartThings/OpenSSH 직접 경로" in dialog_source
+    assert "호스트 HTTPS 위임" in dialog_source
 
 
 def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
@@ -205,8 +208,8 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
         assert dialog.remote_access_url_edit.isReadOnly()
         assert "sslip.io" in dialog.remote_access_url_edit.placeholderText()
         assert dialog.devices_table.isColumnHidden(0)
-        assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        assert dialog.devices_table.maximumHeight() > 1000
+        assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert dialog.devices_table.maximumHeight() <= 220
 
         dialog._populate_devices([])
         empty_height = dialog.devices_table.height()
@@ -217,7 +220,7 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
         app.processEvents()
 
         assert dialog.devices_table.rowCount() == 4
-        assert dialog.devices_table.height() > empty_height
+        assert dialog.devices_table.height() >= dialog.devices_table.minimumHeight()
         assert dialog.devices_table.item(0, 0).data(Qt.ItemDataRole.UserRole) is True
         expected_min = (
             dialog.devices_table.horizontalHeader().height()

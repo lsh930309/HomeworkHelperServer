@@ -16,20 +16,14 @@ import dev.homeworkhelper.remote.data.SMARTTHINGS_DEFAULT_WAKE_LABEL
 import dev.homeworkhelper.remote.data.SmartThingsClient
 import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
 import dev.homeworkhelper.remote.data.selectSmartThingsWakeDevice
-import dev.homeworkhelper.remote.platform.AndroidSSHKeyStore
-import dev.homeworkhelper.remote.platform.AndroidSSHPowerManager
 import dev.homeworkhelper.remote.platform.AndroidTokenStore
 import dev.homeworkhelper.remote.platform.AutomationPreferences
 import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.platform.RemoteNetworkControllers
-import dev.homeworkhelper.remote.platform.RemoteNetworkSocketFactory
 import dev.homeworkhelper.remote.platform.RemoteNetworkState
 import dev.homeworkhelper.remote.platform.RemoteNetworkStatus
 import dev.homeworkhelper.remote.platform.RemotePreferences
 import dev.homeworkhelper.remote.platform.SmartThingsPreferences
-import dev.homeworkhelper.remote.platform.SshPowerPreferences
-import dev.homeworkhelper.remote.platform.TailscaleBinding
-import dev.homeworkhelper.remote.platform.TailscaleBindingState
 import dev.homeworkhelper.remote.platform.TokenStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,11 +35,8 @@ import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 
-private const val REMOTE_AGENT_SCHEME = "http"
 private const val PUBLIC_REMOTE_AGENT_SCHEME = "https"
-private const val REMOTE_AGENT_PORT = 8000
 private const val PUBLIC_IP_DNS_SUFFIX = "sslip.io"
-private val URL_SCHEME_PATTERN = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
 private val IPV4_PATTERN = Regex("""^\d{1,3}(?:\.\d{1,3}){3}$""")
 private val SSLIP_DASH_IPV4_PATTERN = Regex("""^(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.sslip\.io$""", RegexOption.IGNORE_CASE)
 
@@ -57,85 +48,33 @@ internal data class RemoteBaseUrlPolicy(
 internal fun normalizeRemoteBaseUrl(value: String): String {
     val trimmed = value.trim().trimEnd('/')
     if (trimmed.isBlank()) return ""
-    if (!URL_SCHEME_PATTERN.containsMatchIn(trimmed)) {
-        val hostCandidate = trimmed.substringBefore('/').substringBefore('?').substringBefore(':')
-        if (isPublicIpv4Host(hostCandidate)) {
-            return "$PUBLIC_REMOTE_AGENT_SCHEME://${hostCandidate.replace(".", "-")}.$PUBLIC_IP_DNS_SUFFIX"
-        }
-    }
-    val withScheme = if (URL_SCHEME_PATTERN.containsMatchIn(trimmed)) trimmed else "$REMOTE_AGENT_SCHEME://$trimmed"
-    val uri = runCatching { URI(withScheme) }.getOrNull() ?: return withScheme
-    val host = uri.host?.trim().orEmpty()
-    if (host.isBlank()) return withScheme
-    val scheme = uri.scheme.ifBlank { REMOTE_AGENT_SCHEME }
-    val port = uri.port
-    val displayHost = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
-    val path = uri.rawPath?.takeIf { it.isNotBlank() && it != "/" }.orEmpty()
-    val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
-    val authority = if (port > 0) {
-        "$displayHost:$port"
-    } else if (scheme.lowercase() == "https") {
-        displayHost
-    } else {
-        "$displayHost:$REMOTE_AGENT_PORT"
-    }
-    return "$scheme://$authority$path$query"
+    val publicIp = publicIpv4FromUserInput(trimmed) ?: publicIpv4FromSslipUrl(trimmed) ?: return ""
+    return "$PUBLIC_REMOTE_AGENT_SCHEME://${publicIp.replace(".", "-")}.$PUBLIC_IP_DNS_SUFFIX"
 }
 
 internal fun remoteHostInputFromBaseUrl(baseUrl: String): String {
-    val normalized = normalizeRemoteBaseUrl(baseUrl)
-    val host = runCatching { URI(normalized).host?.trim().orEmpty() }.getOrDefault("")
-    val match = SSLIP_DASH_IPV4_PATTERN.matchEntire(host)
-    if (match != null) {
-        val dotted = match.groupValues.drop(1).joinToString(".")
-        if (isPublicIpv4Host(dotted)) return dotted
-    }
-    return normalized
+    return publicIpv4FromSslipUrl(baseUrl) ?: publicIpv4FromUserInput(baseUrl) ?: ""
 }
 
 internal fun validateRemoteBaseUrlPolicy(baseUrl: String): RemoteBaseUrlPolicy {
     val normalized = normalizeRemoteBaseUrl(baseUrl)
-    if (normalized.isBlank()) return RemoteBaseUrlPolicy(true, "")
-    val uri = runCatching { URI(normalized) }.getOrNull()
-        ?: return RemoteBaseUrlPolicy(false, "Remote Agent URL 형식이 올바르지 않습니다.")
-    val scheme = uri.scheme?.lowercase().orEmpty()
-    val host = uri.host?.trim().orEmpty()
-    if (scheme == "https") {
-        return RemoteBaseUrlPolicy(true, "Public HTTPS 직접접속 URL입니다.")
+    if (normalized.isBlank()) {
+        return RemoteBaseUrlPolicy(false, "공유기 WAN 공인 IPv4만 입력하세요. URL, 포트, LAN/사설망 주소는 사용할 수 없습니다.")
     }
-    if (scheme == "http" && isPrivateRemoteHost(host)) {
-        return RemoteBaseUrlPolicy(true, "Private HTTP 경로입니다. LAN, loopback, Tailscale 같은 사설망에서만 사용하세요.")
-    }
-    if (scheme == "http") {
-        return RemoteBaseUrlPolicy(false, "Public HTTP는 허용하지 않습니다. 외부 접속은 라우터/프록시에서 HTTPS로 종료한 URL을 사용하세요.")
-    }
-    return RemoteBaseUrlPolicy(false, "Remote Agent URL은 http 또는 https만 지원합니다.")
+    return RemoteBaseUrlPolicy(true, "공개 HTTPS 직접접속: 공유기 공인 IP만 저장하고 URL은 앱 내부에서 생성합니다.")
 }
 
-private fun isPrivateRemoteHost(host: String): Boolean {
-    val normalized = host.trim().trim('[', ']').lowercase()
-    if (normalized in setOf("localhost", "testclient")) return true
-    if (normalized.endsWith(".local")) return true
-    if (normalized.contains(":") && (
-            normalized == "::1" ||
-                normalized.startsWith("fe80:") ||
-                normalized.startsWith("fc") ||
-                normalized.startsWith("fd")
-            )
-    ) {
-        return true
-    }
-    if (!IPV4_PATTERN.matches(normalized)) return false
-    val octets = normalized.split(".").mapNotNull { it.toIntOrNull() }
-    if (octets.size != 4 || octets.any { it !in 0..255 }) return false
-    val first = octets[0]
-    val second = octets[1]
-    return first == 10 ||
-        first == 127 ||
-        first == 192 && second == 168 ||
-        first == 172 && second in 16..31 ||
-        first == 169 && second == 254 ||
-        first == 100 && second in 64..127
+private fun publicIpv4FromUserInput(value: String): String? {
+    val trimmed = value.trim()
+    if (!IPV4_PATTERN.matches(trimmed)) return null
+    return trimmed.takeIf(::isPublicIpv4Host)
+}
+
+private fun publicIpv4FromSslipUrl(value: String): String? {
+    val host = runCatching { URI(value.trim()).host?.trim().orEmpty() }.getOrDefault("")
+    val match = SSLIP_DASH_IPV4_PATTERN.matchEntire(host) ?: return null
+    val dotted = match.groupValues.drop(1).joinToString(".")
+    return dotted.takeIf(::isPublicIpv4Host)
 }
 
 private fun isPublicIpv4Host(host: String): Boolean {
@@ -146,31 +85,34 @@ private fun isPublicIpv4Host(host: String): Boolean {
     val first = octets[0]
     val second = octets[1]
     val third = octets[2]
-    if (first == 0 || first >= 224 || first == 192 && second == 0 || first == 198 && second in 18..19) return false
-    if (first == 198 && second == 51 && third == 100 || first == 203 && second == 0 && third == 113) return false
-    return !isPrivateRemoteHost(normalized)
+    if (first == 0 || first >= 224) return false
+    if (first == 10 || first == 127) return false
+    if (first == 172 && second in 16..31) return false
+    if (first == 192 && second == 168) return false
+    if (first == 169 && second == 254) return false
+    if (first == 100 && second in 64..127) return false
+    if (first == 192 && second == 0 && third == 2) return false
+    if (first == 198 && second in 18..19) return false
+    if (first == 198 && second == 51 && third == 100) return false
+    if (first == 203 && second == 0 && third == 113) return false
+    return true
 }
 
 data class AutomationUiState(
     val remoteNetwork: RemoteNetworkState = RemoteNetworkState(),
-    val tailscale: TailscaleBindingState = TailscaleBindingState(),
-    val ssh: SshPowerPreferences = SshPowerPreferences(),
     val smartThings: SmartThingsPreferences = SmartThingsPreferences(),
     val isRemoteNetworkBusy: Boolean = false,
     val smartThingsCandidates: List<SmartThingsDeviceCandidate> = emptyList(),
-    val isSshBusy: Boolean = false,
     val isSmartThingsBusy: Boolean = false,
     val powerActionInFlight: PowerAction? = null,
 ) {
-    val sshReady: Boolean
-        get() = ssh.publicKey.isNotBlank() && ssh.healthOk && ssh.host.isNotBlank() && ssh.user.isNotBlank()
-
     val wakeReady: Boolean
         get() = smartThings.hasPat && smartThings.deviceId.isNotBlank()
 }
 
 data class RemoteUiState(
     val baseUrl: String = "",
+    val routerPublicIpInput: String = "",
     val deviceName: String = "",
     val hasToken: Boolean = false,
     val availability: RemoteAvailability = RemoteAvailability.Unknown,
@@ -191,11 +133,19 @@ data class RemoteUiState(
     val powerReadiness: RemotePowerReadiness? = null,
     val setupRepairInFlight: Boolean = false,
     val baseUrlSecurityMessage: String = "",
-    val baseUrlAllowed: Boolean = true,
+    val baseUrlAllowed: Boolean = false,
     val automation: AutomationUiState = AutomationUiState(),
 ) {
     val canRefresh: Boolean
         get() = baseUrl.isNotBlank() && baseUrlAllowed && !isRefreshing
+
+    val hostDelegatedPowerReady: Boolean
+        get() = listOf(PowerAction.Sleep, PowerAction.Restart, PowerAction.Shutdown).all(::supportsHostPowerAction)
+
+    fun supportsHostPowerAction(action: PowerAction): Boolean {
+        if (action == PowerAction.Wake) return automation.wakeReady
+        return powerReadiness?.status?.supportedActions?.contains(action.wireName) == true
+    }
 
     val lastSyncLabel: String
         get() = if (lastSyncMillis <= 0L) {
@@ -213,17 +163,10 @@ class RemoteViewModel(
 ) : ViewModel() {
     private val appContext = context.applicationContext
     private val remoteNetworkController = RemoteNetworkControllers.create(appContext)
-    private val tailscaleBinding = TailscaleBinding(appContext)
-    private val sshKeyStore = AndroidSSHKeyStore(automationPreferences)
-    private val sshPowerManager = AndroidSSHPowerManager(
-        automationPreferences,
-        RemoteNetworkSocketFactory(remoteNetworkController),
-    )
     private val smartThingsPatSeeded = automationPreferences.seedSmartThingsPatFromBuildConfig()
-    private var autoSshAttemptSignature: String? = null
     private val storedBaseUrlAtLaunch = preferences.baseUrl
     private val defaultRemoteBaseUrl = normalizeRemoteBaseUrl(BuildConfig.DEFAULT_REMOTE_BASE_URL)
-    private val initialBaseUrl = normalizeRemoteBaseUrl(storedBaseUrlAtLaunch.ifBlank { defaultRemoteBaseUrl })
+    private val initialBaseUrl = normalizeRemoteBaseUrl(storedBaseUrlAtLaunch).ifBlank { defaultRemoteBaseUrl }
     private val defaultRemoteBaseUrlApplied = storedBaseUrlAtLaunch.isBlank() && initialBaseUrl.isNotBlank()
 
     init {
@@ -232,21 +175,21 @@ class RemoteViewModel(
         }
     }
 
+    private val initialPolicy = validateRemoteBaseUrlPolicy(initialBaseUrl)
     private val _uiState = MutableStateFlow(
         RemoteUiState(
             baseUrl = initialBaseUrl,
+            routerPublicIpInput = remoteHostInputFromBaseUrl(initialBaseUrl),
             deviceName = preferences.deviceName.ifBlank { defaultDeviceName() },
             hasToken = tokenStore.loadToken() != null,
             processes = preferences.cachedProcesses(),
             lastSyncMillis = preferences.lastSyncMillis,
             showDiagnostics = preferences.showDiagnostics,
             userMessage = initialUserMessage(),
-            baseUrlSecurityMessage = validateRemoteBaseUrlPolicy(initialBaseUrl).message,
-            baseUrlAllowed = validateRemoteBaseUrlPolicy(initialBaseUrl).allowed,
+            baseUrlSecurityMessage = if (initialBaseUrl.isBlank()) "공유기 WAN 공인 IPv4를 입력하세요." else initialPolicy.message,
+            baseUrlAllowed = initialBaseUrl.isNotBlank() && initialPolicy.allowed,
             automation = AutomationUiState(
                 remoteNetwork = remoteNetworkController.initialState,
-                tailscale = tailscaleBinding.inspect(),
-                ssh = automationPreferences.loadSsh(),
                 smartThings = automationPreferences.loadSmartThings(),
             ),
         )
@@ -254,7 +197,6 @@ class RemoteViewModel(
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
 
     fun onAppForeground() {
-        updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
         viewModelScope.launch {
             val state = remoteNetworkController.inspect()
             updateAutomation { it.copy(remoteNetwork = state) }
@@ -265,22 +207,25 @@ class RemoteViewModel(
     }
 
     fun onAppBackground() {
-        // Public HTTPS direct mode never toggles VPN state on lifecycle changes.
+        // Public HTTPS direct mode has no client-side network lifecycle side effects.
     }
 
     fun updateBaseUrl(value: String) {
-        val normalized = normalizeRemoteBaseUrl(value)
-        val policy = validateRemoteBaseUrlPolicy(normalized)
-        preferences.baseUrl = normalized
+        val sanitizedInput = value.filter { it.isDigit() || it == '.' }.take(15)
+        val normalized = normalizeRemoteBaseUrl(sanitizedInput)
+        val policy = if (normalized.isBlank()) validateRemoteBaseUrlPolicy(sanitizedInput) else validateRemoteBaseUrlPolicy(normalized)
+        if (normalized.isNotBlank()) {
+            preferences.baseUrl = normalized
+        }
         _uiState.update {
             it.copy(
+                routerPublicIpInput = sanitizedInput,
                 baseUrl = normalized,
                 baseUrlSecurityMessage = policy.message,
-                baseUrlAllowed = policy.allowed,
-                userMessage = if (policy.allowed) null else policy.message,
+                baseUrlAllowed = normalized.isNotBlank() && policy.allowed,
+                userMessage = if (normalized.isNotBlank() && policy.allowed) null else policy.message,
             )
         }
-        repairSshDefaults(reason = "URL 변경")
     }
 
     fun updateDeviceName(value: String) {
@@ -308,25 +253,6 @@ class RemoteViewModel(
                 _uiState.update { it.copy(userMessage = _uiState.value.automation.remoteNetwork.message) }
             }
         }
-    }
-
-    fun updateSshHost(value: String) {
-        if (automationPreferences.sshHost != value.trim()) resetSshHealthTrust()
-        automationPreferences.sshHost = value
-        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
-    }
-
-    fun updateSshUser(value: String) {
-        if (automationPreferences.sshUser != value.trim()) resetSshHealthTrust(resetFingerprint = false)
-        automationPreferences.sshUser = value
-        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
-    }
-
-    fun updateSshPort(value: String) {
-        val port = value.toIntOrNull() ?: return
-        if (automationPreferences.sshPort != port) resetSshHealthTrust()
-        automationPreferences.sshPort = port
-        updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
     }
 
     fun updateManualSmartThingsDevice(value: String) {
@@ -361,7 +287,7 @@ class RemoteViewModel(
             _uiState.update {
                 it.copy(
                     availability = RemoteAvailability.Unknown,
-                    userMessage = "Remote Agent URL을 먼저 입력하세요.",
+                    userMessage = "공유기 WAN 공인 IPv4를 먼저 입력하세요.",
                 )
             }
             return
@@ -372,12 +298,16 @@ class RemoteViewModel(
                 _uiState.update { it.copy(isRefreshing = false) }
                 return@launch
             }
-            runCatching { repository().fetchHomeSnapshot() }
-                .onSuccess { snapshot ->
+            runCatching {
+                val repo = repository()
+                val accessStatus = runCatching { repo.remoteAccessStatus() }.getOrNull()
+                val snapshot = repo.fetchHomeSnapshot()
+                accessStatus to snapshot
+            }
+                .onSuccess { (accessStatus, snapshot) ->
                     val now = System.currentTimeMillis()
                     preferences.cachedProcessesJson = snapshot.rawProcessesJson
                     preferences.lastSyncMillis = now
-                    applyPowerDefaults(snapshot.powerReadiness)
                     _uiState.update {
                         it.copy(
                             availability = RemoteAvailability.Online,
@@ -392,13 +322,8 @@ class RemoteViewModel(
                             processLaunchEnabled = snapshot.status.processLaunch,
                             processStopEnabled = snapshot.status.processStop,
                             powerReadiness = snapshot.powerReadiness,
-                            automation = it.automation.copy(
-                                ssh = automationPreferences.loadSsh(),
-                                tailscale = tailscaleBinding.inspect(),
-                            ),
                         )
                     }
-                    maybeAutoCompleteSshAutomation("온라인 동기화 후")
                 }
                 .onFailure { error -> applyFailure(error) }
         }
@@ -408,7 +333,7 @@ class RemoteViewModel(
         val baseUrl = _uiState.value.baseUrl.trim()
         val deviceName = _uiState.value.deviceName.trim().ifBlank { defaultDeviceName() }
         if (baseUrl.isBlank() || code.trim().length != 6) {
-            _uiState.update { it.copy(userMessage = "Remote Agent URL과 6자리 페어링 코드를 입력하세요.") }
+            _uiState.update { it.copy(userMessage = "공유기 공인 IP와 6자리 페어링 코드를 입력하세요.") }
             return
         }
         viewModelScope.launch {
@@ -427,7 +352,7 @@ class RemoteViewModel(
                             isPairing = false,
                             deviceName = pairedName,
                             hasToken = true,
-                            userMessage = "페어링 성공: $pairedName 등록 완료. 게임 목록을 동기화합니다.",
+                            userMessage = "페어링 성공: $pairedName 등록 완료. 공개 HTTPS 상태를 자동 확인합니다.",
                         )
                     }
                     refreshDevices(updateMessage = false)
@@ -581,52 +506,30 @@ class RemoteViewModel(
         }
     }
 
-    fun inspectTailscale() {
-        updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
-        _uiState.update { it.copy(userMessage = it.automation.tailscale.message) }
-    }
-
-    fun openTailscaleApp() {
-        val opened = tailscaleBinding.openTailscaleApp()
-        _uiState.update { it.copy(userMessage = if (opened) "Tailscale 앱을 열었습니다." else "Tailscale 앱을 찾지 못했습니다.") }
-    }
-
-    fun openTailscaleInstallPage() {
-        tailscaleBinding.openInstallPage()
-        _uiState.update { it.copy(userMessage = "Tailscale 설치 페이지를 열었습니다.") }
-    }
-
-    fun openTailscaleAppSettings() {
-        val opened = tailscaleBinding.openTailscaleAppSettings()
-        _uiState.update { it.copy(userMessage = if (opened) "Tailscale 앱 설정을 열었습니다. 배터리 제한 없음/절전 예외를 권장합니다." else "Tailscale 앱 설정을 열지 못했습니다.") }
-    }
-
-    fun openVpnSettings() {
-        val opened = tailscaleBinding.openVpnSettings()
-        _uiState.update { it.copy(userMessage = if (opened) "Android VPN 설정을 열었습니다. 필요하면 Always-on VPN을 Tailscale로 설정하세요." else "Android VPN 설정을 열지 못했습니다.") }
-    }
-
     fun repairEnvironment() {
         val baseUrl = _uiState.value.baseUrl.trim()
         if (baseUrl.isBlank()) {
-            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
+            _uiState.update { it.copy(userMessage = "공유기 WAN 공인 IPv4를 먼저 입력하세요.") }
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(setupRepairInFlight = true, userMessage = "환경 자동 복구를 시작합니다. 전원 명령은 실행하지 않습니다.") }
-            updateAutomation { it.copy(tailscale = tailscaleBinding.inspect()) }
-            if (!ensureRemoteNetwork("환경 자동 복구")) {
+            _uiState.update { it.copy(setupRepairInFlight = true, userMessage = "공개 HTTPS 환경 점검을 시작합니다.") }
+            if (!ensureRemoteNetwork("공개 HTTPS 환경 점검")) {
                 _uiState.update { it.copy(setupRepairInFlight = false) }
                 return@launch
             }
-            runCatching { repository().fetchHomeSnapshot() }
-                .onSuccess { snapshot ->
+            runCatching {
+                val repo = repository()
+                val accessStatus = runCatching { repo.remoteAccessStatus() }.getOrNull()
+                accessStatus to repo.fetchHomeSnapshot()
+            }
+                .onSuccess { (accessStatus, snapshot) ->
                     val now = System.currentTimeMillis()
                     preferences.cachedProcessesJson = snapshot.rawProcessesJson
                     preferences.lastSyncMillis = now
-                    applyPowerDefaults(snapshot.powerReadiness)
                     _uiState.update {
                         it.copy(
+                            setupRepairInFlight = false,
                             availability = RemoteAvailability.Online,
                             isRefreshing = false,
                             processes = snapshot.processes,
@@ -638,111 +541,15 @@ class RemoteViewModel(
                             processLaunchEnabled = snapshot.status.processLaunch,
                             processStopEnabled = snapshot.status.processStop,
                             powerReadiness = snapshot.powerReadiness,
-                            automation = it.automation.copy(
-                                ssh = automationPreferences.loadSsh(),
-                                tailscale = tailscaleBinding.inspect(),
-                            ),
+                            userMessage = accessStatus?.message
+                                ?: "공개 HTTPS 연결과 Host 위임 전원 상태를 확인했습니다.",
                         )
                     }
+                    refreshDevices(updateMessage = false)
                 }
                 .onFailure { error ->
-                    repairSshDefaults(reason = "환경 자동 복구")
-                    _uiState.update { it.copy(userMessage = error.message ?: "Remote Agent 상태 조회 실패. 로컬 설정 복구만 적용했습니다.") }
+                    _uiState.update { it.copy(setupRepairInFlight = false, userMessage = error.message ?: "Remote Agent 상태 조회 실패") }
                 }
-
-            val ssh = automationPreferences.loadSsh()
-            if (tokenStore.loadToken().isNullOrBlank()) {
-                _uiState.update {
-                    it.copy(
-                        setupRepairInFlight = false,
-                        userMessage = "환경 자동 복구: SSH host/user 후보를 정리했습니다. key 등록은 페어링 토큰 복구 후 가능합니다.",
-                    )
-                }
-                return@launch
-            }
-            if (sshHasKnownBadEndpoint(ssh)) {
-                _uiState.update {
-                    it.copy(
-                        setupRepairInFlight = false,
-                        userMessage = "환경 자동 복구: SSH host/user가 아직 유효하지 않습니다. Remote Agent URL과 host user를 확인하세요.",
-                    )
-                }
-                return@launch
-            }
-            try {
-                completeSshAutomation("환경 자동 복구")
-            } finally {
-                _uiState.update { it.copy(setupRepairInFlight = false) }
-            }
-        }
-    }
-
-    fun createAndRegisterSshKey() {
-        if (_uiState.value.baseUrl.isBlank()) {
-            _uiState.update { it.copy(userMessage = "Remote Agent URL을 먼저 입력하세요.") }
-            return
-        }
-        viewModelScope.launch {
-            completeSshAutomation("수동 요청")
-        }
-    }
-
-    fun verifySshHealth() {
-        val privateKey = sshKeyStore.loadPrivateKey()
-        if (privateKey.isNullOrBlank()) {
-            _uiState.update { it.copy(userMessage = "SSH key를 먼저 생성/등록하세요.") }
-            return
-        }
-        viewModelScope.launch {
-            if (!ensureRemoteNetwork("SSH health 확인")) return@launch
-            updateAutomation { it.copy(isSshBusy = true) }
-            val result = sshPowerManager.health(automationPreferences.loadSsh(), privateKey)
-            updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-            _uiState.update { it.copy(userMessage = result.message) }
-        }
-    }
-
-    private fun maybeAutoCompleteSshAutomation(trigger: String) {
-        val baseUrl = _uiState.value.baseUrl.trim()
-        repairSshDefaults(_uiState.value.powerReadiness, trigger)
-        val ssh = automationPreferences.loadSsh()
-        if (baseUrl.isBlank() || tokenStore.loadToken().isNullOrBlank()) return
-        if (sshHasKnownBadEndpoint(ssh) || ssh.healthOk || _uiState.value.automation.isSshBusy || _uiState.value.setupRepairInFlight) return
-        val signature = listOf(baseUrl, ssh.host, ssh.user, ssh.port.toString(), ssh.publicKey.take(48)).joinToString("|")
-        if (autoSshAttemptSignature == signature) return
-        autoSshAttemptSignature = signature
-        viewModelScope.launch {
-            completeSshAutomation(trigger)
-        }
-    }
-
-    private suspend fun completeSshAutomation(trigger: String) {
-        if (!ensureRemoteNetwork("$trigger SSH 자동화")) return
-        updateAutomation { it.copy(isSshBusy = true) }
-        _uiState.update { it.copy(userMessage = "$trigger SSH key 등록과 health 확인을 자동 진행합니다.") }
-        val keyPair = sshKeyStore.ensureKeyPair()
-        val registerResult = runCatching { repository().registerPowerSSHKey(keyPair.publicKeyLine, "Android") }
-            .getOrElse { error ->
-                updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-                _uiState.update { it.copy(userMessage = "SSH public key 자동 등록 실패: ${error.message ?: "알 수 없는 오류"}") }
-                return
-            }
-        if (!registerResult.accepted) {
-            updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-            _uiState.update { it.copy(userMessage = "SSH public key 자동 등록이 거부되었습니다: ${registerResult.message}") }
-            return
-        }
-        val privateKey = sshKeyStore.loadPrivateKey() ?: keyPair.privateKeyPem
-        val healthResult = sshPowerManager.health(automationPreferences.loadSsh(), privateKey)
-        updateAutomation { it.copy(isSshBusy = false, ssh = automationPreferences.loadSsh()) }
-        _uiState.update {
-            it.copy(
-                userMessage = if (healthResult.ok) {
-                    "$trigger SSH key 등록과 health 확인을 자동 완료했습니다."
-                } else {
-                    "SSH key 등록은 완료했지만 health 확인 실패: ${healthResult.message}"
-                },
-            )
         }
     }
 
@@ -784,7 +591,7 @@ class RemoteViewModel(
     fun executePowerAction(action: PowerAction) {
         when (action) {
             PowerAction.Wake -> wakeWithSmartThings()
-            PowerAction.Sleep, PowerAction.Restart, PowerAction.Shutdown -> executeSshPower(action)
+            PowerAction.Sleep, PowerAction.Restart, PowerAction.Shutdown -> executeHostDelegatedPower(action)
         }
     }
 
@@ -823,27 +630,32 @@ class RemoteViewModel(
         }
     }
 
-    private fun executeSshPower(action: PowerAction) {
-        val privateKey = sshKeyStore.loadPrivateKey()
-        if (privateKey.isNullOrBlank() || !automationPreferences.loadSsh().healthOk) {
-            _uiState.update { it.copy(userMessage = "SSH health 확인이 완료되어야 ${action.label} 명령을 사용할 수 있습니다.") }
+    private fun executeHostDelegatedPower(action: PowerAction) {
+        if (!_uiState.value.supportsHostPowerAction(action)) {
+            _uiState.update { it.copy(userMessage = "Host HTTPS 위임 전원 상태 확인 후 ${action.label} 명령을 사용할 수 있습니다.") }
             return
         }
         viewModelScope.launch {
-            if (!ensureRemoteNetwork("${action.label} SSH 명령")) return@launch
+            if (!ensureRemoteNetwork("${action.label} HTTPS 전원 명령")) return@launch
             updateAutomation { it.copy(powerActionInFlight = action) }
-            val result = sshPowerManager.executePowerAction(action, automationPreferences.loadSsh(), privateKey)
-            updateAutomation { it.copy(powerActionInFlight = null) }
-            _uiState.update {
-                it.copy(
-                    availability = if (result.ok) {
-                        if (action == PowerAction.Restart) RemoteAvailability.Restarting else RemoteAvailability.GoingOffline
-                    } else {
-                        it.availability
-                    },
-                    userMessage = result.message,
-                )
-            }
+            runCatching { repository().executePowerAction(action.wireName) }
+                .onSuccess { result ->
+                    updateAutomation { it.copy(powerActionInFlight = null) }
+                    _uiState.update {
+                        it.copy(
+                            availability = if (result.accepted) {
+                                if (action == PowerAction.Restart) RemoteAvailability.Restarting else RemoteAvailability.GoingOffline
+                            } else {
+                                it.availability
+                            },
+                            userMessage = result.message,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    updateAutomation { it.copy(powerActionInFlight = null) }
+                    applyFailure(error)
+                }
         }
     }
 
@@ -856,68 +668,6 @@ class RemoteViewModel(
 
     private fun repository(tokenOverride: String? = tokenStore.loadToken()): RemoteRepository {
         return RemoteRepository(_uiState.value.baseUrl.trim(), tokenOverride, remoteNetworkController)
-    }
-
-    private fun applyPowerDefaults(powerReadiness: RemotePowerReadiness?) {
-        repairSshDefaults(powerReadiness, "전원 readiness")
-    }
-
-    private fun repairSshDefaults(powerReadiness: RemotePowerReadiness? = _uiState.value.powerReadiness, reason: String = "자동 복구"): Boolean {
-        val candidateUser = powerReadiness?.setup?.user?.trim().orEmpty()
-        val candidateHost = hostFromBaseUrl(_uiState.value.baseUrl)
-        var changed = false
-        if (shouldReplaceSshUser(automationPreferences.sshUser, candidateUser)) {
-            automationPreferences.sshUser = candidateUser
-            resetSshHealthTrust(resetFingerprint = false)
-            changed = true
-        }
-        if (shouldReplaceSshHost(automationPreferences.sshHost, candidateHost)) {
-            automationPreferences.sshHost = candidateHost
-            resetSshHealthTrust()
-            changed = true
-        }
-        if (changed) {
-            autoSshAttemptSignature = null
-            updateAutomation { it.copy(ssh = automationPreferences.loadSsh()) }
-            _uiState.update { it.copy(userMessage = "$reason: 테스트/loopback SSH 설정을 실제 host 후보로 복구했습니다.") }
-        }
-        return changed
-    }
-
-    private fun hostFromBaseUrl(baseUrl: String): String {
-        return runCatching { URI(baseUrl.trim()).host }.getOrNull().orEmpty()
-    }
-
-    private fun shouldReplaceSshHost(current: String, candidate: String): Boolean {
-        if (candidate.isBlank()) return false
-        val normalized = current.trim().lowercase()
-        if (normalized.isBlank()) return true
-        return normalized in setOf("127.0.0.1", "localhost", "0.0.0.0", "::1") || normalized.contains("fake")
-    }
-
-    private fun shouldReplaceSshUser(current: String, candidate: String): Boolean {
-        if (candidate.isBlank()) return false
-        val normalized = current.trim().lowercase()
-        return normalized.isBlank() || sshUserLooksSynthetic(normalized)
-    }
-
-    private fun sshHasKnownBadEndpoint(ssh: SshPowerPreferences): Boolean {
-        val host = ssh.host.trim().lowercase()
-        val user = ssh.user.trim().lowercase()
-        return host.isBlank() ||
-            user.isBlank() ||
-            host in setOf("127.0.0.1", "localhost", "0.0.0.0", "::1") ||
-            host.contains("fake") ||
-            sshUserLooksSynthetic(user)
-    }
-
-    private fun sshUserLooksSynthetic(value: String): Boolean {
-        return value == "fake" || value == "fake-user" || value == "test" || value.contains("fake")
-    }
-
-    private fun resetSshHealthTrust(resetFingerprint: Boolean = true) {
-        automationPreferences.sshHealthOk = false
-        if (resetFingerprint) automationPreferences.sshTrustedFingerprint = ""
     }
 
     private fun updateAutomation(transform: (AutomationUiState) -> AutomationUiState) {
@@ -938,7 +688,7 @@ class RemoteViewModel(
         }
         val connecting = _uiState.value.automation.remoteNetwork.copy(
             status = RemoteNetworkStatus.Connecting,
-            message = "$reason 원격 네트워크 연결을 확인합니다.",
+            message = "$reason 공개 HTTPS 연결을 확인합니다.",
             lastAction = reason,
         )
         updateAutomation { it.copy(isRemoteNetworkBusy = true, remoteNetwork = connecting) }
@@ -978,7 +728,7 @@ class RemoteViewModel(
         return when (error) {
             is RemoteApiException.AuthRejected -> "저장된 토큰이 거부되었습니다. 캐시는 보존했으니 페어링/토큰 복구를 진행하세요."
             is RemoteApiException.OfflineExpected -> "호스트가 꺼져 있거나 네트워크에서 보이지 않습니다. 마지막 게임 목록을 표시합니다."
-            is RemoteApiException.AgentUnavailable -> "호스트는 있을 수 있지만 Remote Agent HTTP 서버에 연결할 수 없습니다."
+            is RemoteApiException.AgentUnavailable -> "호스트는 있을 수 있지만 공개 HTTPS Remote Agent에 연결할 수 없습니다."
             is RemoteApiException.HttpFailure -> "Remote Agent 오류: HTTP ${error.code}"
             else -> error.message ?: "Remote Agent에 연결하지 못했습니다."
         }
@@ -986,10 +736,10 @@ class RemoteViewModel(
 
     private fun initialUserMessage(): String {
         return when {
-            smartThingsPatSeeded && defaultRemoteBaseUrlApplied -> "로컬 SmartThings debug token과 빌드 기본 Remote Agent URL을 적용했습니다."
+            smartThingsPatSeeded && defaultRemoteBaseUrlApplied -> "로컬 SmartThings debug token과 빌드 기본 공유기 공인 IP 설정을 적용했습니다."
             smartThingsPatSeeded -> "로컬 SmartThings debug token을 앱 보안 저장소에 보관했습니다."
-            defaultRemoteBaseUrlApplied -> "빌드 기본 Remote Agent URL을 적용했습니다. 페어링 코드만 입력하면 됩니다."
-            else -> "Host IP/hostname과 페어링 코드가 있으면 바로 연결할 수 있습니다."
+            defaultRemoteBaseUrlApplied -> "빌드 기본 공유기 공인 IP를 적용했습니다. 페어링 코드만 입력하면 됩니다."
+            else -> "공유기 WAN 공인 IP와 페어링 코드가 있으면 바로 연결할 수 있습니다."
         }
     }
 

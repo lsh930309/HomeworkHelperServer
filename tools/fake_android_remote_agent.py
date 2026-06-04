@@ -24,7 +24,7 @@ RESOURCE_ICONS = {
 LAUNCHES: list[str] = []
 STOPS: list[str] = []
 IMAGE_HITS: list[str] = []
-SSH_KEYS: list[str] = []
+POWER_ACTIONS: list[str] = []
 TOKEN_REFRESHES: list[str] = []
 REVOKED_DEVICES: set[str] = set()
 
@@ -80,13 +80,21 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                     "state_revision": f"fake-android-v3-{len(LAUNCHES)}-{len(IMAGE_HITS)}",
                     "updated_at": now,
                     "counts": {"processes": 2, "shortcuts": 0, "active_sessions": 1 if LAUNCHES else 0},
-                    "capabilities": {"process_launch": True, "process_stop": True, "auth_required": False},
+                    "capabilities": {
+                        "process_launch": True,
+                        "process_stop": True,
+                        "auth_required": False,
+                        "power_config": True,
+                        "power_control": True,
+                    },
                     "power": {
-                        "configured": False,
-                        "state": "client_managed",
-                        "status": "client_managed",
-                        "target_host": "",
-                        "supported_actions": [],
+                        "configured": True,
+                        "state": "ready",
+                        "status": "ready",
+                        "target_host": "Windows Host",
+                        "supported_actions": ["sleep", "restart", "shutdown"],
+                        "wake_mode": "smartthings_client",
+                        "ssh_required": False,
                     },
                 }
             )
@@ -113,10 +121,12 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                         "warnings": [],
                     },
                     "power_readiness": {
-                        "state": "warning",
-                        "color": "yellow",
-                        "message": "Android direct power adapter 미구현",
-                        "supported_actions": [],
+                        "state": "ok",
+                        "color": "green",
+                        "message": "Host HTTPS delegated power ready; Wake는 SmartThings",
+                        "supported_actions": ["sleep", "restart", "shutdown"],
+                        "wake_mode": "smartthings_client",
+                        "ssh_required": False,
                     },
                 }
             )
@@ -148,7 +158,6 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                         "config_path": "fake/Caddyfile",
                         "config_preview": "{\\n    https_port 38443\\n}\\n\\nhttps://211-216-28-65.sslip.io {\\n    reverse_proxy 127.0.0.1:8000\\n}\\n",
                     },
-                    "upnp": {"mapping_enabled": False, "state": "deferred", "message": "Fake UPnP deferred"},
                     "warnings": [],
                     "advisories": ["공유기에서 Remote Agent 8000 포트는 공개하지 마세요."],
                     "message": "Fake public HTTPS route ready",
@@ -198,12 +207,14 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
         if path == "/remote/power/status":
             self._json(
                 {
-                    "configured": False,
-                    "state": "client_managed",
-                    "status": "client_managed",
-                    "target_host": "",
-                    "supported_actions": [],
-                    "message": "Android direct power adapter 미구현",
+                    "configured": True,
+                    "state": "ready",
+                    "status": "ready",
+                    "target_host": "Windows Host",
+                    "supported_actions": ["sleep", "restart", "shutdown"],
+                    "wake_mode": "smartthings_client",
+                    "ssh_required": False,
+                    "message": "Host HTTPS 위임 전원 준비 완료; Wake는 SmartThings",
                 }
             )
             return
@@ -212,11 +223,14 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                 {
                     "host_platform": "windows",
                     "user": "fake-user",
-                    "authorized_keys_path": "C:/Users/fake/.ssh/authorized_keys",
-                    "effective_authorized_keys_path": "C:/Users/fake/.ssh/authorized_keys",
-                    "ssh_service": {"available": True, "running": True, "start_type": "auto", "message": "Fake OpenSSH ready"},
-                    "firewall": {"available": True, "enabled": True, "message": "Fake firewall ready"},
-                    "message": "Fake power setup read-only ready",
+                    "configured": True,
+                    "state": "ready",
+                    "status": "ready",
+                    "target_host": "Windows Host",
+                    "supported_actions": ["sleep", "restart", "shutdown"],
+                    "wake_mode": "smartthings_client",
+                    "ssh_required": False,
+                    "message": "Fake Host HTTPS delegated power ready",
                 }
             )
             return
@@ -229,7 +243,8 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                             "name": "Android Device",
                             "platform": "android",
                             "role": "client",
-                            "tailnet_ip": "100.64.0.20",
+                            "tailnet_ip": "",
+                            "last_source_ip": "198.51.100.20",
                             "pairing_status": "paired" if "android-device" not in REVOKED_DEVICES else "revoked",
                             "connectivity_state": "active",
                             "health_message": "Fake Android device active",
@@ -241,7 +256,8 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                             "name": "HomeworkHelper Host",
                             "platform": "windows",
                             "role": "host",
-                            "tailnet_ip": "100.64.0.10",
+                            "tailnet_ip": "",
+                            "last_source_ip": "211.216.28.65",
                             "pairing_status": "host",
                             "connectivity_state": "local",
                             "health_message": "Fake host online",
@@ -307,19 +323,30 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
             TOKEN_REFRESHES.append("fake-token-refresh")
             self._json({"id": "android-device", "name": "Android Device", "token": "fake-token-refreshed"})
             return
-        if self.path == "/remote/power/ssh-key":
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length).decode("utf-8", "replace") if length else "{}"
-            SSH_KEYS.append(body)
-            self._json({"registered": True, "already_present": False, "message": "Fake SSH public key registered"})
-            return
-        if self.path == "/remote/tailscale/ensure":
-            self._json({
-                "ready": True,
-                "method": "fake",
-                "message": "Fake Tailscale ready",
-                "suggested_base_urls": ["http://127.0.0.1:18080"],
-            })
+        if self.path in {
+            "/remote/power/actions/sleep",
+            "/remote/power/actions/restart",
+            "/remote/power/actions/shutdown",
+        }:
+            action = self.path.removeprefix("/remote/power/actions/").strip("/")
+            if action not in {"sleep", "restart", "shutdown"}:
+                self._json({"accepted": False, "command": f"power.{action}", "status": "unsupported", "message": "unsupported fake power action"}, status=400)
+                return
+            POWER_ACTIONS.append(action)
+            self._json(
+                {
+                    "accepted": True,
+                    "command": f"power.{action}",
+                    "target_id": "host",
+                    "target_name": "Windows Host",
+                    "target": "host",
+                    "status": "accepted",
+                    "message": f"Fake Host HTTPS delegated {action} accepted.",
+                    "command_id": f"power.{action}:fake",
+                    "accepted_at": time.time(),
+                    "refresh_after_ms": 1500,
+                }
+            )
             return
         self._json({"error": "not found"}, status=404)
 

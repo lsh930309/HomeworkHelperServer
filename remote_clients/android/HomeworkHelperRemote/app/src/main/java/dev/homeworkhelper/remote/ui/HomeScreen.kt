@@ -469,7 +469,7 @@ private fun PowerQuickSection(
                 )
                 PowerButton(
                     action = PowerAction.Sleep,
-                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    enabled = state.supportsHostPowerAction(PowerAction.Sleep) && state.automation.powerActionInFlight == null,
                     inFlight = state.automation.powerActionInFlight == PowerAction.Sleep,
                     modifier = Modifier.weight(1f),
                     onClick = { pendingAction = it },
@@ -478,14 +478,14 @@ private fun PowerQuickSection(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PowerButton(
                     action = PowerAction.Restart,
-                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    enabled = state.supportsHostPowerAction(PowerAction.Restart) && state.automation.powerActionInFlight == null,
                     inFlight = state.automation.powerActionInFlight == PowerAction.Restart,
                     modifier = Modifier.weight(1f),
                     onClick = { pendingAction = it },
                 )
                 PowerButton(
                     action = PowerAction.Shutdown,
-                    enabled = state.automation.sshReady && state.automation.powerActionInFlight == null,
+                    enabled = state.supportsHostPowerAction(PowerAction.Shutdown) && state.automation.powerActionInFlight == null,
                     inFlight = state.automation.powerActionInFlight == PowerAction.Shutdown,
                     modifier = Modifier.weight(1f),
                     onClick = { pendingAction = it },
@@ -528,9 +528,9 @@ private fun PowerButton(
 
 private fun powerHint(state: RemoteUiState): String {
     return when {
-        !state.automation.wakeReady && !state.automation.sshReady -> "설정 탭에서 SmartThings 인증+PC 켜기 deviceId와 SSH health를 먼저 완료하세요."
+        !state.automation.wakeReady && !state.hostDelegatedPowerReady -> "설정 탭에서 SmartThings 인증+PC 켜기 deviceId와 Host 위임 전원 상태를 확인하세요."
         !state.automation.wakeReady -> "Wake는 SmartThings PAT/OAuth 인증과 PC 켜기 deviceId가 모두 있어야 활성화됩니다."
-        !state.automation.sshReady -> "절전/재시작/종료는 SSH key 등록과 health 확인 후 활성화됩니다."
-        else -> "Wake는 SmartThings REST API, 나머지 전원 명령은 OpenSSH로 직접 실행합니다."
+        !state.hostDelegatedPowerReady -> "절전/재시작/종료는 공개 HTTPS Remote Agent의 Host 위임 전원 준비 후 활성화됩니다."
+        else -> "Wake는 SmartThings REST API, 나머지 전원 명령은 Host HTTPS 위임으로 실행합니다."
     }
 }

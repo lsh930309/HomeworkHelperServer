@@ -3,10 +3,10 @@
 
 The phone-side prerequisites remain intentionally manual: an adb-reachable
 network path, Wireless debugging, and first-time pairing-code consent must be
-enabled on the device. Tailscale can still provide that adb path, but the APK
-itself is built as a lightweight direct-connection client. This script automates
-the host-side deterministic parts: signed release Gradle build, release APK
-naming/archiving, adb pair/connect, and adb install.
+enabled on the device. The APK itself is built as a public-HTTPS direct
+connection client. This script automates the host-side deterministic parts:
+signed release Gradle build, release APK naming/archiving, adb pair/connect,
+and adb install.
 """
 
 from __future__ import annotations
@@ -21,11 +21,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import build
-from src.core.tailscale import TailscalePeer, TailscaleSnapshot, tailscale_status
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ANDROID_ROOT = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
@@ -48,11 +46,8 @@ ADB_TLS_PAIRING_SERVICE = "_adb-tls-pairing._tcp"
 ADB_TLS_CONNECT_SERVICE = "_adb-tls-connect._tcp"
 PACKAGE_NAME = "dev.homeworkhelper.remote"
 MAIN_ACTIVITY = f"{PACKAGE_NAME}/.MainActivity"
-REMOTE_AGENT_DEFAULT_SCHEME = "http"
-REMOTE_AGENT_DEFAULT_PORT = 8000
 REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY = "homeworkhelper.android.defaultRemoteBaseUrl"
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
-_TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME = "https"
 PUBLIC_IP_DNS_SUFFIX = "sslip.io"
 
@@ -151,50 +146,26 @@ def normalize_remote_base_url(value: str) -> str:
     candidate = value.strip().rstrip("/")
     if not candidate:
         return ""
-    if not _URL_SCHEME_RE.match(candidate):
-        host_candidate = candidate.split("/", 1)[0].split("?", 1)[0].split(":", 1)[0]
-        if is_public_ipv4_literal(host_candidate):
-            return f"{PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME}://{host_candidate.replace('.', '-')}.{PUBLIC_IP_DNS_SUFFIX}"
-        candidate = f"{REMOTE_AGENT_DEFAULT_SCHEME}://{candidate}"
-
-    parsed = urlsplit(candidate)
-    if not parsed.scheme or not parsed.netloc:
-        return candidate
-
-    try:
-        has_port = parsed.port is not None
-    except ValueError:
-        has_port = ":" in parsed.netloc.rsplit("@", 1)[-1]
-    if has_port:
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query)).rstrip("/")
-
-    if parsed.scheme.lower() == "https":
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query)).rstrip("/")
-
-    netloc = parsed.netloc
-    host_part = netloc.rsplit("@", 1)[-1]
-    if ":" in host_part and not host_part.startswith("["):
-        prefix = netloc[: -len(host_part)]
-        netloc = f"{prefix}[{host_part}]:{REMOTE_AGENT_DEFAULT_PORT}"
-    else:
-        netloc = f"{netloc}:{REMOTE_AGENT_DEFAULT_PORT}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, "", parsed.query)).rstrip("/")
+    host_candidate = candidate
+    if _URL_SCHEME_RE.match(candidate):
+        parsed = urlsplit(candidate)
+        host_candidate = parsed.hostname or ""
+        if parsed.scheme.lower() != PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME:
+            raise RuntimeError("Android 기본 연결값은 공유기 공인 IPv4 또는 해당 sslip.io HTTPS URL만 허용합니다.")
+        dotted = public_ipv4_from_sslip_hostname(host_candidate)
+        if dotted:
+            host_candidate = dotted
+    if not is_public_ipv4_literal(host_candidate):
+        raise RuntimeError("Android 기본 연결값은 공유기 WAN 공인 IPv4만 입력하세요. URL/포트/LAN/사설망 주소는 지원하지 않습니다.")
+    return f"{PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME}://{host_candidate.replace('.', '-')}.{PUBLIC_IP_DNS_SUFFIX}"
 
 
-def is_private_remote_host(host: str) -> bool:
-    normalized = host.strip().strip("[]").lower()
-    if normalized in {"localhost", "testclient"} or normalized.endswith(".local"):
-        return True
-    try:
-        address = ipaddress.ip_address(normalized)
-    except ValueError:
-        return False
-    return bool(
-        address.is_loopback
-        or address.is_private
-        or address.is_link_local
-        or address in _TAILSCALE_CGNAT
-    )
+def public_ipv4_from_sslip_hostname(host: str) -> str | None:
+    match = re.fullmatch(r"(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.sslip\.io", host.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    dotted = ".".join(match.groups())
+    return dotted if is_public_ipv4_literal(dotted) else None
 
 
 def is_public_ipv4_literal(host: str) -> bool:
@@ -206,23 +177,11 @@ def is_public_ipv4_literal(host: str) -> bool:
 
 
 def public_cleartext_remote_base_url(value: str) -> bool:
-    normalized = normalize_remote_base_url(value)
-    if not normalized:
-        return False
-    parsed = urlsplit(normalized)
-    if parsed.scheme.lower() != "http":
-        return False
-    return not is_private_remote_host(parsed.hostname or "")
+    return False
 
 
 def validate_remote_base_url_for_android(value: str) -> str:
-    normalized = normalize_remote_base_url(value)
-    if public_cleartext_remote_base_url(normalized):
-        raise RuntimeError(
-            "Android public 직접접속 URL은 HTTPS여야 합니다. "
-            f"public HTTP URL은 APK 기본값으로 주입할 수 없습니다: {normalized}"
-        )
-    return normalized
+    return normalize_remote_base_url(value) if value.strip() else ""
 
 
 def create_gradle_assemble_command(
@@ -554,112 +513,6 @@ def choose_mdns_port(services: list[MdnsService], service_type: str, device_ip: 
     return None
 
 
-def _normalized_tailscale_name(value: str) -> str:
-    return value.strip().strip(".").lower()
-
-
-def tailscale_peer_match_score(peer: TailscalePeer, selector: str) -> int:
-    normalized_selector = _normalized_tailscale_name(selector)
-    if not normalized_selector:
-        return 0
-    dns_name = _normalized_tailscale_name(peer.dns_name)
-    exact_tokens = {
-        _normalized_tailscale_name(peer.hostname),
-        dns_name,
-        dns_name.split(".", 1)[0] if dns_name else "",
-        _normalized_tailscale_name(peer.node_id),
-        peer.primary_ipv4(),
-    }
-    exact_tokens.discard("")
-    if normalized_selector in exact_tokens:
-        return 2
-    text_tokens = [token for token in exact_tokens if "." not in token or not re.fullmatch(r"\d+(?:\.\d+){3}", token)]
-    if any(normalized_selector in token for token in text_tokens):
-        return 1
-    return 0
-
-
-def describe_tailscale_peer(peer: TailscalePeer) -> str:
-    labels = [peer.hostname or "(no hostname)"]
-    if peer.dns_name:
-        labels.append(peer.dns_name.rstrip("."))
-    labels.append(peer.primary_ipv4() or "(no ipv4)")
-    labels.append(peer.os or "unknown-os")
-    labels.append("online" if peer.online else "offline")
-    return " / ".join(labels)
-
-
-def _candidate_peer_message(peers: list[TailscalePeer]) -> str:
-    if not peers:
-        return "(후보 없음)"
-    return "\n".join(f"  - {describe_tailscale_peer(peer)}" for peer in peers)
-
-
-def select_tailscale_peer(snapshot: TailscaleSnapshot, selector: str | None = None) -> TailscalePeer:
-    peers_with_ip = [peer for peer in snapshot.peers if peer.primary_ipv4()]
-    if selector:
-        scored = [(tailscale_peer_match_score(peer, selector), peer) for peer in peers_with_ip]
-        best_score = max((score for score, _peer in scored), default=0)
-        matches = [peer for score, peer in scored if score == best_score and score > 0]
-        if not matches:
-            raise RuntimeError(
-                f"Tailscale peer {selector!r}를 찾지 못했습니다. 후보:\n{_candidate_peer_message(peers_with_ip)}"
-            )
-        if len(matches) > 1:
-            raise RuntimeError(
-                f"Tailscale peer {selector!r}가 여러 기기와 매칭됩니다. 더 정확한 이름을 지정하세요:\n"
-                f"{_candidate_peer_message(matches)}"
-            )
-        return matches[0]
-
-    android_peers = [peer for peer in peers_with_ip if peer.os.lower() == "android"]
-    if len(android_peers) == 1:
-        return android_peers[0]
-    if not android_peers:
-        raise RuntimeError(
-            "Tailscale status에서 Android IPv4 peer를 찾지 못했습니다. "
-            "--tailscale-device 또는 --device-ip를 지정하세요. 후보:\n"
-            f"{_candidate_peer_message(peers_with_ip)}"
-        )
-    raise RuntimeError(
-        "Tailscale Android peer가 여러 개입니다. --tailscale-device 또는 "
-        "HH_ANDROID_TAILSCALE_DEVICE로 특정하세요:\n"
-        f"{_candidate_peer_message(android_peers)}"
-    )
-
-
-def resolve_tailscale_device_ip(selector: str | None = None) -> str:
-    snapshot = tailscale_status(timeout_seconds=3.0, cache_ttl_seconds=0.0)
-    if not snapshot.installed:
-        raise RuntimeError(f"Tailscale CLI를 사용할 수 없습니다: {snapshot.message}")
-    peer = select_tailscale_peer(snapshot, selector)
-    device_ip = peer.primary_ipv4()
-    if not device_ip:
-        raise RuntimeError(f"Tailscale peer에 IPv4가 없습니다: {describe_tailscale_peer(peer)}")
-    print(f"  ✓ Tailscale device: {describe_tailscale_peer(peer)}")
-    return device_ip
-
-
-def resolve_default_remote_base_url(host_url: str | None, host_tailscale_device: str | None) -> str:
-    if host_url and host_tailscale_device:
-        raise RuntimeError("--host-url과 --host-tailscale-device는 동시에 지정할 수 없습니다.")
-    if host_url:
-        return validate_remote_base_url_for_android(host_url)
-    if not host_tailscale_device:
-        return ""
-
-    snapshot = tailscale_status(timeout_seconds=3.0, cache_ttl_seconds=0.0)
-    if not snapshot.installed:
-        raise RuntimeError(f"Tailscale CLI를 사용할 수 없습니다: {snapshot.message}")
-    peer = select_tailscale_peer(snapshot, host_tailscale_device)
-    host_ip = peer.primary_ipv4()
-    if not host_ip:
-        raise RuntimeError(f"Tailscale host peer에 IPv4가 없습니다: {describe_tailscale_peer(peer)}")
-    base_url = validate_remote_base_url_for_android(host_ip)
-    print(f"  ✓ Tailscale host: {describe_tailscale_peer(peer)} → {base_url}")
-    return base_url
-
-
 def prompt_port(label: str, current: int | None) -> int | None:
     if current is not None:
         return current
@@ -692,10 +545,10 @@ def adb_connect(adb: str, device_ip: str, connect_port: int) -> str:
 
 
 def prepare_wireless_adb(args: argparse.Namespace, adb: str) -> str:
-    if args.serial and not args.device_ip and not args.tailscale_device:
+    if args.serial and not args.device_ip:
         return args.serial
     if not args.device_ip:
-        args.device_ip = resolve_tailscale_device_ip(args.tailscale_device)
+        raise RuntimeError("Wireless adb 설치에는 --device-ip 또는 --serial이 필요합니다.")
 
     services = discover_mdns_services(adb)
     pair_port = args.pair_port or choose_mdns_port(services, ADB_TLS_PAIRING_SERVICE, args.device_ip)
@@ -725,10 +578,8 @@ def launch_app(adb: str, serial: str) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and install the Android Remote client over wireless adb.")
-    parser.add_argument("--device-ip", default=os.environ.get("HH_ANDROID_DEVICE_IP"), help="Stable device IP override. If omitted, the script resolves a Tailscale Android peer.")
-    parser.add_argument("--tailscale-device", default=os.environ.get("HH_ANDROID_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector. If omitted, exactly one Android peer is auto-selected.")
-    parser.add_argument("--host-url", default=os.environ.get("HH_ANDROID_REMOTE_BASE_URL"), help="Remote Agent base URL or host/IP to seed into the Android app. Public URLs must be HTTPS; private bare host/IP becomes http://<host>:8000. Env: HH_ANDROID_REMOTE_BASE_URL.")
-    parser.add_argument("--host-tailscale-device", default=os.environ.get("HH_ANDROID_HOST_TAILSCALE_DEVICE"), help="Tailscale hostname/DNS name/node ID/IP selector for the Remote Agent host. The resolved IP becomes http://<ip>:8000. Env: HH_ANDROID_HOST_TAILSCALE_DEVICE.")
+    parser.add_argument("--device-ip", default=os.environ.get("HH_ANDROID_DEVICE_IP"), help="Stable device IP override for Wireless debugging. If omitted, --serial is required.")
+    parser.add_argument("--host-url", default=os.environ.get("HH_ANDROID_REMOTE_BASE_URL"), help="Router WAN public IPv4 to seed into the Android app; URL is derived internally. Env: HH_ANDROID_REMOTE_BASE_URL.")
     parser.add_argument("--pair-port", type=int, default=None, help="Port shown by 'Pair device with pairing code'.")
     parser.add_argument("--connect-port", type=int, default=None, help="Wireless debugging connect port.")
     parser.add_argument("--pair-code", default=None, help="Optional six-digit pairing code. If omitted, adb prompts interactively.")
@@ -762,9 +613,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"- release_id: {version_info['string']}")
         if version_info["dirty"]:
             print("- warning: 작업 트리에 커밋되지 않은 변경이 있어 release_id에 _dirty가 붙었습니다.")
-        default_remote_base_url = resolve_default_remote_base_url(args.host_url, args.host_tailscale_device)
+        default_remote_base_url = validate_remote_base_url_for_android(args.host_url or "")
         if default_remote_base_url:
-            print(f"- default Remote Agent URL: {default_remote_base_url}")
+            print(f"- default router public HTTPS seed: {default_remote_base_url}")
 
         print("\n== Archive old Android APKs ==")
         archived = archive_release_artifacts(

@@ -821,26 +821,6 @@ struct RemoteTailscaleSnapshot: Decodable {
     }
 }
 
-struct RemoteTailscaleEnsureResponse: Decodable {
-    let ready: Bool
-    let installAttempted: Bool
-    let launchAttempted: Bool
-    let method: String
-    let message: String
-    let before: RemoteTailscaleSnapshot
-    let after: RemoteTailscaleSnapshot
-
-    enum CodingKeys: String, CodingKey {
-        case ready
-        case installAttempted = "install_attempted"
-        case launchAttempted = "launch_attempted"
-        case method
-        case message
-        case before
-        case after
-    }
-}
-
 struct RemoteCapabilitiesResponse: Decodable {
     let remoteAPIVersion: String
     let stateRevision: String?

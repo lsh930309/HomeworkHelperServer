@@ -714,6 +714,8 @@ def create_remote_router(
             return method == "GET"
         if path.endswith("/remote/power/ssh-key"):
             return method == "POST"
+        if "/remote/power/actions/" in path:
+            return method == "POST"
         if path.endswith("/remote/logging/config"):
             return method in {"GET", "PUT"}
         if path.endswith("/remote/access/status"):
@@ -765,8 +767,8 @@ def create_remote_router(
             "beholder_incidents": True,
             "game_links": True,
             "mobile_sessions": True,
-            "power_config": False,
-            "power_control": False,
+            "power_config": bool(power_status.get("supported_actions")),
+            "power_control": bool(power_status.get("supported_actions")),
             "beholder": True,
             "auth_required": bool(effective_require_auth or auth_token or device_registry.has_registered_devices()),
             "pairing": True,
@@ -798,7 +800,6 @@ def create_remote_router(
             public_direct=public_direct,
             auth_required=auth_ready,
             probe_public_ip=include_remote_access_probe,
-            probe_upnp=include_remote_access_probe,
             probe_caddy=include_remote_access_probe,
         )
         access_ready = access_payload.get("state") == "ready" or bool(access_payload.get("hostname"))
@@ -1213,7 +1214,6 @@ def create_remote_router(
             public_direct=public_direct,
             auth_required=auth_ready,
             probe_public_ip=True,
-            probe_upnp=True,
         )
 
     @router.post("/tailscale/ensure")
@@ -1569,6 +1569,35 @@ def create_remote_router(
         if not hasattr(power_controller, "status"):
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="전원 준비 상태 provider가 없습니다.")
         return power_controller.status()
+
+    @router.post("/power/actions/{action}")
+    def remote_power_action(action: str):
+        if not hasattr(power_controller, "schedule_action"):
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="호스트 전원 명령 provider가 없습니다.")
+        try:
+            result = power_controller.schedule_action(action)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        accepted = bool(result.get("accepted"))
+        command_name = str(result.get("command") or f"power.{action}")
+        write_remote_log("power.action", action=action, accepted=accepted, status=result.get("status"), message=result.get("message"))
+        auditor.record(
+            command=command_name,
+            accepted=accepted,
+            status=str(result.get("status") or ("accepted" if accepted else "rejected")),
+            target=result.get("target") or "host",
+            metadata={"action": action, "wake_mode": "smartthings_client"},
+        )
+        return RemoteCommandResult(
+            accepted=accepted,
+            command=command_name,
+            target=result.get("target") or "host",
+            status=str(result.get("status") or ("accepted" if accepted else "rejected")),
+            message=str(result.get("message") or "전원 명령 결과를 확인할 수 없습니다."),
+            command_id=result.get("command_id"),
+            accepted_at=result.get("accepted_at"),
+            refresh_after_ms=result.get("refresh_after_ms"),
+        )
 
     return router
 

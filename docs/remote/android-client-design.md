@@ -1,168 +1,99 @@
 # Android Remote Client Rebuild Design
 
 Last refreshed: 2026-06-04
-Status: Active Android client implementation guide; existing Android full-parity code must not be resurrected
+Status: Active Android client implementation guide
 
 ## 1. Decision
 
-The Android client is rebuilt around the shared Remote Agent contract and should now be completed by tightening parity with the macOS client's data rules, not by restoring the removed legacy Android architecture.
+Android is now a game-first public HTTPS direct client. The user enters only the **공유기 WAN 공인 IPv4**. The app internally derives `https://<ip-with-dashes>.sslip.io`, hides the generated URL from the primary UI, and uses the shared Remote Agent bearer-token contract.
 
-Reason: the current Android product direction is game-first remote control. The Android app should mirror the macOS popover-first UX: the main screen is registered game status plus quick launch/stop, while pairing, public HTTPS diagnostics, power setup, optional Tailscale fallback, and device management are supporting setup tasks.
-
-Keep:
-
-- Gradle project, wrapper, package name `dev.homeworkhelper.remote`, manifest/resource scaffold.
-- Kotlin + Jetpack Compose + Material 3 stack.
-- Remote Agent API contract and Android Keystore requirement.
-- Internal/device verification script entrypoints, updated to match rebuild phases.
-
-Discard before rebuilding:
-
-- Current `RemoteAppViewModel`, `RemoteRepository`, `RemoteApiClient`, `RemoteModels`, `RemoteScreens`, and platform integration code.
-- Documents that claim Android full parity or device QA completion.
-- Host-power execution assumptions such as `/remote/power/config` or `/remote/power/{action}` style flows.
+The first supported external-network mode is **공개 HTTPS 직접접속** with **수동 포트포워딩**. Automatic router mapping is deferred. Android no longer owns client-side VPN or SSH automation for HomeworkHelper remote control.
 
 ## 2. Product goal
 
-Build an Android-native remote play assistant for HomeworkHelper users.
-
 Primary job:
 
-> Open the app, immediately see the host's registered games and their state, then launch the desired host game with clear feedback.
+> Open the app, immediately see the host's registered games, then launch or stop the desired host game with clear feedback.
 
 Secondary jobs:
 
-- Pair this Android device with the Remote Agent.
-- Diagnose online/offline/auth state.
-- View readiness and cached game state when the host is unavailable.
+- Pair this Android device with the host Remote Agent.
+- Diagnose public HTTPS reachability, auth, and host readiness.
+- Preserve cached game state while offline.
 - Manage paired-device and token lifecycle tasks.
-- Provide optional Android-local power control through SmartThings Wake and OpenSSH.
-- Make public HTTPS direct access the primary external-network path; Tailscale remains a user-driven fallback, not an app lifecycle automation target.
-
-Non-goals for the first rebuild pass:
-
-- Host-managed power side effects or `/remote/power/{action}` execution endpoints.
-- Background sync, notifications, or WorkManager.
-- Cloud relay.
-- Recreating macOS-specific Moonlight/AppKit/LoginItem settings.
-- Moonlight/Apollo integration.
+- Wake the PC through SmartThings.
+- Delegate sleep/restart/shutdown to the host over authenticated HTTPS when the host reports support.
 
 ## 3. UX structure
 
-The Android home screen is the equivalent of the macOS popover.
+Bottom navigation has two user-action surfaces:
 
-Recommended navigation:
+1. **Home / Games**: default screen, game mirror, quick launch/stop, pull-to-refresh, status feedback.
+2. **Setup**: public IP pairing, power readiness, paired devices, app diagnostics.
 
-1. **Home / Games**: default screen, game mirror, quick launch, pull-to-refresh, status feedback.
-2. **Setup**: connection/pairing, power automation, paired devices, app behavior, diagnostics, fake smoke guidance.
+Setup input policy:
 
-Bottom navigation should contain only user-action surfaces. Information-only Power/More tabs are consolidated into Setup sections.
+- The visible host field is **공유기 공인 IP** only.
+- Accepted input is a public IPv4 literal such as `211.216.28.65`.
+- The app stores `https://211-216-28-65.sslip.io` internally.
+- URL, port, LAN/private, link-local, loopback, and CGNAT inputs are rejected in the normal UX.
 
 ## 4. Home screen blueprint
 
-Home header:
+Home mirrors the macOS popover:
 
-- App title and compact host status chip.
-- Last sync time.
-- Floating status message fixed just above bottom navigation.
-- Pull-to-refresh gesture for snapshot refresh; no primary refresh button on Home.
+- Host status chip and last-sync copy.
+- Registered game cards with host icons/resource icons.
+- Running/today-played badges.
+- `[실행]` for `POST /remote/processes/{id}/launch`.
+- Red `[중단]` with confirmation for `POST /remote/processes/{id}/stop`.
+- Pull-to-refresh and short command-chase refreshes after accepted launch/stop.
+- Offline/auth errors preserve cached process cards.
 
-Game list:
+## 5. Setup screen
 
-- Host-provided game icon when available; Material fallback when absent.
-- Host resource icon URL beside progress when available.
-- Game name, status text, progress meter/resource text.
-- Today-played indicator and running-state emphasis.
-- Primary `[실행]` button for `POST /remote/processes/{id}/launch`.
-- Running games replace the launch action with a red `[중단]` button backed by `POST /remote/processes/{id}/stop` and a confirmation dialog.
-- Disabled state with explicit reason when auth/offline/loading/in-flight.
+Sections:
 
-Feedback states:
+1. **연결/페어링**: 공유기 공인 IP, device name, pairing code, token status, Connection Doctor.
+2. **전원**: SmartThings Wake readiness plus Host HTTPS delegated sleep/restart/shutdown readiness.
+3. **기기 관리**: device list, revoke, cleanup.
+4. **앱 동작**: diagnostics and fake Remote Agent smoke guidance.
 
-- Loading: preserve previous list; show refresh spinner/banner.
-- Empty: explain that host has no registered games or pairing is needed.
-- Offline: show cached games with stale marker.
-- Auth rejected: preserve cache; show pairing/token recovery CTA.
-- Launch/stop accepted: show success message and perform short command-chase refreshes so the card quickly mirrors host state.
-- Launch failed: show failure without clearing game list.
+Connection Doctor checks the internally generated URL for DNS/TLS/Bearer/Remote Agent readiness and explains the router rule:
 
-Visual direction:
+```text
+공유기 WAN TCP 443 → Windows Host TCP 38443 → Caddy → Remote Agent 8000
+```
 
-- Material 3 cards, large touch targets, strong status color semantics.
-- Keep hierarchy simple: status banner -> game cards -> secondary setup entry.
-- Avoid dense admin dashboards on the home screen.
-
-## 5. Setup and support screen
-
-Setup screen sections:
-
-1. **연결/페어링**
-2. **전원**
-3. **기기**
-4. **앱**
-
-Setup screen responsibilities:
-
-- Remote Agent URL.
-- Device name.
-- Pairing code.
-- Pair/refresh token/clear local token actions.
-- Server reachability and auth guidance.
-- User-facing display preferences such as diagnostic section visibility.
-- Power readiness explanation and OpenSSH/setup details.
-- App-only `RemoteNetworkController` status for HomeworkHelper HTTP/SSH calls.
-- Tailscale app binding status and host tailnet URL probing as an external fallback.
-- Connection Doctor guidance for `https://<public-ip>.sslip.io`, DNS/TLS/Bearer/Remote Agent checks, and `TCP 443 → Windows Host 38443` router forwarding.
-- Tailscale install/open/settings shortcuts as optional fallback controls without VPN ON/OFF broadcasts.
-- SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
-- Paired device list, device revoke, and revoked-device cleanup.
-- Diagnostics and fake Remote Agent smoke guidance.
-
-Power UI policy:
-
-- Wake is enabled only after SmartThings PAT/OAuth authorization plus `PC 켜기` deviceId are present; deviceId is a target identifier and is never sufficient as SmartThings Cloud authorization.
-- After pairing or online recovery, Android automatically creates/registers its SSH public key and runs marker-based SSH health.
-- Sleep/restart/shutdown are enabled only after that automatic SSH registration/health chain succeeds.
-- Restart/shutdown/sleep require a confirmation dialog; Wake may be one-tap.
-- It must not call removed or host-managed power execution endpoints.
-
-Tailscale UI policy:
-
-- The first-class connection surface is the system-route RemoteNetworkController. Public access must use HTTPS, while cleartext HTTP is limited to loopback, LAN, link-local, or Tailscale `100.64.0.0/10` private routes.
-- If Tailscale is not installed, guide the user to install/open the official Android package.
-- If Tailscale is installed, Android may display install/VPN state and open the app/settings, but it must not send component broadcasts to connect/disconnect VPN.
-- The app must display that first-time Tailscale login, Android VPN consent, and account approval can require direct user confirmation in Tailscale.
+The user-facing setup copy must repeat that `Remote Agent 8000` is local-only and must not be forwarded directly.
 
 ## 6. Android implementation architecture
 
-Use a small, rebuild-friendly architecture:
-
 ```text
 app/src/main/java/dev/homeworkhelper/remote/
-├── MainActivity.kt              # Activity + top-level Compose scaffold
-├── data/RemoteApiClient.kt      # low-level HTTP/JSON client for shared /remote/* contract
-├── data/RemoteModels.kt         # DTOs and mapping helpers
-├── data/RemoteRepository.kt     # snapshot fetch and commands
-├── data/SmartThingsClient.kt    # SmartThings REST list/command client
-├── state/RemoteViewModel.kt     # UI state, refresh, pairing, launch and automation commands
-├── platform/TokenStore.kt       # Android Keystore token store
-├── platform/Preferences.kt      # non-secret settings
-├── platform/AutomationPreferences.kt # SSH/SmartThings local settings
-├── platform/AndroidSSHPowerManager.kt # SSHJ health and power commands
-├── platform/RemoteNetworkController.kt # system-route HTTP/SSH transport hooks and URL policy boundary
-├── platform/TailscaleBinding.kt # optional app detection, launch/install/settings, VPN-state adapter
-└── ui/                          # Home, Setup, shared components
+├── MainActivity.kt
+├── data/RemoteApiClient.kt
+├── data/RemoteModels.kt
+├── data/RemoteRepository.kt
+├── data/SmartThingsClient.kt
+├── state/RemoteViewModel.kt
+├── platform/TokenStore.kt
+├── platform/Preferences.kt
+├── platform/AutomationPreferences.kt
+├── platform/PowerAction.kt
+├── platform/RemoteNetworkController.kt
+└── ui/
 ```
 
 Rules:
 
-- Keep low-level HTTP free of Compose state.
-- Keep token persistence behind a small interface.
+- Keep HTTP free of Compose state.
+- Keep token persistence behind platform secret storage.
 - Treat cached process snapshots as a first-class Home requirement.
-- Do not introduce repository abstractions that only forward one method; keep layers small.
-- Add background sync only after the foreground app is stable.
+- Keep public-IP normalization in one policy boundary.
+- Do not add a background network/VPN lifecycle controller.
 
-## 7. Shared Remote Agent API subset for Android v1
+## 7. Shared Remote Agent API subset
 
 Required for Home:
 
@@ -179,93 +110,42 @@ Required for setup:
 - `GET /remote/devices`
 - `DELETE /remote/devices/{id}`
 - `DELETE /remote/devices/revoked`
-
-Required for automation setup:
-
 - `GET /remote/power/status`
-- `GET /remote/power/setup`
-- `POST /remote/power/ssh-key`
+- `POST /remote/power/actions/{sleep|restart|shutdown}`
 
-Optional after Home is stable:
+Power policy:
 
-- `GET /remote/dashboard/summary`
-- `GET /remote/beholder/incidents`
-- `GET /remote/game-links`, `POST /remote/game-links`
-- `GET /remote/mobile-sessions/active`, start/end mobile sessions
-- `GET /remote/logging/config`, `PUT /remote/logging/config`
+- **Wake는 SmartThings**: Android sends SmartThings REST commands to the configured `PC 켜기` device.
+- **Host HTTPS 위임**: sleep/restart/shutdown call the host Remote Agent action endpoint only when `/remote/power/status` reports the action in `supported_actions`.
+- Unsupported power actions remain disabled with an explanation.
 
-Do not use:
+## 8. Connectivity model
 
-- `/remote/power/config`
-- `/remote/power/{action}`
-- `/remote/power/smartthings/devices`
+The primary path is **공개 HTTPS 직접접속**:
 
-Those belonged to older host-managed assumptions and are not valid Android execution contracts.
-
-## 8. Assets and icons
-
-Preferred assets:
-
-- Host process icon URLs from `/remote/processes` (`icon_url`, `icon_urls`).
-- Host resource icon URLs for progress/resource display (`resource_icon_url`, `resource_icon_urls`).
-- Material Icons/Material 3 default visual language for fallback status symbols.
-
-Do not add a custom icon pack for v1. The visual quality target should come from layout, spacing, status color, typography, and good empty/error states.
-
-Icon caching:
-
-- Use Coil memory/disk caching for Android v3 URL images.
-- Add explicit app-level icon cache only if Coil behavior is insufficient after real-host testing.
-
-## 9. Connectivity model
-
-Android should share the supervisor concepts from `docs/remote/connection-supervisor-protocol.md`:
-
-- `online`: Remote Agent and auth are OK.
-- `offlineExpected`: host/network likely unavailable.
-- `agentUnavailable`: network may exist but Remote Agent/HTTP is unavailable.
-- `authRejected`: token rejected.
-- transient loading/reconnecting states for UI feedback.
-
-Android reachability and state mirroring:
-
-- HTTP status probe first.
-- Friendly messages for timeout, DNS, connection refused, 401/403.
-- Preserve last successful game snapshot.
-- Preserve the paired device token until explicit device revoke; Android should not rotate or locally delete it as part of ordinary setup.
-- When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
-- When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
-- Remote Agent HTTP and Android-local SSH should go through `RemoteNetworkController`; production Android uses Android's system route and rejects public cleartext HTTP before pairing or command requests.
-- A public IPv4 literal entered without a scheme is normalized to `https://<ip-with-dashes>.sslip.io`; private hosts without a scheme keep the local `http://host:8000` default.
-- Tailscale app binding is Android-local only: inspect installed/VPN state and open Tailscale/settings if the user wants a fallback. Never mutate host-side Tailscale health and never send Android VPN ON/OFF broadcasts.
-
-## 10. Verification plan
-
-Phase 0, rebuild scaffold:
-
-```bash
-./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleRelease --stacktrace
-./.venv/bin/python tools/check_android_apk_artifact.py
+```text
+Android client
+  → https://<공인IP-대시>.sslip.io
+  → 공유기 WAN TCP 443
+  → Windows Host TCP 38443
+  → Caddy sidecar
+  → http://127.0.0.1:8000 Remote Agent
 ```
 
-Phase 1, Home and setup implementation:
+Router requirement: **TCP 443 → Windows Host 38443**. No UDP port is required for the HomeworkHelper control plane. Sunshine/Apollo/Moonlight media-plane ports remain separate.
 
-- Static test for required v3 endpoints, public HTTPS normalization, icon payload fields, pull-to-refresh, launch/stop, device/token actions, Tailscale fallback markers, and no stale power endpoints.
-- Unit/static checks for token store and process card labels.
-- APK build.
-- Fake Remote Agent serves PNG process/resource icons from `assets/` and smoke verifies image endpoint hits.
-- Fake Remote Agent smoke should also exercise launch/stop command flow and the compact Setup section hierarchy.
+Supervisor states:
 
-Phase 2, physical device:
+- `online`: Remote Agent and auth are usable.
+- `offlineExpected`: host/network likely unavailable.
+- `agentUnavailable`: HTTPS path reached something, but Remote Agent/HTTP is unavailable.
+- `authRejected`: bearer token rejected.
+- transient `waking`, `goingOffline`, `restarting` for power intents.
 
-- Pairing and process-list sync on a real device.
-- Cached game state survives app restart/offline host.
-- Launch command accepted against a test Remote Agent.
-- Public HTTPS real-host access, optional Tailscale fallback opening, SmartThings wake, OpenSSH power actions, and device revoke should be verified with explicit user-approved real-device scenarios.
+## 9. Verification expectations
 
-## 11. Open questions for implementation phase
-
-- Should Home include dashboard summary above or below game cards?
-- Should Android v1 support Android-PC links immediately, or only after Home is stable?
-- Which persistence API should replace SharedPreferences if settings grow: DataStore or simple SharedPreferences?
+- Invalid host input rejects URLs, ports, LAN/private, loopback, link-local, and CGNAT.
+- Public IPv4 input normalizes to `https://<ip-with-dashes>.sslip.io` internally.
+- Launch/stop actions preserve cached cards on transient failure.
+- SmartThings Wake works without host HTTP being online.
+- Sleep/restart/shutdown use Host HTTPS delegated power and never expose `Remote Agent 8000` publicly.

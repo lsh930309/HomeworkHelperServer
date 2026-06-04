@@ -58,18 +58,14 @@ class RemoteApiClient(
         return JSONObject(request("remote/power/setup")).toRemotePowerSetup()
     }
 
-    suspend fun registerPowerSSHKey(publicKey: String, label: String): RemoteCommandResult {
-        val payload = JSONObject()
-            .put("public_key", publicKey)
-            .put("label", label)
-            .toString()
-        val json = JSONObject(request("remote/power/ssh-key", method = "POST", body = payload))
-        val accepted = json.optBoolean("registered", false) || json.optBoolean("already_present", false)
-        return RemoteCommandResult(
-            accepted = accepted,
-            status = if (accepted) "accepted" else "rejected",
-            message = json.optStringOrNull("message") ?: if (accepted) "SSH public key를 host authorized_keys에 등록했습니다." else "SSH public key 등록이 거부되었습니다.",
-        )
+    suspend fun remoteAccessStatus(): RemoteAccessStatus {
+        return JSONObject(request("remote/access/status")).toRemoteAccessStatus()
+    }
+
+    suspend fun executePowerAction(action: String): RemoteCommandResult {
+        val encodedAction = Uri.encode(action)
+        return JSONObject(request("remote/power/actions/$encodedAction", method = "POST", body = "{}"))
+            .toRemoteCommandResult()
     }
 
     suspend fun confirmPairing(code: String, deviceName: String): PairingConfirmResponse {

@@ -3,15 +3,6 @@ package dev.homeworkhelper.remote.platform
 import android.content.Context
 import dev.homeworkhelper.remote.BuildConfig
 
-data class SshPowerPreferences(
-    val host: String = "",
-    val user: String = "",
-    val port: Int = 22,
-    val publicKey: String = "",
-    val trustedFingerprint: String = "",
-    val healthOk: Boolean = false,
-)
-
 data class SmartThingsPreferences(
     val hasPat: Boolean = false,
     val deviceId: String = "",
@@ -28,30 +19,6 @@ class AutomationPreferences(context: Context) {
         "homeworkhelper_remote_automation_key",
     )
 
-    var sshHost: String
-        get() = preferences.getString(KEY_SSH_HOST, "").orEmpty()
-        set(value) = preferences.edit().putString(KEY_SSH_HOST, value.trim()).apply()
-
-    var sshUser: String
-        get() = preferences.getString(KEY_SSH_USER, "").orEmpty()
-        set(value) = preferences.edit().putString(KEY_SSH_USER, value.trim()).apply()
-
-    var sshPort: Int
-        get() = preferences.getInt(KEY_SSH_PORT, 22).coerceIn(1, 65535)
-        set(value) = preferences.edit().putInt(KEY_SSH_PORT, value.coerceIn(1, 65535)).apply()
-
-    var sshPublicKey: String
-        get() = preferences.getString(KEY_SSH_PUBLIC_KEY, "").orEmpty()
-        set(value) = preferences.edit().putString(KEY_SSH_PUBLIC_KEY, value.trim()).apply()
-
-    var sshTrustedFingerprint: String
-        get() = preferences.getString(KEY_SSH_FINGERPRINT, "").orEmpty()
-        set(value) = preferences.edit().putString(KEY_SSH_FINGERPRINT, value.trim()).apply()
-
-    var sshHealthOk: Boolean
-        get() = preferences.getBoolean(KEY_SSH_HEALTH_OK, false)
-        set(value) = preferences.edit().putBoolean(KEY_SSH_HEALTH_OK, value).apply()
-
     var smartThingsDeviceId: String
         get() = preferences.getString(KEY_ST_DEVICE_ID, "").orEmpty().ifBlank { BuildConfig.SMARTTHINGS_DEFAULT_DEVICE_ID }
         set(value) = preferences.edit().putString(KEY_ST_DEVICE_ID, value.trim()).apply()
@@ -67,15 +34,6 @@ class AutomationPreferences(context: Context) {
     var smartThingsLastVerifiedMillis: Long
         get() = preferences.getLong(KEY_ST_LAST_VERIFIED, 0L)
         set(value) = preferences.edit().putLong(KEY_ST_LAST_VERIFIED, value).apply()
-
-    fun loadSsh(): SshPowerPreferences = SshPowerPreferences(
-        host = sshHost,
-        user = sshUser,
-        port = sshPort,
-        publicKey = sshPublicKey,
-        trustedFingerprint = sshTrustedFingerprint,
-        healthOk = sshHealthOk,
-    )
 
     fun loadSmartThings(): SmartThingsPreferences = SmartThingsPreferences(
         hasPat = loadSmartThingsPat() != null,
@@ -103,24 +61,7 @@ class AutomationPreferences(context: Context) {
         secureStore.clear(KEY_ST_PAT)
     }
 
-    fun savePrivateKey(pem: String) {
-        secureStore.save(KEY_SSH_PRIVATE_KEY, pem)
-    }
-
-    fun loadPrivateKey(): String? = secureStore.load(KEY_SSH_PRIVATE_KEY)?.takeIf { it.isNotBlank() }
-
-    fun clearPrivateKey() {
-        secureStore.clear(KEY_SSH_PRIVATE_KEY)
-    }
-
     companion object {
-        private const val KEY_SSH_HOST = "ssh.host"
-        private const val KEY_SSH_USER = "ssh.user"
-        private const val KEY_SSH_PORT = "ssh.port"
-        private const val KEY_SSH_PUBLIC_KEY = "ssh.public_key"
-        private const val KEY_SSH_FINGERPRINT = "ssh.trusted_fingerprint"
-        private const val KEY_SSH_HEALTH_OK = "ssh.health_ok"
-        private const val KEY_SSH_PRIVATE_KEY = "ssh.private_key"
         private const val KEY_ST_PAT = "smartthings.pat"
         private const val KEY_ST_DEVICE_ID = "smartthings.device_id"
         private const val KEY_ST_DEVICE_LABEL = "smartthings.device_label"

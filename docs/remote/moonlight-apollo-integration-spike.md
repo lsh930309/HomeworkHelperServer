@@ -25,7 +25,7 @@ Task 3의 초기 목표는 코드 구현이 아니라 **Moonlight/Apollo 연동 
 - Apollo/Sunshine에 게임별 앱을 자동 등록하지 않는다.
 - Moonlight pairing을 앱이 완전 자동화하지 않는다.
 - 방화벽, 드라이버, 가상 디스플레이, Apollo/Sunshine 설치를 강제로 자동 설정하지 않는다.
-- 공인 IP/포트포워딩/UPnP 자동화는 우선 보류하고, v1에서는 Tailscale direct 경로만 사용한다.
+- HomeworkHelper 제어 plane은 별도 공개 HTTPS 직접접속 경로로 분리하며, Moonlight/Apollo media-plane 포트 구성은 기존 스트리밍 설정을 유지한다.
 - Android 클라이언트 연동은 이번 task 범위가 아니다.
 
 ## 2. 현재 HomeworkHelper 기준점

@@ -112,13 +112,8 @@ struct RemoteAPIClient {
         try await get("remote/power/setup")
     }
 
-    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse {
-        let payload = [
-            "public_key": publicKey,
-            "label": label,
-        ]
-        let body = try JSONEncoder().encode(payload)
-        return try await post("remote/power/ssh-key", body: body)
+    func executePowerAction(_ action: String) async throws -> RemoteCommandResult {
+        try await post("remote/power/actions/\(pathSegment(action))", body: Data("{}".utf8))
     }
 
     func confirmPairing(code: String, deviceName: String) async throws -> PairingConfirmResponse {
@@ -133,10 +128,6 @@ struct RemoteAPIClient {
 
     func refreshToken() async throws -> PairingConfirmResponse {
         try await post("remote/tokens/refresh", body: Data("{}".utf8))
-    }
-
-    func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse {
-        try await post("remote/tailscale/ensure", body: Data("{}".utf8))
     }
 
     func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse {

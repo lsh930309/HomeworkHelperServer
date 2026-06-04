@@ -37,6 +37,40 @@ class _FakeAuditor:
         return event
 
 
+class _FakeHostDelegatedPowerController:
+    def __init__(self):
+        self.actions: list[str] = []
+
+    def status(self) -> dict:
+        return {
+            "configured": True,
+            "state": "ready",
+            "status": "ready",
+            "target_host": "localhost",
+            "host_platform": "Windows",
+            "supported_actions": ["sleep", "restart", "shutdown"],
+            "wake_mode": "smartthings_client",
+            "ssh_required": False,
+            "message": "Host HTTPS 위임 전원 준비 완료",
+        }
+
+    def schedule_action(self, action: str) -> dict:
+        normalized = action.strip().lower()
+        if normalized not in {"sleep", "restart", "shutdown"}:
+            raise ValueError(f"지원하지 않는 전원 명령입니다: {action}")
+        self.actions.append(normalized)
+        return {
+            "accepted": True,
+            "command": f"power.{normalized}",
+            "target": "host",
+            "status": "accepted",
+            "message": f"{normalized} accepted",
+            "command_id": f"power.{normalized}:test",
+            "accepted_at": 1778497000.0,
+            "refresh_after_ms": 1500,
+        }
+
+
 def _client_with_seed(
     *,
     processes=None,
@@ -161,8 +195,8 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
     assert body["power"]["configured"] is False
-    assert body["power"]["state"] == "client_managed"
-    assert body["power"]["status"] == "client_managed"
+    assert body["power"]["state"] == "unsupported"
+    assert body["power"]["status"] == "unsupported"
     assert body["power"]["supported_actions"] == []
     assert body["power"]["target_host"] == ""
     assert body["diagnostics"]["readiness_mode"] == "lightweight"
@@ -753,16 +787,27 @@ def test_remote_shortcut_open_delegates_to_native_opener_and_records_command_res
     assert auditor.events[-1]["command"] == "shortcut.open"
 
 
-def test_remote_power_action_api_is_not_exposed_by_host_agent():
-    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
+def test_remote_power_action_api_uses_host_https_delegation_only():
+    power = _FakeHostDelegatedPowerController()
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(power_controller=power)
 
     status_response = client.get("/remote/power/status")
-    action_response = client.post("/remote/power/shutdown")
+    action_response = client.post("/remote/power/actions/shutdown")
+    invalid_action_response = client.post("/remote/power/actions/wake")
+    legacy_action_response = client.post("/remote/power/shutdown")
 
     assert status_response.status_code == 200
-    assert status_response.json()["configured"] is False
-    assert action_response.status_code == 404
-    assert not any(event["command"].startswith("power.shutdown") for event in auditor.events)
+    assert status_response.json()["configured"] is True
+    assert status_response.json()["supported_actions"] == ["sleep", "restart", "shutdown"]
+    assert status_response.json()["wake_mode"] == "smartthings_client"
+    assert status_response.json()["ssh_required"] is False
+    assert action_response.status_code == 200
+    assert action_response.json()["accepted"] is True
+    assert action_response.json()["command"] == "power.shutdown"
+    assert power.actions == ["shutdown"]
+    assert invalid_action_response.status_code == 400
+    assert legacy_action_response.status_code == 404
+    assert auditor.events[-1]["command"] == "power.shutdown"
 
 
 def test_remote_api_can_require_bearer_token_for_nonlocal_exposure():
@@ -1235,8 +1280,9 @@ def test_remote_device_token_survives_registry_reload_without_refresh(tmp_path):
     assert reloaded.validate_token(token, now=1778497020.0) is not None
 
 
-def test_removed_remote_power_action_api_preserves_authenticated_pairing_token():
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=ConfigurablePowerController())
+def test_legacy_remote_power_action_api_preserves_authenticated_pairing_token():
+    power = _FakeHostDelegatedPowerController()
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=power)
 
     pairing = client.post("/remote/pair/start")
     confirmed = client.post(
@@ -1254,8 +1300,13 @@ def test_removed_remote_power_action_api_preserves_authenticated_pairing_token()
         assert devices.status_code == 200
         assert devices.json()["devices"][0]["revoked_at"] is None
 
+    delegated = client.post("/remote/power/actions/sleep", headers=headers)
+    assert delegated.status_code == 200
+    assert delegated.json()["accepted"] is True
+    assert power.actions == ["sleep"]
 
-def test_power_controller_reports_client_managed_status_without_actions():
+
+def test_power_controller_reports_host_delegated_status_without_actions_on_non_windows():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=ConfigurablePowerController())
 
     remote_status_response = client.get("/remote/status")
@@ -1264,27 +1315,33 @@ def test_power_controller_reports_client_managed_status_without_actions():
     shutdown_response = client.post("/remote/power/shutdown")
     sleep_response = client.post("/remote/power/sleep")
     restart_response = client.post("/remote/power/restart")
+    delegated_sleep_response = client.post("/remote/power/actions/sleep")
 
     assert remote_status_response.status_code == 200
     remote_status_body = remote_status_response.json()
     assert remote_status_body["capabilities"]["power_control"] is False
     assert remote_status_body["capabilities"]["power_config"] is False
     assert remote_status_body["power"]["configured"] is False
-    assert remote_status_body["power"]["state"] == "client_managed"
-    assert remote_status_body["power"]["status"] == "client_managed"
+    assert remote_status_body["power"]["state"] == "unsupported"
+    assert remote_status_body["power"]["status"] == "unsupported"
     assert remote_status_body["power"]["target_host"] == ""
     assert remote_status_body["power"]["supported_actions"] == []
     assert status_response.status_code == 200
     status_body = status_response.json()
     assert status_body["configured"] is False
-    assert status_body["state"] == "client_managed"
-    assert status_body["status"] == "client_managed"
+    assert status_body["state"] == "unsupported"
+    assert status_body["status"] == "unsupported"
+    assert status_body["wake_mode"] == "smartthings_client"
+    assert status_body["ssh_required"] is False
     assert status_body["target_host"] == ""
     assert status_body["supported_actions"] == []
     assert wake_response.status_code == 404
     assert shutdown_response.status_code == 404
     assert sleep_response.status_code == 404
     assert restart_response.status_code == 404
+    assert delegated_sleep_response.status_code == 200
+    assert delegated_sleep_response.json()["accepted"] is False
+    assert delegated_sleep_response.json()["status"] == "unsupported"
 
 
 def test_remote_power_setup_reports_host_readiness_and_registers_public_key():

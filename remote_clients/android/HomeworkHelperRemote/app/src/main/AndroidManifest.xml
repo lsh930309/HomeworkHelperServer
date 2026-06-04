@@ -7,7 +7,6 @@
         tools:ignore="ProtectedPermissions" />
 
     <queries>
-        <package android:name="com.tailscale.ipn" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

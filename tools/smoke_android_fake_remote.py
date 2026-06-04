@@ -144,11 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         tap_text(args.serial, refreshed_xml, "설정")
         time.sleep(0.5)
         setup_xml = dump_ui(args.serial, "android-v3-setup", args.artifacts)
-        require_markers(setup_xml, ["연결/페어링", "Remote Agent URL", "기기 이름", "6자리 페어링 코드", "페어링", "Connection Doctor", "전원", "기기", "앱"])
+        require_markers(setup_xml, ["연결/페어링", "공유기 공인 IP", "기기 이름", "6자리 페어링 코드", "페어링", "Connection Doctor", "전원", "기기", "앱"])
         tap_text(args.serial, setup_xml, "⚙ 앱")
         time.sleep(0.5)
         setup_more_xml = dump_ui(args.serial, "android-v3-setup-sections", args.artifacts)
-        require_markers(setup_more_xml, ["앱 동작", "Tailscale 선택 fallback", "Fake Remote Agent smoke", "launch/stop"])
+        require_markers(setup_more_xml, ["앱 동작", "공개 HTTPS 직접접속", "Fake Remote Agent smoke", "launch/stop"])
 
         tap_text(args.serial, setup_more_xml, "홈")
         time.sleep(0.5)

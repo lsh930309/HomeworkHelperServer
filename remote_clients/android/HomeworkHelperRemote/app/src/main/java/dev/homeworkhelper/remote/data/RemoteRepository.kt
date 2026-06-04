@@ -53,8 +53,12 @@ class RemoteRepository(
         return api.purgeRevokedDevices()
     }
 
-    suspend fun registerPowerSSHKey(publicKey: String, label: String): RemoteCommandResult {
-        return api.registerPowerSSHKey(publicKey, label)
+    suspend fun remoteAccessStatus(): RemoteAccessStatus {
+        return api.remoteAccessStatus()
+    }
+
+    suspend fun executePowerAction(action: String): RemoteCommandResult {
+        return api.executePowerAction(action)
     }
 
 }

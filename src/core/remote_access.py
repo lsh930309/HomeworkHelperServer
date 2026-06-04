@@ -4,7 +4,6 @@ import ipaddress
 import os
 import platform
 import shutil
-import socket
 import subprocess
 import time
 from dataclasses import dataclass
@@ -143,13 +142,13 @@ def remote_access_status(
     public_direct: bool = False,
     auth_required: bool = False,
     probe_public_ip: bool = False,
-    probe_upnp: bool = False,
     probe_caddy: bool = True,
 ) -> dict[str, Any]:
-    """Return a non-secret status payload for public HTTPS remote access.
+    """Return a non-secret status payload for manual public HTTPS access.
 
-    This intentionally does not mutate router state.  UPnP is represented as a
-    read-only diagnostic so v1 can keep manual forwarding as the safe default.
+    Router configuration is intentionally manual in this version: clients enter
+    only the router public IPv4 address, while Caddy terminates HTTPS on 38443
+    and proxies to the loopback Remote Agent.
     """
 
     config = load_remote_access_config()
@@ -198,7 +197,6 @@ def remote_access_status(
         },
         "router_rule": rule.as_dict(),
         "caddy": caddy,
-        "upnp": _upnp_diagnostic(probe=probe_upnp),
         "security": {
             "public_direct": bool(public_direct),
             "auth_required": bool(auth_required),
@@ -264,17 +262,21 @@ def _caddy_status(hostname: str, *, internal_https_port: int, agent_port: int, p
 
 
 def _caddy_process_running() -> bool:
-    for process in psutil.process_iter(["name", "exe", "cmdline"]):
-        try:
-            parts = [
-                str(process.info.get("name") or ""),
-                str(process.info.get("exe") or ""),
-                " ".join(process.info.get("cmdline") or []),
-            ]
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if any("caddy" in part.casefold() for part in parts):
-            return True
+    try:
+        processes = psutil.process_iter(["name", "exe", "cmdline"])
+        for process in processes:
+            try:
+                parts = [
+                    str(process.info.get("name") or ""),
+                    str(process.info.get("exe") or ""),
+                    " ".join(process.info.get("cmdline") or []),
+                ]
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if any("caddy" in part.casefold() for part in parts):
+                return True
+    except (psutil.Error, OSError, PermissionError):
+        return False
     return False
 
 
@@ -320,61 +322,6 @@ def _remote_access_warnings(
     if not caddy.get("listener", {}).get("listening"):
         warnings.append(f"Caddy 내부 HTTPS 포트 {caddy.get('internal_https_port')} listener가 아직 없습니다.")
     return warnings
-
-
-def _upnp_diagnostic(*, probe: bool) -> dict[str, Any]:
-    base = {
-        "mapping_enabled": False,
-        "state": "deferred",
-        "message": "UPnP 자동 매핑은 v1에서 실행하지 않고 수동 포트포워딩을 기본값으로 사용합니다.",
-    }
-    if not probe:
-        return base
-    discovered = _ssdp_gateway_discovery()
-    if discovered:
-        return {
-            **base,
-            "state": "discoverable",
-            "message": "UPnP/IGD 응답은 감지됐지만 자동 매핑은 후속 구현으로 분리되어 있습니다.",
-            "responses": discovered,
-        }
-    return {
-        **base,
-        "state": "not_discoverable",
-        "message": "UPnP/IGD 응답을 찾지 못했습니다. 수동 포트포워딩을 사용하세요.",
-        "responses": [],
-    }
-
-
-def _ssdp_gateway_discovery(timeout: float = 1.0) -> list[str]:
-    message = (
-        "M-SEARCH * HTTP/1.1\r\n"
-        "HOST: 239.255.255.250:1900\r\n"
-        'MAN: "ssdp:discover"\r\n'
-        "MX: 1\r\n"
-        "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
-        "\r\n"
-    ).encode("ascii")
-    responses: list[str] = []
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.settimeout(timeout)
-        sock.sendto(message, ("239.255.255.250", 1900))
-        deadline = time.time() + timeout
-        while time.time() < deadline and len(responses) < 4:
-            try:
-                data, _addr = sock.recvfrom(2048)
-            except socket.timeout:
-                break
-            responses.append(data.decode("utf-8", errors="ignore")[:600])
-    except OSError:
-        return responses
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-    return responses
 
 
 def windows_network_snapshot() -> dict[str, Any]:

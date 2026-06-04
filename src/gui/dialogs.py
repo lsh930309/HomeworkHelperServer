@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup, QTextEdit, QGridLayout,
+    QRadioButton, QButtonGroup, QTextEdit, QGridLayout, QTabWidget,
 )
 from PyQt6.QtCore import Qt, QTime, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -51,18 +51,45 @@ class RemoteSettingsDialog(QDialog):
         self.base_url = resolve_local_api_base_url(getattr(data_manager, "base_url", None))
         self._workers: list[_RemoteSettingsWorker] = []
         self.setWindowTitle("원격 설정")
-        self.setMinimumWidth(680)
-        self.resize(680, 520)
+        self.setMinimumSize(940, 600)
+        self.resize(980, 640)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        self._build_pairing_section(root)
-        self._build_server_section(root)
-        self._build_remote_access_section(root)
-        self._build_status_section(root)
-        self._build_devices_section(root)
+        self.tabs = QTabWidget()
+        main_page = QWidget()
+        main_layout = QVBoxLayout(main_page)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+        columns = QHBoxLayout()
+        columns.setSpacing(10)
+        left_column = QVBoxLayout()
+        left_column.setSpacing(8)
+        right_column = QVBoxLayout()
+        right_column.setSpacing(8)
+
+        self._build_pairing_section(left_column)
+        self._build_remote_access_section(left_column)
+        left_column.addStretch(1)
+        self._build_server_section(right_column)
+        self._build_power_section(right_column)
+        right_column.addStretch(1)
+        columns.addLayout(left_column, 1)
+        columns.addLayout(right_column, 1)
+        main_layout.addLayout(columns, 1)
+        self._build_devices_section(main_layout)
+        self.tabs.addTab(main_page, "직접 연결")
+
+        legacy_page = QWidget()
+        legacy_layout = QVBoxLayout(legacy_page)
+        legacy_layout.setContentsMargins(8, 8, 8, 8)
+        legacy_layout.setSpacing(8)
+        self._build_tailscale_legacy_section(legacy_layout)
+        legacy_layout.addStretch(1)
+        self.tabs.addTab(legacy_page, "Legacy Tailscale")
+        root.addWidget(self.tabs, 1)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.button_box.rejected.connect(self.reject)
@@ -111,11 +138,11 @@ class RemoteSettingsDialog(QDialog):
 
         self.remote_server_mode_checkbox = QCheckBox(f"리모트 서버 모드로 시작 (0.0.0.0:{resolve_api_port()})")
         self.remote_server_mode_checkbox.setChecked(bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False)))
-        self.remote_server_mode_checkbox.setToolTip("다음 앱 실행부터 Tailscale/LAN 클라이언트 접속을 허용합니다.")
+        self.remote_server_mode_checkbox.setToolTip("다음 앱 실행부터 직접 HTTPS/Caddy 프록시 클라이언트 접속을 허용합니다.")
         save_button = QPushButton("서버 모드 저장")
         save_button.clicked.connect(self._save_server_mode)
         self.remote_desktop_log_checkbox = QCheckBox("원격 진단 로그를 바탕 화면에 저장")
-        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/Tailscale/전원 설정 이벤트를 JSONL로 기록합니다.")
+        self.remote_desktop_log_checkbox.setToolTip("HomeworkHelperRemoteHost.log에 페어링/직접 HTTPS/전원 설정 이벤트를 JSONL로 기록합니다.")
         log_button = QPushButton("로그 저장")
         log_button.clicked.connect(self._save_remote_logging_config)
         self.server_status_label = QLabel("서버 모드 변경은 앱 재시작 후 적용됩니다. 로그 설정을 불러오는 중...")
@@ -145,7 +172,7 @@ class RemoteSettingsDialog(QDialog):
         self.remote_access_details_text = QTextEdit()
         self.remote_access_details_text.setReadOnly(True)
         self.remote_access_details_text.setMaximumHeight(110)
-        self.remote_access_details_text.setPlainText("Caddy sidecar, UPnP 진단, 보안 경고를 불러오는 중... Remote Agent 8000은 공개하지 않습니다.")
+        self.remote_access_details_text.setPlainText("Caddy sidecar와 보안 경고를 불러오는 중... Remote Agent 8000은 공개하지 않습니다.")
 
         refresh_button = QPushButton("공개 HTTPS 새로고침")
         refresh_button.clicked.connect(self._refresh_remote_access)
@@ -161,24 +188,39 @@ class RemoteSettingsDialog(QDialog):
         layout.setColumnStretch(0, 1)
         root.addWidget(group)
 
-    def _build_status_section(self, root: QVBoxLayout) -> None:
-        group = QGroupBox("연결/전원 상태")
+    def _build_power_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("전원 상태")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.power_status_label = QLabel("전원 준비: 확인 대기")
+        self.power_status_label.setWordWrap(True)
+        self.power_setup_text = QTextEdit()
+        self.power_setup_text.setReadOnly(True)
+        self.power_setup_text.setMaximumHeight(130)
+        self.power_setup_text.setPlainText("호스트 HTTPS 위임 전원 readiness를 불러오는 중...")
+        power_refresh = QPushButton("전원 상태 확인")
+        power_refresh.clicked.connect(self._refresh_power_setup)
+
+        layout.addWidget(self.power_status_label, 0, 0)
+        layout.addWidget(power_refresh, 0, 1)
+        layout.addWidget(self.power_setup_text, 1, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_tailscale_legacy_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("Legacy Tailscale")
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(6)
 
         self.tailscale_summary_label = QLabel("Tailscale: 확인 대기")
         self.tailscale_summary_label.setWordWrap(True)
-        self.power_status_label = QLabel("전원 준비: 확인 대기")
-        self.power_status_label.setWordWrap(True)
         self.tailscale_health_text = QTextEdit()
         self.tailscale_health_text.setReadOnly(True)
-        self.tailscale_health_text.setMaximumHeight(78)
+        self.tailscale_health_text.setMaximumHeight(220)
         self.tailscale_health_text.setPlainText("Tailscale 상태를 불러오는 중...")
-        self.power_setup_text = QTextEdit()
-        self.power_setup_text.setReadOnly(True)
-        self.power_setup_text.setMaximumHeight(94)
-        self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
 
         tailscale_refresh = QPushButton("Tailscale 새로고침")
         tailscale_refresh.clicked.connect(self._refresh_tailscale)
@@ -188,8 +230,6 @@ class RemoteSettingsDialog(QDialog):
         tailscale_up_button.clicked.connect(self._tailscale_up)
         tailscale_down_button = QPushButton("Tailscale 비활성화")
         tailscale_down_button.clicked.connect(self._tailscale_down)
-        power_refresh = QPushButton("전원 상태 확인")
-        power_refresh.clicked.connect(self._refresh_power_setup)
 
         layout.addWidget(self.tailscale_summary_label, 0, 0)
         layout.addWidget(tailscale_refresh, 0, 1)
@@ -197,24 +237,23 @@ class RemoteSettingsDialog(QDialog):
         layout.addWidget(tailscale_up_button, 1, 1)
         layout.addWidget(tailscale_down_button, 1, 2)
         layout.addWidget(self.tailscale_health_text, 2, 0, 1, 3)
-        layout.addWidget(self.power_status_label, 3, 0)
-        layout.addWidget(power_refresh, 3, 1, 1, 2)
-        layout.addWidget(self.power_setup_text, 4, 0, 1, 3)
         layout.setColumnStretch(0, 1)
         root.addWidget(group)
 
     def _build_devices_section(self, root: QVBoxLayout) -> None:
-        group = QGroupBox("Tailnet 기기")
+        group = QGroupBox("원격 기기")
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         self.devices_table = QTableWidget(0, 8)
-        self.devices_table.setHorizontalHeaderLabels(["ID", "역할", "이름", "Tailnet IP", "OS", "페어링", "통신 상태", "마지막 통신"])
+        self.devices_table.setHorizontalHeaderLabels(["ID", "역할", "이름", "주소", "OS", "페어링", "통신 상태", "마지막 통신"])
         self.devices_table.setColumnHidden(0, True)
         self.devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.devices_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.devices_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.devices_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.devices_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.devices_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.devices_table.setMaximumHeight(190)
+        self.devices_table.setMinimumHeight(130)
         if self.devices_table.horizontalHeader():
             self.devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         buttons = QHBoxLayout()
@@ -256,25 +295,10 @@ class RemoteSettingsDialog(QDialog):
         return (rank, name, str(device.get("tailnet_ip") or device.get("id") or ""))
 
     def _fit_devices_table_to_rows(self) -> None:
-        """Show every paired-device row without an internal vertical scrollbar."""
-        header = self.devices_table.horizontalHeader()
-        header_height = header.height() if header and not header.isHidden() else 0
-        visible_rows = max(self.devices_table.rowCount(), 1)
-        rows_height = sum(
-            self.devices_table.rowHeight(row)
-            for row in range(self.devices_table.rowCount())
-        )
-        if self.devices_table.rowCount() == 0:
-            rows_height = self.devices_table.verticalHeader().defaultSectionSize()
-        frame_height = self.devices_table.frameWidth() * 2
-        horizontal_scroll_height = (
-            self.devices_table.horizontalScrollBar().sizeHint().height()
-            if self.devices_table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            else 0
-        )
-        target_height = header_height + rows_height + frame_height + horizontal_scroll_height
-        self.devices_table.setFixedHeight(max(target_height, header_height + frame_height + visible_rows))
-        self.adjustSize()
+        """Keep the device table compact; use table-internal scrolling for long lists."""
+        self.devices_table.resizeRowsToContents()
+        self.devices_table.setMaximumHeight(190)
+        self.devices_table.setMinimumHeight(130)
 
     def _schedule_initial_refreshes(self) -> None:
         self._refresh_remote_logging_config()
@@ -337,7 +361,7 @@ class RemoteSettingsDialog(QDialog):
 
     def _refresh_remote_access(self):
         self.remote_access_summary_label.setText("공개 HTTPS: 확인 중...")
-        self.remote_access_details_text.setPlainText("공개 IP, Caddy, UPnP 상태를 불러오는 중...")
+        self.remote_access_details_text.setPlainText("공개 IP, Caddy, HTTPS 포트포워딩 상태를 불러오는 중...")
         def task():
             response = requests.get(f"{self.base_url}/remote/access/status", timeout=8)
             response.raise_for_status()
@@ -348,7 +372,6 @@ class RemoteSettingsDialog(QDialog):
         public_url = str(payload.get("public_base_url") or "")
         router_rule = payload.get("router_rule") if isinstance(payload.get("router_rule"), dict) else {}
         caddy = payload.get("caddy") if isinstance(payload.get("caddy"), dict) else {}
-        upnp = payload.get("upnp") if isinstance(payload.get("upnp"), dict) else {}
         warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
         advisories = payload.get("advisories") if isinstance(payload.get("advisories"), list) else []
         self.remote_access_url_edit.setText(public_url)
@@ -364,7 +387,7 @@ class RemoteSettingsDialog(QDialog):
             f"- hostname: {payload.get('hostname') or '미생성'}\n"
             f"- caddy: installed={caddy.get('installed')} running={caddy.get('running')} listener={caddy.get('listener')}\n"
             f"- caddy_config: {caddy.get('config_path') or ''}\n"
-            f"- upnp: {upnp.get('state') or 'unknown'} · {upnp.get('message') or ''}\n"
+            f"- manual_port_forward: TCP 443 -> Windows Host 38443\n"
             f"- warnings: {warnings}\n"
             f"- advisories: {advisories}\n"
             f"\nCaddyfile preview:\n{caddy.get('config_preview') or ''}"
@@ -428,10 +451,10 @@ class RemoteSettingsDialog(QDialog):
             "active": "정상",
             "local": "로컬",
             "revoked": "폐기됨",
-            "tailnet_online": "Tailnet 온라인",
-            "tailnet_online_unpaired": "Tailnet 온라인",
-            "tailnet_offline": "Tailnet 오프라인",
-            "tailnet_offline_unpaired": "Tailnet 오프라인",
+            "tailnet_online": "온라인",
+            "tailnet_online_unpaired": "온라인",
+            "tailnet_offline": "오프라인",
+            "tailnet_offline_unpaired": "오프라인",
             "stale_or_offline": "대기/오프라인",
             "unknown": "미확인",
         }
@@ -464,7 +487,7 @@ class RemoteSettingsDialog(QDialog):
                     item.setToolTip(str(device.get("health_message") or connectivity_state))
                 self.devices_table.setItem(row, col, item)
         self._fit_devices_table_to_rows()
-        self.pairing_status_label.setText(f"Tailnet/페어링 기기 {len(devices)}개")
+        self.pairing_status_label.setText(f"원격/페어링 기기 {len(devices)}개")
 
     def _revoke_selected_device(self):
         row = self.devices_table.currentRow()
@@ -475,7 +498,7 @@ class RemoteSettingsDialog(QDialog):
         device_id = item.text() if item else ""
         can_revoke = bool(item.data(Qt.ItemDataRole.UserRole)) if item else False
         if not can_revoke:
-            QMessageBox.information(self, "언페어링 불가", "Host, 폐기된 기기 또는 아직 페어링되지 않은 tailnet 기기는 언페어링 대상이 아닙니다.")
+            QMessageBox.information(self, "언페어링 불가", "Host, 폐기된 기기 또는 아직 페어링되지 않은 기기는 언페어링 대상이 아닙니다.")
             return
         if not device_id:
             return
@@ -562,25 +585,23 @@ class RemoteSettingsDialog(QDialog):
         self.power_status_label.setText("전원 준비: 확인 중...")
         self.power_setup_text.setPlainText("호스트 전원 준비 상태를 불러오는 중...")
         def task():
-            response = requests.get(f"{self.base_url}/remote/power/setup", timeout=5)
+            response = requests.get(f"{self.base_url}/remote/power/status", timeout=5)
             response.raise_for_status()
             return response.json()
         self._start_worker("power", task)
 
     def _apply_power_setup_payload(self, payload: dict) -> None:
-        ssh_service = payload.get("ssh_service") or {}
-        firewall = payload.get("firewall") or {}
+        actions = payload.get("supported_actions") or payload.get("host_actions") or []
+        actions_text = ", ".join(str(action) for action in actions) if actions else "없음"
         self.power_status_label.setText(payload.get("message") or "전원 준비 상태 확인 완료")
         self.power_setup_text.setPlainText(
-            "호스트 전원 준비 상태\n"
-            f"- host: {payload.get('host_platform')} / user: {payload.get('user')}\n"
-            f"- authorized_keys: {payload.get('effective_authorized_keys_path') or payload.get('authorized_keys_path')} (exists={payload.get('authorized_keys_exists')})\n"
-            f"- SSH scope: {payload.get('authorized_keys_scope') or 'user'}"
-            f"{' / Administrators' if payload.get('administrators_authorized_keys_active') else ''}\n"
-            f"- OpenSSH Server: running={ssh_service.get('running')} start_type={ssh_service.get('start_type')} message={ssh_service.get('message')}\n"
-            f"- Firewall: enabled={firewall.get('enabled')} message={firewall.get('message')}\n"
-            "클라이언트가 SmartThings/OpenSSH 직접 경로로 전원 제어를 수행합니다. "
-            "SSH public key 등록은 페어링한 클라이언트의 자동 설정 흐름이 수행합니다."
+            "호스트 HTTPS 위임 전원 상태\n"
+            f"- host_platform: {payload.get('host_platform') or 'unknown'}\n"
+            f"- status: {payload.get('status') or payload.get('state') or 'unknown'}\n"
+            f"- supported_actions: {actions_text}\n"
+            f"- wake_mode: {payload.get('wake_mode') or 'smartthings_client'}\n"
+            f"- ssh_required: {payload.get('ssh_required')}\n"
+            "Wake는 클라이언트 SmartThings 경로로 유지하고, 절전/재시작/종료는 인증된 HTTPS Remote Agent가 호스트 로컬 명령으로 위임 수행합니다."
         )
 
 class NumericTableWidgetItem(QTableWidgetItem):

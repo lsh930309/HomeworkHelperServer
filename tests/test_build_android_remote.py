@@ -4,7 +4,6 @@ import pytest
 
 import build
 import build_android_remote as android_build
-from src.core.tailscale import TailscalePeer, TailscaleSnapshot
 
 
 def _android_config(version: str = "0.1.0", build_number: int = 7) -> dict:
@@ -44,12 +43,12 @@ def test_android_version_code_and_gradle_command_use_release_version():
     ]
 
 
-def test_gradle_command_can_seed_default_remote_agent_url():
+def test_gradle_command_can_seed_default_router_public_ip():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
 
-    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="100.64.0.9")
+    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="211.216.28.65")
 
-    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=http://100.64.0.9:8000" in command
+    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://211-216-28-65.sslip.io" in command
 
 
 def test_gradle_command_normalizes_public_ip_to_sslip_https():
@@ -60,28 +59,29 @@ def test_gradle_command_normalizes_public_ip_to_sslip_https():
     assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://211-216-28-65.sslip.io" in command
 
 
-def test_gradle_command_accepts_public_https_remote_agent_url():
+def test_gradle_command_accepts_derived_sslip_https_remote_agent_url():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
 
-    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="https://home.example.com")
+    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="https://211-216-28-65.sslip.io")
 
-    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://home.example.com" in command
+    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://211-216-28-65.sslip.io" in command
 
 
-def test_gradle_command_rejects_public_http_remote_agent_url():
+def test_gradle_command_rejects_non_public_ip_url_inputs():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
 
-    with pytest.raises(RuntimeError, match="HTTPS"):
-        android_build.create_gradle_assemble_command(info, default_remote_base_url="http://home.example.com")
+    for value in ["http://211.216.28.65", "https://home.example.com", "100.64.0.9", "192.168.0.2"]:
+        with pytest.raises(RuntimeError, match="공유기|IPv4|HTTPS"):
+            android_build.create_gradle_assemble_command(info, default_remote_base_url=value)
 
 
-def test_remote_base_url_normalization_adds_fixed_scheme_and_port():
+def test_remote_base_url_normalization_is_public_ipv4_only():
     assert android_build.normalize_remote_base_url("") == ""
-    assert android_build.normalize_remote_base_url("100.64.0.9") == "http://100.64.0.9:8000"
     assert android_build.normalize_remote_base_url("211.216.28.65") == "https://211-216-28-65.sslip.io"
-    assert android_build.normalize_remote_base_url("host.tailnet.ts.net:9000") == "http://host.tailnet.ts.net:9000"
-    assert android_build.normalize_remote_base_url("http://host.tailnet.ts.net") == "http://host.tailnet.ts.net:8000"
-    assert android_build.normalize_remote_base_url("https://home.example.com") == "https://home.example.com"
+    assert android_build.normalize_remote_base_url("https://211-216-28-65.sslip.io") == "https://211-216-28-65.sslip.io"
+    for value in ["100.64.0.9", "host.tailnet.ts.net:9000", "http://host.tailnet.ts.net", "https://home.example.com"]:
+        with pytest.raises(RuntimeError):
+            android_build.normalize_remote_base_url(value)
 
 
 def test_parse_and_choose_adb_mdns_ports_prefers_requested_ip_then_single_fallback():
@@ -96,80 +96,6 @@ adb-phone-b      _adb-tls-connect._tcp    100.64.0.7:40111
     assert android_build.choose_mdns_port(services, android_build.ADB_TLS_CONNECT_SERVICE, "100.64.0.7") == 40111
     assert android_build.choose_mdns_port(services, android_build.ADB_TLS_PAIRING_SERVICE, "100.64.0.7") == 37123
     assert android_build.choose_mdns_port(services, android_build.ADB_TLS_CONNECT_SERVICE, "100.64.0.8") is None
-
-
-def _snapshot(peers: tuple[TailscalePeer, ...]) -> TailscaleSnapshot:
-    return TailscaleSnapshot(
-        installed=True,
-        running=True,
-        backend_state="Running",
-        self_ips=("100.64.0.1",),
-        self_hostname="macbook",
-        peers=peers,
-        message="ok",
-    )
-
-
-def test_tailscale_peer_selection_uses_single_android_even_when_offline():
-    peer = TailscalePeer(
-        hostname="s25-ultra",
-        dns_name="s25-ultra.tail.ts.net.",
-        ips=("100.102.217.35",),
-        online=False,
-        os="android",
-    )
-
-    assert android_build.select_tailscale_peer(_snapshot((peer,))).primary_ipv4() == "100.102.217.35"
-
-
-def test_tailscale_peer_selection_requires_selector_for_multiple_android_devices():
-    snapshot = _snapshot(
-        (
-            TailscalePeer("s25-ultra", "s25-ultra.tail.ts.net.", ("100.102.217.35",), False, "android"),
-            TailscalePeer("tablet", "tablet.tail.ts.net.", ("100.102.217.36",), True, "android"),
-        )
-    )
-
-    try:
-        android_build.select_tailscale_peer(snapshot)
-    except RuntimeError as exc:
-        assert "--tailscale-device" in str(exc)
-        assert "s25-ultra" in str(exc)
-        assert "tablet" in str(exc)
-    else:
-        raise AssertionError("multiple Android peers should require an explicit selector")
-
-
-def test_tailscale_peer_selection_accepts_hostname_dns_node_id_or_ip_selector():
-    peer = TailscalePeer(
-        hostname="s25-ultra",
-        dns_name="s25-ultra.tail.ts.net.",
-        ips=("100.102.217.35",),
-        online=False,
-        os="android",
-        node_id="node-abc",
-    )
-    snapshot = _snapshot((peer,))
-
-    for selector in ["s25-ultra", "s25-ultra.tail.ts.net", "node-abc", "100.102.217.35"]:
-        assert android_build.select_tailscale_peer(snapshot, selector).primary_ipv4() == "100.102.217.35"
-
-
-def test_default_remote_base_url_resolves_tailscale_host_selector(monkeypatch):
-    snapshot = _snapshot(
-        (
-            TailscalePeer("gaming-host", "gaming-host.tail.ts.net.", ("100.64.0.9",), True, "windows"),
-            TailscalePeer("s25-ultra", "s25-ultra.tail.ts.net.", ("100.102.217.35",), True, "android"),
-        )
-    )
-    monkeypatch.setattr(android_build, "tailscale_status", lambda **_kwargs: snapshot)
-
-    assert android_build.resolve_default_remote_base_url(None, "gaming-host") == "http://100.64.0.9:8000"
-
-
-def test_default_remote_base_url_rejects_ambiguous_sources():
-    with pytest.raises(RuntimeError, match="동시에"):
-        android_build.resolve_default_remote_base_url("100.64.0.9", "gaming-host")
 
 
 def test_install_signature_preflight_allows_matching_certificates(monkeypatch, tmp_path):

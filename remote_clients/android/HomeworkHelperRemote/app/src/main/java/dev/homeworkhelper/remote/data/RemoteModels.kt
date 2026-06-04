@@ -32,7 +32,6 @@ data class RemoteReadiness(
     val serverModeReadiness: RemoteReadinessSection?,
     val remoteAccessReadiness: RemoteReadinessSection?,
     val powerReadiness: RemoteReadinessSection?,
-    val tailscaleReadiness: RemoteReadinessSection?,
 )
 
 data class RemoteReadinessSection(
@@ -224,7 +223,6 @@ data class RemotePowerSetup(
     val hostPlatform: String?,
     val user: String?,
     val effectiveAuthorizedKeysPath: String?,
-    val sshServiceMessage: String?,
 )
 
 data class RemotePowerReadiness(
@@ -241,6 +239,15 @@ data class RemotePowerReadiness(
             ?: setup?.message
             ?: "전원 준비 상태를 아직 확인하지 못했습니다."
 }
+
+data class RemoteAccessStatus(
+    val state: String?,
+    val message: String?,
+    val publicIp: String?,
+    val hostname: String?,
+    val publicBaseUrl: String?,
+    val routerRuleSummary: String?,
+)
 
 data class PairingConfirmResponse(
     val id: String,
@@ -344,7 +351,6 @@ fun JSONObject.toRemoteReadiness(): RemoteReadiness {
         serverModeReadiness = optJSONObject("server_mode_readiness")?.toRemoteReadinessSection(),
         remoteAccessReadiness = optJSONObject("remote_access_readiness")?.toRemoteReadinessSection(),
         powerReadiness = optJSONObject("power_readiness")?.toRemoteReadinessSection(),
-        tailscaleReadiness = optJSONObject("tailscale_readiness")?.toRemoteReadinessSection(),
     )
 }
 
@@ -392,14 +398,24 @@ fun JSONObject.toRemotePowerStatus(): RemotePowerStatus {
 }
 
 fun JSONObject.toRemotePowerSetup(): RemotePowerSetup {
-    val sshService = optJSONObject("ssh_service")
     return RemotePowerSetup(
         message = optStringOrNull("message"),
         hostPlatform = optStringOrNull("host_platform"),
         user = optStringOrNull("user"),
         effectiveAuthorizedKeysPath = optStringOrNull("effective_authorized_keys_path")
             ?: optStringOrNull("authorized_keys_path"),
-        sshServiceMessage = sshService?.optStringOrNull("message"),
+    )
+}
+
+fun JSONObject.toRemoteAccessStatus(): RemoteAccessStatus {
+    val routerRule = optJSONObject("router_rule")
+    return RemoteAccessStatus(
+        state = optStringOrNull("state"),
+        message = optStringOrNull("message"),
+        publicIp = optStringOrNull("public_ip"),
+        hostname = optStringOrNull("hostname"),
+        publicBaseUrl = optStringOrNull("public_base_url"),
+        routerRuleSummary = routerRule?.optStringOrNull("summary"),
     )
 }
 

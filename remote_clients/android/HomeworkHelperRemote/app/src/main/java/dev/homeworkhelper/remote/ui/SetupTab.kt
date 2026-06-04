@@ -41,8 +41,8 @@ import androidx.compose.ui.unit.dp
 import dev.homeworkhelper.remote.data.RemoteDevice
 import dev.homeworkhelper.remote.data.SMARTTHINGS_DEFAULT_WAKE_LABEL
 import dev.homeworkhelper.remote.data.SmartThingsDeviceCandidate
+import dev.homeworkhelper.remote.platform.PowerAction
 import dev.homeworkhelper.remote.state.RemoteUiState
-import dev.homeworkhelper.remote.state.remoteHostInputFromBaseUrl
 
 private enum class SetupSection(val label: String, val icon: String) {
     Connection("연결", "🔗"),
@@ -63,17 +63,7 @@ fun SetupTab(
     onShowDiagnosticsChange: (Boolean) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
-    onInspectTailscale: () -> Unit,
-    onOpenTailscale: () -> Unit,
-    onInstallTailscale: () -> Unit,
-    onOpenTailscaleSettings: () -> Unit,
-    onOpenVpnSettings: () -> Unit,
     onRepairEnvironment: () -> Unit,
-    onSshHostChange: (String) -> Unit,
-    onSshUserChange: (String) -> Unit,
-    onSshPortChange: (String) -> Unit,
-    onRegisterSshKey: () -> Unit,
-    onVerifySsh: () -> Unit,
     onSaveSmartThingsPat: (String) -> Unit,
     onDiscoverSmartThings: (String?) -> Unit,
     onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
@@ -85,7 +75,7 @@ fun SetupTab(
         Column(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("설정", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("macOS 클라이언트 구조를 Android에 맞게 나눈 연결 · 전원 · 기기 · 앱 설정입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("공유기 공인 IP 기반 공개 HTTPS 연결, SmartThings Wake, Host 위임 전원을 관리합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TabRow(selectedTabIndex = SetupSection.entries.indexOf(section)) {
                 SetupSection.entries.forEach { item ->
@@ -112,20 +102,10 @@ fun SetupTab(
                         onPair = onPair,
                         onInspectRemoteNetwork = onInspectRemoteNetwork,
                         onEnsureRemoteNetwork = onEnsureRemoteNetwork,
-                        onInspectTailscale = onInspectTailscale,
-                        onOpenTailscale = onOpenTailscale,
-                        onInstallTailscale = onInstallTailscale,
-                        onOpenTailscaleSettings = onOpenTailscaleSettings,
-                        onOpenVpnSettings = onOpenVpnSettings,
                         onRepairEnvironment = onRepairEnvironment,
                     )
                     SetupSection.Power -> PowerSection(
                         state = state,
-                        onSshHostChange = onSshHostChange,
-                        onSshUserChange = onSshUserChange,
-                        onSshPortChange = onSshPortChange,
-                        onRegisterSshKey = onRegisterSshKey,
-                        onVerifySsh = onVerifySsh,
                         onSaveSmartThingsPat = onSaveSmartThingsPat,
                         onDiscoverSmartThings = onDiscoverSmartThings,
                         onSelectSmartThingsDevice = onSelectSmartThingsDevice,
@@ -140,9 +120,6 @@ fun SetupTab(
                     SetupSection.App -> AppSection(
                         state = state,
                         onShowDiagnosticsChange = onShowDiagnosticsChange,
-                        onOpenTailscale = onOpenTailscale,
-                        onOpenTailscaleSettings = onOpenTailscaleSettings,
-                        onOpenVpnSettings = onOpenVpnSettings,
                     )
                 }
             }
@@ -158,30 +135,22 @@ private fun ConnectionSection(
     onPair: (String) -> Unit,
     onInspectRemoteNetwork: () -> Unit,
     onEnsureRemoteNetwork: () -> Unit,
-    onInspectTailscale: () -> Unit,
-    onOpenTailscale: () -> Unit,
-    onInstallTailscale: () -> Unit,
-    onOpenTailscaleSettings: () -> Unit,
-    onOpenVpnSettings: () -> Unit,
     onRepairEnvironment: () -> Unit,
 ) {
     var pairingCode by remember { mutableStateOf("") }
-    val hostInput = remoteHostInputFromBaseUrl(state.baseUrl)
     LaunchedEffect(state.hasToken) {
         if (state.hasToken) pairingCode = ""
     }
-    SettingsCard(title = "연결/페어링", subtitle = "Remote Agent URL과 Android device token을 관리합니다.") {
+    SettingsCard(title = "연결/페어링", subtitle = "공유기 WAN 공인 IPv4만 입력합니다. HTTPS URL은 앱 내부에서 자동 생성됩니다.") {
         OutlinedTextField(
-            value = hostInput,
+            value = state.routerPublicIpInput,
             onValueChange = onBaseUrlChange,
-            label = { Text("Remote Agent URL") },
-            placeholder = { Text("공유기 공인 IP 또는 https://host.example.com") },
+            label = { Text("공유기 공인 IP") },
+            placeholder = { Text("예: 211.216.28.65") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
-        if (state.baseUrl.isNotBlank()) {
-            Text("Remote Agent URL: ${state.baseUrl}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         if (state.baseUrlSecurityMessage.isNotBlank()) {
             Text(
                 state.baseUrlSecurityMessage,
@@ -202,19 +171,11 @@ private fun ConnectionSection(
             enabled = state.baseUrl.isNotBlank() && !state.setupRepairInFlight,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (state.setupRepairInFlight) "환경 복구 중" else "환경 자동 복구")
+            Text(if (state.setupRepairInFlight) "점검 중" else "공개 HTTPS 상태 점검")
         }
-        Text("실제 페어링 상태는 보존하면서 Tailscale 감지, host SSH 후보 복구, SSH key 등록/health를 전원 명령 없이 점검합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("수동 포트포워딩은 TCP 443 → Windows Host 38443만 필요합니다. Remote Agent 8000은 외부에 직접 열지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     RemoteNetworkFoundationSection(state, onInspectRemoteNetwork, onEnsureRemoteNetwork)
-    TailscaleFoundationSection(
-        state,
-        onInspectTailscale,
-        onOpenTailscale,
-        onInstallTailscale,
-        onOpenTailscaleSettings,
-        onOpenVpnSettings,
-    )
 }
 
 @Composable
@@ -224,7 +185,7 @@ private fun RemoteNetworkFoundationSection(
     onEnsureRemoteNetwork: () -> Unit,
 ) {
     val remoteNetwork = state.automation.remoteNetwork
-    SettingsCard(title = "원격 연결 경로", subtitle = "HomeworkHelper 내부 HTTP/SSH 호출은 Android system route를 사용합니다.") {
+    SettingsCard(title = "원격 연결 경로", subtitle = "HomeworkHelper HTTP 호출은 Android system route로 공개 HTTPS에 접속합니다.") {
         InfoRow("Mode", remoteNetwork.mode.label)
         InfoRow("State", remoteNetwork.status.label)
         InfoRow("Engine", remoteNetwork.engine)
@@ -240,13 +201,12 @@ private fun RemoteNetworkFoundationSection(
                 Text("상태")
             }
         }
-        Text("외부 접속은 public HTTPS URL을 사용하고, HTTP는 LAN/Tailscale 같은 private 경로에서만 허용합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("공유기 공인 IP만 저장하고, DNS/TLS/Bearer/Remote Agent 검사는 내부 URL로 자동 수행합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 private fun ConnectionDoctorSection(state: RemoteUiState) {
-    val url = state.baseUrl.ifBlank { "미설정" }
     val verdict = when {
         !state.baseUrlAllowed -> "차단: ${state.baseUrlSecurityMessage}"
         state.hasToken && state.availability.name == "Online" -> "정상: HTTPS/DNS/Bearer/Remote Agent 응답 확인"
@@ -254,87 +214,23 @@ private fun ConnectionDoctorSection(state: RemoteUiState) {
         else -> "페어링 전: Host App에서 6자리 코드를 발급한 뒤 Bearer token을 등록"
     }
     SettingsCard(title = "Connection Doctor", subtitle = "공개 HTTPS 직접접속의 실패 지점을 단계별로 분리합니다.") {
-        InfoRow("입력", remoteHostInputFromBaseUrl(state.baseUrl).ifBlank { "공유기 공인 IP 입력 대기" })
-        InfoRow("적용 URL", url)
+        InfoRow("공인 IP", state.routerPublicIpInput.ifBlank { "입력 대기" })
         InfoRow("정책", state.baseUrlSecurityMessage.ifBlank { "공개망은 HTTPS만 허용" })
         InfoRow("진단", verdict)
-        Text("공유기 수동 포트포워딩 기본값은 TCP 443 → Windows Host 38443입니다. Remote Agent 8000 포트는 외부에 직접 열지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun TailscaleFoundationSection(
-    state: RemoteUiState,
-    onInspectTailscale: () -> Unit,
-    onOpenTailscale: () -> Unit,
-    onInstallTailscale: () -> Unit,
-    onOpenTailscaleSettings: () -> Unit,
-    onOpenVpnSettings: () -> Unit,
-) {
-    val tailscale = state.automation.tailscale
-    SettingsCard(title = "Tailscale 선택 fallback", subtitle = "VPN ON/OFF 자동화 없이 설치/상태/설정 진입만 제공합니다.") {
-        InfoRow("설치", if (tailscale.installed) "감지됨" else "없음")
-        InfoRow("VPN", if (tailscale.vpnActive) "활성" else "미감지")
-        Text(tailscale.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (tailscale.suggestedBaseUrls.isNotEmpty()) {
-            Text("후보 URL: ${tailscale.suggestedBaseUrls.joinToString()}", style = MaterialTheme.typography.bodySmall)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onInspectTailscale, modifier = Modifier.weight(1f)) { Text("상태") }
-            OutlinedButton(onClick = onOpenTailscale, modifier = Modifier.weight(1f)) { Text("열기") }
-            OutlinedButton(onClick = onInstallTailscale, modifier = Modifier.weight(1f)) { Text("설치") }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onOpenTailscaleSettings, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
-            OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) { Text("VPN 설정") }
-        }
-        Text("공개 HTTPS 직접접속을 기본 경로로 사용하므로 Android 앱은 Tailscale broadcast나 lifecycle VPN 제어를 수행하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("수동 포트포워딩 기본값은 TCP 443 → Windows Host 38443입니다. Remote Agent 8000 포트는 외부에 직접 열지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 private fun PowerSection(
     state: RemoteUiState,
-    onSshHostChange: (String) -> Unit,
-    onSshUserChange: (String) -> Unit,
-    onSshPortChange: (String) -> Unit,
-    onRegisterSshKey: () -> Unit,
-    onVerifySsh: () -> Unit,
     onSaveSmartThingsPat: (String) -> Unit,
     onDiscoverSmartThings: (String?) -> Unit,
     onSelectSmartThingsDevice: (SmartThingsDeviceCandidate) -> Unit,
     onManualSmartThingsDeviceChange: (String) -> Unit,
 ) {
     PowerStatusSection(state)
-    SshSection(state, onSshHostChange, onSshUserChange, onSshPortChange, onRegisterSshKey, onVerifySsh)
     SmartThingsSection(state, onSaveSmartThingsPat, onDiscoverSmartThings, onSelectSmartThingsDevice, onManualSmartThingsDeviceChange)
-}
-
-@Composable
-private fun SshSection(
-    state: RemoteUiState,
-    onSshHostChange: (String) -> Unit,
-    onSshUserChange: (String) -> Unit,
-    onSshPortChange: (String) -> Unit,
-    onRegisterSshKey: () -> Unit,
-    onVerifySsh: () -> Unit,
-) {
-    val ssh = state.automation.ssh
-    SettingsCard(title = "OpenSSH 전원 제어", subtitle = "절전/재시작/종료는 Android 로컬 SSH adapter가 직접 수행합니다.") {
-        OutlinedTextField(value = ssh.host, onValueChange = onSshHostChange, label = { Text("SSH host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = ssh.user, onValueChange = onSshUserChange, label = { Text("User") }, singleLine = true, modifier = Modifier.weight(1f))
-            OutlinedTextField(value = ssh.port.toString(), onValueChange = onSshPortChange, label = { Text("Port") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(0.55f))
-        }
-        InfoRow("Key", if (ssh.publicKey.isNotBlank()) "생성됨" else "없음")
-        InfoRow("Health", if (ssh.healthOk) "OK" else "미확인")
-        if (ssh.trustedFingerprint.isNotBlank()) Text("Fingerprint: ${ssh.trustedFingerprint}", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onRegisterSshKey, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("SSH 자동 설정") }
-            Button(onClick = onVerifySsh, enabled = !state.automation.isSshBusy, modifier = Modifier.weight(1f)) { Text("Health 재확인") }
-        }
-        Text("페어링 또는 온라인 복구 후 key 등록과 SSH health는 자동으로 시도됩니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
 }
 
 @Composable
@@ -347,7 +243,7 @@ private fun SmartThingsSection(
 ) {
     var patInput by remember { mutableStateOf("") }
     val smartThings = state.automation.smartThings
-    SettingsCard(title = "SmartThings Wake", subtitle = "Wake는 SmartThings REST API와 PC 켜기 deviceId를 사용합니다.") {
+    SettingsCard(title = "SmartThings Wake", subtitle = "Wake는 공유기 WoL 전달 미지원 때문에 SmartThings REST API와 PC 켜기 deviceId를 사용합니다.") {
         Text("대상 deviceId는 target일 뿐이며, Cloud 명령 전송에는 PAT/OAuth 인증이 반드시 필요합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("디바이스 자동 조회/선택 target label: $SMARTTHINGS_DEFAULT_WAKE_LABEL", style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(value = patInput, onValueChange = { patInput = it.trim() }, label = { Text("SmartThings PAT 또는 로컬 debug token") }, placeholder = { Text(if (smartThings.hasPat) "저장됨 - 비워 두면 기존 PAT 사용" else "PAT 입력") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
@@ -367,13 +263,25 @@ private fun SmartThingsSection(
 }
 
 @Composable
+private fun PowerStatusSection(state: RemoteUiState) {
+    val power = state.powerReadiness
+    SettingsCard(title = "전원 준비 상태", subtitle = power?.summary ?: "Remote Agent 연결 후 전원 readiness를 확인합니다.") {
+        InfoRow("Wake", if (state.automation.wakeReady) "SmartThings 준비됨" else "SmartThings PAT/deviceId 필요")
+        InfoRow("Host 위임", if (state.hostDelegatedPowerReady) "절전/재시작/종료 준비됨" else "Host action 상태 확인 전")
+        InfoRow("Status", power?.status?.status ?: power?.readiness?.state ?: "unknown")
+        InfoRow("Actions", power?.status?.supportedActions?.joinToString().orEmpty().ifBlank { "없음" })
+        Text("Wake는 기존 SmartThings 경로를 유지하고, 절전/재시작/종료는 인증된 공개 HTTPS Remote Agent가 호스트에서 수행합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun DevicesSection(
     state: RemoteUiState,
     onRefreshDevices: () -> Unit,
     onRevokeDevice: (RemoteDevice) -> Unit,
     onPurgeRevokedDevices: () -> Unit,
 ) {
-    SettingsCard(title = "기기 관리", subtitle = "페어링된 기기, host, tailnet peer를 macOS와 같은 규칙으로 표시합니다.") {
+    SettingsCard(title = "기기 관리", subtitle = "페어링된 리모트 기기를 표시합니다.") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onRefreshDevices, enabled = state.hasToken && !state.isDevicesBusy, modifier = Modifier.weight(1f)) { Text(if (state.isDevicesBusy) "조회 중" else "기기 새로고침") }
             OutlinedButton(onClick = onPurgeRevokedDevices, enabled = state.hasToken && !state.isDevicesBusy, modifier = Modifier.weight(1f)) { Text("폐기 정리") }
@@ -414,50 +322,29 @@ private fun DeviceRow(device: RemoteDevice, busy: Boolean, onRevokeDevice: (Remo
 private fun AppSection(
     state: RemoteUiState,
     onShowDiagnosticsChange: (Boolean) -> Unit,
-    onOpenTailscale: () -> Unit,
-    onOpenTailscaleSettings: () -> Unit,
-    onOpenVpnSettings: () -> Unit,
 ) {
-    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 선택 fallback 설정 진입을 제공합니다.") {
+    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 공개 HTTPS 직접 연결 상태를 관리합니다.") {
         ToggleRow("진단 섹션 표시", state.showDiagnostics, onShowDiagnosticsChange)
-        Text("public HTTPS 직접접속을 기본 경로로 사용하므로 앱 lifecycle에서 VPN ON/OFF를 보내지 않습니다. Tailscale은 필요할 때 사용자가 직접 켜는 선택 fallback입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onOpenTailscale, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("Tailscale 열기") }
-            OutlinedButton(onClick = onOpenTailscaleSettings, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
-            OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) { Text("VPN 설정") }
-        }
+        Text("앱 lifecycle에서 외부 네트워크 상태를 변경하지 않습니다. 모든 Remote Agent 호출은 공유기 공인 IP에서 파생한 공개 HTTPS 경로를 사용합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (state.showDiagnostics) DiagnosticsSection(state)
     FakeSmokeSection()
 }
 
 @Composable
-private fun PowerStatusSection(state: RemoteUiState) {
-    val power = state.powerReadiness
-    SettingsCard(title = "전원 준비 상태", subtitle = power?.summary ?: "Remote Agent 연결 후 전원 readiness를 확인합니다.") {
-        InfoRow("Host", power?.status?.targetHost?.takeIf { it.isNotBlank() } ?: "미설정")
-        InfoRow("Status", power?.status?.status ?: power?.readiness?.state ?: "unknown")
-        InfoRow("SSH", power?.setup?.sshServiceMessage ?: "확인 전")
-        power?.setup?.effectiveAuthorizedKeysPath?.let { Text("Authorized keys: $it", style = MaterialTheme.typography.bodySmall) }
-        Text("Wake는 SmartThings REST API, 절전/재시작/종료는 Android OpenSSH adapter가 직접 수행합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
 private fun DiagnosticsSection(state: RemoteUiState) {
     SettingsCard(title = "진단", subtitle = "현재 Android 클라이언트 상태") {
         InfoRow("Availability", state.availability.toString())
-        InfoRow("Base URL", state.baseUrl.ifBlank { "미설정" })
+        InfoRow("공유기 공인 IP", state.routerPublicIpInput.ifBlank { "미설정" })
         InfoRow("Token", if (state.hasToken) "저장됨" else "없음")
         InfoRow("Games", state.processes.size.toString())
         InfoRow("Devices", state.devices.size.toString())
         InfoRow("Last sync", state.lastSyncLabel)
         InfoRow("State revision", state.lastStateRevision ?: "unknown")
-        InfoRow("SSH ready", state.automation.sshReady.toString())
         InfoRow("SmartThings ready", state.automation.wakeReady.toString())
+        InfoRow("Host power ready", state.hostDelegatedPowerReady.toString())
         InfoRow("Remote network mode", state.automation.remoteNetwork.mode.wireName)
         InfoRow("Remote network state", state.automation.remoteNetwork.status.label)
-        InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
         InfoRow("Public HTTPS", state.baseUrl.startsWith("https://").toString())
         InfoRow("Connection policy", state.baseUrlSecurityMessage.ifBlank { "미설정" })
     }
