@@ -29,21 +29,12 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
 
     for marker in [
         "tests/test_remote_routes.py",
-        "tests/test_remote_android_client_static.py",
         "tests/test_remote_macos_client_static.py",
         "tools/smoke_remote_controller_runtime.py",
         "tools/smoke_macos_remote_api_client.py",
         "tools/smoke_macos_remote_viewmodel.py",
         "macOS RemoteDashboardViewModel smoke",
-        "tools/check_android_sdk_readiness.py",
-        "tools/smoke_android_remote_controller.py",
-        "tools/smoke_android_remote_e2e.py",
-        "tools/check_android_apk_artifact.py",
-        "Android APK artifact",
         "swift",
-        "./gradlew",
-        ":app:assembleRelease",
-        "--stacktrace",
         "branch discipline",
         "--require-branch",
         "--expect-main-hash",
@@ -51,13 +42,10 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
     ]:
         assert marker in verifier
 
-    assert "--allow-android-license-blocker" in verifier
-    assert "ANDROID_LICENSE_MARKERS" in verifier
-    assert "blocked: android-sdk-license" in verifier
-    assert "--allow-android-device-blocker" in verifier
-    assert "ANDROID_DEVICE_BLOCKER_MARKERS" in verifier
-    assert "blocked: android-device" in verifier
     assert "--skip-full-pytest" in verifier
+    assert "test_remote_android_client_static.py" not in verifier
+    assert "gradlew" not in verifier
+    assert "Android APK" not in verifier
 
 
 def test_remote_verifier_branch_discipline_passes_when_refs_match(monkeypatch):
@@ -104,99 +92,6 @@ def test_remote_verifier_branch_discipline_fails_on_branch_or_main_drift(monkeyp
     assert result.status == "failed"
     assert "expected branch 'dev-remote', found main" in result.output
     assert "expected main at 4052da3, found deadbee" in result.output
-
-
-def test_android_sdk_readiness_script_reports_blockers_without_mutating_sdk():
-    readiness = _read(TOOLS / "check_android_sdk_readiness.py")
-
-    for marker in [
-        "platform-tools",
-        "platforms;android-36",
-        "build-tools;35.0.0",
-        "android-sdk-license",
-        "android-sdk-preview-license",
-        "--allow-blocker",
-        "sdkmanager --licenses",
-        "sdkmanager --install",
-    ]:
-        assert marker in readiness
-
-    assert "subprocess.run" not in readiness
-    assert "check_readiness" in readiness
-    assert "return 0 if args.allow_blocker else 2" in readiness
-
-
-def test_android_apk_smoke_distinguishes_missing_apk_from_device_launch():
-    smoke = _read(TOOLS / "smoke_android_remote_controller.py")
-
-    for marker in [
-        "app-debug.apk",
-        "dev.homeworkhelper.remote",
-        "dev.homeworkhelper.remote/.MainActivity",
-        "--allow-missing-apk",
-        "adb install",
-        "am",  # shell am start command pieces are built as argv entries.
-        "start",
-        "android.intent.action.MAIN",
-        "android.intent.category.LAUNCHER",
-        "android.permission.INTERNET",
-        "--report-usage-access",
-        "--require-usage-access",
-        "--open-usage-access-settings",
-        "GET_USAGE_STATS",
-        "android.settings.USAGE_ACCESS_SETTINGS",
-        "UsageStats appop",
-        "UsageStats access not allowed",
-    ]:
-        assert marker in smoke
-
-    assert "return 0 if args.allow_missing_apk else 2" in smoke
-    assert "Expected exactly one connected adb device" in smoke
-    assert "Package {args.package} is not installed" in smoke
-
-
-def test_android_remote_e2e_smoke_drives_runtime_pairing_and_secure_token_paths():
-    smoke = _read(TOOLS / "smoke_android_remote_e2e.py")
-
-    for marker in [
-        "runpy.run_path('homework_helper.pyw')",
-        "run_server_main",
-        "remote/pair/start",
-        "6자리 페어링 코드",
-        "페어링",
-        "encrypted_bearer_token",
-        "GET_USAGE_STATS",
-        "모바일 시작",
-        "모바일 종료",
-        "Usage 동기화",
-        "force-stop",
-        "_pull_to_refresh",
-        "Android Remote e2e smoke passed",
-    ]:
-        assert marker in smoke
-
-
-def test_android_apk_artifact_check_pins_packaged_manifest_contract():
-    artifact = _read(TOOLS / "check_android_apk_artifact.py")
-
-    for marker in [
-        "app-release.apk",
-        "aapt",
-        "dump",
-        "badging",
-        "permissions",
-        "dev.homeworkhelper.remote",
-        "0.1.0",
-        "EXPECTED_MIN_SDK",
-        "EXPECTED_TARGET_SDK",
-        "android.permission.INTERNET",
-        "android.permission.PACKAGE_USAGE_STATS",
-        "Android APK artifact passed",
-    ]:
-        assert marker in artifact
-
-    assert "Android APK artifact missing" in artifact
-    assert "aapt not found" in artifact
 
 
 def test_macos_smokes_use_real_server_process_and_production_swift_client():

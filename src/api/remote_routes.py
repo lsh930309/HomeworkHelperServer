@@ -22,7 +22,6 @@ from sqlalchemy.orm import Session
 from src.api.runtime_config import resolve_api_port
 from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
-from src.core.remote_access import remote_access_status
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
 from src.core.remote_power import ConfigurablePowerController
@@ -36,17 +35,14 @@ from src.utils.game_preset_manager import GamePresetManager
 
 
 REMOTE_API_VERSION = "0.2.0"
+TEMPORARY_MACBOOK_TAILSCALE_IP = "100.114.138.46"
 REMOTE_ICON_VARIANT_SIZES = (32, 64, 128, 256)
-
-
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _temporary_pairing_allowed_ips() -> set[str]:
     raw = os.environ.get("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS")
     if raw is None:
-        return set()
+        raw = TEMPORARY_MACBOOK_TAILSCALE_IP
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
@@ -399,7 +395,6 @@ def create_remote_router(
     device_registry: RemoteDeviceRegistry | None = None,
     auth_token: str | None = None,
     require_auth: bool = False,
-    public_direct: bool | None = None,
     now: Callable[[], float] | None = None,
     tailscale_probe: Callable[[], Any] | None = None,
 ) -> APIRouter:
@@ -418,8 +413,6 @@ def create_remote_router(
     auditor = auditor or RemoteAuditLogger()
     device_registry = device_registry or RemoteDeviceRegistry()
     auth_token = auth_token or os.environ.get("HH_REMOTE_TOKEN")
-    public_direct = _env_flag("HH_REMOTE_PUBLIC_DIRECT") if public_direct is None else bool(public_direct)
-    effective_require_auth = bool(require_auth or public_direct)
     now = now or time.time
     tailscale_probe = tailscale_probe or (lambda: tailscale_status(cache_ttl_seconds=30.0))
 
@@ -714,12 +707,8 @@ def create_remote_router(
             return method == "GET"
         if path.endswith("/remote/power/ssh-key"):
             return method == "POST"
-        if "/remote/power/actions/" in path:
-            return method == "POST"
         if path.endswith("/remote/logging/config"):
             return method in {"GET", "PUT"}
-        if path.endswith("/remote/access/status"):
-            return method == "GET"
         if path.endswith("/remote/devices/revoked"):
             return method == "DELETE"
         if path.endswith("/remote/tailscale/ensure"):
@@ -746,7 +735,7 @@ def create_remote_router(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="페어링 코드 발급은 로컬 요청 또는 인증된 디바이스에서만 가능합니다.",
             )
-        if not effective_require_auth and not auth_token and not device_registry.has_registered_devices():
+        if not require_auth and not auth_token and not device_registry.has_registered_devices():
             return
         if _is_valid_remote_token(request, authorization):
             return
@@ -767,15 +756,14 @@ def create_remote_router(
             "beholder_incidents": True,
             "game_links": True,
             "mobile_sessions": True,
-            "power_config": bool(power_status.get("supported_actions")),
-            "power_control": bool(power_status.get("supported_actions")),
+            "power_config": False,
+            "power_control": False,
             "beholder": True,
-            "auth_required": bool(effective_require_auth or auth_token or device_registry.has_registered_devices()),
+            "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
             "pairing": True,
             "tailscale_discovery": True,
             "readiness": True,
             "local_store_health": True,
-            "remote_access": True,
         }
 
     def _readiness_payload(
@@ -783,7 +771,6 @@ def create_remote_router(
         *,
         active_beholder_incidents: int | None = None,
         include_tailscale_details: bool = True,
-        include_remote_access_probe: bool = False,
     ) -> dict[str, Any]:
         tailscale_payload: dict[str, Any] = {}
         ts_snapshot = None
@@ -795,17 +782,10 @@ def create_remote_router(
             and tailscale_payload.get("running")
         )
         power_ready = bool(power_status.get("configured"))
-        auth_ready = bool(effective_require_auth or auth_token or device_registry.has_registered_devices())
-        access_payload = remote_access_status(
-            public_direct=public_direct,
-            auth_required=auth_ready,
-            probe_public_ip=include_remote_access_probe,
-            probe_caddy=include_remote_access_probe,
-        )
-        access_ready = access_payload.get("state") == "ready" or bool(access_payload.get("hostname"))
+        auth_ready = bool(require_auth or auth_token or device_registry.has_registered_devices())
         beholder_state = "ok" if not active_beholder_incidents else "warning"
         remote_state = "ok" if auth_ready else "warning"
-        server_state = "ok" if auth_ready else "warning"
+        server_state = "ok" if auth_ready and (tailscale_ready or not include_tailscale_details) else "warning"
         if include_tailscale_details:
             tailscale_section = {
                 "state": "ok" if tailscale_ready else "warning",
@@ -833,7 +813,7 @@ def create_remote_router(
                 "state": remote_state,
                 "color": "green" if remote_state == "ok" else "yellow",
                 "message": "Remote 인증/페어링 준비됨" if auth_ready else "첫 페어링 전에는 로컬 pair/start로 시작하세요.",
-                "auth_required": bool(effective_require_auth or auth_token or device_registry.has_registered_devices()),
+                "auth_required": bool(require_auth or auth_token or device_registry.has_registered_devices()),
             },
             "server_mode_readiness": {
                 "state": server_state,
@@ -843,23 +823,8 @@ def create_remote_router(
                     if server_state == "ok" and not include_tailscale_details
                     else "서버 모드 준비됨"
                     if server_state == "ok"
-                    else "페어링/인증 준비가 더 필요합니다."
+                    else "Tailscale 또는 페어링 준비가 더 필요합니다."
                 ),
-            },
-            "remote_access_readiness": {
-                "state": "ok" if access_ready and auth_ready else "warning",
-                "color": "green" if access_ready and auth_ready else "yellow",
-                "message": access_payload.get("message") or "공개 HTTPS 연결 상태 미확인",
-                "public_base_url": access_payload.get("public_base_url") or "",
-                "router_rule": access_payload.get("router_rule") or {},
-                "warnings": access_payload.get("warnings") or [],
-                "details": access_payload if include_remote_access_probe else {
-                    "mode": access_payload.get("mode"),
-                    "hostname": access_payload.get("hostname"),
-                    "public_base_url": access_payload.get("public_base_url"),
-                    "ports": access_payload.get("ports"),
-                    "security": access_payload.get("security"),
-                },
             },
             "power_readiness": {
                 "state": "ok" if power_ready else "warning",
@@ -1034,15 +999,9 @@ def create_remote_router(
             platform=pair_request.platform,
             role="client",
             tailnet_binding=tailnet_binding,
-            source_ip=source_ip,
             now=now(),
         )
         if not device:
-            if device_registry.pairing_confirm_limited(source_ip, now=now()):
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="페어링 코드 확인 실패가 너무 많습니다. 새 코드를 발급한 뒤 다시 시도하세요.",
-                )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="페어링 코드가 올바르지 않거나 만료되었습니다.")
         write_remote_log("pair.confirm", device_name=device.get("name"), platform=device.get("platform"))
         auditor.record(
@@ -1188,7 +1147,7 @@ def create_remote_router(
     @router.get("/readiness")
     def remote_readiness():
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
-        return _readiness_payload(power_status, include_remote_access_probe=True)
+        return _readiness_payload(power_status)
 
     @router.get("/logging/config")
     def remote_logging_config():
@@ -1206,15 +1165,6 @@ def create_remote_router(
         if not report.get("ok"):
             write_remote_log("local_store.integrity", **report)
         return report
-
-    @router.get("/access/status")
-    def remote_access_status_endpoint():
-        auth_ready = bool(effective_require_auth or auth_token or device_registry.has_registered_devices())
-        return remote_access_status(
-            public_direct=public_direct,
-            auth_required=auth_ready,
-            probe_public_ip=True,
-        )
 
     @router.post("/tailscale/ensure")
     def remote_tailscale_ensure():
@@ -1569,35 +1519,6 @@ def create_remote_router(
         if not hasattr(power_controller, "status"):
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="전원 준비 상태 provider가 없습니다.")
         return power_controller.status()
-
-    @router.post("/power/actions/{action}")
-    def remote_power_action(action: str):
-        if not hasattr(power_controller, "schedule_action"):
-            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="호스트 전원 명령 provider가 없습니다.")
-        try:
-            result = power_controller.schedule_action(action)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        accepted = bool(result.get("accepted"))
-        command_name = str(result.get("command") or f"power.{action}")
-        write_remote_log("power.action", action=action, accepted=accepted, status=result.get("status"), message=result.get("message"))
-        auditor.record(
-            command=command_name,
-            accepted=accepted,
-            status=str(result.get("status") or ("accepted" if accepted else "rejected")),
-            target=result.get("target") or "host",
-            metadata={"action": action, "wake_mode": "smartthings_client"},
-        )
-        return RemoteCommandResult(
-            accepted=accepted,
-            command=command_name,
-            target=result.get("target") or "host",
-            status=str(result.get("status") or ("accepted" if accepted else "rejected")),
-            message=str(result.get("message") or "전원 명령 결과를 확인할 수 없습니다."),
-            command_id=result.get("command_id"),
-            accepted_at=result.get("accepted_at"),
-            refresh_after_ms=result.get("refresh_after_ms"),
-        )
 
     return router
 

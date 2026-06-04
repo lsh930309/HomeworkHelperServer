@@ -1371,12 +1371,8 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .connection) {
             RemoteSettingsSection("연결/페어링") {
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("공유기 공인 IP", text: $viewModel.routerPublicIPText)
+                    TextField("Base URL", text: $viewModel.baseURLText)
                         .textFieldStyle(.roundedBorder)
-                    Text("공유기 WAN 공인 IPv4만 입력하세요. 앱은 내부적으로 sslip.io HTTPS URL을 생성하지만 UI에는 URL을 노출하지 않습니다. 수동 포트포워딩 기본값은 TCP 443 → Windows Host 38443이며 Remote Agent 8000은 공개하지 않습니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
                     SecureField("Bearer token", text: $viewModel.tokenText)
                         .textFieldStyle(.roundedBorder)
                     TextField("디바이스 이름", text: $viewModel.deviceName)
@@ -1391,8 +1387,8 @@ struct RemoteSettingsView: View {
                     }
                     SettingsActionGrid {
                         Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
-                        Button("공개 HTTPS 상태 확인") { Task { await viewModel.refreshRemoteAccessStatus() } }
-                            .disabled(viewModel.isLoading)
+                        Button("서버 Tailscale 확인/복구") { Task { await viewModel.ensureServerTailscale() } }
+                            .disabled(viewModel.isLoading || !viewModel.isPaired)
                         Button("페어링 토큰 복구") { Task { await viewModel.recoverPairing() } }
                             .disabled(viewModel.isLoading || !viewModel.isPaired)
                         Button(role: .destructive) { viewModel.clearLocalPairing() } label: { Text("로컬 토큰 삭제") }
@@ -1406,15 +1402,34 @@ struct RemoteSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                    if let remoteAccess = viewModel.remoteAccessStatus {
-                        SidebarInfoRow(label: "공개 IP", value: remoteAccess.publicIP ?? viewModel.routerPublicIPText)
-                        SidebarInfoRow(label: "Router rule", value: remoteAccess.routerRule?.summary ?? "TCP 443 → Windows Host 38443")
-                        if !remoteAccess.warnings.isEmpty {
-                            Text(remoteAccess.warnings.joined(separator: "\n"))
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                                .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            RemoteSettingsSection("Tailscale") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingsActionGrid {
+                        Button("Tailscale 기반환경 활성화") { Task { await viewModel.activateLocalTailscale() } }
+                            .disabled(viewModel.isLoading)
+                        Button("Tailscale 서버/호스트 탐색") { Task { await viewModel.discoverTailscale() } }
+                            .disabled(viewModel.isLoading)
+                        Button("Tailscale 네트워크 비활성화", role: .destructive) { Task { await viewModel.deactivateLocalTailscale() } }
+                            .disabled(viewModel.isLoading)
+                    }
+                    if let local = viewModel.localTailscale {
+                        SidebarInfoRow(label: "기반환경", value: local.foundationState)
+                        SidebarInfoRow(label: "로컬 상태", value: local.message)
+                        if !local.selfIPs.isEmpty {
+                            SidebarInfoRow(label: "이 Mac", value: local.selfIPs.joined(separator: ", "))
                         }
+                        ForEach(local.suggestedBaseURLs, id: \.self) { url in
+                            Button(url) { viewModel.applySuggestedBaseURL(url) }
+                                .buttonStyle(.glass)
+                        }
+                    }
+                    if let serverTailscale = viewModel.serverTailscaleEnsure {
+                        SidebarInfoRow(label: "서버 Tailscale", value: serverTailscale.message)
+                        SidebarInfoRow(label: "서버 IP", value: serverTailscale.after.selfIPs.isEmpty ? "없음" : serverTailscale.after.selfIPs.joined(separator: ", "))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1426,7 +1441,7 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .power) {
             RemoteSettingsSection("전원 자동 설정") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Wake는 Mac 로컬 SmartThings CLI가 SmartThings를 통해 수행합니다. 절전/종료/재시동은 페어링된 Host HTTPS Remote Agent가 로컬 명령으로 위임 수행합니다.")
+                    Text("Wake는 Mac 로컬 SmartThings CLI가, 절전/종료/재시동은 Mac 로컬 OpenSSH key가 직접 수행합니다. 호스트에는 key 등록/준비 상태만 자동 확인합니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(
@@ -1440,6 +1455,12 @@ struct RemoteSettingsView: View {
                         value: LocalPowerWakeManager.resolveSmartThingsCLIPath(viewModel.powerConfig.smartthingsCLIPath)
                             ?? (viewModel.powerConfig.smartthingsCLIPath.isEmpty ? "자동 설치/확인 대기" : viewModel.powerConfig.smartthingsCLIPath)
                     )
+                    SidebarInfoRow(
+                        label: "SSH host",
+                        value: viewModel.powerConfig.sshHost.isEmpty ? "Base URL에서 자동 설정" : "\(viewModel.powerConfig.sshHost):\(viewModel.powerConfig.sshPort)"
+                    )
+                    SidebarInfoRow(label: "SSH user", value: viewModel.powerConfig.sshUser.isEmpty ? "호스트 계정 자동 확인 대기" : viewModel.powerConfig.sshUser)
+                    SidebarInfoRow(label: "SSH key", value: viewModel.powerConfig.normalizedLocalSSHKeyPath())
                     SettingsActionGrid {
                         Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
                             .disabled(viewModel.isLoading)
@@ -1448,11 +1469,21 @@ struct RemoteSettingsView: View {
                     }
                     DisclosureGroup("전원 상세 진단") {
                         VStack(alignment: .leading, spacing: 8) {
-                            SidebarInfoRow(label: "Wake", value: viewModel.powerConfig.localWakeConfigured ? "SmartThings 준비됨" : "SmartThings Wake 대상 확인 필요")
-                            SidebarInfoRow(label: "Host HTTPS", value: viewModel.hostDelegatedPowerSummary)
                             if let setup = viewModel.powerSetup {
-                                SidebarInfoRow(label: "Host", value: "\(setup.hostPlatform) · \(setup.user)")
+                                SetupInstructionBlock(
+                                    title: "호스트 SSH 준비",
+                                    lines: [
+                                        "OpenSSH: \(setup.sshService.running ? "실행 중" : "조치 필요")",
+                                        "Firewall: \(setup.firewall.enabled ? "SSH 허용" : "확인 필요")",
+                                        "authorized_keys: \(setup.effectiveAuthorizedKeysPath ?? setup.authorizedKeysPath)",
+                                        "SSH scope: \(setup.authorizedKeysScope ?? "user")\(setup.administratorsAuthorizedKeysActive == true ? " / Administrators" : "")"
+                                    ]
+                                )
                             }
+                            if let key = viewModel.localSSHKey {
+                                SidebarInfoRow(label: "로컬 SSH key", value: "\(key.privateKeyPath) · \(key.created ? "새로 생성" : "기존 사용")")
+                            }
+                            SidebarInfoRow(label: "SSH health", value: viewModel.localSSHHealthSummary)
                         }
                     }
                 }
@@ -1506,7 +1537,7 @@ struct RemoteSettingsView: View {
         SettingsTabScrollView(tab: .moonlight) {
             RemoteSettingsSection("Moonlight 원격 플레이") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다. HomeworkHelper Remote Agent 연결은 public HTTPS 직접접속을 사용합니다.")
+                    Text("기존 Moonlight Desktop host가 HomeworkHelper host와 일치하면 설정을 수정하지 않고 그대로 사용합니다. 매칭되지 않으면 Tailscale direct 등록을 준비하고, 준비된 Desktop 세션은 popover에서 바로 실행합니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     SidebarInfoRow(label: "상태", value: viewModel.moonlightSnapshot.readiness.label, systemImage: "moon.stars")
@@ -1537,6 +1568,10 @@ struct RemoteSettingsView: View {
                             SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")
                             SidebarInfoRow(label: "선택 host", value: viewModel.moonlightSelectedHostDisplay, systemImage: "desktopcomputer")
                             SidebarInfoRow(label: "호스트 공인 IP", value: viewModel.moonlightPublicIPDisplay, systemImage: "network")
+                            if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
+                                SidebarInfoRow(label: "Tailscale 등록 후보", value: viewModel.moonlightTailscaleRegistrationDisplay, systemImage: "network.badge.shield.half.filled")
+                                SidebarInfoRow(label: "Pairing PIN", value: viewModel.moonlightPairingPINDisplay, systemImage: "number")
+                            }
                             SidebarInfoRow(label: "진단", value: viewModel.moonlightSnapshot.message, systemImage: "waveform.path.ecg")
                             if !viewModel.moonlightStalePublicIPWarning.isEmpty {
                                 Text(viewModel.moonlightStalePublicIPWarning)
@@ -1581,6 +1616,12 @@ struct RemoteSettingsView: View {
                             }
                             .disabled(!viewModel.moonlightCanInstallViaHomebrew)
                         }
+                        if viewModel.moonlightSnapshot.installed && viewModel.moonlightSnapshot.readiness != .ready {
+                            Button("Tailscale Direct로 등록") {
+                                Task { await viewModel.registerMoonlightViaTailscaleDirect() }
+                            }
+                            .disabled(!viewModel.moonlightCanRegisterViaTailscale)
+                        }
                         Button("Moonlight 설정 다시 읽기") {
                             viewModel.refreshMoonlightSnapshot()
                         }
@@ -1591,9 +1632,9 @@ struct RemoteSettingsView: View {
                             viewModel.openMacAccessibilitySettings()
                         }
                         Button("호스트 공인 IP 갱신") {
-                            Task { await viewModel.refreshMoonlightPublicIPViaHTTPS() }
+                            Task { await viewModel.refreshMoonlightPublicIPViaSSH() }
                         }
-                        .disabled(!viewModel.isPaired)
+                        .disabled(!viewModel.powerConfig.localSSHConfigured)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

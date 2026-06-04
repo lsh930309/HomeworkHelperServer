@@ -53,8 +53,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RevokeDeviceResponse",
         "RemoteTailscalePeer",
         "RemoteTailscaleSnapshot",
-        "RemoteLoggingConfigResponse",
-        "RemoteAccessStatus",
+        "RemoteTailscaleEnsureResponse",
     ]:
         assert f"struct {model_name}" in models
 
@@ -81,11 +80,6 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
         'targetHost = "target_host"',
-        'remoteAccessReadiness = "remote_access_readiness"',
-        'publicBaseURL = "public_base_url"',
-        'routerRule = "router_rule"',
-        'externalPort = "external_port"',
-        'internalPort = "internal_port"',
         'case state',
         'smartthingsDeviceID = "smartthings_device_id"',
         'smartthingsCLIPath = "smartthings_cli_path"',
@@ -170,7 +164,6 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/status',
         'remote/capabilities',
         'remote/readiness',
-        'remote/access/status',
         'remote/dashboard/summary',
         'remote/beholder/incidents',
         'remote/game-links',
@@ -180,11 +173,12 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/processes',
         'remote/shortcuts',
         'remote/power/setup',
-        'remote/power/actions/\\(pathSegment(action))',
+        'remote/power/ssh-key',
         'remote/pair/confirm',
         'remote/tokens/refresh',
         'remote/logging/config',
         'remote/devices/revoked',
+        'remote/tailscale/ensure',
         'remote/devices',
         'remote/processes/\\(pathSegment(id))/launch',
         'remote/processes/\\(pathSegment(id))/stop',
@@ -203,10 +197,8 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func activeMobileSessions() async throws -> [RemoteMobileSession]' in client
     assert 'func stopProcess(id: String) async throws -> RemoteCommandResult' in client
     assert 'func powerSetup() async throws -> RemotePowerSetupResponse' in client
-    assert 'func executePowerAction(_ action: String) async throws -> RemoteCommandResult' in client
-    for stale in ['remote/power/ssh-key', 'remote/tailscale/ensure', 'func registerPowerSSHKey', 'func ensureServerTailscale']:
-        assert stale not in client
-    assert 'func remoteAccessStatus() async throws -> RemoteAccessStatus' in client
+    assert 'func registerPowerSSHKey(publicKey: String, label: String)' in client
+    assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
     assert 'request(path: path, method: "PUT")' in client
     assert "static func defaultSession(requestTimeout: TimeInterval = 5, resourceTimeout: TimeInterval = 8) -> URLSession" in client
     assert "configuration.timeoutIntervalForRequest = requestTimeout" in client
@@ -542,20 +534,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'trigger: "refresh"' in view_model
     assert 'trigger: "mirror"' in view_model
     assert "probeTailnetManagementReachability(for: client)" in view_model
-    assert "service.executePowerAction(normalized)" in view_model
-    assert "LocalSSHPowerManager.health(config: powerConfig" not in view_model
+    assert "LocalSSHPowerManager.health(config: powerConfig" in view_model
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
     assert "markHTTPAgentUnavailable" in view_model
     assert "applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService)" in view_model
-    assert "if let statusReadiness = latestStatus.readiness" in view_model
-    assert "if let statusReadiness = status.readiness" in view_model
-    assert "normalizeRemoteBaseURLText" in view_model
-    assert "isPublicIPv4Literal" in view_model
-    assert "publicRemoteAgentDNSSuffix" in view_model
-    assert "refreshRemoteAccessStatus" in view_model
-    assert "remoteAccessStatus = try await service.remoteAccessStatus()" in view_model
-    assert "publicHTTPSDirectMode" in view_model
+    assert "status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil" in view_model
     assert "supervisorDecision(_ event: RemoteConnectionEvent)" in view_model
     assert "applyConnectionDecision(_ decision: RemoteConnectionDecision" in view_model
     assert "installClientResumeObservers" in view_model
@@ -590,7 +574,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "Array(repeating: UInt64(1), count: 15)" in supervisor
     assert "Array(repeating: UInt64(2), count: 15)" in supervisor
     assert "Array(repeating: UInt64(5), count: 24)" in supervisor
-    assert "beginPowerTransition(for: normalized)" in view_model
+    assert "beginPowerTransition(for: action)" in view_model
     assert "setHostAvailability(state, clearPairingRecovery: decision.shouldClearPairingRecovery)" in view_model
     assert "authRejected" in view_model
     assert "return NSApp.isActive ? 5 : 15" not in view_model
@@ -599,15 +583,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
     assert "자동 설정 점검" in app
-    assert "공개 HTTPS 상태 확인" in app
-    assert "sslip.io HTTPS URL을 생성하지만 UI에는 URL을 노출하지 않습니다" in app
-    assert "TCP 443 → Windows Host 38443" in app
-    assert "Remote Agent 8000" in app
-    assert "서버 Tailscale 확인/복구" not in app
+    assert "서버 Tailscale 확인/복구" in app
     assert "페어링 토큰 복구" in app
     assert "로컬 토큰 삭제" in app
-    assert "Tailscale 선택 fallback" not in app
-    assert "Tailscale 서버/호스트 탐색" not in app
+    assert "Tailscale 서버/호스트 탐색" in app
     assert "전원 자동 설정" in app
     assert "전원 설정 저장" not in app
     assert "기기 관리" in app
@@ -652,15 +631,15 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "viewModel.requestMacAccessibilityPermission()" in app
     assert "viewModel.openMacAccessibilitySettings()" in app
     assert "연동 상태" in app
-    assert "Tailscale 등록 후보" not in app
-    assert 'TextField("공유기 공인 IP", text: $viewModel.routerPublicIPText)' in app
+    assert "Tailscale 등록 후보" in app
+    assert "Pairing PIN" in app
     assert "Moonlight 설치" in app
-    assert "Tailscale Direct로 등록" not in app
+    assert "Tailscale Direct로 등록" in app
     assert "Moonlight 설정 다시 읽기" in app
     assert "호스트 공인 IP 갱신" in app
     assert "viewModel.moonlightPublicIPDisplay" in app
     assert "viewModel.moonlightStalePublicIPWarning" in app
-    assert "HomeworkHelper Remote Agent 연결은 public HTTPS 직접접속을 사용합니다" in app
+    assert "준비된 Desktop 세션은 popover에서 바로 실행합니다" in app
     assert "viewModel.moonlightSnapshot.readiness.label" in app
     assert "$viewModel.selectedMoonlightHostUUID" in app
     assert "viewModel.moonlightSelectableHosts" in app
@@ -676,8 +655,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'prefix: "\\(prefix).apps"' in local_moonlight
     assert 'caseInsensitiveCompare("Desktop")' in local_moonlight
     assert "targetHostArgument" in local_moonlight
-    assert "needsManualHostRegistration" in local_moonlight
-    assert "needsTailscaleRegistration" not in local_moonlight
+    assert "needsTailscaleRegistration" in local_moonlight
     assert "LocalMoonlightCommandResult" in local_moonlight
     assert "LocalMoonlightSessionSnapshot" in local_moonlight
     assert "desktopStreamProcessCount" in local_moonlight
@@ -715,10 +693,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "peer-relay(" in tailscale
     assert '"CurAddr"' in tailscale
     assert '"Addrs"' in tailscale
-    assert "refreshMoonlightPublicIPViaHTTPS" in view_model
-    assert "LocalSSHPowerManager.publicIP" not in view_model
+    assert "LocalSSHPowerManager.publicIP" in view_model
     assert "installMoonlightViaHomebrew" in view_model
-    assert "registerMoonlightViaTailscaleDirect" not in view_model
+    assert "registerMoonlightViaTailscaleDirect" in view_model
     assert "moonlightBindingEnabledKey" in view_model
     assert "remote.moonlight.bindingEnabled" in view_model
     assert "moonlightAutoWakeBeforeStreamEnabledKey" not in view_model
@@ -748,10 +725,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "focusMoonlightOnPreferredScreen" in view_model
     assert "Accessibility 권한" in view_model
     assert 'if moonlightBindingEnabled, moonlightSnapshot.readiness == .ready' in view_model
-    assert "generateMoonlightPairingPIN" not in view_model
-    assert "moonlightTailscaleRegistrationPeer" not in view_model
-    assert "Tailscale direct 경로 확인 중" not in view_model
-    assert "호스트 Sunshine/Apollo PIN 화면" not in view_model
+    assert "generateMoonlightPairingPIN" in view_model
+    assert "moonlightTailscaleRegistrationPeer" in view_model
+    assert "Tailscale direct 경로 확인 중" in view_model
+    assert "호스트 Sunshine/Apollo PIN 화면" in view_model
     assert "moonlightPublicIPCacheKey" in view_model
     assert "remote.moonlight.hostPublicIPCache" in view_model
     assert "srvcert" not in app
@@ -814,23 +791,22 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "hostSafeForRemoteSave" not in models
     assert "localSSHHealthReady" in view_model
     assert "localSSHHealthSummary" in view_model
-    assert "verifyLocalSSHHealth" not in view_model
-    assert '"power.host_https"' in view_model
-    assert '"power.ssh_health"' not in view_model
-    assert "private func shouldRefreshLocalSSHHealthAfterOnlineRecovery" in view_model
+    assert "verifyLocalSSHHealth" in view_model
+    assert '"power.ssh_health"' in view_model
+    assert "let previousAvailabilityState = hostAvailabilityState" in view_model
     assert "shouldRefreshLocalSSHHealthAfterOnlineRecovery(" in view_model
     assert "previousState != .online || decision.shouldForcePayloadSync" in view_model
-    assert "refreshLocalSSHHealthAfterOnlineRecovery(using: service)" not in view_model
+    assert "refreshLocalSSHHealthAfterOnlineRecovery(using: service)" in view_model
     assert "private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async" in view_model
-    assert "hostDelegatedPowerSummary" in view_model
-    assert "localSSHIdentityStatus" in models
-    assert '"ssh_identity": identityStatus' not in view_model
-    assert '"power.local_ssh.started"' not in view_model
+    assert "localSSHHealthReady," in view_model
+    assert "localSSHIdentityStatus" in view_model
+    assert '"ssh_identity": identityStatus' in view_model
+    assert '"power.local_ssh.started"' in view_model
     assert '"power.transition.accepted"' in view_model
     assert "requestScheduledMirror(trigger: \"power.\\(action).accepted\"" in view_model
-    assert "setup.effectiveAuthorizedKeysPath" not in app
-    assert "setup.authorizedKeysScope" not in app
-    assert "viewModel.localSSHHealthSummary" not in app
+    assert "setup.effectiveAuthorizedKeysPath" in app
+    assert "setup.authorizedKeysScope" in app
+    assert "viewModel.localSSHHealthSummary" in app
     assert "currentState == .goingOffline && !isOfflineHint" in supervisor
     assert "shouldForcePayloadSync: false" in supervisor
     assert "!viewModel.isPowerActionEnabled(action)" in app
@@ -851,7 +827,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "func refreshToken() async" in view_model
     assert "func saveRemoteDesktopLogging" in view_model
     assert "runSetupAutomation" in view_model
-    assert "ensureServerTailscale" not in view_model
+    assert "ensureServerTailscale" in view_model
     assert "probeSmartThingsDevices" in view_model
     assert "refreshPowerSetup" in view_model
     assert "applySuggestedPowerHost" not in view_model

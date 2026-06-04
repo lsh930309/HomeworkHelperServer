@@ -950,17 +950,14 @@ def artifact_archive_bucket(file_path: Path) -> tuple[str, str] | None:
     """Return (target, artifact_type) for release artifacts that should be archived."""
     name = file_path.name
     suffix = file_path.suffix.lower()
-    if suffix not in {".exe", ".zip", ".pkg", ".apk"}:
+    if suffix not in {".exe", ".zip", ".pkg"}:
         return None
     if not (
         name.startswith("HomeworkHelper_")
         or name.startswith("HomeworkHelperRemote_")
-        or name.startswith("HomeworkHelperRemoteAndroid_")
     ):
         return None
-    if name.startswith("HomeworkHelperRemoteAndroid_"):
-        target = "android-client"
-    elif name.startswith("HomeworkHelperRemote_"):
+    if name.startswith("HomeworkHelperRemote_"):
         target = "macos-client"
     else:
         target = "windows-host"
@@ -968,7 +965,6 @@ def artifact_archive_bucket(file_path: Path) -> tuple[str, str] | None:
         ".exe": "installer",
         ".zip": "portable",
         ".pkg": "pkg",
-        ".apk": "apk",
     }[suffix]
     return target, artifact_type
 

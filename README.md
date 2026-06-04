@@ -14,7 +14,7 @@
 
 **게임 일일 루틴 자동 관리 시스템**
 
-프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • Remote Agent • macOS/Android 클라이언트 • RESTful API
+프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • Remote Agent • macOS 클라이언트 • RESTful API
 
 [다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [원격 클라이언트](#-원격-클라이언트) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
 
@@ -41,7 +41,7 @@
 
 ## 🎯 개요
 
-HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows 데스크톱 애플리케이션이며, Remote Agent를 통해 macOS/Android 네이티브 클라이언트에서도 주요 제어 기능을 사용할 수 있습니다.
+HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows 데스크톱 애플리케이션이며, Remote Agent를 통해 macOS 네이티브 클라이언트에서도 주요 제어 기능을 사용할 수 있습니다.
 
 ### 해결하는 문제
 
@@ -184,9 +184,8 @@ sequenceDiagram
 
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
-- **공개 HTTPS 직접접속**: 공유기 수동 포트포워딩 `TCP 443 → Windows Host 38443`, Caddy sidecar TLS 종료, `https://<공인IP-대시>.sslip.io` 자동 URL로 Android/macOS가 Tailscale 없이 Remote Agent에 접속
-- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, 공개 HTTPS 직접접속, 공유기 WAN 공인 IPv4 입력, SmartThings Wake와 Host HTTPS 위임 전원, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: Kotlin + Jetpack Compose v3 게임 우선 UX. Home/Setup 구조로 게임 실행·중단, 서버 추적/로컬 projection 진행률, 아이콘/배지, pull-to-refresh, floating status, 공개 HTTPS Connection Doctor, 기기 관리, SmartThings Wake, Host HTTPS 위임 전원을 제공
+- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
+- **Android 클라이언트**: 안정화 전까지 개발을 중단했으며 워크스페이스의 클라이언트 소스·빌드·검증 자료를 제거함
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---
@@ -232,19 +231,11 @@ swift build --package-path remote_clients/macos/HomeworkHelperRemote
 open dist/macos/HomeworkHelperRemote.app
 ```
 
-macOS 앱은 사용자에게 **공유기 WAN 공인 IPv4**만 입력받고 내부적으로 `https://<공인IP-대시>.sslip.io` URL을 생성한다. 외부망 사용 시 공유기에서 `TCP 443 → Windows Host 38443` 수동 포트포워딩과 6자리 pairing code가 필요하다.
+macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
 
 ### Option 5: Android Remote Client
 
-```bash
-cd remote_clients/android/HomeworkHelperRemote
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
-export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
-export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-./gradlew :app:assembleRelease
-```
-
-현재 Android 앱은 v3 게임 우선 UX 상태다. Home은 게임 미러링과 실행/중단에 집중하고, Setup은 연결/페어링 · 전원 · 기기 · 앱 섹션으로 공유기 WAN 공인 IPv4/token, 공개 HTTPS Connection Doctor, SmartThings Wake, Host HTTPS 위임 전원, paired-device 관리, fake smoke 안내를 나눈다. 기능 재구축 기준은 `docs/remote/android-client-design.md`를 따른다.
+Android 클라이언트 개발은 안정화 전까지 중단됐으며, 관련 소스/빌드/검증 자료는 현재 워크스페이스에서 제거됐다.
 
 ---
 
@@ -368,7 +359,7 @@ GET http://127.0.0.1:8000/sessions/process/{process_id}/active
 
 ## 🛰️ 원격 클라이언트
 
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 macOS/Android 클라이언트는 공개 HTTPS 직접접속을 기준으로 공유기 WAN 공인 IPv4만 입력받고, 게임 미러링, 실행/중단, SmartThings Wake, Host HTTPS 위임 전원, 연결/기기 설정을 분리한다.
+HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 활성 기준 클라이언트는 macOS 클라이언트이며, Android 클라이언트 개발은 안정화 전까지 중단됐다.
 
 ### Remote Agent 실행
 
@@ -377,27 +368,22 @@ HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.
 ```
 
 - 로컬 개발만 할 때는 `./.venv/bin/python homework_helper.pyw --server`로 충분하다.
-- 외부 기기에서 접속하려면 공개 HTTPS 직접접속을 사용하고, 공유기에서 `TCP 443 → Windows Host 38443`을 수동 포트포워딩한 뒤 `HH_REMOTE_PUBLIC_DIRECT=1`/`HH_REMOTE_REQUIRE_AUTH=1`을 유지한다.
+- 외부 기기에서 접속하려면 LAN/Tailscale URL을 사용하고 `HH_REMOTE_REQUIRE_AUTH=1`을 유지한다.
 - 최초 pairing code는 host loopback에서 `curl -X POST http://127.0.0.1:8000/remote/pair/start`로 발급한다.
 
 ### 문서
 
-- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS/Android build 절차
+- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS client build 절차
 - `docs/remote/macos-client-architecture.md` — macOS 기준 클라이언트 구조/계약
-- `docs/remote/android-client-design.md` — Android 클라이언트 재작성 설계도
 - `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
-- `docs/remote/connection-supervisor-protocol.md` — 공통 pairing/connectivity/power/Host HTTPS 위임 프로토콜
-- `remote_clients/android/HomeworkHelperRemote/README.md` — Android v3 게임 우선 UX 및 fake smoke 안내
+- `docs/remote/connection-supervisor-protocol.md` — 공통 pairing/connectivity/power/OpenSSH 프로토콜
 
 ### 핵심 검증 명령
 
 ```bash
-./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py tests/test_remote_android_client_static.py
+./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
-./.venv/bin/python -m pytest tests/test_remote_android_client_static.py -q
-# Android 개발 루프는 fake Remote Agent smoke를 우선 사용
-python tools/smoke_android_fake_remote.py --serial <adb-serial>
-./.venv/bin/python tools/verify_android_device.py
+./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
 ```
 
 ---
@@ -483,7 +469,6 @@ HomeworkHelperServer/
 │   ├── remote/                  # Remote Agent/클라이언트 운영·설계 문서
 │   │   ├── setup-guide.md
 │   │   ├── macos-client-architecture.md
-│   │   ├── android-client-design.md
 │   │   └── remote-storage-policy.md
 │   ├── guides/                  # 사용 가이드
 │   │   ├── build-guide.md
@@ -492,8 +477,7 @@ HomeworkHelperServer/
 │   └── archived/                # 보류된 문서
 │
 ├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
-│   ├── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
-│   └── android/HomeworkHelperRemote/  # Kotlin/Compose Android v3 game-first UX
+│   └── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
 │
 ├── 🎨 assets/                    # 리소스
 │   ├── icons/                   # 아이콘

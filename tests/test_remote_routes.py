@@ -37,40 +37,6 @@ class _FakeAuditor:
         return event
 
 
-class _FakeHostDelegatedPowerController:
-    def __init__(self):
-        self.actions: list[str] = []
-
-    def status(self) -> dict:
-        return {
-            "configured": True,
-            "state": "ready",
-            "status": "ready",
-            "target_host": "localhost",
-            "host_platform": "Windows",
-            "supported_actions": ["sleep", "restart", "shutdown"],
-            "wake_mode": "smartthings_client",
-            "ssh_required": False,
-            "message": "Host HTTPS 위임 전원 준비 완료",
-        }
-
-    def schedule_action(self, action: str) -> dict:
-        normalized = action.strip().lower()
-        if normalized not in {"sleep", "restart", "shutdown"}:
-            raise ValueError(f"지원하지 않는 전원 명령입니다: {action}")
-        self.actions.append(normalized)
-        return {
-            "accepted": True,
-            "command": f"power.{normalized}",
-            "target": "host",
-            "status": "accepted",
-            "message": f"{normalized} accepted",
-            "command_id": f"power.{normalized}:test",
-            "accepted_at": 1778497000.0,
-            "refresh_after_ms": 1500,
-        }
-
-
 def _client_with_seed(
     *,
     processes=None,
@@ -84,7 +50,6 @@ def _client_with_seed(
     power_controller=None,
     process_terminator=None,
     require_auth=False,
-    public_direct=None,
     client_address=("testclient", 50000),
     tailscale_probe=None,
 ):
@@ -160,7 +125,6 @@ def _client_with_seed(
             process_terminator=process_terminator,
             auth_token=auth_token,
             require_auth=require_auth,
-            public_direct=public_direct,
             now=lambda: 1778497000.0,
             tailscale_probe=tailscale_probe,
         )
@@ -191,21 +155,17 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["power_config"] is False
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["local_store_health"] is True
-    assert body["capabilities"]["remote_access"] is True
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
     assert body["power"]["configured"] is False
-    assert body["power"]["state"] == "unsupported"
-    assert body["power"]["status"] == "unsupported"
+    assert body["power"]["state"] == "client_managed"
+    assert body["power"]["status"] == "client_managed"
     assert body["power"]["supported_actions"] == []
     assert body["power"]["target_host"] == ""
     assert body["diagnostics"]["readiness_mode"] == "lightweight"
     assert "duration_ms" in body["diagnostics"]
     assert body["readiness"]["tailscale_readiness"]["state"] == "deferred"
     assert "details" not in body["readiness"]["tailscale_readiness"]
-    assert body["readiness"]["remote_access_readiness"]["details"]["mode"] == "manual_port_forward_public_https"
-    assert body["readiness"]["remote_access_readiness"]["router_rule"]["external_port"] == 443
-    assert body["readiness"]["remote_access_readiness"]["router_rule"]["internal_port"] == 38443
 
 
 def test_remote_status_does_not_block_on_tailscale_probe():
@@ -787,27 +747,16 @@ def test_remote_shortcut_open_delegates_to_native_opener_and_records_command_res
     assert auditor.events[-1]["command"] == "shortcut.open"
 
 
-def test_remote_power_action_api_uses_host_https_delegation_only():
-    power = _FakeHostDelegatedPowerController()
-    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(power_controller=power)
+def test_remote_power_action_api_is_not_exposed_by_host_agent():
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
     status_response = client.get("/remote/power/status")
-    action_response = client.post("/remote/power/actions/shutdown")
-    invalid_action_response = client.post("/remote/power/actions/wake")
-    legacy_action_response = client.post("/remote/power/shutdown")
+    action_response = client.post("/remote/power/shutdown")
 
     assert status_response.status_code == 200
-    assert status_response.json()["configured"] is True
-    assert status_response.json()["supported_actions"] == ["sleep", "restart", "shutdown"]
-    assert status_response.json()["wake_mode"] == "smartthings_client"
-    assert status_response.json()["ssh_required"] is False
-    assert action_response.status_code == 200
-    assert action_response.json()["accepted"] is True
-    assert action_response.json()["command"] == "power.shutdown"
-    assert power.actions == ["shutdown"]
-    assert invalid_action_response.status_code == 400
-    assert legacy_action_response.status_code == 404
-    assert auditor.events[-1]["command"] == "power.shutdown"
+    assert status_response.json()["configured"] is False
+    assert action_response.status_code == 404
+    assert not any(event["command"].startswith("power.shutdown") for event in auditor.events)
 
 
 def test_remote_api_can_require_bearer_token_for_nonlocal_exposure():
@@ -823,14 +772,6 @@ def test_remote_api_can_require_bearer_token_for_nonlocal_exposure():
 
 def test_remote_api_force_auth_blocks_before_first_pairing_when_bound_externally():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(require_auth=True)
-
-    response = client.get("/remote/status")
-
-    assert response.status_code == 401
-
-
-def test_remote_api_public_direct_blocks_before_first_pairing_when_bound_externally():
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(public_direct=True)
 
     response = client.get("/remote/status")
 
@@ -932,19 +873,7 @@ def test_loopback_can_manage_remote_settings_after_pairing_without_bearer_token(
     assert revoked.status_code == 200
 
 
-def test_pairing_start_does_not_default_allow_current_macbook_tailscale_ip():
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
-        client_address=("100.114.138.46", 50000),
-        require_auth=True,
-    )
-
-    pairing = client.post("/remote/pair/start")
-
-    assert pairing.status_code == 403
-
-
-def test_pairing_start_allows_explicit_dev_allowed_pairing_ip(monkeypatch):
-    monkeypatch.setenv("HH_REMOTE_DEV_ALLOWED_PAIRING_IPS", "100.114.138.46")
+def test_pairing_start_temporarily_allows_current_macbook_tailscale_ip():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
         require_auth=True,
@@ -956,31 +885,6 @@ def test_pairing_start_allows_explicit_dev_allowed_pairing_ip(monkeypatch):
     assert pairing.status_code == 200
     assert pairing.json()["code"].isdigit()
     assert protected_without_token.status_code == 401
-
-
-def test_pairing_confirm_locks_after_repeated_source_failures():
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed()
-
-    start = client.post("/remote/pair/start")
-    code = start.json()["code"]
-    for _index in range(4):
-        failed = client.post(
-            "/remote/pair/confirm",
-            json={"code": "000000", "device_name": "Android", "platform": "android"},
-        )
-        assert failed.status_code == 400
-
-    lock_trigger = client.post(
-        "/remote/pair/confirm",
-        json={"code": "000000", "device_name": "Android", "platform": "android"},
-    )
-    correct_after_lock = client.post(
-        "/remote/pair/confirm",
-        json={"code": code, "device_name": "Android", "platform": "android"},
-    )
-
-    assert lock_trigger.status_code == 429
-    assert correct_after_lock.status_code == 429
 
 
 def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
@@ -1007,17 +911,12 @@ def test_tailnet_ip_becomes_device_identity_and_devices_include_host_role():
                 ],
             }
 
-    host_client, _launcher, _opened_urls, _auditor, registry = _client_with_seed(
-        client_address=("127.0.0.1", 50000),
-        tailscale_probe=lambda: _Snapshot(),
-    )
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(
         client_address=("100.114.138.46", 50000),
-        device_registry=registry,
         tailscale_probe=lambda: _Snapshot(),
     )
 
-    start = host_client.post("/remote/pair/start")
+    start = client.post("/remote/pair/start")
     confirm = client.post("/remote/pair/confirm", json={"code": start.json()["code"], "device_name": "MacBook", "platform": "macos"})
     token = confirm.json()["token"]
     accepted = client.get("/remote/status", headers={"Authorization": f"Bearer {token}"})
@@ -1280,9 +1179,8 @@ def test_remote_device_token_survives_registry_reload_without_refresh(tmp_path):
     assert reloaded.validate_token(token, now=1778497020.0) is not None
 
 
-def test_legacy_remote_power_action_api_preserves_authenticated_pairing_token():
-    power = _FakeHostDelegatedPowerController()
-    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=power)
+def test_removed_remote_power_action_api_preserves_authenticated_pairing_token():
+    client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=ConfigurablePowerController())
 
     pairing = client.post("/remote/pair/start")
     confirmed = client.post(
@@ -1300,13 +1198,8 @@ def test_legacy_remote_power_action_api_preserves_authenticated_pairing_token():
         assert devices.status_code == 200
         assert devices.json()["devices"][0]["revoked_at"] is None
 
-    delegated = client.post("/remote/power/actions/sleep", headers=headers)
-    assert delegated.status_code == 200
-    assert delegated.json()["accepted"] is True
-    assert power.actions == ["sleep"]
 
-
-def test_power_controller_reports_host_delegated_status_without_actions_on_non_windows():
+def test_power_controller_reports_client_managed_status_without_actions():
     client, _launcher, _opened_urls, _auditor, _registry = _client_with_seed(power_controller=ConfigurablePowerController())
 
     remote_status_response = client.get("/remote/status")
@@ -1315,33 +1208,27 @@ def test_power_controller_reports_host_delegated_status_without_actions_on_non_w
     shutdown_response = client.post("/remote/power/shutdown")
     sleep_response = client.post("/remote/power/sleep")
     restart_response = client.post("/remote/power/restart")
-    delegated_sleep_response = client.post("/remote/power/actions/sleep")
 
     assert remote_status_response.status_code == 200
     remote_status_body = remote_status_response.json()
     assert remote_status_body["capabilities"]["power_control"] is False
     assert remote_status_body["capabilities"]["power_config"] is False
     assert remote_status_body["power"]["configured"] is False
-    assert remote_status_body["power"]["state"] == "unsupported"
-    assert remote_status_body["power"]["status"] == "unsupported"
+    assert remote_status_body["power"]["state"] == "client_managed"
+    assert remote_status_body["power"]["status"] == "client_managed"
     assert remote_status_body["power"]["target_host"] == ""
     assert remote_status_body["power"]["supported_actions"] == []
     assert status_response.status_code == 200
     status_body = status_response.json()
     assert status_body["configured"] is False
-    assert status_body["state"] == "unsupported"
-    assert status_body["status"] == "unsupported"
-    assert status_body["wake_mode"] == "smartthings_client"
-    assert status_body["ssh_required"] is False
+    assert status_body["state"] == "client_managed"
+    assert status_body["status"] == "client_managed"
     assert status_body["target_host"] == ""
     assert status_body["supported_actions"] == []
     assert wake_response.status_code == 404
     assert shutdown_response.status_code == 404
     assert sleep_response.status_code == 404
     assert restart_response.status_code == 404
-    assert delegated_sleep_response.status_code == 200
-    assert delegated_sleep_response.json()["accepted"] is False
-    assert delegated_sleep_response.json()["status"] == "unsupported"
 
 
 def test_remote_power_setup_reports_host_readiness_and_registers_public_key():

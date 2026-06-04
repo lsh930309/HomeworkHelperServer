@@ -155,7 +155,7 @@ enum LocalMoonlightReadiness: String, Equatable {
     case missingApp
     case missingConfig
     case noHosts
-    case needsManualHostRegistration
+    case needsTailscaleRegistration
     case ambiguous
     case ready
 
@@ -167,8 +167,8 @@ enum LocalMoonlightReadiness: String, Equatable {
             return "설정 없음"
         case .noHosts:
             return "Host 없음"
-        case .needsManualHostRegistration:
-            return "Host 등록 필요"
+        case .needsTailscaleRegistration:
+            return "Tailscale 등록 필요"
         case .ambiguous:
             return "Host 선택 필요"
         case .ready:
@@ -381,8 +381,8 @@ enum LocalMoonlightManager {
                 hosts: hosts,
                 selectedHostUUID: selected,
                 targetHost: nil,
-                readiness: .needsManualHostRegistration,
-                message: "HomeworkHelper host와 일치하는 Moonlight Desktop host를 찾지 못했습니다. 기존 설정은 수정하지 않고, Moonlight에서 수동 host 등록을 확인하세요.",
+                readiness: .needsTailscaleRegistration,
+                message: "HomeworkHelper host와 일치하는 Moonlight Desktop host를 찾지 못했습니다. 기존 설정은 수정하지 않고, Tailscale direct 경로로 새 host 등록을 준비하세요.",
                 publicIPCache: publicIPCache
             )
         }

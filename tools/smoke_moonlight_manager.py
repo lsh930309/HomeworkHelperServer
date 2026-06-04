@@ -113,7 +113,7 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 expect(matchedByPublicIP.targetHost?.uuid == "HOST-2", "public IP hint should select HOST-2")
 
                 let needsRegistration = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, hostNameHints: ["homework-host"], publicIPHints: ["203.0.113.5"])
-                expect(needsRegistration.readiness == .needsManualHostRegistration, "identity hints without a matching Moonlight host should request manual host registration")
+                expect(needsRegistration.readiness == .needsTailscaleRegistration, "identity hints without a matching Moonlight host should request Tailscale registration")
                 expect(needsRegistration.targetHost == nil, "unmatched HomeworkHelper identity hints must not auto-select an unrelated Moonlight host")
 
                 let stale = LocalMoonlightManager.snapshot(selectedHostUUID: "HOST-1", baseURLHost: nil, publicIPHints: ["211.216.28.65"])

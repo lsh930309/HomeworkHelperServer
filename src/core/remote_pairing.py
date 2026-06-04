@@ -48,8 +48,6 @@ class RemoteDeviceRegistry:
 
     path: Path = field(default_factory=lambda: remote_store().path("remote_devices.json"))
     code_ttl_seconds: int = 300
-    source_attempt_limit: int = 5
-    global_attempt_limit: int = 20
 
     def start_pairing(self, *, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()
@@ -59,9 +57,6 @@ class RemoteDeviceRegistry:
             "code_hash": _sha256(code),
             "expires_at": now + self.code_ttl_seconds,
             "created_at": now,
-            "failed_attempts": 0,
-            "failed_attempts_by_source": {},
-            "locked_until": None,
         }
         self._write(state)
         return {"code": code, "expires_at": state["active_pairing"]["expires_at"]}
@@ -74,7 +69,6 @@ class RemoteDeviceRegistry:
         platform: str | None = None,
         role: str = "client",
         tailnet_binding: dict[str, Any] | None = None,
-        source_ip: str | None = None,
         now: float | None = None,
     ) -> dict[str, Any] | None:
         now = now or time.time()
@@ -83,10 +77,7 @@ class RemoteDeviceRegistry:
         expires_at = float(active.get("expires_at") or 0)
         if not active or expires_at < now:
             return None
-        if self._pairing_attempt_limited(active, self._pairing_source_key(source_ip), now=now):
-            return None
         if not secrets.compare_digest(str(active.get("code_hash") or ""), _sha256(code)):
-            self._record_pairing_failure(state, active, source_ip=source_ip, now=now)
             return None
 
         token = secrets.token_urlsafe(32)
@@ -109,15 +100,6 @@ class RemoteDeviceRegistry:
         public = self._public_device(device)
         public["token"] = token
         return public
-
-    def pairing_confirm_limited(self, source_ip: str | None = None, *, now: float | None = None) -> bool:
-        now = now or time.time()
-        state = self._read()
-        active = state.get("active_pairing") or {}
-        expires_at = float(active.get("expires_at") or 0)
-        if not active or expires_at < now:
-            return False
-        return self._pairing_attempt_limited(active, self._pairing_source_key(source_ip), now=now)
 
     def has_active_devices(self) -> bool:
         state = self._read()
@@ -242,39 +224,6 @@ class RemoteDeviceRegistry:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-
-    def _pairing_source_key(self, source_ip: str | None) -> str:
-        return str(source_ip or "unknown").strip() or "unknown"
-
-    def _pairing_attempt_limited(self, active: dict[str, Any], source_key: str, *, now: float) -> bool:
-        locked_until = active.get("locked_until")
-        if locked_until and float(locked_until) > now:
-            return True
-        attempts_by_source = active.get("failed_attempts_by_source") or {}
-        return (
-            int(attempts_by_source.get(source_key) or 0) >= self.source_attempt_limit
-            or int(active.get("failed_attempts") or 0) >= self.global_attempt_limit
-        )
-
-    def _record_pairing_failure(
-        self,
-        state: dict[str, Any],
-        active: dict[str, Any],
-        *,
-        source_ip: str | None,
-        now: float,
-    ) -> None:
-        source_key = self._pairing_source_key(source_ip)
-        attempts_by_source = dict(active.get("failed_attempts_by_source") or {})
-        attempts_by_source[source_key] = int(attempts_by_source.get(source_key) or 0) + 1
-        active["failed_attempts_by_source"] = attempts_by_source
-        active["failed_attempts"] = int(active.get("failed_attempts") or 0) + 1
-        if (
-            attempts_by_source[source_key] >= self.source_attempt_limit
-            or int(active.get("failed_attempts") or 0) >= self.global_attempt_limit
-        ):
-            active["locked_until"] = float(active.get("expires_at") or now)
-        self._write(state)
 
     def _public_device(self, device: dict[str, Any]) -> dict[str, Any]:
         return {

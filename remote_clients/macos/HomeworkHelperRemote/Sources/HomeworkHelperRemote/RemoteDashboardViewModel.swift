@@ -2,79 +2,6 @@ import Foundation
 import AppKit
 import SwiftUI
 
-private let remoteAgentDefaultHTTPPort = 8000
-private let publicRemoteAgentDNSSuffix = "sslip.io"
-
-private func normalizeRemoteBaseURLText(_ value: String) -> String {
-    normalizePublicRemoteBaseURLText(value) ?? ""
-}
-
-private func normalizePublicRemoteBaseURLText(_ value: String) -> String? {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    guard !trimmed.isEmpty else { return nil }
-    if isPublicIPv4Literal(trimmed) {
-        return "https://\(trimmed.replacingOccurrences(of: ".", with: "-")).\(publicRemoteAgentDNSSuffix)"
-    }
-    guard let components = URLComponents(string: trimmed),
-          components.scheme?.lowercased() == "https",
-          let host = components.host?.lowercased(),
-          components.path.isEmpty || components.path == "/",
-          components.query == nil,
-          components.fragment == nil else {
-        return nil
-    }
-    guard let ip = publicIPv4FromRemoteHost(host) else { return nil }
-    return "https://\(ip.replacingOccurrences(of: ".", with: "-")).\(publicRemoteAgentDNSSuffix)"
-}
-
-private func publicIPv4FromRemoteHost(_ value: String) -> String? {
-    let host = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        .lowercased()
-    if isPublicIPv4Literal(host) { return host }
-    let suffix = ".\(publicRemoteAgentDNSSuffix)"
-    guard host.hasSuffix(suffix) else { return nil }
-    let label = String(host.dropLast(suffix.count))
-    let candidate = label.replacingOccurrences(of: "-", with: ".")
-    return isPublicIPv4Literal(candidate) ? candidate : nil
-}
-
-private func routerPublicIPInputFromRemoteBaseURL(_ value: String) -> String {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if isPublicIPv4Literal(trimmed) { return trimmed }
-    if let host = URLComponents(string: trimmed)?.host, let ip = publicIPv4FromRemoteHost(host) {
-        return ip
-    }
-    if let ip = publicIPv4FromRemoteHost(trimmed) { return ip }
-    return ""
-}
-
-private func sanitizeRouterPublicIPInput(_ value: String) -> String {
-    let allowed = value.filter { $0.isNumber || $0 == "." }
-    return String(allowed.prefix(15))
-}
-
-private func isPublicIPv4Literal(_ value: String) -> Bool {
-    let parts = value.split(separator: ".")
-    guard parts.count == 4 else { return false }
-    let octets = parts.compactMap { Int($0) }
-    guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return false }
-    let first = octets[0]
-    let second = octets[1]
-    let third = octets[2]
-    if first == 0 || first >= 224 { return false }
-    if first == 10 || first == 127 { return false }
-    if first == 172 && (16...31).contains(second) { return false }
-    if first == 192 && second == 168 { return false }
-    if first == 169 && second == 254 { return false }
-    if first == 100 && (64...127).contains(second) { return false }
-    if first == 192 && second == 0 && third == 2 { return false }
-    if first == 198 && (second == 18 || second == 19 || second == 51) { return false }
-    if first == 203 && second == 0 && third == 113 { return false }
-    return true
-}
-
 private actor RemoteDashboardServiceGate {
     private var locked = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -114,13 +41,14 @@ private actor RemoteDashboardService {
 
     func status() async throws -> RemoteStatus { try await Self.gate.run { try await client.status() } }
     func readiness() async throws -> RemoteReadiness { try await Self.gate.run { try await client.readiness() } }
-    func remoteAccessStatus() async throws -> RemoteAccessStatus { try await Self.gate.run { try await client.remoteAccessStatus() } }
     func dashboardSummary() async throws -> RemoteDashboardSummary { try await Self.gate.run { try await client.dashboardSummary() } }
     func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await Self.gate.run { try await client.beholderIncidents() } }
     func gameLinks() async throws -> [RemoteGameLink] { try await Self.gate.run { try await client.gameLinks() } }
     func activeMobileSessions() async throws -> [RemoteMobileSession] { try await Self.gate.run { try await client.activeMobileSessions() } }
     func powerSetup() async throws -> RemotePowerSetupResponse { try await Self.gate.run { try await client.powerSetup() } }
-    func executePowerAction(_ action: String) async throws -> RemoteCommandResult { try await Self.gate.run { try await client.executePowerAction(action) } }
+    func registerPowerSSHKey(publicKey: String, label: String) async throws -> RemoteSSHKeyRegistrationResponse {
+        try await Self.gate.run { try await client.registerPowerSSHKey(publicKey: publicKey, label: label) }
+    }
     func processes() async throws -> [RemoteProcess] { try await Self.gate.run { try await client.processes() } }
     func devices() async throws -> [RemoteDevice] { try await Self.gate.run { try await client.devices() } }
     func startMobileSession(gameLinkID: String) async throws -> RemoteMobileSession {
@@ -140,6 +68,7 @@ private actor RemoteDashboardService {
         try await Self.gate.run { try await client.confirmPairing(code: code, deviceName: deviceName) }
     }
     func refreshToken() async throws -> PairingConfirmResponse { try await Self.gate.run { try await client.refreshToken() } }
+    func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse { try await Self.gate.run { try await client.ensureServerTailscale() } }
     func remoteLoggingConfig() async throws -> RemoteLoggingConfigResponse { try await Self.gate.run { try await client.remoteLoggingConfig() } }
     func saveRemoteLoggingConfig(enabled: Bool) async throws -> RemoteLoggingConfigResponse {
         try await Self.gate.run { try await client.saveRemoteLoggingConfig(enabled: enabled) }
@@ -180,16 +109,11 @@ private enum RemoteClientPreferences {
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return normalizeRemoteBaseURLText(stored)
+        return stored.isEmpty ? "http://127.0.0.1:8000" : stored
     }
 
     static func saveBaseURL(_ value: String) {
-        let normalized = normalizeRemoteBaseURLText(value)
-        if normalized.isEmpty {
-            defaults.removeObject(forKey: baseURLKey)
-        } else {
-            defaults.set(normalized, forKey: baseURLKey)
-        }
+        defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: baseURLKey)
     }
 
     static func loadDeviceName() -> String {
@@ -545,33 +469,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         return formatter
     }()
 
-    @Published var baseURLText = normalizeRemoteBaseURLText(RemoteClientPreferences.loadBaseURL()) {
+    @Published var baseURLText = RemoteClientPreferences.loadBaseURL() {
         didSet {
-            let normalized = normalizeRemoteBaseURLText(baseURLText)
-            if normalized != baseURLText {
-                baseURLText = normalized
-                return
-            }
-            RemoteClientPreferences.saveBaseURL(normalized)
+            RemoteClientPreferences.saveBaseURL(baseURLText)
             refreshMoonlightSnapshot()
-        }
-    }
-    @Published var routerPublicIPText = routerPublicIPInputFromRemoteBaseURL(RemoteClientPreferences.loadBaseURL()) {
-        didSet {
-            let sanitized = sanitizeRouterPublicIPInput(routerPublicIPText)
-            if sanitized != routerPublicIPText {
-                routerPublicIPText = sanitized
-                return
-            }
-            guard !sanitized.isEmpty else {
-                baseURLText = ""
-                return
-            }
-            if let normalized = normalizePublicRemoteBaseURLText(sanitized) {
-                baseURLText = normalized
-            } else {
-                message = "공유기 WAN 공인 IPv4만 입력하세요. URL, 포트, 사설/LAN/CGNAT IP는 사용할 수 없습니다."
-            }
         }
     }
     @Published var selectedMoonlightHostUUID = RemoteClientPreferences.loadSelectedMoonlightHostUUID() {
@@ -583,10 +484,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightPublicIPCache = RemoteClientPreferences.loadMoonlightPublicIPCache()
     @Published private(set) var moonlightSnapshot = LocalMoonlightManager.snapshot(
         selectedHostUUID: RemoteClientPreferences.loadSelectedMoonlightHostUUID(),
-        baseURLHost: URL(string: normalizeRemoteBaseURLText(RemoteClientPreferences.loadBaseURL()))?.host,
+        baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host,
         publicIPCache: RemoteClientPreferences.loadMoonlightPublicIPCache()
     )
     @Published private(set) var moonlightSetupInProgress = false
+    @Published private(set) var moonlightPairingPIN = ""
+    @Published private(set) var moonlightTailscalePing: LocalTailscalePingResult?
     @Published private(set) var moonlightLastCommandSummary = ""
     @Published private(set) var moonlightSessionSnapshot = LocalMoonlightManager.sessionSnapshot()
     @Published var moonlightBindingEnabled = RemoteClientPreferences.loadMoonlightBindingEnabled() {
@@ -616,7 +519,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var smartThingsDevices: [String] = []
     @Published var smartThingsDeviceCandidates: [RemoteSmartThingsDeviceCandidate] = []
     @Published var readiness: RemoteReadiness?
-    @Published var remoteAccessStatus: RemoteAccessStatus?
     @Published var localTailscale: LocalTailscaleSnapshot? {
         didSet {
             if let localTailscale {
@@ -625,6 +527,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             refreshMoonlightSnapshot()
         }
     }
+    @Published var serverTailscaleEnsure: RemoteTailscaleEnsureResponse?
     @Published var setupProgress = "원격 설정 준비 전입니다."
     @Published var remoteDesktopLoggingEnabled = RemoteClientPreferences.loadDesktopLoggingEnabled()
     @Published var remoteDesktopLoggingPath = RemoteClientDesktopLogger.logPath()
@@ -728,30 +631,24 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var setupChecklist: [(String, String, Bool)] {
         let pairingHealthy = !tokenText.isEmpty && pairingRecoveryMessage.isEmpty
-        let wakeReady = powerConfig.localWakeConfigured
-        let hostPowerReady = Self.disconnectingPowerActions.contains { hostSupportsDelegatedPowerAction($0) }
+        let powerHealthy = powerConfig.localWakeConfigured || localSSHHealthReady
         let wakeDetail = powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Wake 대상 자동 확인 필요"
             : "Wake 대상: \(powerConfig.smartthingsDeviceID)"
-        let hostPowerDetail = hostPowerReady
-            ? "절전/종료/재시동: Host HTTPS 위임 준비됨"
-            : "절전/종료/재시동: Host HTTPS 전원 readiness 확인 필요"
-        let publicHTTPSReady = baseURLText.lowercased().hasPrefix("https://")
-        let publicHTTPSDetail = routerPublicIPText.isEmpty
-            ? "공유기 WAN 공인 IPv4를 입력하면 내부적으로 sslip.io HTTPS URL을 생성"
-            : "공유기 WAN IP \(routerPublicIPText) · \(remoteAccessStatus?.routerRule?.summary ?? "TCP 443 → Host 38443")"
+        let sshDetail = powerConfig.localSSHConfigured
+            ? localSSHHealthSummary
+            : "SSH key 자동 등록/health 확인 필요"
+        let powerDetail = "\(wakeDetail) · \(sshDetail)"
         return [
-            ("1. Public HTTPS", publicHTTPSDetail, publicHTTPSReady),
+            ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "기반환경 상태: \(localTailscale?.foundationState ?? "unknown") · Tailscale 설치/실행/로그인 필요", localTailscale?.running == true),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
-            ("4. 전원 관리", "\(wakeDetail) · \(hostPowerDetail)", wakeReady || hostPowerReady),
-            ("5. 외부 자동 연결", publicHTTPSReady ? "네트워크가 바뀌어도 공유기 공인 IP 기반 HTTPS 경로로 자동 재연결" : "URL/포트 대신 공유기 공인 IPv4만 입력하세요.", publicHTTPSReady)
+            ("4. 전원 관리", powerDetail, powerHealthy),
+            ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
     }
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-    var publicHTTPSDirectMode: Bool { baseURLText.lowercased().hasPrefix("https://") }
 
     var moonlightSelectableHosts: [LocalMoonlightHostCandidate] {
         moonlightSnapshot.usableHosts.filter { !$0.uuid.isEmpty }
@@ -775,6 +672,27 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     var moonlightCanInstallViaHomebrew: Bool {
         moonlightSnapshot.installation == nil && LocalMoonlightManager.resolveHomebrewExecutablePath() != nil && !moonlightSetupInProgress
+    }
+
+    var moonlightTailscaleRegistrationDisplay: String {
+        guard let peer = moonlightTailscaleRegistrationPeer() else {
+            if localTailscale?.running == true { return "등록 후보 없음" }
+            return "Tailscale 준비 필요"
+        }
+        let route = moonlightTailscalePing?.streamingRouteSummary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let routeSuffix = route.isEmpty ? "" : " · \(route)"
+        return "\(peer.hostname.isEmpty ? peer.dnsStem : peer.hostname) · \(moonlightTailscaleRegistrationHost(from: peer) ?? "-")\(routeSuffix)"
+    }
+
+    var moonlightCanRegisterViaTailscale: Bool {
+        moonlightSnapshot.installation != nil
+            && moonlightSnapshot.readiness != .ready
+            && moonlightTailscaleRegistrationPeer() != nil
+            && !moonlightSetupInProgress
+    }
+
+    var moonlightPairingPINDisplay: String {
+        moonlightPairingPIN.isEmpty ? "미시작" : moonlightPairingPIN
     }
 
     var moonlightFooterButtonTitle: String {
@@ -883,30 +801,25 @@ final class RemoteDashboardViewModel: ObservableObject {
         refreshMoonlightSessionSnapshot()
     }
 
-    func refreshMoonlightPublicIPViaHTTPS() async {
-        guard let service else {
-            message = "공유기 공인 IP를 먼저 입력하고 페어링하세요."
+    func refreshMoonlightPublicIPViaSSH() async {
+        guard powerConfig.localSSHConfigured else {
+            message = "SSH 전원 설정이 준비되어야 호스트 공인 IP를 수동 갱신할 수 있습니다."
             return
         }
-        message = "Host HTTPS로 공유기 공인 IP를 확인 중..."
-        do {
-            let status = try await service.remoteAccessStatus()
-            remoteAccessStatus = status
-            guard let ip = status.publicIP?.nilIfBlank else {
-                message = "호스트 공인 IP 확인 실패: Remote Agent가 public_ip를 반환하지 않았습니다."
-                return
-            }
-            let cache = LocalMoonlightPublicIPCache(
-                ip: ip,
-                source: "public_https",
-                collectedAt: Date().timeIntervalSince1970,
-                matchedPeerHostName: status.hostname ?? ""
-            )
-            saveMoonlightPublicIPCache(cache)
-            message = "호스트 공인 IP를 갱신했습니다: \(ip)"
-        } catch {
-            message = connectionGuidance(for: error)
+        message = "SSH로 호스트 공인 IP를 확인 중..."
+        let result = await LocalSSHPowerManager.publicIP(config: powerConfig, timeoutSeconds: 8)
+        guard let ip = result.ip else {
+            message = "호스트 공인 IP 확인 실패: \(result.message)"
+            return
         }
+        let cache = LocalMoonlightPublicIPCache(
+            ip: ip,
+            source: "ssh",
+            collectedAt: Date().timeIntervalSince1970,
+            matchedPeerHostName: powerConfig.sshHost
+        )
+        saveMoonlightPublicIPCache(cache)
+        message = "호스트 공인 IP를 갱신했습니다: \(ip)"
     }
 
     func installMoonlightViaHomebrew() async {
@@ -924,12 +837,62 @@ final class RemoteDashboardViewModel: ObservableObject {
         moonlightSetupInProgress = false
         refreshMoonlightSnapshot()
         if result.succeeded, moonlightSnapshot.installation != nil {
-            message = "Moonlight 설치를 확인했습니다. 기존 Desktop host 감지 또는 Moonlight 수동 등록 상태를 확인하세요."
+            message = "Moonlight 설치를 확인했습니다. 이제 Tailscale Direct 등록 또는 기존 host 감지를 진행할 수 있습니다."
         } else if result.succeeded {
             message = "Moonlight 설치 명령은 완료됐지만 앱을 아직 찾지 못했습니다. 설치 위치를 확인한 뒤 설정을 다시 읽어 주세요."
         } else {
             message = "Moonlight 설치 실패: \(result.outputSummary)"
         }
+    }
+
+    func registerMoonlightViaTailscaleDirect() async {
+        guard !moonlightSetupInProgress else { return }
+        guard let installation = moonlightSnapshot.installation else {
+            message = "Moonlight가 설치되어 있어야 Tailscale Direct 등록을 진행할 수 있습니다."
+            return
+        }
+        guard let peer = moonlightTailscaleRegistrationPeer(),
+              let targetHost = moonlightTailscaleRegistrationHost(from: peer) else {
+            message = "HomeworkHelper host와 연결된 Tailscale 등록 후보를 찾지 못했습니다."
+            return
+        }
+
+        moonlightSetupInProgress = true
+        moonlightLastCommandSummary = ""
+        moonlightTailscalePing = nil
+        message = "Tailscale direct 경로 확인 중: \(targetHost)"
+
+        let ping = await TailscaleDiscovery.ping(host: targetHost, timeoutSeconds: 5)
+        moonlightTailscalePing = ping
+        guard ping.directForStreaming else {
+            moonlightSetupInProgress = false
+            let route = ping.streamingRouteSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = "Moonlight 스트리밍용 Tailscale direct 연결을 확인하지 못했습니다. \(route.isEmpty ? ping.message : route)"
+            return
+        }
+
+        let pin = Self.generateMoonlightPairingPIN()
+        moonlightPairingPIN = pin
+        message = "Moonlight pairing 시작: 호스트 Sunshine/Apollo PIN 화면에서 \(pin)을 승인하세요."
+        let pairResult = await LocalMoonlightManager.pair(host: targetHost, pin: pin, installation: installation, timeoutSeconds: 120)
+        moonlightLastCommandSummary = pairResult.outputSummary
+        if pairResult.succeeded {
+            let listResult = await LocalMoonlightManager.listApps(host: targetHost, installation: installation, timeoutSeconds: 45)
+            let listSummary = listResult.outputSummary
+            moonlightLastCommandSummary = [pairResult.outputSummary, listSummary]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            refreshMoonlightSnapshot()
+            if listResult.succeeded {
+                message = "Moonlight Tailscale Direct 등록을 완료했고 앱 목록을 확인했습니다."
+            } else {
+                message = "Moonlight pairing은 완료됐지만 앱 목록 확인은 실패했습니다: \(listSummary)"
+            }
+        } else {
+            message = "Moonlight pairing 완료를 확인하지 못했습니다. 호스트에서 PIN 승인 상태를 확인하세요: \(pairResult.outputSummary)"
+        }
+        moonlightSetupInProgress = false
     }
 
     func toggleMoonlightDesktopSession() async {
@@ -1156,6 +1119,53 @@ final class RemoteDashboardViewModel: ObservableObject {
         return peers.count == 1 ? peers[0] : nil
     }
 
+    private func moonlightTailscaleRegistrationPeer() -> LocalTailscalePeer? {
+        guard let localTailscale, localTailscale.running else { return nil }
+        let windowsPeers = localTailscale.peers.filter { peer in
+            peer.online
+                && peer.primaryIPv4 != nil
+                && (peer.os.lowercased().contains("windows")
+                    || "\(peer.hostname) \(peer.dnsName)".lowercased().contains("desktop"))
+        }
+        guard !windowsPeers.isEmpty else { return nil }
+
+        if let baseHost = URL(string: baseURLText)?.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !baseHost.isEmpty,
+           let matched = windowsPeers.first(where: { peer in
+               peer.ips.map { $0.lowercased() }.contains(baseHost)
+                   || peer.dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == baseHost
+                   || peer.dnsStem.lowercased() == baseHost
+           }) {
+            return matched
+        }
+
+        let hostDeviceHints = devices
+            .filter { $0.role == "host" }
+            .flatMap { device -> [String] in
+                [device.name, device.tailnetHostname ?? ""]
+            }
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for hint in hostDeviceHints {
+            if let matched = windowsPeers.first(where: { peerMatchesHostName($0, hint: hint) }) {
+                return matched
+            }
+        }
+
+        return windowsPeers.count == 1 ? windowsPeers[0] : nil
+    }
+
+    private func moonlightTailscaleRegistrationHost(from peer: LocalTailscalePeer) -> String? {
+        peer.primaryIPv4 ?? peer.dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).nilIfBlank
+    }
+
+    private func peerMatchesHostName(_ peer: LocalTailscalePeer, hint: String) -> Bool {
+        let normalizedHint = Self.canonicalHostToken(hint)
+        guard !normalizedHint.isEmpty else { return false }
+        return [peer.hostname, peer.dnsName, peer.dnsStem]
+            .map(Self.canonicalHostToken)
+            .contains(normalizedHint)
+    }
+
     private func moonlightHostNameHints() -> [String] {
         var hints: [String] = []
         if let localTailscale {
@@ -1205,27 +1215,18 @@ final class RemoteDashboardViewModel: ObservableObject {
             .replacingOccurrences(of: "_", with: "-") ?? ""
     }
 
+    private static func generateMoonlightPairingPIN() -> String {
+        String(format: "%04d", Int.random(in: 0...9999))
+    }
+
     var localSSHHealthReady: Bool {
         localSSHHealth?.authenticated == true
     }
 
     var localSSHHealthSummary: String {
-        guard let localSSHHealth else { return "Legacy SSH health 미사용" }
-        if localSSHHealth.authenticated { return "Legacy SSH 인증 확인됨" }
+        guard let localSSHHealth else { return "SSH health 미확인" }
+        if localSSHHealth.authenticated { return "SSH 인증 확인됨" }
         return localSSHHealth.message
-    }
-
-    func hostSupportsDelegatedPowerAction(_ action: String) -> Bool {
-        let normalized = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if status?.power?.supportedActions.contains(normalized) == true { return true }
-        if readiness?.powerReadiness.supportedActions?.contains(normalized) == true { return true }
-        return false
-    }
-
-    var hostDelegatedPowerSummary: String {
-        let actions = Self.disconnectingPowerActions.sorted().filter { hostSupportsDelegatedPowerAction($0) }
-        if actions.isEmpty { return "Host HTTPS 위임 전원 readiness 확인 필요" }
-        return "Host HTTPS 위임 준비됨: \(actions.joined(separator: ", "))"
     }
 
     var hostStatusLabel: String {
@@ -1485,7 +1486,6 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderHealth: readySection,
             remoteConnectivity: readySection,
             serverModeReadiness: readySection,
-            remoteAccessReadiness: readySection,
             powerReadiness: readySection,
             tailscaleReadiness: readySection
         )
@@ -1850,7 +1850,13 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func shouldProbeSSHHealth(for client: RemoteAPIClient) -> Bool {
-        false
+        guard powerConfig.localSSHConfigured else { return false }
+        let sshHost = powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !sshHost.isEmpty else { return false }
+        guard let httpHost = client.baseURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !httpHost.isEmpty else {
+            return Self.isLikelyTailscaleHost(sshHost)
+        }
+        return sshHost == httpHost || Self.isLikelyTailscaleHost(sshHost)
     }
 
     private func probeTailnetManagementReachability(for client: RemoteAPIClient) async -> TailnetManagementProbe {
@@ -1861,7 +1867,32 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .unreachable(let detail):
             return TailnetManagementProbe(reachability: .unreachable(detail), tailscale: detail, ssh: nil)
         case .skipped(let detail):
-            return TailnetManagementProbe(reachability: .skipped(detail), tailscale: detail, ssh: nil)
+            guard shouldProbeSSHHealth(for: client) else {
+                return TailnetManagementProbe(reachability: .skipped(detail), tailscale: detail, ssh: nil)
+            }
+            let startedAt = Date()
+            let ssh = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
+            let sshDetail = ConnectivityProbeDetail(
+                outcome: "\(ssh.outcome)",
+                message: ssh.message,
+                elapsedSeconds: Date().timeIntervalSince(startedAt),
+                executablePath: ssh.executablePath,
+                exitStatus: ssh.exitStatus.map(String.init) ?? "",
+                stdout: ssh.stdout,
+                stderr: ssh.stderr,
+                timedOut: false
+            )
+            switch ssh.outcome {
+            case .reachable:
+                let management = ConnectivityProbeDetail(outcome: "reachable", message: "SSH management OK: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .reachable(management), tailscale: detail, ssh: sshDetail)
+            case .unreachable:
+                let management = ConnectivityProbeDetail(outcome: "unreachable", message: "tailscale ping skipped; SSH health unreachable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .unreachable(management), tailscale: detail, ssh: sshDetail)
+            case .unavailable:
+                let management = ConnectivityProbeDetail(outcome: "unavailable", message: "tailscale ping skipped; SSH health unavailable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
+                return TailnetManagementProbe(reachability: .unavailable(management), tailscale: detail, ssh: sshDetail)
+            }
         }
     }
 
@@ -2130,16 +2161,16 @@ final class RemoteDashboardViewModel: ObservableObject {
         return trimmed.isEmpty || trimmed.contains("127.0.0.1") || trimmed.contains("localhost")
     }
 
-    private func bootstrapConnectionProgress() -> String {
+    private func bootstrapConnectionProgress(localTailscale snapshot: LocalTailscaleSnapshot) -> String {
         switch hostAvailabilityState {
         case .authRejected:
             return "호스트가 저장 토큰을 거부했습니다. 토큰은 보존했으니 Windows 앱의 원격 설정에서 디바이스 상태를 확인하세요."
         case .online:
-            return isPaired ? "저장된 Keychain 토큰으로 public HTTPS 직접 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
+            return isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
         case .offlineExpected:
-            return "공개 HTTPS 경로 응답이 없어 호스트가 최대 절전/종료 상태이거나 공유기 포트포워딩/Caddy 경로가 막힌 것으로 판단했습니다. 캐시 데이터는 standalone으로 유지합니다."
+            return "호스트 Tailscale ping 응답이 없어 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다. 캐시 데이터는 standalone으로 유지합니다."
         case .agentUnavailable:
-            return "공개 HTTPS 경로는 도달했지만 Windows Remote Agent HTTP 첫 응답이 지연되고 있습니다. 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔는지 확인하세요."
+            return "호스트 관리 계층은 확인됐지만 Windows Remote Agent HTTP 첫 응답이 지연되고 있습니다. 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔는지 확인하세요."
         case .waking:
             return "호스트 부팅을 기다리는 중입니다. 연결이 복구되면 자동으로 데이터를 다시 미러링합니다."
         case .restarting:
@@ -2149,7 +2180,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .reconnecting:
             return "호스트 연결을 다시 확인하는 중입니다. 캐시 데이터는 standalone으로 유지합니다."
         case .unknown:
-            return "공유기 공인 IP 기반 public HTTPS 직접 연결 정보를 확인 중입니다."
+            return snapshot.running
+                ? "Tailscale은 준비됐지만 Windows Remote Agent 상태를 아직 확정하지 못했습니다."
+                : "Tailscale 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 자동 설정 점검을 실행하세요."
         }
     }
 
@@ -2159,7 +2192,13 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         startLocalProgressTicker()
-        setupProgress = "저장된 공유기 공인 IP와 public HTTPS 연결 정보를 확인 중..."
+        setupProgress = "저장된 연결 정보와 Tailscale 후보를 확인 중..."
+        let snapshot = await TailscaleDiscovery.status()
+        localTailscale = snapshot
+        if baseURLNeedsTailnetSuggestion, let url = snapshot.suggestedBaseURLs.first {
+            baseURLText = url
+            setupProgress = "저장된 Base URL이 없어서 Windows Desktop 후보를 적용했습니다: \(url)"
+        }
         if let logging = try? await service?.remoteLoggingConfig() {
             remoteDesktopLoggingPath = logging.path
         }
@@ -2169,7 +2208,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if !isPaired || hostAvailabilityState == .online || hostAvailabilityState == .unknown {
             await refresh()
         }
-        setupProgress = bootstrapConnectionProgress()
+        setupProgress = bootstrapConnectionProgress(localTailscale: snapshot)
         startMirroring()
     }
 
@@ -2613,7 +2652,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return "호스트에서 이 Mac의 페어링이 해제되어 로컬 토큰을 삭제했습니다. 다시 페어링하세요. (\(raw))"
         }
         if raw.localizedCaseInsensitiveContains("could not connect") || raw.localizedCaseInsensitiveContains("timed out") || raw.localizedCaseInsensitiveContains("서버") {
-            return "Windows Remote Agent에 연결하지 못했습니다. 공유기 공인 IP, TCP 443→Host 38443 포트포워딩, Caddy HTTPS, bearer 인증을 확인하세요. (\(raw))"
+            return "Windows Remote Agent에 연결하지 못했습니다. Windows 앱 서버 모드, Tailscale IP, 방화벽/포트 8000을 확인하세요. (\(raw))"
         }
         return raw
     }
@@ -2629,7 +2668,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         defer { if !silent { isLoading = false } }
         guard let client, let service else {
-            pairingRecoveryMessage = "공유기 공인 IP가 올바르지 않습니다."
+            pairingRecoveryMessage = "Remote Agent URL이 올바르지 않습니다."
             setupProgress = pairingRecoveryMessage
             return
         }
@@ -2681,8 +2720,12 @@ final class RemoteDashboardViewModel: ObservableObject {
     func runSetupAutomation() async {
         isLoading = true
         defer { isLoading = false }
-        setupProgress = "1/5 public HTTPS 직접접속 상태 확인 중..."
-        await refreshRemoteAccessStatus(updateLoading: false)
+        setupProgress = "1/5 Mac Tailscale 확인 중..."
+        let local = await TailscaleDiscovery.ensureReady()
+        localTailscale = local
+        if let url = local.suggestedBaseURLs.first, baseURLText.contains("127.0.0.1") || baseURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            baseURLText = url
+        }
 
         setupProgress = "2/5 Mac SmartThings wake 대상 확인 중..."
         let smartThingsPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2704,21 +2747,25 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
 
         guard let client else {
-            setupProgress = "공유기 WAN 공인 IPv4를 먼저 입력하세요. URL/포트/사설 IP는 사용할 수 없습니다."
+            setupProgress = "Base URL이 올바르지 않습니다."
             message = setupProgress
             return
         }
         let service = RemoteDashboardService(client: client)
-        setupProgress = "3/5 Windows Remote Agent HTTPS 상태 확인 중..."
+        setupProgress = "3/5 Windows Remote Agent 상태 확인 중..."
         guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.status") else {
             if hostAvailabilityState != .authRejected {
-                setupProgress = "public HTTPS 경로 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 공유기 포트포워딩, Caddy, bearer 인증을 확인하세요."
+                setupProgress = "Tailscale/SSH 관리 계층 또는 Windows Remote Agent가 아직 준비되지 않았습니다. 저장된 캐시 데이터는 유지합니다."
             }
             return
         }
         let latestStatus = evaluation.status
         await applyReadiness(from: latestStatus, using: service)
         powerSetup = try? await service.powerSetup()
+        fillDefaultSSHFields()
+        if isPaired {
+            _ = await verifyLocalSSHHealth(updateMessage: false)
+        }
 
         if isPaired {
             setupProgress = "4/5 페어링 토큰 복구와 등록 디바이스 확인 중..."
@@ -2726,37 +2773,41 @@ final class RemoteDashboardViewModel: ObservableObject {
             if let remoteDevices = try? await service.devices() {
                 applyDevices(remoteDevices)
             }
-            remoteAccessStatus = try? await service.remoteAccessStatus()
+            serverTailscaleEnsure = try? await service.ensureServerTailscale()
             if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus") {
                 readiness = evaluation.status.readiness
-                status = evaluation.status
             }
         } else {
             setupProgress = "4/5 페어링 대기: Windows 앱의 설정 > 원격 설정에서 코드를 발급해 입력하세요."
         }
 
-        setupProgress = isPaired
-            ? "5/5 자동 설정 점검 완료. Wake는 SmartThings, 절전/종료/재시동은 Host HTTPS 위임으로 동작합니다. \(hostDelegatedPowerSummary)."
-            : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
+        setupProgress = isPaired ? "5/5 자동 설정 점검 완료. Wake/SSH 상태를 클라이언트 로컬 설정으로 관리합니다. SSH 상태: \(localSSHHealthSummary)." : "페어링 코드를 입력하면 자동 설정을 계속할 수 있습니다."
         message = setupProgress
     }
 
-    func refreshRemoteAccessStatus(updateLoading: Bool = true) async {
+    func ensureServerTailscale() async {
         guard let service else {
-            message = "공유기 공인 IP가 올바르지 않습니다."
+            message = "Remote Agent URL이 올바르지 않습니다."
             return
         }
-        if updateLoading {
-            isLoading = true
+        guard isPaired else {
+            message = "서버 Tailscale 복구는 페어링 후 사용할 수 있습니다."
+            return
         }
-        defer {
-            if updateLoading { isLoading = false }
-        }
+        isLoading = true
+        defer { isLoading = false }
         do {
-            remoteAccessStatus = try await service.remoteAccessStatus()
-            message = remoteAccessStatus?.message ?? "public HTTPS 상태를 확인했습니다."
+            serverTailscaleEnsure = try await service.ensureServerTailscale()
+            if let client, let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale") {
+                readiness = evaluation.status.readiness
+            }
+            message = serverTailscaleEnsure?.message ?? "서버 Tailscale 확인 완료"
         } catch {
-            handleRemoteFailure(error)
+            if let client {
+                _ = await evaluateConnectivity(using: service, client: client, trigger: "ensureServerTailscale.failure")
+            } else {
+                handleRemoteFailure(error)
+            }
         }
     }
 
@@ -2766,7 +2817,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         guard let client else {
-            message = "공유기 공인 IP가 올바르지 않습니다."
+            message = "Remote Agent URL이 올바르지 않습니다."
             return
         }
         await refresh(using: RemoteDashboardService(client: client), includeDevices: !tokenText.isEmpty)
@@ -2789,16 +2840,24 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func mirrorRemoteState(trigger: String = "mirror", syncScope: RemotePayloadSyncScope = .revisionAware) async {
         guard let client else { return }
         let service = RemoteDashboardService(client: client)
+        let previousAvailabilityState = hostAvailabilityState
         guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: trigger, updateMessage: false) else {
             return
         }
         let latestStatus = evaluation.status
+        let shouldRefreshSSHHealthAfterRecovery = shouldRefreshLocalSSHHealthAfterOnlineRecovery(
+            previousState: previousAvailabilityState,
+            decision: evaluation.decision
+        )
         await applyReadiness(from: latestStatus, using: service)
         let revisionRequiresSync = evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil
         let shouldSyncPayload = revisionRequiresSync || syncScope != .revisionAware
         updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: shouldSyncPayload)
         guard shouldSyncPayload else {
             refreshLocalProcessDisplay()
+            if shouldRefreshSSHHealthAfterRecovery {
+                await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
+            }
             await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
             clearPendingMoonlightWakeActionIfBlocked()
             return
@@ -2810,6 +2869,9 @@ final class RemoteDashboardViewModel: ObservableObject {
             await syncRemotePayloads(using: service, client: client)
         case .forceProcesses:
             await syncRemoteProcesses(using: service, client: client)
+        }
+        if shouldRefreshSSHHealthAfterRecovery {
+            await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
         }
         await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
         clearPendingMoonlightWakeActionIfBlocked()
@@ -2825,14 +2887,15 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async {
         powerSetup = try? await service.powerSetup()
-        localSSHHealth = nil
+        fillDefaultSSHFields()
+        _ = await verifyLocalSSHHealth(updateMessage: false)
     }
 
     private func applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService) async {
-        if let statusReadiness = status.readiness {
-            readiness = statusReadiness
-        } else {
+        if status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil {
             readiness = try? await service.readiness()
+        } else {
+            readiness = status.readiness
         }
     }
 
@@ -2901,7 +2964,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             gameLinks = try await service.gameLinks()
             mobileSessions = try await service.activeMobileSessions()
             powerSetup = try? await service.powerSetup()
-            localSSHHealth = nil
+            fillDefaultSSHFields()
+            _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             RemoteClientCache.saveProcesses(remoteProcesses)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
@@ -2923,14 +2987,42 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
 
-    func applySuggestedBaseURL(_ url: String) {
-        guard let normalized = normalizePublicRemoteBaseURLText(url) else {
-            message = "공유기 WAN 공인 IPv4 또는 내부 sslip.io HTTPS URL만 적용할 수 있습니다."
-            return
+    func discoverTailscale() async {
+        message = "Tailscale CLI 확인 중..."
+        let snapshot = await TailscaleDiscovery.activateNetwork()
+        localTailscale = snapshot
+        if let url = snapshot.suggestedBaseURLs.first {
+            baseURLText = url
+            setupProgress = "Tailscale 후보를 Base URL로 적용했습니다: \(url)"
+            message = setupProgress
+        } else {
+            message = snapshot.message
         }
-        baseURLText = normalized
-        routerPublicIPText = routerPublicIPInputFromRemoteBaseURL(normalized)
-        message = "공유기 공인 IP 적용 완료"
+    }
+
+    func activateLocalTailscale() async {
+        isLoading = true
+        defer { isLoading = false }
+        setupProgress = "Mac Tailscale 기반환경을 설치/실행/활성화하는 중..."
+        let snapshot = await TailscaleDiscovery.activateNetwork()
+        localTailscale = snapshot
+        setupProgress = snapshot.running ? "Mac Tailscale 활성화 완료: \(snapshot.selfIPs.joined(separator: ", "))" : snapshot.message
+        message = setupProgress
+    }
+
+    func deactivateLocalTailscale() async {
+        isLoading = true
+        defer { isLoading = false }
+        setupProgress = "Mac Tailscale 네트워크를 비활성화하는 중..."
+        let snapshot = await TailscaleDiscovery.deactivateNetwork()
+        localTailscale = snapshot
+        setupProgress = snapshot.message
+        message = setupProgress
+    }
+
+    func applySuggestedBaseURL(_ url: String) {
+        baseURLText = url
+        message = "Base URL 적용: \(url)"
     }
 
     func activeMobileSession(for link: RemoteGameLink) -> RemoteMobileSession? {
@@ -3116,59 +3208,39 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isPowerActionEnabled(_ action: String) -> Bool {
-        let normalized = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized == "wake", powerConfig.localWakeConfigured { return true }
-        if Self.disconnectingPowerActions.contains(normalized),
-           hostAllowsRemoteCommands,
-           hostSupportsDelegatedPowerAction(normalized) {
+        if action == "wake", powerConfig.localWakeConfigured { return true }
+        if Self.disconnectingPowerActions.contains(action),
+           powerConfig.localSSHConfigured,
+           localSSHHealthReady,
+           !Self.isDisconnectedPowerState(hostAvailabilityState) {
             return true
         }
         return false
     }
 
     func power(_ action: String) async {
-        let normalized = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard isPowerActionEnabled(normalized) else {
-            message = "Wake는 SmartThings, 절전/종료/재시동은 Host HTTPS 위임 readiness가 준비되어야 사용할 수 있습니다."
+        guard isPowerActionEnabled(action) else {
+            message = "전원 명령은 클라이언트의 SmartThings/OpenSSH 직접 경로가 준비되어야 사용할 수 있습니다."
             return
         }
         if remoteDesktopLoggingEnabled {
-            RemoteClientDesktopLogger.write("power.click", ["action": normalized])
+            RemoteClientDesktopLogger.write("power.click", ["action": action])
         }
-        if normalized == "wake", powerConfig.localWakeConfigured {
+        if action == "wake", powerConfig.localWakeConfigured {
             if await localWake() {
                 beginPowerTransition(for: "wake")
             }
             return
         }
 
-        guard Self.disconnectingPowerActions.contains(normalized), let service else {
-            message = "Host HTTPS 전원 명령을 보낼 Remote Agent 연결이 없습니다."
+        if Self.disconnectingPowerActions.contains(action), powerConfig.localSSHConfigured {
+            if await localSSH(action) {
+                beginPowerTransition(for: action)
+            }
             return
         }
-        do {
-            let result = try await service.executePowerAction(normalized)
-            message = result.message
-            if remoteDesktopLoggingEnabled {
-                RemoteClientDesktopLogger.write(
-                    "power.host_https",
-                    [
-                        "action": normalized,
-                        "accepted": String(result.accepted),
-                        "status": result.status,
-                        "command_id": result.commandID ?? "",
-                        "message": result.message,
-                    ]
-                )
-            }
-            if result.accepted {
-                beginPowerTransition(for: normalized)
-            }
-        } catch {
-            handleRemoteFailure(error)
-        }
+        message = "전원 명령은 클라이언트의 SmartThings/OpenSSH 직접 경로가 준비되어야 사용할 수 있습니다."
     }
-
 
     @discardableResult
     func localWake() async -> Bool {
@@ -3202,22 +3274,81 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func verifyLocalSSHHealth(updateMessage: Bool = true) async -> Bool {
+        guard powerConfig.localSSHConfigured else {
+            localSSHHealth = nil
+            return false
+        }
+        let result = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
+        localSSHHealth = result
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.ssh_health",
+                [
+                    "host": powerConfig.sshHost,
+                    "user": powerConfig.sshUser,
+                    "outcome": "\(result.outcome)",
+                    "authenticated": String(result.authenticated),
+                    "exit_status": result.exitStatus.map(String.init) ?? "",
+                    "message": result.message,
+                ]
+            )
+        }
+        if updateMessage {
+            message = result.authenticated
+                ? "SSH health 인증 확인 완료: \(result.host)"
+                : "SSH key 등록은 확인했지만 실제 SSH 인증은 실패했습니다: \(result.message)"
+        }
+        return result.authenticated
+    }
+
+    @discardableResult
+    func localSSH(_ action: String) async -> Bool {
+        let identityStatus = powerConfig.localSSHIdentityStatus
+        if remoteDesktopLoggingEnabled {
+            RemoteClientDesktopLogger.write(
+                "power.local_ssh.started",
+                [
+                    "action": action,
+                    "host": powerConfig.sshHost,
+                    "user": powerConfig.sshUser,
+                    "ssh_identity": identityStatus,
+                ]
+            )
+        }
+        do {
+            message = try await LocalSSHPowerManager.run(action: action, config: powerConfig)
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "accepted", "ssh_identity": identityStatus, "message": message])
+            }
+            return true
+        } catch {
+            message = error.localizedDescription
+            localSSHHealth = nil
+            if remoteDesktopLoggingEnabled {
+                RemoteClientDesktopLogger.write("power.local_ssh", ["action": action, "host": powerConfig.sshHost, "user": powerConfig.sshUser, "status": "failed", "ssh_identity": identityStatus, "message": error.localizedDescription])
+            }
+            return false
+        }
+    }
+
+
     func refreshPowerSetup() async {
         guard let service else { return }
-        if let latestStatus = try? await service.status() {
-            applyRemoteStatus(latestStatus)
-            await applyReadiness(from: latestStatus, using: service)
-        } else {
-            readiness = try? await service.readiness()
-        }
-        powerSetup = try? await service.powerSetup()
-        if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
-                powerConfig.smartthingsCLIPath = local
+        do {
+            powerSetup = try await service.powerSetup()
+            if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
+                    powerConfig.smartthingsCLIPath = local
+                }
             }
+            fillDefaultSSHFields()
+            _ = await verifyLocalSSHHealth(updateMessage: false)
+            message = "\(powerSetup?.message ?? "전원 준비 상태 확인 완료") · \(localSSHHealthSummary)"
+        } catch {
+            message = connectionGuidance(for: error)
         }
-        localSSHHealth = nil
-        message = "전원 준비 확인 완료 · Wake=SmartThings · \(hostDelegatedPowerSummary)"
     }
 
     func probeSmartThingsDevices() async {
@@ -3261,13 +3392,30 @@ final class RemoteDashboardViewModel: ObservableObject {
 
 
     private func completePairingOnboarding(using service: RemoteDashboardService) async {
-        setupProgress = "PIN 확인 완료: public HTTPS, SmartThings Wake, Host HTTPS 전원 readiness를 점검합니다."
+        setupProgress = "PIN 확인 완료: Tailscale, SSH key, SmartThings 전원 설정을 자동 점검합니다."
+        serverTailscaleEnsure = try? await service.ensureServerTailscale()
         powerSetup = try? await service.powerSetup()
-        localSSHHealth = nil
+        var sshOnboardingReady = false
+        var sshOnboardingMessage = "SSH health 미확인"
         if powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let local = LocalPowerWakeManager.smartThingsCLICandidates().first {
                 powerConfig.smartthingsCLIPath = local
             }
+        }
+        fillDefaultSSHFields()
+
+        do {
+            powerConfig.sshKeyPath = powerConfig.normalizedLocalSSHKeyPath()
+            let key = try await LocalSSHKeyManager.ensureKeyPair(privateKeyPath: powerConfig.sshKeyPath)
+            localSSHKey = key
+            powerConfig.sshKeyPath = key.privateKeyPath
+            _ = try await service.registerPowerSSHKey(publicKey: key.publicKey, label: deviceName)
+            sshOnboardingReady = await verifyLocalSSHHealth(updateMessage: false)
+            sshOnboardingMessage = localSSHHealthSummary
+        } catch {
+            sshOnboardingReady = false
+            sshOnboardingMessage = error.localizedDescription
+            setupProgress = "SSH key 자동 등록은 실패했습니다. Windows 원격 설정 또는 mac 전원 설정에서 다시 시도하세요: \(error.localizedDescription)"
         }
 
         let smartThingsCLIPath = powerConfig.smartthingsCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3288,19 +3436,20 @@ final class RemoteDashboardViewModel: ObservableObject {
             )
         }
         _ = applySmartThingsProbeResult(result, updateMessage: false)
-        remoteAccessStatus = try? await service.remoteAccessStatus()
         if let latestStatus = try? await service.status() {
             applyRemoteStatus(latestStatus)
             await applyReadiness(from: latestStatus, using: service)
         }
-        setupProgress = smartThingsDeviceCandidates.count > 1 && powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "PIN 페어링 완료. SmartThings 후보가 여러 개라 wake 대상을 확인하세요. \(hostDelegatedPowerSummary)."
-            : "PIN 페어링과 직접 HTTPS 자동 설정을 완료했습니다. Wake는 SmartThings, 절전/종료/재시동은 Host HTTPS 위임으로 동작합니다. \(hostDelegatedPowerSummary)."
+        setupProgress = sshOnboardingReady
+            ? (smartThingsDeviceCandidates.count > 1 && powerConfig.smartthingsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "PIN 설정 대부분 완료. SSH 인증 확인됨. SmartThings 후보가 여러 개라 wake 대상을 확인하세요."
+                : "PIN 1회 입력으로 가능한 원격 연결 설정과 SSH 인증을 자동 완료했습니다.")
+            : "PIN 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(sshOnboardingMessage)"
     }
 
     func confirmPairing() async {
         guard let client else {
-            message = "공유기 공인 IP가 올바르지 않습니다."
+            message = "Remote Agent URL이 올바르지 않습니다."
             return
         }
         guard !pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -3318,10 +3467,12 @@ final class RemoteDashboardViewModel: ObservableObject {
             pairingRecoveryMessage = ""
             readiness = response.onboarding?.readiness ?? readiness
             powerSetup = response.onboarding?.powerSetup ?? powerSetup
-            localSSHHealth = nil
+            fillDefaultSSHFields()
             let pairedService = RemoteDashboardService(client: RemoteAPIClient(baseURL: client.baseURL, bearerToken: response.token))
             await completePairingOnboarding(using: pairedService)
-            message = "'\(response.name)' 디바이스 페어링 및 직접 HTTPS 자동 설정을 완료했습니다."
+            message = localSSHHealthReady
+                ? "'\(response.name)' 디바이스 페어링 및 자동 설정을 완료했습니다."
+                : "'\(response.name)' 디바이스 페어링은 완료됐지만 SSH 인증 확인이 필요합니다: \(localSSHHealthSummary)"
             if remoteDesktopLoggingEnabled { RemoteClientDesktopLogger.write("pairing.complete", ["device": response.name]) }
             await refresh(using: pairedService, includeDevices: true)
         } catch {

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Run the Remote Controller verification lane.
+"""Run the active Remote Controller verification lane.
 
-The Android APK build currently requires an explicit Google Android SDK License
-acceptance.  Use --allow-android-license-blocker to treat that known blocker as
-an expected terminal state while still failing on all other verification errors.
+Android client development is suspended, so this verifier intentionally covers
+the host Remote Agent and macOS reference client only.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -19,20 +17,6 @@ from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MACOS_CLIENT_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote"
-ANDROID_CLIENT_DIR = PROJECT_ROOT / "remote_clients" / "android" / "HomeworkHelperRemote"
-DEFAULT_JAVA_HOME = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home")
-DEFAULT_ANDROID_SDK_ROOT = Path("/opt/homebrew/share/android-commandlinetools")
-ANDROID_LICENSE_MARKERS = (
-    "licenses have not been accepted",
-    "License for package Android SDK",
-    "Android SDK License",
-)
-ANDROID_DEVICE_BLOCKER_MARKERS = (
-    "Expected exactly one connected adb device",
-    "adb devices failed",
-    "adb not found",
-    "Requested adb device",
-)
 
 
 @dataclass(frozen=True)
@@ -44,22 +28,11 @@ class CheckResult:
     output: str
 
 
-def _env_for_android() -> dict[str, str]:
-    env = os.environ.copy()
-    if DEFAULT_JAVA_HOME.exists():
-        env.setdefault("JAVA_HOME", str(DEFAULT_JAVA_HOME))
-    if DEFAULT_ANDROID_SDK_ROOT.exists():
-        env.setdefault("ANDROID_HOME", str(DEFAULT_ANDROID_SDK_ROOT))
-        env.setdefault("ANDROID_SDK_ROOT", str(DEFAULT_ANDROID_SDK_ROOT))
-    return env
-
-
-def _run(name: str, command: Iterable[str], *, cwd: Path = PROJECT_ROOT, env: dict[str, str] | None = None) -> CheckResult:
+def _run(name: str, command: Iterable[str], *, cwd: Path = PROJECT_ROOT) -> CheckResult:
     cmd = tuple(command)
     completed = subprocess.run(
         cmd,
         cwd=cwd,
-        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -129,14 +102,6 @@ def _verify_branch_discipline(required_branch: str | None, expected_main_hash: s
     )
 
 
-def _is_android_license_blocker(result: CheckResult) -> bool:
-    return result.returncode != 0 and any(marker in result.output for marker in ANDROID_LICENSE_MARKERS)
-
-
-def _is_android_device_blocker(result: CheckResult) -> bool:
-    return result.returncode != 0 and any(marker in result.output for marker in ANDROID_DEVICE_BLOCKER_MARKERS)
-
-
 def _print_result(result: CheckResult) -> None:
     print(f"\n== {result.name}: {result.status} ({result.returncode}) ==")
     print("$ " + " ".join(result.command))
@@ -146,16 +111,6 @@ def _print_result(result: CheckResult) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify HomeworkHelper Remote Controller implementation.")
-    parser.add_argument(
-        "--allow-android-license-blocker",
-        action="store_true",
-        help="Exit 0 when the only failure is the known Android SDK License blocker.",
-    )
-    parser.add_argument(
-        "--allow-android-device-blocker",
-        action="store_true",
-        help="Exit 0 when the only failure is the absence of a connected Android device/emulator for APK smoke.",
-    )
     parser.add_argument(
         "--skip-full-pytest",
         action="store_true",
@@ -174,67 +129,26 @@ def main(argv: list[str] | None = None) -> int:
     checks: list[CheckResult] = []
     checks.append(_verify_branch_discipline(args.require_branch, args.expect_main_hash))
     checks.append(_run("remote routes", [sys.executable, "-m", "pytest", "tests/test_remote_routes.py"]))
-    checks.append(_run("android static contract", [sys.executable, "-m", "pytest", "tests/test_remote_android_client_static.py"]))
     checks.append(_run("macOS static contract", [sys.executable, "-m", "pytest", "tests/test_remote_macos_client_static.py"]))
     checks.append(_run("remote runtime smoke", [sys.executable, "tools/smoke_remote_controller_runtime.py"]))
     checks.append(_run("macOS RemoteAPIClient smoke", [sys.executable, "tools/smoke_macos_remote_api_client.py"]))
     checks.append(_run("macOS RemoteConnectionSupervisor smoke", [sys.executable, "tools/smoke_macos_connection_supervisor.py"]))
     checks.append(_run("macOS RemoteDashboardViewModel smoke", [sys.executable, "tools/smoke_macos_remote_viewmodel.py"]))
-    checks.append(_run("Android SDK readiness", [sys.executable, "tools/check_android_sdk_readiness.py", "--allow-blocker"]))
-    checks.append(_run("Android APK smoke readiness", [sys.executable, "tools/smoke_android_remote_controller.py", "--allow-missing-apk"]))
-    checks.append(_run("Android Remote e2e smoke", [sys.executable, "tools/smoke_android_remote_e2e.py"]))
     if not args.skip_full_pytest:
         checks.append(_run("full pytest", [sys.executable, "-m", "pytest"]))
     checks.append(_run("macOS Swift build", ["swift", "build"], cwd=MACOS_CLIENT_DIR))
-    checks.append(
-        _run(
-            "Android assembleRelease",
-            ["./gradlew", ":app:assembleRelease", "--stacktrace"],
-            cwd=ANDROID_CLIENT_DIR,
-            env=_env_for_android(),
-        )
-    )
-    checks.append(_run("Android APK artifact", [sys.executable, "tools/check_android_apk_artifact.py"], env=_env_for_android()))
 
     failures: list[CheckResult] = []
-    android_license_blockers: list[CheckResult] = []
-    android_device_blockers: list[CheckResult] = []
     for result in checks:
-        if result.returncode == 0:
-            _print_result(result)
-            continue
-        if result.name == "Android assembleRelease" and _is_android_license_blocker(result):
-            object.__setattr__(result, "status", "blocked: android-sdk-license")
-            android_license_blockers.append(result)
-            _print_result(result)
-            continue
-        if result.name in {"Android APK smoke readiness", "Android Remote e2e smoke"} and _is_android_device_blocker(result):
-            object.__setattr__(result, "status", "blocked: android-device")
-            android_device_blockers.append(result)
-            _print_result(result)
-            continue
-        failures.append(result)
+        if result.returncode != 0:
+            failures.append(result)
         _print_result(result)
 
     if failures:
         print("\nVerification failed.")
         return 1
-    if android_license_blockers and not args.allow_android_license_blocker:
-        print("\nVerification blocked by Android SDK License acceptance.")
-        return 2
-    if android_device_blockers and not args.allow_android_device_blocker:
-        print("\nVerification blocked by missing connected Android device/emulator.")
-        return 2
 
-    if android_license_blockers or android_device_blockers:
-        acknowledged = []
-        if android_license_blockers:
-            acknowledged.append("Android SDK License")
-        if android_device_blockers:
-            acknowledged.append("Android device/emulator")
-        print(f"\nVerification passed except for acknowledged blocker(s): {', '.join(acknowledged)}.")
-    else:
-        print("\nVerification passed.")
+    print("\nVerification passed.")
     return 0
 
 

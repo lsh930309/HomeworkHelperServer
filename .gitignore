@@ -37,31 +37,10 @@ installer_output/
 release/
 
 # ===========================
-# Android
-# ===========================
-android/.gradle/
-android/.idea/
-android/local.properties
-android/*.iml
-android/build/
-android/app/build/
-android/captures/
-android/.externalNativeBuild/
-android/.cxx/
-*.apk
-*.aab
-
-# ===========================
 # 데이터 및 로그
 # ===========================
 **/homework_helper_data/
 HomeworkHelper/
-!remote_clients/android/HomeworkHelperRemote/
-!remote_clients/android/HomeworkHelperRemote/**
-remote_clients/android/HomeworkHelperRemote/.gradle/
-remote_clients/android/HomeworkHelperRemote/build/
-remote_clients/android/HomeworkHelperRemote/app/build/
-remote_clients/android/HomeworkHelperRemote/local.properties
 HomeworkHelper.zip
 *.log
 *.db
