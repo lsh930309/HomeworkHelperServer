@@ -109,13 +109,18 @@ def test_gui_parent_passes_remote_server_mode_bind_host_to_api_child():
     source = Path("homework_helper.pyw").read_text(encoding="utf-8")
 
     assert "def _desired_child_api_bind_host()" in source
+    assert "def _is_loopback_api_host(" in source
     assert '"remote_server_mode_enabled"' in source
+    assert "remote_server_mode_enabled and (not explicit_host or _is_loopback_api_host(explicit_host))" in source
+    assert "loopback HH_API_HOST=" in source
     assert 'return "0.0.0.0", "remote_server_mode_enabled"' in source
+    assert 'return explicit_host, "HH_API_HOST"' in source
     assert 'os.environ["HH_API_HOST"] = child_bind_host' in source
     assert "api_server_process.start()" in source
     assert source.index('os.environ["HH_API_HOST"] = child_bind_host') < source.index(
         "api_server_process.start()"
     )
+    assert "if child_bind_host:" in source
     assert 'os.environ.pop("HH_API_HOST", None)' in source
 
 

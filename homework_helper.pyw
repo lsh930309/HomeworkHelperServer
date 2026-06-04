@@ -401,12 +401,15 @@ def _wants_server_only_mode(argv: list[str] | None = None) -> bool:
     return any(arg in {"--server", "--testbench-server", "--run-server"} for arg in args)
 
 
+def _is_loopback_api_host(host: str | None) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"127.0.0.1", "localhost", "::1"}
+
+
 def _desired_child_api_bind_host() -> tuple[str | None, str]:
     """Return the bind host that the GUI parent should pass to the API child."""
     explicit_host = os.environ.get("HH_API_HOST")
-    if explicit_host:
-        return explicit_host, "HH_API_HOST"
-
+    remote_server_mode_enabled = False
     try:
         from src.data import crud
         from src.data.database import SessionLocal
@@ -414,12 +417,19 @@ def _desired_child_api_bind_host() -> tuple[str | None, str]:
         db = SessionLocal()
         try:
             settings = crud.get_settings(db)
-            if bool(getattr(settings, "remote_server_mode_enabled", False)):
-                return "0.0.0.0", "remote_server_mode_enabled"
+            remote_server_mode_enabled = bool(getattr(settings, "remote_server_mode_enabled", False))
         finally:
             db.close()
     except Exception as exc:
         print(f"리모트 서버 모드 설정 확인 실패: {exc}")
+
+    if remote_server_mode_enabled and (not explicit_host or _is_loopback_api_host(explicit_host)):
+        if explicit_host:
+            print(f"리모트 서버 모드가 loopback HH_API_HOST={explicit_host} 설정을 0.0.0.0으로 대체합니다.")
+        return "0.0.0.0", "remote_server_mode_enabled"
+
+    if explicit_host:
+        return explicit_host, "HH_API_HOST"
 
     return None, "default_loopback"
 
@@ -446,7 +456,7 @@ def start_api_server() -> bool:
         child_bind_host, child_bind_source = _desired_child_api_bind_host()
         env_had_api_host = "HH_API_HOST" in os.environ
         previous_api_host = os.environ.get("HH_API_HOST")
-        if child_bind_host and not env_had_api_host:
+        if child_bind_host:
             os.environ["HH_API_HOST"] = child_bind_host
         print(f"API 서버 child 바인딩 요청: {child_bind_host or '127.0.0.1'} ({child_bind_source})")
         try:
@@ -456,10 +466,11 @@ def start_api_server() -> bool:
             )
             api_server_process.start()
         finally:
-            if env_had_api_host:
-                os.environ["HH_API_HOST"] = previous_api_host or ""
-            else:
-                os.environ.pop("HH_API_HOST", None)
+            if child_bind_host:
+                if env_had_api_host:
+                    os.environ["HH_API_HOST"] = previous_api_host or ""
+                else:
+                    os.environ.pop("HH_API_HOST", None)
         print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
 
         # 서버가 준비될 때까지 대기
