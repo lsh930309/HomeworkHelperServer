@@ -184,8 +184,9 @@ sequenceDiagram
 
 - **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
 - **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
-- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **Android 클라이언트**: Kotlin + Jetpack Compose v3 게임 우선 UX. Home/Setup 구조로 게임 실행·중단, 서버 추적/로컬 projection 진행률, 아이콘/배지, pull-to-refresh, floating status, 전원 readiness, 기기 관리, Tailscale lifecycle 설정을 분리
+- **공개 HTTPS 직접접속**: 공유기 수동 포트포워딩 `TCP 443 → Windows Host 38443`, Caddy sidecar TLS 종료, `https://<공인IP-대시>.sslip.io` 자동 URL로 Android/macOS가 Tailscale 없이 Remote Agent에 접속
+- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, public HTTPS/Tailscale fallback/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
+- **Android 클라이언트**: Kotlin + Jetpack Compose v3 게임 우선 UX. Home/Setup 구조로 게임 실행·중단, 서버 추적/로컬 projection 진행률, 아이콘/배지, pull-to-refresh, floating status, 전원 readiness, 기기 관리, public HTTPS Connection Doctor와 Tailscale 선택 fallback을 분리
 - **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
 
 ---

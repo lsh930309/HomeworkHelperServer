@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from src.api.runtime_config import resolve_api_port
 from src.core.launcher import Launcher
 from src.core.remote_audit import RemoteAuditLogger
+from src.core.remote_access import remote_access_status
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
 from src.core.remote_power import ConfigurablePowerController
@@ -715,6 +716,8 @@ def create_remote_router(
             return method == "POST"
         if path.endswith("/remote/logging/config"):
             return method in {"GET", "PUT"}
+        if path.endswith("/remote/access/status"):
+            return method == "GET"
         if path.endswith("/remote/devices/revoked"):
             return method == "DELETE"
         if path.endswith("/remote/tailscale/ensure"):
@@ -770,6 +773,7 @@ def create_remote_router(
             "tailscale_discovery": True,
             "readiness": True,
             "local_store_health": True,
+            "remote_access": True,
         }
 
     def _readiness_payload(
@@ -777,6 +781,7 @@ def create_remote_router(
         *,
         active_beholder_incidents: int | None = None,
         include_tailscale_details: bool = True,
+        include_remote_access_probe: bool = False,
     ) -> dict[str, Any]:
         tailscale_payload: dict[str, Any] = {}
         ts_snapshot = None
@@ -789,9 +794,17 @@ def create_remote_router(
         )
         power_ready = bool(power_status.get("configured"))
         auth_ready = bool(effective_require_auth or auth_token or device_registry.has_registered_devices())
+        access_payload = remote_access_status(
+            public_direct=public_direct,
+            auth_required=auth_ready,
+            probe_public_ip=include_remote_access_probe,
+            probe_upnp=include_remote_access_probe,
+            probe_caddy=include_remote_access_probe,
+        )
+        access_ready = access_payload.get("state") == "ready" or bool(access_payload.get("hostname"))
         beholder_state = "ok" if not active_beholder_incidents else "warning"
         remote_state = "ok" if auth_ready else "warning"
-        server_state = "ok" if auth_ready and (tailscale_ready or not include_tailscale_details) else "warning"
+        server_state = "ok" if auth_ready else "warning"
         if include_tailscale_details:
             tailscale_section = {
                 "state": "ok" if tailscale_ready else "warning",
@@ -829,8 +842,23 @@ def create_remote_router(
                     if server_state == "ok" and not include_tailscale_details
                     else "서버 모드 준비됨"
                     if server_state == "ok"
-                    else "Tailscale 또는 페어링 준비가 더 필요합니다."
+                    else "페어링/인증 준비가 더 필요합니다."
                 ),
+            },
+            "remote_access_readiness": {
+                "state": "ok" if access_ready and auth_ready else "warning",
+                "color": "green" if access_ready and auth_ready else "yellow",
+                "message": access_payload.get("message") or "공개 HTTPS 연결 상태 미확인",
+                "public_base_url": access_payload.get("public_base_url") or "",
+                "router_rule": access_payload.get("router_rule") or {},
+                "warnings": access_payload.get("warnings") or [],
+                "details": access_payload if include_remote_access_probe else {
+                    "mode": access_payload.get("mode"),
+                    "hostname": access_payload.get("hostname"),
+                    "public_base_url": access_payload.get("public_base_url"),
+                    "ports": access_payload.get("ports"),
+                    "security": access_payload.get("security"),
+                },
             },
             "power_readiness": {
                 "state": "ok" if power_ready else "warning",
@@ -1159,7 +1187,7 @@ def create_remote_router(
     @router.get("/readiness")
     def remote_readiness():
         power_status = power_controller.status() if hasattr(power_controller, "status") else {}
-        return _readiness_payload(power_status)
+        return _readiness_payload(power_status, include_remote_access_probe=True)
 
     @router.get("/logging/config")
     def remote_logging_config():
@@ -1177,6 +1205,16 @@ def create_remote_router(
         if not report.get("ok"):
             write_remote_log("local_store.integrity", **report)
         return report
+
+    @router.get("/access/status")
+    def remote_access_status_endpoint():
+        auth_ready = bool(effective_require_auth or auth_token or device_registry.has_registered_devices())
+        return remote_access_status(
+            public_direct=public_direct,
+            auth_required=auth_ready,
+            probe_public_ip=True,
+            probe_upnp=True,
+        )
 
     @router.post("/tailscale/ensure")
     def remote_tailscale_ensure():

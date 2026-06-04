@@ -30,6 +30,7 @@ data class RemoteStatus(
 data class RemoteReadiness(
     val remoteConnectivity: RemoteReadinessSection?,
     val serverModeReadiness: RemoteReadinessSection?,
+    val remoteAccessReadiness: RemoteReadinessSection?,
     val powerReadiness: RemoteReadinessSection?,
     val tailscaleReadiness: RemoteReadinessSection?,
 )
@@ -341,6 +342,7 @@ fun JSONObject.toRemoteReadiness(): RemoteReadiness {
     return RemoteReadiness(
         remoteConnectivity = optJSONObject("remote_connectivity")?.toRemoteReadinessSection(),
         serverModeReadiness = optJSONObject("server_mode_readiness")?.toRemoteReadinessSection(),
+        remoteAccessReadiness = optJSONObject("remote_access_readiness")?.toRemoteReadinessSection(),
         powerReadiness = optJSONObject("power_readiness")?.toRemoteReadinessSection(),
         tailscaleReadiness = optJSONObject("tailscale_readiness")?.toRemoteReadinessSection(),
     )

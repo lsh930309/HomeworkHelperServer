@@ -2,7 +2,7 @@
 
 Status: v3 game-first UX active implementation. The previous Android full-parity implementation has been removed to avoid extending the wrong architecture.
 
-The Android client follows `docs/remote/android-client-design.md`. The current v3 shape uses two bottom tabs: Home mirrors the macOS popover with registered game status, host/resource icons, server-tracked/projection-aware resource progress, badges, quick launch/stop, pull-to-refresh, and a floating status message; Setup owns pairing/URL/token inputs, Tailscale foundation and lifecycle options, Android-local power automation, paired-device management, diagnostics, and fake Remote Agent smoke guidance.
+The Android client follows `docs/remote/android-client-design.md`. The current v3 shape uses two bottom tabs: Home mirrors the macOS popover with registered game status, host/resource icons, server-tracked/projection-aware resource progress, badges, quick launch/stop, pull-to-refresh, and a floating status message; Setup owns pairing/URL/token inputs, public HTTPS Connection Doctor, Tailscale optional fallback shortcuts, Android-local power automation, paired-device management, diagnostics, and fake Remote Agent smoke guidance.
 
 ## Preserved project contract
 
@@ -78,18 +78,22 @@ The smoke uses `adb reverse`, a local fake `/remote/*` server, uiautomator marke
 
 Setup is intentionally compact and mirrors the macOS settings hierarchy where Android has an equivalent:
 
-- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, direct system-route status, Tailscale install/open/status fallback, Android-local VPN readiness check, and VPN ON request.
+- **연결/페어링**: Remote Agent URL, device name, pairing code, stable device token status, Connection Doctor, direct system-route status, and Tailscale install/open/status fallback.
 - **전원**: readiness, OpenSSH key/health setup, SmartThings PAT/OAuth and `PC 켜기` device auto-selection.
 - **기기**: paired-device refresh, revoke, and revoked-device cleanup.
-- **앱**: diagnostics toggle, optional Tailscale ON at app foreground, optional Tailscale OFF at app background, and manual VPN ON/OFF requests.
+- **앱**: diagnostics toggle plus optional Tailscale/settings entry points. The app does not send VPN ON/OFF lifecycle broadcasts.
 
-Tailscale automation requests the installed Tailscale Android app to connect/disconnect VPN, polls Android-local VPN state, and only then refreshes the host snapshot. The Android client does not call host-side Tailscale ensure/health mutation endpoints.
+Tailscale is a user-driven fallback: the app can inspect whether the package/VPN are present and open Tailscale or Android VPN settings, but it does not call host-side Tailscale ensure/health mutation endpoints and does not broadcast connect/disconnect intents.
 
 The primary Remote Agent URL is a public HTTPS URL terminated by a router or
 reverse proxy, then forwarded to the local Windows HomeworkHelper server.
 Cleartext HTTP is accepted only for loopback, LAN, link-local, or Tailscale
 `100.64.0.0/10` private routes. Pairing codes are issued locally on the host;
 Android only confirms a code that the user already obtained from the host.
+When the user enters a router public IPv4 address only, the client stores
+`https://<ip-with-dashes>.sslip.io`. The router rule for the HomeworkHelper
+control plane is one TCP rule: external `443` to Windows Host `38443`, where
+Caddy forwards to `127.0.0.1:8000`. Do not expose port `8000` directly.
 
 ## Local SmartThings wake defaults
 

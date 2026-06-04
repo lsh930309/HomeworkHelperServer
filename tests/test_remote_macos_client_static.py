@@ -54,6 +54,7 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         "RemoteTailscalePeer",
         "RemoteTailscaleSnapshot",
         "RemoteTailscaleEnsureResponse",
+        "RemoteAccessStatus",
     ]:
         assert f"struct {model_name}" in models
 
@@ -80,6 +81,11 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'authRequired = "auth_required"',
         'supportedActions = "supported_actions"',
         'targetHost = "target_host"',
+        'remoteAccessReadiness = "remote_access_readiness"',
+        'publicBaseURL = "public_base_url"',
+        'routerRule = "router_rule"',
+        'externalPort = "external_port"',
+        'internalPort = "internal_port"',
         'case state',
         'smartthingsDeviceID = "smartthings_device_id"',
         'smartthingsCLIPath = "smartthings_cli_path"',
@@ -164,6 +170,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
         'remote/status',
         'remote/capabilities',
         'remote/readiness',
+        'remote/access/status',
         'remote/dashboard/summary',
         'remote/beholder/incidents',
         'remote/game-links',
@@ -199,6 +206,7 @@ def test_macos_api_client_tracks_remote_agent_endpoints_and_auth():
     assert 'func powerSetup() async throws -> RemotePowerSetupResponse' in client
     assert 'func registerPowerSSHKey(publicKey: String, label: String)' in client
     assert 'func ensureServerTailscale() async throws -> RemoteTailscaleEnsureResponse' in client
+    assert 'func remoteAccessStatus() async throws -> RemoteAccessStatus' in client
     assert 'request(path: path, method: "PUT")' in client
     assert "static func defaultSession(requestTimeout: TimeInterval = 5, resourceTimeout: TimeInterval = 8) -> URLSession" in client
     assert "configuration.timeoutIntervalForRequest = requestTimeout" in client
@@ -540,6 +548,12 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "markHTTPAgentUnavailable" in view_model
     assert "applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService)" in view_model
     assert "status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil" in view_model
+    assert "normalizeRemoteBaseURLText" in view_model
+    assert "isPublicIPv4Literal" in view_model
+    assert "publicRemoteAgentDNSSuffix" in view_model
+    assert "refreshRemoteAccessStatus" in view_model
+    assert "remoteAccessStatus = try await service.remoteAccessStatus()" in view_model
+    assert "publicHTTPSDirectMode" in view_model
     assert "supervisorDecision(_ event: RemoteConnectionEvent)" in view_model
     assert "applyConnectionDecision(_ decision: RemoteConnectionDecision" in view_model
     assert "installClientResumeObservers" in view_model
@@ -583,9 +597,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "6자리 코드" in app
     assert "페어링 및 자동 설정" in app
     assert "자동 설정 점검" in app
+    assert "공개 HTTPS 상태 확인" in app
+    assert "https://<IP>.sslip.io" in app
+    assert "TCP 443 → Windows Host 38443" in app
+    assert "Remote Agent 8000" in app
     assert "서버 Tailscale 확인/복구" in app
     assert "페어링 토큰 복구" in app
     assert "로컬 토큰 삭제" in app
+    assert "Tailscale 선택 fallback" in app
     assert "Tailscale 서버/호스트 탐색" in app
     assert "전원 자동 설정" in app
     assert "전원 설정 저장" not in app

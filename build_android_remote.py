@@ -53,6 +53,8 @@ REMOTE_AGENT_DEFAULT_PORT = 8000
 REMOTE_AGENT_BASE_URL_GRADLE_PROPERTY = "homeworkhelper.android.defaultRemoteBaseUrl"
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME = "https"
+PUBLIC_IP_DNS_SUFFIX = "sslip.io"
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,9 @@ def normalize_remote_base_url(value: str) -> str:
     if not candidate:
         return ""
     if not _URL_SCHEME_RE.match(candidate):
+        host_candidate = candidate.split("/", 1)[0].split("?", 1)[0].split(":", 1)[0]
+        if is_public_ipv4_literal(host_candidate):
+            return f"{PUBLIC_REMOTE_AGENT_DEFAULT_SCHEME}://{host_candidate.replace('.', '-')}.{PUBLIC_IP_DNS_SUFFIX}"
         candidate = f"{REMOTE_AGENT_DEFAULT_SCHEME}://{candidate}"
 
     parsed = urlsplit(candidate)
@@ -190,6 +195,14 @@ def is_private_remote_host(host: str) -> bool:
         or address.is_link_local
         or address in _TAILSCALE_CGNAT
     )
+
+
+def is_public_ipv4_literal(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    return bool(address.version == 4 and address.is_global)
 
 
 def public_cleartext_remote_base_url(value: str) -> bool:

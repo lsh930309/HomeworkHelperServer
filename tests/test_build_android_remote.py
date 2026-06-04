@@ -52,6 +52,14 @@ def test_gradle_command_can_seed_default_remote_agent_url():
     assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=http://100.64.0.9:8000" in command
 
 
+def test_gradle_command_normalizes_public_ip_to_sslip_https():
+    info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
+
+    command = android_build.create_gradle_assemble_command(info, default_remote_base_url="211.216.28.65")
+
+    assert "-Phomeworkhelper.android.defaultRemoteBaseUrl=https://211-216-28-65.sslip.io" in command
+
+
 def test_gradle_command_accepts_public_https_remote_agent_url():
     info = build.make_version_info("android-client", _android_config("0.1.2", 34), git_hash="abc1234", dirty=False)
 
@@ -70,6 +78,7 @@ def test_gradle_command_rejects_public_http_remote_agent_url():
 def test_remote_base_url_normalization_adds_fixed_scheme_and_port():
     assert android_build.normalize_remote_base_url("") == ""
     assert android_build.normalize_remote_base_url("100.64.0.9") == "http://100.64.0.9:8000"
+    assert android_build.normalize_remote_base_url("211.216.28.65") == "https://211-216-28-65.sslip.io"
     assert android_build.normalize_remote_base_url("host.tailnet.ts.net:9000") == "http://host.tailnet.ts.net:9000"
     assert android_build.normalize_remote_base_url("http://host.tailnet.ts.net") == "http://host.tailnet.ts.net:8000"
     assert android_build.normalize_remote_base_url("https://home.example.com") == "https://home.example.com"

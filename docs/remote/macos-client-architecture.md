@@ -1,6 +1,6 @@
 # macOS Remote Client Architecture
 
-Last refreshed: 2026-05-19
+Last refreshed: 2026-06-04
 Status: Active reference for native client rebuilds
 
 ## 1. Purpose
@@ -45,7 +45,7 @@ Key files under `remote_clients/macos/HomeworkHelperRemote/Sources/HomeworkHelpe
 - `LocalPowerWakeManager.swift`: client-local SmartThings wake adapter.
 - `LocalSSHPowerManager.swift`: client-local OpenSSH power adapter.
 - `LocalSSHKeyManager.swift`: client-local keypair generation and public-key registration support.
-- `TailscaleDiscovery.swift`: local Tailscale discovery, suggested URLs, and reachability helpers.
+- `TailscaleDiscovery.swift`: optional local Tailscale fallback discovery, suggested URLs, and reachability helpers.
 
 Boundary rule: `RemoteDashboardViewModel` owns side effects and delegates pure decisions to helpers. `RemoteConnectionSupervisor` must remain portable and deterministic.
 
@@ -58,7 +58,7 @@ The macOS client uses these shared `/remote/*` contracts:
 - Games/shortcuts: `/remote/processes`, `/remote/processes/{id}/launch`, `/remote/shortcuts`, `/remote/shortcuts/{id}/open`.
 - Dashboard/alerts: `/remote/dashboard/summary`, `/remote/beholder/incidents`.
 - Android/mobile data model: `/remote/game-links`, `/remote/mobile-sessions/active`, `/remote/mobile-sessions/start`, `/remote/mobile-sessions/end`.
-- Diagnostics/connectivity setup: `/remote/logging/config`, `/remote/tailscale/ensure`.
+- Diagnostics/connectivity setup: `/remote/logging/config`, `/remote/access/status`, `/remote/tailscale/ensure`.
 - Power readiness only: `/remote/power/status`, `/remote/power/setup`, `/remote/power/ssh-key`.
 
 Important power contract:
@@ -72,7 +72,7 @@ Important power contract:
 
 Startup/pairing:
 
-1. Load base URL from `UserDefaults` and token from Keychain.
+1. Load base URL from `UserDefaults` and token from Keychain. A bare public IPv4 input is normalized to `https://<ip-with-dashes>.sslip.io`; private no-scheme hosts keep the `http://host:8000` local default.
 2. Probe status/readiness through `RemoteAPIClient`.
 3. If no token, show pairing guidance.
 4. On pairing, store token, register SSH public key if possible, refresh readiness and payloads.
@@ -103,6 +103,7 @@ The supervisor reduces typed events into these states:
 It never runs Tailscale, SSH, HTTP, or platform APIs directly. The ViewModel provides evidence such as:
 
 - HTTP status success/failure/auth failure.
+- Public HTTPS readiness from `/remote/access/status` when the base URL is an HTTPS direct path.
 - Management reachability result.
 - Client power intent accepted.
 - Client resume/wake event.

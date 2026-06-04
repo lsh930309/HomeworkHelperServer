@@ -151,9 +151,16 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "Tailnet 기기" in remote_dialog_source
     assert "can_revoke" in remote_dialog_source
     assert "_start_worker(\"devices\"" in remote_dialog_source
+    assert "_start_worker(\"remote_access\"" in remote_dialog_source
     assert "_start_worker(\"tailscale\"" in remote_dialog_source
     assert "_start_worker(\"power\"" in remote_dialog_source
+    assert "공개 HTTPS 직접접속" in remote_dialog_source
+    assert "/remote/access/status" in remote_dialog_source
+    assert "TCP 443 → Windows Host 38443" in remote_dialog_source
+    assert "Caddy sidecar" in remote_dialog_source
+    assert "Remote Agent 8000" in remote_dialog_source
     assert "devices_table" in dialog_source
+    assert "remote_access_details_text" in dialog_source
     assert "tailscale_health_text" in dialog_source
     assert "power_setup_text" in dialog_source
     assert "/remote/power/setup" in dialog_source
@@ -195,6 +202,8 @@ def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned
     try:
         assert dialog.pairing_code_edit.alignment() & Qt.AlignmentFlag.AlignLeft
         assert dialog.devices_table.columnCount() == 8
+        assert dialog.remote_access_url_edit.isReadOnly()
+        assert "sslip.io" in dialog.remote_access_url_edit.placeholderText()
         assert dialog.devices_table.isColumnHidden(0)
         assert dialog.devices_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         assert dialog.devices_table.maximumHeight() > 1000

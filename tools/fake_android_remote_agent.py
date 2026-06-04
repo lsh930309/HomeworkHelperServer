@@ -104,12 +104,54 @@ class FakeRemoteHandler(BaseHTTPRequestHandler):
                         "color": "green",
                         "message": "Server mode ready",
                     },
+                    "remote_access_readiness": {
+                        "state": "ok",
+                        "color": "green",
+                        "message": "Fake public HTTPS ready",
+                        "public_base_url": "https://211-216-28-65.sslip.io",
+                        "router_rule": {"protocol": "TCP", "external_port": 443, "internal_port": 38443, "summary": "TCP 443 -> Windows Host:38443"},
+                        "warnings": [],
+                    },
                     "power_readiness": {
                         "state": "warning",
                         "color": "yellow",
                         "message": "Android direct power adapter 미구현",
                         "supported_actions": [],
                     },
+                }
+            )
+            return
+        if path == "/remote/access/status":
+            self._json(
+                {
+                    "schema_version": 1,
+                    "enabled": True,
+                    "mode": "manual_port_forward_public_https",
+                    "state": "ready",
+                    "public_ip": "211.216.28.65",
+                    "public_ip_source": "fake",
+                    "hostname": "211-216-28-65.sslip.io",
+                    "public_base_url": "https://211-216-28-65.sslip.io",
+                    "agent_base_url": "http://127.0.0.1:8000",
+                    "ports": {
+                        "required_count": 1,
+                        "rules": [{"protocol": "TCP", "external_port": 443, "internal_port": 38443, "summary": "TCP 443 -> Windows Host:38443"}],
+                        "no_udp_required": True,
+                        "do_not_forward": [8000],
+                    },
+                    "router_rule": {"protocol": "TCP", "external_port": 443, "internal_port": 38443, "target_host": "Windows Host", "summary": "TCP 443 -> Windows Host:38443"},
+                    "caddy": {
+                        "strategy": "caddy_sidecar",
+                        "installed": True,
+                        "running": True,
+                        "internal_https_port": 38443,
+                        "config_path": "fake/Caddyfile",
+                        "config_preview": "{\\n    https_port 38443\\n}\\n\\nhttps://211-216-28-65.sslip.io {\\n    reverse_proxy 127.0.0.1:8000\\n}\\n",
+                    },
+                    "upnp": {"mapping_enabled": False, "state": "deferred", "message": "Fake UPnP deferred"},
+                    "warnings": [],
+                    "advisories": ["공유기에서 Remote Agent 8000 포트는 공개하지 마세요."],
+                    "message": "Fake public HTTPS route ready",
                 }
             )
             return

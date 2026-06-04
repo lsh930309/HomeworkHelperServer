@@ -157,6 +157,7 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert body["capabilities"]["power_config"] is False
     assert body["capabilities"]["power_control"] is False
     assert body["capabilities"]["local_store_health"] is True
+    assert body["capabilities"]["remote_access"] is True
     assert body["capabilities"]["auth_required"] is False
     assert body["capabilities"]["pairing"] is True
     assert body["power"]["configured"] is False
@@ -168,6 +169,9 @@ def test_remote_status_reports_counts_and_safe_default_power_capability():
     assert "duration_ms" in body["diagnostics"]
     assert body["readiness"]["tailscale_readiness"]["state"] == "deferred"
     assert "details" not in body["readiness"]["tailscale_readiness"]
+    assert body["readiness"]["remote_access_readiness"]["details"]["mode"] == "manual_port_forward_public_https"
+    assert body["readiness"]["remote_access_readiness"]["router_rule"]["external_port"] == 443
+    assert body["readiness"]["remote_access_readiness"]["router_rule"]["internal_port"] == 38443
 
 
 def test_remote_status_does_not_block_on_tailscale_probe():

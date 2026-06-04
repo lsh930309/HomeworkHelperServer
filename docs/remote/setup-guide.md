@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-05-26
+Last refreshed: 2026-06-04
 
 HomeworkHelper exposes a local **Remote Agent** from the desktop app and controls it from native clients. The Remote Agent is local-first: it uses the existing FastAPI app, SQLite data, pairing tokens, and LAN/Tailscale-style private access rather than a hosted relay.
 
@@ -35,13 +35,61 @@ forward to the local HomeworkHelper server. Android public URLs must be
 `https://...`; plain `http://...` is only for loopback, LAN, link-local, or
 Tailscale `100.64.0.0/10` private routes.
 
+### Public HTTPS direct path (manual port-forward v1)
+
+Default topology:
+
+```text
+Android/macOS client
+  -> https://211-216-28-65.sslip.io
+  -> router WAN TCP 443
+  -> Windows Host TCP 38443 (Caddy sidecar)
+  -> http://127.0.0.1:8000 (HomeworkHelper Remote Agent)
+```
+
+Router rule to add manually:
+
+| Purpose | Protocol | External port | Internal target | Internal port |
+| --- | --- | ---: | --- | ---: |
+| HomeworkHelper public HTTPS control plane | TCP | 443 | Windows Host fixed LAN IP | 38443 |
+
+No UDP ports are required for the HomeworkHelper control plane. Do **not** forward
+Remote Agent port `8000` directly to the internet. Sunshine/Apollo/Moonlight
+streaming ports are a separate media-plane configuration and are not replaced by
+this rule.
+
+Client URL UX:
+
+- Android and macOS accept the router public IPv4 address as input.
+- `211.216.28.65` is normalized to `https://211-216-28-65.sslip.io`.
+- Custom domains are allowed when entered as a full `https://...` URL.
+
+Host-side Caddy sidecar default:
+
+```caddyfile
+{
+    https_port 38443
+    auto_https disable_redirects
+}
+
+https://211-216-28-65.sslip.io {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+The Host App's Remote Settings dialog exposes `/remote/access/status` as a
+readiness panel for public IP/hostname, router rule, Caddy status/config preview,
+and UPnP diagnostics. UPnP auto-mapping is deliberately deferred in v1: the
+current implementation performs read-only discovery only and keeps manual
+port-forwarding as the safe baseline.
+
 `--server` is a server-only entrypoint: it starts the FastAPI Remote Agent without entering the GUI single-instance/admin prompt path. SSH real-device test sessions can use the stricter `--testbench-server` variant through `tools/ssh_host_testbench.py`, which shadow-copies the installed package, assigns a per-session port/mutex/AppData root, writes a local report under `artifacts/ssh-host-testbench/`, and cleans the remote temp root after the run.
 
 Security rules:
 
 - Do not expose the Remote Agent publicly without bearer-token auth and HTTPS termination.
-- Prefer LAN firewall/Tailscale-style private routing when possible. For fixed-IP direct access, use `HH_REMOTE_PUBLIC_DIRECT=1` and a TLS-terminating router/reverse proxy.
-- Tailscale remains a supported private-route fallback. It is not required when Android uses a public HTTPS Remote Agent URL.
+- For fixed-IP direct access, use `HH_REMOTE_PUBLIC_DIRECT=1`, bearer-token auth, and TLS termination through Caddy/router/reverse proxy.
+- Tailscale remains a supported private-route fallback. It is not required when Android/macOS uses a public HTTPS Remote Agent URL.
 - First-time Tailscale account creation, login, macOS VPN/System Extension approval, and any auth-key/MDM policy rollout remain explicit user/admin approval steps.
 - `/remote/pair/start` is intended for loopback or trusted/authenticated setup. Android does not remotely issue the first pairing code; the user obtains it locally from the host and enters it on Android.
 - `/remote/pair/confirm` accepts the local code from the client, but repeated failed guesses are rate-limited for the active pairing window.
@@ -82,6 +130,7 @@ Core game-mirror and setup endpoints:
 - `POST /remote/mobile-sessions/start`, `POST /remote/mobile-sessions/end`
 - `GET /remote/devices`, `DELETE /remote/devices/{id}`, `DELETE /remote/devices/revoked`
 - `GET /remote/logging/config`, `PUT /remote/logging/config`
+- `GET /remote/access/status`
 - `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
 
 Power boundary:
@@ -109,11 +158,11 @@ Architecture reference: `docs/remote/macos-client-architecture.md`.
 
 Source: `remote_clients/android/HomeworkHelperRemote`
 
-The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch/stop, pull-to-refresh, and a floating status message above bottom navigation. Setup is split into compact **연결/페어링 · 전원 · 기기 · 앱** sections for URL/pairing/stable token status, Tailscale foundation checks, Android-local power automation, device management, app lifecycle options, diagnostics, and fake smoke guidance.
+The old Android full-parity feature implementation was removed. The current Android v3 client uses a game-first Home tab plus a consolidated Setup tab. Home mirrors the macOS popover with host icons, resource icons, badges, quick launch/stop, pull-to-refresh, and a floating status message above bottom navigation. Setup is split into compact **연결/페어링 · 전원 · 기기 · 앱** sections for URL/pairing/stable token status, public HTTPS Connection Doctor, Tailscale optional fallback checks, Android-local power automation, device management, diagnostics, and fake smoke guidance.
 
 Android-specific automation notes:
 
-- The app can request Tailscale VPN ON when it enters foreground and VPN OFF when it leaves foreground, then polls Android-local VPN state before refreshing. Android does not call host-side Tailscale ensure endpoints.
+- The app does not send Tailscale VPN ON/OFF lifecycle broadcasts. Public HTTPS is the primary Remote Agent path; Tailscale can still be opened manually as a fallback.
 - Wake uses SmartThings REST with PAT/OAuth authorization plus the `PC 켜기` target deviceId.
 - Sleep/restart/shutdown use the Android OpenSSH adapter after key registration and health marker verification.
 - Paired devices can be listed, revoked, and cleaned up from the Android Setup > 기기 section.

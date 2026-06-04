@@ -2,6 +2,56 @@ import Foundation
 import AppKit
 import SwiftUI
 
+private let remoteAgentDefaultHTTPPort = 8000
+private let publicRemoteAgentDNSSuffix = "sslip.io"
+
+private func normalizeRemoteBaseURLText(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard !trimmed.isEmpty else { return "" }
+    if !trimmed.contains("://") {
+        let beforePath = String(trimmed.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(trimmed))
+        let beforeQuery = String(beforePath.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(beforePath))
+        let hostCandidate = String(beforeQuery.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(beforeQuery))
+        if isPublicIPv4Literal(hostCandidate) {
+            return "https://\(hostCandidate.replacingOccurrences(of: ".", with: "-")).\(publicRemoteAgentDNSSuffix)"
+        }
+        return normalizeRemoteBaseURLText("http://\(trimmed)")
+    }
+    guard var components = URLComponents(string: trimmed),
+          let scheme = components.scheme?.lowercased(),
+          components.host != nil else {
+        return trimmed
+    }
+    if scheme == "http", components.port == nil {
+        components.port = remoteAgentDefaultHTTPPort
+    }
+    if scheme == "https", components.port == 443 {
+        components.port = nil
+    }
+    return components.url?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? trimmed
+}
+
+private func isPublicIPv4Literal(_ value: String) -> Bool {
+    let parts = value.split(separator: ".")
+    guard parts.count == 4 else { return false }
+    let octets = parts.compactMap { Int($0) }
+    guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return false }
+    let first = octets[0]
+    let second = octets[1]
+    let third = octets[2]
+    if first == 0 || first >= 224 { return false }
+    if first == 10 || first == 127 { return false }
+    if first == 172 && (16...31).contains(second) { return false }
+    if first == 192 && second == 168 { return false }
+    if first == 169 && second == 254 { return false }
+    if first == 100 && (64...127).contains(second) { return false }
+    if first == 192 && second == 0 && third == 2 { return false }
+    if first == 198 && (second == 18 || second == 19 || second == 51) { return false }
+    if first == 203 && second == 0 && third == 113 { return false }
+    return true
+}
+
 private actor RemoteDashboardServiceGate {
     private var locked = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -41,6 +91,7 @@ private actor RemoteDashboardService {
 
     func status() async throws -> RemoteStatus { try await Self.gate.run { try await client.status() } }
     func readiness() async throws -> RemoteReadiness { try await Self.gate.run { try await client.readiness() } }
+    func remoteAccessStatus() async throws -> RemoteAccessStatus { try await Self.gate.run { try await client.remoteAccessStatus() } }
     func dashboardSummary() async throws -> RemoteDashboardSummary { try await Self.gate.run { try await client.dashboardSummary() } }
     func beholderIncidents() async throws -> [RemoteBeholderIncident] { try await Self.gate.run { try await client.beholderIncidents() } }
     func gameLinks() async throws -> [RemoteGameLink] { try await Self.gate.run { try await client.gameLinks() } }
@@ -109,11 +160,11 @@ private enum RemoteClientPreferences {
 
     static func loadBaseURL() -> String {
         let stored = defaults.string(forKey: baseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return stored.isEmpty ? "http://127.0.0.1:8000" : stored
+        return stored.isEmpty ? "http://127.0.0.1:8000" : normalizeRemoteBaseURLText(stored)
     }
 
     static func saveBaseURL(_ value: String) {
-        defaults.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: baseURLKey)
+        defaults.set(normalizeRemoteBaseURLText(value), forKey: baseURLKey)
     }
 
     static func loadDeviceName() -> String {
@@ -469,9 +520,14 @@ final class RemoteDashboardViewModel: ObservableObject {
         return formatter
     }()
 
-    @Published var baseURLText = RemoteClientPreferences.loadBaseURL() {
+    @Published var baseURLText = normalizeRemoteBaseURLText(RemoteClientPreferences.loadBaseURL()) {
         didSet {
-            RemoteClientPreferences.saveBaseURL(baseURLText)
+            let normalized = normalizeRemoteBaseURLText(baseURLText)
+            if normalized != baseURLText {
+                baseURLText = normalized
+                return
+            }
+            RemoteClientPreferences.saveBaseURL(normalized)
             refreshMoonlightSnapshot()
         }
     }
@@ -484,7 +540,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var moonlightPublicIPCache = RemoteClientPreferences.loadMoonlightPublicIPCache()
     @Published private(set) var moonlightSnapshot = LocalMoonlightManager.snapshot(
         selectedHostUUID: RemoteClientPreferences.loadSelectedMoonlightHostUUID(),
-        baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host,
+        baseURLHost: URL(string: normalizeRemoteBaseURLText(RemoteClientPreferences.loadBaseURL()))?.host,
         publicIPCache: RemoteClientPreferences.loadMoonlightPublicIPCache()
     )
     @Published private(set) var moonlightSetupInProgress = false
@@ -519,6 +575,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var smartThingsDevices: [String] = []
     @Published var smartThingsDeviceCandidates: [RemoteSmartThingsDeviceCandidate] = []
     @Published var readiness: RemoteReadiness?
+    @Published var remoteAccessStatus: RemoteAccessStatus?
     @Published var localTailscale: LocalTailscaleSnapshot? {
         didSet {
             if let localTailscale {
@@ -639,16 +696,22 @@ final class RemoteDashboardViewModel: ObservableObject {
             ? localSSHHealthSummary
             : "SSH key 자동 등록/health 확인 필요"
         let powerDetail = "\(wakeDetail) · \(sshDetail)"
+        let publicHTTPSReady = baseURLText.lowercased().hasPrefix("https://")
+        let publicHTTPSDetail = remoteAccessStatus?.publicBaseURL?.isEmpty == false
+            ? "\(remoteAccessStatus?.publicBaseURL ?? "") · \(remoteAccessStatus?.routerRule?.summary ?? "TCP 443 → Host 38443")"
+            : "공유기 공인 IP를 입력하면 sslip.io public HTTPS URL로 자동 변환"
         return [
-            ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "기반환경 상태: \(localTailscale?.foundationState ?? "unknown") · Tailscale 설치/실행/로그인 필요", localTailscale?.running == true),
+            ("1. Public HTTPS", publicHTTPSDetail, publicHTTPSReady),
             ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
             ("4. 전원 관리", powerDetail, powerHealthy),
-            ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
+            ("5. Tailscale fallback", localTailscale?.running == true || serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "선택 fallback 준비됨" : "public HTTPS 직접접속에는 필수 조건이 아닙니다", publicHTTPSReady || localTailscale?.running == true || serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
         ]
     }
 
     var isPaired: Bool { !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var publicHTTPSDirectMode: Bool { baseURLText.lowercased().hasPrefix("https://") }
 
     var moonlightSelectableHosts: [LocalMoonlightHostCandidate] {
         moonlightSnapshot.usableHosts.filter { !$0.uuid.isEmpty }
@@ -1486,6 +1549,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderHealth: readySection,
             remoteConnectivity: readySection,
             serverModeReadiness: readySection,
+            remoteAccessReadiness: readySection,
             powerReadiness: readySection,
             tailscaleReadiness: readySection
         )
@@ -2720,11 +2784,16 @@ final class RemoteDashboardViewModel: ObservableObject {
     func runSetupAutomation() async {
         isLoading = true
         defer { isLoading = false }
-        setupProgress = "1/5 Mac Tailscale 확인 중..."
-        let local = await TailscaleDiscovery.ensureReady()
-        localTailscale = local
-        if let url = local.suggestedBaseURLs.first, baseURLText.contains("127.0.0.1") || baseURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            baseURLText = url
+        if publicHTTPSDirectMode {
+            setupProgress = "1/5 public HTTPS 직접접속 상태 확인 중..."
+            await refreshRemoteAccessStatus(updateLoading: false)
+        } else {
+            setupProgress = "1/5 Mac Tailscale fallback 확인 중..."
+            let local = await TailscaleDiscovery.ensureReady()
+            localTailscale = local
+            if let url = local.suggestedBaseURLs.first, baseURLText.contains("127.0.0.1") || baseURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                baseURLText = url
+            }
         }
 
         setupProgress = "2/5 Mac SmartThings wake 대상 확인 중..."
@@ -2773,7 +2842,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             if let remoteDevices = try? await service.devices() {
                 applyDevices(remoteDevices)
             }
-            serverTailscaleEnsure = try? await service.ensureServerTailscale()
+            if publicHTTPSDirectMode {
+                remoteAccessStatus = try? await service.remoteAccessStatus()
+            } else {
+                serverTailscaleEnsure = try? await service.ensureServerTailscale()
+            }
             if let evaluation = await evaluateConnectivity(using: service, client: client, trigger: "setupAutomation.pairedStatus") {
                 readiness = evaluation.status.readiness
             }
@@ -2785,9 +2858,32 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = setupProgress
     }
 
+    func refreshRemoteAccessStatus(updateLoading: Bool = true) async {
+        guard let service else {
+            message = "Remote Agent URL이 올바르지 않습니다."
+            return
+        }
+        if updateLoading {
+            isLoading = true
+        }
+        defer {
+            if updateLoading { isLoading = false }
+        }
+        do {
+            remoteAccessStatus = try await service.remoteAccessStatus()
+            message = remoteAccessStatus?.message ?? "public HTTPS 상태를 확인했습니다."
+        } catch {
+            handleRemoteFailure(error)
+        }
+    }
+
     func ensureServerTailscale() async {
         guard let service else {
             message = "Remote Agent URL이 올바르지 않습니다."
+            return
+        }
+        if publicHTTPSDirectMode {
+            await refreshRemoteAccessStatus()
             return
         }
         guard isPaired else {

@@ -1373,6 +1373,10 @@ struct RemoteSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Base URL", text: $viewModel.baseURLText)
                         .textFieldStyle(.roundedBorder)
+                    Text("공유기 공인 IP만 입력하면 https://<IP>.sslip.io public HTTPS URL로 저장됩니다. 수동 포트포워딩 기본값은 TCP 443 → Windows Host 38443이며 Remote Agent 8000은 공개하지 않습니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                     SecureField("Bearer token", text: $viewModel.tokenText)
                         .textFieldStyle(.roundedBorder)
                     TextField("디바이스 이름", text: $viewModel.deviceName)
@@ -1387,6 +1391,8 @@ struct RemoteSettingsView: View {
                     }
                     SettingsActionGrid {
                         Button("자동 설정 점검") { Task { await viewModel.runSetupAutomation() } }
+                        Button("공개 HTTPS 상태 확인") { Task { await viewModel.refreshRemoteAccessStatus() } }
+                            .disabled(viewModel.isLoading)
                         Button("서버 Tailscale 확인/복구") { Task { await viewModel.ensureServerTailscale() } }
                             .disabled(viewModel.isLoading || !viewModel.isPaired)
                         Button("페어링 토큰 복구") { Task { await viewModel.recoverPairing() } }
@@ -1402,12 +1408,25 @@ struct RemoteSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    if let remoteAccess = viewModel.remoteAccessStatus {
+                        SidebarInfoRow(label: "Public HTTPS", value: remoteAccess.publicBaseURL ?? "미생성")
+                        SidebarInfoRow(label: "Router rule", value: remoteAccess.routerRule?.summary ?? "TCP 443 → Windows Host 38443")
+                        if !remoteAccess.warnings.isEmpty {
+                            Text(remoteAccess.warnings.joined(separator: "\n"))
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            RemoteSettingsSection("Tailscale") {
+            RemoteSettingsSection("Tailscale 선택 fallback") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("public HTTPS 직접접속을 기본 경로로 사용할 때 Tailscale은 필수 조건이 아니라 수동 fallback입니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     SettingsActionGrid {
                         Button("Tailscale 기반환경 활성화") { Task { await viewModel.activateLocalTailscale() } }
                             .disabled(viewModel.isLoading)

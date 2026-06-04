@@ -1,6 +1,6 @@
 # Remote Connection Supervisor, Pairing, and Power Protocol
 
-Last refreshed: 2026-05-19
+Last refreshed: 2026-06-04
 Status: Shared protocol reference for macOS and Android clients
 
 ## 1. Purpose
@@ -61,7 +61,7 @@ All clients should evaluate evidence in this order where available:
 2. **Auth result**: HTTP 401/403 always maps to `authRejected`.
 3. **Management reachability**: optional platform-specific evidence that host/network exists even if HTTP failed.
    - macOS may use Tailscale ping and SSH health.
-   - Android v1 may initially skip this and rely on friendly HTTP error categories.
+   - Android may use public HTTPS DNS/TLS/Bearer/Remote Agent checks first and only treat Tailscale as an optional fallback.
 4. **Local cache**: cached process snapshot keeps the main UI useful while disconnected.
 5. **Client power intent overlay**: accepted local power commands temporarily override ambiguous HTTP results.
 
@@ -189,7 +189,8 @@ Android adapters:
 - Preferences settings.
 - Process/icon cache.
 - Friendly network error classification.
-- Tailscale Android app binding (`com.tailscale.ipn`) and VPN-state detection.
+- Public IPv4 to `https://<ip-with-dashes>.sslip.io` URL normalization.
+- Tailscale Android app detection/open/settings (`com.tailscale.ipn`) and VPN-state display as a user-driven fallback only.
 - SmartThings REST wake with `PC 켜기` auto-selection and manual deviceId fallback.
 - SSHJ-backed OpenSSH health plus sleep/restart/shutdown commands.
 

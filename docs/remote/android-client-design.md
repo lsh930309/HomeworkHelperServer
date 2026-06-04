@@ -1,13 +1,13 @@
 # Android Remote Client Rebuild Design
 
-Last refreshed: 2026-05-26
+Last refreshed: 2026-06-04
 Status: Active Android client implementation guide; existing Android full-parity code must not be resurrected
 
 ## 1. Decision
 
 The Android client is rebuilt around the shared Remote Agent contract and should now be completed by tightening parity with the macOS client's data rules, not by restoring the removed legacy Android architecture.
 
-Reason: the current Android product direction is game-first remote control. The Android app should mirror the macOS popover-first UX: the main screen is registered game status plus quick launch/stop, while pairing, power setup, diagnostics, Tailscale lifecycle automation, and device management are supporting setup tasks.
+Reason: the current Android product direction is game-first remote control. The Android app should mirror the macOS popover-first UX: the main screen is registered game status plus quick launch/stop, while pairing, public HTTPS diagnostics, power setup, optional Tailscale fallback, and device management are supporting setup tasks.
 
 Keep:
 
@@ -36,14 +36,14 @@ Secondary jobs:
 - Diagnose online/offline/auth state.
 - View readiness and cached game state when the host is unavailable.
 - Manage paired-device and token lifecycle tasks.
-- Provide optional Android-local power control through Tailscale app binding, SmartThings Wake, and OpenSSH.
-- Keep Android-only lifecycle automation explicit and reversible: app foreground may request Tailscale VPN ON, app background may request VPN OFF, but first login/VPN consent remains user-approved.
+- Provide optional Android-local power control through SmartThings Wake and OpenSSH.
+- Make public HTTPS direct access the primary external-network path; Tailscale remains a user-driven fallback, not an app lifecycle automation target.
 
 Non-goals for the first rebuild pass:
 
 - Host-managed power side effects or `/remote/power/{action}` execution endpoints.
 - Background sync, notifications, or WorkManager.
-- Cloud relay or public Remote Agent exposure.
+- Cloud relay.
 - Recreating macOS-specific Moonlight/AppKit/LoginItem settings.
 - Moonlight/Apollo integration.
 
@@ -112,7 +112,8 @@ Setup screen responsibilities:
 - Power readiness explanation and OpenSSH/setup details.
 - App-only `RemoteNetworkController` status for HomeworkHelper HTTP/SSH calls.
 - Tailscale app binding status and host tailnet URL probing as an external fallback.
-- Tailscale ON/OFF broadcast requests and optional foreground/background lifecycle automation as explicit fallback controls.
+- Connection Doctor guidance for `https://<public-ip>.sslip.io`, DNS/TLS/Bearer/Remote Agent checks, and `TCP 443 → Windows Host 38443` router forwarding.
+- Tailscale install/open/settings shortcuts as optional fallback controls without VPN ON/OFF broadcasts.
 - SmartThings PAT input, PAT-only save path for already-known deviceId, `PC 켜기` device auto-selection, candidate selection, and manual deviceId fallback.
 - Paired device list, device revoke, and revoked-device cleanup.
 - Diagnostics and fake Remote Agent smoke guidance.
@@ -129,7 +130,7 @@ Tailscale UI policy:
 
 - The first-class connection surface is the system-route RemoteNetworkController. Public access must use HTTPS, while cleartext HTTP is limited to loopback, LAN, link-local, or Tailscale `100.64.0.0/10` private routes.
 - If Tailscale is not installed, guide the user to install/open the official Android package.
-- If Tailscale is installed, Android may request VPN connect/disconnect through the installed app and then re-inspect VPN state.
+- If Tailscale is installed, Android may display install/VPN state and open the app/settings, but it must not send component broadcasts to connect/disconnect VPN.
 - The app must display that first-time Tailscale login, Android VPN consent, and account approval can require direct user confirmation in Tailscale.
 
 ## 6. Android implementation architecture
@@ -146,10 +147,10 @@ app/src/main/java/dev/homeworkhelper/remote/
 ├── state/RemoteViewModel.kt     # UI state, refresh, pairing, launch and automation commands
 ├── platform/TokenStore.kt       # Android Keystore token store
 ├── platform/Preferences.kt      # non-secret settings
-├── platform/AutomationPreferences.kt # SSH/SmartThings/Tailscale local settings
+├── platform/AutomationPreferences.kt # SSH/SmartThings local settings
 ├── platform/AndroidSSHPowerManager.kt # SSHJ health and power commands
 ├── platform/RemoteNetworkController.kt # system-route HTTP/SSH transport hooks and URL policy boundary
-├── platform/TailscaleBinding.kt # app detection, launch/install, VPN-state adapter
+├── platform/TailscaleBinding.kt # optional app detection, launch/install/settings, VPN-state adapter
 └── ui/                          # Home, Setup, shared components
 ```
 
@@ -174,6 +175,7 @@ Required for Home:
 Required for setup:
 
 - `POST /remote/pair/confirm`
+- `GET /remote/access/status`
 - `GET /remote/devices`
 - `DELETE /remote/devices/{id}`
 - `DELETE /remote/devices/revoked`
@@ -234,7 +236,8 @@ Android reachability and state mirroring:
 - When paired and online, process state, running flags, and resource/progress metadata are host-authoritative and should overwrite local cached projection.
 - When offline, Android may show cached games and locally projected progress using the `projection_*` metadata supplied by the host.
 - Remote Agent HTTP and Android-local SSH should go through `RemoteNetworkController`; production Android uses Android's system route and rejects public cleartext HTTP before pairing or command requests.
-- Tailscale app binding is Android-local only: request the installed Tailscale app to connect, poll local VPN state, and never mutate host-side Tailscale health.
+- A public IPv4 literal entered without a scheme is normalized to `https://<ip-with-dashes>.sslip.io`; private hosts without a scheme keep the local `http://host:8000` default.
+- Tailscale app binding is Android-local only: inspect installed/VPN state and open Tailscale/settings if the user wants a fallback. Never mutate host-side Tailscale health and never send Android VPN ON/OFF broadcasts.
 
 ## 10. Verification plan
 
@@ -248,7 +251,7 @@ cd remote_clients/android/HomeworkHelperRemote && ./gradlew :app:assembleRelease
 
 Phase 1, Home and setup implementation:
 
-- Static test for required v3 endpoints, icon payload fields, pull-to-refresh, launch/stop, device/token actions, Tailscale lifecycle markers, and no stale power endpoints.
+- Static test for required v3 endpoints, public HTTPS normalization, icon payload fields, pull-to-refresh, launch/stop, device/token actions, Tailscale fallback markers, and no stale power endpoints.
 - Unit/static checks for token store and process card labels.
 - APK build.
 - Fake Remote Agent serves PNG process/resource icons from `assets/` and smoke verifies image endpoint hits.
@@ -259,7 +262,7 @@ Phase 2, physical device:
 - Pairing and process-list sync on a real device.
 - Cached game state survives app restart/offline host.
 - Launch command accepted against a test Remote Agent.
-- Tailscale foreground/background automation, SmartThings wake, OpenSSH power actions, and device revoke should be verified with explicit user-approved real-device scenarios.
+- Public HTTPS real-host access, optional Tailscale fallback opening, SmartThings wake, OpenSSH power actions, and device revoke should be verified with explicit user-approved real-device scenarios.
 
 ## 11. Open questions for implementation phase
 

@@ -28,7 +28,6 @@ import dev.homeworkhelper.remote.platform.RemoteNetworkStatus
 import dev.homeworkhelper.remote.platform.RemotePreferences
 import dev.homeworkhelper.remote.platform.SmartThingsPreferences
 import dev.homeworkhelper.remote.platform.SshPowerPreferences
-import dev.homeworkhelper.remote.platform.TailscaleAutomationPreferences
 import dev.homeworkhelper.remote.platform.TailscaleBinding
 import dev.homeworkhelper.remote.platform.TailscaleBindingState
 import dev.homeworkhelper.remote.platform.TokenStore
@@ -42,15 +41,13 @@ import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 
-private const val TAILSCALE_CONNECT_TIMEOUT_MILLIS = 15_000L
-private const val TAILSCALE_CONNECT_POLL_MILLIS = 1_000L
-private const val TAILSCALE_CONNECT_MAX_ATTEMPTS = 3
-private const val TAILSCALE_CONNECT_RETRY_DELAY_MILLIS = 1_500L
-private const val TAILSCALE_FOREGROUND_CONNECT_DELAY_MILLIS = 1_000L
 private const val REMOTE_AGENT_SCHEME = "http"
+private const val PUBLIC_REMOTE_AGENT_SCHEME = "https"
 private const val REMOTE_AGENT_PORT = 8000
+private const val PUBLIC_IP_DNS_SUFFIX = "sslip.io"
 private val URL_SCHEME_PATTERN = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
 private val IPV4_PATTERN = Regex("""^\d{1,3}(?:\.\d{1,3}){3}$""")
+private val SSLIP_DASH_IPV4_PATTERN = Regex("""^(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.sslip\.io$""", RegexOption.IGNORE_CASE)
 
 internal data class RemoteBaseUrlPolicy(
     val allowed: Boolean,
@@ -60,6 +57,12 @@ internal data class RemoteBaseUrlPolicy(
 internal fun normalizeRemoteBaseUrl(value: String): String {
     val trimmed = value.trim().trimEnd('/')
     if (trimmed.isBlank()) return ""
+    if (!URL_SCHEME_PATTERN.containsMatchIn(trimmed)) {
+        val hostCandidate = trimmed.substringBefore('/').substringBefore('?').substringBefore(':')
+        if (isPublicIpv4Host(hostCandidate)) {
+            return "$PUBLIC_REMOTE_AGENT_SCHEME://${hostCandidate.replace(".", "-")}.$PUBLIC_IP_DNS_SUFFIX"
+        }
+    }
     val withScheme = if (URL_SCHEME_PATTERN.containsMatchIn(trimmed)) trimmed else "$REMOTE_AGENT_SCHEME://$trimmed"
     val uri = runCatching { URI(withScheme) }.getOrNull() ?: return withScheme
     val host = uri.host?.trim().orEmpty()
@@ -80,7 +83,14 @@ internal fun normalizeRemoteBaseUrl(value: String): String {
 }
 
 internal fun remoteHostInputFromBaseUrl(baseUrl: String): String {
-    return normalizeRemoteBaseUrl(baseUrl)
+    val normalized = normalizeRemoteBaseUrl(baseUrl)
+    val host = runCatching { URI(normalized).host?.trim().orEmpty() }.getOrDefault("")
+    val match = SSLIP_DASH_IPV4_PATTERN.matchEntire(host)
+    if (match != null) {
+        val dotted = match.groupValues.drop(1).joinToString(".")
+        if (isPublicIpv4Host(dotted)) return dotted
+    }
+    return normalized
 }
 
 internal fun validateRemoteBaseUrlPolicy(baseUrl: String): RemoteBaseUrlPolicy {
@@ -128,15 +138,26 @@ private fun isPrivateRemoteHost(host: String): Boolean {
         first == 100 && second in 64..127
 }
 
+private fun isPublicIpv4Host(host: String): Boolean {
+    val normalized = host.trim()
+    if (!IPV4_PATTERN.matches(normalized)) return false
+    val octets = normalized.split(".").mapNotNull { it.toIntOrNull() }
+    if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+    val first = octets[0]
+    val second = octets[1]
+    val third = octets[2]
+    if (first == 0 || first >= 224 || first == 192 && second == 0 || first == 198 && second in 18..19) return false
+    if (first == 198 && second == 51 && third == 100 || first == 203 && second == 0 && third == 113) return false
+    return !isPrivateRemoteHost(normalized)
+}
+
 data class AutomationUiState(
     val remoteNetwork: RemoteNetworkState = RemoteNetworkState(),
     val tailscale: TailscaleBindingState = TailscaleBindingState(),
-    val tailscaleAutomation: TailscaleAutomationPreferences = TailscaleAutomationPreferences(),
     val ssh: SshPowerPreferences = SshPowerPreferences(),
     val smartThings: SmartThingsPreferences = SmartThingsPreferences(),
     val isRemoteNetworkBusy: Boolean = false,
     val smartThingsCandidates: List<SmartThingsDeviceCandidate> = emptyList(),
-    val isTailscaleBusy: Boolean = false,
     val isSshBusy: Boolean = false,
     val isSmartThingsBusy: Boolean = false,
     val powerActionInFlight: PowerAction? = null,
@@ -200,7 +221,6 @@ class RemoteViewModel(
     )
     private val smartThingsPatSeeded = automationPreferences.seedSmartThingsPatFromBuildConfig()
     private var autoSshAttemptSignature: String? = null
-    private var tailscaleConnectSequence: Int = 0
     private val storedBaseUrlAtLaunch = preferences.baseUrl
     private val defaultRemoteBaseUrl = normalizeRemoteBaseUrl(BuildConfig.DEFAULT_REMOTE_BASE_URL)
     private val initialBaseUrl = normalizeRemoteBaseUrl(storedBaseUrlAtLaunch.ifBlank { defaultRemoteBaseUrl })
@@ -226,7 +246,6 @@ class RemoteViewModel(
             automation = AutomationUiState(
                 remoteNetwork = remoteNetworkController.initialState,
                 tailscale = tailscaleBinding.inspect(),
-                tailscaleAutomation = automationPreferences.loadTailscaleAutomation(),
                 ssh = automationPreferences.loadSsh(),
                 smartThings = automationPreferences.loadSmartThings(),
             ),
@@ -240,25 +259,13 @@ class RemoteViewModel(
             val state = remoteNetworkController.inspect()
             updateAutomation { it.copy(remoteNetwork = state) }
         }
-        if (_uiState.value.automation.tailscaleAutomation.connectOnAppForeground) {
-            requestTailscaleConnect(
-                "앱 실행",
-                refreshWhenReady = true,
-                initialDelayMillis = TAILSCALE_FOREGROUND_CONNECT_DELAY_MILLIS,
-            )
-        } else if (_uiState.value.baseUrl.isNotBlank()) {
+        if (_uiState.value.baseUrl.isNotBlank()) {
             refresh()
         }
     }
 
     fun onAppBackground() {
-        val tailscaleAutomation = _uiState.value.automation.tailscaleAutomation
-        if (tailscaleAutomation.sleepSafeMode) {
-            return
-        }
-        if (tailscaleAutomation.disconnectOnAppBackground) {
-            requestTailscaleDisconnect("앱 종료")
-        }
+        // Public HTTPS direct mode never toggles VPN state on lifecycle changes.
     }
 
     fun updateBaseUrl(value: String) {
@@ -300,38 +307,6 @@ class RemoteViewModel(
             if (ready) {
                 _uiState.update { it.copy(userMessage = _uiState.value.automation.remoteNetwork.message) }
             }
-        }
-    }
-
-    fun updateTailscaleConnectOnForeground(value: Boolean) {
-        automationPreferences.tailscaleConnectOnAppForeground = value
-        updateAutomation { it.copy(tailscaleAutomation = automationPreferences.loadTailscaleAutomation()) }
-        _uiState.update { it.copy(userMessage = if (value) "앱 실행 시 Tailscale CONNECT_VPN 자동화를 시도합니다." else "앱 실행 시 Tailscale 자동 연결을 껐습니다.") }
-    }
-
-    fun updateTailscaleDisconnectOnBackground(value: Boolean) {
-        automationPreferences.tailscaleDisconnectOnAppBackground = value
-        updateAutomation { it.copy(tailscaleAutomation = automationPreferences.loadTailscaleAutomation()) }
-        val sleepSafeMode = automationPreferences.tailscaleSleepSafeMode
-        val message = when {
-            value && sleepSafeMode -> "앱 종료 시 Tailscale OFF 요청을 저장했지만 Sleep-safe가 켜져 있어 실제 종료 시에는 실행하지 않습니다."
-            value -> "앱 종료 시 Tailscale DISCONNECT_VPN 자동화를 시도합니다. sleep/wake 후 자동 ON이 실패할 수 있습니다."
-            else -> "앱 종료 시 Tailscale 자동 비활성화를 껐습니다."
-        }
-        _uiState.update { it.copy(userMessage = message) }
-    }
-
-    fun updateTailscaleSleepSafeMode(value: Boolean) {
-        automationPreferences.tailscaleSleepSafeMode = value
-        updateAutomation { it.copy(tailscaleAutomation = automationPreferences.loadTailscaleAutomation()) }
-        _uiState.update {
-            it.copy(
-                userMessage = if (value) {
-                    "Sleep-safe가 켜졌습니다. 앱 종료 시 Tailscale OFF 요청을 보내지 않아 sleep/wake 연결 유지성을 우선합니다."
-                } else {
-                    "Sleep-safe를 껐습니다. 앱 종료 OFF가 켜져 있으면 sleep/wake 후 Tailscale broadcast 자동 ON이 실패할 수 있습니다."
-                },
-            )
         }
     }
 
@@ -419,7 +394,7 @@ class RemoteViewModel(
                             powerReadiness = snapshot.powerReadiness,
                             automation = it.automation.copy(
                                 ssh = automationPreferences.loadSsh(),
-                                tailscale = inspectTailscalePreservingDiagnostics(it.automation.tailscale),
+                                tailscale = tailscaleBinding.inspect(),
                             ),
                         )
                     }
@@ -611,21 +586,6 @@ class RemoteViewModel(
         _uiState.update { it.copy(userMessage = it.automation.tailscale.message) }
     }
 
-    fun requestTailscaleConnect(trigger: String = "수동") {
-        requestTailscaleConnect(trigger, refreshWhenReady = false, initialDelayMillis = 0L)
-    }
-
-    fun requestTailscaleDisconnect(trigger: String = "수동") {
-        tailscaleConnectSequence += 1
-        updateAutomation { it.copy(isTailscaleBusy = false, tailscale = tailscaleBinding.requestVpnDisconnect()) }
-        val warning = if (trigger == "수동") {
-            " sleep/wake 후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast를 받지 못할 수 있습니다."
-        } else {
-            ""
-        }
-        _uiState.update { it.copy(userMessage = "$trigger Tailscale DISCONNECT_VPN 자동화를 요청했습니다.$warning") }
-    }
-
     fun openTailscaleApp() {
         val opened = tailscaleBinding.openTailscaleApp()
         _uiState.update { it.copy(userMessage = if (opened) "Tailscale 앱을 열었습니다." else "Tailscale 앱을 찾지 못했습니다.") }
@@ -644,116 +604,6 @@ class RemoteViewModel(
     fun openVpnSettings() {
         val opened = tailscaleBinding.openVpnSettings()
         _uiState.update { it.copy(userMessage = if (opened) "Android VPN 설정을 열었습니다. 필요하면 Always-on VPN을 Tailscale로 설정하세요." else "Android VPN 설정을 열지 못했습니다.") }
-    }
-
-    fun checkClientTailscaleAndRefresh() {
-        requestTailscaleConnect("클라이언트 확인", refreshWhenReady = true, initialDelayMillis = 0L)
-    }
-
-    private fun requestTailscaleConnect(trigger: String, refreshWhenReady: Boolean, initialDelayMillis: Long) {
-        val sequence = ++tailscaleConnectSequence
-        val inspected = tailscaleBinding.inspect()
-        updateAutomation { it.copy(isTailscaleBusy = inspected.installed && !inspected.vpnActive, tailscale = inspected) }
-        if (!inspected.installed) {
-            _uiState.update { it.copy(userMessage = inspected.message) }
-            return
-        }
-        if (inspected.vpnActive) {
-            updateAutomation { it.copy(isTailscaleBusy = false, tailscale = inspected) }
-            if (refreshWhenReady && _uiState.value.baseUrl.trim().isNotBlank()) {
-                refreshWithMessage("Tailscale이 이미 활성 상태라 게임 목록을 동기화했습니다.")
-            } else {
-                _uiState.update { it.copy(userMessage = "Android-local Tailscale VPN이 이미 활성 상태입니다.") }
-            }
-            return
-        }
-        val delayMessage = if (initialDelayMillis > 0L) " ${initialDelayMillis / 1000.0}초 후" else ""
-        _uiState.update { it.copy(userMessage = "$trigger Tailscale CONNECT_VPN 자동화를$delayMessage 시작합니다.") }
-        viewModelScope.launch {
-            if (initialDelayMillis > 0L) {
-                delay(initialDelayMillis)
-                if (sequence != tailscaleConnectSequence) return@launch
-            }
-            var finalState = inspected
-            for (attemptNumber in 1..TAILSCALE_CONNECT_MAX_ATTEMPTS) {
-                if (sequence != tailscaleConnectSequence) return@launch
-                val initial = tailscaleBinding.requestVpnConnect(
-                    automationAttempt = attemptNumber,
-                    automationAttemptLimit = TAILSCALE_CONNECT_MAX_ATTEMPTS,
-                    includePackageFallback = attemptNumber > 1,
-                )
-                updateAutomation {
-                    it.copy(
-                        isTailscaleBusy = initial.installed && !initial.vpnActive,
-                        tailscale = initial,
-                    )
-                }
-                if (!initial.installed) {
-                    _uiState.update { it.copy(userMessage = initial.message) }
-                    return@launch
-                }
-                _uiState.update {
-                    it.copy(
-                        userMessage = "$trigger Tailscale CONNECT_VPN 요청 ${attemptNumber}/${TAILSCALE_CONNECT_MAX_ATTEMPTS}: ${initial.broadcastTarget}",
-                    )
-                }
-                finalState = waitForTailscaleActive(initial)
-                if (sequence != tailscaleConnectSequence) return@launch
-                updateAutomation { it.copy(tailscale = finalState) }
-                if (finalState.vpnActive) break
-                if (attemptNumber < TAILSCALE_CONNECT_MAX_ATTEMPTS) {
-                    delay(TAILSCALE_CONNECT_RETRY_DELAY_MILLIS)
-                }
-            }
-            updateAutomation { it.copy(isTailscaleBusy = false, tailscale = finalState) }
-            val baseUrl = _uiState.value.baseUrl.trim()
-            when {
-                finalState.vpnActive && refreshWhenReady && baseUrl.isNotBlank() -> {
-                    refreshWithMessage("Tailscale 연결 확인 후 게임 목록을 동기화했습니다.")
-                }
-                finalState.vpnActive -> {
-                    _uiState.update { it.copy(userMessage = "Android-local Tailscale VPN 활성화를 확인했습니다.") }
-                }
-                else -> {
-                    _uiState.update {
-                        it.copy(
-                            userMessage = "${finalState.message} Sleep-safe를 켜고, Tailscale을 Always-on VPN/배터리 제한 없음으로 설정하거나 Tailscale 앱을 열어 수동 상태를 확인하세요.",
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun waitForTailscaleActive(initial: TailscaleBindingState): TailscaleBindingState {
-        var latest = tailscaleBinding.inspect(
-            lastAutomationAction = initial.lastAutomationAction,
-            broadcastTarget = initial.broadcastTarget,
-            automationAttempt = initial.automationAttempt,
-            automationAttemptLimit = initial.automationAttemptLimit,
-        )
-        if (!latest.installed) return latest
-        if (latest.vpnActive) {
-            return latest.copy(message = "Android-local Tailscale VPN 활성화를 확인했습니다.")
-        }
-        val deadlineMillis = System.currentTimeMillis() + TAILSCALE_CONNECT_TIMEOUT_MILLIS
-        while (System.currentTimeMillis() < deadlineMillis) {
-            delay(TAILSCALE_CONNECT_POLL_MILLIS)
-            latest = tailscaleBinding.inspect(
-                lastAutomationAction = initial.lastAutomationAction,
-                broadcastTarget = initial.broadcastTarget,
-                automationAttempt = initial.automationAttempt,
-                automationAttemptLimit = initial.automationAttemptLimit,
-            )
-            updateAutomation { it.copy(tailscale = latest) }
-            if (latest.vpnActive) {
-                return latest.copy(message = "Android-local Tailscale VPN 활성화를 확인했습니다.")
-            }
-        }
-        return latest.copy(
-            message = "Tailscale CONNECT_VPN ${initial.automationAttempt}/${initial.automationAttemptLimit} 요청 후에도 Android VPN 활성 네트워크가 감지되지 않았습니다. target=${initial.broadcastTarget}. sleep/wake 이후 Tailscale 앱 standby 상태에서는 broadcast 자동 ON이 제한될 수 있습니다.",
-            pollingTimedOut = true,
-        )
     }
 
     fun repairEnvironment() {
@@ -790,7 +640,7 @@ class RemoteViewModel(
                             powerReadiness = snapshot.powerReadiness,
                             automation = it.automation.copy(
                                 ssh = automationPreferences.loadSsh(),
-                                tailscale = inspectTailscalePreservingDiagnostics(it.automation.tailscale),
+                                tailscale = tailscaleBinding.inspect(),
                             ),
                         )
                     }
@@ -1099,16 +949,6 @@ class RemoteViewModel(
             return false
         }
         return true
-    }
-
-    private fun inspectTailscalePreservingDiagnostics(previous: TailscaleBindingState): TailscaleBindingState {
-        return tailscaleBinding.inspect(
-            lastAutomationAction = previous.lastAutomationAction,
-            broadcastTarget = previous.broadcastTarget,
-            automationAttempt = previous.automationAttempt,
-            automationAttemptLimit = previous.automationAttemptLimit,
-            pollingTimedOut = previous.pollingTimedOut,
-        )
     }
 
     private fun applyFailure(error: Throwable) {

@@ -35,6 +35,10 @@ struct RemoteAPIClient {
         try await get("remote/readiness")
     }
 
+    func remoteAccessStatus() async throws -> RemoteAccessStatus {
+        try await get("remote/access/status")
+    }
+
     func processes() async throws -> [RemoteProcess] {
         try await get("remote/processes")
     }

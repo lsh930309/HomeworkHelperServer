@@ -60,6 +60,7 @@ class RemoteSettingsDialog(QDialog):
 
         self._build_pairing_section(root)
         self._build_server_section(root)
+        self._build_remote_access_section(root)
         self._build_status_section(root)
         self._build_devices_section(root)
 
@@ -125,6 +126,38 @@ class RemoteSettingsDialog(QDialog):
         layout.addWidget(self.remote_desktop_log_checkbox, 1, 0)
         layout.addWidget(log_button, 1, 1)
         layout.addWidget(self.server_status_label, 2, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+        root.addWidget(group)
+
+    def _build_remote_access_section(self, root: QVBoxLayout) -> None:
+        group = QGroupBox("공개 HTTPS 직접접속")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+
+        self.remote_access_summary_label = QLabel("공개 HTTPS: 확인 대기")
+        self.remote_access_summary_label.setWordWrap(True)
+        self.remote_access_url_edit = QLineEdit()
+        self.remote_access_url_edit.setReadOnly(True)
+        self.remote_access_url_edit.setPlaceholderText("공인 IP 감지 후 https://<ip>.sslip.io 생성")
+        self.remote_access_rule_label = QLabel("공유기 수동 포트포워딩: TCP 443 → Windows Host 38443")
+        self.remote_access_rule_label.setWordWrap(True)
+        self.remote_access_details_text = QTextEdit()
+        self.remote_access_details_text.setReadOnly(True)
+        self.remote_access_details_text.setMaximumHeight(110)
+        self.remote_access_details_text.setPlainText("Caddy sidecar, UPnP 진단, 보안 경고를 불러오는 중... Remote Agent 8000은 공개하지 않습니다.")
+
+        refresh_button = QPushButton("공개 HTTPS 새로고침")
+        refresh_button.clicked.connect(self._refresh_remote_access)
+        copy_button = QPushButton("URL 복사")
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.remote_access_url_edit.text()))
+
+        layout.addWidget(self.remote_access_summary_label, 0, 0)
+        layout.addWidget(refresh_button, 0, 1)
+        layout.addWidget(copy_button, 0, 2)
+        layout.addWidget(self.remote_access_url_edit, 1, 0, 1, 3)
+        layout.addWidget(self.remote_access_rule_label, 2, 0, 1, 3)
+        layout.addWidget(self.remote_access_details_text, 3, 0, 1, 3)
         layout.setColumnStretch(0, 1)
         root.addWidget(group)
 
@@ -245,6 +278,7 @@ class RemoteSettingsDialog(QDialog):
 
     def _schedule_initial_refreshes(self) -> None:
         self._refresh_remote_logging_config()
+        self._refresh_remote_access()
         self._refresh_devices()
         self._refresh_tailscale()
         self._refresh_power_setup()
@@ -265,6 +299,8 @@ class RemoteSettingsDialog(QDialog):
             self._populate_devices(devices)
         elif task_name == "tailscale":
             self._apply_tailscale_payload(payload if isinstance(payload, dict) else {})
+        elif task_name == "remote_access":
+            self._apply_remote_access_payload(payload if isinstance(payload, dict) else {})
         elif task_name == "tailscale_ensure":
             self._apply_tailscale_ensure_payload(payload if isinstance(payload, dict) else {})
         elif task_name in {"tailscale_up", "tailscale_down"}:
@@ -280,6 +316,9 @@ class RemoteSettingsDialog(QDialog):
         elif task_name in {"tailscale", "tailscale_ensure", "tailscale_up", "tailscale_down"}:
             self.tailscale_summary_label.setText("Tailscale: 조회 실패")
             self.tailscale_health_text.setPlainText(f"Tailscale 상태 조회 실패: {exc}")
+        elif task_name == "remote_access":
+            self.remote_access_summary_label.setText("공개 HTTPS: 조회 실패")
+            self.remote_access_details_text.setPlainText(f"공개 HTTPS 상태 조회 실패: {exc}")
         elif task_name == "power":
             self.power_status_label.setText("전원 준비: 조회 실패")
             self.power_setup_text.setPlainText(f"전원 준비 상태 조회 실패: {exc}")
@@ -295,6 +334,41 @@ class RemoteSettingsDialog(QDialog):
     def _apply_remote_logging_config(self, payload: dict) -> None:
         self.remote_desktop_log_checkbox.setChecked(bool(payload.get("enabled")))
         self.server_status_label.setText(f"원격 로그: {payload.get('path') or '경로 미확인'}")
+
+    def _refresh_remote_access(self):
+        self.remote_access_summary_label.setText("공개 HTTPS: 확인 중...")
+        self.remote_access_details_text.setPlainText("공개 IP, Caddy, UPnP 상태를 불러오는 중...")
+        def task():
+            response = requests.get(f"{self.base_url}/remote/access/status", timeout=8)
+            response.raise_for_status()
+            return response.json()
+        self._start_worker("remote_access", task)
+
+    def _apply_remote_access_payload(self, payload: dict) -> None:
+        public_url = str(payload.get("public_base_url") or "")
+        router_rule = payload.get("router_rule") if isinstance(payload.get("router_rule"), dict) else {}
+        caddy = payload.get("caddy") if isinstance(payload.get("caddy"), dict) else {}
+        upnp = payload.get("upnp") if isinstance(payload.get("upnp"), dict) else {}
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+        advisories = payload.get("advisories") if isinstance(payload.get("advisories"), list) else []
+        self.remote_access_url_edit.setText(public_url)
+        self.remote_access_summary_label.setText(
+            f"공개 HTTPS: {payload.get('state') or 'unknown'} · {payload.get('message') or '상태 미확인'}"
+        )
+        self.remote_access_rule_label.setText(
+            f"공유기 수동 포트포워딩: {router_rule.get('summary') or 'TCP 443 -> Windows Host:38443'}"
+        )
+        self.remote_access_details_text.setPlainText(
+            "공개 HTTPS 직접접속\n"
+            f"- public_ip: {payload.get('public_ip') or '미감지'} ({payload.get('public_ip_source') or 'unknown'})\n"
+            f"- hostname: {payload.get('hostname') or '미생성'}\n"
+            f"- caddy: installed={caddy.get('installed')} running={caddy.get('running')} listener={caddy.get('listener')}\n"
+            f"- caddy_config: {caddy.get('config_path') or ''}\n"
+            f"- upnp: {upnp.get('state') or 'unknown'} · {upnp.get('message') or ''}\n"
+            f"- warnings: {warnings}\n"
+            f"- advisories: {advisories}\n"
+            f"\nCaddyfile preview:\n{caddy.get('config_preview') or ''}"
+        )
 
     def _save_remote_logging_config(self):
         try:

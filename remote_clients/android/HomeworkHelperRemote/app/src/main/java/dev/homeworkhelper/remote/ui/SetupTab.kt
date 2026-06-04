@@ -68,12 +68,6 @@ fun SetupTab(
     onInstallTailscale: () -> Unit,
     onOpenTailscaleSettings: () -> Unit,
     onOpenVpnSettings: () -> Unit,
-    onCheckClientTailscale: () -> Unit,
-    onTailscaleConnect: () -> Unit,
-    onTailscaleDisconnect: () -> Unit,
-    onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
-    onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
-    onTailscaleSleepSafeModeChange: (Boolean) -> Unit,
     onRepairEnvironment: () -> Unit,
     onSshHostChange: (String) -> Unit,
     onSshUserChange: (String) -> Unit,
@@ -123,8 +117,6 @@ fun SetupTab(
                         onInstallTailscale = onInstallTailscale,
                         onOpenTailscaleSettings = onOpenTailscaleSettings,
                         onOpenVpnSettings = onOpenVpnSettings,
-                        onCheckClientTailscale = onCheckClientTailscale,
-                        onTailscaleConnect = onTailscaleConnect,
                         onRepairEnvironment = onRepairEnvironment,
                     )
                     SetupSection.Power -> PowerSection(
@@ -151,11 +143,6 @@ fun SetupTab(
                         onOpenTailscale = onOpenTailscale,
                         onOpenTailscaleSettings = onOpenTailscaleSettings,
                         onOpenVpnSettings = onOpenVpnSettings,
-                        onTailscaleConnect = onTailscaleConnect,
-                        onTailscaleDisconnect = onTailscaleDisconnect,
-                        onTailscaleConnectOnForegroundChange = onTailscaleConnectOnForegroundChange,
-                        onTailscaleDisconnectOnBackgroundChange = onTailscaleDisconnectOnBackgroundChange,
-                        onTailscaleSleepSafeModeChange = onTailscaleSleepSafeModeChange,
                     )
                 }
             }
@@ -176,8 +163,6 @@ private fun ConnectionSection(
     onInstallTailscale: () -> Unit,
     onOpenTailscaleSettings: () -> Unit,
     onOpenVpnSettings: () -> Unit,
-    onCheckClientTailscale: () -> Unit,
-    onTailscaleConnect: () -> Unit,
     onRepairEnvironment: () -> Unit,
 ) {
     var pairingCode by remember { mutableStateOf("") }
@@ -190,7 +175,7 @@ private fun ConnectionSection(
             value = hostInput,
             onValueChange = onBaseUrlChange,
             label = { Text("Remote Agent URL") },
-            placeholder = { Text("https://home.example.com 또는 http://100.x.y.z:8000") },
+            placeholder = { Text("공유기 공인 IP 또는 https://host.example.com") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -211,6 +196,7 @@ private fun ConnectionSection(
             Button(onClick = { onPair(pairingCode) }, enabled = !state.isPairing && state.baseUrlAllowed) { Text(if (state.isPairing) "페어링 중" else "페어링") }
         }
         Text("페어링 토큰은 명시적 기기 revoke 전까지 유지됩니다. 네트워크 오류나 앱 재시작만으로 갱신/삭제하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ConnectionDoctorSection(state)
         Button(
             onClick = onRepairEnvironment,
             enabled = state.baseUrl.isNotBlank() && !state.setupRepairInFlight,
@@ -228,8 +214,6 @@ private fun ConnectionSection(
         onInstallTailscale,
         onOpenTailscaleSettings,
         onOpenVpnSettings,
-        onCheckClientTailscale,
-        onTailscaleConnect,
     )
 }
 
@@ -261,6 +245,24 @@ private fun RemoteNetworkFoundationSection(
 }
 
 @Composable
+private fun ConnectionDoctorSection(state: RemoteUiState) {
+    val url = state.baseUrl.ifBlank { "미설정" }
+    val verdict = when {
+        !state.baseUrlAllowed -> "차단: ${state.baseUrlSecurityMessage}"
+        state.hasToken && state.availability.name == "Online" -> "정상: HTTPS/DNS/Bearer/Remote Agent 응답 확인"
+        state.hasToken -> "점검: DNS → TLS 인증서 → Bearer 인증 → /remote/status 순서로 확인"
+        else -> "페어링 전: Host App에서 6자리 코드를 발급한 뒤 Bearer token을 등록"
+    }
+    SettingsCard(title = "Connection Doctor", subtitle = "공개 HTTPS 직접접속의 실패 지점을 단계별로 분리합니다.") {
+        InfoRow("입력", remoteHostInputFromBaseUrl(state.baseUrl).ifBlank { "공유기 공인 IP 입력 대기" })
+        InfoRow("적용 URL", url)
+        InfoRow("정책", state.baseUrlSecurityMessage.ifBlank { "공개망은 HTTPS만 허용" })
+        InfoRow("진단", verdict)
+        Text("공유기 수동 포트포워딩 기본값은 TCP 443 → Windows Host 38443입니다. Remote Agent 8000 포트는 외부에 직접 열지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun TailscaleFoundationSection(
     state: RemoteUiState,
     onInspectTailscale: () -> Unit,
@@ -268,23 +270,12 @@ private fun TailscaleFoundationSection(
     onInstallTailscale: () -> Unit,
     onOpenTailscaleSettings: () -> Unit,
     onOpenVpnSettings: () -> Unit,
-    onCheckClientTailscale: () -> Unit,
-    onTailscaleConnect: () -> Unit,
 ) {
     val tailscale = state.automation.tailscale
-    SettingsCard(title = "Tailscale 기반환경", subtitle = "외부 Tailscale 앱/VPN fallback 상태만 확인합니다.") {
+    SettingsCard(title = "Tailscale 선택 fallback", subtitle = "VPN ON/OFF 자동화 없이 설치/상태/설정 진입만 제공합니다.") {
         InfoRow("설치", if (tailscale.installed) "감지됨" else "없음")
         InfoRow("VPN", if (tailscale.vpnActive) "활성" else "미감지")
         Text(tailscale.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (tailscale.lastAutomationAction.isNotBlank()) {
-            Text("최근 자동화: ${tailscale.lastAutomationAction}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (tailscale.broadcastTarget.isNotBlank()) {
-            Text("Broadcast target: ${tailscale.broadcastTarget}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (tailscale.automationAttemptLimit > 0) {
-            Text("Retry: ${tailscale.automationAttempt}/${tailscale.automationAttemptLimit} · polling timeout=${tailscale.pollingTimedOut}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         if (tailscale.suggestedBaseUrls.isNotEmpty()) {
             Text("후보 URL: ${tailscale.suggestedBaseUrls.joinToString()}", style = MaterialTheme.typography.bodySmall)
         }
@@ -297,10 +288,7 @@ private fun TailscaleFoundationSection(
             OutlinedButton(onClick = onOpenTailscaleSettings, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
             OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) { Text("VPN 설정") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onTailscaleConnect, enabled = tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON 요청") }
-            Button(onClick = onCheckClientTailscale, enabled = tailscale.installed && !state.automation.isTailscaleBusy, modifier = Modifier.weight(1f)) { Text(if (state.automation.isTailscaleBusy) "확인 중" else "클라이언트 확인") }
-        }
+        Text("공개 HTTPS 직접접속을 기본 경로로 사용하므로 Android 앱은 Tailscale broadcast나 lifecycle VPN 제어를 수행하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -429,35 +417,10 @@ private fun AppSection(
     onOpenTailscale: () -> Unit,
     onOpenTailscaleSettings: () -> Unit,
     onOpenVpnSettings: () -> Unit,
-    onTailscaleConnect: () -> Unit,
-    onTailscaleDisconnect: () -> Unit,
-    onTailscaleConnectOnForegroundChange: (Boolean) -> Unit,
-    onTailscaleDisconnectOnBackgroundChange: (Boolean) -> Unit,
-    onTailscaleSleepSafeModeChange: (Boolean) -> Unit,
 ) {
-    val tailscaleAutomation = state.automation.tailscaleAutomation
-    val sleepSafeMode = tailscaleAutomation.sleepSafeMode
-    val lifecycleOffEffective = tailscaleAutomation.disconnectOnAppBackground && !sleepSafeMode
-    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 외부 Tailscale lifecycle fallback 자동화를 설정합니다.") {
+    SettingsCard(title = "앱 동작", subtitle = "진단 표시와 선택 fallback 설정 진입을 제공합니다.") {
         ToggleRow("진단 섹션 표시", state.showDiagnostics, onShowDiagnosticsChange)
-        ToggleRow("Sleep-safe Tailscale 유지", sleepSafeMode, onTailscaleSleepSafeModeChange)
-        Text("Sleep-safe가 켜져 있으면 앱 종료/백그라운드 진입 시 Tailscale OFF 요청을 보내지 않습니다. sleep/wake 이후 broadcast 자동 ON 실패를 피하기 위한 기본값입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ToggleRow("앱 실행 시 Tailscale ON 요청", tailscaleAutomation.connectOnAppForeground, onTailscaleConnectOnForegroundChange)
-        ToggleRow("앱 종료 시 Tailscale OFF 요청", tailscaleAutomation.disconnectOnAppBackground, onTailscaleDisconnectOnBackgroundChange, enabled = !sleepSafeMode)
-        if (sleepSafeMode && tailscaleAutomation.disconnectOnAppBackground) {
-            Text("Sleep-safe가 켜져 있어 앱 종료 OFF 요청은 저장되어 있어도 실행되지 않습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (tailscaleAutomation.connectOnAppForeground || lifecycleOffEffective) {
-            Text("주의: lifecycle 자동화가 켜져 있으면 앱 전환만으로 Tailscale VPN ON/OFF 요청이 발생할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-        if (lifecycleOffEffective) {
-            Text("앱 종료 OFF는 sleep/wake 이후 Tailscale 앱이 standby 상태가 되면 자동 ON broadcast 복구가 실패할 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-        Text("Tailscale ON/OFF fallback은 Tailscale Android 앱의 IPNReceiver component broadcast를 우선 요청하고, 자동 ON은 retry합니다. 직접 HTTPS 연결을 사용할 때는 필수 조건이 아닙니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onTailscaleConnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN ON") }
-            OutlinedButton(onClick = onTailscaleDisconnect, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("VPN OFF") }
-        }
+        Text("public HTTPS 직접접속을 기본 경로로 사용하므로 앱 lifecycle에서 VPN ON/OFF를 보내지 않습니다. Tailscale은 필요할 때 사용자가 직접 켜는 선택 fallback입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onOpenTailscale, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("Tailscale 열기") }
             OutlinedButton(onClick = onOpenTailscaleSettings, enabled = state.automation.tailscale.installed, modifier = Modifier.weight(1f)) { Text("앱 설정") }
@@ -495,11 +458,8 @@ private fun DiagnosticsSection(state: RemoteUiState) {
         InfoRow("Remote network mode", state.automation.remoteNetwork.mode.wireName)
         InfoRow("Remote network state", state.automation.remoteNetwork.status.label)
         InfoRow("Tailscale VPN", state.automation.tailscale.vpnActive.toString())
-        InfoRow("Tailscale sleep-safe", state.automation.tailscaleAutomation.sleepSafeMode.toString())
-        InfoRow("Tailscale auto OFF effective", (state.automation.tailscaleAutomation.disconnectOnAppBackground && !state.automation.tailscaleAutomation.sleepSafeMode).toString())
-        InfoRow("Tailscale target", state.automation.tailscale.broadcastTarget.ifBlank { "none" })
-        InfoRow("Tailscale retry", "${state.automation.tailscale.automationAttempt}/${state.automation.tailscale.automationAttemptLimit}")
-        InfoRow("Tailscale timeout", state.automation.tailscale.pollingTimedOut.toString())
+        InfoRow("Public HTTPS", state.baseUrl.startsWith("https://").toString())
+        InfoRow("Connection policy", state.baseUrlSecurityMessage.ifBlank { "미설정" })
     }
 }
 

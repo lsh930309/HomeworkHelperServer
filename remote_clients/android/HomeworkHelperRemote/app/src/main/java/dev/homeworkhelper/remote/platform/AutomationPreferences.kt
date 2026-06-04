@@ -20,12 +20,6 @@ data class SmartThingsPreferences(
     val lastVerifiedMillis: Long = 0L,
 )
 
-data class TailscaleAutomationPreferences(
-    val connectOnAppForeground: Boolean = false,
-    val disconnectOnAppBackground: Boolean = false,
-    val sleepSafeMode: Boolean = true,
-)
-
 class AutomationPreferences(context: Context) {
     private val preferences = context.getSharedPreferences("homeworkhelper.remote.automation", Context.MODE_PRIVATE)
     private val secureStore = SecureStringStore(
@@ -74,18 +68,6 @@ class AutomationPreferences(context: Context) {
         get() = preferences.getLong(KEY_ST_LAST_VERIFIED, 0L)
         set(value) = preferences.edit().putLong(KEY_ST_LAST_VERIFIED, value).apply()
 
-    var tailscaleConnectOnAppForeground: Boolean
-        get() = preferences.getBoolean(KEY_TS_CONNECT_ON_FOREGROUND, false)
-        set(value) = preferences.edit().putBoolean(KEY_TS_CONNECT_ON_FOREGROUND, value).apply()
-
-    var tailscaleDisconnectOnAppBackground: Boolean
-        get() = preferences.getBoolean(KEY_TS_DISCONNECT_ON_BACKGROUND, false)
-        set(value) = preferences.edit().putBoolean(KEY_TS_DISCONNECT_ON_BACKGROUND, value).apply()
-
-    var tailscaleSleepSafeMode: Boolean
-        get() = preferences.getBoolean(KEY_TS_SLEEP_SAFE_MODE, true)
-        set(value) = preferences.edit().putBoolean(KEY_TS_SLEEP_SAFE_MODE, value).apply()
-
     fun loadSsh(): SshPowerPreferences = SshPowerPreferences(
         host = sshHost,
         user = sshUser,
@@ -101,12 +83,6 @@ class AutomationPreferences(context: Context) {
         deviceLabel = smartThingsDeviceLabel,
         locationId = smartThingsLocationId,
         lastVerifiedMillis = smartThingsLastVerifiedMillis,
-    )
-
-    fun loadTailscaleAutomation(): TailscaleAutomationPreferences = TailscaleAutomationPreferences(
-        connectOnAppForeground = tailscaleConnectOnAppForeground,
-        disconnectOnAppBackground = tailscaleDisconnectOnAppBackground,
-        sleepSafeMode = tailscaleSleepSafeMode,
     )
 
     fun saveSmartThingsPat(value: String) {
@@ -150,8 +126,5 @@ class AutomationPreferences(context: Context) {
         private const val KEY_ST_DEVICE_LABEL = "smartthings.device_label"
         private const val KEY_ST_LOCATION_ID = "smartthings.location_id"
         private const val KEY_ST_LAST_VERIFIED = "smartthings.last_verified_millis"
-        private const val KEY_TS_CONNECT_ON_FOREGROUND = "tailscale.connect_on_app_foreground"
-        private const val KEY_TS_DISCONNECT_ON_BACKGROUND = "tailscale.disconnect_on_app_background"
-        private const val KEY_TS_SLEEP_SAFE_MODE = "tailscale.sleep_safe_mode"
     }
 }

@@ -180,6 +180,7 @@ struct RemoteReadiness: Decodable {
     let beholderHealth: Section
     let remoteConnectivity: Section
     let serverModeReadiness: Section
+    let remoteAccessReadiness: Section?
     let powerReadiness: Section
     let tailscaleReadiness: Section
 
@@ -187,8 +188,47 @@ struct RemoteReadiness: Decodable {
         case beholderHealth = "beholder_health"
         case remoteConnectivity = "remote_connectivity"
         case serverModeReadiness = "server_mode_readiness"
+        case remoteAccessReadiness = "remote_access_readiness"
         case powerReadiness = "power_readiness"
         case tailscaleReadiness = "tailscale_readiness"
+    }
+}
+
+struct RemoteAccessStatus: Decodable {
+    struct RouterRule: Decodable {
+        let protocolName: String?
+        let externalPort: Int?
+        let internalPort: Int?
+        let targetHost: String?
+        let summary: String?
+
+        enum CodingKeys: String, CodingKey {
+            case protocolName = "protocol"
+            case externalPort = "external_port"
+            case internalPort = "internal_port"
+            case targetHost = "target_host"
+            case summary
+        }
+    }
+
+    let state: String
+    let publicIP: String?
+    let hostname: String?
+    let publicBaseURL: String?
+    let routerRule: RouterRule?
+    let warnings: [String]
+    let advisories: [String]
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case publicIP = "public_ip"
+        case hostname
+        case publicBaseURL = "public_base_url"
+        case routerRule = "router_rule"
+        case warnings
+        case advisories
+        case message
     }
 }
 
