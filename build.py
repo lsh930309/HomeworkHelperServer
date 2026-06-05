@@ -90,7 +90,7 @@ def load_version_config(path: Path = VERSION_CONFIG_FILE) -> dict:
     """Load the tracked version source of truth shared by all platform targets."""
     if not path.exists():
         raise BuildConfigError(
-            f"{path.name} 파일이 없습니다. Git에서 복구하거나 새 build.version.json을 생성하세요."
+            f"{path.name} 파일이 없습니다. 로컬 build.version.json을 생성한 뒤 다시 실행하세요."
         )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -565,7 +565,7 @@ class VersionSelectorGUI:
 
 
 class BuildVersionSelectorGUI:
-    """Tracked build.version.json 후보를 GUI에서 최종 확인/수정한다."""
+    """로컬 build.version.json 후보를 GUI에서 최종 확인/수정한다."""
 
     def __init__(self, target: str, current_payload: dict, candidate_payload: dict, theme, font_family="맑은 고딕"):
         self.target = target

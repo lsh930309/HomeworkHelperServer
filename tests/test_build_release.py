@@ -118,6 +118,45 @@ def test_version_bump_policy_updates_only_candidate_config():
     assert major_bump["targets"]["windows-host"] == {"version": "2.0.0", "build": 1}
 
 
+@pytest.mark.parametrize("target", ["windows-host", "macos-client"])
+def test_gui_version_selector_is_shared_by_windows_and_macos_targets(monkeypatch, target):
+    calls = []
+
+    class FakeSelector:
+        def __init__(self, target_name, current_payload, candidate_payload, _theme, font_family):
+            calls.append(
+                {
+                    "target": target_name,
+                    "current": current_payload,
+                    "candidate": candidate_payload,
+                    "font": font_family,
+                }
+            )
+
+        def show(self):
+            return {"version": "9.8.7", "build": 42}
+
+    monkeypatch.setattr(build, "tk", object())
+    monkeypatch.setattr(build, "load_custom_font", lambda: "TestFont")
+    monkeypatch.setattr(build, "is_dark_mode", lambda: False)
+    monkeypatch.setattr(build, "BuildVersionSelectorGUI", FakeSelector)
+
+    candidate = build.create_candidate_version_config(target, _config(), bump="build", no_gui=False)
+
+    assert candidate["targets"][target] == {"version": "9.8.7", "build": 42}
+    assert calls == [
+        {
+            "target": target,
+            "current": build.target_version_payload(_config(), target),
+            "candidate": build.target_version_payload(
+                build.bump_target_version_config(_config(), target, "build"),
+                target,
+            ),
+            "font": "TestFont",
+        }
+    ]
+
+
 def test_installer_shutdown_policy_uses_legacy_force_kill_flow():
     installer = Path("installer.iss").read_text(encoding="utf-8").lower()
 

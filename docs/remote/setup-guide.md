@@ -1,8 +1,8 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-06-04
+Last refreshed: 2026-06-05
 
-HomeworkHelper exposes a local **Remote Agent** from the desktop app and controls it from native clients. The Remote Agent is local-first: it uses the existing FastAPI app, SQLite data, pairing tokens, and LAN/Tailscale-style private access rather than a hosted relay.
+HomeworkHelper exposes a local **Remote Agent** from the Windows host app and controls it from the macOS menu-bar client. The current contract is host-owned data + token-protected remote endpoints + client-local power/Moonlight orchestration. Do not treat old roadmap, migration, spike, or preview-GUI notes as active remote requirements.
 
 ## 1. Remote Agent
 
@@ -12,7 +12,7 @@ Local development:
 ./.venv/bin/python homework_helper.pyw --server
 ```
 
-Trusted LAN/tailnet device access:
+Trusted private-network access:
 
 ```bash
 HH_API_HOST=0.0.0.0 \
@@ -21,20 +21,19 @@ HH_REMOTE_REQUIRE_AUTH=1 \
 ./.venv/bin/python homework_helper.pyw --server
 ```
 
-`--server` is a server-only entrypoint: it starts the FastAPI Remote Agent without entering the GUI single-instance/admin prompt path. SSH real-device test sessions can use the stricter `--testbench-server` variant through `tools/ssh_host_testbench.py`, which shadow-copies the installed package, assigns a per-session port/mutex/AppData root, writes a local report under `artifacts/ssh-host-testbench/`, and cleans the remote temp root after the run.
+`--server` starts the FastAPI Remote Agent without entering the GUI single-instance/admin prompt path. SSH real-device test sessions can use `tools/ssh_host_testbench.py`; it shadow-copies the installed package, assigns an isolated port/mutex/AppData root, writes a local report under `artifacts/ssh-host-testbench/`, and cleans the remote temp root after the run.
 
 Security rules:
 
-- Do not expose the Remote Agent publicly without bearer-token auth and a private network boundary.
-- Prefer LAN firewall/Tailscale-style private routing over public port forwarding.
-- HomeworkHelper Remote assumes host and client are on the same Tailscale tailnet. The apps therefore treat Tailscale as a required foundation layer: missing clients are installed from the official package source where possible, installed clients are launched with the discovered executable path, and `tailscale up --accept-routes` / `tailscale down` are used for local activation/deactivation instead of relying on a shell alias.
-- First-time Tailscale account creation, login, macOS VPN/System Extension approval, and any auth-key/MDM policy rollout remain explicit user/admin approval steps.
-- `/remote/pair/start` is intended for loopback or trusted/authenticated setup.
-- The host does not expose arbitrary shell or power-execution endpoints.
-- If Tailscale/TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.
+- Never expose the Remote Agent without bearer-token auth.
+- Prefer private LAN/tailnet routing or an explicitly authenticated reverse proxy over unauthenticated public forwarding.
+- First-time VPN/system-extension/account approval remains an explicit user/admin action.
+- `/remote/pair/start` is intended for loopback or trusted setup paths.
+- The host does not expose arbitrary shell execution endpoints.
+- If TCP is reachable but Remote Agent HTTP hangs or the Windows host app becomes sluggish, preserve the current state before restarting and follow `docs/remote/host-ssh-diagnostics-runbook.md`.
 - For package-environment logic checks, prefer the isolated SSH testbench in `docs/remote/host-ssh-diagnostics-runbook.md` over probing or killing the production host process.
 
-## 2. Pairing and tokens
+## 2. Pairing and token storage
 
 1. Create a six-digit pairing code on the host:
 
@@ -49,12 +48,13 @@ curl -X POST http://127.0.0.1:8000/remote/pair/start
 
 Token storage requirements:
 
-- macOS: Keychain.
-- Plaintext preferences may store non-secret URL/device/UI settings only.
+- macOS secret token: Keychain.
+- Plain preferences: URL, device name, UI settings, cached non-secret host metadata only.
+- Smoke tests must inject temporary token/preference/cache roots and must not mutate production user state.
 
 ## 3. Shared Remote API surface
 
-Core game-mirror and setup endpoints:
+Core endpoints:
 
 - `GET /remote/status`, `GET /remote/capabilities`, `GET /remote/readiness`
 - `GET /remote/processes`, `POST /remote/processes/{id}/launch`, `POST /remote/processes/{id}/stop`
@@ -68,14 +68,13 @@ Core game-mirror and setup endpoints:
 - `GET /remote/logging/config`, `PUT /remote/logging/config`
 - `GET /remote/power/status`, `GET /remote/power/setup`, `POST /remote/power/ssh-key`
 
-Power boundary:
+Payload synchronization rules:
 
-- The host reports readiness and registers SSH public keys.
-- Wake/sleep/restart/shutdown are client-local side effects.
-- Clients without a direct local power adapter must keep power buttons disabled.
-- See `docs/remote/connection-supervisor-protocol.md` for power, OpenSSH, and SSH accepted-marker rules.
+- Host data remains authoritative for process/game/link/session state.
+- Client caches are disposable acceleration state, not a source of truth.
+- Auth failures must return the client to a clearly repairable pairing/auth state.
 
-## 4. macOS client
+## 4. macOS client UX and supervisor contract
 
 Source: `remote_clients/macos/HomeworkHelperRemote`
 
@@ -85,9 +84,35 @@ swift build --package-path remote_clients/macos/HomeworkHelperRemote
 open dist/macos/HomeworkHelperRemote.app
 ```
 
-The macOS client is the reference native client. Its main UX is a menu-bar popover focused on registered game state, progress, running/today indicators, and quick host launch. Setup and diagnostics live in settings.
+Primary UX contract:
 
-Architecture reference: `docs/remote/macos-client-architecture.md`.
+- Menu-bar popover is the normal control surface.
+- Settings opens only through explicit settings actions or the app shortcut.
+- Pairing state, host reachability, Remote Agent auth, game/process state, and Moonlight desktop-session state must update the popover immediately enough for user decisions.
+- Moonlight state is client-observed as well as app-command-observed; a visible Moonlight desktop session should be reflected even if it was launched externally.
+
+Supervisor state contract:
+
+- Connection state distinguishes host unreachable, Remote Agent unavailable, auth rejected, paired/ready, and degraded evidence.
+- Evidence layers include HTTP readiness, pairing/auth response, cached host metadata, and client-local reachability signals.
+- Client resume should request an immediate probe rather than waiting for the next slow poll.
+- Recovery with unchanged revision should not duplicate cached processes or sessions.
+
+Power boundary:
+
+- The host reports readiness and can register SSH public keys.
+- Wake/sleep/restart/shutdown are client-local side effects.
+- Clients without a direct local power adapter must keep power buttons disabled.
+- OpenSSH automation accepts explicit success markers from the selected command path only; absence of that marker is a failed power action even when the shell exits ambiguously.
+
+Connection-state scenarios that must remain covered by tests/smokes:
+
+- External host shutdown / hibernate
+- Tailscale reachable but HTTP server down
+- Auth rejected
+- Client wake command accepted
+- Recovery with unchanged revision
+- Mac sleep then resume
 
 ## 5. Verification
 
@@ -107,4 +132,3 @@ Stateful client smoke isolation contract:
 - Smoke fixtures may not write to production cache paths such as `~/Library/Application Support/HomeworkHelperRemote/cache/processes.json`.
 - Tests that intentionally verify cache behavior must assert the production cache signature is unchanged.
 - `tools/smoke_macos_connection_supervisor.py` validates the macOS supervisor state reducer.
-- macOS connection-state scenarios remain documented in `docs/remote/macos-connection-state-scenarios.md`.

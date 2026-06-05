@@ -1,907 +1,110 @@
-# 📚 HomeworkHelper
+# HomeworkHelper
 
-<div align="center">
+HomeworkHelper는 Windows 호스트 앱과 macOS 메뉴바 원격 클라이언트로 구성된 개인용 게임/프로세스 보조 도구입니다. 현재 활성 개발 범위는 **Windows host**, **macOS remote client**, **Remote Agent**, **대시보드/데이터 안전성**, **배포 빌드 자동화**입니다.
 
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688?style=flat-square&logo=fastapi&logoColor=white)
-![PyQt6](https://img.shields.io/badge/PyQt6-6.9-41CD52?style=flat-square&logo=qt&logoColor=white)
-![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+## 현재 지원 범위
 
-[![Download](https://img.shields.io/badge/Download-Latest_Release-4CAF50?style=flat-square&logo=github&logoColor=white)](https://github.com/lsh930309/HomeworkHelperServer/releases/latest)
-[![GitHub Stars](https://img.shields.io/github/stars/lsh930309/HomeworkHelperServer?style=flat-square&logo=github)](https://github.com/lsh930309/HomeworkHelperServer/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/lsh930309/HomeworkHelperServer?style=flat-square&logo=github)](https://github.com/lsh930309/HomeworkHelperServer/issues)
+- **Windows host app**: PyQt 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
+- **Remote Agent**: 호스트 앱의 FastAPI 서버를 통해 상태 조회, 프로세스 실행/종료, 대시보드 요약, pairing/token 기반 보호 endpoint를 제공합니다.
+- **macOS remote client**: 메뉴바 popover 중심의 네이티브 Swift 클라이언트입니다. pairing, host 상태 확인, Moonlight 실행 상태 반영, 원격 quick action을 담당합니다.
+- **Dashboard frontend**: `src/api/dashboard/frontend`의 Vite/React 앱을 빌드 시 `build/dashboard-static`으로 생성해 PyInstaller 패키지에 포함합니다.
 
-**게임 일일 루틴 자동 관리 시스템**
+현재 워크스페이스에는 중단된 실험/완료 문서를 남기지 않습니다. 오래된 roadmap, migration, spike, legacy GUI preview 문서는 활성 계약으로 보지 않습니다.
 
-프로세스 모니터링 • 인게임 오버레이 사이드바 • 스크린샷 & OBS 녹화 • HoYoLab 스태미나 추적 • Remote Agent • macOS 클라이언트 • RESTful API
+## 빠른 시작
 
-[다운로드](#-설치-방법) • [사용 가이드](#-사용-가이드) • [원격 클라이언트](#-원격-클라이언트) • [API 문서](#-api-문서) • [기여하기](#-기여하기)
-
-</div>
-
----
-
-## 📋 목차
-
-- [개요](#-개요)
-- [시스템 아키텍처](#-시스템-아키텍처)
-- [주요 기능](#-주요-기능)
-- [설치 방법](#-설치-방법)
-- [사용 가이드](#-사용-가이드)
-- [원격 클라이언트](#-원격-클라이언트)
-- [프로젝트 구조](#-프로젝트-구조)
-- [모듈 설명](#-모듈-설명)
-- [API 문서](#-api-문서)
-- [기술 스택](#-기술-스택)
-- [개발 가이드](#-개발-가이드)
-- [기여하기](#-기여하기)
-
----
-
-## 🎯 개요
-
-HomeworkHelper는 **게임 일일 루틴 관리**를 자동화하는 Windows 데스크톱 애플리케이션이며, Remote Agent를 통해 macOS 네이티브 클라이언트에서도 주요 제어 기능을 사용할 수 있습니다.
-
-### 해결하는 문제
-
-- 🎮 **게임 일일 퀘스트 놓침** - 서버 리셋 시간 추적 및 자동 알림
-- ⏰ **플레이 시간 관리** - 마지막 플레이 시간 자동 기록 및 데드라인 알림
-- 🌐 **웹 루틴 자동화** - 매일 방문해야 하는 사이트 원클릭 실행
-- 📊 **게임 패턴 분석** - 세션별 플레이 타임 자동 수집 및 통계
-- ⚡ **HoYoLab 스태미나 추적** - 원신, 붕괴: 스타레일, 젠레스 존 제로 스태미나 자동 조회
-
-### 핵심 가치
-
-- **자동화**: 프로세스 모니터링, 세션 트래킹, 알림 발송을 자동으로 처리
-- **확장성**: RESTful API와 Remote Agent로 외부 도구·네이티브 클라이언트 연동 가능
-- **안정성**: SQLite WAL 모드, 자동 재시도 로직으로 데이터 손실 방지
-- **편의성**: 시스템 트레이 상주, 원클릭 실행, 커스터마이징 가능한 알림
-
----
-
-## 🏗️ 시스템 아키텍처
-
-### 전체 파이프라인
-
-```mermaid
-graph TD
-    A[사용자] -->|상호작용| B[GUI 레이어]
-    B -->|HTTP 요청| C[API Client]
-    C -->|REST API| D[FastAPI Server]
-    D -->|CRUD 작업| E[Database Layer]
-    E -->|읽기/쓰기| F[(SQLite WAL)]
-
-    G[Process Monitor] -->|프로세스 감지| C
-    H[Scheduler] -->|주기적 실행| I[Notifier]
-    I -->|알림 전송| J[GUI Notification Handler]
-    J -->|토스트 알림| A
-
-    K[HoYoLab Service] -->|스태미나 조회| C
-
-    style B fill:#e1f5ff
-    style D fill:#fff3e0
-    style F fill:#f3e5f5
-    style G fill:#e8f5e9
-    style H fill:#fce4ec
-```
-
-### 데이터 흐름
-
-```mermaid
-sequenceDiagram
-    participant U as 사용자
-    participant G as GUI
-    participant A as API Client
-    participant S as FastAPI Server
-    participant D as Database
-    participant M as Process Monitor
-
-    U->>G: 프로세스 추가
-    G->>A: POST /processes
-    A->>S: HTTP Request
-    S->>D: CRUD Insert
-    D-->>S: 성공
-    S-->>A: Response
-    A-->>G: 데이터 반환
-    G-->>U: UI 업데이트
-
-    loop 백그라운드 모니터링
-        M->>M: 프로세스 상태 확인
-        M->>A: POST /sessions (시작/종료)
-        A->>S: HTTP Request
-        S->>D: 세션 기록
-    end
-```
-
----
-
-## ✨ 주요 기능
-
-### 🎮 프로세스 모니터링
-
-- **실시간 감지**: 게임/프로그램 실행 상태 자동 감지
-- **원클릭 실행**: UI에서 버튼 클릭으로 프로그램 실행
-- **세션 트래킹**: 시작/종료 시간, 플레이 시간 자동 기록
-- **관리자 권한**: 필요 시 관리자 권한으로 실행
-
-### ⏰ 스마트 알림 시스템
-
-- **서버 리셋 알림**: 일일 퀘스트 리셋 2시간 전 알림
-- **사용자 주기 알림**: 24시간 단위 커스텀 주기 관리
-- **필수 플레이 시간**: 특정 시간대 플레이 필수 알림
-- **수면 시간 보정**: 취침 중 알림 방지 및 기상 후 자동 발송
-- **HoYoLab 스태미나 알림**: 스태미나 임계값 도달 시 알림
-
-### 🌐 웹 바로가기 관리
-
-- 일일 리프레시가 필요한 웹사이트 등록
-- 리셋 시간 설정 및 자동 추적
-- 원클릭 브라우저 실행
-
-### ⚡ HoYoLab 통합
-
-- **지원 게임**: 원신, 붕괴: 스타레일, 젠레스 존 제로
-- **자동 로그인**: 브라우저 쿠키 추출로 자동 인증
-- **스태미나 추적**: 실시간 스태미나 조회 및 알림
-- **자동 보정**: 게임 실행 시 스태미나 자동 보정
-
-### 📊 데이터 트래킹
-
-- **세션 기록**: 게임별 실행 시작/종료 타임스탬프
-- **플레이 패턴**: 프로세스별 세션 이력 및 통계
-- **RESTful API**: FastAPI 기반 데이터 조회/분석 인터페이스
-
-### 🖥️ 인게임 오버레이 사이드바
-
-- **자동 활성화**: 게임 실행 감지 시 화면 우측 가장자리에 트리거 대기
-- **엣지 트리거**: 마우스를 화면 우측 끝에 올리면 반투명 사이드바 슬라이드인
-- **스크린샷 갤러리**: 최근 8개 스크린샷 썸네일 — 클릭으로 열기, 우클릭으로 복사/삭제
-- **녹화 제어**: OBS WebSocket 연동, 원클릭 녹화 시작(3초 카운트다운) / 중지
-- **녹화 갤러리**: 최근 MP4 파일 썸네일 그리드 (Windows Shell API 미리보기)
-- **볼륨 제어**: 실행 중인 게임 프로세스 음량 실시간 조절
-- **플레이 타임**: 현재 세션 경과 시간 표시
-- **게임패드 연동**: 짧게 누르면 스크린샷, 길게 누르면 녹화 토글
-- **자동 숨김**: 지정 시간 후 슬라이드아웃, 화면 구성 변경 시 자동 재배치
-
-### 📸 스크린샷 & OBS 녹화
-
-- **게임패드 스크린샷**: 버튼 단축키로 전체 화면 또는 게임 창만 캡처
-- **저장 경로 설정**: 캡처 파일 저장 폴더 수동 지정
-- **OBS WebSocket 5.x**: 자동 연결 / 수동 재연결 / 자동 실행 지원
-- **카운트다운 오버레이**: 녹화 시작 전 3초 전체화면 카운트다운
-- **녹화 출력 폴더**: OBS INI 자동 감지 또는 수동 지정
-
-### 🔧 시스템 기능
-
-- **트레이 상주**: 시스템 트레이에서 백그라운드 실행
-- **부팅 시 자동 실행**: Windows 시작 프로그램 등록 (선택)
-- **알림 커스터마이징**: 알림별 On/Off 설정
-- **창 위치 기억**: 마지막 창 위치 자동 복원
-- **마그넷 스냅**: 화면 가장자리 자동 정렬
-
-### 🛰️ Remote Agent & 네이티브 클라이언트
-
-- **Remote Agent**: 기존 FastAPI 서버에 `/remote/*` 라우트를 노출해 PC 게임 실행, 웹 숏컷, 대시보드 요약, Beholder 알림, 전원 제어를 원격 클라이언트에서 호출
-- **페어링/토큰**: 6자리 pairing code와 Bearer token 기반 device registry, token refresh, revoke 지원
-- **macOS 클라이언트**: SwiftUI/AppKit 메뉴바 앱, Keychain 저장, Tailscale/전원 설정 자동화, Liquid Glass UI, icon/cache, dashboard/Beholder/game-link 지원
-- **저장 경계**: 사용자 DB 데이터와 machine-local token/power/logging 파일을 분리해 업데이트 중 설정 손실을 방지
-
----
-
-## 🚀 설치 방법
-
-### Option 1: 인스톨러 (권장)
-
-1. [최신 릴리즈](https://github.com/lsh930309/HomeworkHelperServer/releases/latest) 다운로드
-2. `HomeworkHelper_Setup_vX.X.X.exe` 실행
-3. 설치 마법사에 따라 설치 진행
-4. **업데이트 시 작업 표시줄 고정 아이콘 유지**
-
-### Option 2: Portable 버전
-
-1. [최신 릴리즈](https://github.com/lsh930309/HomeworkHelperServer/releases/latest)에서 `HomeworkHelper_Portable.zip` 다운로드
-2. 원하는 폴더에 압축 해제
-3. `homework_helper.exe` 실행
-
-### Option 3: 소스코드 실행
+### Windows host 개발 실행
 
 ```bash
-# 1. 저장소 클론
-git clone https://github.com/lsh930309/HomeworkHelperServer.git
-cd HomeworkHelperServer
-
-# 2. 가상환경 생성 (권장)
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-
-# 3. 의존성 설치
+.venv\\Scripts\\activate
 pip install -r requirements.txt
-
-# 4. 프로그램 실행
 python homework_helper.pyw
 ```
 
-### Option 4: macOS Remote Client
+서버만 확인할 때는 GUI 단일 인스턴스 경로를 우회합니다.
+
+```bash
+python homework_helper.pyw --server
+```
+
+### macOS remote client 개발 실행
 
 ```bash
 swift build --package-path remote_clients/macos/HomeworkHelperRemote
+```
+
+앱 번들 패키징은 Python helper 또는 통합 빌드 스크립트를 사용합니다.
+
+```bash
 ./.venv/bin/python tools/package_macos_remote_app.py
-open dist/macos/HomeworkHelperRemote.app
+python build.py --target macos-client
 ```
 
-macOS 앱은 기본값으로 `http://127.0.0.1:8000` Remote Agent에 접속한다. 다른 PC에 붙을 때는 host의 LAN 또는 Tailscale URL과 6자리 pairing code를 입력한다.
+## 빌드
 
----
-
-## 📖 사용 가이드
-
-### 1️⃣ 프로세스 추가하기
-
-<details>
-<summary><b>게임/프로그램 등록 방법</b></summary>
-
-1. **메인 화면에서 `프로세스 추가` 버튼 클릭**
-2. **필수 정보 입력:**
-   - 📝 **이름**: 표시될 프로세스 이름
-   - 📂 **모니터링 경로**: 프로세스 실행 파일 경로 (감지용)
-   - 🚀 **실행 경로**: 버튼 클릭 시 실행할 파일 경로
-
-3. **선택 정보 입력:**
-   - 🔄 **서버 리셋 시간**: 일일 퀘스트가 리셋되는 시간 (예: 04:00)
-   - ⏱️ **사용자 주기**: 플레이 주기 (기본 24시간)
-   - ⭐ **필수 플레이 시간**: 특정 시간대에 플레이 필수 (여러 개 설정 가능)
-   - ⚡ **HoYoLab 연동**: 스태미나 추적 활성화
-
-4. **저장 완료** - 프로세스가 자동 모니터링 시작
-
-</details>
-
-### 2️⃣ 웹 바로가기 추가하기
-
-<details>
-<summary><b>일일 웹사이트 등록 방법</b></summary>
-
-1. **`웹 바로가기 추가` 버튼 클릭**
-2. **정보 입력:**
-   - 📝 **이름**: 바로가기 이름
-   - 🌐 **URL**: 웹사이트 주소
-   - 🔄 **리프레시 시간**: 일일 리셋 시간 (선택)
-
-3. **저장** - 원클릭 실행 버튼 생성
-
-</details>
-
-### 3️⃣ HoYoLab 스태미나 추적 설정
-
-<details>
-<summary><b>HoYoLab 연동 방법</b></summary>
-
-1. **프로세스 편집에서 `HoYoLab 연동` 활성화**
-2. **스태미나 추적 설정:**
-   - 게임 선택 (원신, 붕괴: 스타레일, 젠레스 존 제로)
-   - 알림 임계값 설정 (예: 160/240)
-
-3. **브라우저 쿠키 자동 추출:**
-   - Chrome, Edge, Firefox 지원
-   - HoYoLab 로그인 상태 유지 필요
-
-4. **자동 조회:**
-   - 10분마다 스태미나 자동 조회
-   - 임계값 도달 시 알림 발송
-   - 게임 실행 시 스태미나 자동 보정
-
-</details>
-
-### 4️⃣ 알림 설정하기
-
-<details>
-<summary><b>알림 커스터마이징</b></summary>
-
-1. **설정(⚙️) 버튼 클릭**
-2. **알림 옵션 선택:**
-   - ✅ 게임 실행 성공/실패 알림
-   - ✅ 필수 플레이 시간 알림
-   - ✅ 주기 데드라인 알림
-   - ✅ 수면 시간 보정 알림
-   - ✅ 일일 리셋 알림
-   - ✅ HoYoLab 스태미나 알림
-
-3. **수면 시간 설정:**
-   - 시작 시간 / 종료 시간 설정
-   - 수면 중 알림을 기상 후로 연기
-
-</details>
-
-### 5️⃣ 세션 데이터 조회하기
-
-<details>
-<summary><b>플레이 기록 분석</b></summary>
-
-**API 엔드포인트 사용:**
+단일 진입점은 `build.py`입니다. 현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
 
 ```bash
-# FastAPI 서버가 자동으로 백그라운드에서 실행됩니다.
-# 브라우저에서 http://127.0.0.1:8000/docs 접속
-
-# 1. 모든 세션 조회
-GET http://127.0.0.1:8000/sessions
-
-# 2. 특정 게임의 세션 이력
-GET http://127.0.0.1:8000/sessions/process/{process_id}
-
-# 3. 현재 활성 세션 확인
-GET http://127.0.0.1:8000/sessions/process/{process_id}/active
-```
-
-**응답 예시:**
-```json
-[
-  {
-    "id": 1,
-    "process_id": "6d101682-c386-4a1c-8696-3d4d5f85cf09",
-    "process_name": "젠레스 존 제로",
-    "start_timestamp": 1759405875.473616,
-    "end_timestamp": 1759405938.1449769,
-    "session_duration": 62.67
-  }
-]
-```
-
-</details>
-
----
-
-## 🛰️ 원격 클라이언트
-
-HomeworkHelper Remote Client는 PC의 Remote Agent를 제어하는 별도 네이티브 앱이다. 현재 활성 기준 클라이언트는 macOS 클라이언트다.
-
-### Remote Agent 실행
-
-```bash
-HH_API_HOST=0.0.0.0 HH_REMOTE_REQUIRE_AUTH=1 ./.venv/bin/python homework_helper.pyw --server
-```
-
-- 로컬 개발만 할 때는 `./.venv/bin/python homework_helper.pyw --server`로 충분하다.
-- 외부 기기에서 접속하려면 LAN/Tailscale URL을 사용하고 `HH_REMOTE_REQUIRE_AUTH=1`을 유지한다.
-- 최초 pairing code는 host loopback에서 `curl -X POST http://127.0.0.1:8000/remote/pair/start`로 발급한다.
-
-### 문서
-
-- `docs/remote/setup-guide.md` — Remote Agent, pairing, macOS client build 절차
-- `docs/remote/macos-client-architecture.md` — macOS 기준 클라이언트 구조/계약
-- `docs/remote/remote-storage-policy.md` — remote-local token/power/logging 저장 경계
-- `docs/remote/connection-supervisor-protocol.md` — 공통 pairing/connectivity/power/OpenSSH 프로토콜
-
-### 핵심 검증 명령
-
-```bash
-./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py
-swift build --package-path remote_clients/macos/HomeworkHelperRemote
-./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
-```
-
----
-
-## 📁 프로젝트 구조
-
-```
-HomeworkHelperServer/
-├── 📱 메인 애플리케이션
-│   ├── homework_helper.pyw       # 진입점
-│   ├── homework_helper.spec      # PyInstaller 빌드 설정
-│   ├── build.py                  # 빌드 자동화 스크립트
-│   ├── installer.iss             # Inno Setup 인스톨러 스크립트
-│   └── requirements.txt          # 의존성 목록
-│
-├── 🔧 src/                       # 소스 코드
-│   ├── api/                      # API 레이어
-│   │   ├── client.py             # FastAPI 서버와 통신
-│   │   ├── remote_routes.py      # Remote Agent API 라우터
-│   │   └── dashboard/            # 웹 대시보드 (FastAPI 라우터·템플릿·정적 파일)
-│   │
-│   ├── core/                     # 핵심 로직
-│   │   ├── instance_manager.py  # 싱글톤 인스턴스 관리
-│   │   ├── launcher.py          # 프로세스 실행
-│   │   ├── notifier.py          # 알림 시스템
-│   │   ├── process_monitor.py   # 프로세스 모니터링
-│   │   └── scheduler.py         # 스케줄링 및 알림 로직
-│   │
-│   ├── data/                     # 데이터 레이어
-│   │   ├── crud.py              # CRUD 작업
-│   │   ├── data_models.py       # 도메인 모델
-│   │   ├── database.py          # SQLite WAL 설정
-│   │   ├── models.py            # SQLAlchemy ORM 모델
-│   │   ├── schemas.py           # Pydantic 검증 스키마
-│   │   ├── manager.py           # 데이터 관리자
-│   │   └── game_presets.json    # 게임 프리셋 정의
-│   │
-│   ├── gui/                      # GUI 레이어
-│   │   ├── sidebar/             # 인게임 오버레이 사이드바
-│   │   │   ├── sidebar_widget.py       # 사이드바 UI (갤러리·녹화·볼륨)
-│   │   │   ├── sidebar_controller.py   # 생명주기 관리 (게임 실행/종료 연동)
-│   │   │   ├── edge_trigger_window.py  # 마우스 우측 가장자리 감지
-│   │   │   └── win32_effects.py        # Acrylic/Blur 배경 효과
-│   │   ├── countdown_overlay.py # 녹화 시작 3초 카운트다운 오버레이
-│   │   ├── dialogs.py           # 프로세스/바로가기 추가 다이얼로그
-│   │   ├── gui_notification_handler.py  # GUI 알림 핸들러
-│   │   ├── main_window.py       # 메인 윈도우
-│   │   ├── preset_editor_dialog.py      # 게임 프리셋 편집기
-│   │   ├── sidebar_settings_dialog.py   # 사이드바·스크린샷·녹화 설정
-│   │   ├── tray_manager.py      # 시스템 트레이 관리
-│   │   └── volume_panel.py      # 게임별 볼륨 조절 팝오버 패널
-│   │
-│   ├── screenshot/               # 스크린샷 시스템
-│   │   ├── capture.py           # 캡처 로직 (GDI BitBlt / mss)
-│   │   ├── manager.py           # 중앙 컨트롤러
-│   │   ├── method_a.py          # WH_KEYBOARD_LL 훅 기반 캡처
-│   │   └── trigger_dispatcher.py # 홀드 시간 분기 (스크린샷/녹화)
-│   │
-│   ├── recording/                # OBS 녹화 시스템
-│   │   ├── manager.py           # 상태 머신 (idle/recording/connecting/obs_offline)
-│   │   ├── obs_client.py        # OBS WebSocket 5.x 클라이언트
-│   │   └── obs_config_reader.py # OBS INI 설정 자동 읽기
-│   │
-│   ├── services/                 # 외부 서비스 통합
-│   │   └── hoyolab.py           # HoYoLab API (스태미나 조회)
-│   │
-│   └── utils/                    # 유틸리티
-│       ├── admin.py             # 관리자 권한 처리
-│       ├── browser_cookie_extractor.py  # 브라우저 쿠키 추출
-│       ├── common.py            # 공통 유틸리티
-│       ├── game_preset_manager.py       # 게임 프리셋 관리
-│       ├── hoyolab_config.py    # HoYoLab 설정
-│       ├── icon_helper.py       # 아이콘 경로 해석
-│       ├── launcher_utils.py    # 런처 유틸리티
-│       ├── lsh_installer.py     # 설치 관리
-│       ├── process.py           # 프로세스 유틸리티
-│       └── windows.py           # Windows API 래퍼
-│
-├── 📚 docs/                      # 문서
-│   ├── architecture.md          # 아키텍처 가이드
-│   ├── milestone.md             # 마일스톤 로드맵
-│   ├── git-workflow.md          # Git 워크플로우
-│   ├── remote/                  # Remote Agent/클라이언트 운영·설계 문서
-│   │   ├── setup-guide.md
-│   │   ├── macos-client-architecture.md
-│   │   └── remote-storage-policy.md
-│   ├── guides/                  # 사용 가이드
-│   │   ├── build-guide.md
-│   │   └── multi-pc-sync-guide.md
-│   ├── archive/                 # 과거 작업 기록
-│   └── archived/                # 보류된 문서
-│
-├── 🧩 remote_clients/            # 네이티브 원격 클라이언트
-│   └── macos/HomeworkHelperRemote/    # SwiftUI/AppKit macOS Remote Client
-│
-├── 🎨 assets/                    # 리소스
-│   ├── icons/                   # 아이콘
-│   │   ├── app/                 # 앱 아이콘
-│   │   └── games/               # 시스템 프리셋 스태미나 아이콘
-│   └── fonts/                   # 폰트 파일
-│
-└── ⚙️ 설정
-    ├── .claude/                 # Claude Code 설정
-    ├── .gitignore
-    └── .gitattributes
-```
-
----
-
-## 🔍 모듈 설명
-
-### 📡 API Client (`src/api/client.py`)
-
-FastAPI 서버와 통신하는 HTTP 클라이언트
-
-**핵심 기능:**
-- RESTful API 요청 관리
-- 자동 재시도 및 에러 핸들링
-- 데이터 캐싱 및 동기화
-
-**주요 메서드:**
-- `get_processes()`: 모든 프로세스 조회
-- `create_process()`: 새 프로세스 등록
-- `start_session()`: 세션 시작 기록
-- `end_session()`: 세션 종료 기록
-
----
-
-### 🎯 Core 모듈
-
-#### `instance_manager.py` - 싱글톤 관리
-- API 클라이언트, 데이터베이스 세션 등 싱글톤 인스턴스 관리
-- 애플리케이션 전역에서 단일 인스턴스 보장
-
-#### `launcher.py` - 프로세스 실행
-- 프로세스 실행 및 관리자 권한 처리
-- 실행 결과 검증 및 에러 핸들링
-
-#### `notifier.py` - 알림 시스템
-- Windows 토스트 알림 발송
-- 알림 우선순위 및 중복 방지
-
-#### `process_monitor.py` - 프로세스 모니터링
-- `psutil`을 사용한 프로세스 상태 감지
-- 시작/종료 이벤트 자동 기록
-- 백그라운드 스레드로 실시간 모니터링
-
-#### `scheduler.py` - 스케줄링
-- 주기적 알림 스케줄링
-- 서버 리셋, 사용자 주기, 필수 플레이 시간 관리
-- 수면 시간 보정 로직
-
----
-
-### 💾 Data 모듈
-
-#### `database.py` - DB 설정
-- SQLite WAL 모드 설정
-- 동시 읽기/쓰기 지원
-- 데이터 손실 방지
-
-#### `models.py` - ORM 모델
-- `Process`: 프로세스 정보
-- `Shortcut`: 웹 바로가기
-- `Session`: 세션 기록
-- `Settings`: 전역 설정
-
-#### `schemas.py` - Pydantic 스키마
-- API 요청/응답 검증
-- 타입 안전성 보장
-
-#### `crud.py` - CRUD 작업
-- 데이터베이스 CRUD 로직
-- 자동 재시도 데코레이터 (`@db_retry_on_lock`)
-- 트랜잭션 관리
-
-#### `data_models.py` - 도메인 모델
-- 비즈니스 로직을 포함한 도메인 객체
-- 알림 계산, 상태 관리
-
----
-
-### 🖥️ GUI 모듈
-
-#### `sidebar/sidebar_widget.py` - 사이드바 UI
-- 스크린샷 갤러리 (썸네일 캐시, 우클릭 복사/삭제)
-- 녹화 갤러리 (MP4 썸네일, Windows Shell API)
-- 녹화 상태 표시 및 시작/중지 버튼
-- 볼륨 슬라이더 (게임 프로세스별)
-- 호버 시 흰색 테두리 하이라이트
-
-#### `sidebar/sidebar_controller.py` - 사이드바 생명주기
-- 게임 실행 감지 시 트리거 활성화
-- 게임 종료 시 사이드바/트리거 비활성화
-- 디스플레이 변경(해상도, 가상 디스플레이) 시 자동 재배치
-
-#### `sidebar/edge_trigger_window.py` - 엣지 트리거
-- 화면 우측 가장자리 마우스 진입 감지
-- 트리거 영역(Y 비율), 폭(px), 쿨다운 설정 가능
-
-#### `countdown_overlay.py` - 카운트다운 오버레이
-- 녹화 시작 전 3 → 2 → 1 전체화면 카운트다운
-- `WA_TranslucentBackground` 반투명 위젯
-
-#### `main_window.py` - 메인 윈도우
-- 프로세스 목록 표시
-- 실행 버튼 및 상태 표시
-- 창 위치 기억 및 마그넷 스냅
-
-#### `dialogs.py` - 다이얼로그
-- 프로세스 추가/편집 다이얼로그
-- 웹 바로가기 추가/편집 다이얼로그
-
-#### `sidebar_settings_dialog.py` - 사이드바·녹화 설정
-- 사이드바 위치·효과·자동숨김 설정
-- 스크린샷 저장 경로, 게임패드 버튼 지정
-- OBS 연결 정보, 녹화 출력 폴더, OBS 자동 실행 설정
-
-#### `tray_manager.py` - 트레이 관리
-- 시스템 트레이 아이콘
-- 컨텍스트 메뉴
-- 더블클릭으로 메인 윈도우 열기
-
-#### `gui_notification_handler.py` - GUI 알림
-- GUI 이벤트 루프와 통합
-- 알림 큐 관리
-
----
-
-### 📸 Screenshot 모듈
-
-#### `screenshot/manager.py` - 스크린샷 매니저
-- 캡처 방식(Method A: WH_KEYBOARD_LL) 고정 관리
-- 게임 이름 기반 파일명 자동 생성
-- 저장 경로 런타임 변경 지원
-
-#### `screenshot/trigger_dispatcher.py` - 트리거 분기
-- 게임패드 버튼 홀드 시간으로 동작 분기
-- 짧게(500ms 미만): 스크린샷, 길게(800ms+): 녹화 토글
-
-#### `screenshot/capture.py` - 캡처 로직
-- `mss` 전체화면 캡처 / GDI BitBlt 게임 창 캡처
-- 실패 시 전체 화면으로 자동 폴백
-
----
-
-### 🎬 Recording 모듈
-
-#### `recording/manager.py` - 녹화 매니저
-- 상태 머신: `idle` / `recording` / `connecting` / `obs_offline`
-- OBS 자동 실행 후 WebSocket 연결 (최대 2회 재시도)
-- 경과 시간 추적 (`get_elapsed_sec()`)
-
-#### `recording/obs_client.py` - OBS WebSocket 클라이언트
-- OBS WebSocket 5.x 프로토콜
-- 녹화 상태 변경 이벤트 콜백
-
-#### `recording/obs_config_reader.py` - OBS 설정 읽기
-- OBS INI 파일에서 포트 / 비밀번호 / 출력 경로 자동 추출
-
----
-
-### 🌐 Services 모듈
-
-#### `hoyolab.py` - HoYoLab 통합
-- 원신, 붕괴: 스타레일, 젠레스 존 제로 API
-- 스태미나 실시간 조회
-- 브라우저 쿠키 기반 자동 로그인
-- 스태미나 보정 로직
-
-**지원 기능:**
-- 실시간 스태미나 조회
-- 회복 완료 시간 계산
-- 게임 실행 시 자동 보정 (현재 스태미나 - 최대 스태미나)
-
----
-
-### 🛠️ Utils 모듈
-
-다양한 유틸리티 함수들:
-- `admin.py`: 관리자 권한 확인 및 재실행
-- `browser_cookie_extractor.py`: Chrome/Edge/Firefox 쿠키 추출
-- `common.py`: 공통 유틸리티 (시간 변환, 검증 등)
-- `game_preset_manager.py`: 게임 프리셋 관리
-- `windows.py`: Windows API 래퍼 (창 제어, 파일 선택 등)
-
----
-
-## 📡 API 문서
-
-### 기본 정보
-
-- **Base URL**: `http://127.0.0.1:8000`
-- **Interactive Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **OpenAPI Schema**: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
-
-### 주요 엔드포인트
-
-#### 프로세스 관리
-```http
-GET    /processes              # 모든 프로세스 조회
-GET    /processes/{id}         # 특정 프로세스 조회
-POST   /processes              # 프로세스 추가
-PUT    /processes/{id}         # 프로세스 수정
-DELETE /processes/{id}         # 프로세스 삭제
-```
-
-#### 세션 트래킹
-```http
-POST   /sessions                          # 세션 시작 기록
-PUT    /sessions/{session_id}/end         # 세션 종료 기록
-GET    /sessions                          # 모든 세션 조회
-GET    /sessions/process/{process_id}     # 프로세스별 세션 이력
-GET    /sessions/process/{process_id}/active  # 활성 세션 조회
-```
-
-#### 웹 바로가기
-```http
-GET    /shortcuts              # 모든 바로가기 조회
-POST   /shortcuts              # 바로가기 추가
-PUT    /shortcuts/{id}         # 바로가기 수정
-DELETE /shortcuts/{id}         # 바로가기 삭제
-```
-
-#### HoYoLab
-```http
-GET    /hoyolab/stamina/{process_id}      # 스태미나 조회
-POST   /hoyolab/correct/{process_id}      # 스태미나 보정
-```
-
-#### 설정
-```http
-GET    /settings               # 전역 설정 조회
-PUT    /settings               # 전역 설정 수정
-```
-
----
-
-## 🛠️ 기술 스택
-
-### 핵심 라이브러리
-
-정확한 설치 목록은 `requirements.txt`를 기준으로 관리합니다.
-Windows 전용 패키지는 platform marker로 제한되어 macOS/Linux 설치 시 자동으로 제외됩니다.
-
-| 분류 | 라이브러리 | 버전 제약 | 용도 |
-|------|------------|-----------|------|
-| 런타임 | **Python** | 3.11+ | 메인 런타임 |
-| GUI | **PyQt6** | `requirements.txt` | 데스크톱 GUI 프레임워크 |
-| Windows | **pywin32** | `requirements.txt` | Windows API / GDI 캡처 / 레지스트리 연동 |
-| Windows | **winshell** | `requirements.txt` | 시작 프로그램 폴더 조회, 휴지통 이동 |
-| Windows | **psutil** | `requirements.txt` | 프로세스 모니터링 |
-| Windows | **pycaw** | `requirements.txt` | Windows 앱 볼륨 제어 |
-| API 서버 | **FastAPI** | `requirements.txt` | RESTful API 서버 |
-| API 서버 | **uvicorn** | `requirements.txt` | ASGI 서버 |
-| 데이터 | **SQLAlchemy** | `requirements.txt` | ORM 및 SQLite 데이터베이스 관리 |
-| 데이터 | **pydantic** | `requirements.txt` | API / 설정 데이터 검증 |
-| 네트워크 | **requests** | `requirements.txt` | HTTP 클라이언트, 외부 리소스 조회 |
-| 데이터 검증 | **jsonschema** | `requirements.txt` | JSON 스키마 검증 |
-| 알림 / 입력 | **Windows-Toasts** | `requirements.txt` | Windows 토스트 알림 |
-| 알림 / 입력 | **winrt-Windows.Gaming.Input** | `requirements.txt` | Windows 게임 입력 WinRT 바인딩 |
-| 녹화 | **websocket-client** | `requirements.txt` | OBS WebSocket 5.x 프로토콜 클라이언트 |
-| 스크린샷 / 아이콘 | **mss** | `requirements.txt` | 고속 스크린샷 캡처 |
-| 스크린샷 / 아이콘 | **Pillow** | `requirements.txt` | 이미지 처리 및 아이콘 변환 |
-| 자원 추적 | **genshin** | 1.6+ | HoYoLab 스태미나 / 리소스 API |
-| 자원 추적 | **pycryptodome** | 3.20+ | 브라우저 쿠키 DB 복호화 |
-| 빌드 / 개발 | **pyinstaller** | `requirements.txt` | Windows 실행 파일 빌드 |
-| 빌드 / 개발 | **pytest** | `requirements.txt` | 테스트 실행 |
-| 빌드 / 개발 | **tqdm** | `requirements.txt` | 빌드 / 마이그레이션 진행률 표시 |
-
-### 데이터베이스
-
-- **SQLite**: 경량 임베디드 데이터베이스
-- **WAL 모드**: 동시 읽기/쓰기 지원
-- **자동 재시도**: 락 발생 시 자동 재시도 (지수 백오프)
-
----
-
-## 👨‍💻 개발 가이드
-
-### 빌드하기
-
-```bash
-# 현재 OS에 맞는 타깃 자동 선택
+# 현재 OS 기준 target 자동 선택 + GUI version selector
 python build.py
 
-# CI/터미널 환경에서는 GUI 없이 실행
+# 콘솔/CI용
 python build.py --no-gui
 
-# 버전 증가 정책
-# - 기본값: --bump build
-# - 선택지: none, build, patch, minor, major
-
-# 빌드 산출물
-# - release/HomeworkHelper_vX.Y.Z_bN_gHASH_Setup.exe
-# - release/HomeworkHelper_vX.Y.Z_bN_gHASH_Portable.zip
-# - release/HomeworkHelperRemote_vX.Y.Z_bN_gHASH.pkg
+# target 강제 지정
+python build.py --target windows-host
+python build.py --target macos-client
 ```
 
-**빌드 스크립트 특징:**
-- `build.version.json` 기반 host/client 버전 관리 및 성공 시 저장
-- OS 자동 감지: Windows는 host, macOS는 remote client 패키지 빌드
-- GUI 버전 확인 및 콘솔(`--no-gui`) 빌드 지원
-- 이전 산출물 target/type/date별 archive 이동 및 자동 pruning
-- Windows: PyInstaller onedir, Portable ZIP, Inno Setup 인스톨러
-- macOS: Swift release build, `.app` 번들, `.pkg` 생성
+버전 상태는 로컬 `build.version.json`에 저장됩니다. 이 파일은 빌드 성공 후에만 갱신되며, 개인 워크스페이스마다 다를 수 있는 local mutable state입니다.
 
-### 개발 환경 설정
+자세한 내용은 [`docs/guides/build-guide.md`](docs/guides/build-guide.md)를 확인합니다.
 
-1. **필수 도구:**
-   - Python 3.11+
-   - Git
-   - Inno Setup 6 (인스톨러 생성 시)
+## 의존성 기준
 
-2. **의존성 설치:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+- Python host/API/build: [`requirements.txt`](requirements.txt)
+- Dashboard frontend: [`src/api/dashboard/frontend/package.json`](src/api/dashboard/frontend/package.json)
+- macOS remote client: [`remote_clients/macos/HomeworkHelperRemote/Package.swift`](remote_clients/macos/HomeworkHelperRemote/Package.swift)
 
-3. **실행:**
-   ```bash
-   python homework_helper.pyw
-   ```
+패키징 캐시와 산출물은 `.gitignore` 정책을 따릅니다. 실험 후 폐기된 GUI preview 경로나 웹 캐시는 Git에 숨겨 보존하지 않습니다.
 
-### 코드 스타일
+## 원격 클라이언트 운영 문서
 
-- **커밋 메시지**: `카테고리: 설명` 형식 (예: `기능 추가: HoYoLab 스태미나 추적`)
-- **브랜치 전략**: [Git 워크플로우](docs/git-workflow.md) 참조
-- **문서화**: 주요 기능 변경 시 문서 업데이트
+- [`docs/remote/setup-guide.md`](docs/remote/setup-guide.md): Remote Agent, pairing/token, macOS client, supervisor/power 계약, 검증 절차.
+- [`docs/remote/host-ssh-diagnostics-runbook.md`](docs/remote/host-ssh-diagnostics-runbook.md): 실제 호스트 SSH 진단과 안전한 testbench 절차.
+- [`docs/data-safety-policy.md`](docs/data-safety-policy.md): 설정/DB write 안전 정책.
 
----
+## 검증 명령
 
-## 🔒 데이터 안전성
+변경 범위에 따라 필요한 검증만 좁혀 실행하되, 원격/빌드 계약을 건드릴 때는 아래 조합을 우선 사용합니다.
 
-### 구현된 보호 장치
+```bash
+./.venv/bin/python -m py_compile build.py
+./.venv/bin/python -m pytest tests/test_build_release.py tests/test_remote_verifier_contract.py -q
+./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py -q
+./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
+swift build --package-path remote_clients/macos/HomeworkHelperRemote
+```
 
-1. **WAL (Write-Ahead Logging) 모드**
-   - 동시 읽기/쓰기 지원
-   - 데이터 손실 방지
+## 프로젝트 구조
 
-2. **자동 재시도 로직**
-   - DB 락 발생 시 최대 3회 재시도
-   - 지수 백오프 적용 (100ms, 200ms, 300ms)
+```text
+homework_helper.pyw                  # Windows host entrypoint
+build.py                             # platform-aware release builder
+requirements.txt                     # Python dependency surface
+src/
+  api/                               # FastAPI server, dashboard, remote routes
+  core/ data/ gui/ recording/ ...    # host app runtime modules
+remote_clients/macos/HomeworkHelperRemote/
+                                     # Swift menu-bar remote client
+tools/                               # packaging, smoke, diagnostic helpers
+tests/                               # static/unit/smoke contract tests
+docs/                               # active operational docs only
+```
 
-3. **예외 처리**
-   - `OperationalError`, `IntegrityError` 핸들링
-   - 로깅 시스템 통합
+## 문서 관리 원칙
 
-4. **트랜잭션 관리**
-   - SQLAlchemy 세션 자동 관리
-   - 실패 시 자동 롤백
-
----
-
-## 🎓 튜토리얼: 첫 게임 등록하기
-
-### 예시: 붕괴: 스타레일 등록 (HoYoLab 연동)
-
-1. **프로세스 추가 버튼 클릭**
-
-2. **기본 정보 입력:**
-   ```
-   이름: 붕괴: 스타레일
-   모니터링 경로: C:\Program Files\Star Rail\Game\StarRail.exe
-   실행 경로: C:\Program Files\Star Rail\launcher.exe
-   서버 리셋 시간: 04:00
-   사용자 주기: 24시간
-   ```
-
-3. **HoYoLab 연동 설정:**
-   - `HoYoLab 연동` 체크
-   - 게임: `붕괴: 스타레일`
-   - 알림 임계값: `160/240`
-
-4. **필수 플레이 시간 추가 (선택):**
-   - `필수 시간 활성화` 체크
-   - `21:00` 추가
-
-5. **저장 완료**
-   - 게임 실행 자동 감지
-   - 세션 시작/종료 자동 기록
-   - 10분마다 스태미나 자동 조회
-   - 임계값 도달 시 알림
-
----
-
-## 🤝 기여하기
-
-기여는 언제나 환영합니다!
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m '기능 추가: 멋진 기능'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-### 기여 가이드라인
-
-- **코드 스타일**: 기존 코드 스타일 유지
-- **커밋 메시지**: 한국어로 작성, `카테고리: 설명` 형식
-- **문서화**: 새 기능 추가 시 README 및 관련 문서 업데이트
-- **테스트**: 변경 사항이 정상 작동하는지 확인
-
----
-
-## 📜 라이선스
-
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
----
-
-## 📧 문의
-
-프로젝트 관련 문의사항이나 버그 제보는 [Issues](https://github.com/lsh930309/HomeworkHelperServer/issues) 페이지를 이용해주세요.
-
----
-
-<div align="center">
-
-**Made with ❤️ for gamers who never miss daily quests**
-
-⭐ 이 프로젝트가 도움이 되었다면 Star를 눌러주세요!
-
-[맨 위로 ⬆](#-homeworkhelper)
-
-</div>
+- 완료된 작업 기록, 과거 roadmap, migration checklist, spike 문서는 활성 workspace에 두지 않습니다.
+- 에이전트가 현재 구현 계약으로 오해할 수 있는 문서는 삭제하거나 README/운영 문서에 흡수합니다.
+- 새 문서는 “현재도 따라야 하는 운영/검증 계약”일 때만 추가합니다.

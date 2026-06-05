@@ -48,13 +48,37 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
     assert "Android APK" not in verifier
 
 
-def test_android_client_artifacts_stay_removed_from_active_workspace():
+def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_workspace():
     forbidden_paths = [
+        Path("PROJECT_WORK_PRIORITIES.md"),
         Path("remote_clients/android"),
         Path("android"),
         Path("build_android_remote.py"),
         Path("tests/test_build_android_remote.py"),
         Path("tests/test_remote_android_client_static.py"),
+        Path("tests/migration/feature_matrix.json"),
+        Path("src/gui/v2"),
+        Path("src/gui/new_gui"),
+        Path("docs/architecture.md"),
+        Path("docs/dev-setup-guide.md"),
+        Path("docs/git-workflow.md"),
+        Path("docs/milestone.md"),
+        Path("docs/mvp-roadmap.md"),
+        Path("docs/os_dependencies.md"),
+        Path("docs/phase0-mvp-integration.md"),
+        Path("docs/migration-feature-inventory.md"),
+        Path("docs/migration-smoke-checklist.md"),
+        Path("docs/archive"),
+        Path("docs/archived"),
+        Path("docs/migration"),
+        Path("docs/workflows"),
+        Path("docs/guides/label-studio-guide.md"),
+        Path("docs/guides/multi-pc-sync-guide.md"),
+        Path("docs/remote/connection-supervisor-protocol.md"),
+        Path("docs/remote/macos-client-architecture.md"),
+        Path("docs/remote/macos-connection-state-scenarios.md"),
+        Path("docs/remote/moonlight-apollo-integration-spike.md"),
+        Path("docs/remote/remote-storage-policy.md"),
         TOOLS / "verify_android_device.py",
         TOOLS / "verify_android_internal.py",
         TOOLS / "smoke_android_remote_e2e.py",
@@ -67,14 +91,10 @@ def test_android_client_artifacts_stay_removed_from_active_workspace():
 
     active_docs = [
         Path("README.md"),
-        Path("PROJECT_WORK_PRIORITIES.md"),
+        Path("docs/data-safety-policy.md"),
         Path("docs/guides/build-guide.md"),
         Path("docs/remote/setup-guide.md"),
-        Path("docs/remote/connection-supervisor-protocol.md"),
-        Path("docs/git-workflow.md"),
-        Path("docs/dev-setup-guide.md"),
-        Path("docs/milestone.md"),
-        Path("docs/architecture.md"),
+        Path("docs/remote/host-ssh-diagnostics-runbook.md"),
     ]
     forbidden_doc_markers = [
         "Android Remote Client",
@@ -86,6 +106,11 @@ def test_android_client_artifacts_stay_removed_from_active_workspace():
         "gradlew",
         "Gradle Sync",
         "*.apk",
+        "src/gui/v2",
+        "src/gui/new_gui",
+        "new_gui_status",
+        "tauri-preview",
+        "Tauri/React preview",
     ]
     for path in active_docs:
         text = _read(path)
@@ -150,7 +175,6 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     supervisor_smoke = _read(TOOLS / "smoke_macos_connection_supervisor.py")
     packager = _read(TOOLS / "package_macos_remote_app.py")
     setup_guide = _read(Path("docs") / "remote" / "setup-guide.md")
-    scenario_doc = _read(Path("docs") / "remote" / "macos-connection-state-scenarios.md")
 
     assert "runpy.run_path('homework_helper.pyw')" in runtime
     assert "run_server_main" in runtime
@@ -218,7 +242,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "~/Library/Application Support/HomeworkHelperRemote/cache/processes.json" in setup_guide
     assert "production cache signature is unchanged" in setup_guide
     assert "tools/smoke_macos_connection_supervisor.py" in setup_guide
-    assert "docs/remote/macos-connection-state-scenarios.md" in setup_guide
+    assert "Supervisor state contract" in setup_guide
 
     for marker in [
         "External host shutdown / hibernate",
@@ -228,7 +252,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
         "Recovery with unchanged revision",
         "Mac sleep then resume",
     ]:
-        assert marker in scenario_doc
+        assert marker in setup_guide
 
     assert "swift\", \"build\", \"-c\", \"release" in packager
     assert "HomeworkHelperRemote.app" in packager
