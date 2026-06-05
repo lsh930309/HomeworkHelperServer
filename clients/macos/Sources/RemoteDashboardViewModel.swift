@@ -788,14 +788,14 @@ final class RemoteDashboardViewModel: ObservableObject {
     var macAccessibilityPermissionDisplay: String {
         LocalMoonlightManager.accessibilityPermissionReady(prompt: false)
             ? "허용됨"
-            : "권한 필요 · 업데이트 후 재등록 필요 가능"
+            : "권한 필요 · 로컬 서명 identity 확인"
     }
 
     var macAccessibilityPermissionGuidance: String {
         if LocalMoonlightManager.accessibilityPermissionReady(prompt: false) {
-            return "Moonlight 창 포커스/다중 디스플레이 이동 권한이 준비되어 있습니다."
+            return "Moonlight 창 포커스/다중 디스플레이 이동 권한이 준비되어 있습니다. 업데이트 시 같은 로컬 code-signing identity가 유지되어야 권한도 안정적으로 유지됩니다."
         }
-        return "macOS가 업데이트된 앱 번들을 별도 항목으로 판단하면 기존 손쉬운 사용 허용이 적용되지 않을 수 있습니다. 권한 요청 후에도 실패하면 기존 HomeworkHelper Remote 항목을 제거하고 새 앱을 다시 추가하세요."
+        return "손쉬운 사용 권한이 필요합니다. 권한 요청 후에도 실패하면 앱이 같은 로컬 code-signing identity로 서명되었는지 확인한 뒤, 필요할 때만 기존 HomeworkHelper Remote 항목을 제거하고 새 앱을 다시 추가하세요."
     }
 
     func requestMacAccessibilityPermission() {
@@ -803,7 +803,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if trusted {
             message = "손쉬운 사용 권한이 이미 허용되어 있습니다."
         } else {
-            message = "macOS 손쉬운 사용 권한 요청을 열었습니다. 권한이 갱신되지 않으면 기존 항목 제거 후 새 앱을 다시 추가하세요."
+            message = "macOS 손쉬운 사용 권한 요청을 열었습니다. 권한이 갱신되지 않으면 로컬 서명 identity 확인 후 필요할 때만 기존 항목을 제거하고 새 앱을 다시 추가하세요."
         }
         refreshMoonlightSessionSnapshot()
     }
@@ -1137,7 +1137,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard NSScreen.screens.count > 1 else { return true }
         guard !LocalMoonlightManager.accessibilityPermissionReady(prompt: true) else { return true }
         moonlightLastCommandSummary = "다중 디스플레이에서 Moonlight 창을 이동하려면 macOS Accessibility 권한이 필요합니다."
-        message = "Moonlight 창을 현재 화면으로 옮기려면 손쉬운 사용 권한이 필요합니다. 업데이트 후 권한이 꼬이면 기존 항목 제거 후 새 앱을 다시 추가하세요."
+        message = "Moonlight 창을 현재 화면으로 옮기려면 손쉬운 사용 권한이 필요합니다. 업데이트 후 권한이 꼬이면 로컬 서명 identity를 확인하세요."
         return false
     }
 

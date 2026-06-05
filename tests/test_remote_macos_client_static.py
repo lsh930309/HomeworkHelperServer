@@ -788,6 +788,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert 'return "깨우기"' not in view_model
     assert 'return "준비 중"' not in view_model
     assert "macAccessibilityPermissionDisplay" in view_model
+    assert "로컬 code-signing identity" in view_model
     assert "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" in view_model
     assert "PendingMoonlightWakeAction" in view_model
     assert "prepareMoonlightAutoWake(action:" in view_model

@@ -1,9 +1,11 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 import build
+from tools import ensure_macos_local_codesign_identity
 from tools import package_macos_remote_app
 
 
@@ -74,6 +76,38 @@ def test_macos_pkgbuild_command_and_path_use_same_release_id():
         str(build.MACOS_PKG_SCRIPTS_DIR),
         str(pkg),
     ]
+
+
+def test_macos_codesign_identity_defaults_to_local_personal_identity():
+    assert build.macos_codesign_identity({}) == "HomeworkHelperRemote Local Code Signing"
+    assert build.macos_codesign_identity({"HH_MACOS_CODESIGN_IDENTITY": "Custom Local Identity"}) == (
+        "Custom Local Identity"
+    )
+
+
+def test_macos_app_bundle_command_passes_codesign_identity():
+    info = build.make_version_info("macos-client", _config(), git_hash="abcdef0", dirty=False)
+    command = build.create_macos_app_bundle_command(
+        info,
+        Path("dist/macos"),
+        "HomeworkHelperRemote Local Code Signing",
+    )
+
+    assert command[:3] == [sys.executable, str(build.MACOS_PACKAGE_TOOL), "--output-dir"]
+    assert "--codesign-identity" in command
+    assert command[command.index("--codesign-identity") + 1] == "HomeworkHelperRemote Local Code Signing"
+    assert "--dirty" not in command
+
+
+def test_macos_local_codesign_helper_uses_ephemeral_self_signed_identity():
+    source = Path("tools/ensure_macos_local_codesign_identity.py").read_text(encoding="utf-8")
+
+    assert ensure_macos_local_codesign_identity.DEFAULT_IDENTITY == "HomeworkHelperRemote Local Code Signing"
+    assert "TemporaryDirectory" in source
+    assert "extendedKeyUsage = codeSigning" in source
+    assert "security" in source
+    assert "add-trusted-cert" in source
+    assert "certs/" not in source
 
 
 def test_parallel_jobs_are_bounded_by_available_cpu():
@@ -265,3 +299,47 @@ def test_macos_packager_plist_accepts_build_versions_and_release_metadata():
     assert plist["CFBundlePackageType"] == "APPL"
     assert plist["LSMinimumSystemVersion"] == "26.0"
     assert plist["NSHighResolutionCapable"] is True
+
+
+def test_macos_packager_codesigns_and_verifies_bundle(monkeypatch):
+    calls = []
+
+    def fake_run(command, *, cwd):
+        calls.append(command)
+
+    def fake_run_output(command, *, cwd):
+        calls.append(command)
+        return 'Signature=Developer ID\nTeamIdentifier=not set\n# designated => identifier "dev.homeworkhelper.remote.macos"'
+
+    monkeypatch.setattr(package_macos_remote_app, "_run", fake_run)
+    monkeypatch.setattr(package_macos_remote_app, "_run_output", fake_run_output)
+
+    package_macos_remote_app._codesign_app(Path("dist/macos/HomeworkHelperRemote.app"), "Local Identity")
+
+    assert calls[0] == [
+        "codesign",
+        "--force",
+        "--deep",
+        "--options",
+        "runtime",
+        "--timestamp=none",
+        "--sign",
+        "Local Identity",
+        "dist/macos/HomeworkHelperRemote.app",
+    ]
+    assert ["codesign", "--verify", "--deep", "--strict", "--verbose=2", "dist/macos/HomeworkHelperRemote.app"] in calls
+    assert ["codesign", "--display", "--requirements", "-", "--verbose=4", "dist/macos/HomeworkHelperRemote.app"] in calls
+
+
+def test_macos_packager_rejects_adhoc_codesign_identity(monkeypatch):
+    monkeypatch.setattr(package_macos_remote_app, "_run", lambda command, *, cwd: None)
+
+    def fake_run_output(command, *, cwd):
+        if "--display" in command:
+            return 'Signature=adhoc\n# designated => cdhash H"abcdef"'
+        return ""
+
+    monkeypatch.setattr(package_macos_remote_app, "_run_output", fake_run_output)
+
+    with pytest.raises(RuntimeError, match="ad-hoc/cdhash-only"):
+        package_macos_remote_app._codesign_app(Path("dist/macos/HomeworkHelperRemote.app"), "Local Identity")

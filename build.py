@@ -57,6 +57,9 @@ MACOS_SWIFT_RELEASE_EXECUTABLE = MACOS_CLIENT_DIR / ".build" / "release" / "Home
 MACOS_APP_EXECUTABLE = MACOS_APP_BUNDLE / "Contents" / "MacOS" / "HomeworkHelperRemote"
 MACOS_APP_PROCESS_NAME = "HomeworkHelperRemote"
 MACOS_PKG_SCRIPTS_DIR = BUILD_DIR / "macos-pkg-scripts"
+MACOS_CODESIGN_HELPER = PROJECT_ROOT / "tools" / "ensure_macos_local_codesign_identity.py"
+MACOS_CODESIGN_IDENTITY_ENV = "HH_MACOS_CODESIGN_IDENTITY"
+MACOS_DEFAULT_CODESIGN_IDENTITY = "HomeworkHelperRemote Local Code Signing"
 
 VERSION_SCHEMA = 1
 VERSION_BUMP_CHOICES = ("none", "build", "patch", "minor", "major")
@@ -1573,18 +1576,31 @@ def create_pkgbuild_command(app_bundle: Path, pkg_path: Path, scripts_dir: Path 
     ]
 
 
-def build_macos_remote_app(gui, version_info):
-    """Build the Swift macOS remote client and package it as a .app bundle."""
-    gui.log_section("macOS Remote Client 앱 번들 생성")
-    gui.set_status("Swift release 빌드 및 .app 생성 중...")
-    gui.set_progress(25)
+def macos_codesign_identity(env: dict[str, str] | None = None) -> str:
+    env = env or os.environ
+    return (env.get(MACOS_CODESIGN_IDENTITY_ENV) or MACOS_DEFAULT_CODESIGN_IDENTITY).strip()
 
-    ensure_release_dir(gui)
-    if not MACOS_PACKAGE_TOOL.exists():
-        gui.log(f"✗ macOS 패키징 도구 없음: {MACOS_PACKAGE_TOOL}", 'error')
+
+def macos_codesign_identity_available(identity: str) -> bool:
+    if not identity or platform.system() != "Darwin" or not shutil.which("security"):
         return False
+    try:
+        result = subprocess.run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    return any(identity in line for line in (result.stdout or "").splitlines())
 
-    output_dir = DIST_DIR / "macos"
+
+def create_macos_app_bundle_command(version_info: dict, output_dir: Path, codesign_identity: str) -> list[str]:
     cmd = [
         sys.executable,
         str(MACOS_PACKAGE_TOOL),
@@ -1600,9 +1616,41 @@ def build_macos_remote_app(gui, version_info):
         version_info["string"],
         "--git-hash",
         version_info["git_hash"],
+        "--codesign-identity",
+        codesign_identity,
     ]
     if version_info.get("dirty"):
         cmd.append("--dirty")
+    return cmd
+
+
+def build_macos_remote_app(gui, version_info):
+    """Build the Swift macOS remote client and package it as a .app bundle."""
+    gui.log_section("macOS Remote Client 앱 번들 생성")
+    gui.set_status("Swift release 빌드 및 .app 생성 중...")
+    gui.set_progress(25)
+
+    ensure_release_dir(gui)
+    if not MACOS_PACKAGE_TOOL.exists():
+        gui.log(f"✗ macOS 패키징 도구 없음: {MACOS_PACKAGE_TOOL}", 'error')
+        return False
+
+    output_dir = DIST_DIR / "macos"
+    codesign_identity = macos_codesign_identity()
+    if not macos_codesign_identity_available(codesign_identity):
+        gui.log(f"✗ macOS code-signing identity 없음: {codesign_identity}", 'error')
+        gui.log(
+            "  준비 명령: "
+            f"{sys.executable} {MACOS_CODESIGN_HELPER} --identity {codesign_identity}",
+            'warning',
+        )
+        gui.log(
+            f"  다른 로컬 identity를 쓰려면 {MACOS_CODESIGN_IDENTITY_ENV}=<identity> 환경변수를 지정하세요.",
+            'warning',
+        )
+        return False
+    gui.log(f"  macOS code-signing identity: {codesign_identity}")
+    cmd = create_macos_app_bundle_command(version_info, output_dir, codesign_identity)
     gui.log(f"앱 번들 명령: {' '.join(cmd)}\n")
     try:
         process = subprocess.run(
@@ -1639,8 +1687,7 @@ def build_macos_remote_app(gui, version_info):
     gui.log(f"  Swift release SHA256: {swift_hash}")
     gui.log(f"  App bundle SHA256:   {app_hash}")
     if swift_hash != app_hash:
-        gui.log("✗ Swift release binary와 app bundle binary hash가 다릅니다.", 'error')
-        return False
+        gui.log("  codesign 후 app bundle binary hash가 달라졌습니다. 서명된 번들에서는 정상입니다.", 'warning')
     gui.log(
         "  App metadata: "
         f"release={version_info['string']}, git={version_info['git_hash']}, dirty={version_info['dirty']}"

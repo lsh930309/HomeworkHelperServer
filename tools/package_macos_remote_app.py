@@ -24,6 +24,7 @@ APP_NAME = "HomeworkHelperRemote.app"
 BUNDLE_IDENTIFIER = "dev.homeworkhelper.remote.macos"
 ICON_SOURCE = PROJECT_ROOT / "assets" / "icons" / "app" / "app_icon.png"
 ICON_NAME = "HomeworkHelperRemote.icns"
+DEFAULT_CODESIGN_IDENTITY = ""
 
 
 def _run(command: list[str], *, cwd: Path) -> None:
@@ -39,6 +40,21 @@ def _run(command: list[str], *, cwd: Path) -> None:
         raise RuntimeError(f"{' '.join(command)} failed ({completed.returncode}):\n{completed.stdout}")
     if completed.stdout.strip():
         print(completed.stdout.rstrip())
+
+
+def _run_output(command: list[str], *, cwd: Path) -> str:
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    output = completed.stdout or ""
+    if completed.returncode != 0:
+        raise RuntimeError(f"{' '.join(command)} failed ({completed.returncode}):\n{output}")
+    return output
 
 
 def _info_plist(
@@ -92,6 +108,41 @@ def _copy_icon(resources: Path) -> None:
     shutil.rmtree(iconset, ignore_errors=True)
 
 
+def _codesign_app(app: Path, identity: str) -> None:
+    if not identity.strip():
+        return
+    print(f"codesign identity: {identity}")
+    _run(
+        [
+            "codesign",
+            "--force",
+            "--deep",
+            "--options",
+            "runtime",
+            "--timestamp=none",
+            "--sign",
+            identity,
+            str(app),
+        ],
+        cwd=PROJECT_ROOT,
+    )
+    verify_output = _run_output(
+        ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)],
+        cwd=PROJECT_ROOT,
+    )
+    if verify_output.strip():
+        print(verify_output.rstrip())
+    requirement = _run_output(
+        ["codesign", "--display", "--requirements", "-", "--verbose=4", str(app)],
+        cwd=PROJECT_ROOT,
+    )
+    if "Signature=adhoc" in requirement or "designated => cdhash" in requirement:
+        raise RuntimeError("codesign verification produced an ad-hoc/cdhash-only app identity.")
+    for line in requirement.splitlines():
+        if "Signature=" in line or "TeamIdentifier=" in line or "designated =>" in line:
+            print(line)
+
+
 def package_app(
     output_dir: Path,
     *,
@@ -101,6 +152,7 @@ def package_app(
     release_id: str = "",
     git_hash: str = "",
     dirty: bool = False,
+    codesign_identity: str = DEFAULT_CODESIGN_IDENTITY,
 ) -> Path:
     swift_command = ["swift", "build", "-c", "release"]
     if jobs and jobs > 0:
@@ -137,6 +189,7 @@ def package_app(
             file,
             sort_keys=True,
         )
+    _codesign_app(app, codesign_identity)
     return app
 
 
@@ -149,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--release-id", default="")
     parser.add_argument("--git-hash", default="")
     parser.add_argument("--dirty", action="store_true")
+    parser.add_argument(
+        "--codesign-identity",
+        default=DEFAULT_CODESIGN_IDENTITY,
+        help="Optional local code-signing identity. When omitted, the app bundle is left unsigned.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -160,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             release_id=args.release_id,
             git_hash=args.git_hash,
             dirty=args.dirty,
+            codesign_identity=args.codesign_identity,
         )
     except Exception as exc:
         print(f"macOS app packaging failed: {exc}", file=sys.stderr)
