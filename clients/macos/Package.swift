@@ -7,7 +7,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "HomeworkHelperRemote",
-            path: "Sources/HomeworkHelperRemote"
+            path: "Sources"
         )
     ]
 )

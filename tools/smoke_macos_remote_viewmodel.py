@@ -25,7 +25,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MACOS_SOURCE_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / "Sources" / "HomeworkHelperRemote"
+MACOS_SOURCE_DIR = PROJECT_ROOT / "clients" / "macos" / "Sources"
 REMOTE_MODELS = MACOS_SOURCE_DIR / "RemoteModels.swift"
 REMOTE_API_CLIENT = MACOS_SOURCE_DIR / "RemoteAPIClient.swift"
 KEYCHAIN_TOKEN_STORE = MACOS_SOURCE_DIR / "KeychainTokenStore.swift"

@@ -76,10 +76,10 @@ Payload synchronization rules:
 
 ## 4. macOS client UX and supervisor contract
 
-Source: `remote_clients/macos/HomeworkHelperRemote`
+Source: `clients/macos`
 
 ```bash
-swift build --package-path remote_clients/macos/HomeworkHelperRemote
+swift build --package-path clients/macos
 ./.venv/bin/python tools/package_macos_remote_app.py
 open dist/macos/HomeworkHelperRemote.app
 ```
@@ -121,7 +121,7 @@ Remote route/static checks:
 ```bash
 ./.venv/bin/python -m pytest tests/test_remote_routes.py
 ./.venv/bin/python -m pytest tests/test_remote_macos_client_static.py
-swift build --package-path remote_clients/macos/HomeworkHelperRemote
+swift build --package-path clients/macos
 ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
 ```
 

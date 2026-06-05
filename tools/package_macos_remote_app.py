@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MACOS_ROOT = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote"
+MACOS_ROOT = PROJECT_ROOT / "clients" / "macos"
 EXECUTABLE = MACOS_ROOT / ".build" / "release" / "HomeworkHelperRemote"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "dist" / "macos"
 APP_NAME = "HomeworkHelperRemote.app"

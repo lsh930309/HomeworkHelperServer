@@ -50,9 +50,10 @@ APP_FOLDER = DIST_DIR / APP_NAME
 INNO_SETUP_PATH = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
 INSTALLER_SCRIPT = PROJECT_ROOT / "installer.iss"
 MACOS_PACKAGE_TOOL = PROJECT_ROOT / "tools" / "package_macos_remote_app.py"
+MACOS_CLIENT_DIR = PROJECT_ROOT / "clients" / "macos"
 MACOS_APP_NAME = "HomeworkHelperRemote.app"
 MACOS_APP_BUNDLE = DIST_DIR / "macos" / MACOS_APP_NAME
-MACOS_SWIFT_RELEASE_EXECUTABLE = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / ".build" / "release" / "HomeworkHelperRemote"
+MACOS_SWIFT_RELEASE_EXECUTABLE = MACOS_CLIENT_DIR / ".build" / "release" / "HomeworkHelperRemote"
 MACOS_APP_EXECUTABLE = MACOS_APP_BUNDLE / "Contents" / "MacOS" / "HomeworkHelperRemote"
 MACOS_APP_PROCESS_NAME = "HomeworkHelperRemote"
 MACOS_PKG_SCRIPTS_DIR = BUILD_DIR / "macos-pkg-scripts"
@@ -1087,7 +1088,7 @@ def cleanup_intermediate_artifacts(gui, *, deep_clean: bool = False):
             except Exception as e:
                 gui.log(f"  ⚠ 삭제 실패 ({folder.name}): {e}", 'warning')
     if deep_clean:
-        swift_build = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / ".build"
+        swift_build = MACOS_CLIENT_DIR / ".build"
         for folder in [swift_build]:
             if folder.exists():
                 try:

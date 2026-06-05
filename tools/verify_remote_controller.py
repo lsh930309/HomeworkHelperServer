@@ -15,7 +15,7 @@ from typing import Iterable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MACOS_CLIENT_DIR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote"
+MACOS_CLIENT_DIR = PROJECT_ROOT / "clients" / "macos"
 
 
 @dataclass(frozen=True)

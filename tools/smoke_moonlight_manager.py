@@ -16,11 +16,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MOONLIGHT_MANAGER = (
     PROJECT_ROOT
-    / "remote_clients"
+    / "clients"
     / "macos"
-    / "HomeworkHelperRemote"
     / "Sources"
-    / "HomeworkHelperRemote"
     / "LocalMoonlightManager.swift"
 )
 

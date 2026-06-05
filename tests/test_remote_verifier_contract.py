@@ -51,7 +51,9 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
 def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_workspace():
     forbidden_paths = [
         Path("PROJECT_WORK_PRIORITIES.md"),
+        Path("remote_clients"),
         Path("remote_clients/android"),
+        Path("remote_clients/macos"),
         Path("android"),
         Path("build_android_remote.py"),
         Path("tests/test_build_android_remote.py"),
@@ -111,6 +113,9 @@ def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_work
         "new_gui_status",
         "tauri-preview",
         "Tauri/React preview",
+        "remote_clients/macos/HomeworkHelperRemote",
+        "remote_clients/macos",
+        "Sources/HomeworkHelperRemote",
     ]
     for path in active_docs:
         text = _read(path)
@@ -184,6 +189,7 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
 
     assert "RemoteAPIClient.swift" in macos
     assert "RemoteModels.swift" in macos
+    assert "LocalSSHKeyManager.swift" in macos
     assert "LocalPowerWakeManager.swift" in macos
     assert "swiftc" in macos
     assert "confirmPairing" in macos
@@ -229,6 +235,9 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "smoke_ssh_key" in viewmodel
     assert "Smoke Game" in viewmodel
 
+    assert 'PROJECT_ROOT / "clients" / "macos"' in _read(TOOLS / "verify_remote_controller.py")
+    assert 'PROJECT_ROOT / "clients" / "macos"' in packager
+    assert "Source: `clients/macos`" in setup_guide
     assert "RemoteConnectionSupervisor.swift" in supervisor_smoke
     assert "macOS RemoteConnectionSupervisor smoke passed" in supervisor_smoke
     assert "tailscale no reply should infer offline host" in supervisor_smoke

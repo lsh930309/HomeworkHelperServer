@@ -9,7 +9,7 @@ import textwrap
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUPERVISOR = PROJECT_ROOT / "remote_clients" / "macos" / "HomeworkHelperRemote" / "Sources" / "HomeworkHelperRemote" / "RemoteConnectionSupervisor.swift"
+SUPERVISOR = PROJECT_ROOT / "clients" / "macos" / "Sources" / "RemoteConnectionSupervisor.swift"
 
 
 def _swift_source() -> str:

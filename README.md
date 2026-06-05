@@ -31,7 +31,7 @@ python homework_helper.pyw --server
 ### macOS remote client 개발 실행
 
 ```bash
-swift build --package-path remote_clients/macos/HomeworkHelperRemote
+swift build --package-path clients/macos
 ```
 
 앱 번들 패키징은 Python helper 또는 통합 빌드 스크립트를 사용합니다.
@@ -65,7 +65,7 @@ python build.py --target macos-client
 
 - Python host/API/build: [`requirements.txt`](requirements.txt)
 - Dashboard frontend: [`src/api/dashboard/frontend/package.json`](src/api/dashboard/frontend/package.json)
-- macOS remote client: [`remote_clients/macos/HomeworkHelperRemote/Package.swift`](remote_clients/macos/HomeworkHelperRemote/Package.swift)
+- macOS remote client: [`clients/macos/Package.swift`](clients/macos/Package.swift)
 
 패키징 캐시와 산출물은 `.gitignore` 정책을 따릅니다. 실험 후 폐기된 GUI preview 경로나 웹 캐시는 Git에 숨겨 보존하지 않습니다.
 
@@ -84,7 +84,7 @@ python build.py --target macos-client
 ./.venv/bin/python -m pytest tests/test_build_release.py tests/test_remote_verifier_contract.py -q
 ./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py -q
 ./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
-swift build --package-path remote_clients/macos/HomeworkHelperRemote
+swift build --package-path clients/macos
 ```
 
 ## 프로젝트 구조
@@ -96,7 +96,7 @@ requirements.txt                     # Python dependency surface
 src/
   api/                               # FastAPI server, dashboard, remote routes
   core/ data/ gui/ recording/ ...    # host app runtime modules
-remote_clients/macos/HomeworkHelperRemote/
+clients/macos/
                                      # Swift menu-bar remote client
 tools/                               # packaging, smoke, diagnostic helpers
 tests/                               # static/unit/smoke contract tests

@@ -1,8 +1,8 @@
 from pathlib import Path
 
 
-MACOS_ROOT = Path("remote_clients/macos/HomeworkHelperRemote")
-SOURCE_ROOT = MACOS_ROOT / "Sources/HomeworkHelperRemote"
+MACOS_ROOT = Path("clients/macos")
+SOURCE_ROOT = MACOS_ROOT / "Sources"
 
 
 def _read(path: Path) -> str:
@@ -18,7 +18,7 @@ def test_macos_package_keeps_native_swiftui_executable_contract():
     assert 'platforms: [.macOS("26.0")]' in package
     assert '.macOS(.v13)' not in package
     assert '.executableTarget(' in package
-    assert 'path: "Sources/HomeworkHelperRemote"' in package
+    assert 'path: "Sources"' in package
     assert 'import SwiftUI' in app
     assert '@main' in app
     assert 'struct HomeworkHelperRemoteApp: App' in app
