@@ -280,3 +280,23 @@ class DailyCheckInLog(Base):
     post_called = Column(Boolean, nullable=False, default=False)
     raw_debug_json = Column(String, nullable=True)
     created_at = Column(Float, nullable=False)
+
+
+class ProviderCredentialHealth(Base):
+    """Last observed cookie/token validity by external provider."""
+    __tablename__ = "provider_credential_health"
+    __table_args__ = (
+        Index("ix_provider_credential_health_status", "status"),
+        Index("ix_provider_credential_health_detected_at", "detected_at"),
+    )
+
+    provider = Column(String, primary_key=True, index=True)
+    status = Column(String, nullable=False, default="unknown")
+    reason = Column(String, nullable=True)
+    message = Column(String, nullable=True)
+    source = Column(String, nullable=True)
+    process_id = Column(String, nullable=True)
+    game_id = Column(String, nullable=True)
+    detected_at = Column(Float, nullable=False)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)

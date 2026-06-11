@@ -137,22 +137,24 @@ class MainWindow(QMainWindow):
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
-        self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self,
-        )
-        self._nikke_resource_reconcile = NikkeResourceReconcileCoordinator(
-            self.data_manager,
-            self.process_monitor,
-            self,
-        )
-
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
         self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
             QApplication.applicationName(),
             main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
         )
+        self._hoyolab_reconcile = HoYoStaminaReconcileCoordinator(
+            self.data_manager,
+            self.process_monitor,
+            self.system_notifier,
+            self,
+        )
+        self._nikke_resource_reconcile = NikkeResourceReconcileCoordinator(
+            self.data_manager,
+            self.process_monitor,
+            self.system_notifier,
+            self,
+        )
+
         self._daily_checkin = DailyCheckInCoordinator(
             self.data_manager,
             self.system_notifier,

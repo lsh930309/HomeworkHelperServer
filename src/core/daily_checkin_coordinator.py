@@ -8,6 +8,7 @@ from typing import Any
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 
 from src.core import daily_checkin
+from src.core import credential_health
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,10 @@ class DailyCheckInCoordinator(QObject):
         if not daily_checkin.is_failure_status(status):
             return
 
+        if credential_health.is_alertable_health(None, status):
+            self._send_failure_notification(log, credential_issue=True)
+            return
+
         process_id = str(log.get("process_id") or "")
         game_id = str(log.get("game_id") or "")
         try:
@@ -109,14 +114,17 @@ class DailyCheckInCoordinator(QObject):
         if key in self._notified_failures:
             return
         self._notified_failures.add(key)
+        self._send_failure_notification(log, credential_issue=False)
 
-        title = f"{log.get('game_name') or log.get('process_name') or '게임'} 출석 실패"
-        message = str(log.get("message") or status)
+    def _send_failure_notification(self, log: dict[str, Any], *, credential_issue: bool) -> None:
+        game_label = log.get("game_name") or log.get("process_name") or "게임"
+        title = f"{game_label} 계정/토큰 확인 필요" if credential_issue else f"{game_label} 출석 실패"
+        message = str(log.get("message") or log.get("status") or "")
         try:
             self._notifier.send_notification(
                 title=title,
                 message=message,
-                task_id_to_highlight=process_id or None,
+                task_id_to_highlight=str(log.get("process_id") or "") or None,
                 button_text="확인",
                 button_action="show",
             )

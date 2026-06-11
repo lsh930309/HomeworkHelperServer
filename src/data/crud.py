@@ -810,6 +810,60 @@ def get_daily_checkin_logs_for_period(
         .all()
     )
 
+
+def get_provider_credential_health(db: Session, provider: str):
+    return (
+        db.query(models.ProviderCredentialHealth)
+        .filter(models.ProviderCredentialHealth.provider == provider)
+        .first()
+    )
+
+
+def get_provider_credential_health_rows(db: Session):
+    return (
+        db.query(models.ProviderCredentialHealth)
+        .order_by(models.ProviderCredentialHealth.provider.asc())
+        .all()
+    )
+
+
+@db_retry_on_lock
+def upsert_provider_credential_health(
+    db: Session,
+    *,
+    provider: str,
+    status: str,
+    reason: str | None = None,
+    message: str | None = None,
+    source: str | None = None,
+    process_id: str | None = None,
+    game_id: str | None = None,
+    detected_at: float | None = None,
+    timestamp: float | None = None,
+):
+    now = float(timestamp or time.time())
+    observed_at = float(detected_at or now)
+    row = get_provider_credential_health(db, provider)
+    if row is None:
+        row = models.ProviderCredentialHealth(
+            provider=provider,
+            created_at=now,
+            detected_at=observed_at,
+            updated_at=now,
+        )
+    row.status = status or "unknown"
+    row.reason = reason
+    row.message = message
+    row.source = source
+    row.process_id = process_id
+    row.game_id = game_id
+    row.detected_at = observed_at
+    row.updated_at = now
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):

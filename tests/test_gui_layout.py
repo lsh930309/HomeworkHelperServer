@@ -188,6 +188,10 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     assert "run_daily_checkin" in dialog_source
     assert "probe_daily_checkin_status" in dialog_source
     assert "set_daily_checkin_enabled" in dialog_source
+    assert "get_provider_credential_health" in dialog_source
+    assert "update_provider_credential_health" in dialog_source
+    assert "유효성은 검사/자동 동기화 결과" in dialog_source
+    assert "manual_cookie_check" in dialog_source
     assert "customContextMenuRequested" in dialog_source
     assert "메시지 복사" in dialog_source
     assert "로그 행 복사" in dialog_source
@@ -201,6 +205,39 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     assert "self.ltoken_edit" not in dialog_source
     assert "self.ltmid_edit" not in dialog_source
     assert "save_credentials(int(cookies.get(\"ltuid\"))" in dialog_source
+
+
+def test_resource_tracking_dialog_maps_manual_blabla_token_error_to_provider_health():
+    from src.core import credential_health
+    import src.gui.dialogs as dialogs
+
+    payload = dialogs.HoYoLabSettingsDialog._provider_health_payload_from_lines(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        [
+            "✅ BlablaLink: 전초기지 방어 보상 42.0% (서버=1)",
+            "❌ BlablaLink 출석: BlablaLink/NIKKE 로그인 또는 바인딩 상태 확인 필요 (ret=11002: Inner token is invalid[3].)",
+        ],
+        source="manual_cookie_check",
+    )
+
+    assert payload is not None
+    assert payload["provider"] == credential_health.PROVIDER_NIKKE_BLABLALINK
+    assert payload["status"] == credential_health.HEALTH_AUTH_PROBLEM
+    assert payload["reason"] == "game_login_required"
+    assert "Inner token is invalid[3]" in payload["message"]
+
+
+def test_resource_tracking_dialog_does_not_overwrite_provider_health_on_network_error():
+    from src.core import credential_health
+    import src.gui.dialogs as dialogs
+
+    payload = dialogs.HoYoLabSettingsDialog._provider_health_payload_from_lines(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        ["❌ BlablaLink 출석: 네트워크/API 요청 실패 (timeout)"],
+        source="manual_cookie_check",
+    )
+
+    assert payload is None
 
 
 def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned(monkeypatch):

@@ -333,3 +333,30 @@ class DailyCheckInStatusProbeSchema(BaseModel):
     message: Optional[str] = None
     post_called: bool = False
     raw_debug_json: Optional[str] = None
+
+
+class ProviderCredentialHealthUpdate(BaseModel):
+    provider: Optional[str] = None
+    status: str = "unknown"
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    source: Optional[str] = None
+    process_id: Optional[str] = None
+    game_id: Optional[str] = None
+    detected_at: Optional[float] = None
+
+
+class ProviderCredentialHealthSchema(BaseModel):
+    provider: str
+    status: str
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    source: Optional[str] = None
+    process_id: Optional[str] = None
+    game_id: Optional[str] = None
+    detected_at: float
+    created_at: float
+    updated_at: float
+
+    class Config:
+        from_attributes = True

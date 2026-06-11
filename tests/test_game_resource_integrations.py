@@ -6,7 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from src.core import credential_health
 from src.core.process_progress import calculate_process_progress
 from src.core.daily_checkin import (
     GAME_HONKAI_STARRAIL,
@@ -21,6 +25,7 @@ from src.utils.icon_helper import resolve_preset_icon_path
 from src.services.hoyolab import HoYoLabService
 from src.services.nikke import NikkeService
 from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+from src.data import crud, models
 import src.services.hoyolab as hoyolab_module
 
 
@@ -166,6 +171,86 @@ def test_daily_checkin_due_policy_is_conservative():
     assert not should_attempt_daily_checkin([{"status": "auth_required", "attempted_at": 1_000.0}], now_ts=now)
     assert not should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 100.0}], now_ts=now)
     assert should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 2_000.0}], now_ts=now)
+
+
+def test_provider_credential_health_classification_keeps_transients_out_of_auth_state():
+    auth_payload = credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        "game_login_required",
+        message="Inner token is invalid[3].",
+        source="daily_checkin",
+        process_id="nikke",
+        game_id="nikke",
+        detected_at=1234.0,
+    )
+    ok_payload = credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_HOYOLAB,
+        "already_done",
+        message="오늘 이미 출석 체크가 완료되었습니다.",
+        source="daily_checkin",
+    )
+
+    assert auth_payload is not None
+    assert auth_payload["status"] == credential_health.HEALTH_AUTH_PROBLEM
+    assert credential_health.is_alertable_health(auth_payload["status"], auth_payload["reason"])
+    assert ok_payload is not None
+    assert ok_payload["status"] == credential_health.HEALTH_OK
+    assert credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        "network_error",
+        message="timeout",
+        source="resource_tracking",
+    ) is None
+
+
+def test_provider_credential_health_crud_upserts_latest_observation():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    models.Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+
+    db = Session()
+    try:
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_NIKKE_BLABLALINK,
+            status=credential_health.HEALTH_AUTH_PROBLEM,
+            reason="game_login_required",
+            message="Inner token is invalid[3].",
+            source="manual_cookie_check",
+            process_id="nikke-process",
+            game_id="nikke",
+            detected_at=1000.0,
+            timestamp=1001.0,
+        )
+        assert row.provider == credential_health.PROVIDER_NIKKE_BLABLALINK
+        assert row.status == credential_health.HEALTH_AUTH_PROBLEM
+        assert row.detected_at == 1000.0
+
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_NIKKE_BLABLALINK,
+            status=credential_health.HEALTH_OK,
+            reason="ok",
+            message="resource tracking ok",
+            source="resource_tracking",
+            detected_at=2000.0,
+            timestamp=2001.0,
+        )
+
+        rows = crud.get_provider_credential_health_rows(db)
+        assert len(rows) == 1
+        assert row.status == credential_health.HEALTH_OK
+        assert row.reason == "ok"
+        assert row.source == "resource_tracking"
+        assert row.detected_at == 2000.0
+        assert row.created_at == 1001.0
+        assert row.updated_at == 2001.0
+    finally:
+        db.close()
 
 
 def test_nikke_factory_preset_enables_resource_tracking():

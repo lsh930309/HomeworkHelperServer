@@ -996,6 +996,42 @@ def run_server_main():
             return attempted_at + daily_checkin.TRANSIENT_RETRY_AFTER_SECONDS
         return period_end
 
+    def _record_provider_health(
+        db: Session,
+        *,
+        provider: str,
+        reason: str,
+        message: str = "",
+        source: str,
+        process_id: str | None = None,
+        game_id: str | None = None,
+        detected_at: float | None = None,
+    ):
+        from src.core import credential_health
+
+        payload = credential_health.update_payload_for_reason(
+            provider,
+            reason,
+            message=message,
+            source=source,
+            process_id=process_id,
+            game_id=game_id,
+            detected_at=detected_at,
+        )
+        if payload is None:
+            return None
+        return crud.upsert_provider_credential_health(
+            db,
+            provider=payload["provider"],
+            status=payload["status"],
+            reason=payload["reason"],
+            message=payload["message"],
+            source=payload["source"],
+            process_id=payload["process_id"],
+            game_id=payload["game_id"],
+            detected_at=payload["detected_at"],
+        )
+
     def _execute_and_record_daily_checkin(db: Session, process, descriptor, trigger: str):
         from src.core import daily_checkin
 
@@ -1037,13 +1073,33 @@ def run_server_main():
             last_success_at=result.attempted_at if result.status in daily_checkin.SUCCESS_STATUSES else None,
             next_run_at=_daily_checkin_next_run_at(result.status, result.attempted_at, period_end),
         )
+        _record_provider_health(
+            db,
+            provider=descriptor.provider,
+            reason=result.status,
+            message=result.message,
+            source=f"daily_checkin:{trigger or 'manual_run'}",
+            process_id=process.id,
+            game_id=descriptor.game_id,
+            detected_at=result.attempted_at,
+        )
         return log_row
 
-    def _probe_daily_checkin_payload(process, descriptor) -> dict[str, Any]:
+    def _probe_daily_checkin_payload(db: Session, process, descriptor) -> dict[str, Any]:
         from src.core import daily_checkin
 
         result = daily_checkin.probe_daily_checkin_status(descriptor)
         period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        _record_provider_health(
+            db,
+            provider=descriptor.provider,
+            reason=result.status,
+            message=result.message,
+            source="daily_checkin_status_probe",
+            process_id=process.id,
+            game_id=descriptor.game_id,
+            detected_at=result.attempted_at,
+        )
         return {
             "process_id": process.id,
             "process_name": process.name,
@@ -1262,6 +1318,40 @@ def run_server_main():
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
 
+    @app.get("/provider-health", response_model=List[schemas.ProviderCredentialHealthSchema])
+    def get_provider_health_rows(db: Session = Depends(get_db)):
+        """Provider별 최근 쿠키/토큰 유효성 관측 상태를 반환합니다."""
+        return crud.get_provider_credential_health_rows(db)
+
+    @app.get("/provider-health/{provider}", response_model=schemas.ProviderCredentialHealthSchema)
+    def get_provider_health(provider: str, db: Session = Depends(get_db)):
+        row = crud.get_provider_credential_health(db, provider)
+        if row is None:
+            raise HTTPException(status_code=404, detail="provider 상태가 아직 기록되지 않았습니다.")
+        return row
+
+    @app.post("/provider-health/{provider}", response_model=schemas.ProviderCredentialHealthSchema)
+    def update_provider_health(
+        provider: str,
+        update: schemas.ProviderCredentialHealthUpdate,
+        db: Session = Depends(get_db),
+    ):
+        """자동/수동 연동 흐름에서 관측한 provider 쿠키/토큰 상태를 저장합니다."""
+        if update.provider and update.provider != provider:
+            raise HTTPException(status_code=400, detail="provider 경로와 payload가 일치하지 않습니다.")
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=provider,
+            status=update.status,
+            reason=update.reason,
+            message=update.message,
+            source=update.source,
+            process_id=update.process_id,
+            game_id=update.game_id,
+            detected_at=update.detected_at,
+        )
+        return row
+
     @app.get("/daily-checkin/games", response_model=List[schemas.DailyCheckInRegisteredGameSchema])
     def get_daily_checkin_games(db: Session = Depends(get_db)):
         """현재 등록된 지원 게임의 자동 출석 설정/최근 상태를 반환합니다."""
@@ -1323,7 +1413,7 @@ def run_server_main():
     ):
         """단일 등록 게임의 출석 상태를 POST 없이 조회합니다."""
         process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
-        return _probe_daily_checkin_payload(process, descriptor)
+        return _probe_daily_checkin_payload(db, process, descriptor)
 
     @app.post("/daily-checkin/run-due")
     def run_due_daily_checkins(

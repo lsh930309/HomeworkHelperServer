@@ -1,6 +1,7 @@
 import os
 import datetime
 import logging
+import time
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons direc
 
 # Local imports
 from src.data.data_models import ManagedProcess, GlobalSettings
+from src.core import credential_health
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL
@@ -2182,6 +2184,7 @@ class HoYoLabSettingsDialog(QDialog):
 
         self._update_status()
         self._update_nikke_status()
+        self._load_provider_health_labels()
         self._load_daily_checkin_games()
         self._load_daily_checkin_logs()
 
@@ -2529,14 +2532,160 @@ class HoYoLabSettingsDialog(QDialog):
             return "color: #ffcc00;"
         return "color: #ff6666;"
 
+    def _load_provider_health_labels(self) -> None:
+        """Apply the last automatically/manual observed provider health, if any."""
+        if self.data_manager is None or not hasattr(self.data_manager, "get_provider_credential_health"):
+            return
+        for provider in (credential_health.PROVIDER_HOYOLAB, credential_health.PROVIDER_NIKKE_BLABLALINK):
+            if not self._provider_has_stored_credentials(provider):
+                continue
+            try:
+                health = self.data_manager.get_provider_credential_health(provider)
+            except Exception:
+                health = None
+            if isinstance(health, dict):
+                self._apply_provider_health_label(provider, health)
+
+    @staticmethod
+    def _provider_has_stored_credentials(provider: str) -> bool:
+        """Avoid showing stale 'OK' observations after a user removes cookies."""
+        try:
+            if provider == credential_health.PROVIDER_HOYOLAB:
+                from src.utils.hoyolab_config import HoYoLabConfig
+
+                return bool(HoYoLabConfig().is_configured())
+            if provider == credential_health.PROVIDER_NIKKE_BLABLALINK:
+                from src.utils.nikke_config import NikkeConfig
+
+                return bool(NikkeConfig().is_configured())
+        except Exception:
+            return True
+        return True
+
+    def _apply_provider_health_label(self, provider: str, health: dict[str, Any]) -> None:
+        status = str(health.get("status") or credential_health.HEALTH_UNKNOWN)
+        message = credential_health.user_message(
+            provider,
+            status,
+            str(health.get("reason") or ""),
+            str(health.get("message") or ""),
+        )
+        detected_at = health.get("detected_at")
+        suffix = ""
+        if detected_at:
+            suffix = f"\n최근 확인: {self._format_timestamp(detected_at)}"
+        text = message + suffix
+        if status == credential_health.HEALTH_OK:
+            style = "color: #44cc44;"
+            text = "✅ " + text
+        elif status == credential_health.HEALTH_AUTH_PROBLEM:
+            style = "color: #ff6666;"
+            text = "❌ " + text
+        elif status == credential_health.HEALTH_WARNING:
+            style = "color: #ffcc00;"
+            text = "⚠️ " + text
+        else:
+            style = "color: #ffcc00;"
+            text = "☑️ " + text
+
+        if provider == credential_health.PROVIDER_HOYOLAB:
+            self.status_label.setText(text)
+            self.status_label.setStyleSheet(style)
+        elif provider == credential_health.PROVIDER_NIKKE_BLABLALINK:
+            self.nikke_status_label.setText(text)
+            self.nikke_status_label.setStyleSheet(style)
+
+    def _persist_provider_health(self, payload: dict[str, Any]) -> dict[str, Any]:
+        updater = getattr(self.data_manager, "update_provider_credential_health", None) if self.data_manager is not None else None
+        if callable(updater):
+            saved = updater(
+                str(payload.get("provider") or ""),
+                str(payload.get("status") or credential_health.HEALTH_UNKNOWN),
+                reason=payload.get("reason"),
+                message=payload.get("message"),
+                source=payload.get("source"),
+                process_id=payload.get("process_id"),
+                game_id=payload.get("game_id"),
+                detected_at=payload.get("detected_at"),
+            )
+            if isinstance(saved, dict):
+                return saved
+        return payload
+
+    def _sync_provider_health_from_lines(self, provider: str, lines: list[str], *, source: str) -> None:
+        payload = self._provider_health_payload_from_lines(provider, lines, source=source)
+        if payload is None:
+            return
+        self._apply_provider_health_label(provider, self._persist_provider_health(payload))
+
+    def _set_provider_health_status(
+        self,
+        provider: str,
+        *,
+        status: str,
+        reason: str,
+        message: str,
+        source: str,
+        game_id: str | None = None,
+        apply_label: bool = True,
+    ) -> None:
+        payload = {
+            "provider": provider,
+            "status": status,
+            "reason": reason,
+            "message": message,
+            "source": source,
+            "process_id": None,
+            "game_id": game_id,
+            "detected_at": time.time(),
+        }
+        saved = self._persist_provider_health(payload)
+        if apply_label:
+            self._apply_provider_health_label(provider, saved)
+
+    @staticmethod
+    def _provider_health_payload_from_lines(provider: str, lines: list[str], *, source: str) -> dict[str, Any] | None:
+        non_empty = [str(line or "") for line in lines if str(line or "").strip()]
+        if not non_empty:
+            return None
+        combined = "\n".join(non_empty)
+        lowered = combined.lower()
+        if any(line.startswith("❌") for line in non_empty):
+            if "네트워크" in combined or "network" in lowered or "timeout" in lowered:
+                reason = "network_error"
+            elif any(token in combined for token in ("쿠키", "토큰", "인증", "로그인", "세션", "바인딩", "만료")) or "token" in lowered:
+                if "inner token" in lowered or "game not login" in lowered or "세션 쿠키 갱신" in combined:
+                    reason = "game_login_required"
+                elif "보안" in combined:
+                    reason = "challenge_required"
+                elif "대표 계정" in combined or "바인딩" in combined:
+                    reason = "role_not_found"
+                else:
+                    reason = "auth_required"
+            else:
+                reason = "route_error"
+        elif any(line.startswith("⚠️") for line in non_empty):
+            reason = "role_not_found" if ("대표 계정" in combined or "바인딩" in combined) else "route_error"
+        elif all(line.startswith("✅") for line in non_empty):
+            reason = "ok"
+        else:
+            reason = "unknown"
+        return credential_health.update_payload_for_reason(
+            provider,
+            reason,
+            message=combined,
+            source=source,
+            detected_at=time.time(),
+        )
+
     def _update_status(self):
         """현재 HoYoLab 인증 상태 업데이트"""
         try:
             from src.utils.hoyolab_config import HoYoLabConfig
             config = HoYoLabConfig()
             if config.is_configured():
-                self.status_label.setText("✅ HoYoLab 인증 정보가 설정되어 있습니다.")
-                self.status_label.setStyleSheet("color: #44cc44;")
+                self.status_label.setText("☑️ HoYoLab 쿠키가 저장되어 있습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다.")
+                self.status_label.setStyleSheet("color: #ffcc00;")
             else:
                 self.status_label.setText("❌ HoYoLab 인증 정보가 없습니다.")
                 self.status_label.setStyleSheet("color: #ff6666;")
@@ -2570,7 +2719,13 @@ class HoYoLabSettingsDialog(QDialog):
                     reset_hoyolab_service()
                     self.extract_status_label.setText(f"✅ {browser}에서 HoYoLab 쿠키를 추출해 저장했습니다.")
                     self.extract_status_label.setStyleSheet("color: #44cc44;")
-                    self._update_status()
+                    self._set_provider_health_status(
+                        credential_health.PROVIDER_HOYOLAB,
+                        status=credential_health.HEALTH_UNKNOWN,
+                        reason="stored_unverified",
+                        message=f"{browser}에서 HoYoLab 쿠키를 저장했습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다.",
+                        source="browser_cookie_extract",
+                    )
                 else:
                     self.extract_status_label.setText("❌ HoYoLab 쿠키 저장 실패")
                     self.extract_status_label.setStyleSheet("color: #ff6666;")
@@ -2590,8 +2745,8 @@ class HoYoLabSettingsDialog(QDialog):
 
             config = NikkeConfig()
             if config.is_configured():
-                self.nikke_status_label.setText("✅ NIKKE/BlablaLink 인증 정보가 설정되어 있습니다.")
-                self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                self.nikke_status_label.setText("☑️ NIKKE/BlablaLink 쿠키가 저장되어 있습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다.")
+                self.nikke_status_label.setStyleSheet("color: #ffcc00;")
             else:
                 self.nikke_status_label.setText("❌ NIKKE/BlablaLink 인증 정보가 없습니다.")
                 self.nikke_status_label.setStyleSheet("color: #ff6666;")
@@ -2629,17 +2784,39 @@ class HoYoLabSettingsDialog(QDialog):
                     role = NikkeService(config=config).get_role_info(refresh=True)
                     reset_nikke_service()
                     if role:
-                        self.nikke_status_label.setText(
-                            f"✅ {browser}에서 BlablaLink 쿠키와 ShiftyPad 대표 계정 정보를 확인했습니다. "
-                            f"서버={role.nikke_area_id}, open_id={self._mask_identifier(role.intl_open_id)}"
+                        payload = credential_health.update_payload_for_reason(
+                            credential_health.PROVIDER_NIKKE_BLABLALINK,
+                            "ok",
+                            message=(
+                                f"{browser}에서 BlablaLink 쿠키와 ShiftyPad 대표 계정 정보를 확인했습니다. "
+                                f"서버={role.nikke_area_id}, open_id={self._mask_identifier(role.intl_open_id)}"
+                            ),
+                            source="browser_cookie_extract",
+                            game_id="nikke",
+                            detected_at=time.time(),
                         )
-                        self.nikke_status_label.setStyleSheet("color: #44cc44;")
+                        if payload:
+                            self._apply_provider_health_label(
+                                credential_health.PROVIDER_NIKKE_BLABLALINK,
+                                self._persist_provider_health(payload),
+                            )
                     else:
-                        self.nikke_status_label.setText(
-                            f"⚠️ {browser}에서 BlablaLink 쿠키는 저장했지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다.\n"
-                            "BlablaLink에서 ShiftyPad를 열어 대표 계정이 보이는지 확인한 뒤 다시 추출하세요."
+                        payload = credential_health.update_payload_for_reason(
+                            credential_health.PROVIDER_NIKKE_BLABLALINK,
+                            "role_not_found",
+                            message=(
+                                f"{browser}에서 BlablaLink 쿠키는 저장했지만 ShiftyPad 대표 계정/서버 정보를 찾지 못했습니다. "
+                                "BlablaLink에서 ShiftyPad를 열어 대표 계정이 보이는지 확인한 뒤 다시 추출하세요."
+                            ),
+                            source="browser_cookie_extract",
+                            game_id="nikke",
+                            detected_at=time.time(),
                         )
-                        self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+                        if payload:
+                            self._apply_provider_health_label(
+                                credential_health.PROVIDER_NIKKE_BLABLALINK,
+                                self._persist_provider_health(payload),
+                            )
                 else:
                     self.nikke_status_label.setText("❌ BlablaLink 쿠키 저장 실패")
                     self.nikke_status_label.setStyleSheet("color: #ff6666;")
@@ -2663,6 +2840,13 @@ class HoYoLabSettingsDialog(QDialog):
         dialog = HoYoLabAdvancedCredentialsDialog(self)
         if dialog.exec():
             self._update_status()
+            self._set_provider_health_status(
+                credential_health.PROVIDER_HOYOLAB,
+                status=credential_health.HEALTH_UNKNOWN,
+                reason="stored_unverified",
+                message="HoYoLab 고급 인증 정보가 저장되었습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다.",
+                source="advanced_credentials_save",
+            )
             self.extract_status_label.setText("✅ HoYoLab 고급 인증 정보가 저장되었습니다.")
             self.extract_status_label.setStyleSheet("color: #44cc44;")
 
@@ -2670,8 +2854,14 @@ class HoYoLabSettingsDialog(QDialog):
         dialog = NikkeAdvancedSessionDialog(self)
         if dialog.exec():
             self._update_nikke_status()
-            self.nikke_status_label.setText("✅ NIKKE/BlablaLink 고급 인증 정보가 저장되었습니다.")
-            self.nikke_status_label.setStyleSheet("color: #44cc44;")
+            self._set_provider_health_status(
+                credential_health.PROVIDER_NIKKE_BLABLALINK,
+                status=credential_health.HEALTH_UNKNOWN,
+                reason="stored_unverified",
+                message="NIKKE/BlablaLink 고급 인증 정보가 저장되었습니다. 유효성은 검사/자동 동기화 결과로 확인됩니다.",
+                source="advanced_credentials_save",
+                game_id="nikke",
+            )
 
     def _open_nikke(self):
         """BlablaLink 로그인 웹사이트 열기"""
@@ -2700,6 +2890,15 @@ class HoYoLabSettingsDialog(QDialog):
 
                 NikkeConfig().clear_session()
                 reset_nikke_service()
+                self._set_provider_health_status(
+                    credential_health.PROVIDER_NIKKE_BLABLALINK,
+                    status=credential_health.HEALTH_AUTH_PROBLEM,
+                    reason="auth_required",
+                    message="NIKKE/BlablaLink 인증 정보가 삭제되었습니다.",
+                    source="manual_credentials_clear",
+                    game_id="nikke",
+                    apply_label=False,
+                )
                 self._update_nikke_status()
                 self.cookie_check_status_label.setText("NIKKE/BlablaLink 인증 정보가 삭제되었습니다.")
             except Exception as e:
@@ -2731,6 +2930,14 @@ class HoYoLabSettingsDialog(QDialog):
 
                 HoYoLabConfig().clear_credentials()
                 reset_hoyolab_service()
+                self._set_provider_health_status(
+                    credential_health.PROVIDER_HOYOLAB,
+                    status=credential_health.HEALTH_AUTH_PROBLEM,
+                    reason="auth_required",
+                    message="HoYoLab 인증 정보가 삭제되었습니다.",
+                    source="manual_credentials_clear",
+                    apply_label=False,
+                )
                 self._update_status()
                 self.cookie_check_status_label.setText("HoYoLab 인증 정보가 삭제되었습니다.")
             except Exception as e:
@@ -2742,11 +2949,20 @@ class HoYoLabSettingsDialog(QDialog):
         self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
         QApplication.processEvents()
         try:
-            lines = [
-                self._check_hoyolab_availability(),
-                self._check_nikke_availability(),
-                self._check_nikke_daily_checkin_availability(),
-            ]
+            hoyolab_line = self._check_hoyolab_availability()
+            nikke_resource_line = self._check_nikke_availability()
+            nikke_checkin_line = self._check_nikke_daily_checkin_availability()
+            lines = [hoyolab_line, nikke_resource_line, nikke_checkin_line]
+            self._sync_provider_health_from_lines(
+                credential_health.PROVIDER_HOYOLAB,
+                [hoyolab_line],
+                source="manual_cookie_check",
+            )
+            self._sync_provider_health_from_lines(
+                credential_health.PROVIDER_NIKKE_BLABLALINK,
+                [nikke_resource_line, nikke_checkin_line],
+                source="manual_cookie_check",
+            )
             self.cookie_check_status_label.setText("\n".join(lines))
             if all(line.startswith("✅") for line in lines):
                 self.cookie_check_status_label.setStyleSheet("color: #44cc44;")

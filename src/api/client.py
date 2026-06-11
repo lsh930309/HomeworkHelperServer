@@ -344,6 +344,55 @@ class ApiClient:
             print(f"프로세스 리소스 저장에 실패했습니다: {e}")
             return False
 
+    def get_provider_credential_health(self, provider: str | None = None) -> dict[str, Any] | list[dict[str, Any]] | None:
+        """Return the last observed cookie/token health for one provider or all providers."""
+        try:
+            url = f"{self.base_url}/provider-health"
+            if provider:
+                url = f"{url}/{provider}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 404 and provider:
+                return None
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"provider 인증 상태 조회 실패: {e}")
+            return None
+
+    def update_provider_credential_health(
+        self,
+        provider: str,
+        status: str,
+        *,
+        reason: str | None = None,
+        message: str | None = None,
+        source: str | None = None,
+        process_id: str | None = None,
+        game_id: str | None = None,
+        detected_at: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist the last observed cookie/token health for a provider."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/provider-health/{provider}",
+                json={
+                    "provider": provider,
+                    "status": status,
+                    "reason": reason,
+                    "message": message,
+                    "source": source,
+                    "process_id": process_id,
+                    "game_id": game_id,
+                    "detected_at": detected_at,
+                },
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"provider 인증 상태 저장 실패: {e}")
+            return None
+
     def get_daily_checkin_games(self) -> list[dict[str, Any]]:
         """Return registered games that support API-first daily check-in."""
         try:

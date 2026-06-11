@@ -155,6 +155,28 @@
      - BlablaLink는 기존 task status endpoint를 재사용하며 `DailyCheckIn` POST는 호출하지 않는다.
    - 최근 로그 UI는 긴 오류 메시지를 잘림 없이 확인할 수 있도록 tooltip에 전체 내용을 넣고, 로그 row 우클릭 메뉴에서 `메시지 복사` / `로그 행 복사`를 제공한다.
 
+   ### 2026-06-11 쿠키/토큰 상태 표시 및 자동 감지 정책
+
+   - HoYoLab/BlablaLink 쿠키는 자원 추적과 자동 출석체크가 공유하므로, 기능별 상태와 별개로 provider 단위의 최근 인증 상태를 기록한다.
+     - 신규 상태 저장 단위: `provider_credential_health`
+     - provider: `hoyolab`, `nikke_blablalink`
+     - 상태: `unknown`, `ok`, `warning`, `auth_problem`
+     - 기록 필드: reason/message/source/process_id/game_id/detected_at
+   - 계정/토큰 탭의 기본 표기는 “인증 정상”이 아니라 “쿠키가 저장되어 있음, 유효성은 검사/자동 동기화 결과로 확인”으로 분리한다.
+     - 저장 여부만 확인된 상태는 노란색/중립 상태로 표시한다.
+     - 실제 읽기/출석/자원 조회가 성공한 경우에만 초록색 `ok`로 표시한다.
+     - `Inner token is invalid[3]`, `game not login`, 로그인 세션 실패, 대표 계정/바인딩 실패 등은 빨간색 `auth_problem`으로 표시한다.
+   - 수동 `쿠키 유효성 검사`는 HoYoLab 스태미나 읽기, BlablaLink 로그인/전초기지 읽기, BlablaLink 출석 상태 probe 결과를 provider health에 반영한다.
+     - 수동 검사는 UI 표기와 DB 상태만 갱신하고 시스템 알림은 보내지 않는다.
+   - 자동 기능에서 감지된 인증 문제도 provider health에 반영한다.
+     - 자동 출석 실행 결과는 local API가 기록한다.
+     - NIKKE 전초기지 자원 추적 실패(`auth_required`, `auth_expired`, `role_not_found`)는 provider health와 process resource status를 함께 갱신한다.
+     - HoYoLab 스태미나 추적의 명확한 미설정/사용 불가 상태도 provider health에 기록한다.
+   - 자동 감지 알림 정책은 “감지마다 알림”으로 고정한다.
+     - 인증/토큰 문제는 같은 reset window 안에서도 재감지 시 알림을 허용한다.
+     - 같은 한 번의 수동/자동 검사 흐름 안에서 중복 메시지를 여러 번 보내지는 않는다.
+     - 네트워크 일시 오류(`network_error`)는 provider health와 인증 문제 알림 대상으로 승격하지 않는다.
+
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.
 

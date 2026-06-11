@@ -235,6 +235,28 @@ def auto_migrate_database():
                 "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_provider_game "
                 "ON daily_checkin_logs (provider, game_id)"
             ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS provider_credential_health ("
+                "provider TEXT PRIMARY KEY, "
+                "status TEXT NOT NULL DEFAULT 'unknown', "
+                "reason TEXT, "
+                "message TEXT, "
+                "source TEXT, "
+                "process_id TEXT, "
+                "game_id TEXT, "
+                "detected_at REAL NOT NULL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_provider_credential_health_status "
+                "ON provider_credential_health (status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_provider_credential_health_detected_at "
+                "ON provider_credential_health (detected_at)"
+            ))
             conn.commit()
             conn.execute(text(
                 "CREATE TABLE IF NOT EXISTS game_platform_links ("
