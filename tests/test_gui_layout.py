@@ -180,6 +180,8 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     assert "check_cookies_btn" in dialog_source
     assert "hoyolab_checkin_run_btn" in dialog_source
     assert "출석 실행 (붕스→젠존제)" in dialog_source
+    assert "출석 실행 (POST)" in dialog_source
+    assert "claim_daily_checkin" in dialog_source
     assert "_run_hoyolab_daily_checkin" in dialog_source
     assert "cookie_check_status_label" in dialog_source
     assert "QDialogButtonBox.StandardButton.Close" in dialog_source

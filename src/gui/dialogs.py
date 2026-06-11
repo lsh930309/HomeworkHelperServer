@@ -2231,9 +2231,9 @@ class HoYoLabSettingsDialog(QDialog):
         nikke_button_layout.addWidget(self.clear_nikke_btn)
         nikke_layout.addLayout(nikke_button_layout)
 
-        self.nikke_checkin_status_btn = QPushButton("출석 상태 확인 (읽기 전용)")
+        self.nikke_checkin_status_btn = QPushButton("출석 실행 (POST)")
         self.nikke_checkin_status_btn.setToolTip(
-            "BlablaLink daily check-in 상태만 조회하며 실제 출석 체크는 수행하지 않습니다."
+            "BlablaLink DailyCheckIn POST를 실제 실행합니다. 실행 전 task 상태를 먼저 확인합니다."
         )
         nikke_layout.addWidget(self.nikke_checkin_status_btn)
 
@@ -2596,20 +2596,44 @@ class HoYoLabSettingsDialog(QDialog):
             return f"❌ BlablaLink: 검사 실패 - {exc}"
 
     def _check_nikke_daily_checkin_status(self) -> None:
-        """NIKKE/BlablaLink daily check-in 상태를 읽기 전용으로 확인합니다."""
+        """NIKKE/BlablaLink DailyCheckIn POST를 실제 실행합니다."""
+        reply = QMessageBox.question(
+            self,
+            "BlablaLink 출석 체크 실행",
+            "BlablaLink/NIKKE 실제 출석 체크 POST를 실행합니다.\n"
+            "실행 전 출석 task 상태를 먼저 확인하고, 오늘 출석 가능 상태일 때 DailyCheckIn을 호출합니다.\n\n"
+            "계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
         self.nikke_checkin_status_btn.setEnabled(False)
-        self.nikke_status_label.setText("BlablaLink 출석 상태 확인 중... (읽기 전용)")
+        self.nikke_status_label.setText("BlablaLink 출석 체크 실행 중... (status 확인 → POST)")
         self.nikke_status_label.setStyleSheet("color: #ffcc00;")
         QApplication.processEvents()
         try:
-            line = self._check_nikke_daily_checkin_availability()
-            self.nikke_status_label.setText(line + "\n읽기 전용 확인만 수행했으며 실제 출석 체크는 실행하지 않았습니다.")
-            if line.startswith("✅"):
+            from src.services.nikke import NikkeService
+            from src.utils.nikke_config import NikkeConfig
+
+            result = NikkeService(config=NikkeConfig()).claim_daily_checkin()
+            line = self._format_nikke_daily_checkin_status(result)
+            post_note = (
+                "BlablaLink DailyCheckIn POST를 호출했습니다."
+                if getattr(result, "raw_debug", {}).get("post_called")
+                else "status 확인 결과 POST가 필요하지 않아 호출하지 않았습니다."
+            )
+            self.nikke_status_label.setText(line + "\n" + post_note)
+            if result.status in {"success", "already_done"}:
                 self.nikke_status_label.setStyleSheet("color: #44cc44;")
-            elif line.startswith("⚠️"):
+            elif result.status == "route_error":
                 self.nikke_status_label.setStyleSheet("color: #ffcc00;")
             else:
                 self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.nikke_status_label.setText(f"❌ BlablaLink 출석 체크 실행 실패: {exc}")
+            self.nikke_status_label.setStyleSheet("color: #ff6666;")
         finally:
             self.nikke_checkin_status_btn.setEnabled(True)
 
@@ -2632,6 +2656,8 @@ class HoYoLabSettingsDialog(QDialog):
                 task_suffix += f", +{status.points}P"
             task_suffix += ")"
 
+        if status.status == "success":
+            return f"✅ BlablaLink 출석: 출석 체크 완료{task_suffix}"
         if status.status == "ready":
             return f"✅ BlablaLink 출석: 오늘 출석 체크 가능{task_suffix}"
         if status.status == "already_done":

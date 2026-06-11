@@ -218,6 +218,12 @@
      - 이 버튼은 read-only probe가 아니라 실제 HoYoLAB daily reward sign POST를 수행한다.
      - 결과 상태는 `success`, `already_done`, `auth_required`, `challenge_required`, `network_error`, `unavailable`, `unsupported`로 정규화한다.
    - 아직 자동 실행/스케줄러로 연결하지 않는다. 이 버튼은 host 실험을 위한 임시 수동 실행 진입점이다.
+   - 이어서 NIKKE/BlablaLink 임시 버튼도 실제 POST 검증용으로 전환한다.
+     - 버튼명: `출석 실행 (POST)`
+     - 실행 흐름: `GetTaskListWithStatusV2`로 daily task 상태를 먼저 확인한 뒤, `ready`일 때만 `/lip/proxy/lipass/Points/DailyCheckIn` POST를 `{task_id}` payload로 호출한다.
+     - status probe에서 이미 `already_done` 또는 인증/route 오류가 확인되면 POST를 생략하고 해당 상태를 표시한다.
+     - POST `code=0`은 `success`, `code=1001009`는 `already_done`, `code=300001`/`game not login` 계열은 `game_login_required`로 정규화한다.
+     - 아직 자동 실행/스케줄러로 연결하지 않는다. 이 버튼 역시 host 실험을 위한 임시 수동 실행 진입점이다.
 
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.

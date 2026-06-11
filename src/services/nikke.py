@@ -35,10 +35,10 @@ class NikkeRoleInfo:
 
 @dataclass
 class NikkeDailyCheckInStatus:
-    """BlablaLink 일일 출석 체크 상태 조회 결과.
+    """BlablaLink 일일 출석 체크 상태 조회/실행 결과.
 
-    이 모델은 읽기 전용 status probe 전용이며, 실제 출석 처리 POST 결과를
-    표현하지 않습니다.
+    읽기 전용 status probe 결과와 임시 실험용 DailyCheckIn POST 결과를 같은
+    UI formatter로 표시하기 위해 공유합니다.
     """
 
     status: str
@@ -69,6 +69,7 @@ class NikkeService:
     )
     DAILY_PROGRESS_PATH = "game/proxy/Game/GetUserDailyContentsProgress"
     DAILY_CHECKIN_STATUS_PATH = "lip/proxy/lipass/Points/GetTaskListWithStatusV2"
+    DAILY_CHECKIN_POST_PATH = "lip/proxy/lipass/Points/DailyCheckIn"
     DAILY_CHECKIN_TASK_TYPE = 1
     DAILY_CHECKIN_TASK_ID = "15"
 
@@ -205,6 +206,38 @@ class NikkeService:
                 return status
 
         return NikkeDailyCheckInStatus("route_error", now, message="BlablaLink 출석 task를 찾지 못했습니다.")
+
+    def claim_daily_checkin(self) -> NikkeDailyCheckInStatus:
+        """BlablaLink NIKKE 일일 출석 체크를 실제 POST로 실행합니다.
+
+        안전한 task id 확인을 위해 먼저 읽기 전용 status endpoint를 호출합니다.
+        daily task가 ``ready``일 때만 ``DailyCheckIn`` POST를 수행하며, 이미
+        완료되었거나 인증/route 문제가 있는 경우에는 POST를 생략하고 해당
+        상태를 그대로 반환합니다.
+        """
+        status = self.get_daily_checkin_status()
+        if status.status != "ready":
+            status.raw_debug = {**status.raw_debug, "post_called": False}
+            return status
+
+        task_id = status.task_id or self.DAILY_CHECKIN_TASK_ID
+        try:
+            body = self._post(self.DAILY_CHECKIN_POST_PATH, {"task_id": task_id})
+        except Exception as exc:
+            logger.error("NIKKE 출석 체크 POST 실패: %s", exc)
+            return NikkeDailyCheckInStatus(
+                "network_error",
+                datetime.now(),
+                task_id=task_id,
+                task_name=status.task_name,
+                points=status.points,
+                completed_times=status.completed_times,
+                need_completed_times=status.need_completed_times,
+                message=str(exc),
+                raw_debug={"task_id": task_id, "post_called": True},
+            )
+
+        return self._parse_daily_checkin_post_result(body, status, task_id=task_id)
 
     def get_role_info(self, *, refresh: bool = False) -> Optional[NikkeRoleInfo]:
         session_payload = self._session_payload()
@@ -402,6 +435,82 @@ class NikkeService:
             completed_times=completed_times,
             need_completed_times=need_completed_times,
             message="오늘 이미 출석 체크가 완료되었습니다." if is_completed else "오늘 출석 체크가 가능합니다.",
+            raw_debug=raw_debug,
+        )
+
+    @classmethod
+    def _parse_daily_checkin_post_result(
+        cls, body: Any, status: NikkeDailyCheckInStatus, *, task_id: str
+    ) -> NikkeDailyCheckInStatus:
+        updated_at = datetime.now()
+        if not isinstance(body, dict):
+            return cls._daily_checkin_post_result(
+                "route_error",
+                status,
+                task_id=task_id,
+                message="BlablaLink API가 예상하지 못한 응답을 반환했습니다.",
+                raw_debug={"body_type": type(body).__name__, "post_called": True},
+                updated_at=updated_at,
+            )
+
+        code = body.get("code")
+        msg = str(body.get("msg") or body.get("message") or "")
+        raw_debug = {"task_id": task_id, "code": code, "msg": msg, "post_called": True}
+        if code in (0, "0", None):
+            return cls._daily_checkin_post_result(
+                "success",
+                status,
+                task_id=task_id,
+                message=msg or "BlablaLink 출석 체크가 완료되었습니다.",
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        if str(code) == "1001009":
+            return cls._daily_checkin_post_result(
+                "already_done",
+                status,
+                task_id=task_id,
+                message=msg or "오늘 이미 출석 체크가 완료되었습니다.",
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        if code == "auth_required" or cls._is_auth_expired(body):
+            return cls._daily_checkin_post_result(
+                "game_login_required",
+                status,
+                task_id=task_id,
+                message=msg or "game not login",
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        return cls._daily_checkin_post_result(
+            "route_error",
+            status,
+            task_id=task_id,
+            message=msg or f"BlablaLink API code={code}",
+            raw_debug=raw_debug,
+            updated_at=updated_at,
+        )
+
+    @staticmethod
+    def _daily_checkin_post_result(
+        result_status: str,
+        status: NikkeDailyCheckInStatus,
+        *,
+        task_id: str,
+        message: str,
+        raw_debug: dict[str, Any],
+        updated_at: datetime,
+    ) -> NikkeDailyCheckInStatus:
+        return NikkeDailyCheckInStatus(
+            result_status,
+            updated_at,
+            task_id=task_id,
+            task_name=status.task_name,
+            points=status.points,
+            completed_times=status.completed_times,
+            need_completed_times=status.need_completed_times,
+            message=message,
             raw_debug=raw_debug,
         )
 
