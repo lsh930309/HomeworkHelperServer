@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
     QRadioButton, QButtonGroup, QTextEdit, QGridLayout, QTabWidget,
-    QAbstractItemView,
+    QAbstractItemView, QMenu,
 )
 from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -2116,6 +2116,8 @@ class HoYoLabSettingsDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.data_manager = getattr(parent, "data_manager", None)
+        self._daily_checkin_rows: dict[tuple[str, str], int] = {}
+        self._daily_checkin_logs: list[dict[str, Any]] = []
         self.setWindowTitle("자원/출석 관리")
         self.setMinimumWidth(720)
 
@@ -2295,6 +2297,8 @@ class HoYoLabSettingsDialog(QDialog):
         self.daily_checkin_logs_table.setHorizontalHeaderLabels(["시각", "게임", "트리거", "결과", "메시지"])
         self.daily_checkin_logs_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.daily_checkin_logs_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.daily_checkin_logs_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.daily_checkin_logs_table.customContextMenuRequested.connect(self._show_daily_checkin_log_context_menu)
         header = self.daily_checkin_logs_table.horizontalHeader()
         if header:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -2313,10 +2317,12 @@ class HoYoLabSettingsDialog(QDialog):
             self.daily_checkin_status_label.setText("자동 출석 API 클라이언트를 사용할 수 없습니다.")
             return
         games = self.data_manager.get_daily_checkin_games()
+        self._daily_checkin_rows = {}
         self.daily_checkin_table.setRowCount(0)
         for game in games:
             row = self.daily_checkin_table.rowCount()
             self.daily_checkin_table.insertRow(row)
+            self._daily_checkin_rows[self._daily_checkin_key(game)] = row
 
             checkbox = QCheckBox()
             checkbox.setChecked(bool(game.get("enabled")))
@@ -2327,7 +2333,10 @@ class HoYoLabSettingsDialog(QDialog):
             game_item = QTableWidgetItem(f"{game.get('game_name') or game.get('process_name')} ({game.get('provider_label')})")
             game_item.setToolTip(str(game.get("process_name") or ""))
             self.daily_checkin_table.setItem(row, 1, game_item)
-            self.daily_checkin_table.setItem(row, 2, QTableWidgetItem(self._format_daily_checkin_status(game)))
+            status_text = self._format_daily_checkin_status(game)
+            status_item = QTableWidgetItem(status_text)
+            status_item.setToolTip(status_text)
+            self.daily_checkin_table.setItem(row, 2, status_item)
             self.daily_checkin_table.setItem(row, 3, QTableWidgetItem(self._format_timestamp(game.get("last_attempt_at"))))
             self.daily_checkin_table.setItem(row, 4, QTableWidgetItem(self._format_timestamp(game.get("next_reset_at"))))
 
@@ -2348,16 +2357,76 @@ class HoYoLabSettingsDialog(QDialog):
             self.daily_checkin_logs_status_label.setText("자동 출석 로그 API 클라이언트를 사용할 수 없습니다.")
             return
         logs = self.data_manager.get_daily_checkin_logs(limit=50)
+        self._daily_checkin_logs = [dict(log) for log in logs]
         self.daily_checkin_logs_table.setRowCount(0)
-        for log in logs:
+        for log in self._daily_checkin_logs:
             row = self.daily_checkin_logs_table.rowCount()
             self.daily_checkin_logs_table.insertRow(row)
-            self.daily_checkin_logs_table.setItem(row, 0, QTableWidgetItem(self._format_timestamp(log.get("attempted_at"))))
-            self.daily_checkin_logs_table.setItem(row, 1, QTableWidgetItem(str(log.get("game_name") or log.get("process_name") or "")))
-            self.daily_checkin_logs_table.setItem(row, 2, QTableWidgetItem(str(log.get("trigger") or "")))
-            self.daily_checkin_logs_table.setItem(row, 3, QTableWidgetItem(str(log.get("status") or "")))
-            self.daily_checkin_logs_table.setItem(row, 4, QTableWidgetItem(str(log.get("message") or "")))
-        self.daily_checkin_logs_status_label.setText(f"최근 출석 로그 {len(logs)}개를 표시했습니다.")
+            values = [
+                self._format_timestamp(log.get("attempted_at")),
+                str(log.get("game_name") or log.get("process_name") or ""),
+                str(log.get("trigger") or ""),
+                str(log.get("status") or ""),
+                str(log.get("message") or ""),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.ItemDataRole.UserRole, dict(log))
+                self.daily_checkin_logs_table.setItem(row, column, item)
+        self.daily_checkin_logs_status_label.setText(f"최근 출석 로그 {len(self._daily_checkin_logs)}개를 표시했습니다.")
+
+    @staticmethod
+    def _daily_checkin_key(game: dict[str, Any]) -> tuple[str, str]:
+        return (str(game.get("process_id") or ""), str(game.get("game_id") or ""))
+
+    def _set_daily_checkin_row_status(self, game: dict[str, Any], status_payload: dict[str, Any]) -> None:
+        row = self._daily_checkin_rows.get(self._daily_checkin_key(game))
+        if row is None:
+            return
+        status_text = self._format_daily_checkin_status(status_payload)
+        item = self.daily_checkin_table.item(row, 2)
+        if item is None:
+            item = QTableWidgetItem()
+            self.daily_checkin_table.setItem(row, 2, item)
+        item.setText(status_text)
+        item.setToolTip(status_text)
+
+    def _show_daily_checkin_log_context_menu(self, pos) -> None:
+        item = self.daily_checkin_logs_table.itemAt(pos)
+        if item is None:
+            return
+        row = item.row()
+        if row < 0 or row >= len(self._daily_checkin_logs):
+            return
+        menu = QMenu(self)
+        copy_message = menu.addAction("메시지 복사")
+        copy_row = menu.addAction("로그 행 복사")
+        selected = menu.exec(self.daily_checkin_logs_table.viewport().mapToGlobal(pos))
+        if selected == copy_message:
+            self._copy_daily_checkin_log_message(row)
+        elif selected == copy_row:
+            self._copy_daily_checkin_log_row(row)
+
+    def _copy_daily_checkin_log_message(self, row: int) -> None:
+        if row < 0 or row >= len(self._daily_checkin_logs):
+            return
+        QApplication.clipboard().setText(str(self._daily_checkin_logs[row].get("message") or ""))
+
+    def _copy_daily_checkin_log_row(self, row: int) -> None:
+        if row < 0 or row >= len(self._daily_checkin_logs):
+            return
+        log = self._daily_checkin_logs[row]
+        text = "\t".join(
+            [
+                self._format_timestamp(log.get("attempted_at")),
+                str(log.get("game_name") or log.get("process_name") or ""),
+                str(log.get("trigger") or ""),
+                str(log.get("status") or ""),
+                str(log.get("message") or ""),
+            ]
+        )
+        QApplication.clipboard().setText(text)
 
     def _toggle_daily_checkin(self, game: dict[str, Any], enabled: bool) -> None:
         if self.data_manager is None or not hasattr(self.data_manager, "set_daily_checkin_enabled"):
@@ -2375,8 +2444,35 @@ class HoYoLabSettingsDialog(QDialog):
             self._load_daily_checkin_games()
             return
         state = "활성화" if enabled else "비활성화"
-        self.daily_checkin_status_label.setText(f"{game.get('game_name') or game.get('process_name')} 자동 출석을 {state}했습니다.")
+        label = str(game.get("game_name") or game.get("process_name") or "게임")
+        if enabled:
+            self.daily_checkin_status_label.setText(f"{label} 자동 출석을 {state}했습니다. 현재 출석 상태 확인 중...")
+            self.daily_checkin_status_label.setStyleSheet("color: #ffcc00;")
+            QApplication.processEvents()
+            probe_result = self._probe_registered_daily_checkin_status(game)
+            if probe_result is None:
+                self.daily_checkin_status_label.setText(f"{label} 자동 출석은 활성화했지만 현재 상태 조회에 실패했습니다.")
+                self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+                return
+            status_line = self._format_daily_checkin_status(probe_result)
+            self.daily_checkin_status_label.setText(f"{label} 자동 출석 활성화됨. 현재 상태: {status_line}")
+            self.daily_checkin_status_label.setStyleSheet(self._daily_checkin_status_style(str(probe_result.get("status") or "")))
+            return
+        self.daily_checkin_status_label.setText(f"{label} 자동 출석을 {state}했습니다.")
         self.daily_checkin_status_label.setStyleSheet("color: #44cc44;")
+
+    def _probe_registered_daily_checkin_status(self, game: dict[str, Any]) -> dict[str, Any] | None:
+        if self.data_manager is None or not hasattr(self.data_manager, "probe_daily_checkin_status"):
+            self.daily_checkin_status_label.setText("자동 출석 상태 조회 API 클라이언트를 사용할 수 없습니다.")
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+            return None
+        result = self.data_manager.probe_daily_checkin_status(
+            str(game.get("process_id") or ""),
+            game_id=str(game.get("game_id") or ""),
+        )
+        if result is not None:
+            self._set_daily_checkin_row_status(game, result)
+        return result
 
     def _run_registered_daily_checkin(self, game: dict[str, Any]) -> None:
         if self.data_manager is None or not hasattr(self.data_manager, "run_daily_checkin"):
@@ -2398,10 +2494,7 @@ class HoYoLabSettingsDialog(QDialog):
             return
         status_line = self._format_daily_checkin_status(result)
         self.daily_checkin_status_label.setText(status_line)
-        if result.get("status") in {"success", "already_done"}:
-            self.daily_checkin_status_label.setStyleSheet("color: #44cc44;")
-        else:
-            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+        self.daily_checkin_status_label.setStyleSheet(self._daily_checkin_status_style(str(result.get("status") or "")))
         self._load_daily_checkin_games()
         self._load_daily_checkin_logs()
 
@@ -2420,11 +2513,21 @@ class HoYoLabSettingsDialog(QDialog):
         message = str(item.get("last_message") or item.get("message") or "")
         if status in {"success", "already_done"}:
             prefix = "✅"
+        elif status == "ready":
+            prefix = "🟡"
         elif status == "대기":
             prefix = "⬜"
         else:
             prefix = "⚠️"
         return f"{prefix} {status}" + (f" - {message}" if message else "")
+
+    @staticmethod
+    def _daily_checkin_status_style(status: str) -> str:
+        if status in {"success", "already_done"}:
+            return "color: #44cc44;"
+        if status == "ready":
+            return "color: #ffcc00;"
+        return "color: #ff6666;"
 
     def _update_status(self):
         """현재 HoYoLab 인증 상태 업데이트"""

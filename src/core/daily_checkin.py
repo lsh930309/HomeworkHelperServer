@@ -285,6 +285,25 @@ def execute_daily_checkin(descriptor: DailyCheckInDescriptor) -> DailyCheckInAtt
     )
 
 
+def probe_daily_checkin_status(descriptor: DailyCheckInDescriptor) -> DailyCheckInAttemptResult:
+    """Read the provider's current daily check-in status without claiming."""
+    attempted_at = time.time()
+    if descriptor.provider == PROVIDER_HOYOLAB:
+        return _probe_hoyolab_daily_checkin(descriptor, attempted_at=attempted_at)
+    if descriptor.provider == PROVIDER_NIKKE_BLABLALINK:
+        return _probe_nikke_daily_checkin(descriptor, attempted_at=attempted_at)
+    return DailyCheckInAttemptResult(
+        provider=descriptor.provider,
+        game_id=descriptor.game_id,
+        game_name=descriptor.game_name,
+        status="unsupported",
+        attempted_at=attempted_at,
+        message="지원하지 않는 출석 provider입니다.",
+        post_called=False,
+        raw_debug={"provider": descriptor.provider},
+    )
+
+
 def _execute_hoyolab_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
@@ -339,6 +358,55 @@ def _execute_hoyolab_daily_checkin(
         )
 
 
+def _probe_hoyolab_daily_checkin(
+    descriptor: DailyCheckInDescriptor,
+    *,
+    attempted_at: float,
+) -> DailyCheckInAttemptResult:
+    try:
+        from src.services.hoyolab import get_hoyolab_service
+
+        results = get_hoyolab_service().get_daily_reward_status([descriptor.game_id])
+        result = results[0] if results else None
+        if result is None:
+            return DailyCheckInAttemptResult(
+                provider=descriptor.provider,
+                game_id=descriptor.game_id,
+                game_name=descriptor.game_name,
+                status="route_error",
+                attempted_at=attempted_at,
+                message="HoYoLab 출석 상태 결과가 비어 있습니다.",
+                post_called=False,
+                raw_debug={"empty_results": True},
+            )
+        return DailyCheckInAttemptResult(
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=getattr(result, "game_name", descriptor.game_name) or descriptor.game_name,
+            status=str(getattr(result, "status", "") or "network_error"),
+            attempted_at=getattr(result, "updated_at", None).timestamp()
+            if getattr(result, "updated_at", None)
+            else attempted_at,
+            message=getattr(result, "message", "") or "",
+            post_called=False,
+            raw_debug={},
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
+        logger.warning("HoYoLab daily check-in status probe failed: %s", exc, exc_info=True)
+        return DailyCheckInAttemptResult(
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=descriptor.game_name,
+            status="network_error",
+            attempted_at=time.time(),
+            message=str(exc) or type(exc).__name__,
+            post_called=False,
+            raw_debug={"exception": type(exc).__name__},
+        )
+
+
 def _execute_nikke_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
@@ -365,6 +433,44 @@ def _execute_nikke_daily_checkin(
         raise
     except Exception as exc:
         logger.warning("NIKKE daily check-in failed: %s", exc, exc_info=True)
+        return DailyCheckInAttemptResult(
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=descriptor.game_name,
+            status="network_error",
+            attempted_at=time.time(),
+            message=str(exc) or type(exc).__name__,
+            post_called=False,
+            raw_debug={"exception": type(exc).__name__},
+        )
+
+
+def _probe_nikke_daily_checkin(
+    descriptor: DailyCheckInDescriptor,
+    *,
+    attempted_at: float,
+) -> DailyCheckInAttemptResult:
+    try:
+        from src.services.nikke import get_nikke_service
+
+        status = get_nikke_service().get_daily_checkin_status()
+        raw_debug = getattr(status, "raw_debug", {}) or {}
+        return DailyCheckInAttemptResult(
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=descriptor.game_name,
+            status=str(getattr(status, "status", "") or "network_error"),
+            attempted_at=getattr(status, "updated_at", None).timestamp()
+            if getattr(status, "updated_at", None)
+            else attempted_at,
+            message=getattr(status, "message", "") or "",
+            post_called=False,
+            raw_debug={**raw_debug, "post_called": False},
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
+        logger.warning("NIKKE daily check-in status probe failed: %s", exc, exc_info=True)
         return DailyCheckInAttemptResult(
             provider=descriptor.provider,
             game_id=descriptor.game_id,

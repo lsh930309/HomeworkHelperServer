@@ -185,12 +185,42 @@ class HoYoLabService:
             logger.error("HoYoLab 일일 출석 순차 실행 실패: %s", exc)
             return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
 
+    def get_daily_reward_status(self, game_ids: Optional[list[str]] = None) -> list[HoYoLabDailyCheckInResult]:
+        """HoYoLAB 일일 출석 상태를 POST 없이 조회합니다."""
+        targets = list(game_ids or self.DAILY_CHECKIN_GAME_ORDER)
+        if not GENSHIN_AVAILABLE:
+            return [self._daily_checkin_result(game_id, "unavailable", "genshin.py 라이브러리를 사용할 수 없습니다.") for game_id in targets]
+        if not self.is_configured():
+            return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 인증 정보가 없습니다.") for game_id in targets]
+
+        with self._client_lock:
+            client = self._get_client_unlocked()
+            if not client:
+                return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
+
+        try:
+            with self._request_lock:
+                if self._closed:
+                    return [self._daily_checkin_result(game_id, "unavailable", "HoYoLab 서비스가 종료되었습니다.") for game_id in targets]
+                return self._run_async(self._async_get_daily_reward_statuses(client, targets))
+        except Exception as exc:
+            logger.error("HoYoLab 일일 출석 상태 조회 실패: %s", exc)
+            return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
+
     async def _async_claim_daily_rewards(
         self, client: "genshin.Client", game_ids: list[str]
     ) -> list[HoYoLabDailyCheckInResult]:
         results: list[HoYoLabDailyCheckInResult] = []
         for game_id in game_ids:
             results.append(await self._async_claim_daily_reward(client, game_id))
+        return results
+
+    async def _async_get_daily_reward_statuses(
+        self, client: "genshin.Client", game_ids: list[str]
+    ) -> list[HoYoLabDailyCheckInResult]:
+        results: list[HoYoLabDailyCheckInResult] = []
+        for game_id in game_ids:
+            results.append(await self._async_get_daily_reward_status(client, game_id))
         return results
 
     async def _async_claim_daily_reward(self, client: "genshin.Client", game_id: str) -> HoYoLabDailyCheckInResult:
@@ -213,6 +243,20 @@ class HoYoLabService:
                 reward_name=reward_name,
                 reward_amount=reward_amount,
             )
+        except Exception as exc:
+            return self._daily_checkin_result(game_id, *self._normalise_daily_checkin_exception(exc))
+
+    async def _async_get_daily_reward_status(self, client: "genshin.Client", game_id: str) -> HoYoLabDailyCheckInResult:
+        game = self._daily_reward_game(game_id)
+        if game is None:
+            return self._daily_checkin_result(game_id, "unsupported", "지원하지 않는 HoYoLAB 출석 대상입니다.")
+
+        try:
+            info = await client.get_reward_info(game=game, lang="ko-kr")
+            signed_in = bool(getattr(info, "signed_in", False))
+            status = "already_done" if signed_in else "ready"
+            message = "오늘 이미 출석 체크가 완료되었습니다." if signed_in else "오늘 출석 체크가 가능합니다."
+            return self._daily_checkin_result(game_id, status, message)
         except Exception as exc:
             return self._daily_checkin_result(game_id, *self._normalise_daily_checkin_exception(exc))
 

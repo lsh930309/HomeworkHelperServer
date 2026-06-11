@@ -312,3 +312,24 @@ class DailyCheckInRunRequest(BaseModel):
 
 class DailyCheckInRunDueRequest(BaseModel):
     trigger: str = "periodic"
+
+
+class DailyCheckInStatusProbeRequest(BaseModel):
+    process_id: str
+    game_id: Optional[str] = None
+
+
+class DailyCheckInStatusProbeSchema(BaseModel):
+    process_id: str
+    process_name: Optional[str] = None
+    user_preset_id: Optional[str] = None
+    provider: str
+    game_id: str
+    game_name: Optional[str] = None
+    period_start: float
+    period_end: float
+    checked_at: float
+    status: str
+    message: Optional[str] = None
+    post_called: bool = False
+    raw_debug_json: Optional[str] = None

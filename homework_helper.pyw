@@ -1039,6 +1039,27 @@ def run_server_main():
         )
         return log_row
 
+    def _probe_daily_checkin_payload(process, descriptor) -> dict[str, Any]:
+        from src.core import daily_checkin
+
+        result = daily_checkin.probe_daily_checkin_status(descriptor)
+        period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        return {
+            "process_id": process.id,
+            "process_name": process.name,
+            "user_preset_id": getattr(process, "user_preset_id", None),
+            "provider": descriptor.provider,
+            "game_id": descriptor.game_id,
+            "game_name": descriptor.game_name,
+            "period_start": period_start,
+            "period_end": period_end,
+            "checked_at": result.attempted_at,
+            "status": result.status,
+            "message": result.message,
+            "post_called": result.post_called,
+            "raw_debug_json": daily_checkin.raw_debug_json(result.raw_debug),
+        }
+
     @app.exception_handler(beholder.BeholderBlocked)
     async def beholder_blocked_handler(request, exc):
         return JSONResponse(
@@ -1294,6 +1315,15 @@ def run_server_main():
         """단일 등록 게임의 출석 POST를 즉시 실행하고 로그에 기록합니다."""
         process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
         return _execute_and_record_daily_checkin(db, process, descriptor, request.trigger or "manual_run")
+
+    @app.post("/daily-checkin/status", response_model=schemas.DailyCheckInStatusProbeSchema)
+    def probe_daily_checkin_status(
+        request: schemas.DailyCheckInStatusProbeRequest,
+        db: Session = Depends(get_db),
+    ):
+        """단일 등록 게임의 출석 상태를 POST 없이 조회합니다."""
+        process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
+        return _probe_daily_checkin_payload(process, descriptor)
 
     @app.post("/daily-checkin/run-due")
     def run_due_daily_checkins(

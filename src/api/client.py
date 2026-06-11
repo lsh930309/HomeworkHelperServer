@@ -411,6 +411,25 @@ class ApiClient:
             print(f"자동 출석 실행 실패: {e}")
             return None
 
+    def probe_daily_checkin_status(
+        self,
+        process_id: str,
+        *,
+        game_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Read a single registered game's check-in status without claiming."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/daily-checkin/status",
+                json={"process_id": process_id, "game_id": game_id},
+                timeout=30,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"자동 출석 상태 조회 실패: {e}")
+            return None
+
     def run_due_daily_checkins(self, *, trigger: str = "periodic") -> dict[str, Any] | None:
         """Ask the local API process to execute all due opt-in check-ins."""
         try:

@@ -141,6 +141,20 @@
      - `daily_checkin_logs`: 모든 실제 출석 시도 결과 append-only 기록.
    - 실제 provider 호출은 local API route가 담당하고, GUI 스케줄러는 due 실행 요청과 failure-only 알림만 담당한다.
 
+   ### 2026-06-11 NIKKE 세션 오류 대응 및 관리 UX 보강
+
+   - BlablaLink API 호출은 `requests.Session` 기반으로 수행해 응답 과정에서 갱신되는 세션 쿠키를 감지하고, 변경된 쿠키는 기존 `NikkeConfig` 저장소에 다시 반영한다.
+   - BlablaLink `x-common-params`/referer는 현재 공개 ShiftyPad 웹앱 기준으로 맞춘다.
+     - `game_id=16`, `area_id=global`, `intl_game_id=nikke`, `source=h5`
+     - referer/page id는 `https://www.blablalink.com/nikke/`
+   - `Inner token is invalid[3]`, `ret=11002`, token invalid 계열 응답은 단순 route 오류가 아니라 `game_login_required`로 정규화한다.
+     - 사용자 메시지는 “BlablaLink/ShiftyPad 재로그인 후 쿠키 재추출 필요”로 명확히 표시한다.
+   - 자동 출석 opt-in을 켠 직후에는 POST 실행 없이 즉시 현재 출석 상태를 probe한다.
+     - 신규 local API route: `POST /daily-checkin/status`
+     - HoYoLAB은 `get_reward_info(...)` 기반 read-only 상태 확인을 사용한다.
+     - BlablaLink는 기존 task status endpoint를 재사용하며 `DailyCheckIn` POST는 호출하지 않는다.
+   - 최근 로그 UI는 긴 오류 메시지를 잘림 없이 확인할 수 있도록 tooltip에 전체 내용을 넣고, 로그 row 우클릭 메뉴에서 `메시지 복사` / `로그 행 복사`를 제공한다.
+
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.
 

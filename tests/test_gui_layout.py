@@ -186,7 +186,13 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     assert "daily_checkin_logs_table" in dialog_source
     assert "지금 출석" in dialog_source
     assert "run_daily_checkin" in dialog_source
+    assert "probe_daily_checkin_status" in dialog_source
     assert "set_daily_checkin_enabled" in dialog_source
+    assert "customContextMenuRequested" in dialog_source
+    assert "메시지 복사" in dialog_source
+    assert "로그 행 복사" in dialog_source
+    assert "_copy_daily_checkin_log_message" in dialog_source
+    assert "_daily_checkin_status_style" in dialog_source
     assert "hoyolab_checkin_run_btn" not in dialog_source
     assert "nikke_checkin_status_btn" not in dialog_source
     assert "cookie_check_status_label" in dialog_source
