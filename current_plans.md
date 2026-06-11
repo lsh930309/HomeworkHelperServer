@@ -127,6 +127,20 @@
       - GUI layout/static test
       - 실제 외부 POST는 자동 테스트에서 mock 처리하고, 계정 상태를 바꾸는 live 실행은 수동 승인 경로에서만 수행
 
+   ### 2026-06-11 정식 구현 반영
+
+   - 관리 UI는 기존 `자원 추적 설정` 메뉴를 `자원/출석 관리`로 확장하고, 내부를 `계정/토큰`, `자동 출석`, `최근 로그` 탭으로 분리한다.
+   - 자동 출석 opt-in은 등록된 지원 게임 row 단위로 저장하며, 기본값은 OFF로 둔다.
+   - 스케줄러 동작은 다음 규칙으로 고정한다.
+     - 앱 시작, sleep/wake 복귀, 앱 실행 중 5분 주기 평가에서 due 상태를 확인한다.
+     - 현재 reset window에 `success` 또는 `already_done` 로그가 있으면 같은 구간에서는 다시 호출하지 않는다.
+     - `network_error` 등 일시 실패는 30분 이후 재시도한다.
+     - `auth_required`, `challenge_required`, `game_login_required`, `route_error` 등 사용자 조치가 필요한 실패는 해당 구간에서 중복 자동 재시도하지 않고 실패 알림만 남긴다.
+   - 출석 설정/로그 저장은 신규 DB 테이블로 분리한다.
+     - `daily_checkin_settings`: process별 opt-in 및 최근 결과 캐시.
+     - `daily_checkin_logs`: 모든 실제 출석 시도 결과 append-only 기록.
+   - 실제 provider 호출은 local API route가 담당하고, GUI 스케줄러는 due 실행 요청과 failure-only 알림만 담당한다.
+
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.
 

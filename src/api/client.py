@@ -344,6 +344,88 @@ class ApiClient:
             print(f"프로세스 리소스 저장에 실패했습니다: {e}")
             return False
 
+    def get_daily_checkin_games(self) -> list[dict[str, Any]]:
+        """Return registered games that support API-first daily check-in."""
+        try:
+            response = requests.get(f"{self.base_url}/daily-checkin/games", timeout=10)
+            self._raise_for_status(response)
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except requests.RequestException as e:
+            print(f"자동 출석 대상 조회 실패: {e}")
+            return []
+
+    def set_daily_checkin_enabled(self, process_id: str, enabled: bool, game_id: str | None = None) -> dict[str, Any] | None:
+        """Persist per-registered-game check-in opt-in state."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/daily-checkin/settings/{process_id}",
+                json={"enabled": enabled, "game_id": game_id},
+                timeout=10,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"자동 출석 설정 저장 실패: {e}")
+            return None
+
+    def get_daily_checkin_logs(
+        self,
+        *,
+        process_id: str | None = None,
+        game_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recent daily check-in attempt logs."""
+        params: dict[str, Any] = {"limit": limit}
+        if process_id:
+            params["process_id"] = process_id
+        if game_id:
+            params["game_id"] = game_id
+        try:
+            response = requests.get(f"{self.base_url}/daily-checkin/logs", params=params, timeout=10)
+            self._raise_for_status(response)
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except requests.RequestException as e:
+            print(f"자동 출석 로그 조회 실패: {e}")
+            return []
+
+    def run_daily_checkin(
+        self,
+        process_id: str,
+        *,
+        game_id: str | None = None,
+        trigger: str = "manual_run",
+    ) -> dict[str, Any] | None:
+        """Run a single registered game's check-in immediately."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/daily-checkin/run",
+                json={"process_id": process_id, "game_id": game_id, "trigger": trigger},
+                timeout=45,
+            )
+            self._raise_for_status(response)
+            return response.json()
+        except requests.RequestException as e:
+            print(f"자동 출석 실행 실패: {e}")
+            return None
+
+    def run_due_daily_checkins(self, *, trigger: str = "periodic") -> dict[str, Any] | None:
+        """Ask the local API process to execute all due opt-in check-ins."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/daily-checkin/run-due",
+                json={"trigger": trigger},
+                timeout=90,
+            )
+            self._raise_for_status(response)
+            payload = response.json()
+            return payload if isinstance(payload, dict) else None
+        except requests.RequestException as e:
+            print(f"자동 출석 due 실행 실패: {e}")
+            return None
+
     def get_process_by_id(self, process_id: str) -> Optional[ManagedProcess]:
         """ID로 단일 프로세스를 찾습니다 (내부 메모리에서)."""
         for p in self.managed_processes:

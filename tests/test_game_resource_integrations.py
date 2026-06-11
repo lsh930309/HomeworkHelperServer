@@ -7,6 +7,13 @@ from pathlib import Path
 import pytest
 
 from src.core.process_progress import calculate_process_progress
+from src.core.daily_checkin import (
+    GAME_HONKAI_STARRAIL,
+    GAME_NIKKE,
+    descriptor_for_process,
+    checkin_period_for_descriptor,
+    should_attempt_daily_checkin,
+)
 from src.data.data_models import ManagedProcess
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils.icon_helper import resolve_preset_icon_path
@@ -103,6 +110,61 @@ def test_nikke_login_button_uses_blabla_login(monkeypatch):
     BrowserCookieExtractor().open_nikke_login()
 
     assert opened == ["https://www.blablalink.com/login"]
+
+
+def test_daily_checkin_descriptor_uses_registered_supported_games():
+    starrail = ManagedProcess(
+        id="hsr",
+        name="붕괴: 스타레일",
+        monitoring_path="/StarRail.exe",
+        launch_path="/StarRail.exe",
+        user_preset_id="honkai_starrail",
+    )
+    nikke = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        user_preset_id="nikke",
+    )
+
+    assert descriptor_for_process(starrail).game_id == GAME_HONKAI_STARRAIL
+    assert descriptor_for_process(nikke).game_id == GAME_NIKKE
+
+
+def test_daily_checkin_kst_period_uses_game_reset_times():
+    descriptor = descriptor_for_process(
+        ManagedProcess(
+            id="hsr",
+            name="붕괴: 스타레일",
+            monitoring_path="/StarRail.exe",
+            launch_path="/StarRail.exe",
+            user_preset_id="honkai_starrail",
+        )
+    )
+
+    before_reset = dt.datetime(2026, 6, 11, 0, 30)
+    after_reset = dt.datetime(2026, 6, 11, 1, 30)
+
+    start_before, end_before = checkin_period_for_descriptor(descriptor, before_reset)
+    start_after, end_after = checkin_period_for_descriptor(descriptor, after_reset)
+
+    assert start_before.day == 10
+    assert end_before.day == 11
+    assert start_before.hour == 1
+    assert start_after.day == 11
+    assert end_after.day == 12
+    assert start_after.hour == 1
+
+
+def test_daily_checkin_due_policy_is_conservative():
+    now = 2_000.0
+
+    assert should_attempt_daily_checkin([], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "success", "attempted_at": 1_000.0}], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "auth_required", "attempted_at": 1_000.0}], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 100.0}], now_ts=now)
+    assert should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 2_000.0}], now_ts=now)
 
 
 def test_nikke_factory_preset_enables_resource_tracking():

@@ -691,6 +691,125 @@ def end_mobile_game_session(
     db.refresh(session)
     return session
 
+
+def get_daily_checkin_setting(db: Session, process_id: str):
+    return (
+        db.query(models.DailyCheckInSetting)
+        .filter(models.DailyCheckInSetting.process_id == process_id)
+        .first()
+    )
+
+
+def get_enabled_daily_checkin_settings(db: Session):
+    return (
+        db.query(models.DailyCheckInSetting)
+        .filter(models.DailyCheckInSetting.enabled == True)
+        .order_by(models.DailyCheckInSetting.updated_at.desc())
+        .all()
+    )
+
+
+@db_retry_on_lock
+def upsert_daily_checkin_setting(
+    db: Session,
+    *,
+    process_id: str,
+    process_name: str | None,
+    user_preset_id: str | None,
+    provider: str,
+    game_id: str,
+    game_name: str | None,
+    enabled: bool | None = None,
+    last_attempt_at: float | None = None,
+    last_result: str | None = None,
+    last_message: str | None = None,
+    last_period_start: float | None = None,
+    last_success_at: float | None = None,
+    next_run_at: float | None = None,
+    timestamp: float | None = None,
+):
+    now = float(timestamp or time.time())
+    row = get_daily_checkin_setting(db, process_id)
+    if row is None:
+        row = models.DailyCheckInSetting(
+            process_id=process_id,
+            created_at=now,
+            updated_at=now,
+            provider=provider,
+            game_id=game_id,
+            enabled=bool(enabled) if enabled is not None else False,
+        )
+    row.process_name = process_name
+    row.user_preset_id = user_preset_id
+    row.provider = provider
+    row.game_id = game_id
+    row.game_name = game_name
+    if enabled is not None:
+        row.enabled = bool(enabled)
+    if last_attempt_at is not None:
+        row.last_attempt_at = float(last_attempt_at)
+    if last_result is not None:
+        row.last_result = last_result
+    if last_message is not None:
+        row.last_message = last_message
+    if last_period_start is not None:
+        row.last_period_start = float(last_period_start)
+    if last_success_at is not None:
+        row.last_success_at = float(last_success_at)
+    if next_run_at is not None:
+        row.next_run_at = float(next_run_at)
+    row.updated_at = now
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@db_retry_on_lock
+def create_daily_checkin_log(db: Session, log: schemas.DailyCheckInLogCreate):
+    log_data = _dump_schema(log)
+    if log_data.get("created_at") is None:
+        log_data["created_at"] = time.time()
+    row = models.DailyCheckInLog(**log_data)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_daily_checkin_logs(
+    db: Session,
+    *,
+    process_id: str | None = None,
+    game_id: str | None = None,
+    limit: int = 50,
+):
+    query = db.query(models.DailyCheckInLog)
+    if process_id:
+        query = query.filter(models.DailyCheckInLog.process_id == process_id)
+    if game_id:
+        query = query.filter(models.DailyCheckInLog.game_id == game_id)
+    return query.order_by(models.DailyCheckInLog.attempted_at.desc()).limit(max(1, min(int(limit), 200))).all()
+
+
+def get_daily_checkin_logs_for_period(
+    db: Session,
+    *,
+    process_id: str,
+    game_id: str,
+    period_start: float,
+    period_end: float,
+):
+    return (
+        db.query(models.DailyCheckInLog)
+        .filter(models.DailyCheckInLog.process_id == process_id)
+        .filter(models.DailyCheckInLog.game_id == game_id)
+        .filter(models.DailyCheckInLog.period_start == float(period_start))
+        .filter(models.DailyCheckInLog.period_end == float(period_end))
+        .order_by(models.DailyCheckInLog.attempted_at.desc())
+        .all()
+    )
+
 # global setting management functions
 @db_retry_on_lock
 def get_settings(db: Session):

@@ -47,6 +47,7 @@ from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
@@ -151,6 +152,11 @@ class MainWindow(QMainWindow):
         self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
             QApplication.applicationName(),
             main_window_activated_callback=self.gui_notification_handler.process_system_notification_activation,
+        )
+        self._daily_checkin = DailyCheckInCoordinator(
+            self.data_manager,
+            self.system_notifier,
+            self,
         )
 
         self.scheduler = Scheduler(self.data_manager, self.system_notifier, self.process_monitor) # 스케줄러 객체 생성
@@ -367,6 +373,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
         QTimer.singleShot(1800, self._nikke_resource_reconcile.schedule_startup_refreshes)
+        QTimer.singleShot(2200, self._daily_checkin.schedule_startup_check)
         QTimer.singleShot(800, self._refresh_remote_readiness_indicators)
 
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
@@ -690,6 +697,8 @@ class MainWindow(QMainWindow):
 
         # 타이머 상태 확인 및 재시작
         self._ensure_timers_running()
+        if hasattr(self, "_daily_checkin"):
+            self._daily_checkin.handle_wake_recovery()
 
         QTimer.singleShot(0, self._run_sleep_wake_refresh)
 
@@ -946,7 +955,7 @@ class MainWindow(QMainWindow):
         sm = mb.addMenu("설정(&S)") # 설정 메뉴
         gsa = self._text_menu_action("앱 설정...", self.open_global_settings_dialog)
         remote_settings_action = self._text_menu_action("원격 설정...", self.open_remote_settings_dialog)
-        hoyolab_action = self._text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)
+        hoyolab_action = self._text_menu_action("자원/출석 관리...", self.open_hoyolab_settings_dialog)
         sidebar_settings_action = self._text_menu_action("사이드바 설정...", self.open_sidebar_settings_dialog)
         if sm:
             sm.addAction(gsa) # 앱 설정 액션
@@ -1245,7 +1254,7 @@ class MainWindow(QMainWindow):
         self._refresh_remote_readiness_indicators()
 
     def open_hoyolab_settings_dialog(self):
-        """자원 추적 인증 정보 설정 다이얼로그를 엽니다."""
+        """자원 추적/자동 출석 관리 다이얼로그를 엽니다."""
         dlg = HoYoLabSettingsDialog(self)
         dlg.exec()
 
@@ -1343,6 +1352,8 @@ class MainWindow(QMainWindow):
 
         # 스케줄러 검사 실행 (알림 발송 등)
         status_changed = self.scheduler.run_all_checks() # 게임 관련 스케줄 검사
+        if hasattr(self, "_daily_checkin"):
+            self._daily_checkin.maybe_run_periodic()
 
         if status_changed:
             self.update_process_statuses_only()
@@ -2299,6 +2310,8 @@ class MainWindow(QMainWindow):
             self._hoyolab_reconcile.shutdown()
         if hasattr(self, '_nikke_resource_reconcile'):
             self._nikke_resource_reconcile.shutdown()
+        if hasattr(self, '_daily_checkin'):
+            self._daily_checkin.shutdown()
 
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()

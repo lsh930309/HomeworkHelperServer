@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
     QTimeEdit, QDoubleSpinBox, QSpinBox, QComboBox, QGroupBox, QApplication,
-    QRadioButton, QButtonGroup, QTextEdit, QGridLayout,
+    QRadioButton, QButtonGroup, QTextEdit, QGridLayout, QTabWidget,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
@@ -2110,24 +2111,30 @@ class NikkeAdvancedSessionDialog(QDialog):
 
 
 class HoYoLabSettingsDialog(QDialog):
-    """자원 추적용 HoYoLab/BlablaLink 인증 정보 설정 다이얼로그."""
+    """자원 추적/자동 출석용 HoYoLab/BlablaLink 관리 다이얼로그."""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("자원 추적 설정")
-        self.setMinimumWidth(500)
+        self.data_manager = getattr(parent, "data_manager", None)
+        self.setWindowTitle("자원/출석 관리")
+        self.setMinimumWidth(720)
 
         layout = QVBoxLayout(self)
 
         info_label = QLabel(
-            "게임 스태미나/리소스 자동 추적을 위해 HoYoLab 또는 BlablaLink 로그인 쿠키가 필요합니다.\n"
-            "일반적으로 브라우저 자동 추출을 사용하고, 직접 수정이 필요할 때만 고급 설정을 여세요."
+            "게임 스태미나/리소스 추적과 자동 출석체크는 같은 HoYoLab/BlablaLink 로그인 쿠키를 사용합니다.\n"
+            "자원 추적과 자동 출석은 분리해서 관리하되, 이 화면에서 함께 확인할 수 있습니다."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
 
-        self._build_hoyolab_section(layout)
-        self._build_nikke_section(layout)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        account_tab = QWidget()
+        account_layout = QVBoxLayout(account_tab)
+        self._build_hoyolab_section(account_layout)
+        self._build_nikke_section(account_layout)
 
         status_group = QGroupBox("유효성 검사")
         status_layout = QVBoxLayout(status_group)
@@ -2137,7 +2144,19 @@ class HoYoLabSettingsDialog(QDialog):
         self.cookie_check_status_label.setWordWrap(True)
         status_layout.addWidget(self.check_cookies_btn)
         status_layout.addWidget(self.cookie_check_status_label)
-        layout.addWidget(status_group)
+        account_layout.addWidget(status_group)
+        account_layout.addStretch(1)
+        self.tabs.addTab(account_tab, "계정/토큰")
+
+        checkin_tab = QWidget()
+        checkin_layout = QVBoxLayout(checkin_tab)
+        self._build_daily_checkin_tab(checkin_layout)
+        self.tabs.addTab(checkin_tab, "자동 출석")
+
+        logs_tab = QWidget()
+        logs_layout = QVBoxLayout(logs_tab)
+        self._build_daily_checkin_logs_tab(logs_layout)
+        self.tabs.addTab(logs_tab, "최근 로그")
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.button_box.rejected.connect(self.reject)
@@ -2153,14 +2172,16 @@ class HoYoLabSettingsDialog(QDialog):
         self.open_nikke_btn.clicked.connect(self._open_nikke)
         self.hoyolab_advanced_btn.clicked.connect(self._open_hoyolab_advanced)
         self.nikke_advanced_btn.clicked.connect(self._open_nikke_advanced)
-        self.hoyolab_checkin_run_btn.clicked.connect(self._run_hoyolab_daily_checkin)
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
         self.check_cookies_btn.clicked.connect(self._check_cookie_availability)
-        self.nikke_checkin_status_btn.clicked.connect(self._check_nikke_daily_checkin_status)
+        self.refresh_daily_checkin_btn.clicked.connect(self._load_daily_checkin_games)
+        self.refresh_daily_checkin_logs_btn.clicked.connect(self._load_daily_checkin_logs)
 
         self._update_status()
         self._update_nikke_status()
+        self._load_daily_checkin_games()
+        self._load_daily_checkin_logs()
 
     def _build_hoyolab_section(self, root: QVBoxLayout) -> None:
         auto_group = QGroupBox("HoYoLab")
@@ -2188,12 +2209,6 @@ class HoYoLabSettingsDialog(QDialog):
         button_layout.addWidget(self.hoyolab_advanced_btn)
         button_layout.addWidget(self.clear_btn)
         auto_layout.addLayout(button_layout)
-
-        self.hoyolab_checkin_run_btn = QPushButton("출석 실행 (붕스→젠존제)")
-        self.hoyolab_checkin_run_btn.setToolTip(
-            "HoYoLab daily reward sign POST를 붕괴: 스타레일, 젠레스 존 제로 순서로 실제 실행합니다."
-        )
-        auto_layout.addWidget(self.hoyolab_checkin_run_btn)
 
         self.extract_status_label = QLabel("")
         self.extract_status_label.setWordWrap(True)
@@ -2231,17 +2246,185 @@ class HoYoLabSettingsDialog(QDialog):
         nikke_button_layout.addWidget(self.clear_nikke_btn)
         nikke_layout.addLayout(nikke_button_layout)
 
-        self.nikke_checkin_status_btn = QPushButton("출석 실행 (POST)")
-        self.nikke_checkin_status_btn.setToolTip(
-            "BlablaLink DailyCheckIn POST를 실제 실행합니다. 실행 전 task 상태를 먼저 확인합니다."
-        )
-        nikke_layout.addWidget(self.nikke_checkin_status_btn)
-
         self.nikke_status_label = QLabel("")
         self.nikke_status_label.setWordWrap(True)
         nikke_layout.addWidget(self.nikke_status_label)
 
         root.addWidget(nikke_group)
+
+    def _build_daily_checkin_tab(self, root: QVBoxLayout) -> None:
+        info = QLabel(
+            "지원되는 게임 중 현재 호스트에 등록된 게임만 표시됩니다. "
+            "게임별로 자동 출석을 opt-in하고, 필요하면 즉시 출석을 수동 실행할 수 있습니다."
+        )
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        toolbar = QHBoxLayout()
+        self.refresh_daily_checkin_btn = QPushButton("목록 새로고침")
+        toolbar.addWidget(self.refresh_daily_checkin_btn)
+        toolbar.addStretch(1)
+        root.addLayout(toolbar)
+
+        self.daily_checkin_table = QTableWidget(0, 6)
+        self.daily_checkin_table.setHorizontalHeaderLabels(["사용", "게임", "최근 상태", "마지막 시도", "다음 초기화", "실행"])
+        self.daily_checkin_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.daily_checkin_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        header = self.daily_checkin_table.horizontalHeader()
+        if header:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        root.addWidget(self.daily_checkin_table)
+
+        self.daily_checkin_status_label = QLabel("자동 출석 대상 목록을 불러오는 중입니다.")
+        self.daily_checkin_status_label.setWordWrap(True)
+        root.addWidget(self.daily_checkin_status_label)
+
+    def _build_daily_checkin_logs_tab(self, root: QVBoxLayout) -> None:
+        toolbar = QHBoxLayout()
+        self.refresh_daily_checkin_logs_btn = QPushButton("로그 새로고침")
+        toolbar.addWidget(self.refresh_daily_checkin_logs_btn)
+        toolbar.addStretch(1)
+        root.addLayout(toolbar)
+
+        self.daily_checkin_logs_table = QTableWidget(0, 5)
+        self.daily_checkin_logs_table.setHorizontalHeaderLabels(["시각", "게임", "트리거", "결과", "메시지"])
+        self.daily_checkin_logs_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.daily_checkin_logs_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        header = self.daily_checkin_logs_table.horizontalHeader()
+        if header:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        root.addWidget(self.daily_checkin_logs_table)
+
+        self.daily_checkin_logs_status_label = QLabel("출석 로그를 불러오는 중입니다.")
+        self.daily_checkin_logs_status_label.setWordWrap(True)
+        root.addWidget(self.daily_checkin_logs_status_label)
+
+    def _load_daily_checkin_games(self) -> None:
+        if self.data_manager is None or not hasattr(self.data_manager, "get_daily_checkin_games"):
+            self.daily_checkin_status_label.setText("자동 출석 API 클라이언트를 사용할 수 없습니다.")
+            return
+        games = self.data_manager.get_daily_checkin_games()
+        self.daily_checkin_table.setRowCount(0)
+        for game in games:
+            row = self.daily_checkin_table.rowCount()
+            self.daily_checkin_table.insertRow(row)
+
+            checkbox = QCheckBox()
+            checkbox.setChecked(bool(game.get("enabled")))
+            checkbox.setToolTip("이 게임의 자동 출석을 켜거나 끕니다.")
+            checkbox.toggled.connect(lambda checked, item=dict(game): self._toggle_daily_checkin(item, checked))
+            self.daily_checkin_table.setCellWidget(row, 0, checkbox)
+
+            game_item = QTableWidgetItem(f"{game.get('game_name') or game.get('process_name')} ({game.get('provider_label')})")
+            game_item.setToolTip(str(game.get("process_name") or ""))
+            self.daily_checkin_table.setItem(row, 1, game_item)
+            self.daily_checkin_table.setItem(row, 2, QTableWidgetItem(self._format_daily_checkin_status(game)))
+            self.daily_checkin_table.setItem(row, 3, QTableWidgetItem(self._format_timestamp(game.get("last_attempt_at"))))
+            self.daily_checkin_table.setItem(row, 4, QTableWidgetItem(self._format_timestamp(game.get("next_reset_at"))))
+
+            run_button = QPushButton("지금 출석")
+            run_button.setToolTip("브라우저 없이 API POST로 이 게임의 출석을 즉시 실행합니다.")
+            run_button.clicked.connect(lambda _checked=False, item=dict(game): self._run_registered_daily_checkin(item))
+            self.daily_checkin_table.setCellWidget(row, 5, run_button)
+
+        if games:
+            self.daily_checkin_status_label.setText(f"등록된 자동 출석 지원 게임 {len(games)}개를 표시했습니다.")
+            self.daily_checkin_status_label.setStyleSheet("")
+        else:
+            self.daily_checkin_status_label.setText("현재 등록된 지원 게임이 없습니다. 붕스/젠존제/NIKKE를 먼저 호스트에 등록하세요.")
+            self.daily_checkin_status_label.setStyleSheet("color: #ffcc00;")
+
+    def _load_daily_checkin_logs(self) -> None:
+        if self.data_manager is None or not hasattr(self.data_manager, "get_daily_checkin_logs"):
+            self.daily_checkin_logs_status_label.setText("자동 출석 로그 API 클라이언트를 사용할 수 없습니다.")
+            return
+        logs = self.data_manager.get_daily_checkin_logs(limit=50)
+        self.daily_checkin_logs_table.setRowCount(0)
+        for log in logs:
+            row = self.daily_checkin_logs_table.rowCount()
+            self.daily_checkin_logs_table.insertRow(row)
+            self.daily_checkin_logs_table.setItem(row, 0, QTableWidgetItem(self._format_timestamp(log.get("attempted_at"))))
+            self.daily_checkin_logs_table.setItem(row, 1, QTableWidgetItem(str(log.get("game_name") or log.get("process_name") or "")))
+            self.daily_checkin_logs_table.setItem(row, 2, QTableWidgetItem(str(log.get("trigger") or "")))
+            self.daily_checkin_logs_table.setItem(row, 3, QTableWidgetItem(str(log.get("status") or "")))
+            self.daily_checkin_logs_table.setItem(row, 4, QTableWidgetItem(str(log.get("message") or "")))
+        self.daily_checkin_logs_status_label.setText(f"최근 출석 로그 {len(logs)}개를 표시했습니다.")
+
+    def _toggle_daily_checkin(self, game: dict[str, Any], enabled: bool) -> None:
+        if self.data_manager is None or not hasattr(self.data_manager, "set_daily_checkin_enabled"):
+            self.daily_checkin_status_label.setText("자동 출석 설정 API 클라이언트를 사용할 수 없습니다.")
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+            return
+        result = self.data_manager.set_daily_checkin_enabled(
+            str(game.get("process_id") or ""),
+            enabled,
+            str(game.get("game_id") or ""),
+        )
+        if result is None:
+            self.daily_checkin_status_label.setText("자동 출석 설정 저장에 실패했습니다.")
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+            self._load_daily_checkin_games()
+            return
+        state = "활성화" if enabled else "비활성화"
+        self.daily_checkin_status_label.setText(f"{game.get('game_name') or game.get('process_name')} 자동 출석을 {state}했습니다.")
+        self.daily_checkin_status_label.setStyleSheet("color: #44cc44;")
+
+    def _run_registered_daily_checkin(self, game: dict[str, Any]) -> None:
+        if self.data_manager is None or not hasattr(self.data_manager, "run_daily_checkin"):
+            self.daily_checkin_status_label.setText("자동 출석 실행 API 클라이언트를 사용할 수 없습니다.")
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+            return
+        label = str(game.get("game_name") or game.get("process_name") or "게임")
+        self.daily_checkin_status_label.setText(f"{label} 출석 실행 중...")
+        self.daily_checkin_status_label.setStyleSheet("color: #ffcc00;")
+        QApplication.processEvents()
+        result = self.data_manager.run_daily_checkin(
+            str(game.get("process_id") or ""),
+            game_id=str(game.get("game_id") or ""),
+            trigger="manual_run",
+        )
+        if result is None:
+            self.daily_checkin_status_label.setText(f"❌ {label} 출석 실행 실패")
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+            return
+        status_line = self._format_daily_checkin_status(result)
+        self.daily_checkin_status_label.setText(status_line)
+        if result.get("status") in {"success", "already_done"}:
+            self.daily_checkin_status_label.setStyleSheet("color: #44cc44;")
+        else:
+            self.daily_checkin_status_label.setStyleSheet("color: #ff6666;")
+        self._load_daily_checkin_games()
+        self._load_daily_checkin_logs()
+
+    @staticmethod
+    def _format_timestamp(value: Any) -> str:
+        if value in (None, ""):
+            return "-"
+        try:
+            return datetime.datetime.fromtimestamp(float(value)).strftime("%m-%d %H:%M")
+        except Exception:
+            return "-"
+
+    @staticmethod
+    def _format_daily_checkin_status(item: dict[str, Any]) -> str:
+        status = str(item.get("last_result") or item.get("status") or "대기")
+        message = str(item.get("last_message") or item.get("message") or "")
+        if status in {"success", "already_done"}:
+            prefix = "✅"
+        elif status == "대기":
+            prefix = "⬜"
+        else:
+            prefix = "⚠️"
+        return f"{prefix} {status}" + (f" - {message}" if message else "")
 
     def _update_status(self):
         """현재 HoYoLab 인증 상태 업데이트"""
@@ -2498,45 +2681,12 @@ class HoYoLabSettingsDialog(QDialog):
             return f"❌ HoYoLab: 검사 실패 - {exc}"
 
     def _run_hoyolab_daily_checkin(self) -> None:
-        """HoYoLAB daily reward sign POST를 붕스 → 젠존제 순서로 실행합니다."""
-        reply = QMessageBox.question(
-            self,
-            "HoYoLab 출석 체크 실행",
-            "HoYoLab 실제 출석 체크 POST를 실행합니다.\n"
-            "대상: 붕괴: 스타레일 → 젠레스 존 제로\n\n"
-            "계속하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        """Compatibility wrapper for the old temporary HoYoLab button path."""
+        if not self.data_manager or not hasattr(self.data_manager, "get_daily_checkin_games"):
             return
-
-        self.hoyolab_checkin_run_btn.setEnabled(False)
-        self.extract_status_label.setText("HoYoLab 출석 체크 실행 중... (붕스 → 젠존제)")
-        self.extract_status_label.setStyleSheet("color: #ffcc00;")
-        QApplication.processEvents()
-        try:
-            from src.services.hoyolab import HoYoLabService
-
-            service = HoYoLabService()
-            try:
-                results = service.claim_daily_rewards(["honkai_starrail", "zenless_zone_zero"])
-            finally:
-                service.close()
-
-            self.extract_status_label.setText(self._format_hoyolab_daily_checkin_results(results))
-            statuses = {getattr(result, "status", "") for result in results}
-            if statuses and statuses <= {"success", "already_done"}:
-                self.extract_status_label.setStyleSheet("color: #44cc44;")
-            elif statuses & {"success", "already_done"} or "challenge_required" in statuses:
-                self.extract_status_label.setStyleSheet("color: #ffcc00;")
-            else:
-                self.extract_status_label.setStyleSheet("color: #ff6666;")
-        except Exception as exc:
-            self.extract_status_label.setText(f"❌ HoYoLab 출석 체크 실행 실패: {exc}")
-            self.extract_status_label.setStyleSheet("color: #ff6666;")
-        finally:
-            self.hoyolab_checkin_run_btn.setEnabled(True)
+        for game in self.data_manager.get_daily_checkin_games():
+            if game.get("provider") == "hoyolab":
+                self._run_registered_daily_checkin(game)
 
     @classmethod
     def _format_hoyolab_daily_checkin_results(cls, results) -> str:
@@ -2596,46 +2746,13 @@ class HoYoLabSettingsDialog(QDialog):
             return f"❌ BlablaLink: 검사 실패 - {exc}"
 
     def _check_nikke_daily_checkin_status(self) -> None:
-        """NIKKE/BlablaLink DailyCheckIn POST를 실제 실행합니다."""
-        reply = QMessageBox.question(
-            self,
-            "BlablaLink 출석 체크 실행",
-            "BlablaLink/NIKKE 실제 출석 체크 POST를 실행합니다.\n"
-            "실행 전 출석 task 상태를 먼저 확인하고, 오늘 출석 가능 상태일 때 DailyCheckIn을 호출합니다.\n\n"
-            "계속하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        """Compatibility wrapper for the old temporary NIKKE button path."""
+        if not self.data_manager or not hasattr(self.data_manager, "get_daily_checkin_games"):
             return
-
-        self.nikke_checkin_status_btn.setEnabled(False)
-        self.nikke_status_label.setText("BlablaLink 출석 체크 실행 중... (status 확인 → POST)")
-        self.nikke_status_label.setStyleSheet("color: #ffcc00;")
-        QApplication.processEvents()
-        try:
-            from src.services.nikke import NikkeService
-            from src.utils.nikke_config import NikkeConfig
-
-            result = NikkeService(config=NikkeConfig()).claim_daily_checkin()
-            line = self._format_nikke_daily_checkin_status(result)
-            post_note = (
-                "BlablaLink DailyCheckIn POST를 호출했습니다."
-                if getattr(result, "raw_debug", {}).get("post_called")
-                else "status 확인 결과 POST가 필요하지 않아 호출하지 않았습니다."
-            )
-            self.nikke_status_label.setText(line + "\n" + post_note)
-            if result.status in {"success", "already_done"}:
-                self.nikke_status_label.setStyleSheet("color: #44cc44;")
-            elif result.status == "route_error":
-                self.nikke_status_label.setStyleSheet("color: #ffcc00;")
-            else:
-                self.nikke_status_label.setStyleSheet("color: #ff6666;")
-        except Exception as exc:
-            self.nikke_status_label.setText(f"❌ BlablaLink 출석 체크 실행 실패: {exc}")
-            self.nikke_status_label.setStyleSheet("color: #ff6666;")
-        finally:
-            self.nikke_checkin_status_btn.setEnabled(True)
+        for game in self.data_manager.get_daily_checkin_games():
+            if game.get("game_id") == "nikke":
+                self._run_registered_daily_checkin(game)
+                return
 
     def _check_nikke_daily_checkin_availability(self) -> str:
         try:

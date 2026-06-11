@@ -217,3 +217,98 @@ class MobileGameSessionSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DailyCheckInSettingSchema(BaseModel):
+    process_id: str
+    process_name: Optional[str] = None
+    user_preset_id: Optional[str] = None
+    provider: str
+    game_id: str
+    game_name: Optional[str] = None
+    enabled: bool = False
+    last_attempt_at: Optional[float] = None
+    last_result: Optional[str] = None
+    last_message: Optional[str] = None
+    last_period_start: Optional[float] = None
+    last_success_at: Optional[float] = None
+    next_run_at: Optional[float] = None
+    created_at: float
+    updated_at: float
+
+    class Config:
+        from_attributes = True
+
+
+class DailyCheckInSettingUpdate(BaseModel):
+    enabled: bool
+    game_id: Optional[str] = None
+
+
+class DailyCheckInLogCreate(BaseModel):
+    process_id: str
+    process_name: Optional[str] = None
+    user_preset_id: Optional[str] = None
+    provider: str
+    game_id: str
+    game_name: Optional[str] = None
+    period_start: float
+    period_end: float
+    attempted_at: float
+    trigger: str
+    status: str
+    message: Optional[str] = None
+    post_called: bool = False
+    raw_debug_json: Optional[str] = None
+    created_at: Optional[float] = None
+
+
+class DailyCheckInLogSchema(BaseModel):
+    id: int
+    process_id: str
+    process_name: Optional[str] = None
+    user_preset_id: Optional[str] = None
+    provider: str
+    game_id: str
+    game_name: Optional[str] = None
+    period_start: float
+    period_end: float
+    attempted_at: float
+    trigger: str
+    status: str
+    message: Optional[str] = None
+    post_called: bool = False
+    raw_debug_json: Optional[str] = None
+    created_at: float
+
+    class Config:
+        from_attributes = True
+
+
+class DailyCheckInRegisteredGameSchema(BaseModel):
+    process_id: str
+    process_name: str
+    user_preset_id: Optional[str] = None
+    provider: str
+    provider_label: str
+    game_id: str
+    game_name: str
+    reset_time_kst: str
+    period_start: float
+    period_end: float
+    next_reset_at: float
+    enabled: bool = False
+    last_attempt_at: Optional[float] = None
+    last_result: Optional[str] = None
+    last_message: Optional[str] = None
+    last_success_at: Optional[float] = None
+
+
+class DailyCheckInRunRequest(BaseModel):
+    process_id: str
+    game_id: Optional[str] = None
+    trigger: str = "manual_run"
+
+
+class DailyCheckInRunDueRequest(BaseModel):
+    trigger: str = "periodic"

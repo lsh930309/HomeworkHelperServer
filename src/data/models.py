@@ -228,3 +228,55 @@ class AppRuntimeHeartbeat(Base):
     started_at = Column(Float, nullable=True)
     last_heartbeat_at = Column(Float, nullable=True)
     last_shutdown_at = Column(Float, nullable=True)
+
+
+class DailyCheckInSetting(Base):
+    """Per registered game opt-in state for API-first daily check-in."""
+    __tablename__ = "daily_checkin_settings"
+    __table_args__ = (
+        Index("ix_daily_checkin_settings_enabled", "enabled"),
+        Index("ix_daily_checkin_settings_provider_game", "provider", "game_id"),
+    )
+
+    process_id = Column(String, primary_key=True, index=True)
+    process_name = Column(String, nullable=True)
+    user_preset_id = Column(String, nullable=True)
+    provider = Column(String, nullable=False)
+    game_id = Column(String, nullable=False)
+    game_name = Column(String, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    last_attempt_at = Column(Float, nullable=True)
+    last_result = Column(String, nullable=True)
+    last_message = Column(String, nullable=True)
+    last_period_start = Column(Float, nullable=True)
+    last_success_at = Column(Float, nullable=True)
+    next_run_at = Column(Float, nullable=True)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
+class DailyCheckInLog(Base):
+    """Append-only daily check-in attempt log for future dashboard use."""
+    __tablename__ = "daily_checkin_logs"
+    __table_args__ = (
+        Index("ix_daily_checkin_logs_process_game_period", "process_id", "game_id", "period_start"),
+        Index("ix_daily_checkin_logs_attempted_at", "attempted_at"),
+        Index("ix_daily_checkin_logs_provider_game", "provider", "game_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    process_id = Column(String, nullable=False, index=True)
+    process_name = Column(String, nullable=True)
+    user_preset_id = Column(String, nullable=True)
+    provider = Column(String, nullable=False)
+    game_id = Column(String, nullable=False)
+    game_name = Column(String, nullable=True)
+    period_start = Column(Float, nullable=False)
+    period_end = Column(Float, nullable=False)
+    attempted_at = Column(Float, nullable=False)
+    trigger = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    message = Column(String, nullable=True)
+    post_called = Column(Boolean, nullable=False, default=False)
+    raw_debug_json = Column(String, nullable=True)
+    created_at = Column(Float, nullable=False)

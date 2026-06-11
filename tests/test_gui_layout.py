@@ -127,7 +127,7 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "setIconVisibleInMenu(False)" in source
     assert '_text_menu_action("앱 설정...", self.open_global_settings_dialog)' in source
     assert '_text_menu_action("원격 설정...", self.open_remote_settings_dialog)' in source
-    assert '_text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)' in source
+    assert '_text_menu_action("자원/출석 관리...", self.open_hoyolab_settings_dialog)' in source
     assert '_text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)' not in source
     assert source.index('_text_menu_action("앱 설정..."') < source.index('_text_menu_action("원격 설정..."')
     assert source.index('_text_menu_action("원격 설정..."') < source.index('_text_menu_action("사이드바 설정..."')
@@ -172,17 +172,23 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
     dialog_source = source[source.index("class HoYoLabSettingsDialog"):]
 
-    assert 'setWindowTitle("자원 추적 설정")' in dialog_source
+    assert 'setWindowTitle("자원/출석 관리")' in dialog_source
+    assert "QTabWidget" in source
+    assert 'self.tabs.addTab(account_tab, "계정/토큰")' in dialog_source
+    assert 'self.tabs.addTab(checkin_tab, "자동 출석")' in dialog_source
+    assert 'self.tabs.addTab(logs_tab, "최근 로그")' in dialog_source
     assert "HoYoLabAdvancedCredentialsDialog" in source
     assert "NikkeAdvancedSessionDialog" in source
     assert "hoyolab_advanced_btn" in dialog_source
     assert "nikke_advanced_btn" in dialog_source
     assert "check_cookies_btn" in dialog_source
-    assert "hoyolab_checkin_run_btn" in dialog_source
-    assert "출석 실행 (붕스→젠존제)" in dialog_source
-    assert "출석 실행 (POST)" in dialog_source
-    assert "claim_daily_checkin" in dialog_source
-    assert "_run_hoyolab_daily_checkin" in dialog_source
+    assert "daily_checkin_table" in dialog_source
+    assert "daily_checkin_logs_table" in dialog_source
+    assert "지금 출석" in dialog_source
+    assert "run_daily_checkin" in dialog_source
+    assert "set_daily_checkin_enabled" in dialog_source
+    assert "hoyolab_checkin_run_btn" not in dialog_source
+    assert "nikke_checkin_status_btn" not in dialog_source
     assert "cookie_check_status_label" in dialog_source
     assert "QDialogButtonBox.StandardButton.Close" in dialog_source
     assert "self.ltuid_edit" not in dialog_source
