@@ -285,6 +285,154 @@ def test_nikke_outpost_storage_discovers_role_before_daily_progress(monkeypatch)
     assert daily_payloads == [{"intl_open_id": "1", "nikke_area_id": 1}]
 
 
+def _daily_checkin_body(task):
+    return {"code": 0, "data": {"tasks": [task]}}
+
+
+def _daily_checkin_task(**overrides):
+    task = {
+        "task_id": "15",
+        "task_type": 1,
+        "task_name": "매일 출석 체크",
+        "reward_infos": [
+            {
+                "is_completed": False,
+                "completed_times": 0,
+                "need_completed_times": 1,
+                "points": 100,
+            }
+        ],
+    }
+    task.update(overrides)
+    return task
+
+
+def test_nikke_daily_checkin_status_ready_is_read_only(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append((url, kwargs))
+        assert url.endswith("lip/proxy/lipass/Points/GetTaskListWithStatusV2")
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("daily check-in status probe must not POST")
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+    monkeypatch.setattr("src.services.nikke.requests.post", fail_post)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "ready"
+    assert status.task_id == "15"
+    assert status.task_name == "매일 출석 체크"
+    assert status.points == 100
+    assert status.completed_times == 0
+    assert status.need_completed_times == 1
+    assert get_calls[0][1]["params"] == {"get_top": "false", "intl_game_id": "nikke"}
+
+
+def test_nikke_daily_checkin_status_already_done_from_completed_flag(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(
+            _daily_checkin_body(
+                _daily_checkin_task(
+                    reward_infos=[
+                        {
+                            "is_completed": True,
+                            "completed_times": 0,
+                            "need_completed_times": 1,
+                            "points": 100,
+                        }
+                    ]
+                )
+            )
+        )
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "already_done"
+    assert "완료" in status.message
+
+
+def test_nikke_daily_checkin_status_already_done_from_completed_times(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(
+            _daily_checkin_body(
+                _daily_checkin_task(
+                    reward_infos=[
+                        {
+                            "is_completed": False,
+                            "completed_times": 1,
+                            "need_completed_times": 1,
+                            "points": 100,
+                        }
+                    ]
+                )
+            )
+        )
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "already_done"
+    assert status.completed_times == 1
+    assert status.need_completed_times == 1
+
+
+def test_nikke_daily_checkin_status_maps_game_login_required(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse({"code": 300001, "msg": "game not login"})
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "game_login_required"
+    assert status.message == "game not login"
+
+
+def test_nikke_daily_checkin_status_falls_back_to_top_tasks(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    get_top_values = []
+
+    def fake_get(url, **kwargs):
+        get_top_values.append(kwargs["params"]["get_top"])
+        if kwargs["params"]["get_top"] == "false":
+            return _FakeResponse({"code": 0, "data": {"tasks": []}})
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "ready"
+    assert get_top_values == ["false", "true"]
+
+
+def test_nikke_daily_checkin_status_requires_configured_session(monkeypatch):
+    config = _FakeNikkeConfig(None)
+
+    def fail_get(*args, **kwargs):
+        raise AssertionError("unconfigured daily check-in status probe must not call network")
+
+    monkeypatch.setattr("src.services.nikke.requests.get", fail_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "auth_required"
+
+
 def test_process_progress_exposes_generic_resource_snapshot():
     process = ManagedProcess(
         id="nikke",

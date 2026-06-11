@@ -33,6 +33,25 @@ class NikkeRoleInfo:
     nikke_area_id: int | str
 
 
+@dataclass
+class NikkeDailyCheckInStatus:
+    """BlablaLink 일일 출석 체크 상태 조회 결과.
+
+    이 모델은 읽기 전용 status probe 전용이며, 실제 출석 처리 POST 결과를
+    표현하지 않습니다.
+    """
+
+    status: str
+    updated_at: datetime
+    task_id: Optional[str] = None
+    task_name: str = ""
+    points: Optional[int] = None
+    completed_times: Optional[int] = None
+    need_completed_times: Optional[int] = None
+    message: str = ""
+    raw_debug: dict[str, Any] = field(default_factory=dict)
+
+
 class NikkeService:
     """ShiftyPad 웹앱이 사용하는 BlablaLink API에서 NIKKE 리소스를 조회합니다."""
 
@@ -49,6 +68,9 @@ class NikkeService:
         ("POST", "game/proxy/Game/GetSavedRoleInfo"),
     )
     DAILY_PROGRESS_PATH = "game/proxy/Game/GetUserDailyContentsProgress"
+    DAILY_CHECKIN_STATUS_PATH = "lip/proxy/lipass/Points/GetTaskListWithStatusV2"
+    DAILY_CHECKIN_TASK_TYPE = 1
+    DAILY_CHECKIN_TASK_ID = "15"
 
     def __init__(self, config: Optional[NikkeConfig] = None, timeout: float = 10.0):
         self._config = config or NikkeConfig()
@@ -152,6 +174,37 @@ class NikkeService:
             return False, str(body.get("msg") or "game not login")
         code = body.get("code")
         return (code in (0, "0", None)), str(body.get("msg") or body.get("message") or "ok")
+
+    def get_daily_checkin_status(self) -> NikkeDailyCheckInStatus:
+        """BlablaLink NIKKE 일일 출석 체크 상태를 읽기 전용으로 조회합니다.
+
+        실제 출석 처리 endpoint인 ``DailyCheckIn`` POST는 호출하지 않습니다.
+        ShiftyPad 웹앱이 출석 버튼 노출에 사용하는 task status endpoint만
+        조회하여 오늘 출석 가능/완료/인증 필요 상태를 판별합니다.
+        """
+        now = datetime.now()
+        if not self.is_configured():
+            return NikkeDailyCheckInStatus(
+                "auth_required",
+                now,
+                message="BlablaLink 세션이 없습니다.",
+            )
+
+        for get_top in ("false", "true"):
+            try:
+                body = self._get(
+                    self.DAILY_CHECKIN_STATUS_PATH,
+                    {"get_top": get_top, "intl_game_id": "nikke"},
+                )
+            except Exception as exc:
+                logger.error("NIKKE 출석 상태 조회 실패: %s", exc)
+                return NikkeDailyCheckInStatus("network_error", now, message=str(exc))
+
+            status = self._parse_daily_checkin_status(body, now, get_top=get_top)
+            if status.status != "route_error" or get_top == "true":
+                return status
+
+        return NikkeDailyCheckInStatus("route_error", now, message="BlablaLink 출석 task를 찾지 못했습니다.")
 
     def get_role_info(self, *, refresh: bool = False) -> Optional[NikkeRoleInfo]:
         session_payload = self._session_payload()
@@ -286,6 +339,115 @@ class NikkeService:
             datetime.now(),
             raw_debug={"field": "daily_progress[0].outpost_battle_storage_fullness", "value": raw_value},
         )
+
+    @classmethod
+    def _parse_daily_checkin_status(cls, body: Any, updated_at: datetime, *, get_top: str) -> NikkeDailyCheckInStatus:
+        if not isinstance(body, dict):
+            return NikkeDailyCheckInStatus(
+                "route_error",
+                updated_at,
+                message="BlablaLink API가 예상하지 못한 응답을 반환했습니다.",
+                raw_debug={"get_top": get_top, "body_type": type(body).__name__},
+            )
+
+        code = body.get("code")
+        msg = str(body.get("msg") or body.get("message") or "")
+        raw_debug = {"get_top": get_top, "code": code, "msg": msg}
+        if code == "auth_required":
+            return NikkeDailyCheckInStatus("auth_required", updated_at, message=msg, raw_debug=raw_debug)
+        if cls._is_auth_expired(body):
+            return NikkeDailyCheckInStatus("game_login_required", updated_at, message=msg or "game not login", raw_debug=raw_debug)
+        if code not in (0, "0", None):
+            return NikkeDailyCheckInStatus("route_error", updated_at, message=msg or f"BlablaLink API code={code}", raw_debug=raw_debug)
+
+        task = cls._find_daily_checkin_task(body)
+        if not task:
+            return NikkeDailyCheckInStatus(
+                "route_error",
+                updated_at,
+                message="BlablaLink 출석 task를 찾지 못했습니다.",
+                raw_debug=raw_debug,
+            )
+
+        completed_times = cls._to_int(task.get("completed_times"))
+        need_completed_times = cls._to_int(task.get("need_completed_times"))
+        points = cls._to_int(task.get("points"))
+        is_completed = cls._truthy(task.get("is_completed"))
+        if (
+            not is_completed
+            and completed_times is not None
+            and need_completed_times is not None
+            and need_completed_times > 0
+            and completed_times >= need_completed_times
+        ):
+            is_completed = True
+
+        status = "already_done" if is_completed else "ready"
+        task_id = str(task.get("task_id") or "")
+        task_name = str(task.get("task_name") or "")
+        raw_debug.update(
+            {
+                "task_id": task_id,
+                "task_type": task.get("task_type"),
+                "completed_times": completed_times,
+                "need_completed_times": need_completed_times,
+            }
+        )
+        return NikkeDailyCheckInStatus(
+            status,
+            updated_at,
+            task_id=task_id,
+            task_name=task_name,
+            points=points,
+            completed_times=completed_times,
+            need_completed_times=need_completed_times,
+            message="오늘 이미 출석 체크가 완료되었습니다." if is_completed else "오늘 출석 체크가 가능합니다.",
+            raw_debug=raw_debug,
+        )
+
+    @classmethod
+    def _find_daily_checkin_task(cls, body: Any) -> dict[str, Any] | None:
+        tasks = cls._find_key(body, "tasks")
+        if not isinstance(tasks, list):
+            return None
+
+        normalised = [cls._normalise_reward_task(task) for task in tasks if isinstance(task, dict)]
+        for task in normalised:
+            if cls._to_int(task.get("task_type")) == cls.DAILY_CHECKIN_TASK_TYPE:
+                return task
+        for task in normalised:
+            task_id = str(task.get("task_id") or "").strip()
+            task_name = str(task.get("task_name") or "").strip().lower()
+            if task_id == cls.DAILY_CHECKIN_TASK_ID or "출석" in task_name or "check" in task_name:
+                return task
+        return None
+
+    @staticmethod
+    def _normalise_reward_task(task: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(task)
+        reward_infos = task.get("reward_infos")
+        if isinstance(reward_infos, list) and reward_infos and isinstance(reward_infos[0], dict):
+            merged.update(reward_infos[0])
+        return merged
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "completed", "complete"}
+        return False
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def normalise_outpost_percent(raw_value: Any) -> float:

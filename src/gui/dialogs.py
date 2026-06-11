@@ -2156,6 +2156,7 @@ class HoYoLabSettingsDialog(QDialog):
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
         self.check_cookies_btn.clicked.connect(self._check_cookie_availability)
+        self.nikke_checkin_status_btn.clicked.connect(self._check_nikke_daily_checkin_status)
 
         self._update_status()
         self._update_nikke_status()
@@ -2222,6 +2223,12 @@ class HoYoLabSettingsDialog(QDialog):
         nikke_button_layout.addWidget(self.nikke_advanced_btn)
         nikke_button_layout.addWidget(self.clear_nikke_btn)
         nikke_layout.addLayout(nikke_button_layout)
+
+        self.nikke_checkin_status_btn = QPushButton("출석 상태 확인 (읽기 전용)")
+        self.nikke_checkin_status_btn.setToolTip(
+            "BlablaLink daily check-in 상태만 조회하며 실제 출석 체크는 수행하지 않습니다."
+        )
+        nikke_layout.addWidget(self.nikke_checkin_status_btn)
 
         self.nikke_status_label = QLabel("")
         self.nikke_status_label.setWordWrap(True)
@@ -2442,7 +2449,11 @@ class HoYoLabSettingsDialog(QDialog):
         self.cookie_check_status_label.setStyleSheet("color: #ffcc00;")
         QApplication.processEvents()
         try:
-            lines = [self._check_hoyolab_availability(), self._check_nikke_availability()]
+            lines = [
+                self._check_hoyolab_availability(),
+                self._check_nikke_availability(),
+                self._check_nikke_daily_checkin_availability(),
+            ]
             self.cookie_check_status_label.setText("\n".join(lines))
             if all(line.startswith("✅") for line in lines):
                 self.cookie_check_status_label.setStyleSheet("color: #44cc44;")
@@ -2500,3 +2511,54 @@ class HoYoLabSettingsDialog(QDialog):
             return f"⚠️ BlablaLink: 대표 계정 확인됨, 리소스 조회 실패 ({snapshot.status})"
         except Exception as exc:
             return f"❌ BlablaLink: 검사 실패 - {exc}"
+
+    def _check_nikke_daily_checkin_status(self) -> None:
+        """NIKKE/BlablaLink daily check-in 상태를 읽기 전용으로 확인합니다."""
+        self.nikke_checkin_status_btn.setEnabled(False)
+        self.nikke_status_label.setText("BlablaLink 출석 상태 확인 중... (읽기 전용)")
+        self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+        QApplication.processEvents()
+        try:
+            line = self._check_nikke_daily_checkin_availability()
+            self.nikke_status_label.setText(line + "\n읽기 전용 확인만 수행했으며 실제 출석 체크는 실행하지 않았습니다.")
+            if line.startswith("✅"):
+                self.nikke_status_label.setStyleSheet("color: #44cc44;")
+            elif line.startswith("⚠️"):
+                self.nikke_status_label.setStyleSheet("color: #ffcc00;")
+            else:
+                self.nikke_status_label.setStyleSheet("color: #ff6666;")
+        finally:
+            self.nikke_checkin_status_btn.setEnabled(True)
+
+    def _check_nikke_daily_checkin_availability(self) -> str:
+        try:
+            from src.services.nikke import NikkeService
+            from src.utils.nikke_config import NikkeConfig
+
+            status = NikkeService(config=NikkeConfig()).get_daily_checkin_status()
+            return self._format_nikke_daily_checkin_status(status)
+        except Exception as exc:
+            return f"❌ BlablaLink 출석: 검사 실패 - {exc}"
+
+    @staticmethod
+    def _format_nikke_daily_checkin_status(status) -> str:
+        task_suffix = ""
+        if getattr(status, "task_id", None):
+            task_suffix = f" (task={status.task_id}"
+            if getattr(status, "points", None) is not None:
+                task_suffix += f", +{status.points}P"
+            task_suffix += ")"
+
+        if status.status == "ready":
+            return f"✅ BlablaLink 출석: 오늘 출석 체크 가능{task_suffix}"
+        if status.status == "already_done":
+            return f"✅ BlablaLink 출석: 오늘 이미 출석 체크 완료{task_suffix}"
+        if status.status == "game_login_required":
+            return f"❌ BlablaLink 출석: BlablaLink/NIKKE 로그인 또는 바인딩 상태 확인 필요 ({status.message or 'game not login'})"
+        if status.status == "auth_required":
+            return f"❌ BlablaLink 출석: 저장된 쿠키가 없거나 만료되었습니다. ({status.message or 'auth required'})"
+        if status.status == "route_error":
+            return f"⚠️ BlablaLink 출석: 출석 task를 찾지 못했습니다. ({status.message or 'route error'})"
+        if status.status == "network_error":
+            return f"❌ BlablaLink 출석: 네트워크/API 요청 실패 ({status.message or 'network error'})"
+        return f"⚠️ BlablaLink 출석: 확인 필요 ({status.status}: {status.message})"

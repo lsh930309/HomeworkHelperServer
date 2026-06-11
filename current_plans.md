@@ -179,6 +179,33 @@
       - GUI layout/static test
       - 실제 출석 POST는 수동 승인 전 자동 테스트에서 제외
 
+   ### 2026-06-11 dev-daily-checkin 1차 구현 범위
+
+   이번 브랜치의 첫 구현은 실제 자동 출석 실행이 아니라, Windows host의 저장 세션으로 실동작 여부를 확인하기 위한 BlablaLink/NIKKE 읽기 전용 probe에 한정한다.
+
+   - `NikkeService.get_daily_checkin_status()`를 추가한다.
+     - `GET /lip/proxy/lipass/Points/GetTaskListWithStatusV2`만 호출한다.
+     - `get_top=false`에서 daily task를 찾지 못하면 `get_top=true`로 한 번 더 읽기 전용 fallback을 수행한다.
+     - `/lip/proxy/lipass/Points/DailyCheckIn` POST는 호출하지 않는다.
+     - `task_type == 1`을 daily check-in task의 1차 판별 기준으로 삼고, `task_id == "15"` 또는 task name의 `출석`/`check` 문자열을 fallback으로 사용한다.
+     - `reward_infos[0]`를 task top-level 값과 병합해 `is_completed`, `completed_times`, `need_completed_times`, `points`를 파싱한다.
+     - 결과 상태는 `ready`, `already_done`, `auth_required`, `game_login_required`, `network_error`, `route_error`로 정규화한다.
+   - 기존 HoYoLab/BlablaLink 인증 설정 다이얼로그에 임시 실험 버튼 `출석 상태 확인 (읽기 전용)`을 추가한다.
+     - 버튼은 NIKKE/BlablaLink 상태만 확인한다.
+     - UI 문구에 실제 출석 체크를 실행하지 않았음을 명시한다.
+     - 기존 `쿠키 유효성 확인` 흐름에도 BlablaLink 출석 상태 probe 결과를 함께 표시한다.
+   - 테스트는 다음을 고정한다.
+     - read-only probe가 GET status endpoint만 호출하고 POST를 호출하지 않는지 확인한다.
+     - `ready`/`already_done`/`game_login_required`/`auth_required` 상태 정규화와 `get_top=true` fallback을 검증한다.
+     - GUI 정적 테스트는 기존 레이아웃 회귀가 없는지 확인한다.
+   - 아직 포함하지 않는다.
+     - 실제 출석 실행 POST
+     - 스케줄러/catch-up/히스토리 저장
+     - 별도 자동 출석 관리 다이얼로그
+     - HoYoLAB daily reward status 구현
+
+   다음 단계는 실제 BlablaLink 로그인 토큰이 저장된 Windows host에서 위 read-only probe 버튼을 눌러 `GetTaskListWithStatusV2`의 인증 상태 응답을 확인하고, 그 결과에 따라 `ready`/`already_done` 판별 신뢰도를 확정하는 것이다.
+
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.
 
