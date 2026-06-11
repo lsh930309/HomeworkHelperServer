@@ -206,6 +206,19 @@
 
    다음 단계는 실제 BlablaLink 로그인 토큰이 저장된 Windows host에서 위 read-only probe 버튼을 눌러 `GetTaskListWithStatusV2`의 인증 상태 응답을 확인하고, 그 결과에 따라 `ready`/`already_done` 판별 신뢰도를 확정하는 것이다.
 
+   ### 2026-06-11 host 실험 후속
+
+   - Windows host의 실제 BlablaLink 저장 세션에서 임시 `출석 상태 확인 (읽기 전용)` 버튼이 동작함을 확인했다.
+     - 관찰 결과: `BlablaLink 출석: 오늘 출석 체크 가능 (task=15, +100P)`
+     - 의미: 기존 `NikkeConfig` 쿠키와 `GetTaskListWithStatusV2` read-only route만으로 daily check-in task 상태를 판별할 수 있다.
+   - 같은 화면에 HoYoLAB 실제 POST 검증용 임시 버튼을 추가한다.
+     - 버튼명: `출석 실행 (붕스→젠존제)`
+     - 실행 순서: `honkai_starrail` → `zenless_zone_zero`
+     - 구현 방식: `genshin.py`의 `claim_daily_reward(game=..., lang="ko-kr")`를 순차 호출한다.
+     - 이 버튼은 read-only probe가 아니라 실제 HoYoLAB daily reward sign POST를 수행한다.
+     - 결과 상태는 `success`, `already_done`, `auth_required`, `challenge_required`, `network_error`, `unavailable`, `unsupported`로 정규화한다.
+   - 아직 자동 실행/스케줄러로 연결하지 않는다. 이 버튼은 host 실험을 위한 임시 수동 실행 진입점이다.
+
 
 2. host & client: openSSH 의존성을 덜기 위해, host에 sleep/shutdown/restart 제어 기능을 만들고, client가 http 요청을 통해 이것을 제어하도록 구성하여 원격 전원 관리 기능에서 openSSH 의존성을 제거.
 

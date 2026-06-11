@@ -2153,6 +2153,7 @@ class HoYoLabSettingsDialog(QDialog):
         self.open_nikke_btn.clicked.connect(self._open_nikke)
         self.hoyolab_advanced_btn.clicked.connect(self._open_hoyolab_advanced)
         self.nikke_advanced_btn.clicked.connect(self._open_nikke_advanced)
+        self.hoyolab_checkin_run_btn.clicked.connect(self._run_hoyolab_daily_checkin)
         self.clear_btn.clicked.connect(self._clear_credentials)
         self.clear_nikke_btn.clicked.connect(self._clear_nikke_credentials)
         self.check_cookies_btn.clicked.connect(self._check_cookie_availability)
@@ -2187,6 +2188,12 @@ class HoYoLabSettingsDialog(QDialog):
         button_layout.addWidget(self.hoyolab_advanced_btn)
         button_layout.addWidget(self.clear_btn)
         auto_layout.addLayout(button_layout)
+
+        self.hoyolab_checkin_run_btn = QPushButton("출석 실행 (붕스→젠존제)")
+        self.hoyolab_checkin_run_btn.setToolTip(
+            "HoYoLab daily reward sign POST를 붕괴: 스타레일, 젠레스 존 제로 순서로 실제 실행합니다."
+        )
+        auto_layout.addWidget(self.hoyolab_checkin_run_btn)
 
         self.extract_status_label = QLabel("")
         self.extract_status_label.setWordWrap(True)
@@ -2489,6 +2496,82 @@ class HoYoLabSettingsDialog(QDialog):
                 service.close()
         except Exception as exc:
             return f"❌ HoYoLab: 검사 실패 - {exc}"
+
+    def _run_hoyolab_daily_checkin(self) -> None:
+        """HoYoLAB daily reward sign POST를 붕스 → 젠존제 순서로 실행합니다."""
+        reply = QMessageBox.question(
+            self,
+            "HoYoLab 출석 체크 실행",
+            "HoYoLab 실제 출석 체크 POST를 실행합니다.\n"
+            "대상: 붕괴: 스타레일 → 젠레스 존 제로\n\n"
+            "계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.hoyolab_checkin_run_btn.setEnabled(False)
+        self.extract_status_label.setText("HoYoLab 출석 체크 실행 중... (붕스 → 젠존제)")
+        self.extract_status_label.setStyleSheet("color: #ffcc00;")
+        QApplication.processEvents()
+        try:
+            from src.services.hoyolab import HoYoLabService
+
+            service = HoYoLabService()
+            try:
+                results = service.claim_daily_rewards(["honkai_starrail", "zenless_zone_zero"])
+            finally:
+                service.close()
+
+            self.extract_status_label.setText(self._format_hoyolab_daily_checkin_results(results))
+            statuses = {getattr(result, "status", "") for result in results}
+            if statuses and statuses <= {"success", "already_done"}:
+                self.extract_status_label.setStyleSheet("color: #44cc44;")
+            elif statuses & {"success", "already_done"} or "challenge_required" in statuses:
+                self.extract_status_label.setStyleSheet("color: #ffcc00;")
+            else:
+                self.extract_status_label.setStyleSheet("color: #ff6666;")
+        except Exception as exc:
+            self.extract_status_label.setText(f"❌ HoYoLab 출석 체크 실행 실패: {exc}")
+            self.extract_status_label.setStyleSheet("color: #ff6666;")
+        finally:
+            self.hoyolab_checkin_run_btn.setEnabled(True)
+
+    @classmethod
+    def _format_hoyolab_daily_checkin_results(cls, results) -> str:
+        lines = ["HoYoLab 실제 출석 POST 실행 결과:"]
+        for result in results:
+            lines.append(cls._format_hoyolab_daily_checkin_result(result))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_hoyolab_daily_checkin_result(result) -> str:
+        reward_suffix = ""
+        if getattr(result, "reward_name", ""):
+            reward_suffix = f" ({result.reward_name}"
+            if getattr(result, "reward_amount", None) is not None:
+                reward_suffix += f" x{result.reward_amount}"
+            reward_suffix += ")"
+
+        game_name = getattr(result, "game_name", "")
+        status = getattr(result, "status", "")
+        message = getattr(result, "message", "")
+        if status == "success":
+            return f"✅ {game_name}: 출석 체크 완료{reward_suffix}"
+        if status == "already_done":
+            return f"✅ {game_name}: 오늘 이미 출석 체크 완료 ({message or 'already claimed'})"
+        if status == "challenge_required":
+            return f"⚠️ {game_name}: HoYoLab 보안 인증 필요 ({message or 'challenge required'})"
+        if status == "auth_required":
+            return f"❌ {game_name}: HoYoLab 인증 필요 ({message or 'auth required'})"
+        if status == "unavailable":
+            return f"❌ {game_name}: HoYoLab 출석 기능 사용 불가 ({message or 'unavailable'})"
+        if status == "unsupported":
+            return f"⚠️ {game_name}: 지원하지 않는 출석 대상 ({message or 'unsupported'})"
+        if status == "network_error":
+            return f"❌ {game_name}: HoYoLab 요청 실패 ({message or 'network error'})"
+        return f"⚠️ {game_name}: 확인 필요 ({status}: {message})"
 
     def _check_nikke_availability(self) -> str:
         try:

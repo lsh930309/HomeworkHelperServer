@@ -10,8 +10,10 @@ from src.core.process_progress import calculate_process_progress
 from src.data.data_models import ManagedProcess
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils.icon_helper import resolve_preset_icon_path
+from src.services.hoyolab import HoYoLabService
 from src.services.nikke import NikkeService
 from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+import src.services.hoyolab as hoyolab_module
 
 
 def _create_firefox_cookie_db(path: Path, rows):
@@ -191,6 +193,81 @@ class _FakeResponse:
 
     def json(self):
         return self._body
+
+
+class _FakeHoYoLabConfig:
+    def __init__(self, configured=True):
+        self.configured = configured
+
+    def is_configured(self):
+        return self.configured
+
+    def load_credentials(self):
+        if not self.configured:
+            return None
+        return {"ltuid": 12345, "ltoken_v2": "token"}
+
+
+class _FakeDailyReward:
+    def __init__(self, name, amount):
+        self.name = name
+        self.amount = amount
+
+
+def test_hoyolab_daily_checkin_runs_starrail_then_zzz_post_sequence():
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def claim_daily_reward(self, *, game, lang):
+            self.calls.append((game, lang))
+            if game == hoyolab_module.genshin.Game.STARRAIL:
+                return _FakeDailyReward("성옥", 20)
+            if game == hoyolab_module.genshin.Game.ZZZ:
+                return _FakeDailyReward("필름", 30)
+            raise AssertionError(f"unexpected game: {game}")
+
+    client = FakeClient()
+    service = HoYoLabService(config=_FakeHoYoLabConfig())
+    service._client = client
+
+    results = service.claim_daily_rewards()
+
+    assert [call[0] for call in client.calls] == [
+        hoyolab_module.genshin.Game.STARRAIL,
+        hoyolab_module.genshin.Game.ZZZ,
+    ]
+    assert [call[1] for call in client.calls] == ["ko-kr", "ko-kr"]
+    assert [(result.game_id, result.status, result.reward_name, result.reward_amount) for result in results] == [
+        ("honkai_starrail", "success", "성옥", 20),
+        ("zenless_zone_zero", "success", "필름", 30),
+    ]
+
+
+def test_hoyolab_daily_checkin_continues_after_already_claimed():
+    class FakeClient:
+        async def claim_daily_reward(self, *, game, lang):
+            if game == hoyolab_module.genshin.Game.STARRAIL:
+                raise hoyolab_module.genshin.errors.AlreadyClaimed({"retcode": -5003, "message": "already signed in"})
+            return _FakeDailyReward("필름", 30)
+
+    service = HoYoLabService(config=_FakeHoYoLabConfig())
+    service._client = FakeClient()
+
+    results = service.claim_daily_rewards()
+
+    assert [result.status for result in results] == ["already_done", "success"]
+    assert results[0].game_name == "붕괴: 스타레일"
+    assert results[1].game_name == "젠레스 존 제로"
+
+
+def test_hoyolab_daily_checkin_requires_configured_credentials():
+    service = HoYoLabService(config=_FakeHoYoLabConfig(configured=False))
+
+    results = service.claim_daily_rewards()
+
+    assert [result.status for result in results] == ["auth_required", "auth_required"]
+    assert [result.game_id for result in results] == ["honkai_starrail", "zenless_zone_zero"]
 
 
 def test_nikke_outpost_storage_parses_shiftypad_daily_progress(monkeypatch):
