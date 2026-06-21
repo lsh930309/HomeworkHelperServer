@@ -728,7 +728,7 @@ def upsert_daily_checkin_setting(
     next_run_at: float | None = None,
     timestamp: float | None = None,
 ):
-    now = float(timestamp or time.time())
+    now = float(time.time() if timestamp is None else timestamp)
     row = get_daily_checkin_setting(db, process_id)
     if row is None:
         row = models.DailyCheckInSetting(
@@ -841,8 +841,8 @@ def upsert_provider_credential_health(
     detected_at: float | None = None,
     timestamp: float | None = None,
 ):
-    now = float(timestamp or time.time())
-    observed_at = float(detected_at or now)
+    now = float(time.time() if timestamp is None else timestamp)
+    observed_at = float(now if detected_at is None else detected_at)
     row = get_provider_credential_health(db, provider)
     if row is None:
         row = models.ProviderCredentialHealth(

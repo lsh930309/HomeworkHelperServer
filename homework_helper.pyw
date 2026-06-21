@@ -942,6 +942,7 @@ def run_server_main():
     def _daily_checkin_process_payload(process, descriptor, setting=None, latest_log=None) -> dict[str, Any]:
         from src.core import daily_checkin
 
+        setting = setting if daily_checkin.setting_matches_descriptor(setting, descriptor) else None
         period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor)
         last_attempt_at = getattr(setting, "last_attempt_at", None)
         last_result = getattr(setting, "last_result", None)
@@ -1032,6 +1033,17 @@ def run_server_main():
             detected_at=payload["detected_at"],
         )
 
+    def _try_record_provider_health(db: Session, *, context: str, **kwargs):
+        try:
+            return _record_provider_health(db, **kwargs)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception as rollback_exc:
+                logger.debug("provider health 기록 실패 후 rollback 실패: %s", rollback_exc, exc_info=True)
+            logger.warning("provider health 기록 실패(%s 결과는 유지): %s", context, exc, exc_info=True)
+            return None
+
     def _execute_and_record_daily_checkin(db: Session, process, descriptor, trigger: str):
         from src.core import daily_checkin
 
@@ -1057,6 +1069,12 @@ def run_server_main():
             ),
         )
         setting = crud.get_daily_checkin_setting(db, process.id)
+        if setting is None:
+            enabled = None
+        elif daily_checkin.setting_matches_descriptor(setting, descriptor):
+            enabled = bool(getattr(setting, "enabled", False))
+        else:
+            enabled = False
         crud.upsert_daily_checkin_setting(
             db,
             process_id=process.id,
@@ -1065,7 +1083,7 @@ def run_server_main():
             provider=descriptor.provider,
             game_id=descriptor.game_id,
             game_name=descriptor.game_name,
-            enabled=bool(getattr(setting, "enabled", False)) if setting is not None else None,
+            enabled=enabled,
             last_attempt_at=result.attempted_at,
             last_result=result.status,
             last_message=result.message,
@@ -1073,8 +1091,9 @@ def run_server_main():
             last_success_at=result.attempted_at if result.status in daily_checkin.SUCCESS_STATUSES else None,
             next_run_at=_daily_checkin_next_run_at(result.status, result.attempted_at, period_end),
         )
-        _record_provider_health(
+        _try_record_provider_health(
             db,
+            context="출석 실행",
             provider=descriptor.provider,
             reason=result.status,
             message=result.message,
@@ -1090,8 +1109,9 @@ def run_server_main():
 
         result = daily_checkin.probe_daily_checkin_status(descriptor)
         period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
-        _record_provider_health(
+        _try_record_provider_health(
             db,
+            context="상태 조회",
             provider=descriptor.provider,
             reason=result.status,
             message=result.message,

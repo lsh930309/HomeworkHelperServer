@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
 from src.core import credential_health
+from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
 from src.data.data_models import ManagedProcess
 
@@ -268,6 +269,8 @@ class HoYoStaminaReconcileCoordinator(QObject):
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
+        self._health_pool = QThreadPool(self)
+        self._health_pool.setMaxThreadCount(1)
         self._signals = _StaminaFetchSignals(self)
         self._signals.finished.connect(self._on_fetch_finished)
         self._persist_signals = _StaminaPersistSignals(self)
@@ -350,6 +353,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         for process_id in list(self._jobs):
             self._finish_job(process_id, "shutdown")
         self._pool.waitForDone()
+        self._health_pool.waitForDone()
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
         """같은 프로세스의 이전 시작/종료 시퀀스를 무효화할 새 토큰을 발급합니다."""
@@ -523,18 +527,13 @@ class HoYoStaminaReconcileCoordinator(QObject):
         if payload is None:
             return
 
-        updater = getattr(self._data_manager, "update_provider_credential_health", None)
-        if callable(updater):
-            updater(
-                payload["provider"],
-                payload["status"],
-                reason=payload["reason"],
-                message=payload["message"],
-                source=payload["source"],
-                process_id=payload["process_id"],
-                game_id=payload["game_id"],
-                detected_at=payload["detected_at"],
+        self._health_pool.start(
+            ProviderHealthPersistTask(
+                self._data_manager,
+                payload,
+                context="HoYoLab stamina_tracking",
             )
+        )
 
         if credential_health.is_alertable_health(payload["status"], payload["reason"]):
             self._send_provider_health_notification(process, payload)

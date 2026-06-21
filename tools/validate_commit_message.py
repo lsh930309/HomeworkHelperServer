@@ -82,9 +82,9 @@ def validate_message(message: str) -> list[str]:
     if not nested_bullets:
         errors.append("본문에는 하위 목록을 포함한 계층 구조가 필요합니다.")
 
-    if not _has_required_section(top_level_bullets, "변경 사항", "주요 변경", "변경"):
+    if not _has_required_section(top_level_bullets, "변경 사항"):
         errors.append("최상위 목록에 '변경 사항' 항목을 포함해야 합니다.")
-    if not _has_required_section(top_level_bullets, "검증", "검증 결과"):
+    if not _has_required_section(top_level_bullets, "검증"):
         errors.append("최상위 목록에 '검증' 항목을 포함해야 합니다.")
 
     for line in top_level_bullets:

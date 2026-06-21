@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, py
 
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
 from src.core import credential_health
+from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.data.data_models import ManagedProcess
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
@@ -269,6 +270,8 @@ class NikkeResourceReconcileCoordinator(QObject):
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
+        self._health_pool = QThreadPool(self)
+        self._health_pool.setMaxThreadCount(1)
         self._signals = _ResourceFetchSignals(self)
         self._signals.finished.connect(self._on_fetch_finished)
         self._persist_signals = _ResourcePersistSignals(self)
@@ -350,6 +353,7 @@ class NikkeResourceReconcileCoordinator(QObject):
         for process_id in list(self._jobs):
             self._finish_job(process_id, "shutdown")
         self._pool.waitForDone()
+        self._health_pool.waitForDone()
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
         next_token = self._lifecycle_tokens.get(process_id, 0) + 1
@@ -512,28 +516,13 @@ class NikkeResourceReconcileCoordinator(QObject):
         if payload is None:
             return
 
-        updater = getattr(self._data_manager, "update_provider_credential_health", None)
-        if callable(updater):
-            updater(
-                payload["provider"],
-                payload["status"],
-                reason=payload["reason"],
-                message=payload["message"],
-                source=payload["source"],
-                process_id=payload["process_id"],
-                game_id=payload["game_id"],
-                detected_at=payload["detected_at"],
+        self._health_pool.start(
+            ProviderHealthPersistTask(
+                self._data_manager,
+                payload,
+                context="NIKKE resource_tracking",
             )
-
-        resource_updater = getattr(self._data_manager, "update_process_resource", None)
-        if callable(resource_updater):
-            resource_updater(
-                process.id,
-                getattr(process, "resource_percent", None),
-                fetched_at,
-                status,
-                getattr(snapshot, "label", None) or NIKKE_OUTPOST_LABEL,
-            )
+        )
 
         if credential_health.is_alertable_health(payload["status"], payload["reason"]):
             self._send_provider_health_notification(process, payload)

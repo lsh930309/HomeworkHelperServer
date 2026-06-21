@@ -2,6 +2,7 @@ import json
 import sqlite3
 import time
 import datetime as dt
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from src.core.daily_checkin import (
     GAME_NIKKE,
     descriptor_for_process,
     checkin_period_for_descriptor,
+    setting_matches_descriptor,
     should_attempt_daily_checkin,
 )
 from src.data.data_models import ManagedProcess
@@ -138,6 +140,29 @@ def test_daily_checkin_descriptor_uses_registered_supported_games():
     assert descriptor_for_process(nikke).game_id == GAME_NIKKE
 
 
+def test_daily_checkin_setting_must_match_current_descriptor():
+    descriptor = descriptor_for_process(
+        ManagedProcess(
+            id="starrail",
+            name="Star Rail",
+            monitoring_path="/starrail.exe",
+            launch_path="/starrail.exe",
+            user_preset_id=GAME_HONKAI_STARRAIL,
+        )
+    )
+
+    assert descriptor is not None
+    assert setting_matches_descriptor(
+        SimpleNamespace(provider=descriptor.provider, game_id=descriptor.game_id),
+        descriptor,
+    )
+    assert not setting_matches_descriptor(
+        SimpleNamespace(provider=descriptor.provider, game_id=GAME_NIKKE, enabled=True),
+        descriptor,
+    )
+    assert not setting_matches_descriptor(None, descriptor)
+
+
 def test_daily_checkin_kst_period_uses_game_reset_times():
     descriptor = descriptor_for_process(
         ManagedProcess(
@@ -253,6 +278,46 @@ def test_provider_credential_health_crud_upserts_latest_observation():
         db.close()
 
 
+def test_daily_checkin_crud_preserves_zero_timestamps():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    models.Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+
+    db = Session()
+    try:
+        setting = crud.upsert_daily_checkin_setting(
+            db,
+            process_id="starrail",
+            process_name="Star Rail",
+            user_preset_id=GAME_HONKAI_STARRAIL,
+            provider=credential_health.PROVIDER_HOYOLAB,
+            game_id=GAME_HONKAI_STARRAIL,
+            game_name="붕괴: 스타레일",
+            enabled=True,
+            timestamp=0.0,
+        )
+        assert setting.created_at == 0.0
+        assert setting.updated_at == 0.0
+
+        health = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_HOYOLAB,
+            status=credential_health.HEALTH_OK,
+            reason="ok",
+            detected_at=0.0,
+            timestamp=0.0,
+        )
+        assert health.created_at == 0.0
+        assert health.updated_at == 0.0
+        assert health.detected_at == 0.0
+    finally:
+        db.close()
+
+
 def test_nikke_factory_preset_enables_resource_tracking():
     data = json.loads(Path("src/data/game_presets.json").read_text(encoding="utf-8"))
     nikke = next(preset for preset in data["presets"] if preset["id"] == "nikke")
@@ -356,6 +421,15 @@ class _FakeResponse:
 def _patch_nikke_http_session(monkeypatch, *, get=None, post=None):
     created_sessions = []
 
+    def _accepts_session_arg(callback):
+        params = list(inspect.signature(callback).parameters.values())
+        positional = [
+            param
+            for param in params
+            if param.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        return len(positional) >= 2
+
     class _FakeHttpSession:
         def __init__(self):
             self.cookies = {}
@@ -364,24 +438,35 @@ def _patch_nikke_http_session(monkeypatch, *, get=None, post=None):
         def get(self, url, **kwargs):
             if get is None:
                 raise AssertionError(f"unexpected GET: {url}")
-            try:
+            if _accepts_session_arg(get):
                 return get(self, url, **kwargs)
-            except TypeError:
-                return get(url, **kwargs)
+            return get(url, **kwargs)
 
         def post(self, url, **kwargs):
             if post is None:
                 raise AssertionError(f"unexpected POST: {url}")
-            try:
+            if _accepts_session_arg(post):
                 return post(self, url, **kwargs)
-            except TypeError:
-                return post(url, **kwargs)
+            return post(url, **kwargs)
 
         def close(self):
             return None
 
     monkeypatch.setattr("src.services.nikke.requests.Session", _FakeHttpSession)
     return created_sessions
+
+
+def test_nikke_http_session_helper_does_not_mask_callback_type_errors(monkeypatch):
+    import src.services.nikke as nikke_module
+
+    def broken_get(url, **kwargs):
+        raise TypeError("callback internal type error")
+
+    _patch_nikke_http_session(monkeypatch, get=broken_get)
+    session = nikke_module.requests.Session()
+
+    with pytest.raises(TypeError, match="callback internal type error"):
+        session.get("https://example.test")
 
 
 class _FakeHoYoLabConfig:
@@ -1047,6 +1132,78 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
     assert data_manager.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
     assert data_manager.session_updates == [(7, pytest.approx(15.8333333333))]
     assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+
+
+def test_reconcile_provider_health_writes_are_queued_off_main_path():
+    from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
+    from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+
+    class FailIfCalledDataManager:
+        def update_provider_credential_health(self, *args, **kwargs):
+            raise AssertionError("provider health should be queued, not written inline")
+
+        def update_process_resource(self, *args, **kwargs):
+            raise AssertionError("resource fields must be written only by the persist task")
+
+    class FakePool:
+        def __init__(self):
+            self.tasks = []
+
+        def start(self, task):
+            self.tasks.append(task)
+
+    hoyolab_process = ManagedProcess(
+        id="starrail",
+        name="Star Rail",
+        monitoring_path="/starrail.exe",
+        launch_path="/starrail.exe",
+        user_preset_id=GAME_HONKAI_STARRAIL,
+        hoyolab_game_id=GAME_HONKAI_STARRAIL,
+    )
+    hoyolab_pool = FakePool()
+    hoyolab = HoYoStaminaReconcileCoordinator.__new__(HoYoStaminaReconcileCoordinator)
+    hoyolab._data_manager = FailIfCalledDataManager()
+    hoyolab._health_pool = hoyolab_pool
+    hoyolab._notifier = None
+
+    hoyolab._record_provider_health_from_status(
+        hoyolab_process,
+        "ok",
+        "HoYoLab 스태미나 조회 성공",
+        1234.0,
+    )
+
+    assert len(hoyolab_pool.tasks) == 1
+    assert hoyolab_pool.tasks[0].payload["provider"] == credential_health.PROVIDER_HOYOLAB
+    assert hoyolab_pool.tasks[0].payload["detected_at"] == 1234.0
+
+    nikke_process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        user_preset_id=GAME_NIKKE,
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_percent=10.0,
+        resource_updated_at=1000.0,
+    )
+    nikke_pool = FakePool()
+    nikke = NikkeResourceReconcileCoordinator.__new__(NikkeResourceReconcileCoordinator)
+    nikke._data_manager = FailIfCalledDataManager()
+    nikke._health_pool = nikke_pool
+    nikke._notifier = None
+
+    nikke._record_provider_health_from_snapshot(
+        nikke_process,
+        SimpleNamespace(status="ok", message="NIKKE resource ok", label="전초기지 방어 보상"),
+        5678.0,
+    )
+
+    assert len(nikke_pool.tasks) == 1
+    assert nikke_pool.tasks[0].payload["provider"] == credential_health.PROVIDER_NIKKE_BLABLALINK
+    assert nikke_pool.tasks[0].payload["detected_at"] == 5678.0
 
 
 def test_process_monitor_calibrates_nikke_resource_session_on_start(monkeypatch):

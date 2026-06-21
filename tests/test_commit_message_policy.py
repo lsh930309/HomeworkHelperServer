@@ -26,6 +26,18 @@ def test_rejects_english_conventional_prefix():
     assert "영문 Conventional Commit 접두사는 사용하지 않습니다." in validate_message(message)
 
 
+def test_rejects_message_without_korean_in_subject():
+    message = """Add commit message policy
+
+- 변경 사항:
+  - 정책 문서를 추가한다.
+- 검증:
+  - 정적 검증을 통과한다.
+"""
+
+    assert "제목에는 한국어 요약이 포함되어야 합니다." in validate_message(message)
+
+
 def test_rejects_flat_message_without_required_sections():
     message = """커밋 메시지 정책 추가
 
@@ -36,5 +48,32 @@ def test_rejects_flat_message_without_required_sections():
     errors = validate_message(message)
 
     assert "본문에는 하위 목록을 포함한 계층 구조가 필요합니다." in errors
+    assert "최상위 목록에 '변경 사항' 항목을 포함해야 합니다." in errors
+    assert "최상위 목록에 '검증' 항목을 포함해야 합니다." in errors
+
+
+def test_rejects_placeholder_in_body():
+    message = """정책: 커밋 메시지 작성 규칙을 고정한다
+
+- 변경 사항:
+  - TODO: 정책 문서를 추가한다.
+- 검증:
+  - TBD: 검증 방법을 추가한다.
+"""
+
+    assert "목록에는 TODO/TBD/미정 같은 placeholder를 남기지 않습니다." in validate_message(message)
+
+
+def test_rejects_non_policy_section_name_variants():
+    message = """정책: 커밋 메시지 작성 규칙을 고정한다
+
+- 주요 변경:
+  - 정책 문서를 추가한다.
+- 검증 결과:
+  - 정적 검증을 통과한다.
+"""
+
+    errors = validate_message(message)
+
     assert "최상위 목록에 '변경 사항' 항목을 포함해야 합니다." in errors
     assert "최상위 목록에 '검증' 항목을 포함해야 합니다." in errors

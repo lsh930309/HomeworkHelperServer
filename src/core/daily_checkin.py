@@ -130,6 +130,15 @@ def descriptor_for_process(process: Any) -> DailyCheckInDescriptor | None:
     return None
 
 
+def setting_matches_descriptor(setting: Any, descriptor: DailyCheckInDescriptor) -> bool:
+    """Return whether a stored check-in setting still belongs to the current game."""
+    return bool(
+        setting is not None
+        and getattr(setting, "provider", None) == descriptor.provider
+        and getattr(setting, "game_id", None) == descriptor.game_id
+    )
+
+
 def iter_registered_daily_checkin_processes(processes: Iterable[Any]) -> list[tuple[Any, DailyCheckInDescriptor]]:
     targets: list[tuple[Any, DailyCheckInDescriptor]] = []
     for process in processes:
