@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN=python
+else
+  echo "커밋 메시지 검증 실패: python3 또는 python 실행 파일을 찾을 수 없습니다." >&2
+  exit 1
+fi
+
+exec "$PYTHON_BIN" tools/validate_commit_message.py "$1"
