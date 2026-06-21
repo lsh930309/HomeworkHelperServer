@@ -176,6 +176,87 @@ def auto_migrate_database():
                 "last_shutdown_at REAL"
                 ")"
             ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS daily_checkin_settings ("
+                "process_id TEXT PRIMARY KEY, "
+                "process_name TEXT, "
+                "user_preset_id TEXT, "
+                "provider TEXT NOT NULL, "
+                "game_id TEXT NOT NULL, "
+                "game_name TEXT, "
+                "enabled INTEGER NOT NULL DEFAULT 0, "
+                "last_attempt_at REAL, "
+                "last_result TEXT, "
+                "last_message TEXT, "
+                "last_period_start REAL, "
+                "last_success_at REAL, "
+                "next_run_at REAL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_settings_enabled "
+                "ON daily_checkin_settings (enabled)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_settings_provider_game "
+                "ON daily_checkin_settings (provider, game_id)"
+            ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS daily_checkin_logs ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "process_id TEXT NOT NULL, "
+                "process_name TEXT, "
+                "user_preset_id TEXT, "
+                "provider TEXT NOT NULL, "
+                "game_id TEXT NOT NULL, "
+                "game_name TEXT, "
+                "period_start REAL NOT NULL, "
+                "period_end REAL NOT NULL, "
+                "attempted_at REAL NOT NULL, "
+                "trigger TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "message TEXT, "
+                "post_called INTEGER NOT NULL DEFAULT 0, "
+                "raw_debug_json TEXT, "
+                "created_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_process_game_period "
+                "ON daily_checkin_logs (process_id, game_id, period_start)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_attempted_at "
+                "ON daily_checkin_logs (attempted_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_provider_game "
+                "ON daily_checkin_logs (provider, game_id)"
+            ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS provider_credential_health ("
+                "provider TEXT PRIMARY KEY, "
+                "status TEXT NOT NULL DEFAULT 'unknown', "
+                "reason TEXT, "
+                "message TEXT, "
+                "source TEXT, "
+                "process_id TEXT, "
+                "game_id TEXT, "
+                "detected_at REAL NOT NULL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_provider_credential_health_status "
+                "ON provider_credential_health (status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_provider_credential_health_detected_at "
+                "ON provider_credential_health (detected_at)"
+            ))
             conn.commit()
             conn.execute(text(
                 "CREATE TABLE IF NOT EXISTS game_platform_links ("

@@ -74,6 +74,13 @@ python build.py --target macos-client
 - [`docs/remote/setup-guide.md`](docs/remote/setup-guide.md): Remote Agent, pairing/token, macOS client, supervisor/power 계약, 검증 절차.
 - [`docs/remote/host-ssh-diagnostics-runbook.md`](docs/remote/host-ssh-diagnostics-runbook.md): 실제 호스트 SSH 진단과 안전한 testbench 절차.
 - [`docs/data-safety-policy.md`](docs/data-safety-policy.md): 설정/DB write 안전 정책.
+- [`docs/development/commit-message-policy.md`](docs/development/commit-message-policy.md): 한국어 계층 목록형 커밋 메시지 정책과 Git hook 고정 방법.
+
+## 개발 정책
+
+- 커밋 메시지는 항상 한국어 제목과 계층 목록형 본문으로 작성합니다.
+- 본문에는 최소한 `변경 사항`과 `검증` 항목을 포함합니다.
+- 이 정책은 repo-local [`AGENTS.md`](AGENTS.md), `.gitmessage`, `.githooks/commit-msg`, `tools/validate_commit_message.py`로 고정합니다.
 
 ## 검증 명령
 

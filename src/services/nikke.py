@@ -33,6 +33,25 @@ class NikkeRoleInfo:
     nikke_area_id: int | str
 
 
+@dataclass
+class NikkeDailyCheckInStatus:
+    """BlablaLink 일일 출석 체크 상태 조회/실행 결과.
+
+    읽기 전용 status probe 결과와 임시 실험용 DailyCheckIn POST 결과를 같은
+    UI formatter로 표시하기 위해 공유합니다.
+    """
+
+    status: str
+    updated_at: datetime
+    task_id: Optional[str] = None
+    task_name: str = ""
+    points: Optional[int] = None
+    completed_times: Optional[int] = None
+    need_completed_times: Optional[int] = None
+    message: str = ""
+    raw_debug: dict[str, Any] = field(default_factory=dict)
+
+
 class NikkeService:
     """ShiftyPad 웹앱이 사용하는 BlablaLink API에서 NIKKE 리소스를 조회합니다."""
 
@@ -49,6 +68,11 @@ class NikkeService:
         ("POST", "game/proxy/Game/GetSavedRoleInfo"),
     )
     DAILY_PROGRESS_PATH = "game/proxy/Game/GetUserDailyContentsProgress"
+    DAILY_CHECKIN_STATUS_PATH = "lip/proxy/lipass/Points/GetTaskListWithStatusV2"
+    DAILY_CHECKIN_POST_PATH = "lip/proxy/lipass/Points/DailyCheckIn"
+    DAILY_CHECKIN_TASK_TYPE = 1
+    DAILY_CHECKIN_TASK_ID = "15"
+    WEB_REFERER = "https://www.blablalink.com/nikke/"
 
     def __init__(self, config: Optional[NikkeConfig] = None, timeout: float = 10.0):
         self._config = config or NikkeConfig()
@@ -61,19 +85,26 @@ class NikkeService:
         return self._config.load_session()
 
     def _request_headers(self) -> dict[str, str]:
+        # Keep the metadata aligned with the current public ShiftyPad web app.
+        # BlablaLink accepts cookie authentication but some LIP endpoints are
+        # sensitive to these common params when validating the inner session.
         common_params = {
-            "game_id": "nikke",
-            "intl_game_id": "nikke",
+            "game_id": "16",
+            "area_id": "global",
             "source": "h5",
+            "intl_game_id": "nikke",
             "language": "ko",
             "env": "prod",
-            "data_statistics_scene": "shiftypad",
+            "data_statistics_scene": "outer",
+            "data_statistics_page_id": self.WEB_REFERER,
+            "data_statistics_client_type": "h5",
+            "data_statistics_lang": "ko",
         }
         return {
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json;charset=UTF-8",
             "Origin": "https://www.blablalink.com",
-            "Referer": "https://www.blablalink.com/nikke/",
+            "Referer": self.WEB_REFERER,
             "User-Agent": "Mozilla/5.0 HomeworkHelper/1.0",
             "x-language": "ko",
             "x-channel-type": "2",
@@ -96,6 +127,37 @@ class NikkeService:
         return session_payload, cookies
 
     @staticmethod
+    def _cookie_mapping(cookies: Any) -> dict[str, str]:
+        if isinstance(cookies, dict):
+            return {str(key): str(value) for key, value in cookies.items() if value is not None}
+        try:
+            return {
+                str(key): str(value)
+                for key, value in requests.utils.dict_from_cookiejar(cookies).items()
+                if value is not None
+            }
+        except Exception:
+            return {}
+
+    def _persist_session_cookies(self, http_session: requests.Session, session_payload: dict[str, Any]) -> None:
+        before = self._cookie_mapping(session_payload.get("cookies") or {})
+        after = self._cookie_mapping(getattr(http_session, "cookies", {}))
+        if not after or after == before:
+            return
+
+        saver = getattr(self._config, "save_session", None)
+        if not callable(saver):
+            return
+        try:
+            saver(
+                after,
+                intl_open_id=session_payload.get("intl_open_id"),
+                nikke_area_id=session_payload.get("nikke_area_id"),
+            )
+        except Exception as exc:
+            logger.debug("BlablaLink 갱신 쿠키 저장 실패: %s", exc, exc_info=True)
+
+    @staticmethod
     def _json_response(response: requests.Response) -> dict[str, Any]:
         response.raise_for_status()
         try:
@@ -103,31 +165,33 @@ class NikkeService:
         except ValueError as exc:
             raise RuntimeError("BlablaLink API가 JSON이 아닌 응답을 반환했습니다.") from exc
 
-    def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        _session_payload, cookies = self._request_session()
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        session_payload, cookies = self._request_session()
         if not cookies:
             return {"code": "auth_required", "msg": "BlablaLink 세션이 없습니다."}
-        response = requests.post(
-            self.API_BASE + path,
-            json=payload or {},
-            headers=self._request_headers(),
-            cookies=cookies,
-            timeout=self._timeout,
-        )
-        return self._json_response(response)
+        http_session = requests.Session()
+        try:
+            http_session.cookies.update(self._cookie_mapping(cookies))
+            request_kwargs = {
+                "headers": self._request_headers(),
+                "timeout": self._timeout,
+            }
+            if method.upper() == "GET":
+                response = http_session.get(self.API_BASE + path, params=payload or {}, **request_kwargs)
+            else:
+                response = http_session.post(self.API_BASE + path, json=payload or {}, **request_kwargs)
+            self._persist_session_cookies(http_session, session_payload or {})
+            return self._json_response(response)
+        finally:
+            closer = getattr(http_session, "close", None)
+            if callable(closer):
+                closer()
+
+    def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._request("POST", path, payload)
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        _session_payload, cookies = self._request_session()
-        if not cookies:
-            return {"code": "auth_required", "msg": "BlablaLink 세션이 없습니다."}
-        response = requests.get(
-            self.API_BASE + path,
-            params=params or {},
-            headers=self._request_headers(),
-            cookies=cookies,
-            timeout=self._timeout,
-        )
-        return self._json_response(response)
+        return self._request("GET", path, params)
 
     def _call_endpoint(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         method = method.upper()
@@ -137,11 +201,41 @@ class NikkeService:
             return self._post(path, payload)
         raise ValueError(f"지원하지 않는 BlablaLink API 메서드입니다: {method}")
 
+    @classmethod
+    def _response_code(cls, body: dict[str, Any]) -> Any:
+        if "code" in body:
+            return body.get("code")
+        return body.get("ret")
+
     @staticmethod
-    def _is_auth_expired(body: dict[str, Any]) -> bool:
-        code = body.get("code")
-        msg = str(body.get("msg") or body.get("message") or "").lower()
-        return code == 300001 or str(code) == "300001" or "not login" in msg or "login" in msg and "not" in msg
+    def _response_message(body: dict[str, Any]) -> str:
+        return str(body.get("msg") or body.get("message") or "")
+
+    @classmethod
+    def _is_auth_expired(cls, body: dict[str, Any]) -> bool:
+        code = cls._response_code(body)
+        msg = cls._response_message(body).lower()
+        return (
+            code == 300001
+            or str(code) == "300001"
+            or str(body.get("ret")) == "11002"
+            or "not login" in msg
+            or ("login" in msg and "not" in msg)
+            or "inner token is invalid" in msg
+            or ("token" in msg and "invalid" in msg)
+        )
+
+    @classmethod
+    def _auth_required_message(cls, body: dict[str, Any], fallback: str = "game not login") -> str:
+        msg = cls._response_message(body) or fallback
+        ret = body.get("ret")
+        code = cls._response_code(body)
+        msg_lower = msg.lower()
+        if str(ret) == "11002" or "inner token is invalid" in msg_lower or ("token" in msg_lower and "invalid" in msg_lower):
+            detail_code = ret if ret is not None else code
+            detail = f"ret={detail_code}, msg={msg}" if detail_code is not None else msg
+            return f"BlablaLink 세션 쿠키 갱신이 필요합니다. BlablaLink/ShiftyPad에 다시 로그인한 뒤 쿠키를 다시 추출하세요. ({detail})"
+        return msg
 
     def check_login(self) -> tuple[bool, str]:
         try:
@@ -149,9 +243,72 @@ class NikkeService:
         except Exception as exc:
             return False, str(exc)
         if self._is_auth_expired(body):
-            return False, str(body.get("msg") or "game not login")
-        code = body.get("code")
+            return False, self._auth_required_message(body)
+        code = self._response_code(body)
         return (code in (0, "0", None)), str(body.get("msg") or body.get("message") or "ok")
+
+    def get_daily_checkin_status(self) -> NikkeDailyCheckInStatus:
+        """BlablaLink NIKKE 일일 출석 체크 상태를 읽기 전용으로 조회합니다.
+
+        실제 출석 처리 endpoint인 ``DailyCheckIn`` POST는 호출하지 않습니다.
+        ShiftyPad 웹앱이 출석 버튼 노출에 사용하는 task status endpoint만
+        조회하여 오늘 출석 가능/완료/인증 필요 상태를 판별합니다.
+        """
+        now = datetime.now()
+        if not self.is_configured():
+            return NikkeDailyCheckInStatus(
+                "auth_required",
+                now,
+                message="BlablaLink 세션이 없습니다.",
+            )
+
+        for get_top in ("false", "true"):
+            try:
+                body = self._get(
+                    self.DAILY_CHECKIN_STATUS_PATH,
+                    {"get_top": get_top, "intl_game_id": "nikke"},
+                )
+            except Exception as exc:
+                logger.error("NIKKE 출석 상태 조회 실패: %s", exc)
+                return NikkeDailyCheckInStatus("network_error", now, message=str(exc))
+
+            status = self._parse_daily_checkin_status(body, now, get_top=get_top)
+            if status.status != "route_error" or get_top == "true":
+                return status
+
+        return NikkeDailyCheckInStatus("route_error", now, message="BlablaLink 출석 task를 찾지 못했습니다.")
+
+    def claim_daily_checkin(self) -> NikkeDailyCheckInStatus:
+        """BlablaLink NIKKE 일일 출석 체크를 실제 POST로 실행합니다.
+
+        안전한 task id 확인을 위해 먼저 읽기 전용 status endpoint를 호출합니다.
+        daily task가 ``ready``일 때만 ``DailyCheckIn`` POST를 수행하며, 이미
+        완료되었거나 인증/route 문제가 있는 경우에는 POST를 생략하고 해당
+        상태를 그대로 반환합니다.
+        """
+        status = self.get_daily_checkin_status()
+        if status.status != "ready":
+            status.raw_debug = {**status.raw_debug, "post_called": False}
+            return status
+
+        task_id = status.task_id or self.DAILY_CHECKIN_TASK_ID
+        try:
+            body = self._post(self.DAILY_CHECKIN_POST_PATH, {"task_id": task_id})
+        except Exception as exc:
+            logger.error("NIKKE 출석 체크 POST 실패: %s", exc)
+            return NikkeDailyCheckInStatus(
+                "network_error",
+                datetime.now(),
+                task_id=task_id,
+                task_name=status.task_name,
+                points=status.points,
+                completed_times=status.completed_times,
+                need_completed_times=status.need_completed_times,
+                message=str(exc),
+                raw_debug={"task_id": task_id, "post_called": True},
+            )
+
+        return self._parse_daily_checkin_post_result(body, status, task_id=task_id)
 
     def get_role_info(self, *, refresh: bool = False) -> Optional[NikkeRoleInfo]:
         session_payload = self._session_payload()
@@ -262,7 +419,15 @@ class NikkeService:
             return GameResourceSnapshot(NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_OUTPOST_LABEL, None, "unavailable", now, str(exc))
 
         if self._is_auth_expired(body):
-            return GameResourceSnapshot(NIKKE_PROVIDER, NIKKE_OUTPOST_RESOURCE_KEY, NIKKE_OUTPOST_LABEL, None, "auth_expired", now, str(body.get("msg") or "login expired"))
+            return GameResourceSnapshot(
+                NIKKE_PROVIDER,
+                NIKKE_OUTPOST_RESOURCE_KEY,
+                NIKKE_OUTPOST_LABEL,
+                None,
+                "auth_expired",
+                now,
+                self._auth_required_message(body, "login expired"),
+            )
 
         raw_value = self._extract_outpost_fullness(body)
         if raw_value is None:
@@ -286,6 +451,196 @@ class NikkeService:
             datetime.now(),
             raw_debug={"field": "daily_progress[0].outpost_battle_storage_fullness", "value": raw_value},
         )
+
+    @classmethod
+    def _parse_daily_checkin_status(cls, body: Any, updated_at: datetime, *, get_top: str) -> NikkeDailyCheckInStatus:
+        if not isinstance(body, dict):
+            return NikkeDailyCheckInStatus(
+                "route_error",
+                updated_at,
+                message="BlablaLink API가 예상하지 못한 응답을 반환했습니다.",
+                raw_debug={"get_top": get_top, "body_type": type(body).__name__},
+            )
+
+        code = cls._response_code(body)
+        msg = cls._response_message(body)
+        raw_debug = {"get_top": get_top, "code": body.get("code"), "ret": body.get("ret"), "msg": msg}
+        if code == "auth_required":
+            return NikkeDailyCheckInStatus("auth_required", updated_at, message=msg, raw_debug=raw_debug)
+        if cls._is_auth_expired(body):
+            return NikkeDailyCheckInStatus(
+                "game_login_required",
+                updated_at,
+                message=cls._auth_required_message(body),
+                raw_debug=raw_debug,
+            )
+        if code not in (0, "0", None):
+            return NikkeDailyCheckInStatus("route_error", updated_at, message=msg or f"BlablaLink API code={code}", raw_debug=raw_debug)
+
+        task = cls._find_daily_checkin_task(body)
+        if not task:
+            return NikkeDailyCheckInStatus(
+                "route_error",
+                updated_at,
+                message="BlablaLink 출석 task를 찾지 못했습니다.",
+                raw_debug=raw_debug,
+            )
+
+        completed_times = cls._to_int(task.get("completed_times"))
+        need_completed_times = cls._to_int(task.get("need_completed_times"))
+        points = cls._to_int(task.get("points"))
+        is_completed = cls._truthy(task.get("is_completed"))
+        if (
+            not is_completed
+            and completed_times is not None
+            and need_completed_times is not None
+            and need_completed_times > 0
+            and completed_times >= need_completed_times
+        ):
+            is_completed = True
+
+        status = "already_done" if is_completed else "ready"
+        task_id = str(task.get("task_id") or "")
+        task_name = str(task.get("task_name") or "")
+        raw_debug.update(
+            {
+                "task_id": task_id,
+                "task_type": task.get("task_type"),
+                "completed_times": completed_times,
+                "need_completed_times": need_completed_times,
+            }
+        )
+        return NikkeDailyCheckInStatus(
+            status,
+            updated_at,
+            task_id=task_id,
+            task_name=task_name,
+            points=points,
+            completed_times=completed_times,
+            need_completed_times=need_completed_times,
+            message="오늘 이미 출석 체크가 완료되었습니다." if is_completed else "오늘 출석 체크가 가능합니다.",
+            raw_debug=raw_debug,
+        )
+
+    @classmethod
+    def _parse_daily_checkin_post_result(
+        cls, body: Any, status: NikkeDailyCheckInStatus, *, task_id: str
+    ) -> NikkeDailyCheckInStatus:
+        updated_at = datetime.now()
+        if not isinstance(body, dict):
+            return cls._daily_checkin_post_result(
+                "route_error",
+                status,
+                task_id=task_id,
+                message="BlablaLink API가 예상하지 못한 응답을 반환했습니다.",
+                raw_debug={"body_type": type(body).__name__, "post_called": True},
+                updated_at=updated_at,
+            )
+
+        code = cls._response_code(body)
+        msg = cls._response_message(body)
+        raw_debug = {"task_id": task_id, "code": body.get("code"), "ret": body.get("ret"), "msg": msg, "post_called": True}
+        if code in (0, "0", None):
+            return cls._daily_checkin_post_result(
+                "success",
+                status,
+                task_id=task_id,
+                message=msg or "BlablaLink 출석 체크가 완료되었습니다.",
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        if str(code) == "1001009":
+            return cls._daily_checkin_post_result(
+                "already_done",
+                status,
+                task_id=task_id,
+                message=msg or "오늘 이미 출석 체크가 완료되었습니다.",
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        if code == "auth_required" or cls._is_auth_expired(body):
+            return cls._daily_checkin_post_result(
+                "game_login_required",
+                status,
+                task_id=task_id,
+                message=cls._auth_required_message(body),
+                raw_debug=raw_debug,
+                updated_at=updated_at,
+            )
+        return cls._daily_checkin_post_result(
+            "route_error",
+            status,
+            task_id=task_id,
+            message=msg or f"BlablaLink API code={code}",
+            raw_debug=raw_debug,
+            updated_at=updated_at,
+        )
+
+    @staticmethod
+    def _daily_checkin_post_result(
+        result_status: str,
+        status: NikkeDailyCheckInStatus,
+        *,
+        task_id: str,
+        message: str,
+        raw_debug: dict[str, Any],
+        updated_at: datetime,
+    ) -> NikkeDailyCheckInStatus:
+        return NikkeDailyCheckInStatus(
+            result_status,
+            updated_at,
+            task_id=task_id,
+            task_name=status.task_name,
+            points=status.points,
+            completed_times=status.completed_times,
+            need_completed_times=status.need_completed_times,
+            message=message,
+            raw_debug=raw_debug,
+        )
+
+    @classmethod
+    def _find_daily_checkin_task(cls, body: Any) -> dict[str, Any] | None:
+        tasks = cls._find_key(body, "tasks")
+        if not isinstance(tasks, list):
+            return None
+
+        normalised = [cls._normalise_reward_task(task) for task in tasks if isinstance(task, dict)]
+        for task in normalised:
+            if cls._to_int(task.get("task_type")) == cls.DAILY_CHECKIN_TASK_TYPE:
+                return task
+        for task in normalised:
+            task_id = str(task.get("task_id") or "").strip()
+            task_name = str(task.get("task_name") or "").strip().lower()
+            if task_id == cls.DAILY_CHECKIN_TASK_ID or "출석" in task_name or "check" in task_name:
+                return task
+        return None
+
+    @staticmethod
+    def _normalise_reward_task(task: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(task)
+        reward_infos = task.get("reward_infos")
+        if isinstance(reward_infos, list) and reward_infos and isinstance(reward_infos[0], dict):
+            merged.update(reward_infos[0])
+        return merged
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "completed", "complete"}
+        return False
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def normalise_outpost_percent(raw_value: Any) -> float:

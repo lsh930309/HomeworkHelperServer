@@ -9,6 +9,8 @@ from typing import Callable, Optional
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
+from src.core import credential_health
+from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.data.data_models import ManagedProcess
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
@@ -257,16 +259,19 @@ class NikkeResourceReconcileCoordinator(QObject):
     RECONCILE_INTERVAL_MS = 60_000
     REQUIRED_STABLE_HITS = 2
 
-    def __init__(self, data_manager, process_monitor: ProcessMonitor, parent: Optional[QObject] = None):
+    def __init__(self, data_manager, process_monitor: ProcessMonitor, notifier=None, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._data_manager = data_manager
         self._process_monitor = process_monitor
+        self._notifier = notifier
         self._lifecycle_tokens: dict[str, int] = {}
         self._jobs: dict[str, _ResourceReconcileJob] = {}
         self._shutting_down = False
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
+        self._health_pool = QThreadPool(self)
+        self._health_pool.setMaxThreadCount(1)
         self._signals = _ResourceFetchSignals(self)
         self._signals.finished.connect(self._on_fetch_finished)
         self._persist_signals = _ResourcePersistSignals(self)
@@ -348,6 +353,7 @@ class NikkeResourceReconcileCoordinator(QObject):
         for process_id in list(self._jobs):
             self._finish_job(process_id, "shutdown")
         self._pool.waitForDone()
+        self._health_pool.waitForDone()
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
         next_token = self._lifecycle_tokens.get(process_id, 0) + 1
@@ -450,6 +456,7 @@ class NikkeResourceReconcileCoordinator(QObject):
         percent = getattr(snapshot, "percent", None)
         status = getattr(snapshot, "status", None)
         if snapshot is not None and status == "ok" and percent is not None:
+            self._record_provider_health_from_snapshot(process, snapshot, fetched_at)
             normalized_percent = clamp_percent(percent)
             if normalized_percent is not None:
                 self._pool.start(
@@ -477,6 +484,12 @@ class NikkeResourceReconcileCoordinator(QObject):
                 )
                 return
 
+        if snapshot is not None and status:
+            self._record_provider_health_from_snapshot(process, snapshot, fetched_at)
+            if status in {"auth_required", "auth_expired", "role_not_found"}:
+                self._finish_job(process_id, f"provider health {status}")
+                return
+
         job.in_flight = False
         if job.finish_on_success:
             self._finish_job(process_id, "startup refresh failed")
@@ -487,6 +500,46 @@ class NikkeResourceReconcileCoordinator(QObject):
             return
 
         self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
+
+    def _record_provider_health_from_snapshot(self, process: ManagedProcess, snapshot, fetched_at: float) -> None:
+        status = str(getattr(snapshot, "status", "") or "")
+        message = str(getattr(snapshot, "message", "") or status)
+        payload = credential_health.update_payload_for_reason(
+            credential_health.PROVIDER_NIKKE_BLABLALINK,
+            status,
+            message=message,
+            source="resource_tracking",
+            process_id=process.id,
+            game_id=getattr(process, "user_preset_id", None) or "nikke",
+            detected_at=fetched_at,
+        )
+        if payload is None:
+            return
+
+        self._health_pool.start(
+            ProviderHealthPersistTask(
+                self._data_manager,
+                payload,
+                context="NIKKE resource_tracking",
+            )
+        )
+
+        if credential_health.is_alertable_health(payload["status"], payload["reason"]):
+            self._send_provider_health_notification(process, payload)
+
+    def _send_provider_health_notification(self, process: ManagedProcess, payload: dict[str, object]) -> None:
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.send_notification(
+                title=f"{process.name} 계정/토큰 확인 필요",
+                message=str(payload.get("message") or payload.get("reason") or ""),
+                task_id_to_highlight=process.id,
+                button_text="확인",
+                button_action="show",
+            )
+        except Exception as exc:
+            logger.debug("[Resource] provider health 알림 전송 실패: %s", exc, exc_info=True)
 
     @pyqtSlot(str, int, int, object)
     def _on_persist_finished(self, process_id: str, lifecycle_token: int, request_seq: int, payload: object) -> None:

@@ -7,6 +7,8 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
+from src.core import credential_health
+from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
 from src.data.data_models import ManagedProcess
 
@@ -66,13 +68,20 @@ class _StaminaFetchTask(QRunnable):
             from src.services.hoyolab import get_hoyolab_service
 
             service = get_hoyolab_service()
-            if service and service.is_available() and service.is_configured():
+            if not service or not service.is_available():
+                payload["provider_status"] = "unavailable"
+                payload["error"] = "HoYoLab 서비스를 사용할 수 없습니다."
+            elif not service.is_configured():
+                payload["provider_status"] = "auth_required"
+                payload["error"] = "HoYoLab 인증 정보가 없습니다."
+            else:
                 stamina = service.get_stamina(self._game_id)
                 payload["stamina"] = stamina
                 if stamina is not None:
                     payload["fetched_at"] = stamina.updated_at.timestamp()
-            else:
-                payload["error"] = "service unavailable or not configured"
+                else:
+                    payload["provider_status"] = "network_error"
+                    payload["error"] = "HoYoLab 스태미나 조회에 실패했습니다."
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -248,17 +257,20 @@ class HoYoStaminaReconcileCoordinator(QObject):
     REQUIRED_STABLE_HITS = 2
     RECOVERY_RATE_SEC = 360
 
-    def __init__(self, data_manager, process_monitor: ProcessMonitor, parent: Optional[QObject] = None):
+    def __init__(self, data_manager, process_monitor: ProcessMonitor, notifier=None, parent: Optional[QObject] = None):
         """프로세스 lifecycle과 서버 재조회 결과를 연결할 상태와 워커를 준비합니다."""
         super().__init__(parent)
         self._data_manager = data_manager
         self._process_monitor = process_monitor
+        self._notifier = notifier
         self._lifecycle_tokens: dict[str, int] = {}
         self._jobs: dict[str, _ReconcileJob] = {}
         self._shutting_down = False
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
+        self._health_pool = QThreadPool(self)
+        self._health_pool.setMaxThreadCount(1)
         self._signals = _StaminaFetchSignals(self)
         self._signals.finished.connect(self._on_fetch_finished)
         self._persist_signals = _StaminaPersistSignals(self)
@@ -341,6 +353,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         for process_id in list(self._jobs):
             self._finish_job(process_id, "shutdown")
         self._pool.waitForDone()
+        self._health_pool.waitForDone()
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
         """같은 프로세스의 이전 시작/종료 시퀀스를 무효화할 새 토큰을 발급합니다."""
@@ -452,6 +465,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         if stamina is not None:
+            self._record_provider_health_from_status(process, "ok", "HoYoLab 스태미나 조회 성공", fetched_at)
             self._pool.start(
                 _StaminaPersistTask(
                     process_id=job.process_id,
@@ -476,6 +490,13 @@ class HoYoStaminaReconcileCoordinator(QObject):
             )
             return
 
+        provider_status = str(data.get("provider_status") or "")
+        if provider_status:
+            self._record_provider_health_from_status(process, provider_status, str(data.get("error") or provider_status), fetched_at)
+            if provider_status in {"auth_required", "challenge_required"}:
+                self._finish_job(process_id, f"provider health {provider_status}")
+                return
+
         job.in_flight = False
         if job.finish_on_success:
             self._finish_job(process_id, "startup refresh failed")
@@ -486,6 +507,50 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
+
+    def _record_provider_health_from_status(
+        self,
+        process: ManagedProcess,
+        status: str,
+        message: str,
+        fetched_at: float,
+    ) -> None:
+        payload = credential_health.update_payload_for_reason(
+            credential_health.PROVIDER_HOYOLAB,
+            status,
+            message=message,
+            source="stamina_tracking",
+            process_id=process.id,
+            game_id=getattr(process, "hoyolab_game_id", None),
+            detected_at=fetched_at,
+        )
+        if payload is None:
+            return
+
+        self._health_pool.start(
+            ProviderHealthPersistTask(
+                self._data_manager,
+                payload,
+                context="HoYoLab stamina_tracking",
+            )
+        )
+
+        if credential_health.is_alertable_health(payload["status"], payload["reason"]):
+            self._send_provider_health_notification(process, payload)
+
+    def _send_provider_health_notification(self, process: ManagedProcess, payload: dict[str, object]) -> None:
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.send_notification(
+                title=f"{process.name} 계정/토큰 확인 필요",
+                message=str(payload.get("message") or payload.get("reason") or ""),
+                task_id_to_highlight=process.id,
+                button_text="확인",
+                button_action="show",
+            )
+        except Exception as exc:
+            logger.debug("[HoYoLab] provider health 알림 전송 실패: %s", exc, exc_info=True)
 
     @pyqtSlot(str, int, int, object)
     def _on_persist_finished(

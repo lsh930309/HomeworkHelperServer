@@ -939,6 +939,203 @@ def run_server_main():
         resource_status: str | None = None
         resource_label: str | None = None
 
+    def _daily_checkin_process_payload(process, descriptor, setting=None, latest_log=None) -> dict[str, Any]:
+        from src.core import daily_checkin
+
+        setting = setting if daily_checkin.setting_matches_descriptor(setting, descriptor) else None
+        period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor)
+        last_attempt_at = getattr(setting, "last_attempt_at", None)
+        last_result = getattr(setting, "last_result", None)
+        last_message = getattr(setting, "last_message", None)
+        last_success_at = getattr(setting, "last_success_at", None)
+        if latest_log is not None and (
+            last_attempt_at is None or float(getattr(latest_log, "attempted_at", 0.0) or 0.0) >= float(last_attempt_at or 0.0)
+        ):
+            last_attempt_at = getattr(latest_log, "attempted_at", None)
+            last_result = getattr(latest_log, "status", None)
+            last_message = getattr(latest_log, "message", None)
+            if getattr(latest_log, "status", None) in daily_checkin.SUCCESS_STATUSES:
+                last_success_at = getattr(latest_log, "attempted_at", None)
+        return {
+            "process_id": process.id,
+            "process_name": process.name,
+            "user_preset_id": getattr(process, "user_preset_id", None),
+            "provider": descriptor.provider,
+            "provider_label": descriptor.provider_label,
+            "game_id": descriptor.game_id,
+            "game_name": descriptor.game_name,
+            "reset_time_kst": f"{descriptor.reset_hour:02d}:{descriptor.reset_minute:02d}",
+            "period_start": period_start,
+            "period_end": period_end,
+            "next_reset_at": period_end,
+            "enabled": bool(getattr(setting, "enabled", False)) if setting is not None else False,
+            "last_attempt_at": last_attempt_at,
+            "last_result": last_result,
+            "last_message": last_message,
+            "last_success_at": last_success_at,
+        }
+
+    def _get_daily_checkin_process_or_error(db: Session, process_id: str, game_id: str | None = None):
+        from src.core import daily_checkin
+
+        process = crud.get_process_by_id(db=db, process_id=process_id)
+        if process is None:
+            raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
+        descriptor = daily_checkin.descriptor_for_process(process)
+        if descriptor is None:
+            raise HTTPException(status_code=400, detail="지원되는 자동 출석 대상이 아닌 프로세스입니다.")
+        if game_id and game_id != descriptor.game_id:
+            raise HTTPException(status_code=400, detail="프로세스와 출석 게임 ID가 일치하지 않습니다.")
+        return process, descriptor
+
+    def _daily_checkin_next_run_at(status: str, attempted_at: float, period_end: float) -> float:
+        from src.core import daily_checkin
+
+        if status in daily_checkin.SUCCESS_STATUSES:
+            return period_end
+        if status in daily_checkin.TRANSIENT_RETRY_STATUSES:
+            return attempted_at + daily_checkin.TRANSIENT_RETRY_AFTER_SECONDS
+        return period_end
+
+    def _record_provider_health(
+        db: Session,
+        *,
+        provider: str,
+        reason: str,
+        message: str = "",
+        source: str,
+        process_id: str | None = None,
+        game_id: str | None = None,
+        detected_at: float | None = None,
+    ):
+        from src.core import credential_health
+
+        payload = credential_health.update_payload_for_reason(
+            provider,
+            reason,
+            message=message,
+            source=source,
+            process_id=process_id,
+            game_id=game_id,
+            detected_at=detected_at,
+        )
+        if payload is None:
+            return None
+        return crud.upsert_provider_credential_health(
+            db,
+            provider=payload["provider"],
+            status=payload["status"],
+            reason=payload["reason"],
+            message=payload["message"],
+            source=payload["source"],
+            process_id=payload["process_id"],
+            game_id=payload["game_id"],
+            detected_at=payload["detected_at"],
+        )
+
+    def _try_record_provider_health(db: Session, *, context: str, **kwargs):
+        try:
+            return _record_provider_health(db, **kwargs)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception as rollback_exc:
+                logger.debug("provider health 기록 실패 후 rollback 실패: %s", rollback_exc, exc_info=True)
+            logger.warning("provider health 기록 실패(%s 결과는 유지): %s", context, exc, exc_info=True)
+            return None
+
+    def _execute_and_record_daily_checkin(db: Session, process, descriptor, trigger: str):
+        from src.core import daily_checkin
+
+        result = daily_checkin.execute_daily_checkin(descriptor)
+        period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        log_row = crud.create_daily_checkin_log(
+            db,
+            schemas.DailyCheckInLogCreate(
+                process_id=process.id,
+                process_name=process.name,
+                user_preset_id=getattr(process, "user_preset_id", None),
+                provider=descriptor.provider,
+                game_id=descriptor.game_id,
+                game_name=descriptor.game_name,
+                period_start=period_start,
+                period_end=period_end,
+                attempted_at=result.attempted_at,
+                trigger=trigger,
+                status=result.status,
+                message=result.message,
+                post_called=result.post_called,
+                raw_debug_json=daily_checkin.raw_debug_json(result.raw_debug),
+            ),
+        )
+        setting = crud.get_daily_checkin_setting(db, process.id)
+        if setting is None:
+            enabled = None
+        elif daily_checkin.setting_matches_descriptor(setting, descriptor):
+            enabled = bool(getattr(setting, "enabled", False))
+        else:
+            enabled = False
+        crud.upsert_daily_checkin_setting(
+            db,
+            process_id=process.id,
+            process_name=process.name,
+            user_preset_id=getattr(process, "user_preset_id", None),
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=descriptor.game_name,
+            enabled=enabled,
+            last_attempt_at=result.attempted_at,
+            last_result=result.status,
+            last_message=result.message,
+            last_period_start=period_start,
+            last_success_at=result.attempted_at if result.status in daily_checkin.SUCCESS_STATUSES else None,
+            next_run_at=_daily_checkin_next_run_at(result.status, result.attempted_at, period_end),
+        )
+        _try_record_provider_health(
+            db,
+            context="출석 실행",
+            provider=descriptor.provider,
+            reason=result.status,
+            message=result.message,
+            source=f"daily_checkin:{trigger or 'manual_run'}",
+            process_id=process.id,
+            game_id=descriptor.game_id,
+            detected_at=result.attempted_at,
+        )
+        return log_row
+
+    def _probe_daily_checkin_payload(db: Session, process, descriptor) -> dict[str, Any]:
+        from src.core import daily_checkin
+
+        result = daily_checkin.probe_daily_checkin_status(descriptor)
+        period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        _try_record_provider_health(
+            db,
+            context="상태 조회",
+            provider=descriptor.provider,
+            reason=result.status,
+            message=result.message,
+            source="daily_checkin_status_probe",
+            process_id=process.id,
+            game_id=descriptor.game_id,
+            detected_at=result.attempted_at,
+        )
+        return {
+            "process_id": process.id,
+            "process_name": process.name,
+            "user_preset_id": getattr(process, "user_preset_id", None),
+            "provider": descriptor.provider,
+            "game_id": descriptor.game_id,
+            "game_name": descriptor.game_name,
+            "period_start": period_start,
+            "period_end": period_end,
+            "checked_at": result.attempted_at,
+            "status": result.status,
+            "message": result.message,
+            "post_called": result.post_called,
+            "raw_debug_json": daily_checkin.raw_debug_json(result.raw_debug),
+        }
+
     @app.exception_handler(beholder.BeholderBlocked)
     async def beholder_blocked_handler(request, exc):
         return JSONResponse(
@@ -1140,6 +1337,144 @@ def run_server_main():
         if updated_process is None:
             raise HTTPException(status_code=404, detail="프로세스를 찾을 수 없습니다.")
         return updated_process
+
+    @app.get("/provider-health", response_model=List[schemas.ProviderCredentialHealthSchema])
+    def get_provider_health_rows(db: Session = Depends(get_db)):
+        """Provider별 최근 쿠키/토큰 유효성 관측 상태를 반환합니다."""
+        return crud.get_provider_credential_health_rows(db)
+
+    @app.get("/provider-health/{provider}", response_model=schemas.ProviderCredentialHealthSchema)
+    def get_provider_health(provider: str, db: Session = Depends(get_db)):
+        row = crud.get_provider_credential_health(db, provider)
+        if row is None:
+            raise HTTPException(status_code=404, detail="provider 상태가 아직 기록되지 않았습니다.")
+        return row
+
+    @app.post("/provider-health/{provider}", response_model=schemas.ProviderCredentialHealthSchema)
+    def update_provider_health(
+        provider: str,
+        update: schemas.ProviderCredentialHealthUpdate,
+        db: Session = Depends(get_db),
+    ):
+        """자동/수동 연동 흐름에서 관측한 provider 쿠키/토큰 상태를 저장합니다."""
+        if update.provider and update.provider != provider:
+            raise HTTPException(status_code=400, detail="provider 경로와 payload가 일치하지 않습니다.")
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=provider,
+            status=update.status,
+            reason=update.reason,
+            message=update.message,
+            source=update.source,
+            process_id=update.process_id,
+            game_id=update.game_id,
+            detected_at=update.detected_at,
+        )
+        return row
+
+    @app.get("/daily-checkin/games", response_model=List[schemas.DailyCheckInRegisteredGameSchema])
+    def get_daily_checkin_games(db: Session = Depends(get_db)):
+        """현재 등록된 지원 게임의 자동 출석 설정/최근 상태를 반환합니다."""
+        from src.core import daily_checkin
+
+        rows = []
+        for process, descriptor in daily_checkin.iter_registered_daily_checkin_processes(crud.get_processes(db)):
+            setting = crud.get_daily_checkin_setting(db, process.id)
+            latest_logs = crud.get_daily_checkin_logs(
+                db,
+                process_id=process.id,
+                game_id=descriptor.game_id,
+                limit=1,
+            )
+            rows.append(_daily_checkin_process_payload(process, descriptor, setting, latest_logs[0] if latest_logs else None))
+        return rows
+
+    @app.patch("/daily-checkin/settings/{process_id}", response_model=schemas.DailyCheckInSettingSchema)
+    def update_daily_checkin_setting(
+        process_id: str,
+        setting_update: schemas.DailyCheckInSettingUpdate,
+        db: Session = Depends(get_db),
+    ):
+        """등록 게임별 자동 출석 opt-in 상태를 저장합니다."""
+        process, descriptor = _get_daily_checkin_process_or_error(db, process_id, setting_update.game_id)
+        return crud.upsert_daily_checkin_setting(
+            db,
+            process_id=process.id,
+            process_name=process.name,
+            user_preset_id=getattr(process, "user_preset_id", None),
+            provider=descriptor.provider,
+            game_id=descriptor.game_id,
+            game_name=descriptor.game_name,
+            enabled=setting_update.enabled,
+        )
+
+    @app.get("/daily-checkin/logs", response_model=List[schemas.DailyCheckInLogSchema])
+    def get_daily_checkin_logs(
+        process_id: str | None = None,
+        game_id: str | None = None,
+        limit: int = 50,
+        db: Session = Depends(get_db),
+    ):
+        return crud.get_daily_checkin_logs(db, process_id=process_id, game_id=game_id, limit=limit)
+
+    @app.post("/daily-checkin/run", response_model=schemas.DailyCheckInLogSchema)
+    def run_daily_checkin(
+        request: schemas.DailyCheckInRunRequest,
+        db: Session = Depends(get_db),
+    ):
+        """단일 등록 게임의 출석 POST를 즉시 실행하고 로그에 기록합니다."""
+        process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
+        return _execute_and_record_daily_checkin(db, process, descriptor, request.trigger or "manual_run")
+
+    @app.post("/daily-checkin/status", response_model=schemas.DailyCheckInStatusProbeSchema)
+    def probe_daily_checkin_status(
+        request: schemas.DailyCheckInStatusProbeRequest,
+        db: Session = Depends(get_db),
+    ):
+        """단일 등록 게임의 출석 상태를 POST 없이 조회합니다."""
+        process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
+        return _probe_daily_checkin_payload(db, process, descriptor)
+
+    @app.post("/daily-checkin/run-due")
+    def run_due_daily_checkins(
+        request: schemas.DailyCheckInRunDueRequest,
+        db: Session = Depends(get_db),
+    ):
+        """현재 구간에서 due 상태인 opt-in 게임들의 자동 출석을 실행합니다."""
+        from src.core import daily_checkin
+
+        logs = []
+        skipped = []
+        trigger = request.trigger or "periodic"
+        now_ts = time.time()
+        for setting in crud.get_enabled_daily_checkin_settings(db):
+            process = crud.get_process_by_id(db=db, process_id=setting.process_id)
+            if process is None:
+                skipped.append({"process_id": setting.process_id, "reason": "process_missing"})
+                continue
+            descriptor = daily_checkin.descriptor_for_process(process)
+            if descriptor is None or descriptor.game_id != setting.game_id:
+                skipped.append({"process_id": setting.process_id, "reason": "unsupported_or_changed"})
+                continue
+
+            period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, now_ts)
+            period_logs = crud.get_daily_checkin_logs_for_period(
+                db,
+                process_id=process.id,
+                game_id=descriptor.game_id,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if not daily_checkin.should_attempt_daily_checkin(period_logs, now_ts=now_ts):
+                skipped.append({"process_id": process.id, "game_id": descriptor.game_id, "reason": "not_due"})
+                continue
+
+            log_row = _execute_and_record_daily_checkin(db, process, descriptor, trigger)
+            if hasattr(schemas.DailyCheckInLogSchema, "model_validate"):
+                logs.append(schemas.DailyCheckInLogSchema.model_validate(log_row).model_dump())
+            else:  # pydantic v1 fallback
+                logs.append({column.name: getattr(log_row, column.name) for column in log_row.__table__.columns})
+        return {"logs": logs, "skipped": skipped, "attempted": len(logs)}
 
     @app.delete("/processes/{process_id}")
     def delete_existing_process(
@@ -1605,6 +1940,65 @@ def ensure_process_table_schema():
                 "last_heartbeat_at REAL, "
                 "last_shutdown_at REAL"
                 ")"
+            ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS daily_checkin_settings ("
+                "process_id TEXT PRIMARY KEY, "
+                "process_name TEXT, "
+                "user_preset_id TEXT, "
+                "provider TEXT NOT NULL, "
+                "game_id TEXT NOT NULL, "
+                "game_name TEXT, "
+                "enabled INTEGER NOT NULL DEFAULT 0, "
+                "last_attempt_at REAL, "
+                "last_result TEXT, "
+                "last_message TEXT, "
+                "last_period_start REAL, "
+                "last_success_at REAL, "
+                "next_run_at REAL, "
+                "created_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_settings_enabled "
+                "ON daily_checkin_settings (enabled)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_settings_provider_game "
+                "ON daily_checkin_settings (provider, game_id)"
+            ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS daily_checkin_logs ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "process_id TEXT NOT NULL, "
+                "process_name TEXT, "
+                "user_preset_id TEXT, "
+                "provider TEXT NOT NULL, "
+                "game_id TEXT NOT NULL, "
+                "game_name TEXT, "
+                "period_start REAL NOT NULL, "
+                "period_end REAL NOT NULL, "
+                "attempted_at REAL NOT NULL, "
+                "trigger TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "message TEXT, "
+                "post_called INTEGER NOT NULL DEFAULT 0, "
+                "raw_debug_json TEXT, "
+                "created_at REAL NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_process_game_period "
+                "ON daily_checkin_logs (process_id, game_id, period_start)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_attempted_at "
+                "ON daily_checkin_logs (attempted_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_checkin_logs_provider_game "
+                "ON daily_checkin_logs (provider, game_id)"
             ))
 
             conn.commit()

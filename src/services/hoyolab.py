@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import genshin
@@ -35,6 +35,19 @@ class StaminaInfo:
     updated_at: datetime   # 데이터 조회 시각
 
 
+@dataclass
+class HoYoLabDailyCheckInResult:
+    """HoYoLAB 일일 출석 실행 결과."""
+
+    game_id: str
+    game_name: str
+    status: str
+    updated_at: datetime
+    reward_name: str = ""
+    reward_amount: Optional[int] = None
+    message: str = ""
+
+
 class HoYoLabService:
     """HoYoLab API 서비스 클래스
     
@@ -52,6 +65,7 @@ class HoYoLabService:
             "stamina_name": "배터리",
         },
     }
+    DAILY_CHECKIN_GAME_ORDER = ("honkai_starrail", "zenless_zone_zero")
     
     def __init__(self, config: Optional[HoYoLabConfig] = None):
         """HoYoLabService 초기화
@@ -143,6 +157,159 @@ class HoYoLabService:
             return self.get_zzz_stamina()
         else:
             logger.warning(f"지원하지 않는 게임 타입: {hoyolab_game_id}")
+            return None
+
+    def claim_daily_rewards(self, game_ids: Optional[list[str]] = None) -> list[HoYoLabDailyCheckInResult]:
+        """HoYoLAB 일일 출석 체크를 순차 실행합니다.
+
+        임시 검증 버튼에서 사용하는 실제 POST 경로입니다. 기본 순서는 현재
+        호스트에서 추적 중인 HoYoLAB 게임인 붕괴: 스타레일 → 젠레스 존 제로입니다.
+        """
+        targets = list(game_ids or self.DAILY_CHECKIN_GAME_ORDER)
+        if not GENSHIN_AVAILABLE:
+            return [self._daily_checkin_result(game_id, "unavailable", "genshin.py 라이브러리를 사용할 수 없습니다.") for game_id in targets]
+        if not self.is_configured():
+            return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 인증 정보가 없습니다.") for game_id in targets]
+
+        with self._client_lock:
+            client = self._get_client_unlocked()
+            if not client:
+                return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
+
+        try:
+            with self._request_lock:
+                if self._closed:
+                    return [self._daily_checkin_result(game_id, "unavailable", "HoYoLab 서비스가 종료되었습니다.") for game_id in targets]
+                return self._run_async(self._async_claim_daily_rewards(client, targets))
+        except Exception as exc:
+            logger.error("HoYoLab 일일 출석 순차 실행 실패: %s", exc)
+            return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
+
+    def get_daily_reward_status(self, game_ids: Optional[list[str]] = None) -> list[HoYoLabDailyCheckInResult]:
+        """HoYoLAB 일일 출석 상태를 POST 없이 조회합니다."""
+        targets = list(game_ids or self.DAILY_CHECKIN_GAME_ORDER)
+        if not GENSHIN_AVAILABLE:
+            return [self._daily_checkin_result(game_id, "unavailable", "genshin.py 라이브러리를 사용할 수 없습니다.") for game_id in targets]
+        if not self.is_configured():
+            return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 인증 정보가 없습니다.") for game_id in targets]
+
+        with self._client_lock:
+            client = self._get_client_unlocked()
+            if not client:
+                return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
+
+        try:
+            with self._request_lock:
+                if self._closed:
+                    return [self._daily_checkin_result(game_id, "unavailable", "HoYoLab 서비스가 종료되었습니다.") for game_id in targets]
+                return self._run_async(self._async_get_daily_reward_statuses(client, targets))
+        except Exception as exc:
+            logger.error("HoYoLab 일일 출석 상태 조회 실패: %s", exc)
+            return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
+
+    async def _async_claim_daily_rewards(
+        self, client: "genshin.Client", game_ids: list[str]
+    ) -> list[HoYoLabDailyCheckInResult]:
+        results: list[HoYoLabDailyCheckInResult] = []
+        for game_id in game_ids:
+            results.append(await self._async_claim_daily_reward(client, game_id))
+        return results
+
+    async def _async_get_daily_reward_statuses(
+        self, client: "genshin.Client", game_ids: list[str]
+    ) -> list[HoYoLabDailyCheckInResult]:
+        results: list[HoYoLabDailyCheckInResult] = []
+        for game_id in game_ids:
+            results.append(await self._async_get_daily_reward_status(client, game_id))
+        return results
+
+    async def _async_claim_daily_reward(self, client: "genshin.Client", game_id: str) -> HoYoLabDailyCheckInResult:
+        game = self._daily_reward_game(game_id)
+        if game is None:
+            return self._daily_checkin_result(game_id, "unsupported", "지원하지 않는 HoYoLAB 출석 대상입니다.")
+
+        try:
+            reward = await client.claim_daily_reward(game=game, lang="ko-kr")
+            reward_name = str(getattr(reward, "name", "") or "")
+            reward_amount = self._to_int(getattr(reward, "amount", None))
+            if reward_name and reward_amount is not None:
+                message = f"{reward_name} x{reward_amount}"
+            else:
+                message = "출석 체크가 완료되었습니다."
+            return self._daily_checkin_result(
+                game_id,
+                "success",
+                message,
+                reward_name=reward_name,
+                reward_amount=reward_amount,
+            )
+        except Exception as exc:
+            return self._daily_checkin_result(game_id, *self._normalise_daily_checkin_exception(exc))
+
+    async def _async_get_daily_reward_status(self, client: "genshin.Client", game_id: str) -> HoYoLabDailyCheckInResult:
+        game = self._daily_reward_game(game_id)
+        if game is None:
+            return self._daily_checkin_result(game_id, "unsupported", "지원하지 않는 HoYoLAB 출석 대상입니다.")
+
+        try:
+            info = await client.get_reward_info(game=game, lang="ko-kr")
+            signed_in = bool(getattr(info, "signed_in", False))
+            status = "already_done" if signed_in else "ready"
+            message = "오늘 이미 출석 체크가 완료되었습니다." if signed_in else "오늘 출석 체크가 가능합니다."
+            return self._daily_checkin_result(game_id, status, message)
+        except Exception as exc:
+            return self._daily_checkin_result(game_id, *self._normalise_daily_checkin_exception(exc))
+
+    @classmethod
+    def _daily_reward_game(cls, game_id: str) -> Any | None:
+        if not GENSHIN_AVAILABLE:
+            return None
+        if game_id == "honkai_starrail":
+            return genshin.Game.STARRAIL
+        if game_id == "zenless_zone_zero":
+            return genshin.Game.ZZZ
+        return None
+
+    @classmethod
+    def _daily_checkin_result(
+        cls,
+        game_id: str,
+        status: str,
+        message: str = "",
+        *,
+        reward_name: str = "",
+        reward_amount: Optional[int] = None,
+    ) -> HoYoLabDailyCheckInResult:
+        return HoYoLabDailyCheckInResult(
+            game_id=game_id,
+            game_name=cls.GAME_TYPES.get(game_id, {}).get("name", game_id),
+            status=status,
+            updated_at=datetime.now(),
+            reward_name=reward_name,
+            reward_amount=reward_amount,
+            message=message,
+        )
+
+    @staticmethod
+    def _normalise_daily_checkin_exception(exc: Exception) -> tuple[str, str]:
+        if GENSHIN_AVAILABLE:
+            if isinstance(exc, genshin.errors.AlreadyClaimed):
+                return "already_done", str(exc) or "오늘 이미 출석 체크가 완료되었습니다."
+            if isinstance(exc, genshin.errors.DailyGeetestTriggered | genshin.errors.GeetestError | genshin.errors.GeetestFailed):
+                return "challenge_required", str(exc) or "HoYoLAB 보안 인증이 필요합니다."
+            if isinstance(exc, genshin.errors.InvalidCookies | genshin.errors.CookieException):
+                return "auth_required", str(exc) or "HoYoLab 인증 정보가 없거나 만료되었습니다."
+            if isinstance(exc, genshin.errors.TooManyRequests | genshin.errors.VisitsTooFrequently):
+                return "network_error", str(exc) or "HoYoLAB 요청 제한에 걸렸습니다."
+        return "network_error", str(exc) or type(exc).__name__
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
             return None
     
     def get_starrail_stamina(self) -> Optional[StaminaInfo]:

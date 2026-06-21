@@ -127,7 +127,7 @@ def test_main_window_settings_menu_exposes_remote_settings_dialog():
     assert "setIconVisibleInMenu(False)" in source
     assert '_text_menu_action("앱 설정...", self.open_global_settings_dialog)' in source
     assert '_text_menu_action("원격 설정...", self.open_remote_settings_dialog)' in source
-    assert '_text_menu_action("자원 추적 설정...", self.open_hoyolab_settings_dialog)' in source
+    assert '_text_menu_action("자원/출석 관리...", self.open_hoyolab_settings_dialog)' in source
     assert '_text_menu_action("HoYoLab 설정...", self.open_hoyolab_settings_dialog)' not in source
     assert source.index('_text_menu_action("앱 설정..."') < source.index('_text_menu_action("원격 설정..."')
     assert source.index('_text_menu_action("원격 설정..."') < source.index('_text_menu_action("사이드바 설정..."')
@@ -172,18 +172,72 @@ def test_resource_tracking_settings_dialog_uses_advanced_cookie_flows():
     source = Path("src/gui/dialogs.py").read_text(encoding="utf-8")
     dialog_source = source[source.index("class HoYoLabSettingsDialog"):]
 
-    assert 'setWindowTitle("자원 추적 설정")' in dialog_source
+    assert 'setWindowTitle("자원/출석 관리")' in dialog_source
+    assert "QTabWidget" in source
+    assert 'self.tabs.addTab(account_tab, "계정/토큰")' in dialog_source
+    assert 'self.tabs.addTab(checkin_tab, "자동 출석")' in dialog_source
+    assert 'self.tabs.addTab(logs_tab, "최근 로그")' in dialog_source
     assert "HoYoLabAdvancedCredentialsDialog" in source
     assert "NikkeAdvancedSessionDialog" in source
     assert "hoyolab_advanced_btn" in dialog_source
     assert "nikke_advanced_btn" in dialog_source
     assert "check_cookies_btn" in dialog_source
+    assert "daily_checkin_table" in dialog_source
+    assert "daily_checkin_logs_table" in dialog_source
+    assert "지금 출석" in dialog_source
+    assert "run_daily_checkin" in dialog_source
+    assert "probe_daily_checkin_status" in dialog_source
+    assert "set_daily_checkin_enabled" in dialog_source
+    assert "get_provider_credential_health" in dialog_source
+    assert "update_provider_credential_health" in dialog_source
+    assert "유효성은 검사/자동 동기화 결과" in dialog_source
+    assert "manual_cookie_check" in dialog_source
+    assert "customContextMenuRequested" in dialog_source
+    assert "메시지 복사" in dialog_source
+    assert "로그 행 복사" in dialog_source
+    assert "_copy_daily_checkin_log_message" in dialog_source
+    assert "_daily_checkin_status_style" in dialog_source
+    assert "hoyolab_checkin_run_btn" not in dialog_source
+    assert "nikke_checkin_status_btn" not in dialog_source
     assert "cookie_check_status_label" in dialog_source
     assert "QDialogButtonBox.StandardButton.Close" in dialog_source
     assert "self.ltuid_edit" not in dialog_source
     assert "self.ltoken_edit" not in dialog_source
     assert "self.ltmid_edit" not in dialog_source
     assert "save_credentials(int(cookies.get(\"ltuid\"))" in dialog_source
+
+
+def test_resource_tracking_dialog_maps_manual_blabla_token_error_to_provider_health():
+    from src.core import credential_health
+    import src.gui.dialogs as dialogs
+
+    payload = dialogs.HoYoLabSettingsDialog._provider_health_payload_from_lines(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        [
+            "✅ BlablaLink: 전초기지 방어 보상 42.0% (서버=1)",
+            "❌ BlablaLink 출석: BlablaLink/NIKKE 로그인 또는 바인딩 상태 확인 필요 (ret=11002: Inner token is invalid[3].)",
+        ],
+        source="manual_cookie_check",
+    )
+
+    assert payload is not None
+    assert payload["provider"] == credential_health.PROVIDER_NIKKE_BLABLALINK
+    assert payload["status"] == credential_health.HEALTH_AUTH_PROBLEM
+    assert payload["reason"] == "game_login_required"
+    assert "Inner token is invalid[3]" in payload["message"]
+
+
+def test_resource_tracking_dialog_does_not_overwrite_provider_health_on_network_error():
+    from src.core import credential_health
+    import src.gui.dialogs as dialogs
+
+    payload = dialogs.HoYoLabSettingsDialog._provider_health_payload_from_lines(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        ["❌ BlablaLink 출석: 네트워크/API 요청 실패 (timeout)"],
+        source="manual_cookie_check",
+    )
+
+    assert payload is None
 
 
 def test_remote_settings_device_table_fits_rows_and_pairing_code_is_left_aligned(monkeypatch):

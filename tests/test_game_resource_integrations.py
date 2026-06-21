@@ -2,16 +2,33 @@ import json
 import sqlite3
 import time
 import datetime as dt
+import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from src.core import credential_health
 from src.core.process_progress import calculate_process_progress
+from src.core.daily_checkin import (
+    GAME_HONKAI_STARRAIL,
+    GAME_NIKKE,
+    descriptor_for_process,
+    checkin_period_for_descriptor,
+    setting_matches_descriptor,
+    should_attempt_daily_checkin,
+)
 from src.data.data_models import ManagedProcess
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils.icon_helper import resolve_preset_icon_path
+from src.services.hoyolab import HoYoLabService
 from src.services.nikke import NikkeService
 from src.utils.browser_cookie_extractor import BrowserCookieExtractor
+from src.data import crud, models
+import src.services.hoyolab as hoyolab_module
 
 
 def _create_firefox_cookie_db(path: Path, rows):
@@ -103,6 +120,204 @@ def test_nikke_login_button_uses_blabla_login(monkeypatch):
     assert opened == ["https://www.blablalink.com/login"]
 
 
+def test_daily_checkin_descriptor_uses_registered_supported_games():
+    starrail = ManagedProcess(
+        id="hsr",
+        name="붕괴: 스타레일",
+        monitoring_path="/StarRail.exe",
+        launch_path="/StarRail.exe",
+        user_preset_id="honkai_starrail",
+    )
+    nikke = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        user_preset_id="nikke",
+    )
+
+    assert descriptor_for_process(starrail).game_id == GAME_HONKAI_STARRAIL
+    assert descriptor_for_process(nikke).game_id == GAME_NIKKE
+
+
+def test_daily_checkin_setting_must_match_current_descriptor():
+    descriptor = descriptor_for_process(
+        ManagedProcess(
+            id="starrail",
+            name="Star Rail",
+            monitoring_path="/starrail.exe",
+            launch_path="/starrail.exe",
+            user_preset_id=GAME_HONKAI_STARRAIL,
+        )
+    )
+
+    assert descriptor is not None
+    assert setting_matches_descriptor(
+        SimpleNamespace(provider=descriptor.provider, game_id=descriptor.game_id),
+        descriptor,
+    )
+    assert not setting_matches_descriptor(
+        SimpleNamespace(provider=descriptor.provider, game_id=GAME_NIKKE, enabled=True),
+        descriptor,
+    )
+    assert not setting_matches_descriptor(None, descriptor)
+
+
+def test_daily_checkin_kst_period_uses_game_reset_times():
+    descriptor = descriptor_for_process(
+        ManagedProcess(
+            id="hsr",
+            name="붕괴: 스타레일",
+            monitoring_path="/StarRail.exe",
+            launch_path="/StarRail.exe",
+            user_preset_id="honkai_starrail",
+        )
+    )
+
+    before_reset = dt.datetime(2026, 6, 11, 0, 30)
+    after_reset = dt.datetime(2026, 6, 11, 1, 30)
+
+    start_before, end_before = checkin_period_for_descriptor(descriptor, before_reset)
+    start_after, end_after = checkin_period_for_descriptor(descriptor, after_reset)
+
+    assert start_before.day == 10
+    assert end_before.day == 11
+    assert start_before.hour == 1
+    assert start_after.day == 11
+    assert end_after.day == 12
+    assert start_after.hour == 1
+
+
+def test_daily_checkin_due_policy_is_conservative():
+    now = 2_000.0
+
+    assert should_attempt_daily_checkin([], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "success", "attempted_at": 1_000.0}], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "auth_required", "attempted_at": 1_000.0}], now_ts=now)
+    assert not should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 100.0}], now_ts=now)
+    assert should_attempt_daily_checkin([{"status": "network_error", "attempted_at": now - 2_000.0}], now_ts=now)
+
+
+def test_provider_credential_health_classification_keeps_transients_out_of_auth_state():
+    auth_payload = credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        "game_login_required",
+        message="Inner token is invalid[3].",
+        source="daily_checkin",
+        process_id="nikke",
+        game_id="nikke",
+        detected_at=1234.0,
+    )
+    ok_payload = credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_HOYOLAB,
+        "already_done",
+        message="오늘 이미 출석 체크가 완료되었습니다.",
+        source="daily_checkin",
+    )
+
+    assert auth_payload is not None
+    assert auth_payload["status"] == credential_health.HEALTH_AUTH_PROBLEM
+    assert credential_health.is_alertable_health(auth_payload["status"], auth_payload["reason"])
+    assert ok_payload is not None
+    assert ok_payload["status"] == credential_health.HEALTH_OK
+    assert credential_health.update_payload_for_reason(
+        credential_health.PROVIDER_NIKKE_BLABLALINK,
+        "network_error",
+        message="timeout",
+        source="resource_tracking",
+    ) is None
+
+
+def test_provider_credential_health_crud_upserts_latest_observation():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    models.Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+
+    db = Session()
+    try:
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_NIKKE_BLABLALINK,
+            status=credential_health.HEALTH_AUTH_PROBLEM,
+            reason="game_login_required",
+            message="Inner token is invalid[3].",
+            source="manual_cookie_check",
+            process_id="nikke-process",
+            game_id="nikke",
+            detected_at=1000.0,
+            timestamp=1001.0,
+        )
+        assert row.provider == credential_health.PROVIDER_NIKKE_BLABLALINK
+        assert row.status == credential_health.HEALTH_AUTH_PROBLEM
+        assert row.detected_at == 1000.0
+
+        row = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_NIKKE_BLABLALINK,
+            status=credential_health.HEALTH_OK,
+            reason="ok",
+            message="resource tracking ok",
+            source="resource_tracking",
+            detected_at=2000.0,
+            timestamp=2001.0,
+        )
+
+        rows = crud.get_provider_credential_health_rows(db)
+        assert len(rows) == 1
+        assert row.status == credential_health.HEALTH_OK
+        assert row.reason == "ok"
+        assert row.source == "resource_tracking"
+        assert row.detected_at == 2000.0
+        assert row.created_at == 1001.0
+        assert row.updated_at == 2001.0
+    finally:
+        db.close()
+
+
+def test_daily_checkin_crud_preserves_zero_timestamps():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    models.Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+
+    db = Session()
+    try:
+        setting = crud.upsert_daily_checkin_setting(
+            db,
+            process_id="starrail",
+            process_name="Star Rail",
+            user_preset_id=GAME_HONKAI_STARRAIL,
+            provider=credential_health.PROVIDER_HOYOLAB,
+            game_id=GAME_HONKAI_STARRAIL,
+            game_name="붕괴: 스타레일",
+            enabled=True,
+            timestamp=0.0,
+        )
+        assert setting.created_at == 0.0
+        assert setting.updated_at == 0.0
+
+        health = crud.upsert_provider_credential_health(
+            db,
+            provider=credential_health.PROVIDER_HOYOLAB,
+            status=credential_health.HEALTH_OK,
+            reason="ok",
+            detected_at=0.0,
+            timestamp=0.0,
+        )
+        assert health.created_at == 0.0
+        assert health.updated_at == 0.0
+        assert health.detected_at == 0.0
+    finally:
+        db.close()
+
+
 def test_nikke_factory_preset_enables_resource_tracking():
     data = json.loads(Path("src/data/game_presets.json").read_text(encoding="utf-8"))
     nikke = next(preset for preset in data["presets"] if preset["id"] == "nikke")
@@ -170,12 +385,22 @@ class _FakeNikkeConfig:
     def __init__(self, payload):
         self.payload = payload
         self.updated_role = None
+        self.saved_sessions = []
 
     def is_configured(self):
         return bool(self.payload)
 
     def load_session(self):
         return self.payload
+
+    def save_session(self, cookies, *, intl_open_id=None, nikke_area_id=None):
+        self.saved_sessions.append((dict(cookies), intl_open_id, nikke_area_id))
+        self.payload = {
+            "cookies": dict(cookies),
+            "intl_open_id": intl_open_id,
+            "nikke_area_id": nikke_area_id,
+        }
+        return True
 
     def update_role(self, *, intl_open_id, nikke_area_id):
         self.updated_role = (intl_open_id, nikke_area_id)
@@ -193,6 +418,163 @@ class _FakeResponse:
         return self._body
 
 
+def _patch_nikke_http_session(monkeypatch, *, get=None, post=None):
+    created_sessions = []
+
+    def _accepts_session_arg(callback):
+        params = list(inspect.signature(callback).parameters.values())
+        positional = [
+            param
+            for param in params
+            if param.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        return len(positional) >= 2
+
+    class _FakeHttpSession:
+        def __init__(self):
+            self.cookies = {}
+            created_sessions.append(self)
+
+        def get(self, url, **kwargs):
+            if get is None:
+                raise AssertionError(f"unexpected GET: {url}")
+            if _accepts_session_arg(get):
+                return get(self, url, **kwargs)
+            return get(url, **kwargs)
+
+        def post(self, url, **kwargs):
+            if post is None:
+                raise AssertionError(f"unexpected POST: {url}")
+            if _accepts_session_arg(post):
+                return post(self, url, **kwargs)
+            return post(url, **kwargs)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("src.services.nikke.requests.Session", _FakeHttpSession)
+    return created_sessions
+
+
+def test_nikke_http_session_helper_does_not_mask_callback_type_errors(monkeypatch):
+    import src.services.nikke as nikke_module
+
+    def broken_get(url, **kwargs):
+        raise TypeError("callback internal type error")
+
+    _patch_nikke_http_session(monkeypatch, get=broken_get)
+    session = nikke_module.requests.Session()
+
+    with pytest.raises(TypeError, match="callback internal type error"):
+        session.get("https://example.test")
+
+
+class _FakeHoYoLabConfig:
+    def __init__(self, configured=True):
+        self.configured = configured
+
+    def is_configured(self):
+        return self.configured
+
+    def load_credentials(self):
+        if not self.configured:
+            return None
+        return {"ltuid": 12345, "ltoken_v2": "token"}
+
+
+class _FakeDailyReward:
+    def __init__(self, name, amount):
+        self.name = name
+        self.amount = amount
+
+
+def test_hoyolab_daily_checkin_runs_starrail_then_zzz_post_sequence():
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def claim_daily_reward(self, *, game, lang):
+            self.calls.append((game, lang))
+            if game == hoyolab_module.genshin.Game.STARRAIL:
+                return _FakeDailyReward("성옥", 20)
+            if game == hoyolab_module.genshin.Game.ZZZ:
+                return _FakeDailyReward("필름", 30)
+            raise AssertionError(f"unexpected game: {game}")
+
+    client = FakeClient()
+    service = HoYoLabService(config=_FakeHoYoLabConfig())
+    service._client = client
+
+    results = service.claim_daily_rewards()
+
+    assert [call[0] for call in client.calls] == [
+        hoyolab_module.genshin.Game.STARRAIL,
+        hoyolab_module.genshin.Game.ZZZ,
+    ]
+    assert [call[1] for call in client.calls] == ["ko-kr", "ko-kr"]
+    assert [(result.game_id, result.status, result.reward_name, result.reward_amount) for result in results] == [
+        ("honkai_starrail", "success", "성옥", 20),
+        ("zenless_zone_zero", "success", "필름", 30),
+    ]
+
+
+def test_hoyolab_daily_checkin_continues_after_already_claimed():
+    class FakeClient:
+        async def claim_daily_reward(self, *, game, lang):
+            if game == hoyolab_module.genshin.Game.STARRAIL:
+                raise hoyolab_module.genshin.errors.AlreadyClaimed({"retcode": -5003, "message": "already signed in"})
+            return _FakeDailyReward("필름", 30)
+
+    service = HoYoLabService(config=_FakeHoYoLabConfig())
+    service._client = FakeClient()
+
+    results = service.claim_daily_rewards()
+
+    assert [result.status for result in results] == ["already_done", "success"]
+    assert results[0].game_name == "붕괴: 스타레일"
+    assert results[1].game_name == "젠레스 존 제로"
+
+
+def test_hoyolab_daily_checkin_requires_configured_credentials():
+    service = HoYoLabService(config=_FakeHoYoLabConfig(configured=False))
+
+    results = service.claim_daily_rewards()
+
+    assert [result.status for result in results] == ["auth_required", "auth_required"]
+    assert [result.game_id for result in results] == ["honkai_starrail", "zenless_zone_zero"]
+
+
+def test_hoyolab_daily_checkin_status_probe_is_read_only():
+    class FakeClient:
+        def __init__(self):
+            self.reward_info_calls = []
+            self.claim_calls = []
+
+        async def get_reward_info(self, *, game, lang):
+            self.reward_info_calls.append((game, lang))
+            return SimpleNamespace(signed_in=(game == hoyolab_module.genshin.Game.ZZZ))
+
+        async def claim_daily_reward(self, *, game, lang):
+            self.claim_calls.append((game, lang))
+            raise AssertionError("status probe must not claim daily reward")
+
+    client = FakeClient()
+    service = HoYoLabService(config=_FakeHoYoLabConfig())
+    service._client = client
+
+    results = service.get_daily_reward_status()
+
+    assert client.reward_info_calls == [
+        (hoyolab_module.genshin.Game.STARRAIL, "ko-kr"),
+        (hoyolab_module.genshin.Game.ZZZ, "ko-kr"),
+    ]
+    assert client.claim_calls == []
+    assert [(result.game_id, result.status, result.message) for result in results] == [
+        ("honkai_starrail", "ready", "오늘 출석 체크가 가능합니다."),
+        ("zenless_zone_zero", "already_done", "오늘 이미 출석 체크가 완료되었습니다."),
+    ]
+
+
 def test_nikke_outpost_storage_parses_shiftypad_daily_progress(monkeypatch):
     config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}, "intl_open_id": "open-1", "nikke_area_id": 1})
     calls = []
@@ -201,7 +583,7 @@ def test_nikke_outpost_storage_parses_shiftypad_daily_progress(monkeypatch):
         calls.append((url, kwargs))
         return _FakeResponse({"code": 0, "data": {"daily_progress": [{"outpost_battle_storage_fullness": 0.055}]}})
 
-    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    _patch_nikke_http_session(monkeypatch, post=fake_post)
 
     snapshot = NikkeService(config=config).get_outpost_storage()
 
@@ -216,7 +598,7 @@ def test_nikke_outpost_storage_marks_auth_expired(monkeypatch):
     def fake_post(url, **kwargs):
         return _FakeResponse({"code": 300001, "msg": "game not login"})
 
-    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
+    _patch_nikke_http_session(monkeypatch, post=fake_post)
 
     snapshot = NikkeService(config=config).get_outpost_storage()
 
@@ -243,8 +625,7 @@ def test_nikke_role_discovery_combines_user_info_and_saved_role(monkeypatch):
             return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": "1", "role_id": "10105414"}}})
         raise AssertionError(f"unexpected GET: {url}")
 
-    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
-    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
 
     role = NikkeService(config=config).get_role_info(refresh=True)
 
@@ -275,14 +656,310 @@ def test_nikke_outpost_storage_discovers_role_before_daily_progress(monkeypatch)
             return _FakeResponse({"code": 0, "data": {"role_info": {"area_id": 1}}})
         raise AssertionError(f"unexpected GET: {url}")
 
-    monkeypatch.setattr("src.services.nikke.requests.post", fake_post)
-    monkeypatch.setattr("src.services.nikke.requests.get", fake_get)
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
 
     snapshot = NikkeService(config=config).get_outpost_storage()
 
     assert snapshot.status == "ok"
     assert snapshot.percent == 5.5
     assert daily_payloads == [{"intl_open_id": "1", "nikke_area_id": 1}]
+
+
+def _daily_checkin_body(task):
+    return {"code": 0, "data": {"tasks": [task]}}
+
+
+def _daily_checkin_task(**overrides):
+    task = {
+        "task_id": "15",
+        "task_type": 1,
+        "task_name": "매일 출석 체크",
+        "reward_infos": [
+            {
+                "is_completed": False,
+                "completed_times": 0,
+                "need_completed_times": 1,
+                "points": 100,
+            }
+        ],
+    }
+    task.update(overrides)
+    return task
+
+
+def test_nikke_daily_checkin_status_ready_is_read_only(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append((url, kwargs))
+        assert url.endswith("lip/proxy/lipass/Points/GetTaskListWithStatusV2")
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("daily check-in status probe must not POST")
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fail_post)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "ready"
+    assert status.task_id == "15"
+    assert status.task_name == "매일 출석 체크"
+    assert status.points == 100
+    assert status.completed_times == 0
+    assert status.need_completed_times == 1
+    assert get_calls[0][1]["params"] == {"get_top": "false", "intl_game_id": "nikke"}
+
+
+def test_nikke_daily_checkin_headers_match_current_blabla_web_common_params():
+    service = NikkeService(config=_FakeNikkeConfig({"cookies": {"session_id": "abc"}}))
+
+    headers = service._request_headers()
+    common_params = json.loads(headers["x-common-params"])
+
+    assert headers["Origin"] == "https://www.blablalink.com"
+    assert headers["Referer"] == "https://www.blablalink.com/nikke/"
+    assert common_params["game_id"] == "16"
+    assert common_params["area_id"] == "global"
+    assert common_params["intl_game_id"] == "nikke"
+    assert common_params["source"] == "h5"
+    assert common_params["data_statistics_scene"] == "outer"
+    assert common_params["data_statistics_page_id"] == "https://www.blablalink.com/nikke/"
+    assert common_params["data_statistics_client_type"] == "h5"
+    assert common_params["data_statistics_lang"] == "ko"
+
+
+def test_nikke_daily_checkin_status_already_done_from_completed_flag(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(
+            _daily_checkin_body(
+                _daily_checkin_task(
+                    reward_infos=[
+                        {
+                            "is_completed": True,
+                            "completed_times": 0,
+                            "need_completed_times": 1,
+                            "points": 100,
+                        }
+                    ]
+                )
+            )
+        )
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "already_done"
+    assert "완료" in status.message
+
+
+def test_nikke_daily_checkin_status_already_done_from_completed_times(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(
+            _daily_checkin_body(
+                _daily_checkin_task(
+                    reward_infos=[
+                        {
+                            "is_completed": False,
+                            "completed_times": 1,
+                            "need_completed_times": 1,
+                            "points": 100,
+                        }
+                    ]
+                )
+            )
+        )
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "already_done"
+    assert status.completed_times == 1
+    assert status.need_completed_times == 1
+
+
+def test_nikke_daily_checkin_status_maps_game_login_required(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse({"code": 300001, "msg": "game not login"})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "game_login_required"
+    assert status.message == "game not login"
+
+
+def test_nikke_daily_checkin_status_falls_back_to_top_tasks(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    get_top_values = []
+
+    def fake_get(url, **kwargs):
+        get_top_values.append(kwargs["params"]["get_top"])
+        if kwargs["params"]["get_top"] == "false":
+            return _FakeResponse({"code": 0, "data": {"tasks": []}})
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "ready"
+    assert get_top_values == ["false", "true"]
+
+
+def test_nikke_daily_checkin_status_requires_configured_session(monkeypatch):
+    config = _FakeNikkeConfig(None)
+
+    def fail_get(*args, **kwargs):
+        raise AssertionError("unconfigured daily check-in status probe must not call network")
+
+    _patch_nikke_http_session(monkeypatch, get=fail_get)
+
+    status = NikkeService(config=config).get_daily_checkin_status()
+
+    assert status.status == "auth_required"
+
+
+def test_nikke_daily_checkin_claim_posts_ready_task(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+    post_calls = []
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fake_post(url, **kwargs):
+        post_calls.append((url, kwargs))
+        assert url.endswith("lip/proxy/lipass/Points/DailyCheckIn")
+        return _FakeResponse({"code": 0, "msg": "ok"})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "success"
+    assert result.task_id == "15"
+    assert result.points == 100
+    assert result.raw_debug["post_called"] is True
+    assert post_calls[0][1]["json"] == {"task_id": "15"}
+
+
+def test_nikke_daily_checkin_claim_persists_refreshed_session_cookie(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "old"}})
+
+    def fake_get(session, url, **kwargs):
+        assert session.cookies["session_id"] == "old"
+        session.cookies["session_id"] = "fresh"
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fake_post(session, url, **kwargs):
+        assert url.endswith("lip/proxy/lipass/Points/DailyCheckIn")
+        assert session.cookies["session_id"] == "fresh"
+        return _FakeResponse({"code": 0, "msg": "ok"})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "success"
+    assert result.raw_debug["post_called"] is True
+    assert config.saved_sessions
+    assert config.saved_sessions[-1][0]["session_id"] == "fresh"
+
+
+def test_nikke_daily_checkin_claim_skips_post_when_already_done(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(
+            _daily_checkin_body(
+                _daily_checkin_task(
+                    reward_infos=[
+                        {
+                            "is_completed": True,
+                            "completed_times": 1,
+                            "need_completed_times": 1,
+                            "points": 100,
+                        }
+                    ]
+                )
+            )
+        )
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("already completed check-in must not POST")
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fail_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "already_done"
+    assert result.raw_debug["post_called"] is False
+
+
+def test_nikke_daily_checkin_claim_maps_already_done_post_code(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse({"code": 1001009, "msg": "already checked in"})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "already_done"
+    assert result.message == "already checked in"
+    assert result.raw_debug["post_called"] is True
+
+
+def test_nikke_daily_checkin_claim_maps_login_required_post_code(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse({"code": 300001, "msg": "game not login"})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "game_login_required"
+    assert result.message == "game not login"
+    assert result.raw_debug["post_called"] is True
+
+
+def test_nikke_daily_checkin_claim_maps_inner_token_invalid_to_cookie_refresh(monkeypatch):
+    config = _FakeNikkeConfig({"cookies": {"session_id": "abc"}})
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse(_daily_checkin_body(_daily_checkin_task()))
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse({"ret": 11002, "msg": "Inner token is invalid[3]."})
+
+    _patch_nikke_http_session(monkeypatch, get=fake_get, post=fake_post)
+
+    result = NikkeService(config=config).claim_daily_checkin()
+
+    assert result.status == "game_login_required"
+    assert "BlablaLink 세션 쿠키 갱신이 필요합니다" in result.message
+    assert "ret=11002" in result.message
+    assert "Inner token is invalid[3]." in result.message
+    assert result.raw_debug["post_called"] is True
 
 
 def test_process_progress_exposes_generic_resource_snapshot():
@@ -455,6 +1132,78 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
     assert data_manager.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
     assert data_manager.session_updates == [(7, pytest.approx(15.8333333333))]
     assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+
+
+def test_reconcile_provider_health_writes_are_queued_off_main_path():
+    from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
+    from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
+
+    class FailIfCalledDataManager:
+        def update_provider_credential_health(self, *args, **kwargs):
+            raise AssertionError("provider health should be queued, not written inline")
+
+        def update_process_resource(self, *args, **kwargs):
+            raise AssertionError("resource fields must be written only by the persist task")
+
+    class FakePool:
+        def __init__(self):
+            self.tasks = []
+
+        def start(self, task):
+            self.tasks.append(task)
+
+    hoyolab_process = ManagedProcess(
+        id="starrail",
+        name="Star Rail",
+        monitoring_path="/starrail.exe",
+        launch_path="/starrail.exe",
+        user_preset_id=GAME_HONKAI_STARRAIL,
+        hoyolab_game_id=GAME_HONKAI_STARRAIL,
+    )
+    hoyolab_pool = FakePool()
+    hoyolab = HoYoStaminaReconcileCoordinator.__new__(HoYoStaminaReconcileCoordinator)
+    hoyolab._data_manager = FailIfCalledDataManager()
+    hoyolab._health_pool = hoyolab_pool
+    hoyolab._notifier = None
+
+    hoyolab._record_provider_health_from_status(
+        hoyolab_process,
+        "ok",
+        "HoYoLab 스태미나 조회 성공",
+        1234.0,
+    )
+
+    assert len(hoyolab_pool.tasks) == 1
+    assert hoyolab_pool.tasks[0].payload["provider"] == credential_health.PROVIDER_HOYOLAB
+    assert hoyolab_pool.tasks[0].payload["detected_at"] == 1234.0
+
+    nikke_process = ManagedProcess(
+        id="nikke",
+        name="NIKKE",
+        monitoring_path="/nikke.exe",
+        launch_path="/nikke.exe",
+        user_preset_id=GAME_NIKKE,
+        resource_tracking_enabled=True,
+        resource_provider="nikke_blablalink",
+        resource_key="nikke_outpost_storage",
+        resource_percent=10.0,
+        resource_updated_at=1000.0,
+    )
+    nikke_pool = FakePool()
+    nikke = NikkeResourceReconcileCoordinator.__new__(NikkeResourceReconcileCoordinator)
+    nikke._data_manager = FailIfCalledDataManager()
+    nikke._health_pool = nikke_pool
+    nikke._notifier = None
+
+    nikke._record_provider_health_from_snapshot(
+        nikke_process,
+        SimpleNamespace(status="ok", message="NIKKE resource ok", label="전초기지 방어 보상"),
+        5678.0,
+    )
+
+    assert len(nikke_pool.tasks) == 1
+    assert nikke_pool.tasks[0].payload["provider"] == credential_health.PROVIDER_NIKKE_BLABLALINK
+    assert nikke_pool.tasks[0].payload["detected_at"] == 5678.0
 
 
 def test_process_monitor_calibrates_nikke_resource_session_on_start(monkeypatch):
