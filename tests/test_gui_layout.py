@@ -403,6 +403,12 @@ def test_main_window_launch_args_apply_only_to_direct_targets():
         process,
         "shortcut",
         "/Games/ZZZ.exe",
+    ) == "-use-d3d12"
+    assert main_window.MainWindow._launch_args_for_process(
+        probe,
+        process,
+        "launcher",
+        "/Games/ZZZ.exe",
     ) is None
     assert main_window.MainWindow._launch_args_for_process(
         probe,

@@ -1622,7 +1622,7 @@ class MainWindow(QMainWindow):
 
     def _launch_args_for_process(self, process: ManagedProcess, launch_mode: str, launch_target: str | None) -> str | None:
         """직접 실행 대상에만 저장된 추가 인자를 적용합니다."""
-        if launch_mode != "direct" or not launch_target_accepts_args(launch_target):
+        if launch_mode == "launcher" or not launch_target_accepts_args(launch_target):
             return None
         if not getattr(process, "launch_args_enabled", False):
             return None

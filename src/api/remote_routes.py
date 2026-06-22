@@ -307,7 +307,7 @@ def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> t
 
 
 def _resolve_launch_args(process: Any, mode: str, target: str | None) -> str | None:
-    if mode != "direct" or not launch_target_accepts_args(target):
+    if mode == "launcher" or not launch_target_accepts_args(target):
         return None
     if not bool(getattr(process, "launch_args_enabled", False)):
         return None

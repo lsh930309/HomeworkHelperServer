@@ -18,7 +18,9 @@ def launch_target_accepts_args(launch_command: str | None) -> bool:
     lower_value = value.lower()
     if lower_value.endswith((".lnk", ".url")):
         return False
-    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+    has_uri_scheme = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", value)
+    is_windows_drive_path = re.match(r"^[a-zA-Z]:", value)
+    if has_uri_scheme and not is_windows_drive_path:
         return False
     return True
 
@@ -40,6 +42,19 @@ def _posix_launch_args(args: str | list[str] | tuple[str, ...] | None) -> list[s
         value = args.strip()
         return shlex.split(value, posix=True) if value else []
     return [str(item) for item in args if str(item)]
+
+
+def _posix_launch_command_args(launch_command: str, extra_args: list[str]) -> list[str]:
+    command_value = str(launch_command).strip()
+    if os.path.exists(command_value):
+        return [command_value, *extra_args]
+    return [*shlex.split(command_value, posix=True), *extra_args]
+
+
+def _redacted_posix_launch_args(popen_args: list[str], extra_args: list[str]) -> list[str]:
+    if not extra_args:
+        return popen_args
+    return [*popen_args[: -len(extra_args)], "<redacted>"]
 
 class Launcher:
     def __init__(self, run_as_admin: bool = False):
@@ -723,7 +738,7 @@ class Launcher:
         if requested_args and not accepts_args:
             print("  실행 인자는 .lnk/.url/protocol 대상에 적용되지 않아 무시합니다.")
         elif launch_args:
-            print(f"  추가 실행 인자: {launch_args}")
+            print("  추가 실행 인자: <redacted>")
         
         try:
             # 1. .url 파일 처리 (Windows 우선)
@@ -924,7 +939,8 @@ class Launcher:
                         else:
                             print(f"  일반 사용자 권한으로 실행합니다.")
 
-                    print(f"  ShellExecuteW 호출 시도: verb='{verb}', file='{launch_command}', params={launch_args!r}")
+                    params_for_log = "<redacted>" if launch_args else None
+                    print(f"  ShellExecuteW 호출 시도: verb='{verb}', file='{launch_command}', params={params_for_log!r}")
 
                     ret = shell32.ShellExecuteW(None, verb, launch_command, launch_args, None, 1) # SW_SHOWNORMAL = 1
                     if ret > 32:
@@ -941,9 +957,10 @@ class Launcher:
                         return False
                 else: 
                     try:
-                        popen_args = [launch_command, *_posix_launch_args(args)] if accepts_args else shlex.split(launch_command, posix=True)
+                        extra_args = _posix_launch_args(args) if accepts_args else []
+                        popen_args = _posix_launch_command_args(launch_command, extra_args)
                         subprocess.Popen(popen_args)
-                        print(f"  프로세스 실행 시도 완료 (비 Windows): {popen_args}")
+                        print(f"  프로세스 실행 시도 완료 (비 Windows): {_redacted_posix_launch_args(popen_args, extra_args)}")
                         return True
                     except Exception as e_shlex:
                         print(f"  비 Windows 환경 shlex.split 또는 Popen 오류: {e_shlex}")

@@ -9,6 +9,9 @@ def test_launch_target_accepts_args_only_for_direct_targets():
     assert launcher_module.launch_target_accepts_args("C:/Games/ZZZ.lnk") is False
     assert launcher_module.launch_target_accepts_args("C:/Games/ZZZ.url") is False
     assert launcher_module.launch_target_accepts_args("steam://run/1234") is False
+    assert launcher_module.launch_target_accepts_args("microsoft-edge:") is False
+    assert launcher_module.launch_target_accepts_args("shell:AppsFolder\\Game") is False
+    assert launcher_module.launch_target_accepts_args("mailto:user@example.test") is False
     assert launcher_module.launch_target_accepts_args("") is False
     assert launcher_module.launch_target_accepts_args(None) is False
 
@@ -58,3 +61,35 @@ def test_launcher_passes_launch_args_as_posix_popen_list(monkeypatch):
     ) is True
 
     assert calls == [["/Applications/ZenlessZoneZero.app", "-use-d3d12", "--profile", "alpha test"]]
+
+
+def test_launcher_preserves_posix_command_string_without_extra_args(monkeypatch):
+    calls = []
+
+    class _FakePopen:
+        def __init__(self, args):
+            calls.append(args)
+
+    monkeypatch.setattr(launcher_module.os, "name", "posix")
+    monkeypatch.setattr(launcher_module.subprocess, "Popen", _FakePopen)
+
+    assert launcher_module.Launcher().launch_process("python -m homework_helper") is True
+
+    assert calls == [["python", "-m", "homework_helper"]]
+
+
+def test_launcher_keeps_existing_posix_target_path_with_spaces_when_args_are_added(monkeypatch, tmp_path):
+    calls = []
+    app_path = tmp_path / "Zenless Zone Zero.app"
+    app_path.mkdir()
+
+    class _FakePopen:
+        def __init__(self, args):
+            calls.append(args)
+
+    monkeypatch.setattr(launcher_module.os, "name", "posix")
+    monkeypatch.setattr(launcher_module.subprocess, "Popen", _FakePopen)
+
+    assert launcher_module.Launcher().launch_process(str(app_path), args="-use-d3d12") is True
+
+    assert calls == [[str(app_path), "-use-d3d12"]]

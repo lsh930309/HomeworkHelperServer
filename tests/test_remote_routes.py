@@ -752,6 +752,29 @@ def test_remote_launch_ignores_saved_args_for_shortcut_url_targets():
     assert auditor.events[-1]["metadata"] == {"mode": "shortcut", "launch_args_applied": False}
 
 
+def test_remote_launch_applies_saved_args_for_shortcut_mode_direct_executable_target():
+    client, launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="zzz",
+                name="Zenless Zone Zero",
+                monitoring_path="/Applications/ZenlessZoneZero.app",
+                launch_path="/Applications/ZenlessZoneZero.app",
+                preferred_launch_type="shortcut",
+                launch_args_enabled=True,
+                launch_args="-use-d3d12",
+            )
+        ]
+    )
+
+    response = client.post("/remote/processes/zzz/launch", json={})
+
+    assert response.status_code == 200
+    assert response.json()["command"] == "process.launch.shortcut"
+    assert launcher.launches == [("/Applications/ZenlessZoneZero.app", "-use-d3d12")]
+    assert auditor.events[-1]["metadata"] == {"mode": "shortcut", "launch_args_applied": True}
+
+
 def test_remote_launch_launcher_mode_uses_preset_launcher_pattern(tmp_path):
     game_dir = tmp_path / "StarRail"
     game_dir.mkdir()

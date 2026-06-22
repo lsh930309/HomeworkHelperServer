@@ -45,16 +45,16 @@
    ### 현재 구조 확인
 
    - 실행 버튼 흐름은 `src/gui/main_window.py`의 `handle_launch_button_in_row()`에서 `preferred_launch_type`에 따라 실행 대상을 고른 뒤 `Launcher.launch_process(...)`를 호출한다.
-   - 실제 실행은 `src/core/launcher.py`의 `Launcher.launch_process(launch_command: str)`가 담당하며, 현재는 단일 경로/명령 문자열만 받는다.
+   - 실제 실행은 `src/core/launcher.py`의 `Launcher.launch_process(launch_command: str, args: str | list[str] | None = None)`가 담당하며, 실행 대상과 추가 인자를 분리해 받는다.
    - 프로세스 저장 모델은 `ManagedProcess`, `ProcessSchema`, `ProcessCreateSchema`, SQLAlchemy `Process` 모델에 새 실행 인자 필드를 추가한다.
    - 프로세스 추가/편집 UI는 `src/gui/dialogs.py`의 `ProcessDialog`에서 실행 경로, 실행 방식, 직접 실행 인자 opt-in을 저장한다.
 
    ### v1 범위
 
-   - 인자는 `프로세스 선호` 또는 우클릭 `직접 실행`처럼 실제 실행 파일 경로를 호출하는 경우에만 적용한다.
+   - 인자는 resolved target이 실제 실행 파일/직접 실행 대상인 경우에만 적용한다.
    - `바로가기(.lnk)`, `.url`, 런처 프로토콜, 프리셋 launcher 경로에는 v1에서 인자를 붙이지 않는다.
      - 이유: 각 경로는 OS shell/런처가 해석하며 인자 전달 의미가 불안정하다.
-   - remote API의 `mode=direct` 실행도 direct target일 때만 저장된 인자를 적용하며, macOS client는 새 필드를 decode/cache만 한다.
+   - remote API도 direct target일 때만 저장된 인자를 적용하며, macOS client는 새 필드를 decode/cache만 한다.
    - 저장 형식은 `launch_args_enabled: bool`과 `launch_args: str`의 두 필드로 둔다.
      - opt-in이 꺼져 있으면 `launch_args` 값이 있어도 실행에 사용하지 않는다.
      - 앞뒤 공백을 trim하고, 빈 문자열은 인자 없음으로 취급한다.
@@ -67,7 +67,7 @@
    1. 저장 모델 확장
       - `ManagedProcess.__init__`, `from_dict`, `to_dict` 호환 경로에 `launch_args_enabled`, `launch_args`를 추가한다.
       - `src/data/schemas.py`의 process schema와 `src/data/models.py`의 `managed_processes` 테이블 모델에 동일 필드를 추가한다.
-      - `src/data/beholder.py` 관리 필드명/검증에 실행 인자 필드를 추가하되, 일단 허용 길이와 줄바꿈 금지 정도의 방어 검증만 둔다.
+      - `src/data/beholder.py` 관리 필드명/검증에 실행 인자 필드를 추가하고, trim 후 빈 문자열은 무시하며 newline/CR/NUL 금지와 512자 제한을 적용한다.
 
    2. 편집 UI 추가
       - `ProcessDialog`의 실행 방식 섹션 근처에 `직접 실행 인자 사용` checkbox와 인자 입력 field를 추가한다.
@@ -75,13 +75,13 @@
       - 프리셋 자동 적용 시에는 인자를 자동으로 켜지 않고, 저장된 프로세스 단위 설정만 반영한다.
 
    3. 실행 대상 결정 로직 정리
-      - `handle_launch_button_in_row()`에서 선택된 launch type과 실제 target이 직접 실행 대상인지 판별한다.
-      - 직접 실행 대상일 때만 `launch_args_enabled`와 `launch_args`를 읽어 `Launcher.launch_process(target, args=...)`로 전달한다.
+      - `handle_launch_button_in_row()`에서 실제 target이 직접 실행 대상인지 판별한다.
+      - resolved target이 직접 실행 대상일 때만 `launch_args_enabled`와 `launch_args`를 읽어 `Launcher.launch_process(target, args=...)`로 전달한다.
       - `_launch_with_specific_path(..., use_shortcut=False)` 우클릭 직접 실행도 동일한 인자 적용 규칙을 사용한다.
       - shortcut/launcher fallback으로 실행되는 경우에는 인자를 전달하지 않는다.
 
    4. remote 실행 경로 반영
-      - `/remote/processes/{process_id}/launch`에서 resolved mode가 `direct`이고 target이 직접 실행 대상이면 저장된 인자를 전달한다.
+      - `/remote/processes/{process_id}/launch`에서 resolved target이 직접 실행 대상이고 launcher mode가 아니면 저장된 인자를 전달한다.
       - audit metadata에는 `launch_args_applied` 여부를 기록한다.
       - remote 상태 revision fingerprint에 `launch_args_enabled`, `launch_args`를 포함해 client cache/refresh가 변경을 감지하게 한다.
       - macOS client 모델은 `launch_args_enabled`, `launch_args`를 decode/cache하되 편집 UI는 v1 범위에서 제외한다.
