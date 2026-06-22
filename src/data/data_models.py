@@ -42,6 +42,8 @@ class ManagedProcess:
                  original_launch_path: Optional[str] = None, # 원본 실행 경로 보존
                  # 실행 방식 선택: "auto" (기본), "shortcut" (바로가기 우선), "direct" (직접 실행 우선)
                  preferred_launch_type: str = "shortcut",
+                 launch_args_enabled: bool = False,
+                 launch_args: str = "",
                  # 사용자 설정 프리셋 ID
                  user_preset_id: Optional[str] = None,  # 사용자 설정 프리셋 ID (예: "zenless_zone_zero")
                  # HoYoLab 스태미나 연동 필드
@@ -77,6 +79,8 @@ class ManagedProcess:
         
         # 실행 방식 선택 (auto, shortcut, direct)
         self.preferred_launch_type = preferred_launch_type
+        self.launch_args_enabled = bool(launch_args_enabled)
+        self.launch_args = str(launch_args or "").strip()
 
         # 사용자 설정 프리셋 ID
         self.user_preset_id = user_preset_id
@@ -118,6 +122,10 @@ class ManagedProcess:
         # 실행 방식 선택 하위 호환성
         if 'preferred_launch_type' not in data:
             data['preferred_launch_type'] = 'shortcut'
+        if 'launch_args_enabled' not in data:
+            data['launch_args_enabled'] = False
+        if 'launch_args' not in data:
+            data['launch_args'] = ''
         # 사용자 프리셋 ID 하위 호환성 (game_schema_id → user_preset_id 마이그레이션)
         if 'user_preset_id' not in data:
             data['user_preset_id'] = data.get('game_schema_id')  # 기존 game_schema_id 값 복사

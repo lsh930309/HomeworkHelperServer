@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.api.runtime_config import resolve_api_port
-from src.core.launcher import Launcher
+from src.core.launcher import Launcher, launch_target_accepts_args
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
@@ -304,6 +304,15 @@ def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> t
     if mode == "launcher":
         return (_resolve_launcher_path(process) or getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
     return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), "auto")
+
+
+def _resolve_launch_args(process: Any, mode: str, target: str | None) -> str | None:
+    if mode != "direct" or not launch_target_accepts_args(target):
+        return None
+    if not bool(getattr(process, "launch_args_enabled", False)):
+        return None
+    value = str(getattr(process, "launch_args", "") or "").strip()
+    return value or None
 
 
 def _normalize_executable_path(value: str | None) -> str | None:
@@ -855,6 +864,8 @@ def create_remote_router(
                     "monitoring_path": getattr(process, "monitoring_path", None),
                     "launch_path": getattr(process, "launch_path", None),
                     "preferred_launch_type": getattr(process, "preferred_launch_type", None),
+                    "launch_args_enabled": getattr(process, "launch_args_enabled", None),
+                    "launch_args": getattr(process, "launch_args", None),
                     "last_played_timestamp": last_played,
                     "user_cycle_hours": getattr(process, "user_cycle_hours", None),
                     "user_preset_id": getattr(process, "user_preset_id", None),
@@ -1419,7 +1430,8 @@ def create_remote_router(
 
         settings = crud.get_settings(db)
         launcher = launcher_factory(bool(getattr(settings, "run_as_admin", False)))
-        ok = bool(launcher.launch_process(target))
+        launch_args = _resolve_launch_args(process, mode, target)
+        ok = bool(launcher.launch_process(target, args=launch_args))
         command = f"process.launch.{mode}"
         result_status = "accepted" if ok else "failed"
         auditor.record(
@@ -1429,7 +1441,7 @@ def create_remote_router(
             target_id=getattr(process, "id", process_id),
             target_name=getattr(process, "name", None),
             target=target,
-            metadata={"mode": mode},
+            metadata={"mode": mode, "launch_args_applied": bool(launch_args)},
         )
         return RemoteCommandResult(
             accepted=ok,

@@ -42,7 +42,7 @@ from src.utils.windows import (
     set_startup_shortcut,
     get_startup_shortcut_status,
 )
-from src.core.launcher import Launcher
+from src.core.launcher import Launcher, launch_target_accepts_args
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -1575,6 +1575,8 @@ class MainWindow(QMainWindow):
                                        last_played_timestamp=p_edit.last_played_timestamp,  # 마지막 플레이 시간은 유지
                                        original_launch_path=getattr(p_edit, 'original_launch_path', data["launch_path"]),  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
+                                       launch_args_enabled=data.get("launch_args_enabled", False),
+                                       launch_args=data.get("launch_args", ""),
                                        user_preset_id=data.get("user_preset_id"),  # 사용자 프리셋 ID
                                        stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
                                        hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID
@@ -1618,6 +1620,15 @@ class MainWindow(QMainWindow):
                     self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
             else: QMessageBox.warning(self, "오류", "프로세스 삭제 실패.")
 
+    def _launch_args_for_process(self, process: ManagedProcess, launch_mode: str, launch_target: str | None) -> str | None:
+        """직접 실행 대상에만 저장된 추가 인자를 적용합니다."""
+        if launch_mode != "direct" or not launch_target_accepts_args(launch_target):
+            return None
+        if not getattr(process, "launch_args_enabled", False):
+            return None
+        launch_args = str(getattr(process, "launch_args", "") or "").strip()
+        return launch_args or None
+
     def handle_launch_button_in_row(self, pid:str): # 게임 실행
         """선택된 게임 프로세스를 실행합니다."""
         p_launch = self.data_manager.get_process_by_id(pid) # ID로 프로세스 정보 가져오기
@@ -1652,7 +1663,9 @@ class MainWindow(QMainWindow):
 
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
-        if self.launcher.launch_process(launch_target): # 프로세스 실행 시도
+        launch_args = self._launch_args_for_process(p_launch, launch_type, launch_target)
+
+        if self.launcher.launch_process(launch_target, args=launch_args): # 프로세스 실행 시도
             status_bar = self.statusBar()
             if status_bar:
                 self._record_status_event(f"'{p_launch.name}' 실행 시도.", 3000)
@@ -1673,7 +1686,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "오류", f"해당 경로가 없습니다.")
             return
 
-        if self.launcher.launch_process(launch_target):
+        launch_mode = "shortcut" if use_shortcut else "direct"
+        launch_args = self._launch_args_for_process(p_launch, launch_mode, launch_target)
+
+        if self.launcher.launch_process(launch_target, args=launch_args):
             status_bar = self.statusBar()
             if status_bar:
                 path_type = "바로가기" if use_shortcut else "직접 실행"
@@ -1765,6 +1781,8 @@ class MainWindow(QMainWindow):
                                        is_mandatory_time_enabled=data["is_mandatory_time_enabled"],
                                        original_launch_path=data["launch_path"],  # 원본 경로 보존
                                        preferred_launch_type=data.get("preferred_launch_type", "shortcut"),  # 실행 방식 선택
+                                       launch_args_enabled=data.get("launch_args_enabled", False),
+                                       launch_args=data.get("launch_args", ""),
                                        user_preset_id=data.get("user_preset_id"),  # 사용자 프리셋 ID
                                        stamina_tracking_enabled=data.get("stamina_tracking_enabled", False),  # 스태미나 추적
                                        hoyolab_game_id=data.get("hoyolab_game_id"),  # 호요랩 게임 ID

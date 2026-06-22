@@ -646,6 +646,8 @@ class RunningProcessSelectionDialog(QDialog):
 
 class ProcessDialog(QDialog):
     """ Dialog for adding a new process or editing an existing one. """
+    MAX_LAUNCH_ARGS_LENGTH = 512
+
     def __init__(self, parent: Optional[QWidget] = None, existing_process: Optional[ManagedProcess] = None):
         super().__init__(parent)
         self.existing_process = existing_process
@@ -693,6 +695,7 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택 섹션
         self._setup_launch_type_section()
+        self._setup_launch_args_section()
 
         # 스태미나 추적 섹션 (호요버스 게임 전용)
         self._setup_stamina_section()
@@ -1053,6 +1056,27 @@ class ProcessDialog(QDialog):
         # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
 
+    def _setup_launch_args_section(self):
+        """직접 실행 시 전달할 추가 인자 opt-in 섹션 설정"""
+        launch_args_layout = QHBoxLayout()
+        self.launch_args_enabled_checkbox = QCheckBox("직접 실행 인자 사용")
+        self.launch_args_enabled_checkbox.setToolTip(
+            "프로세스 선호/직접 실행에만 적용됩니다.\n"
+            "바로가기(.lnk), .url, 런처 실행에는 적용되지 않습니다."
+        )
+        self.launch_args_edit = QLineEdit()
+        self.launch_args_edit.setPlaceholderText("-use-d3d12")
+        self.launch_args_edit.setToolTip(
+            "직접 실행 파일에 전달할 추가 실행 인자를 입력합니다.\n"
+            "예: -use-d3d12"
+        )
+        self.launch_args_edit.setEnabled(False)
+        self.launch_args_enabled_checkbox.toggled.connect(self.launch_args_edit.setEnabled)
+
+        launch_args_layout.addWidget(self.launch_args_enabled_checkbox)
+        launch_args_layout.addWidget(self.launch_args_edit, 1)
+        self.form_layout.addRow(launch_args_layout)
+
     def _update_launch_type_enabled(self, _=None):
         """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
         # 콤보박스가 아직 생성되지 않은 경우 무시
@@ -1353,6 +1377,10 @@ class ProcessDialog(QDialog):
         if self.existing_process.mandatory_times_str:
             self.mandatory_times_edit.setText(",".join(self.existing_process.mandatory_times_str))
         self.is_mandatory_time_enabled_checkbox.setChecked(self.existing_process.is_mandatory_time_enabled)
+        launch_args_enabled = bool(getattr(self.existing_process, 'launch_args_enabled', False))
+        self.launch_args_enabled_checkbox.setChecked(launch_args_enabled)
+        self.launch_args_edit.setText(str(getattr(self.existing_process, 'launch_args', '') or ''))
+        self.launch_args_edit.setEnabled(launch_args_enabled)
 
         # 실행 방식 선택 로드
         if hasattr(self.existing_process, 'preferred_launch_type'):
@@ -1507,6 +1535,13 @@ class ProcessDialog(QDialog):
                 if t_str and not self.validate_time_format(t_str):
                     QMessageBox.warning(self, "입력 오류", f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {t_str}")
                     return
+        launch_args = self.launch_args_edit.text().strip()
+        if "\n" in launch_args or "\r" in launch_args or "\x00" in launch_args:
+            QMessageBox.warning(self, "입력 오류", "직접 실행 인자에는 줄바꿈 또는 NULL 문자를 사용할 수 없습니다.")
+            return
+        if len(launch_args) > self.MAX_LAUNCH_ARGS_LENGTH:
+            QMessageBox.warning(self, "입력 오류", f"직접 실행 인자는 {self.MAX_LAUNCH_ARGS_LENGTH}자 이하로 입력해야 합니다.")
+            return
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -1536,6 +1571,7 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택
         preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
+        launch_args = self.launch_args_edit.text().strip()
 
         # 프리셋 ID 추출
         preset_data = self.preset_combo.currentData()
@@ -1569,6 +1605,8 @@ class ProcessDialog(QDialog):
             "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
             "preferred_launch_type": preferred_launch_type,
+            "launch_args_enabled": self.launch_args_enabled_checkbox.isChecked(),
+            "launch_args": launch_args,
             "user_preset_id": user_preset_id,
             "stamina_tracking_enabled": stamina_tracking_enabled,
             "hoyolab_game_id": hoyolab_game_id,

@@ -13,6 +13,8 @@ class ProcessSchema(BaseModel):
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
     preferred_launch_type: str = "shortcut"
+    launch_args_enabled: bool = False
+    launch_args: str = ""
     user_preset_id: Optional[str] = None
     # HoYoLab 스태미나 필드
     stamina_tracking_enabled: bool = False
@@ -47,6 +49,8 @@ class ProcessCreateSchema(BaseModel):
     last_played_timestamp: Optional[float] = None
     original_launch_path: Optional[str] = None
     preferred_launch_type: str = "shortcut"
+    launch_args_enabled: bool = False
+    launch_args: str = ""
     user_preset_id: Optional[str] = None
     # HoYoLab 스태미나 필드
     stamina_tracking_enabled: bool = False

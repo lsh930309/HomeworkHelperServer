@@ -94,6 +94,9 @@ def auto_migrate_database():
         ("managed_processes", "resource_status", "TEXT", None),
         # Process 테이블 - 사용자 프리셋 ID
         ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
+        # Process 테이블 - 직접 실행 인자
+        ("managed_processes", "launch_args_enabled", "INTEGER", "0"),
+        ("managed_processes", "launch_args", "TEXT", "''"),
         # GlobalSettings 테이블 - 스태미나 알림 설정
         ("global_settings", "stamina_notify_enabled", "INTEGER", "1"),  # Boolean -> INTEGER
         ("global_settings", "stamina_notify_threshold", "INTEGER", "20"),
