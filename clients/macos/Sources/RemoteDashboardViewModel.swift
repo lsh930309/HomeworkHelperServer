@@ -2433,6 +2433,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             monitoringPath: process.monitoringPath,
             launchPath: process.launchPath,
             preferredLaunchType: process.preferredLaunchType,
+            launchArgsEnabled: process.launchArgsEnabled,
+            launchArgs: process.launchArgs,
             lastPlayedTimestamp: process.lastPlayedTimestamp,
             userCycleHours: process.userCycleHours,
             staminaTrackingEnabled: process.staminaTrackingEnabled,

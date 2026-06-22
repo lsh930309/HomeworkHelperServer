@@ -24,6 +24,8 @@ class Process(Base):
     last_played_timestamp = Column(Float, nullable=True)
     original_launch_path = Column(String, nullable=True)
     preferred_launch_type = Column(String, default="shortcut")  # 실행 방식 선호도
+    launch_args_enabled = Column(Boolean, nullable=False, default=False)  # 직접 실행 인자 사용 여부
+    launch_args = Column(String, nullable=False, default="")  # 직접 실행 시 전달할 추가 인자
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
 
     # HoYoLab 스태미나 연동 필드

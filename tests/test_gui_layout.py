@@ -378,6 +378,82 @@ def _stop_window(window, app):
     app.processEvents()
 
 
+def test_main_window_launch_args_apply_only_to_direct_targets():
+    import src.gui.main_window as main_window
+
+    process = ManagedProcess(
+        id="zzz",
+        name="Zenless Zone Zero",
+        monitoring_path="/Games/ZZZ.exe",
+        launch_path="/Games/ZZZ.url",
+        preferred_launch_type="direct",
+        launch_args_enabled=True,
+        launch_args="  -use-d3d12  ",
+    )
+    probe = SimpleNamespace()
+
+    assert main_window.MainWindow._launch_args_for_process(
+        probe,
+        process,
+        "direct",
+        "/Games/ZZZ.exe",
+    ) == "-use-d3d12"
+    assert main_window.MainWindow._launch_args_for_process(
+        probe,
+        process,
+        "shortcut",
+        "/Games/ZZZ.exe",
+    ) == "-use-d3d12"
+    assert main_window.MainWindow._launch_args_for_process(
+        probe,
+        process,
+        "launcher",
+        "/Games/ZZZ.exe",
+    ) is None
+    assert main_window.MainWindow._launch_args_for_process(
+        probe,
+        process,
+        "direct",
+        "/Games/ZZZ.url",
+    ) is None
+
+
+def test_process_dialog_returns_launch_args_opt_in(monkeypatch, tmp_path):
+    app = _qapp()
+    import src.gui.dialogs as dialogs
+    from src.utils.game_preset_manager import GamePresetManager
+
+    monkeypatch.setattr(GamePresetManager, "USER_CONFIG_DIR", tmp_path / "HomeworkHelper", raising=False)
+    monkeypatch.setattr(
+        GamePresetManager,
+        "USER_PRESET_FILE",
+        tmp_path / "HomeworkHelper" / "game_presets_user.json",
+        raising=False,
+    )
+
+    dialog = dialogs.ProcessDialog()
+    try:
+        dialog.name_edit.setText("Zenless Zone Zero")
+        dialog.monitoring_path_edit.setText("/Games/ZZZ.exe")
+        dialog.launch_path_edit.setText("/Games/ZZZ.url")
+        direct_index = dialog.launch_type_combo.findData("direct")
+        dialog.launch_type_combo.setCurrentIndex(direct_index)
+        dialog.launch_args_enabled_checkbox.setChecked(True)
+        dialog.launch_args_edit.setText("  -use-d3d12  ")
+
+        data = dialog.get_data()
+
+        assert data is not None
+        assert data["preferred_launch_type"] == "direct"
+        assert data["launch_args_enabled"] is True
+        assert data["launch_args"] == "-use-d3d12"
+        assert dialog.launch_args_edit.isEnabled() is True
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)

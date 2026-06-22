@@ -29,6 +29,7 @@ STATUS_RESOLVED = "resolved"
 MAX_UNEVIDENCED_SESSION_SECONDS = 7 * 24 * 60 * 60
 MAX_HEARTBEAT_GAP_SECONDS = 10 * 60
 LEGACY_OPEN_SESSION_SECONDS = 24 * 60 * 60
+MAX_LAUNCH_ARGS_LENGTH = 512
 GLOBAL_SETTINGS_TABLE = "global_settings"
 MANAGED_PROCESSES_TABLE = "managed_processes"
 WEB_SHORTCUTS_TABLE = "web_shortcuts"
@@ -143,6 +144,8 @@ FIELD_LABELS: dict[str, str] = {
     "obs_watch_output_dir": "OBS 출력 폴더 감시",
     "obs_recording_output_dir": "OBS 녹화 저장 폴더",
     "preferred_launch_type": "실행 방식",
+    "launch_args_enabled": "직접 실행 인자 사용",
+    "launch_args": "직접 실행 인자",
     "user_cycle_hours": "반복 주기",
     "default_volume": "기본 볼륨",
     "last_played_timestamp": "마지막 플레이 시각",
@@ -625,6 +628,10 @@ def _invalid_process_values(
 
     if "preferred_launch_type" in changed_fields and update_data.get("preferred_launch_type") not in {"shortcut", "direct", "launcher"}:
         invalid.append("preferred_launch_type")
+    if "launch_args" in changed_fields:
+        value = str(update_data.get("launch_args") or "")
+        if "\n" in value or "\r" in value or "\x00" in value or len(value) > MAX_LAUNCH_ARGS_LENGTH:
+            invalid.append("launch_args")
     if "user_cycle_hours" in changed_fields:
         value = update_data.get("user_cycle_hours")
         if not _is_number(value) or float(value) <= 0 or float(value) > 8760:

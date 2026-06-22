@@ -96,6 +96,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
+        'launchArgsEnabled = "launch_args_enabled"',
+        'launchArgs = "launch_args"',
         'userCycleHours = "user_cycle_hours"',
         'schemaVersion = "schema_version"',
         'baseValue = "base_value"',
@@ -970,6 +972,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "trackBadgeDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
+    progress_copy_source = view_model.split("private static func processWithLocalProgress", 1)[1].split("private static func locallyPlayedToday", 1)[0]
+    assert "launchArgsEnabled: process.launchArgsEnabled" in progress_copy_source
+    assert "launchArgs: process.launchArgs" in progress_copy_source
     assert "allowProjection: false" in view_model
     assert 'existing?.source == "server_tracked"' in view_model
     assert "projectedProgress(from:" in view_model

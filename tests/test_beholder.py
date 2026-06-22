@@ -1504,6 +1504,85 @@ def test_process_editor_cannot_mutate_runtime_fields(monkeypatch, tmp_path):
     assert unchanged.last_played_timestamp == dt.datetime(2026, 5, 8, 12, 0).timestamp()
 
 
+def test_process_editor_persists_trimmed_direct_launch_args(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="zzz",
+        name="Zenless Zone Zero",
+        monitoring_path="C:/Games/ZZZ.exe",
+        launch_path="C:/Games/ZZZ.url",
+        preferred_launch_type="direct",
+        launch_args_enabled=True,
+        launch_args="  -use-d3d12  ",
+    ))
+
+    assert process.launch_args_enabled is True
+    assert process.launch_args == "-use-d3d12"
+
+    updated = crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+        name="Zenless Zone Zero",
+        monitoring_path="C:/Games/ZZZ.exe",
+        launch_path="C:/Games/ZZZ.url",
+        preferred_launch_type="direct",
+        launch_args_enabled=False,
+        launch_args="   ",
+    ))
+
+    assert updated.launch_args_enabled is False
+    assert updated.launch_args == ""
+
+
+def test_managed_process_from_dict_backfills_launch_args_defaults():
+    from src.data.data_models import ManagedProcess
+
+    process = ManagedProcess.from_dict({
+        "id": "legacy",
+        "name": "Legacy Game",
+        "monitoring_path": "C:/Games/Legacy.exe",
+        "launch_path": "C:/Games/Legacy.url",
+    })
+
+    assert process.preferred_launch_type == "shortcut"
+    assert process.launch_args_enabled is False
+    assert process.launch_args == ""
+
+
+def test_process_editor_blocks_unsafe_direct_launch_args(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="args-guard",
+        name="Args Guard",
+        monitoring_path="C:/Games/ArgsGuard.exe",
+        launch_path="C:/Games/ArgsGuard.url",
+    ))
+
+    invalid_values = [
+        "-use-d3d12\n--bad",
+        "-use-d3d12\r--bad",
+        "-use-d3d12\x00--bad",
+        "x" * (beholder.MAX_LAUNCH_ARGS_LENGTH + 1),
+    ]
+
+    for value in invalid_values:
+        with pytest.raises(beholder.BeholderBlocked) as blocked:
+            crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+                name="Args Guard",
+                monitoring_path="C:/Games/ArgsGuard.exe",
+                launch_path="C:/Games/ArgsGuard.url",
+                launch_args_enabled=True,
+                launch_args=value,
+            ))
+
+        assert "invalid_process_value" in blocked.value.incident.risk_factors
+
+
 def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod

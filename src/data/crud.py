@@ -80,6 +80,7 @@ def create_process(
     override_token: str | None = None,
 ):
     process_data = _dump_schema(process)
+    _normalize_process_launch_args(process_data)
     provided_id = process_data.pop('id', None)
     process_id = provided_id if provided_id else str(uuid.uuid4())
     guard_columns = {key for key, value in process_data.items() if key in beholder.PROCESS_EDITOR_FIELDS or value is not None} | {"id"}
@@ -144,6 +145,7 @@ def update_process(
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _dump_schema(process, exclude_unset=True)
+        _normalize_process_launch_args(update_data)
         update_data.pop("id", None)
         if actor == "process_editor":
             for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
@@ -432,6 +434,13 @@ def _dump_schema(model: Any, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)
     return model.dict(**kwargs)
+
+
+def _normalize_process_launch_args(data: dict[str, Any]) -> None:
+    if "launch_args" in data:
+        data["launch_args"] = str(data.get("launch_args") or "").strip()
+    if "launch_args_enabled" in data:
+        data["launch_args_enabled"] = bool(data.get("launch_args_enabled"))
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:
