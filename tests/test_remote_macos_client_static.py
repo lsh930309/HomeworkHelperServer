@@ -329,25 +329,22 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "showSettingsWindow" not in show_popover_source
     assert "showSettingsWindow" not in show_primary_source
     assert "private var settingsWindow: NSWindow?" in app
+    assert "private static var settingsOpener: (@MainActor () -> Void)?" in app
     assert "static func showSettingsWindow()" in app
+    assert "static func installSettingsOpener" in app
+    assert "static func registerSettingsWindow(_ window: NSWindow)" in app
     assert "private func presentSettingsWindow()" in app
-    assert "private func makeSettingsWindow() -> NSWindow" in app
-    settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("private func makeSettingsWindow()", 1)[0]
+    assert "private func makeSettingsWindow() -> NSWindow" not in app
+    settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("static func hideSettingsWindow", 1)[0]
     assert "closePopoverForFocusLoss()" in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
     assert "if let settingsWindow" in settings_open_source
-    assert "settingsWindow = window" in settings_open_source
-    assert "window.makeKeyAndOrderFront(nil)" in settings_open_source
-    assert "window.orderFrontRegardless()" in settings_open_source
+    assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
+    assert "settingsWindow.orderFrontRegardless()" in settings_open_source
+    assert "Self.settingsOpener?()" in settings_open_source
     assert "popover.isShown" not in settings_open_source
-    settings_make_source = app.split("private func makeSettingsWindow() -> NSWindow", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "NSHostingController(rootView: RemoteSettingsView(viewModel: RemoteSharedModel.viewModel))" in settings_make_source
-    assert "let window = NSWindow(" in settings_make_source
-    assert "window.contentViewController = controller" in settings_make_source
-    assert "window.isReleasedWhenClosed = false" in settings_make_source
-    assert "window.center()" in settings_make_source
+    assert "NSHostingController(rootView: RemoteSettingsView" not in app
     assert "static let settingsWindowIdentifier" in app
-    assert "static let settingsWindowTitle" in app
     assert "static func hideSettingsWindow(_ window: NSWindow?)" in app
     assert "private static func settingsWindows() -> [NSWindow]" not in app
     assert "explicitSettingsOpen" not in app
@@ -381,8 +378,10 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "CommandGroup(replacing: .appSettings)" in app
     assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
-    assert "RemoteSettingsOpenBridge" not in app
-    assert "@Environment(\\.openSettings)" not in app
+    assert "RemoteSettingsOpenBridge" in app
+    assert "@Environment(\\.openSettings)" in app
+    assert "RemoteAppDelegate.installSettingsOpener" in app
+    assert "openSettings()" in app
     assert "homeworkHelperRemoteOpenSettings" not in app
     assert 'Selector(("showSettingsWindow:"))' not in app
     assert 'Selector(("showPreferencesWindow:"))' not in app
@@ -500,7 +499,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
     assert ".labelStyle(.iconOnly)" not in app
 
-    assert "\n        Settings {" not in app
+    assert "\n        Settings {" in app
     assert "RemoteSettingsView" in app
     assert "RemoteSettingsTab" in app
     assert "TabView(selection: $selectedTab)" in app
@@ -526,7 +525,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let contentWidth: CGFloat = 392" in app
     assert "static let maxWindowWidth: CGFloat = 480" in app
     assert "measured.width * 1.06" in app
-    assert "measured.height * 1.10" in app
+    assert "static let windowVerticalInset: CGFloat = 24" in app
+    assert "let paddedHeight = measured.height + RemoteSettingsLayout.windowVerticalInset" in app
     assert "SettingsActionGrid" in app
     assert ".toggleStyle(.switch)" in app
     assert 'SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)' in app
@@ -547,8 +547,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "orderFrontRegardless" not in settings_window_accessor_source
     assert "NSApp.activate" not in settings_window_accessor_source
     assert "window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.settingsWindowIdentifier)" in settings_window_accessor_source
-    assert "window.title = RemoteAppDelegate.settingsWindowTitle" in settings_window_accessor_source
+    assert "window.title =" not in settings_window_accessor_source
     assert "window.isReleasedWhenClosed = false" in settings_window_accessor_source
+    assert "RemoteAppDelegate.registerSettingsWindow(window)" in settings_window_accessor_source
     assert "RemoteAppDelegate.hideSettingsWindow(sender)" in window_accessor
     assert "RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow)" in app
     settings_keyboard_source = window_accessor.split("struct RemoteSettingsKeyboardShortcutBridge", 1)[1]

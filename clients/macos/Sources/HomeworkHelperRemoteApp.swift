@@ -31,7 +31,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     static let placeholderWindowIdentifier = "HomeworkHelperRemotePlaceholderWindow"
     static let placeholderWindowTitle = "HomeworkHelper Remote Hidden"
     static let settingsWindowIdentifier = "HomeworkHelperRemoteSettingsWindow"
-    static let settingsWindowTitle = "HomeworkHelper Remote 설정"
 
     private static weak var shared: RemoteAppDelegate?
     private static let moonlightBundleIdentifier = "com.moonlight-stream.Moonlight"
@@ -44,6 +43,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private var popoverOutsideClickMonitor: Any?
     private var popoverKeyDownMonitor: Any?
     private var settingsWindow: NSWindow?
+    private static var settingsOpener: (@MainActor () -> Void)?
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -461,37 +461,25 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         shared?.presentSettingsWindow()
     }
 
+    static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
+        settingsOpener = opener
+    }
+
+    static func registerSettingsWindow(_ window: NSWindow) {
+        shared?.settingsWindow = window
+    }
+
     private func presentSettingsWindow() {
         closePopoverForFocusLoss()
         NSApp.setActivationPolicy(.accessory)
-        let window: NSWindow
         if let settingsWindow {
-            window = settingsWindow
-        } else {
-            window = makeSettingsWindow()
-            settingsWindow = window
+            NSApp.activate(ignoringOtherApps: true)
+            settingsWindow.makeKeyAndOrderFront(nil)
+            settingsWindow.orderFrontRegardless()
+            return
         }
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-    }
-
-    private func makeSettingsWindow() -> NSWindow {
-        let contentSize = CGSize(width: RemoteSettingsLayout.minWindowWidth, height: RemoteSettingsLayout.minWindowHeight)
-        let controller = NSHostingController(rootView: RemoteSettingsView(viewModel: RemoteSharedModel.viewModel))
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: contentSize),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentViewController = controller
-        window.identifier = NSUserInterfaceItemIdentifier(Self.settingsWindowIdentifier)
-        window.title = Self.settingsWindowTitle
-        window.isReleasedWhenClosed = false
-        window.delegate = RemoteSettingsWindowDelegate.shared
-        window.center()
-        return window
+        Self.settingsOpener?()
     }
 
     static func hideSettingsWindow(_ window: NSWindow?) {
@@ -525,6 +513,7 @@ struct HomeworkHelperRemoteApp: App {
             Color.clear
                 .frame(width: 160, height: 96)
                 .background(RemotePlaceholderWindowAccessor())
+                .background(RemoteSettingsOpenBridge())
                 .onAppear {
                     DispatchQueue.main.async {
                         RemoteAppDelegate.schedulePlaceholderHide()
@@ -547,6 +536,22 @@ struct HomeworkHelperRemoteApp: App {
             }
         }
 
+        Settings {
+            RemoteSettingsView(viewModel: viewModel)
+        }
+    }
+}
+
+struct RemoteSettingsOpenBridge: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Color.clear
+            .onAppear {
+                RemoteAppDelegate.installSettingsOpener {
+                    openSettings()
+                }
+            }
     }
 }
 
@@ -1289,7 +1294,7 @@ enum RemoteSettingsLayout {
     static let tabPadding: CGFloat = 12
     static let sectionSpacing: CGFloat = 12
     static let windowHorizontalInset: CGFloat = 34
-    static let windowVerticalInset: CGFloat = 72
+    static let windowVerticalInset: CGFloat = 24
     static let minWindowWidth: CGFloat = 430
     static let maxWindowWidth: CGFloat = 480
     static let minWindowHeight: CGFloat = 180
@@ -1311,7 +1316,7 @@ struct RemoteSettingsView: View {
     private var targetSize: CGSize {
         let measured = measuredSizes[selectedTab] ?? CGSize(width: RemoteSettingsLayout.contentWidth, height: 260)
         let paddedWidth = measured.width * 1.06 + RemoteSettingsLayout.windowHorizontalInset
-        let paddedHeight = measured.height * 1.10 + RemoteSettingsLayout.windowVerticalInset
+        let paddedHeight = measured.height + RemoteSettingsLayout.windowVerticalInset
         let visible = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1180, height: 800)
         return CGSize(
             width: min(RemoteSettingsLayout.maxWindowWidth, min(max(RemoteSettingsLayout.minWindowWidth, paddedWidth), max(RemoteSettingsLayout.minWindowWidth, visible.width - 80))),
