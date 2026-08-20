@@ -181,8 +181,10 @@ struct RemoteSettingsWindowAccessor: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.isMovableByWindowBackground = true
+        window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.settingsWindowIdentifier)
+        window.title = RemoteAppDelegate.settingsWindowTitle
+        window.isReleasedWhenClosed = false
         window.delegate = RemoteSettingsWindowDelegate.shared
-        RemoteAppDelegate.prepareSettingsWindow(window)
     }
 }
 

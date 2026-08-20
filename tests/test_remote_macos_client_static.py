@@ -325,35 +325,36 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     status_click_source = app.split("@objc func statusItemClicked", 1)[1].split("func clickStatusItemForUITest", 1)[0]
     show_popover_source = app.split("private func showPopoverFromStatusItem()", 1)[1].split("private func togglePopover", 1)[0]
     show_primary_source = app.split("static func showPrimaryInterface()", 1)[1].split("static func showUITestMainWindow", 1)[0]
-    assert "openSettingsWindow" not in status_click_source
-    assert "openSettingsWindow" not in show_popover_source
-    assert "openSettingsWindow" not in show_primary_source
-    assert "enum SettingsOpenSource" in app
-    assert "case popoverButton" in app
-    assert "case popoverShortcut" in app
-    assert "case uiTest" in app
-    settings_open_source = app.split("static func openSettingsWindow(source: SettingsOpenSource)", 1)[1].split("static func prepareSettingsWindow", 1)[0]
-    assert "guard source == .uiTest || shared?.popover.isShown == true else { return }" in settings_open_source
-    assert "beginExplicitSettingsOpen()" in settings_open_source
+    assert "showSettingsWindow" not in status_click_source
+    assert "showSettingsWindow" not in show_popover_source
+    assert "showSettingsWindow" not in show_primary_source
+    assert "private var settingsWindow: NSWindow?" in app
+    assert "static func showSettingsWindow()" in app
+    assert "private func presentSettingsWindow()" in app
+    assert "private func makeSettingsWindow() -> NSWindow" in app
+    settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("private func makeSettingsWindow()", 1)[0]
+    assert "closePopoverForFocusLoss()" in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
-    assert "focusExistingSettingsWindow()" in settings_open_source
-    assert "guard isExplicitSettingsOpenPending() else { return }" in settings_open_source
-    assert "guard NSApp.windows.contains(where:" not in settings_open_source
+    assert "if let settingsWindow" in settings_open_source
+    assert "settingsWindow = window" in settings_open_source
+    assert "window.makeKeyAndOrderFront(nil)" in settings_open_source
+    assert "window.orderFrontRegardless()" in settings_open_source
+    assert "popover.isShown" not in settings_open_source
+    settings_make_source = app.split("private func makeSettingsWindow() -> NSWindow", 1)[1].split("static func hideSettingsWindow", 1)[0]
+    assert "NSHostingController(rootView: RemoteSettingsView(viewModel: RemoteSharedModel.viewModel))" in settings_make_source
+    assert "let window = NSWindow(" in settings_make_source
+    assert "window.contentViewController = controller" in settings_make_source
+    assert "window.isReleasedWhenClosed = false" in settings_make_source
+    assert "window.center()" in settings_make_source
     assert "static let settingsWindowIdentifier" in app
     assert "static let settingsWindowTitle" in app
-    assert "static func prepareSettingsWindow(_ window: NSWindow)" in app
     assert "static func hideSettingsWindow(_ window: NSWindow?)" in app
-    assert "restoreAccessoryIfNoVisibleUserWindows()" in app
-    assert "private static func focusExistingSettingsWindow() -> Bool" in app
-    assert "private static func settingsWindows() -> [NSWindow]" in app
-    assert "private static func isVisibleUserWindow(_ window: NSWindow) -> Bool" in app
-    assert "private static func beginExplicitSettingsOpen()" in app
-    assert "private static func isExplicitSettingsOpenPending() -> Bool" in app
-    assert "private static func clearExplicitSettingsOpen()" in app
+    assert "private static func settingsWindows() -> [NSWindow]" not in app
+    assert "explicitSettingsOpen" not in app
     assert "installPopoverKeyDownMonitor()" in app
     assert "removePopoverKeyDownMonitor()" in app
     assert "event.keyCode == 43 && event.modifierFlags.contains(.command)" in app
-    assert "openSettingsWindow(source: .popoverShortcut)" in app
+    assert "Self.showSettingsWindow()" in app
     assert "NSPopover" in app
     assert "RemoteMenuBarPopoverPanel" not in app
     assert "MenuBarPopoverView" in app
@@ -367,7 +368,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
-    scene_source = app.split("var body: some Scene", 1)[1].split("Settings {", 1)[0]
+    scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
     assert "RemoteDashboardView(viewModel" not in scene_source
     assert "SidebarCommands()" not in scene_source
     assert "homeworkHelperRemoteToggleSidebar" not in scene_source
@@ -375,19 +376,16 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "창 열기" not in app
     assert "창 숨기기" not in app
     assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
-    assert ".keyboardShortcut(\",\", modifiers: .command)" not in app
-    assert 'Button("설정…")' not in app
+    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
+    assert 'Button("설정…")' in app
     assert "CommandGroup(replacing: .appSettings)" in app
-    assert "RemoteAppDelegate.openSettingsWindow()" not in app
-    assert "RemoteAppDelegate.openSettingsWindow(source: .popoverButton)" in app
+    assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
-    assert "RemoteSettingsOpenBridge" in app
-    assert "@Environment(\\.openSettings)" in app
-    assert "homeworkHelperRemoteOpenSettings" in app
-    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings" in app
-    assert "openSettings()" in app
-    assert 'Selector(("showSettingsWindow:"))' in app
-    assert 'Selector(("showPreferencesWindow:"))' in app
+    assert "RemoteSettingsOpenBridge" not in app
+    assert "@Environment(\\.openSettings)" not in app
+    assert "homeworkHelperRemoteOpenSettings" not in app
+    assert 'Selector(("showSettingsWindow:"))' not in app
+    assert 'Selector(("showPreferencesWindow:"))' not in app
 
     assert "GlassEffectContainer" in app
     assert "RemoteAppKitLiquidGlassBackground" in liquid_glass
@@ -502,7 +500,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
     assert ".labelStyle(.iconOnly)" not in app
 
-    assert "Settings {" in app
+    assert "\n        Settings {" not in app
     assert "RemoteSettingsView" in app
     assert "RemoteSettingsTab" in app
     assert "TabView(selection: $selectedTab)" in app
@@ -544,14 +542,13 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
     assert "RemoteSettingsWindowDelegate" in window_accessor
-    assert "RemoteAppDelegate.prepareSettingsWindow(window)" in window_accessor
     settings_window_accessor_source = window_accessor.split("struct RemoteSettingsWindowAccessor", 1)[1].split("struct RemoteSettingsKeyboardShortcutBridge", 1)[0]
     assert "makeKeyAndOrderFront" not in settings_window_accessor_source
     assert "orderFrontRegardless" not in settings_window_accessor_source
     assert "NSApp.activate" not in settings_window_accessor_source
-    prepare_settings_source = app.split("static func prepareSettingsWindow(_ window: NSWindow)", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "guard isExplicitSettingsOpenPending() else { return }" in prepare_settings_source
-    assert "focusSettingsWindow(prepared)" in prepare_settings_source
+    assert "window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.settingsWindowIdentifier)" in settings_window_accessor_source
+    assert "window.title = RemoteAppDelegate.settingsWindowTitle" in settings_window_accessor_source
+    assert "window.isReleasedWhenClosed = false" in settings_window_accessor_source
     assert "RemoteAppDelegate.hideSettingsWindow(sender)" in window_accessor
     assert "RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow)" in app
     settings_keyboard_source = window_accessor.split("struct RemoteSettingsKeyboardShortcutBridge", 1)[1]
