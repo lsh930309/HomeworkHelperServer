@@ -42,44 +42,57 @@ def database_access_gate(route_name: str = "legacy_database_request"):
 
 
 def _require_valid_sqlite_backup(path: str | Path) -> None:
+    conn = None
     try:
-        with sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True) as conn:
-            result = conn.execute("PRAGMA integrity_check").fetchone()
-            if not result or str(result[0]).lower() != "ok":
-                raise HTTPException(status_code=422, detail="선택한 백업 DB integrity check가 실패했습니다.")
+        conn = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        if not result or str(result[0]).lower() != "ok":
+            raise HTTPException(status_code=422, detail="선택한 백업 DB integrity check가 실패했습니다.")
     except HTTPException:
         raise
     except sqlite3.Error as exc:
         raise HTTPException(status_code=422, detail=f"백업 DB를 안전하게 열 수 없습니다: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _copy_sqlite_database(source: str | Path, target: str | Path) -> None:
-    with sqlite3.connect(f"file:{Path(source)}?mode=ro", uri=True) as src, sqlite3.connect(target) as dst:
+    src = sqlite3.connect(f"file:{Path(source)}?mode=ro", uri=True)
+    dst = sqlite3.connect(target)
+    try:
         src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
 
 
 def _checkpoint_live_database(path: str | Path) -> None:
     if not os.path.exists(path):
         return
+    conn = None
     try:
-        with sqlite3.connect(path, timeout=0.25) as conn:
-            conn.execute("PRAGMA busy_timeout=250")
-            result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            if result is None or len(result) < 3:
-                raise HTTPException(
-                    status_code=500,
-                    detail="현재 DB WAL checkpoint 결과를 확인할 수 없어 복구를 중단했습니다.",
-                )
-            busy, _wal_pages, _checkpointed_pages = result
-            if int(busy) != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail="현재 DB를 읽는 미조정 연결이 남아 있어 복구를 중단했습니다.",
-                )
+        conn = sqlite3.connect(path, timeout=0.25)
+        conn.execute("PRAGMA busy_timeout=250")
+        result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if result is None or len(result) < 3:
+            raise HTTPException(
+                status_code=500,
+                detail="현재 DB WAL checkpoint 결과를 확인할 수 없어 복구를 중단했습니다.",
+            )
+        busy, _wal_pages, _checkpointed_pages = result
+        if int(busy) != 0:
+            raise HTTPException(
+                status_code=500,
+                detail="현재 DB를 읽는 미조정 연결이 남아 있어 복구를 중단했습니다.",
+            )
     except HTTPException:
         raise
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"현재 DB WAL 정리에 실패해 복구를 중단했습니다: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _remove_database_sidecars(path: str | Path) -> None:
@@ -525,4 +538,3 @@ def restore_backup(payload: RestoreRequest) -> Any:
             _cleanup_temporary_database(temporary)
 
     return {"ok": True, "restored_from": source, "previous_snapshot": before_path}
-

@@ -329,7 +329,8 @@ def test_macos_pkg_preinstall_script_stops_running_client(tmp_path):
     preinstall = scripts_dir / "preinstall"
 
     assert preinstall.exists()
-    assert preinstall.stat().st_mode & 0o111
+    if sys.platform != "win32":
+        assert preinstall.stat().st_mode & 0o111
 
     script = preinstall.read_text(encoding="utf-8")
     assert "HomeworkHelperRemote" in script
@@ -439,10 +440,11 @@ def test_macos_packager_codesigns_and_verifies_bundle(monkeypatch):
         "--timestamp=none",
         "--sign",
         "Local Identity",
-        "dist/macos/HomeworkHelperRemote.app",
+        str(Path("dist/macos/HomeworkHelperRemote.app")),
     ]
-    assert ["codesign", "--verify", "--deep", "--strict", "--verbose=2", "dist/macos/HomeworkHelperRemote.app"] in calls
-    assert ["codesign", "--display", "--requirements", "-", "--verbose=4", "dist/macos/HomeworkHelperRemote.app"] in calls
+    app_path = str(Path("dist/macos/HomeworkHelperRemote.app"))
+    assert ["codesign", "--verify", "--deep", "--strict", "--verbose=2", app_path] in calls
+    assert ["codesign", "--display", "--requirements", "-", "--verbose=4", app_path] in calls
 
 
 def test_macos_packager_rejects_adhoc_codesign_identity(monkeypatch):

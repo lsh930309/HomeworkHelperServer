@@ -443,7 +443,9 @@ class DatabaseMaintenanceCoordinator:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
-        with path.open("rb") as committed:
+        # Windows rejects fsync on a read-only descriptor. Reopen the newly
+        # committed sentinel read/write so FlushFileBuffers reaches the file.
+        with path.open("rb+") as committed:
             os.fsync(committed.fileno())
         if os.name != "nt":
             directory_fd = os.open(path.parent, os.O_RDONLY)
