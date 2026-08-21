@@ -5,6 +5,7 @@ import hashlib
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -21,14 +22,14 @@ from src.data.database_coordination import (
 
 
 def _write_marker_database(path, marker: str) -> None:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
         connection.execute("INSERT INTO marker (value) VALUES (?)", (marker,))
         connection.commit()
 
 
 def _read_marker_database(path) -> str:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         return str(connection.execute("SELECT value FROM marker").fetchone()[0])
 
 
@@ -334,7 +335,7 @@ def test_restore_prevalidation_and_successful_atomic_replace(monkeypatch, tmp_pa
 
     response = client.post("/api/beholder/backups/restore", json={"slot": 1})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["ok"] is True
     assert _read_marker_database(current_db) == "new"
     assert coordinator.snapshot().mode == "normal"
@@ -368,7 +369,7 @@ def test_backup_summary_read_drains_before_concurrent_restore_replace(
     def blocking_live_summary(path_to_summarize):
         if Path(path_to_summarize) != Path(current_db):
             return original_summary(path_to_summarize)
-        with sqlite3.connect(f"file:{current_db}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{current_db}?mode=ro", uri=True)) as connection:
             assert connection.execute("SELECT value FROM marker").fetchone()[0] == "old"
             summary_open.set()
             assert release_summary.wait(timeout=2)
