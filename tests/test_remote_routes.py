@@ -1459,7 +1459,19 @@ def test_removed_remote_smartthings_probe_api_is_not_exposed():
     assert not any(event["command"] == "power.smartthings.devices" for event in auditor.events)
 
 
-def test_remote_logging_config_and_purge_revoked_devices():
+def test_remote_logging_config_and_purge_revoked_devices(monkeypatch, tmp_path):
+    from src.core import remote_debug_log, remote_local_store
+
+    isolated_store = remote_local_store.RemoteLocalStore(
+        root=tmp_path / "remote",
+        legacy_root=tmp_path,
+    )
+    monkeypatch.setattr(remote_local_store, "_DEFAULT_STORE", isolated_store)
+    monkeypatch.setattr(
+        remote_debug_log,
+        "CONFIG_PATH",
+        isolated_store.path("remote_debug_logging.json"),
+    )
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
     start = client.post("/remote/pair/start")

@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from src.core import credential_health
 from src.core.provider_health_persist import ProviderHealthPersistTask
@@ -37,11 +37,11 @@ class _ReconcileJob:
 
 
 class _StaminaFetchSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+    finished = Signal(str, int, int, object)
 
 
 class _StaminaPersistSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+    finished = Signal(str, int, int, object)
 
 
 class _StaminaFetchTask(QRunnable):
@@ -427,7 +427,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             )
         )
 
-    @pyqtSlot(str, int, int, object)
+    @Slot(str, int, int, object)
     def _on_fetch_finished(
         self,
         process_id: str,
@@ -552,7 +552,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
         except Exception as exc:
             logger.debug("[HoYoLab] provider health 알림 전송 실패: %s", exc, exc_info=True)
 
-    @pyqtSlot(str, int, int, object)
+    @Slot(str, int, int, object)
     def _on_persist_finished(
         self,
         process_id: str,

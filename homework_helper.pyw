@@ -94,12 +94,13 @@ _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
 from src.gui.main_window import MainWindow
+from src.gui.presentation import PresentationController, resolve_ui_renderer
 from src.core.instance_manager import (
     SingleInstanceApplication,
     run_with_single_instance_check,
 )
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtGui import QFontDatabase, QFont
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtGui import QFontDatabase, QFont
 from src.utils.common import get_bundle_resource_path
 from src.api.client import ApiClient
 from src.api.runtime_config import gui_health_url, resolve_api_port, resolve_local_api_base_url
@@ -2552,6 +2553,10 @@ def start_main_application(instance_manager: SingleInstanceApplication):
 
     # 메인 윈도우 생성 (인스턴스 매니저 전달)
     main_window = MainWindow(api_client_instance, instance_manager=instance_manager)
+    renderer = resolve_ui_renderer(sys.argv[1:])
+    presentation = PresentationController(main_window, renderer)
+    # QObject 부모 관계 외에도 Python 수명주기를 명시적으로 고정합니다.
+    main_window._presentation_controller = presentation
 
     # === Graceful Shutdown: signal 및 atexit 핸들러 등록 ===
     def gui_signal_handler(signum, frame):
@@ -2584,7 +2589,7 @@ def start_main_application(instance_manager: SingleInstanceApplication):
 
     # IPC 서버 시작 (다른 인스턴스로부터의 활성화 요청 처리용)
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
-    main_window.show() # 메인 윈도우 표시
+    presentation.show() # 선택된 Widgets/QML presentation 표시
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
     if not stop_api_server():
         print("API 서버 종료에 실패했습니다.")

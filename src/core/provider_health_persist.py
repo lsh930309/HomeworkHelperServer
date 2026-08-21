@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PyQt6.QtCore import QRunnable
+from PySide6.QtCore import QRunnable
 
 
 logger = logging.getLogger(__name__)

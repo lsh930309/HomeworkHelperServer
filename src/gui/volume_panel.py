@@ -2,12 +2,12 @@
 import logging
 from typing import Optional
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
-from PyQt6.QtGui import QIcon
+from PySide6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
+from PySide6.QtGui import QIcon
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 def _tint_icon_white(icon) -> QIcon:
     """아이콘 픽셀을 흰색으로 틴팅합니다. DPR 보존으로 HiDPI 대응."""
-    from PyQt6.QtGui import QPainter, QColor, QPixmap
-    from PyQt6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QPainter, QColor, QPixmap
+    from PySide6.QtCore import Qt as _Qt
     pixmap = icon.pixmap(16, 16)
     if pixmap.isNull():
         return icon
@@ -212,7 +212,7 @@ class VolumePopoverPanel(QWidget):
         mute_btn.setCheckable(True)
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
-        from PyQt6.QtWidgets import QStyle
+        from PySide6.QtWidgets import QStyle
         icon_on = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolume))
         icon_off = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolumeMuted))
         if not icon_on.isNull():

@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
 from src.core import credential_health
@@ -45,11 +45,11 @@ class _ResourceReconcileJob:
 
 
 class _ResourceFetchSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+    finished = Signal(str, int, int, object)
 
 
 class _ResourcePersistSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+    finished = Signal(str, int, int, object)
 
 
 class _ResourceFetchTask(QRunnable):
@@ -423,7 +423,7 @@ class NikkeResourceReconcileCoordinator(QObject):
             )
         )
 
-    @pyqtSlot(str, int, int, object)
+    @Slot(str, int, int, object)
     def _on_fetch_finished(self, process_id: str, lifecycle_token: int, request_seq: int, payload: object) -> None:
         job = self._jobs.get(process_id)
         if (
@@ -541,7 +541,7 @@ class NikkeResourceReconcileCoordinator(QObject):
         except Exception as exc:
             logger.debug("[Resource] provider health 알림 전송 실패: %s", exc, exc_info=True)
 
-    @pyqtSlot(str, int, int, object)
+    @Slot(str, int, int, object)
     def _on_persist_finished(self, process_id: str, lifecycle_token: int, request_seq: int, payload: object) -> None:
         job = self._jobs.get(process_id)
         if (

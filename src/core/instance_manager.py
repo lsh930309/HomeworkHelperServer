@@ -6,9 +6,9 @@ import os
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-from PyQt6.QtCore import QSharedMemory, QObject, QTimer
-from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from PyQt6.QtWidgets import QMessageBox
+from PySide6.QtCore import QSharedMemory, QObject, QTimer
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QMessageBox
 
 # 애플리케이션 고유 키 (다른 애플리케이션과 충돌하지 않도록 유니크하게 설정하세요)
 APP_UNIQUE_KEY = "HomeworkHelper_App_UUID_v1.0_KHS_UniqueInstanceKey"

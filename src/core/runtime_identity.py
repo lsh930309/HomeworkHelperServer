@@ -29,6 +29,16 @@ def runtime_identity() -> dict[str, Any]:
             return {
                 "release_id": str(payload.get("release_id") or "unknown"),
                 "git_sha": str(payload.get("git_hash") or payload.get("git_sha") or "unknown"),
+                "ui_binding": str(payload.get("ui_binding") or "unknown"),
+                "ui_renderer": str(payload.get("ui_renderer") or "widgets"),
+                "ui_variant": str(payload.get("ui_variant") or "unknown"),
                 "manifest_path": str(path),
             }
-    return {"release_id": "unknown", "git_sha": "unknown", "manifest_path": None}
+    return {
+        "release_id": "unknown",
+        "git_sha": "unknown",
+        "ui_binding": "pyside6",
+        "ui_renderer": "widgets",
+        "ui_variant": "newgui-2nd",
+        "manifest_path": None,
+    }

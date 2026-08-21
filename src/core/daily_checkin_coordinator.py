@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from src.core import daily_checkin
 from src.core import credential_health
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class _DailyCheckInSignals(QObject):
-    finished = pyqtSignal(str, object)
+    finished = Signal(str, object)
 
 
 class _RunDueDailyCheckInsTask(QRunnable):
@@ -84,6 +84,7 @@ class DailyCheckInCoordinator(QObject):
         task = _RunDueDailyCheckInsTask(self._data_manager, trigger, self._signals)
         self._pool.start(task)
 
+    @Slot(str, object)
     def _on_finished(self, trigger: str, payload: object) -> None:
         self._in_flight = False
         if not isinstance(payload, dict):

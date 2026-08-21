@@ -7,8 +7,8 @@ EdgeTriggerWindow 와 SidebarWidget 의 생명주기를 조율합니다.
 import logging
 from typing import Callable, Optional
 
-from PyQt6.QtWidgets import QApplication, QWidget
-from PyQt6.QtGui import QScreen
+from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QScreen
 
 from src.data.data_models import (
     ManagedProcess,

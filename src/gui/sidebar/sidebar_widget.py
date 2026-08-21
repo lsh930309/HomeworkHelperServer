@@ -10,12 +10,12 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve,
-    QRect, QTimer, QRunnable, QThreadPool, pyqtSignal, pyqtSlot,
+    QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
 )
-from PyQt6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
@@ -45,7 +45,7 @@ _THUMB_HIRES_H = _THUMB_H * 2   # 114px
 
 
 class _ThumbnailLoadSignals(QObject):
-    loaded = pyqtSignal(int, str, object)
+    loaded = Signal(int, str, object)
 
 
 class _ThumbnailLoadTask(QRunnable):
@@ -182,7 +182,7 @@ class _VideoThumbnailLoadTask(QRunnable):
     @staticmethod
     def _make_placeholder(w: int, h: int) -> QImage:
         """썸네일 추출 실패 시 회색 플레이 아이콘 플레이스홀더."""
-        from PyQt6.QtGui import QPainter, QPainterPath
+        from PySide6.QtGui import QPainter, QPainterPath
         img = QImage(w, h, QImage.Format.Format_ARGB32)
         img.fill(QColor(40, 40, 50, 255))
         painter = QPainter(img)
@@ -274,8 +274,8 @@ def _tint_icon_white(icon) -> "QIcon":
     devicePixelRatio 를 원본에서 그대로 복사해야 HiDPI 환경에서
     논리 픽셀 크기가 보존됩니다.
     """
-    from PyQt6.QtGui import QPainter, QColor, QPixmap
-    from PyQt6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QPainter, QColor, QPixmap
+    from PySide6.QtCore import Qt as _Qt
     pixmap = icon.pixmap(16, 16)
     if pixmap.isNull():
         return icon
@@ -287,7 +287,7 @@ def _tint_icon_white(icon) -> "QIcon":
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(result.rect(), QColor("white"))
     painter.end()
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     return QIcon(result)
 
 
@@ -835,7 +835,7 @@ class SidebarWidget(QWidget):
 
     def _load_icon_async(self, process: ManagedProcess, icon_label: QLabel) -> None:
         """게임 아이콘을 백그라운드 스레드에서 추출해 icon_label 에 반영합니다."""
-        from PyQt6.QtCore import QThread, pyqtSignal as Signal
+        from PySide6.QtCore import QThread, Signal as Signal
 
         class _IconLoader(QThread):
             icon_loaded = Signal(object)
@@ -930,7 +930,7 @@ class SidebarWidget(QWidget):
         mute_btn.setCheckable(True)
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
-        from PyQt6.QtWidgets import QStyle
+        from PySide6.QtWidgets import QStyle
         style = QApplication.style()
         if style:
             icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
@@ -1096,7 +1096,7 @@ class SidebarWidget(QWidget):
             self._auto_hide_timer.start(self._auto_hide_ms)
 
     def _poll_cursor(self) -> None:
-        from PyQt6.QtGui import QCursor
+        from PySide6.QtGui import QCursor
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
 
@@ -1358,7 +1358,7 @@ class SidebarWidget(QWidget):
         # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
         self._capture_now_btn.setEnabled(True)
 
-    @pyqtSlot()
+    @Slot()
     def _refresh_screenshot_thumbnails(self) -> None:
         """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
         self._thumb_request_id += 1
@@ -1444,8 +1444,8 @@ class SidebarWidget(QWidget):
             os.startfile(path_str)
 
         def _show_context_menu() -> None:
-            from PyQt6.QtWidgets import QMenu, QMessageBox
-            from PyQt6.QtGui import QCursor
+            from PySide6.QtWidgets import QMenu, QMessageBox
+            from PySide6.QtGui import QCursor
             menu = QMenu()
             menu.setStyleSheet("""
                 QMenu {
@@ -1504,7 +1504,7 @@ class SidebarWidget(QWidget):
         cache: dict,
         refresh: Callable[[], None],
     ) -> None:
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
 
         reply = QMessageBox.question(
             self,
@@ -1527,7 +1527,7 @@ class SidebarWidget(QWidget):
         cache.pop(path, None)
         refresh()
 
-    @pyqtSlot(int, str, object)
+    @Slot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
         if request_id != self._thumb_request_id:
             return
@@ -1568,13 +1568,13 @@ class SidebarWidget(QWidget):
 
     def on_screenshot_captured(self, path: str) -> None:
         """외부(MainWindow)에서 캡처 완료 시 호출됩니다. 워커 스레드에서 호출 가능."""
-        from PyQt6.QtCore import QMetaObject, Qt
+        from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(
             self, "_refresh_screenshot_thumbnails",
             Qt.ConnectionType.QueuedConnection,
         )
 
-    @pyqtSlot()
+    @Slot()
     def _refresh_recording_thumbnails(self) -> None:
         """녹화 썸네일 그리드를 최신 MP4 파일로 갱신합니다."""
         self._rec_thumb_request_id += 1
@@ -1650,8 +1650,8 @@ class SidebarWidget(QWidget):
             os.startfile(path_str)
 
         def _show_context_menu() -> None:
-            from PyQt6.QtWidgets import QMenu
-            from PyQt6.QtGui import QCursor
+            from PySide6.QtWidgets import QMenu
+            from PySide6.QtGui import QCursor
 
             menu = QMenu()
             menu.setStyleSheet("""
@@ -1696,7 +1696,7 @@ class SidebarWidget(QWidget):
         )
         return cell
 
-    @pyqtSlot(int, str, object)
+    @Slot(int, str, object)
     def _apply_rec_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
         if request_id != self._rec_thumb_request_id:
             return

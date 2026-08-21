@@ -12,16 +12,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# PyQt6 임포트
-from PyQt6.QtWidgets import (
+# PySide6 임포트
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
     QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
-from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
+from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
 
 # --- 로컬 모듈 임포트 ---
 from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog, RemoteSettingsDialog
@@ -54,6 +54,7 @@ from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
+from src.gui.widgets_style import apply_modern_widgets_style
 
 
 class IconDownloader(QThread):
@@ -61,7 +62,7 @@ class IconDownloader(QThread):
     별도 스레드에서 URL로부터 아이콘을 다운로드하는 클래스.
     다운로드가 완료되면 icon_ready 시그널을 통해 QIcon 객체를 전달합니다.
     """
-    icon_ready = pyqtSignal(QIcon)
+    icon_ready = Signal(QIcon)
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
@@ -86,9 +87,9 @@ class IconDownloader(QThread):
 
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
-    request_table_refresh_signal = pyqtSignal() # 테이블 새로고침 요청 시그널
-    _recording_state_sig = pyqtSignal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
-    _gamepad_countdown_sig = pyqtSignal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
+    request_table_refresh_signal = Signal() # 테이블 새로고침 요청 시그널
+    _recording_state_sig = Signal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
+    _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
 
     # UI 색상 정의
     COLOR_INCOMPLETE = QColor("red")      # 미완료 상태 색상
@@ -119,6 +120,8 @@ class MainWindow(QMainWindow):
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
         MainWindow.INSTANCE = self
+        self._presentation_window = self
+        self._host_ui_facade = None
         self.data_manager = data_manager
         self._instance_manager = instance_manager # 종료 시 정리를 위해 인스턴스 매니저 참조 저장
         self.launcher = Launcher(run_as_admin=self.data_manager.global_settings.run_as_admin)
@@ -381,6 +384,8 @@ class MainWindow(QMainWindow):
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
         self._record_status_event("준비 완료.")
+
+        apply_modern_widgets_style(self, dark=self._is_effective_dark_theme())
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
 
@@ -807,9 +812,19 @@ class MainWindow(QMainWindow):
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
+        if self._presentation_window is not self and self._host_ui_facade is not None:
+            self._host_ui_facade.activateAndShow()
+            return
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
+
+    def set_presentation_window(self, window, facade=None) -> None:
+        self._presentation_window = window or self
+        self._host_ui_facade = facade
+
+    def presentation_window(self):
+        return self._presentation_window
 
     def open_webpage(self, url: str):
         """주어진 URL을 기본 웹 브라우저에서 엽니다."""
@@ -998,8 +1013,12 @@ class MainWindow(QMainWindow):
         self._always_on_top_cb.setChecked(self.data_manager.global_settings.always_on_top)
         self._always_on_top_cb.toggled.connect(self._on_always_on_top_toggled)
 
-        corner_container = QWidget()
-        corner_layout = QHBoxLayout(corner_container)
+        # PySide6에서는 setCornerWidget()에 넘긴 지역 wrapper가 사라지면
+        # 자식 위젯 wrapper도 무효화될 수 있으므로 명시적으로 보유합니다.
+        self._menu_corner_container = QWidget()
+        self._menu_corner_layout = QHBoxLayout(self._menu_corner_container)
+        corner_container = self._menu_corner_container
+        corner_layout = self._menu_corner_layout
         corner_layout.setContentsMargins(0, 0, 4, 0)
         corner_layout.setSpacing(6)
         corner_layout.addWidget(self._always_on_top_cb)
@@ -1733,7 +1752,7 @@ class MainWindow(QMainWindow):
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
 
         p = self.data_manager.get_process_by_id(pid)
         if not p: return
@@ -2706,7 +2725,7 @@ class MainWindow(QMainWindow):
 
     def _on_recording_state_changed(self, state: str) -> None:
         """RecordingManager 상태 변경 콜백 — 백그라운드 스레드에서 호출될 수 있음.
-        pyqtSignal을 통해 메인 스레드로 안전하게 릴레이."""
+        Signal을 통해 메인 스레드로 안전하게 릴레이."""
         self._recording_state_sig.emit(state)
 
     def _dispatch_recording_state_to_sidebar(self, state: str) -> None:
@@ -2737,7 +2756,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, '_recording_manager'):
             return
         from src.gui.countdown_overlay import CountdownOverlay
-        from PyQt6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         screen = QApplication.primaryScreen()
         self._countdown_overlay = CountdownOverlay(
             on_complete=self._recording_manager.start_recording,
@@ -3251,7 +3270,7 @@ class MainWindow(QMainWindow):
             True: 사용자가 재시작에 동의
             False: 사용자가 재시작 거부
         """
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
 
         # 런처명을 사용자 친화적으로 변환
         friendly_name = launcher_name.replace('.exe', '').replace('Launcher', ' Launcher')

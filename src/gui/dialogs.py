@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QTextEdit, QGridLayout, QTabWidget,
     QAbstractItemView, QMenu,
 )
-from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
+from PySide6.QtCore import Qt, QTime, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
 
 # Local imports
 from src.data.data_models import ManagedProcess, GlobalSettings
@@ -30,8 +30,8 @@ from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 class _RemoteSettingsWorker(QThread):
     """Run a remote-settings HTTP/probe task without blocking dialog creation."""
 
-    succeeded = pyqtSignal(str, object)
-    failed = pyqtSignal(str, object)
+    succeeded = Signal(str, object)
+    failed = Signal(str, object)
 
     def __init__(self, task_name: str, task, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -794,7 +794,7 @@ class ProcessDialog(QDialog):
 
     def _on_save_as_preset_clicked(self):
         """현재 설정을 신규 프리셋으로 바로 저장 (간단한 입력 다이얼로그)"""
-        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
         from src.utils.game_preset_manager import GamePresetManager
         import re
         import os

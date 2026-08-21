@@ -4,9 +4,9 @@ from types import MethodType, SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt
-from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import QApplication, QLabel
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel
 
 from src.data.data_models import (
     GlobalSettings,

@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QRect, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QScreen
-from PyQt6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QScreen
+from PySide6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
 
