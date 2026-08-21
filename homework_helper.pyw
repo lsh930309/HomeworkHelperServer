@@ -13,6 +13,8 @@ import tempfile
 import glob
 import shutil
 import threading
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
 from src.utils.app_paths import (
@@ -63,13 +65,39 @@ os.environ["QT_FONT_DPI"] = "96"
 print(f"[DPI] OS DPI 무시, 사용자 배율 적용: {_user_scale * 100:.0f}%")
 # =============================================================================
 
+API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+RUN_DUE_TOTAL_DEADLINE_SECONDS = 60.0
+SINGLE_DAILY_CHECKIN_TOTAL_DEADLINE_SECONDS = 30.0
+RUN_DUE_MIN_PERSISTENCE_RESERVE_SECONDS = 5.0
+RUN_DUE_MAX_PERSISTENCE_RESERVE_SECONDS = 10.0
+RUN_DUE_PERSISTENCE_RESERVE_PER_TARGET_SECONDS = 0.5
+
+# Fault recovery is deliberately method-and-path exact.  The packaged incident
+# collector uses the ping/health probes below plus local filesystem metadata;
+# no wildcard HTTP diagnostics or backup subpaths need database access.
+_FAULTED_ROUTE_ALLOWLIST = frozenset({
+    ("GET", "/api/gui/ping"),
+    ("GET", "/api/gui/health"),
+    ("GET", "/api/beholder/backups"),
+    ("POST", "/api/beholder/backups/restore-preview"),
+    ("POST", "/api/beholder/backups/restore"),
+})
+
+
+def _faulted_route_allowed(method: str, path: str) -> bool:
+    return (str(method).upper(), str(path)) in _FAULTED_ROUTE_ALLOWLIST
+
 api_server_process = None
+api_server_shutdown_event = None
 _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로 설정
 
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
 from src.gui.main_window import MainWindow
-from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
+from src.core.instance_manager import (
+    SingleInstanceApplication,
+    run_with_single_instance_check,
+)
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QFontDatabase, QFont
 from src.utils.common import get_bundle_resource_path
@@ -287,7 +315,7 @@ def _is_existing_api_server_reusable() -> bool:
     if not _process_matches_create_time(parent_pid, metadata.get("parent_create_time")):
         print(
             f"기존 API 서버 parent_pid {parent_pid}가 사라졌거나 재사용된 PID입니다. "
-            "orphan 서버를 재사용하지 않고 재시작합니다."
+            "orphan 서버를 자동 종료·재시작하지 않습니다."
         )
         return False
     return True
@@ -410,14 +438,25 @@ def _terminate_process_id(
         return False
 
 
-def _terminate_existing_api_server(timeout: float = 5.0) -> None:
-    """Stop stale API server processes before starting a fresh server."""
+def _terminate_existing_api_server(timeout: float = 5.0) -> bool:
+    """Stop only processes that can be identified as this app's API server."""
     global api_server_process
 
     known_pids: set[int] = set()
     pid_file_pid = _read_server_pid_file()
     if pid_file_pid:
         known_pids.add(pid_file_pid)
+    metadata = _read_server_metadata_file()
+    if metadata:
+        try:
+            metadata_pid = int(metadata.get("pid"))
+        except (TypeError, ValueError):
+            metadata_pid = None
+        if metadata_pid and _process_matches_create_time(
+            metadata_pid,
+            metadata.get("process_create_time"),
+        ):
+            known_pids.add(metadata_pid)
     api_listener_pids = _find_api_listener_pids(resolve_api_port())
     known_pids.update(api_listener_pids)
 
@@ -432,19 +471,28 @@ def _terminate_existing_api_server(timeout: float = 5.0) -> None:
         if api_server_process.pid and not api_server_process.is_alive():
             known_pids.discard(api_server_process.pid)
 
+    all_stopped = True
     for process_id in sorted(known_pids):
-        _terminate_process_id(
+        stopped = _terminate_process_id(
             process_id,
             timeout=timeout,
             api_listener_pids=api_listener_pids,
         )
+        all_stopped = stopped and all_stopped
 
-    try:
-        os.remove(_server_pid_file_path())
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        print(f"stale PID 파일 삭제 실패: {exc}")
+    if _find_api_listener_pids(resolve_api_port()):
+        all_stopped = False
+
+    if all_stopped:
+        for stale_path in (_server_pid_file_path(), _server_metadata_file_path()):
+            try:
+                os.remove(stale_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"API 서버 메타데이터 정리 실패: {exc}")
+                all_stopped = False
+    return all_stopped
 
 
 def _multiprocessing_parent_pid() -> int | None:
@@ -472,6 +520,14 @@ def _is_loopback_api_host(host: str | None) -> bool:
 
 def _desired_child_api_bind_host() -> tuple[str | None, str]:
     """Return the bind host that the GUI parent should pass to the API child."""
+    try:
+        from src.api.beholder_routes import database_coordinator
+
+        if database_coordinator.snapshot().mode == "faulted":
+            print("DB fault 상태에서는 GUI 부모가 DB 설정을 읽지 않고 localhost 바인딩을 강제합니다.")
+            return "127.0.0.1", "database_faulted"
+    except Exception as exc:
+        print(f"DB fault 상태 확인 실패: {exc}")
     explicit_host = os.environ.get("HH_API_HOST")
     remote_server_mode_enabled = False
     try:
@@ -500,23 +556,52 @@ def _desired_child_api_bind_host() -> tuple[str | None, str]:
 
 def start_api_server() -> bool:
     """FastAPI 서버를 독립 프로세스로 실행합니다 (multiprocessing.Process 방식)."""
-    global api_server_process
+    global api_server_process, api_server_shutdown_event
+    started_process_here = False
     try:
         # 이미 서버가 실행 중인지 확인
-        if is_server_running():
+        server_listening = is_server_running()
+        if server_listening:
             if _is_existing_server_healthy() and _is_existing_api_server_reusable():
                 print("기존 API 서버가 정상 응답 중입니다. 재사용합니다.")
                 return True
+            _terminate_existing_api_server(timeout=API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+            if is_server_running():
+                raise RuntimeError(
+                    "API 포트를 점유한 프로세스를 HomeworkHelper API 서버로 확인할 수 없어 "
+                    "자동 종료하지 않았습니다."
+                )
 
-            print("기존 API 서버가 응답하지 않거나 현재 GUI에서 재사용할 수 없습니다. 종료 후 재시작합니다...")
-            _terminate_existing_api_server(timeout=5.0)
+        metadata = _read_server_metadata_file()
+        if metadata:
+            try:
+                existing_process_id = int(metadata.get("pid"))
+            except (TypeError, ValueError):
+                existing_process_id = None
+            if (
+                existing_process_id
+                and existing_process_id != os.getpid()
+                and _process_matches_create_time(
+                    existing_process_id,
+                    metadata.get("process_create_time"),
+                )
+            ):
+                _terminate_existing_api_server(timeout=API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+                if _process_matches_create_time(
+                    existing_process_id,
+                    metadata.get("process_create_time"),
+                ):
+                    raise RuntimeError(
+                        f"기존 HomeworkHelper API 프로세스 PID {existing_process_id}를 "
+                        "종료하지 못했습니다."
+                    )
 
         print("API 서버를 독립 프로세스로 시작합니다...")
 
-        # multiprocessing.Process를 사용하여 서버 프로세스 생성
-        # daemon=True: 부모 프로세스(GUI) 종료 시 서버도 자동 종료
-        #              SQLite WAL 모드가 DB 무결성 보장
+        # 부모가 소유한 Event를 통해 uvicorn에 graceful shutdown을 요청한다.
+        # daemon 프로세스의 암묵적 강제 종료에 의존하지 않는다.
         import multiprocessing
+        api_server_shutdown_event = multiprocessing.Event()
         child_bind_host, child_bind_source = _desired_child_api_bind_host()
         env_had_api_host = "HH_API_HOST" in os.environ
         previous_api_host = os.environ.get("HH_API_HOST")
@@ -526,9 +611,11 @@ def start_api_server() -> bool:
         try:
             api_server_process = multiprocessing.Process(
                 target=run_server_main,
-                daemon=True
+                args=(api_server_shutdown_event,),
+                daemon=False,
             )
             api_server_process.start()
+            started_process_here = True
         finally:
             if child_bind_host:
                 if env_had_api_host:
@@ -538,9 +625,15 @@ def start_api_server() -> bool:
         print(f"API 서버가 독립 프로세스 PID {api_server_process.pid}로 시작되었습니다.")
 
         # 서버가 준비될 때까지 대기
-        return wait_for_server_ready()
+        if wait_for_server_ready():
+            return True
+        print("API 서버 readiness 확인에 실패해 정상 종료를 요청합니다.")
+        stop_api_server()
+        return False
 
     except Exception as e:
+        if started_process_here:
+            stop_api_server()
         print(f"API 서버 시작 실패: {e}")
         message = f"API 서버 시작에 실패했습니다.\n\n{e}"
         try:
@@ -556,7 +649,7 @@ def start_api_server() -> bool:
             print(message, file=sys.stderr)
         return False
 
-def run_server_main():
+def run_server_main(shutdown_event=None):
     """uvicorn 서버만 실행하는 함수.
 
     GUI에서 multiprocessing으로 호출하거나, SSH testbench가 ``--testbench-server``
@@ -567,6 +660,10 @@ def run_server_main():
     import logging
     from logging.handlers import RotatingFileHandler
     from sqlalchemy import text
+    from src.gui.runtime_logging import RedactingFormatter
+
+    if shutdown_event is None:
+        shutdown_event = threading.Event()
 
     # multiprocessing 환경에서 stdout/stderr가 None일 수 있으므로 재설정
     if sys.stdout is None:
@@ -589,7 +686,7 @@ def run_server_main():
     logger.setLevel(logging.INFO)
 
     # 로그 포맷 설정
-    formatter = logging.Formatter(
+    formatter = RedactingFormatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
@@ -643,6 +740,7 @@ def run_server_main():
             json.dump(
                 {
                     "pid": os.getpid(),
+                    "process_create_time": _process_create_time(os.getpid()),
                     "parent_pid": parent_process_id,
                     "parent_create_time": _process_create_time(parent_process_id),
                     "started_at": time.time(),
@@ -665,48 +763,72 @@ def run_server_main():
         logger.error(f"PID/메타데이터 파일 생성 실패: {e}")
 
     # --- main.py의 내용을 여기로 통합 ---
-    from fastapi import FastAPI, Depends, HTTPException, Header
+    from fastapi import FastAPI, Depends, HTTPException, Header, Request
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
     from src.data import crud, models, schemas, beholder
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
+    from src.data.database_coordination import (
+        DatabaseAccessUnavailable,
+        database_access_error_response,
+    )
+    from src.api.beholder_routes import database_coordinator
+    from src.core.runtime_identity import runtime_identity
+    from src.core.daily_checkin_singleflight import (
+        DailyCheckInAlreadyInFlight,
+        bounded_provider_timeout_seconds,
+        daily_checkin_singleflight,
+        monotonic_deadline,
+        remaining_deadline_seconds,
+    )
 
-    # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
-    backup_database()
+    runtime_identity_payload = runtime_identity()
+    database_faulted_at_startup = database_coordinator.snapshot().mode == "faulted"
+    if database_faulted_at_startup:
+        logger.error(
+            "DB fault sentinel이 유지되어 startup migration/checkpoint/probe를 건너뜁니다. "
+            "ping, health, backup restore 및 진단 경로만 사용하십시오."
+        )
+    else:
+        # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
+        backup_database()
 
-    # 자동 마이그레이션 실행 (새 컬럼 추가)
-    auto_migrate_database()
+        # 자동 마이그레이션 실행 (새 컬럼 추가)
+        auto_migrate_database()
 
-    # 테이블 생성 (새 DB인 경우)
-    models.Base.metadata.create_all(bind=engine)
+        # 테이블 생성 (새 DB인 경우)
+        models.Base.metadata.create_all(bind=engine)
 
-    # 데이터베이스 무결성 확인 및 복구
-    logger.info("데이터베이스 무결성 확인 중...")
-    try:
-        with engine.connect() as conn:
-            # WAL 복구 체크포인트
-            conn.execute(text("PRAGMA wal_checkpoint(RECOVER)"))
-            conn.commit()
+        # 데이터베이스 무결성 확인 및 복구
+        logger.info("데이터베이스 무결성 확인 중...")
+        try:
+            with engine.connect() as conn:
+                # WAL 복구 체크포인트
+                conn.execute(text("PRAGMA wal_checkpoint(RECOVER)"))
+                conn.commit()
 
-            # 무결성 검사
-            result = conn.execute(text("PRAGMA integrity_check"))
-            integrity_result = result.scalar()
-            if integrity_result != "ok":
-                logger.warning(f"데이터베이스 무결성 검사 실패: {integrity_result}")
-            else:
-                logger.info("데이터베이스 무결성 확인 완료.")
-    except Exception as e:
-        logger.error(f"데이터베이스 복구 중 오류: {e}", exc_info=True)
+                # 무결성 검사
+                result = conn.execute(text("PRAGMA integrity_check"))
+                integrity_result = result.scalar()
+                if integrity_result != "ok":
+                    logger.warning(f"데이터베이스 무결성 검사 실패: {integrity_result}")
+                else:
+                    logger.info("데이터베이스 무결성 확인 완료.")
+        except Exception as e:
+            logger.error(f"데이터베이스 복구 중 오류: {e}", exc_info=True)
 
-    # 데이터베이스 테이블 생성
-    # 기존 데이터 호환을 위해 필요한 컬럼이 없으면 추가
-    try:
-        ensure_process_table_schema()
-    except Exception as e:
-        logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
+        # 데이터베이스 테이블 생성
+        # 기존 데이터 호환을 위해 필요한 컬럼이 없으면 추가
+        try:
+            ensure_process_table_schema()
+        except Exception as e:
+            logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
 
     def resolve_api_bind_host() -> str:
+        if database_coordinator.snapshot().mode == "faulted":
+            logger.warning("DB fault 상태에서는 명시적 HH_API_HOST를 무시하고 localhost로 제한합니다.")
+            return "127.0.0.1"
         explicit_host = os.environ.get("HH_API_HOST")
         if explicit_host:
             logger.info(f"API 바인딩 설정 확인: HH_API_HOST={explicit_host}")
@@ -727,14 +849,17 @@ def run_server_main():
     # 주기적 WAL checkpoint 백그라운드 스레드
     def periodic_checkpoint(interval=60):
         """주기적으로 WAL checkpoint 수행"""
-        while True:
+        while not shutdown_event.wait(interval):
             try:
-                time.sleep(interval)
-                from src.api.beholder_routes import database_access_gate
-                with database_access_gate():
+                lease = database_coordinator.try_acquire_request("periodic_wal_checkpoint")
+                if lease is None:
+                    logger.info("DB maintenance 중이므로 WAL checkpoint를 다음 주기로 연기합니다.")
+                    continue
+                with lease:
                     with engine.connect() as conn:
                         conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
                         conn.commit()
+                    database_coordinator.record_checkpoint()
                 logger.info("WAL checkpoint 완료")
             except Exception as e:
                 logger.error(f"Checkpoint 오류: {e}", exc_info=True)
@@ -756,14 +881,15 @@ def run_server_main():
 
         logger.info(f"서버 종료 절차 시작: {reason} (Signal: {signum})")
 
-        try:
-            logger.info("최종 WAL checkpoint 수행 중...")
-            with engine.connect() as conn:
-                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
-                conn.commit()
-            logger.info("WAL checkpoint 완료")
-        except Exception as e:
-            logger.error(f"최종 WAL checkpoint 실패: {e}", exc_info=True)
+        if database_coordinator.snapshot().mode != "faulted":
+            try:
+                logger.info("최종 WAL checkpoint 수행 중...")
+                with engine.connect() as conn:
+                    conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+                    conn.commit()
+                logger.info("WAL checkpoint 완료")
+            except Exception as e:
+                logger.error(f"최종 WAL checkpoint 실패: {e}", exc_info=True)
 
         try:
             engine.dispose()
@@ -791,9 +917,9 @@ def run_server_main():
         logger.info("=" * 60)
 
     def shutdown_handler(signum, frame):
-        """종료 신호 처리 - 안전하게 종료"""
-        shutdown_api_resources("signal", signum=signum)
-        sys.exit(0)
+        """종료 신호를 uvicorn의 graceful shutdown 요청으로 변환한다."""
+        logger.info(f"서버 종료 신호 수신 (Signal: {signum})")
+        shutdown_event.set()
 
     def start_parent_watchdog(parent_pid: int | None) -> None:
         if not parent_pid:
@@ -810,19 +936,18 @@ def run_server_main():
         def watch_parent() -> None:
             try:
                 import psutil
-                while True:
-                    time.sleep(5)
+                while not shutdown_event.wait(5.0):
                     try:
                         parent = psutil.Process(parent_pid)
                         if parent_create_time is not None and abs(parent.create_time() - parent_create_time) > 0.001:
                             raise psutil.NoSuchProcess(parent_pid)
                     except psutil.NoSuchProcess:
                         logger.warning(
-                            "부모 GUI PID %s가 사라졌습니다. stale API 서버 방지를 위해 종료합니다.",
+                            "부모 GUI PID %s가 사라졌습니다. API 정상 종료를 요청합니다.",
                             parent_pid,
                         )
-                        shutdown_api_resources(f"parent_pid_{parent_pid}_gone")
-                        os._exit(0)
+                        shutdown_event.set()
+                        return
                     except Exception as e:
                         logger.warning(f"부모 GUI PID {parent_pid} 확인 실패: {e}")
             except Exception as e:
@@ -856,6 +981,8 @@ def run_server_main():
         metadata["api_host"] = api_host
         metadata["api_port"] = api_port
         metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}
+        metadata["release_id"] = runtime_identity_payload["release_id"]
+        metadata["git_sha"] = runtime_identity_payload["git_sha"]
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -873,6 +1000,17 @@ def run_server_main():
             path.startswith("/api/dashboard/icons/")
             or path.startswith("/api/dashboard/resource-icons/")
         )
+
+    @app.middleware("http")
+    async def database_fault_allowlist_middleware(request, call_next):
+        """Keep a faulted database quarantined behind the recovery allowlist."""
+
+        if (
+            database_coordinator.snapshot().mode == "faulted"
+            and not _faulted_route_allowed(request.method, request.url.path)
+        ):
+            return database_access_error_response(DatabaseAccessUnavailable("faulted"))
+        return await call_next(request)
 
     @app.middleware("http")
     async def remote_exposure_boundary_middleware(request, call_next):
@@ -988,6 +1126,75 @@ def run_server_main():
             raise HTTPException(status_code=400, detail="프로세스와 출석 게임 ID가 일치하지 않습니다.")
         return process, descriptor
 
+    @dataclass(frozen=True)
+    class _DailyCheckInTargetSnapshot:
+        """Provider I/O에 ORM session을 동반하지 않는 immutable target."""
+
+        process_id: str
+        process_name: str
+        user_preset_id: str | None
+        descriptor: Any
+
+    def _daily_checkin_target_snapshot(
+        db: Session,
+        process_id: str,
+        game_id: str | None = None,
+    ) -> _DailyCheckInTargetSnapshot:
+        process, descriptor = _get_daily_checkin_process_or_error(db, process_id, game_id)
+        return _DailyCheckInTargetSnapshot(
+            process_id=str(process.id),
+            process_name=str(process.name),
+            user_preset_id=getattr(process, "user_preset_id", None),
+            descriptor=descriptor,
+        )
+
+    def _configure_database_deadline(
+        db: Session,
+        deadline: float,
+        *,
+        reserve_seconds: float = 0.0,
+        phases_remaining: int = 1,
+    ) -> float:
+        """Bound SQLite lock waits to one share of the remaining request time."""
+
+        remaining = max(
+            remaining_deadline_seconds(deadline) - max(float(reserve_seconds), 0.0),
+            0.0,
+        )
+        phase_budget = remaining / max(int(phases_remaining), 1)
+        busy_timeout_ms = max(0, min(5_000, int(phase_budget * 1000.0)))
+        db.execute(text(f"PRAGMA busy_timeout={busy_timeout_ms}"))
+        return remaining
+
+    @contextmanager
+    def _database_session(
+        route_name: str,
+        *,
+        deadline: float | None = None,
+        reserve_seconds: float = 0.0,
+        phases_remaining: int = 1,
+    ):
+        """Open one short DB phase under an ownerless request lease."""
+
+        lease = database_coordinator.acquire_request(route_name)
+        db = None
+        try:
+            db = SessionLocal()
+            if deadline is not None:
+                _configure_database_deadline(
+                    db,
+                    deadline,
+                    reserve_seconds=reserve_seconds,
+                    phases_remaining=phases_remaining,
+                )
+            yield db
+        finally:
+            try:
+                if db is not None:
+                    db.close()
+            finally:
+                lease.release()
+
     def _daily_checkin_next_run_at(status: str, attempted_at: float, period_end: float) -> float:
         from src.core import daily_checkin
 
@@ -1044,17 +1251,44 @@ def run_server_main():
             logger.warning("provider health 기록 실패(%s 결과는 유지): %s", context, exc, exc_info=True)
             return None
 
-    def _execute_and_record_daily_checkin(db: Session, process, descriptor, trigger: str):
+    def _serialize_daily_checkin_log(log_row) -> dict[str, Any]:
+        if hasattr(schemas.DailyCheckInLogSchema, "model_validate"):
+            return schemas.DailyCheckInLogSchema.model_validate(log_row).model_dump()
+        return {column.name: getattr(log_row, column.name) for column in log_row.__table__.columns}
+
+    def _record_daily_checkin_result(
+        db: Session,
+        target: _DailyCheckInTargetSnapshot,
+        result,
+        trigger: str,
+        *,
+        deadline: float | None = None,
+        persistence_phases_remaining: int = 1,
+    ) -> dict[str, Any]:
         from src.core import daily_checkin
 
-        result = daily_checkin.execute_daily_checkin(descriptor)
+        phases_remaining = max(int(persistence_phases_remaining), 1)
+
+        def prepare_persistence_phase() -> None:
+            nonlocal phases_remaining
+            if deadline is not None:
+                _configure_database_deadline(
+                    db,
+                    deadline,
+                    phases_remaining=phases_remaining,
+                )
+                remaining_deadline_seconds(deadline)
+            phases_remaining = max(phases_remaining - 1, 1)
+
+        descriptor = target.descriptor
         period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        prepare_persistence_phase()
         log_row = crud.create_daily_checkin_log(
             db,
             schemas.DailyCheckInLogCreate(
-                process_id=process.id,
-                process_name=process.name,
-                user_preset_id=getattr(process, "user_preset_id", None),
+                process_id=target.process_id,
+                process_name=target.process_name,
+                user_preset_id=target.user_preset_id,
                 provider=descriptor.provider,
                 game_id=descriptor.game_id,
                 game_name=descriptor.game_name,
@@ -1068,7 +1302,10 @@ def run_server_main():
                 raw_debug_json=daily_checkin.raw_debug_json(result.raw_debug),
             ),
         )
-        setting = crud.get_daily_checkin_setting(db, process.id)
+        if deadline is not None:
+            remaining_deadline_seconds(deadline)
+        prepare_persistence_phase()
+        setting = crud.get_daily_checkin_setting(db, target.process_id)
         if setting is None:
             enabled = None
         elif daily_checkin.setting_matches_descriptor(setting, descriptor):
@@ -1077,9 +1314,9 @@ def run_server_main():
             enabled = False
         crud.upsert_daily_checkin_setting(
             db,
-            process_id=process.id,
-            process_name=process.name,
-            user_preset_id=getattr(process, "user_preset_id", None),
+            process_id=target.process_id,
+            process_name=target.process_name,
+            user_preset_id=target.user_preset_id,
             provider=descriptor.provider,
             game_id=descriptor.game_id,
             game_name=descriptor.game_name,
@@ -1091,6 +1328,9 @@ def run_server_main():
             last_success_at=result.attempted_at if result.status in daily_checkin.SUCCESS_STATUSES else None,
             next_run_at=_daily_checkin_next_run_at(result.status, result.attempted_at, period_end),
         )
+        if deadline is not None:
+            remaining_deadline_seconds(deadline)
+        prepare_persistence_phase()
         _try_record_provider_health(
             db,
             context="출석 실행",
@@ -1098,17 +1338,28 @@ def run_server_main():
             reason=result.status,
             message=result.message,
             source=f"daily_checkin:{trigger or 'manual_run'}",
-            process_id=process.id,
+            process_id=target.process_id,
             game_id=descriptor.game_id,
             detected_at=result.attempted_at,
         )
-        return log_row
+        if deadline is not None:
+            remaining_deadline_seconds(deadline)
+        prepare_persistence_phase()
+        return _serialize_daily_checkin_log(log_row)
 
-    def _probe_daily_checkin_payload(db: Session, process, descriptor) -> dict[str, Any]:
+    def _record_daily_checkin_probe(
+        db: Session,
+        target: _DailyCheckInTargetSnapshot,
+        result,
+        *,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
         from src.core import daily_checkin
 
-        result = daily_checkin.probe_daily_checkin_status(descriptor)
+        descriptor = target.descriptor
         period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, result.attempted_at)
+        if deadline is not None:
+            _configure_database_deadline(db, deadline)
         _try_record_provider_health(
             db,
             context="상태 조회",
@@ -1116,14 +1367,14 @@ def run_server_main():
             reason=result.status,
             message=result.message,
             source="daily_checkin_status_probe",
-            process_id=process.id,
+            process_id=target.process_id,
             game_id=descriptor.game_id,
             detected_at=result.attempted_at,
         )
         return {
-            "process_id": process.id,
-            "process_name": process.name,
-            "user_preset_id": getattr(process, "user_preset_id", None),
+            "process_id": target.process_id,
+            "process_name": target.process_name,
+            "user_preset_id": target.user_preset_id,
             "provider": descriptor.provider,
             "game_id": descriptor.game_id,
             "game_name": descriptor.game_name,
@@ -1146,15 +1397,34 @@ def run_server_main():
             },
         )
 
+    @app.exception_handler(DatabaseAccessUnavailable)
+    async def database_access_unavailable_handler(request, exc):
+        return database_access_error_response(exc)
+
+    @app.exception_handler(DailyCheckInAlreadyInFlight)
+    async def daily_checkin_in_flight_handler(request, exc):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "daily check-in request already in progress",
+                "code": exc.code,
+            },
+        )
+
     # Dependency
-    def get_db():
-        from src.api.beholder_routes import database_access_gate
-        with database_access_gate():
+    def get_db(request: Request):
+        route_name = f"{request.method} {request.url.path}"
+        lease = database_coordinator.acquire_request(route_name)
+        db = None
+        try:
             db = SessionLocal()
+            yield db
+        finally:
             try:
-                yield db
+                if db is not None:
+                    db.close()
             finally:
-                db.close()
+                lease.release()
 
     def _dashboard_static_health() -> dict[str, Any]:
         from src.api.dashboard.static_files import dashboard_static_dir
@@ -1176,6 +1446,8 @@ def run_server_main():
             "port": api_port,
             "testbench_mode": is_testbench_mode(),
             "testbench_session_id": get_testbench_session_id(),
+            "release_id": runtime_identity_payload["release_id"],
+            "git_sha": runtime_identity_payload["git_sha"],
             "server_time": time.time(),
         }
 
@@ -1185,13 +1457,31 @@ def run_server_main():
         db_ready = False
         db_error: str | None = None
         db_started_at = time.perf_counter()
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            db_ready = True
-        except Exception as e:
-            db_error = str(e)
+        access_snapshot = database_coordinator.snapshot()
+        if access_snapshot.mode == "normal":
+            try:
+                with database_coordinator.acquire_request("GET /api/gui/health probe"):
+                    with engine.connect() as conn:
+                        conn.execute(text("SELECT 1"))
+                db_ready = True
+            except DatabaseAccessUnavailable as exc:
+                access_snapshot = database_coordinator.snapshot()
+                db_error = exc.code
+            except Exception as e:
+                db_error = str(e)
+        elif access_snapshot.mode in {"draining", "maintenance"}:
+            db_error = "database_maintenance"
+        else:
+            db_error = "database_faulted"
         db_probe_ms = (time.perf_counter() - db_started_at) * 1000
+        access_snapshot = database_coordinator.snapshot()
+        if access_snapshot.mode != "normal":
+            db_ready = False
+            db_error = (
+                "database_faulted"
+                if access_snapshot.mode == "faulted"
+                else "database_maintenance"
+            )
 
         static_started_at = time.perf_counter()
         dashboard_static = _dashboard_static_health()
@@ -1206,9 +1496,12 @@ def run_server_main():
             "remote_exposed": remote_exposed,
             "testbench_mode": is_testbench_mode(),
             "testbench_session_id": get_testbench_session_id(),
+            "release_id": runtime_identity_payload["release_id"],
+            "git_sha": runtime_identity_payload["git_sha"],
             "db_ready": db_ready,
             "db_error": db_error,
             "db_probe_ms": round(db_probe_ms, 2),
+            "database_access": access_snapshot.to_dict(),
             "dashboard_static_ready": dashboard_static["ready"],
             "dashboard_static_path": dashboard_static["path"],
             "static_probe_ms": round(static_probe_ms, 2),
@@ -1418,62 +1711,228 @@ def run_server_main():
         return crud.get_daily_checkin_logs(db, process_id=process_id, game_id=game_id, limit=limit)
 
     @app.post("/daily-checkin/run", response_model=schemas.DailyCheckInLogSchema)
-    def run_daily_checkin(
-        request: schemas.DailyCheckInRunRequest,
-        db: Session = Depends(get_db),
-    ):
+    def run_daily_checkin(request: schemas.DailyCheckInRunRequest):
         """단일 등록 게임의 출석 POST를 즉시 실행하고 로그에 기록합니다."""
-        process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
-        return _execute_and_record_daily_checkin(db, process, descriptor, request.trigger or "manual_run")
+        from src.core import daily_checkin
+
+        deadline = monotonic_deadline(SINGLE_DAILY_CHECKIN_TOTAL_DEADLINE_SECONDS)
+        with _database_session(
+            "POST /daily-checkin/run snapshot",
+            deadline=deadline,
+            phases_remaining=2,
+        ) as db:
+            target = _daily_checkin_target_snapshot(db, request.process_id, request.game_id)
+        period_start, _ = daily_checkin.checkin_period_timestamps(target.descriptor)
+        with daily_checkin_singleflight.acquire_or_raise(
+            "claim",
+            target.descriptor.provider,
+            target.process_id,
+            target.descriptor.game_id,
+            period_start,
+        ):
+            provider_timeout = bounded_provider_timeout_seconds(
+                deadline,
+                SINGLE_DAILY_CHECKIN_TOTAL_DEADLINE_SECONDS,
+            )
+            result = daily_checkin.execute_daily_checkin(
+                target.descriptor,
+                timeout_seconds=provider_timeout,
+            )
+            with _database_session(
+                "POST /daily-checkin/run persist",
+                deadline=deadline,
+                phases_remaining=4,
+            ) as db:
+                return _record_daily_checkin_result(
+                    db,
+                    target,
+                    result,
+                    request.trigger or "manual_run",
+                    deadline=deadline,
+                    persistence_phases_remaining=4,
+                )
 
     @app.post("/daily-checkin/status", response_model=schemas.DailyCheckInStatusProbeSchema)
-    def probe_daily_checkin_status(
-        request: schemas.DailyCheckInStatusProbeRequest,
-        db: Session = Depends(get_db),
-    ):
+    def probe_daily_checkin_status(request: schemas.DailyCheckInStatusProbeRequest):
         """단일 등록 게임의 출석 상태를 POST 없이 조회합니다."""
-        process, descriptor = _get_daily_checkin_process_or_error(db, request.process_id, request.game_id)
-        return _probe_daily_checkin_payload(db, process, descriptor)
+        from src.core import daily_checkin
+
+        deadline = monotonic_deadline(SINGLE_DAILY_CHECKIN_TOTAL_DEADLINE_SECONDS)
+        with _database_session(
+            "POST /daily-checkin/status snapshot",
+            deadline=deadline,
+            phases_remaining=2,
+        ) as db:
+            target = _daily_checkin_target_snapshot(db, request.process_id, request.game_id)
+        period_start, _ = daily_checkin.checkin_period_timestamps(target.descriptor)
+        with daily_checkin_singleflight.acquire_or_raise(
+            "status",
+            target.descriptor.provider,
+            target.process_id,
+            target.descriptor.game_id,
+            period_start,
+        ):
+            provider_timeout = bounded_provider_timeout_seconds(
+                deadline,
+                SINGLE_DAILY_CHECKIN_TOTAL_DEADLINE_SECONDS,
+            )
+            result = daily_checkin.probe_daily_checkin_status(
+                target.descriptor,
+                timeout_seconds=provider_timeout,
+            )
+            with _database_session(
+                "POST /daily-checkin/status persist",
+                deadline=deadline,
+            ) as db:
+                return _record_daily_checkin_probe(
+                    db,
+                    target,
+                    result,
+                    deadline=deadline,
+                )
 
     @app.post("/daily-checkin/run-due")
-    def run_due_daily_checkins(
-        request: schemas.DailyCheckInRunDueRequest,
-        db: Session = Depends(get_db),
-    ):
+    def run_due_daily_checkins(request: schemas.DailyCheckInRunDueRequest):
         """현재 구간에서 due 상태인 opt-in 게임들의 자동 출석을 실행합니다."""
         from src.core import daily_checkin
 
+        deadline = monotonic_deadline(RUN_DUE_TOTAL_DEADLINE_SECONDS)
         logs = []
         skipped = []
         trigger = request.trigger or "periodic"
         now_ts = time.time()
-        for setting in crud.get_enabled_daily_checkin_settings(db):
-            process = crud.get_process_by_id(db=db, process_id=setting.process_id)
-            if process is None:
-                skipped.append({"process_id": setting.process_id, "reason": "process_missing"})
-                continue
-            descriptor = daily_checkin.descriptor_for_process(process)
-            if descriptor is None or descriptor.game_id != setting.game_id:
-                skipped.append({"process_id": setting.process_id, "reason": "unsupported_or_changed"})
-                continue
+        targets: list[tuple[_DailyCheckInTargetSnapshot, float]] = []
+        with _database_session(
+            "POST /daily-checkin/run-due snapshot",
+            deadline=deadline,
+            reserve_seconds=RUN_DUE_MIN_PERSISTENCE_RESERVE_SECONDS,
+        ) as db:
+            enabled_settings = crud.get_enabled_daily_checkin_settings(db)
+            for index, setting in enumerate(enabled_settings):
+                _configure_database_deadline(
+                    db,
+                    deadline,
+                    reserve_seconds=RUN_DUE_MIN_PERSISTENCE_RESERVE_SECONDS,
+                    phases_remaining=max((len(enabled_settings) - index) * 3, 1),
+                )
+                process = crud.get_process_by_id(db=db, process_id=setting.process_id)
+                if process is None:
+                    skipped.append({"process_id": setting.process_id, "reason": "process_missing"})
+                    continue
+                descriptor = daily_checkin.descriptor_for_process(process)
+                if descriptor is None or descriptor.game_id != setting.game_id:
+                    skipped.append({"process_id": setting.process_id, "reason": "unsupported_or_changed"})
+                    continue
 
-            period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, now_ts)
-            period_logs = crud.get_daily_checkin_logs_for_period(
-                db,
-                process_id=process.id,
-                game_id=descriptor.game_id,
-                period_start=period_start,
-                period_end=period_end,
-            )
-            if not daily_checkin.should_attempt_daily_checkin(period_logs, now_ts=now_ts):
-                skipped.append({"process_id": process.id, "game_id": descriptor.game_id, "reason": "not_due"})
-                continue
+                period_start, period_end = daily_checkin.checkin_period_timestamps(descriptor, now_ts)
+                period_logs = crud.get_daily_checkin_logs_for_period(
+                    db,
+                    process_id=process.id,
+                    game_id=descriptor.game_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                if not daily_checkin.should_attempt_daily_checkin(period_logs, now_ts=now_ts):
+                    skipped.append({"process_id": process.id, "game_id": descriptor.game_id, "reason": "not_due"})
+                    continue
+                targets.append(
+                    (
+                        _DailyCheckInTargetSnapshot(
+                            process_id=str(process.id),
+                            process_name=str(process.name),
+                            user_preset_id=getattr(process, "user_preset_id", None),
+                            descriptor=descriptor,
+                        ),
+                        period_start,
+                    )
+                )
 
-            log_row = _execute_and_record_daily_checkin(db, process, descriptor, trigger)
-            if hasattr(schemas.DailyCheckInLogSchema, "model_validate"):
-                logs.append(schemas.DailyCheckInLogSchema.model_validate(log_row).model_dump())
-            else:  # pydantic v1 fallback
-                logs.append({column.name: getattr(log_row, column.name) for column in log_row.__table__.columns})
+        remaining_after_snapshot = remaining_deadline_seconds(deadline)
+        desired_persistence_reserve = min(
+            RUN_DUE_MAX_PERSISTENCE_RESERVE_SECONDS,
+            max(
+                RUN_DUE_MIN_PERSISTENCE_RESERVE_SECONDS,
+                len(targets) * RUN_DUE_PERSISTENCE_RESERVE_PER_TARGET_SECONDS,
+            ),
+        )
+        persistence_reserve = min(
+            desired_persistence_reserve,
+            remaining_after_snapshot / 2.0,
+        )
+        provider_deadline = deadline - persistence_reserve
+        pending_results = []
+        active_leases = []
+        provider_budget_exhausted = remaining_deadline_seconds(provider_deadline) <= 0.0
+        try:
+            for target, period_start in targets:
+                lease = daily_checkin_singleflight.try_acquire(
+                    "claim",
+                    target.descriptor.provider,
+                    target.process_id,
+                    target.descriptor.game_id,
+                    period_start,
+                )
+                if lease is None:
+                    skipped.append(
+                        {
+                            "process_id": target.process_id,
+                            "game_id": target.descriptor.game_id,
+                            "reason": "in_flight",
+                        }
+                    )
+                    continue
+                active_leases.append(lease)
+                provider_limit = 10.0 if target.descriptor.provider == daily_checkin.PROVIDER_NIKKE_BLABLALINK else 30.0
+                provider_timeout = bounded_provider_timeout_seconds(provider_deadline, provider_limit)
+                if provider_budget_exhausted or provider_timeout <= 0.0:
+                    provider_budget_exhausted = True
+                    result = daily_checkin.DailyCheckInAttemptResult(
+                        provider=target.descriptor.provider,
+                        game_id=target.descriptor.game_id,
+                        game_name=target.descriptor.game_name,
+                        status="network_error",
+                        attempted_at=time.time(),
+                        message="run-due deadline exhausted before provider call",
+                        post_called=False,
+                        raw_debug={"deadline_exhausted": True},
+                    )
+                else:
+                    result = daily_checkin.execute_daily_checkin(
+                        target.descriptor,
+                        timeout_seconds=provider_timeout,
+                    )
+                    if remaining_deadline_seconds(provider_deadline) <= 0.0:
+                        provider_budget_exhausted = True
+                pending_results.append((target, result))
+
+            if pending_results:
+                with _database_session(
+                    "POST /daily-checkin/run-due persist",
+                    deadline=deadline,
+                    phases_remaining=max(len(pending_results) * 4, 1),
+                ) as db:
+                    for index, (target, result) in enumerate(pending_results):
+                        if remaining_deadline_seconds(deadline) <= 0.0:
+                            logger.warning(
+                                "run-due persistence deadline exhausted; SQLite lock waits are disabled "
+                                "while preserving the fixed network_error log contract"
+                            )
+                        logs.append(
+                            _record_daily_checkin_result(
+                                db,
+                                target,
+                                result,
+                                trigger,
+                                deadline=deadline,
+                                persistence_phases_remaining=max(
+                                    (len(pending_results) - index) * 4,
+                                    1,
+                                ),
+                            )
+                        )
+        finally:
+            for lease in reversed(active_leases):
+                lease.release()
         return {"logs": logs, "skipped": skipped, "attempted": len(logs)}
 
     @app.delete("/processes/{process_id}")
@@ -1769,21 +2228,67 @@ def run_server_main():
 
 
     import uvicorn
-    # uvicorn.run에 문자열 대신 app 객체를 직접 전달합니다.
     logger.info(f"API 서버 바인딩: {api_host}:{api_port}")
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=api_host, port=api_port, log_level="warning")
+    )
+
+    def watch_shutdown_request() -> None:
+        shutdown_event.wait()
+        logger.info("API graceful shutdown Event 수신")
+        server.should_exit = True
+
+    shutdown_monitor = threading.Thread(
+        target=watch_shutdown_request,
+        name="api-shutdown-event-monitor",
+        daemon=True,
+    )
+    shutdown_monitor.start()
     try:
-        uvicorn.run(app, host=api_host, port=api_port, log_level="warning")
+        server.run()
     finally:
+        shutdown_event.set()
         shutdown_api_resources("uvicorn_returned")
 
-def stop_api_server():
-    """독립 프로세스로 실행된 API 서버를 종료합니다."""
-    global api_server_process
-    if api_server_process and api_server_process.is_alive():
-        print(f"API 서버(PID: {api_server_process.pid}) 종료 중...")
-        _terminate_existing_api_server(timeout=5.0)
+def stop_api_server(timeout: float = API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS) -> bool:
+    """소유한 API child를 정상 종료하고 필요할 때만 강제 종료합니다."""
+    global api_server_process, api_server_shutdown_event
+
+    process = api_server_process
+    if process is None:
+        return True
+
+    wait_seconds = max(0.0, float(timeout))
+    if process.is_alive() and api_server_shutdown_event is not None:
+        print(f"API 서버(PID: {process.pid}) 정상 종료 요청 (상한 {wait_seconds:.1f}초)...")
+        api_server_shutdown_event.set()
+        process.join(timeout=wait_seconds)
+
+    if process.is_alive():
+        print(f"API 서버(PID: {process.pid}) 종료 요청...")
+        process.terminate()
+        process.join(timeout=wait_seconds)
+
+    if process.is_alive():
+        print(f"API 서버(PID: {process.pid}) 강제 종료...")
+        process.kill()
+        process.join(timeout=wait_seconds)
+
+    stopped = not process.is_alive()
+    if stopped:
         api_server_process = None
+        api_server_shutdown_event = None
+        for stale_path in (_server_pid_file_path(), _server_metadata_file_path()):
+            try:
+                os.remove(stale_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"API 서버 메타데이터 정리 실패: {exc}")
         print("API 서버 종료 완료.")
+    else:
+        print(f"API 서버(PID: {process.pid}) 종료 실패.")
+    return stopped
 
 def ensure_process_table_schema():
     """
@@ -2081,7 +2586,8 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
     main_window.show() # 메인 윈도우 표시
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
-    stop_api_server()       # GUI 종료 후 API 서버 명시 종료
+    if not stop_api_server():
+        print("API 서버 종료에 실패했습니다.")
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
 if __name__ == "__main__":
@@ -2092,6 +2598,17 @@ if __name__ == "__main__":
     if _wants_server_only_mode():
         run_server_main()
         sys.exit(0)
+
+    # Command-only and server-only branches intentionally return before GUI
+    # logging, schema migration, administrator checks, or Qt initialization.
+    try:
+        import logging
+        from src.gui.runtime_logging import configure_gui_logging
+
+        gui_log_path = configure_gui_logging()
+        logging.getLogger(__name__).info("GUI logging initialized: %s", gui_log_path)
+    except Exception as exc:
+        print(f"[GUI] 순환 로그 초기화 실패: {type(exc).__name__}", file=sys.stderr)
 
     # 디버깅: _MEIPASS 경로 확인
     if getattr(sys, 'frozen', False):
@@ -2109,13 +2626,18 @@ if __name__ == "__main__":
     # 앱 업데이트 시 스키마 구조가 변경된 경우 자동으로 마이그레이션합니다.
     # 사용자에게는 보이지 않으며, 실패 시에만 경고를 표시합니다.
     try:
-        from src.migration import SchemaMigrator
-        print("\n=== 스키마 버전 체크 ===")
-        migrator = SchemaMigrator()
-        if not migrator.check_and_migrate():
-            print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
+        from src.api.beholder_routes import database_coordinator
+
+        if database_coordinator.snapshot().mode == "faulted":
+            print("DB fault sentinel이 유지되어 GUI-side schema migration을 건너뜁니다.")
         else:
-            print("=== 스키마 체크 완료 ===\n")
+            from src.migration import SchemaMigrator
+            print("\n=== 스키마 버전 체크 ===")
+            migrator = SchemaMigrator()
+            if not migrator.check_and_migrate():
+                print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
+            else:
+                print("=== 스키마 체크 완료 ===\n")
     except Exception as e:
         print(f"스키마 마이그레이션 체크 중 오류: {e}")
         # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)

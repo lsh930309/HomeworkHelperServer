@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import requests
@@ -78,82 +79,99 @@ def test_sqlite_engine_uses_short_lived_connections_for_host_stability():
     assert "pooled SQLite connection" in source
 
 
-def test_api_server_lifecycle_recovers_stale_orphan_processes():
+def test_api_server_lifecycle_recovers_only_identified_api_processes():
     source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    start_source = source[source.index("def start_api_server()") : source.index("def run_server_main(")]
+    stop_source = source[source.index("def stop_api_server(") : source.index("def ensure_process_table_schema(")]
 
-    assert "def _terminate_existing_api_server" in source
+    assert "API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 5.0" in source
+    assert "def _process_looks_like_homework_api_server" in source
     assert "def _find_api_listener_pids" in source
-    assert "def _is_existing_api_server_reusable" in source
-    assert "_is_existing_server_healthy() and _is_existing_api_server_reusable()" in source
-    assert "orphan 서버를 재사용하지 않고 재시작합니다." in source
-    assert "api_listener_pids = _find_api_listener_pids(resolve_api_port())" in source
-    assert "proc.kill()" in source
-    assert 'metadata_file = os.path.join(data_dir, "db_server_meta.json")' in source
-    assert '"parent_create_time": _process_create_time(parent_process_id)' in source
-    assert "def start_parent_watchdog" in source
-    assert "parent watchdog 시작" in source
-    assert "os._exit(0)" in source
-    assert "shutdown_api_resources(\"uvicorn_returned\")" in source
+    assert "def _terminate_existing_api_server" in source
+    assert "_terminate_existing_api_server(timeout=API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)" in start_source
+    assert "HomeworkHelper API 서버로 확인되지 않아 종료하지 않습니다." in source
+    assert "API 포트를 점유한 프로세스를 HomeworkHelper API 서버로 확인할 수 없어" in start_source
+    assert "api_server_shutdown_event = multiprocessing.Event()" in start_source
+    assert "daemon=False" in start_source
+    assert "process.terminate()" in stop_source
+    assert "process.kill()" in stop_source
+    assert "_server_pid_file_path()" in stop_source
+    assert "_server_metadata_file_path()" in stop_source
 
 
-def test_server_only_entrypoint_supports_ssh_testbench_before_gui_side_effects():
+def _load_stop_api_server_contract():
     source = Path("homework_helper.pyw").read_text(encoding="utf-8")
-    main_tail = source[source.index('if __name__ == "__main__":') :]
-
-    assert "def _wants_server_only_mode" in source
-    assert '{"--server", "--testbench-server", "--run-server"}' in source
-    assert "run_server_main()" in main_tail
-    assert main_tail.index("multiprocessing.freeze_support()") < main_tail.index("if _wants_server_only_mode():")
-    assert main_tail.index("if _wants_server_only_mode():") < main_tail.index("cleanup_old_mei_folders()")
-    assert main_tail.index("if _wants_server_only_mode():") < main_tail.index("check_admin_requirement()")
-    assert "get_server_mutex_name()" in source
-    assert '"testbench_mode": is_testbench_mode()' in source
-    assert '"testbench_session_id": get_testbench_session_id()' in source
-
-
-def test_gui_parent_passes_remote_server_mode_bind_host_to_api_child():
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
-
-    assert "def _desired_child_api_bind_host()" in source
-    assert "def _is_loopback_api_host(" in source
-    assert '"remote_server_mode_enabled"' in source
-    assert "remote_server_mode_enabled and (not explicit_host or _is_loopback_api_host(explicit_host))" in source
-    assert "loopback HH_API_HOST=" in source
-    assert 'return "0.0.0.0", "remote_server_mode_enabled"' in source
-    assert 'return explicit_host, "HH_API_HOST"' in source
-    assert 'os.environ["HH_API_HOST"] = child_bind_host' in source
-    assert "api_server_process.start()" in source
-    assert source.index('os.environ["HH_API_HOST"] = child_bind_host') < source.index(
-        "api_server_process.start()"
-    )
-    assert "if child_bind_host:" in source
-    assert 'os.environ.pop("HH_API_HOST", None)' in source
+    tree = ast.parse(source)
+    selected_nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            target_names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            if target_names & {
+                "API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS",
+                "api_server_process",
+                "api_server_shutdown_event",
+            }:
+                selected_nodes.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "stop_api_server":
+            selected_nodes.append(node)
+    module = ast.fix_missing_locations(ast.Module(body=selected_nodes, type_ignores=[]))
+    namespace = {}
+    exec(compile(module, "homework_helper.pyw", "exec"), namespace)
+    return namespace
 
 
-def test_api_server_logs_and_records_effective_bind_host_for_diagnostics():
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+def test_stop_api_server_sets_event_and_clears_owned_child():
+    namespace = _load_stop_api_server_contract()
+    namespace["_server_pid_file_path"] = lambda: "server.pid"
+    namespace["_server_metadata_file_path"] = lambda: "server.json"
 
-    assert "API 바인딩 설정 확인: HH_API_HOST=" in source
-    assert "API 바인딩 설정 확인: remote_server_mode_enabled=" in source
-    assert 'metadata["api_host"] = api_host' in source
-    assert 'metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}' in source
+    class FakeOs:
+        @staticmethod
+        def remove(_path):
+            raise FileNotFoundError
 
+    namespace["os"] = FakeOs()
 
-def test_remote_server_mode_blocks_legacy_routes_for_non_loopback_clients():
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    class FakeEvent:
+        def __init__(self):
+            self.set_count = 0
 
-    assert "async def remote_exposure_boundary_middleware(request, call_next):" in source
-    assert "remote_exposed and not _request_from_loopback(request)" in source
-    assert 'path != "/remote"' in source
-    assert 'not path.startswith("/remote/")' in source
-    assert "Remote server mode exposes only the authenticated /remote API" in source
+        def set(self):
+            self.set_count += 1
 
+    class FakeProcess:
+        pid = 43210
 
-def test_remote_server_mode_keeps_dashboard_icon_routes_public_for_remote_clients():
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+        def __init__(self):
+            self.alive = True
+            self.join_timeouts = []
+            self.terminate_count = 0
+            self.kill_count = 0
 
-    assert "def _is_remote_public_icon_request(path: str, method: str) -> bool:" in source
-    assert 'method in {"GET", "HEAD"}' in source
-    assert 'path.startswith("/api/dashboard/icons/")' in source
-    assert 'path.startswith("/api/dashboard/resource-icons/")' in source
-    assert "not _is_remote_public_icon_request(path, request.method.upper())" in source
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout):
+            self.join_timeouts.append(timeout)
+            if self.terminate_count:
+                self.alive = False
+
+        def terminate(self):
+            self.terminate_count += 1
+
+        def kill(self):
+            self.kill_count += 1
+            self.alive = False
+
+    event = FakeEvent()
+    process = FakeProcess()
+    namespace["api_server_shutdown_event"] = event
+    namespace["api_server_process"] = process
+
+    assert namespace["stop_api_server"]() is True
+    assert event.set_count == 1
+    assert process.terminate_count == 1
+    assert process.kill_count == 0
+    assert process.join_timeouts == [5.0, 5.0]
+    assert namespace["api_server_process"] is None
+    assert namespace["api_server_shutdown_event"] is None

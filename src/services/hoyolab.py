@@ -7,6 +7,7 @@ import asyncio
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -67,7 +68,14 @@ class HoYoLabService:
     }
     DAILY_CHECKIN_GAME_ORDER = ("honkai_starrail", "zenless_zone_zero")
     
-    def __init__(self, config: Optional[HoYoLabConfig] = None):
+    MAX_ASYNC_TIMEOUT_SECONDS = 30.0
+
+    def __init__(
+        self,
+        config: Optional[HoYoLabConfig] = None,
+        *,
+        async_timeout: float = MAX_ASYNC_TIMEOUT_SECONDS,
+    ):
         """HoYoLabService 초기화
         
         Args:
@@ -79,6 +87,10 @@ class HoYoLabService:
         self._client_lock = threading.RLock()
         self._request_lock = threading.Lock()
         self._closed = False
+        self._async_timeout = min(
+            max(float(async_timeout), 0.001),
+            self.MAX_ASYNC_TIMEOUT_SECONDS,
+        )
     
     def is_available(self) -> bool:
         """genshin.py 라이브러리가 사용 가능한지 확인"""
@@ -118,26 +130,75 @@ class HoYoLabService:
 
     def _get_client(self) -> Optional["genshin.Client"]:
         """genshin.py 클라이언트 인스턴스 반환 (lazy initialization)"""
-        with self._client_lock:
+        deadline = self._operation_deadline()
+        with self._lock_until(self._client_lock, deadline, "client"):
             return self._get_client_unlocked()
+
+    def _operation_deadline(self, timeout_seconds: float | None = None) -> float:
+        timeout = self._async_timeout
+        if timeout_seconds is not None:
+            timeout = min(timeout, max(float(timeout_seconds), 0.0))
+        return time.monotonic() + timeout
+
+    @staticmethod
+    def _remaining_seconds(deadline: float) -> float:
+        return max(float(deadline) - time.monotonic(), 0.0)
+
+    @contextmanager
+    def _lock_until(self, lock, deadline: float, label: str):
+        remaining = self._remaining_seconds(deadline)
+        if remaining <= 0.0 or not lock.acquire(timeout=remaining):
+            raise TimeoutError(f"HoYoLab {label} lock deadline이 만료되었습니다.")
+        try:
+            yield
+        finally:
+            lock.release()
     
-    def _run_async(self, coro):
+    def _run_async(
+        self,
+        coro,
+        *,
+        timeout_seconds: float | None = None,
+        deadline: float | None = None,
+    ):
         """비동기 코루틴을 동기적으로 실행
-        
-        GUI 스레드에서 안전하게 비동기 API를 호출하기 위한 래퍼.
+
+        호출 스레드에 실행 중인 이벤트 루프가 없어야 합니다. 실행 중인 루프를
+        우회하려고 임시 스레드를 만들면 timeout 뒤에도 provider 호출이 살아남을
+        수 있으므로, async 호출자는 provider의 비동기 API를 직접 사용해야 합니다.
         """
         try:
-            # 기존 이벤트 루프가 있는지 확인
-            try:
-                loop = asyncio.get_running_loop()
-                # 이미 실행 중인 루프가 있으면 새 스레드에서 실행
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, coro)
-                    return future.result(timeout=30)
-            except RuntimeError:
-                # 실행 중인 루프가 없으면 직접 실행
-                return asyncio.run(coro)
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            closer = getattr(coro, "close", None)
+            if callable(closer):
+                closer()
+            raise RuntimeError(
+                "실행 중인 이벤트 루프에서는 HoYoLab 동기 API를 호출할 수 없습니다. "
+                "비동기 provider API를 직접 await 하세요."
+            )
+
+        timeout = self._async_timeout
+        if timeout_seconds is not None:
+            timeout = min(timeout, max(float(timeout_seconds), 0.0))
+        if deadline is not None:
+            timeout = min(timeout, self._remaining_seconds(deadline))
+        if timeout <= 0.0:
+            closer = getattr(coro, "close", None)
+            if callable(closer):
+                closer()
+            raise TimeoutError("HoYoLab 요청 deadline이 만료되었습니다.")
+        try:
+            return asyncio.run(
+                asyncio.wait_for(coro, timeout=timeout)
+            )
+        except asyncio.TimeoutError as exc:
+            display_timeout = round(timeout, 3)
+            raise TimeoutError(
+                f"HoYoLab 요청이 {display_timeout:g}초 안에 완료되지 않았습니다."
+            ) from exc
         except Exception as e:
             logger.error(f"비동기 실행 오류: {e}")
             raise
@@ -159,50 +220,66 @@ class HoYoLabService:
             logger.warning(f"지원하지 않는 게임 타입: {hoyolab_game_id}")
             return None
 
-    def claim_daily_rewards(self, game_ids: Optional[list[str]] = None) -> list[HoYoLabDailyCheckInResult]:
+    def claim_daily_rewards(
+        self,
+        game_ids: Optional[list[str]] = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[HoYoLabDailyCheckInResult]:
         """HoYoLAB 일일 출석 체크를 순차 실행합니다.
 
         임시 검증 버튼에서 사용하는 실제 POST 경로입니다. 기본 순서는 현재
         호스트에서 추적 중인 HoYoLAB 게임인 붕괴: 스타레일 → 젠레스 존 제로입니다.
         """
         targets = list(game_ids or self.DAILY_CHECKIN_GAME_ORDER)
+        deadline = self._operation_deadline(timeout_seconds)
         if not GENSHIN_AVAILABLE:
             return [self._daily_checkin_result(game_id, "unavailable", "genshin.py 라이브러리를 사용할 수 없습니다.") for game_id in targets]
         if not self.is_configured():
             return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 인증 정보가 없습니다.") for game_id in targets]
 
-        with self._client_lock:
-            client = self._get_client_unlocked()
-            if not client:
-                return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
-
         try:
-            with self._request_lock:
+            with self._lock_until(self._client_lock, deadline, "client"):
+                client = self._get_client_unlocked()
+                if not client:
+                    return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
+            with self._lock_until(self._request_lock, deadline, "request"):
                 if self._closed:
                     return [self._daily_checkin_result(game_id, "unavailable", "HoYoLab 서비스가 종료되었습니다.") for game_id in targets]
-                return self._run_async(self._async_claim_daily_rewards(client, targets))
+                return self._run_async(
+                    self._async_claim_daily_rewards(client, targets),
+                    deadline=deadline,
+                )
         except Exception as exc:
             logger.error("HoYoLab 일일 출석 순차 실행 실패: %s", exc)
             return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
 
-    def get_daily_reward_status(self, game_ids: Optional[list[str]] = None) -> list[HoYoLabDailyCheckInResult]:
+    def get_daily_reward_status(
+        self,
+        game_ids: Optional[list[str]] = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[HoYoLabDailyCheckInResult]:
         """HoYoLAB 일일 출석 상태를 POST 없이 조회합니다."""
         targets = list(game_ids or self.DAILY_CHECKIN_GAME_ORDER)
+        deadline = self._operation_deadline(timeout_seconds)
         if not GENSHIN_AVAILABLE:
             return [self._daily_checkin_result(game_id, "unavailable", "genshin.py 라이브러리를 사용할 수 없습니다.") for game_id in targets]
         if not self.is_configured():
             return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 인증 정보가 없습니다.") for game_id in targets]
 
-        with self._client_lock:
-            client = self._get_client_unlocked()
-            if not client:
-                return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
-
         try:
-            with self._request_lock:
+            with self._lock_until(self._client_lock, deadline, "client"):
+                client = self._get_client_unlocked()
+                if not client:
+                    return [self._daily_checkin_result(game_id, "auth_required", "HoYoLab 클라이언트를 초기화하지 못했습니다.") for game_id in targets]
+            with self._lock_until(self._request_lock, deadline, "request"):
                 if self._closed:
                     return [self._daily_checkin_result(game_id, "unavailable", "HoYoLab 서비스가 종료되었습니다.") for game_id in targets]
-                return self._run_async(self._async_get_daily_reward_statuses(client, targets))
+                return self._run_async(
+                    self._async_get_daily_reward_statuses(client, targets),
+                    deadline=deadline,
+                )
         except Exception as exc:
             logger.error("HoYoLab 일일 출석 상태 조회 실패: %s", exc)
             return [self._daily_checkin_result(game_id, "network_error", str(exc)) for game_id in targets]
@@ -314,17 +391,17 @@ class HoYoLabService:
     
     def get_starrail_stamina(self) -> Optional[StaminaInfo]:
         """붕괴: 스타레일 개척력 정보 조회"""
-        with self._client_lock:
-            client = self._get_client_unlocked()
-            if not client:
-                return None
-
+        deadline = self._operation_deadline()
         try:
-            with self._request_lock:
+            with self._lock_until(self._client_lock, deadline, "client"):
+                client = self._get_client_unlocked()
+                if not client:
+                    return None
+            with self._lock_until(self._request_lock, deadline, "request"):
                 if self._closed:
                     logger.debug("닫힌 HoYoLab 서비스에서 스타레일 요청을 건너뜁니다.")
                     return None
-                return self._run_async(self._async_get_starrail_stamina(client))
+                return self._run_async(self._async_get_starrail_stamina(client), deadline=deadline)
         except Exception as e:
             logger.error(f"스타레일 스태미나 조회 실패: {e}")
             return None
@@ -361,17 +438,17 @@ class HoYoLabService:
     
     def get_zzz_stamina(self) -> Optional[StaminaInfo]:
         """젠레스 존 제로 배터리 정보 조회"""
-        with self._client_lock:
-            client = self._get_client_unlocked()
-            if not client:
-                return None
-
+        deadline = self._operation_deadline()
         try:
-            with self._request_lock:
+            with self._lock_until(self._client_lock, deadline, "client"):
+                client = self._get_client_unlocked()
+                if not client:
+                    return None
+            with self._lock_until(self._request_lock, deadline, "request"):
                 if self._closed:
                     logger.debug("닫힌 HoYoLab 서비스에서 ZZZ 요청을 건너뜁니다.")
                     return None
-                return self._run_async(self._async_get_zzz_stamina(client))
+                return self._run_async(self._async_get_zzz_stamina(client), deadline=deadline)
         except Exception as e:
             logger.error(f"ZZZ 배터리 조회 실패: {e}")
             return None
@@ -409,15 +486,20 @@ class HoYoLabService:
     
     def close(self) -> None:
         """클라이언트 연결 종료"""
-        with self._client_lock:
-            self._closed = True
-            client = self._client
-            self._client = None
+        deadline = self._operation_deadline()
+        try:
+            with self._lock_until(self._client_lock, deadline, "client"):
+                self._closed = True
+                client = self._client
+                self._client = None
+        except Exception as exc:
+            logger.debug("HoYoLab 클라이언트 종료 진입 중 예외 발생: %s", exc, exc_info=True)
+            return
 
         if client:
             try:
-                with self._request_lock:
-                    self._run_async(client.close())
+                with self._lock_until(self._request_lock, deadline, "request"):
+                    self._run_async(client.close(), deadline=deadline)
             except Exception as exc:
                 logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
             logger.info("HoYoLab 클라이언트 연결 종료")

@@ -1,11 +1,129 @@
 # instance_manager.py
 import sys
-from PyQt6.QtCore import QSharedMemory, QObject
+import hashlib
+import ntpath
+import os
+from dataclasses import dataclass
+from enum import Enum, IntEnum
+
+from PyQt6.QtCore import QSharedMemory, QObject, QTimer
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QMessageBox
 
 # 애플리케이션 고유 키 (다른 애플리케이션과 충돌하지 않도록 유니크하게 설정하세요)
 APP_UNIQUE_KEY = "HomeworkHelper_App_UUID_v1.0_KHS_UniqueInstanceKey"
+IPC_PROTOCOL_VERSION = "HHIPC1"
+
+
+@dataclass(frozen=True)
+class InstanceIdentity:
+    normalized_executable_path: str
+    digest: str
+    server_name: str
+
+
+def normalize_executable_path(executable_path: str | os.PathLike[str], *, windows: bool | None = None) -> str:
+    """Return the stable executable identity path used by shared memory and IPC."""
+    raw_path = os.fspath(executable_path)
+    windows = os.name == "nt" if windows is None else bool(windows)
+    if windows:
+        if os.name == "nt":
+            raw_path = os.path.realpath(os.path.abspath(raw_path))
+        return ntpath.normcase(ntpath.normpath(ntpath.abspath(raw_path)))
+    return os.path.normcase(os.path.realpath(os.path.abspath(raw_path)))
+
+
+def instance_identity(
+    executable_path: str | os.PathLike[str] | None = None,
+    *,
+    windows: bool | None = None,
+) -> InstanceIdentity:
+    normalized_path = normalize_executable_path(executable_path or sys.executable, windows=windows)
+    digest = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()[:20]
+    return InstanceIdentity(
+        normalized_executable_path=normalized_path,
+        digest=digest,
+        server_name=f"{APP_UNIQUE_KEY}_{digest}",
+    )
+
+
+class InstanceCommand(str, Enum):
+    SHOW_WINDOW = "show_window"
+
+
+class InstanceCommandResult(IntEnum):
+    SUCCESS = 0
+    NO_RUNNING_INSTANCE = 3
+    TIMEOUT = 4
+    UNSAFE_TARGET = 5
+
+
+def parse_instance_command(payload: bytes | str) -> InstanceCommand | None:
+    """Parse one newline-delimited IPC command without accepting prefixes."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8", errors="replace")
+    command = payload.splitlines()[0].strip() if payload.splitlines() else payload.strip()
+    try:
+        return InstanceCommand(command)
+    except ValueError:
+        return None
+
+
+def encode_instance_command(command: InstanceCommand, identity: InstanceIdentity) -> bytes:
+    return f"{IPC_PROTOCOL_VERSION} {identity.digest} {command.value}\n".encode("utf-8")
+
+
+def parse_instance_message(payload: bytes | str) -> tuple[str | None, InstanceCommand | None]:
+    """Parse the versioned protocol while retaining legacy show-window messages."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8", errors="replace")
+    line = payload.splitlines()[0].strip() if payload.splitlines() else payload.strip()
+    parts = line.split()
+    if len(parts) == 3 and parts[0] == IPC_PROTOCOL_VERSION:
+        try:
+            return parts[1], InstanceCommand(parts[2])
+        except ValueError:
+            return parts[1], None
+    return None, parse_instance_command(line)
+
+
+def send_instance_command(
+    command: InstanceCommand | str,
+    *,
+    executable_path: str | os.PathLike[str] | None = None,
+    connect_timeout_ms: int = 500,
+    ack_timeout_ms: int = 1500,
+) -> InstanceCommandResult:
+    """Send a command to the primary process and wait for its explicit ACK."""
+    try:
+        parsed_command = command if isinstance(command, InstanceCommand) else InstanceCommand(command)
+    except ValueError:
+        return InstanceCommandResult.UNSAFE_TARGET
+
+    identity = instance_identity(executable_path)
+    ipc_socket = QLocalSocket()
+    ipc_socket.connectToServer(identity.server_name)
+    if not ipc_socket.waitForConnected(connect_timeout_ms):
+        return InstanceCommandResult.NO_RUNNING_INSTANCE
+
+    ipc_socket.write(encode_instance_command(parsed_command, identity))
+    if not ipc_socket.waitForBytesWritten(min(ack_timeout_ms, 500)):
+        ipc_socket.abort()
+        return InstanceCommandResult.TIMEOUT
+    if not ipc_socket.waitForReadyRead(ack_timeout_ms):
+        ipc_socket.abort()
+        return InstanceCommandResult.TIMEOUT
+
+    response = bytes(ipc_socket.readAll()).decode("utf-8", errors="replace").strip()
+    ipc_socket.disconnectFromServer()
+    if response == f"ack:{identity.digest}:{parsed_command.value}":
+        return InstanceCommandResult.SUCCESS
+    if response == "error:unsafe_target":
+        return InstanceCommandResult.UNSAFE_TARGET
+    if response.startswith("ack:"):
+        return InstanceCommandResult.UNSAFE_TARGET
+    return InstanceCommandResult.TIMEOUT
+
 
 class SingleInstanceApplication(QObject):
     """
@@ -14,7 +132,12 @@ class SingleInstanceApplication(QObject):
     """
     _instance_manager_singleton = None # 클래스 레벨에서 싱글턴 인스턴스 관리 (선택적)
 
-    def __init__(self, application_name: str = "Application"):
+    def __init__(
+        self,
+        application_name: str = "Application",
+        *,
+        executable_path: str | os.PathLike[str] | None = None,
+    ):
         super().__init__()
         # 이 클래스의 인스턴스는 애플리케이션 전체에서 하나만 존재해야 함
         if SingleInstanceApplication._instance_manager_singleton is not None:
@@ -25,10 +148,12 @@ class SingleInstanceApplication(QObject):
         SingleInstanceApplication._instance_manager_singleton = self
         
         self.application_name = application_name
-        self._shared_memory = QSharedMemory(APP_UNIQUE_KEY)
+        self._identity = instance_identity(executable_path)
+        self._executable_path = self._identity.normalized_executable_path
+        self._shared_memory = QSharedMemory(self._identity.server_name)
         self._local_server = None
         self._main_window_ref = None # 활성화할 메인 윈도우 참조
-        self._active_client_socket = None # 서버에 연결된 클라이언트 소켓 참조
+        self._active_client_sockets = set()
 
     def is_primary_instance(self) -> bool:
         """이것이 주 인스턴스인지 확인합니다. 공유 메모리를 연결하거나 생성합니다."""
@@ -59,21 +184,14 @@ class SingleInstanceApplication(QObject):
     def signal_existing_instance_and_exit(self):
         """이미 실행 중인 주 인스턴스에 활성화 신호를 보내고 현재 인스턴스를 종료합니다."""
         print(f"{self.application_name}: 이미 실행 중인 인스턴스에 활성화 요청을 보냅니다...")
-        ipc_socket = QLocalSocket()
-        # 서버 이름은 공유 메모리 키와 동일하게 사용
-        ipc_socket.connectToServer(APP_UNIQUE_KEY)
-
-        # 연결 및 메시지 전송 (타임아웃 설정)
-        if ipc_socket.waitForConnected(500): # 0.5초
-            print("IPC 소켓 연결 성공. 'show_window' 메시지 전송 중...")
-            ipc_socket.write(b"show_window\n") # 간단한 활성화 메시지
-            if not ipc_socket.waitForBytesWritten(100): # 0.1초
-                 print(f"IPC 메시지 전송 실패: {ipc_socket.errorString()}")
-            ipc_socket.flush() # 데이터 즉시 전송 보장
-            ipc_socket.disconnectFromServer()
+        result = send_instance_command(
+            InstanceCommand.SHOW_WINDOW,
+            executable_path=self._executable_path,
+        )
+        if result == InstanceCommandResult.SUCCESS:
             print("활성화 요청 전송 완료.")
         else:
-            print(f"기존 인스턴스의 IPC 서버에 연결 실패: {ipc_socket.errorString()}")
+            print(f"기존 인스턴스의 IPC 요청 실패: {result.name}")
             QMessageBox.warning(None, f"{self.application_name} - 실행 중",
                                 "프로그램이 이미 실행 중이지만, 창을 자동으로 활성화할 수 없었습니다.\n"
                                 "이미 실행된 창을 직접 찾아주세요.")
@@ -90,13 +208,13 @@ class SingleInstanceApplication(QObject):
         self._local_server.newConnection.connect(self._handle_ipc_new_connection)
 
         # 서버 리슨 시도
-        if not self._local_server.listen(APP_UNIQUE_KEY):
+        if not self._local_server.listen(self._identity.server_name):
             # 리슨 실패 시 (예: 이전 비정상 종료로 인한 소켓 파일 문제)
             print(f"IPC 서버 listen 실패 (1차): {self._local_server.errorString()}")
             # 기존 서버 소켓 파일 제거 시도 (주로 Unix 계열에서 효과적)
-            if QLocalServer.removeServer(APP_UNIQUE_KEY):
+            if QLocalServer.removeServer(self._identity.server_name):
                 print("기존 IPC 서버 소켓 파일 제거 시도 후 재시도...")
-                if self._local_server.listen(APP_UNIQUE_KEY):
+                if self._local_server.listen(self._identity.server_name):
                     print("IPC 서버 listen 성공 (재시도 후).")
                     return True
             # 재시도도 실패하거나 removeServer가 효과 없는 경우 (예: Windows)
@@ -123,25 +241,73 @@ class SingleInstanceApplication(QObject):
                 socket.deleteLater() # 소켓 자원 정리
             return
 
-        # 기존 연결이 있다면 정리 후 새 연결 처리 (일반적으로는 동시에 여러 연결이 오지 않음)
-        if self._active_client_socket and self._active_client_socket.isOpen():
-            self._active_client_socket.abort() # 기존 연결 강제 종료
-            self._active_client_socket.deleteLater()
+        while self._local_server.hasPendingConnections():
+            socket = self._local_server.nextPendingConnection()
+            if not socket:
+                continue
+            socket._hh_received_command = False
+            socket._hh_command_buffer = bytearray()
+            self._active_client_sockets.add(socket)
+            socket.readyRead.connect(lambda active=socket: self._read_ipc_message(active))
+            socket.disconnected.connect(lambda active=socket: self._finish_ipc_connection(active))
+            # Legacy clients treated connection itself as show_window and might send no payload.
+            QTimer.singleShot(150, lambda active=socket: self._handle_blind_ipc_connection(active))
+            if socket.bytesAvailable():
+                self._read_ipc_message(socket)
 
-        self._active_client_socket = self._local_server.nextPendingConnection()
-        if self._active_client_socket:
-            print("IPC: 새 연결 수신됨. 메인 창 활성화를 시도합니다.")
-            # 이 예제에서는 연결 자체를 활성화 신호로 간주 (메시지 내용 확인 안 함)
-            # 필요시: self._active_client_socket.readyRead.connect(self._read_ipc_message)
-            if hasattr(self._main_window_ref, 'activate_and_show') and \
-               callable(self._main_window_ref.activate_and_show):
-                self._main_window_ref.activate_and_show()
+    def _write_ipc_response(self, socket, response: str):
+        socket.write((response + "\n").encode("utf-8"))
+        socket.flush()
+
+    def _schedule_callback(self, delay_ms: int, callback):
+        QTimer.singleShot(delay_ms, callback)
+
+    def _read_ipc_message(self, socket):
+        if socket not in self._active_client_sockets or socket._hh_received_command:
+            return
+        socket._hh_command_buffer.extend(bytes(socket.readAll()))
+        if b"\n" not in socket._hh_command_buffer:
+            return
+        socket._hh_received_command = True
+        message_identity, command = parse_instance_message(bytes(socket._hh_command_buffer))
+        if message_identity is not None and message_identity != self._identity.digest:
+            self._write_ipc_response(socket, "error:unsafe_target")
+            socket.disconnectFromServer()
+            return
+        if message_identity is None and command != InstanceCommand.SHOW_WINDOW:
+            self._write_ipc_response(socket, "error:unsafe_target")
+            socket.disconnectFromServer()
+            return
+        if command == InstanceCommand.SHOW_WINDOW:
+            callback = getattr(self._main_window_ref, "activate_and_show", None)
+            if not callable(callback):
+                self._write_ipc_response(socket, "error:unsafe_target")
             else:
-                print("오류: _main_window_ref에 activate_and_show 메소드가 없습니다.")
-            
-            self._active_client_socket.disconnectFromServer()
-            self._active_client_socket.deleteLater() # 소켓 자원 정리
-            self._active_client_socket = None # 참조 해제
+                callback()
+                self._write_ipc_response(socket, f"ack:{self._identity.digest}:show_window")
+        else:
+            self._write_ipc_response(socket, "error:unsafe_target")
+        socket.disconnectFromServer()
+
+    def _handle_blind_ipc_connection(self, socket):
+        if socket not in self._active_client_sockets or socket._hh_received_command:
+            return
+        socket._hh_received_command = True
+        callback = getattr(self._main_window_ref, "activate_and_show", None)
+        if callable(callback):
+            callback()
+        socket.disconnectFromServer()
+
+    def _finish_ipc_connection(self, socket):
+        if not socket._hh_received_command:
+            # Compatibility with pre-command clients that used connect/disconnect as show_window.
+            socket._hh_received_command = True
+            callback = getattr(self._main_window_ref, "activate_and_show", None)
+            if callable(callback):
+                callback()
+        if socket in self._active_client_sockets:
+            self._active_client_sockets.remove(socket)
+        socket.deleteLater()
 
     def cleanup(self):
         """애플리케이션 종료 시 IPC 서버 및 공유 메모리 관련 리소스를 정리합니다."""
@@ -156,6 +322,10 @@ class SingleInstanceApplication(QObject):
             if self._local_server and self._local_server.isListening():
                 self._local_server.close()
                 print("IPC 서버가 닫혔습니다.")
+            for socket in tuple(self._active_client_sockets):
+                socket.abort()
+                socket.deleteLater()
+            self._active_client_sockets.clear()
         except RuntimeError:
             # Qt 객체가 이미 삭제된 경우 무시
             print("IPC 서버가 이미 정리되었습니다.")
@@ -177,6 +347,8 @@ class SingleInstanceApplication(QObject):
 
         # 중복 호출 방지 플래그 설정
         self._cleanup_done = True
+        if SingleInstanceApplication._instance_manager_singleton is self:
+            SingleInstanceApplication._instance_manager_singleton = None
 
 
 def run_with_single_instance_check(application_name: str, main_app_start_callback):
@@ -198,3 +370,4 @@ def run_with_single_instance_check(application_name: str, main_app_start_callbac
     else:
         # 이미 실행 중인 인스턴스가 있으므로, 해당 인스턴스에 신호를 보내고 현재 인스턴스는 종료
         instance_manager.signal_existing_instance_and_exit()
+
