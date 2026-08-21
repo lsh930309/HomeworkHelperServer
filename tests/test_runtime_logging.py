@@ -58,12 +58,11 @@ def test_configure_gui_logging_is_idempotent_and_rotates_with_redaction(tmp_path
         root.setLevel(original_level)
 
 
-def test_gui_logging_starts_only_after_command_only_branches():
+def test_gui_logging_starts_only_after_server_only_branch():
     source = Path("homework_helper.pyw").read_text(encoding="utf-8")
 
-    shutdown_branch = source.index("shutdown_reason = _shutdown_request_reason()")
     server_branch = source.index("if _wants_server_only_mode():")
     logging_setup = source.index("gui_log_path = configure_gui_logging()")
     schema_migration = source.index("# === 스키마 자동 마이그레이션 ===")
 
-    assert shutdown_branch < server_branch < logging_setup < schema_migration
+    assert server_branch < logging_setup < schema_migration

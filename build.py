@@ -20,6 +20,7 @@ import json
 import platform
 import argparse
 import hashlib
+import importlib.metadata
 from pathlib import Path
 from datetime import datetime, timedelta
 try:
@@ -65,6 +66,16 @@ VERSION_SCHEMA = 1
 VERSION_BUMP_CHOICES = ("none", "build", "patch", "minor", "major")
 DEFAULT_VERSION_BUMP = "build"
 VERSION_PATTERN = re.compile(r'v(\d+)\.(\d+)\.(\d+)_b(\d+)_g([0-9a-fA-F]+|unknown)(?:_dirty)?')
+WINDOWS_PYTHON_VERSION = (3, 14)
+WINDOWS_REQUIRED_DISTRIBUTIONS = (
+    "PySide6",
+    "PyInstaller",
+    "pywin32",
+    "winshell",
+    "pycaw",
+    "Windows-Toasts",
+    "winrt-Windows.Gaming.Input",
+)
 
 # 코드 서명
 CERT_DIR = PROJECT_ROOT / "certs"
@@ -78,6 +89,122 @@ FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NEXONLv1GothicOTFBold.otf"
 
 class BuildConfigError(RuntimeError):
     """Raised when local build configuration is missing or invalid."""
+
+
+def configure_console_output(stdout=None, stderr=None) -> None:
+    """Replace glyphs unsupported by the active Windows console encoding."""
+    streams = (
+        sys.stdout if stdout is None else stdout,
+        sys.stderr if stderr is None else stderr,
+    )
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+def bootstrap_windows_build_runtime(
+    argv: list[str],
+    *,
+    system_name: str | None = None,
+    project_root: Path = PROJECT_ROOT,
+    python_executable: str | None = None,
+    python_version: tuple[int, int] | None = None,
+    runner=subprocess.run,
+    launcher_finder=shutil.which,
+) -> int | None:
+    """Update the repository .venv and delegate without shell activation."""
+    if (system_name or platform.system()) != "Windows":
+        return None
+
+    current_python = Path(python_executable or sys.executable)
+    current_version = python_version or tuple(sys.version_info[:2])
+    managed_python = project_root / ".venv" / "Scripts" / "python.exe"
+
+    if not managed_python.exists():
+        if current_version == WINDOWS_PYTHON_VERSION:
+            launcher = [str(current_python)]
+        else:
+            py_launcher = launcher_finder("py")
+            if not py_launcher:
+                raise BuildConfigError(
+                    "Python 3.14가 필요합니다. Python Launcher를 포함해 Python 3.14를 "
+                    "설치한 뒤 build.py를 다시 실행하세요."
+                )
+            launcher = [str(py_launcher), "-3.14"]
+        print(f"[준비] Windows 프로젝트 가상환경 생성: {managed_python.parent.parent}")
+        created = runner([*launcher, "-m", "venv", str(managed_python.parent.parent)], cwd=project_root)
+        if created.returncode != 0 or not managed_python.exists():
+            raise BuildConfigError("Windows 프로젝트 Python 3.14 가상환경 생성에 실패했습니다.")
+
+    print("[준비] requirements.txt 의존성 설치 및 업데이트")
+    installed = runner(
+        [
+            str(managed_python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--upgrade",
+            "-r",
+            str(project_root / "requirements.txt"),
+        ],
+        cwd=project_root,
+    )
+    if installed.returncode != 0:
+        raise BuildConfigError("Windows 빌드 의존성 설치에 실패했습니다.")
+
+    if current_python.resolve() == managed_python.resolve():
+        return None
+    delegated = runner(
+        [str(managed_python), str(project_root / "build.py"), *argv],
+        cwd=project_root,
+    )
+    return int(delegated.returncode)
+
+
+def installed_distribution_versions(names: tuple[str, ...]) -> dict[str, str]:
+    versions = {}
+    for name in names:
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "missing"
+    return versions
+
+
+def validate_windows_build_runtime(
+    *,
+    python_version: tuple[int, int] | None = None,
+    distribution_versions=None,
+) -> dict[str, str]:
+    """Require Python 3.14, build dependencies, and one Qt binding."""
+    current_version = python_version or tuple(sys.version_info[:2])
+    if current_version != WINDOWS_PYTHON_VERSION:
+        raise BuildConfigError(
+            "Windows 빌드는 Python 3.14가 필요합니다. "
+            f"현재 버전: {current_version[0]}.{current_version[1]}"
+        )
+
+    version_reader = distribution_versions or installed_distribution_versions
+    versions = version_reader(WINDOWS_REQUIRED_DISTRIBUTIONS)
+    missing = [name for name, version in versions.items() if version == "missing"]
+    if missing:
+        raise BuildConfigError("Windows 빌드 필수 패키지가 없습니다: " + ", ".join(missing))
+
+    bindings = version_reader(("PySide6", "PyQt6"))
+    installed_bindings = [name for name, version in bindings.items() if version != "missing"]
+    if installed_bindings != ["PySide6"]:
+        found = ", ".join(installed_bindings) if installed_bindings else "없음"
+        raise BuildConfigError(
+            "Windows 빌드 환경에는 PySide6만 설치되어야 합니다. "
+            f"현재 감지된 Qt 바인딩: {found}"
+        )
+    return versions
 
 
 def select_build_target(system_name: str | None = None) -> str:
@@ -1198,6 +1325,8 @@ def build_with_pyinstaller(gui):
     gui.log(f"빌드 명령: {' '.join(cmd)}\n")
 
     try:
+        pyinstaller_env = dict(os.environ)
+        pyinstaller_env["QT_API"] = "PySide6"
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1206,6 +1335,7 @@ def build_with_pyinstaller(gui):
             encoding='utf-8',
             errors='replace',
             cwd=PROJECT_ROOT,
+            env=pyinstaller_env,
             bufsize=1
         )
 
@@ -2090,11 +2220,23 @@ def create_candidate_version_config(
 
 def main(argv: list[str] | None = None):
     """메인 함수"""
-    args = parse_args(argv)
+    configure_console_output()
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        delegated_exit = bootstrap_windows_build_runtime(effective_argv)
+    except BuildConfigError as exc:
+        print(f"[오류] {exc}")
+        return 1
+    if delegated_exit is not None:
+        return delegated_exit
+
+    args = parse_args(effective_argv)
     # 커스텀 폰트 로딩
     try:
         target = args.target or select_build_target()
         validate_target_inputs(target)
+        if target == "windows-host":
+            validate_windows_build_runtime()
         version_config = load_version_config(args.version_file)
         candidate_config = create_candidate_version_config(
             target,

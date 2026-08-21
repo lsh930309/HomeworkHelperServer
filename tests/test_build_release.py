@@ -1,5 +1,6 @@
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,119 @@ def test_select_build_target_maps_host_os_to_release_target():
     assert build.select_build_target("Darwin") == "macos-client"
     with pytest.raises(build.BuildConfigError):
         build.select_build_target("Linux")
+
+
+def test_console_output_replaces_characters_unsupported_by_cp949(tmp_path):
+    output_path = tmp_path / "console.txt"
+    with output_path.open("w", encoding="cp949", errors="strict") as stream:
+        build.configure_console_output(stream, stream)
+        print("✓ 빌드 완료", file=stream)
+
+    assert "? 빌드 완료" in output_path.read_text(encoding="cp949")
+
+
+def test_windows_bootstrap_creates_venv_updates_requirements_and_delegates(tmp_path):
+    calls = []
+    managed_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[-3:-1] == ["-m", "venv"]:
+            managed_python.parent.mkdir(parents=True)
+            managed_python.touch()
+        return SimpleNamespace(returncode=0)
+
+    exit_code = build.bootstrap_windows_build_runtime(
+        ["--no-gui"],
+        system_name="Windows",
+        project_root=tmp_path,
+        python_executable="C:/Python314/python.exe",
+        python_version=(3, 14),
+        runner=runner,
+        launcher_finder=lambda _name: None,
+    )
+
+    assert exit_code == 0
+    assert calls[0][0][-2:] == ["venv", str(tmp_path / ".venv")]
+    assert calls[1][0] == [
+        str(managed_python),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--upgrade",
+        "-r",
+        str(tmp_path / "requirements.txt"),
+    ]
+    assert calls[2][0] == [str(managed_python), str(tmp_path / "build.py"), "--no-gui"]
+
+
+def test_windows_bootstrap_reuses_managed_venv_without_activation(tmp_path):
+    managed_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    managed_python.parent.mkdir(parents=True)
+    managed_python.touch()
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    exit_code = build.bootstrap_windows_build_runtime(
+        [],
+        system_name="Windows",
+        project_root=tmp_path,
+        python_executable=str(managed_python),
+        python_version=(3, 14),
+        runner=runner,
+    )
+
+    assert exit_code is None
+    assert len(calls) == 1
+    assert calls[0][1:4] == ["-m", "pip", "install"]
+
+
+def test_windows_bootstrap_requires_python314_launcher(tmp_path):
+    with pytest.raises(build.BuildConfigError, match="Python 3.14"):
+        build.bootstrap_windows_build_runtime(
+            [],
+            system_name="Windows",
+            project_root=tmp_path,
+            python_executable="C:/Python313/python.exe",
+            python_version=(3, 13),
+            launcher_finder=lambda _name: None,
+        )
+
+
+def test_windows_runtime_accepts_only_python314_with_pyside6():
+    def installed(names):
+        return {
+            name: ("missing" if name == "PyQt6" else "6.11.1" if name == "PySide6" else "1.0")
+            for name in names
+        }
+
+    versions = build.validate_windows_build_runtime(
+        python_version=(3, 14),
+        distribution_versions=installed,
+    )
+
+    assert versions["PySide6"] == "6.11.1"
+
+
+def test_windows_runtime_rejects_old_python_or_mixed_qt_bindings():
+    with pytest.raises(build.BuildConfigError, match="Python 3.14"):
+        build.validate_windows_build_runtime(
+            python_version=(3, 13),
+            distribution_versions=lambda names: {name: "1.0" for name in names},
+        )
+
+    def mixed(names):
+        return {name: "6.11.1" for name in names}
+
+    with pytest.raises(build.BuildConfigError, match="PySide6만"):
+        build.validate_windows_build_runtime(
+            python_version=(3, 14),
+            distribution_versions=mixed,
+        )
 
 
 def test_make_version_info_uses_git_hash_and_dirty_suffix():
