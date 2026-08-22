@@ -1019,6 +1019,21 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self._volume_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
 
+    def _sync_menu_corner_metrics(self) -> None:
+        """플랫폼별 메뉴 액션 높이에 코너 컨트롤의 실제 중심선을 맞춥니다."""
+        if not hasattr(self, "_menu_corner_layout"):
+            return
+        actions = self.menuBar().actions()
+        if not actions:
+            return
+        action_height = self.menuBar().actionGeometry(actions[0]).height()
+        if action_height <= 0:
+            return
+        self._always_on_top_cb.setFixedHeight(action_height)
+        self._volume_btn.setFixedSize(action_height, action_height)
+        self._menu_corner_layout.invalidate()
+        self._menu_corner_layout.activate()
+
     def _restart_app(self) -> None:
         """앱을 재시작합니다."""
         import sys, os
@@ -1095,6 +1110,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "process_table"):
             self._refresh_table_theme_colors()
         if hasattr(self, "_volume_btn"):
+            self._sync_menu_corner_metrics()
             tokens = widgets_theme_tokens(dark)
             volume_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
             self._volume_btn.setIcon(tint_icon(volume_icon, QColor(tokens["text"])))

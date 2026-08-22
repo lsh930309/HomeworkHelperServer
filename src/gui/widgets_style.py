@@ -142,7 +142,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QToolButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton:checked {{ background: {t['accent']}; color: {t['text']}; }}
         QToolButton[hhRole="menuCornerAction"] {{
-            min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px;
+            min-width: 0px; min-height: 0px; padding: 0px;
         }}
         QTableWidget#processTable {{
             background: {t['surface_raised']}; alternate-background-color: {t['surface_raised']};
