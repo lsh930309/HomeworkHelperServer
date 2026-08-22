@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel
 
 from src.data.data_models import (
     GlobalSettings,
@@ -469,7 +469,7 @@ def test_process_dialog_returns_launch_args_opt_in(monkeypatch, tmp_path):
         app.processEvents()
 
 
-def test_main_game_cards_use_balanced_grid_name_sort_and_centered_icons(monkeypatch, tmp_path):
+def test_main_game_table_restores_name_sort_and_centered_icons(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     icon_requests = []
@@ -490,24 +490,32 @@ def test_main_game_cards_use_balanced_grid_name_sort_and_centered_icons(monkeypa
         window._adjust_window_size_to_content()
         app.processEvents()
 
-        assert [window._game_cards[key]["name"].text() for key in window._game_cards] == ["Alpha", "Beta", "Zeta"]
+        assert not window.process_table.horizontalHeader().isVisible()
+        assert not window.process_table.verticalHeader().isVisible()
+        assert not window.process_table.isSortingEnabled()
+        assert [
+            window.process_table.item(row, window.COL_NAME).text()
+            for row in range(window.process_table.rowCount())
+        ] == ["Alpha", "Beta", "Zeta"]
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
-        assert {request[1] for request in icon_requests} == {window._CARD_ICON_LOGICAL_SIZE}
-        icon_cell = window._game_cards["a"]["card"].findChild(QLabel, "gameAppIcon")
+        assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
+        icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
         assert isinstance(icon_cell, QLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
-        assert window._game_card_columns == 2
-        assert window.game_card_layout.getItemPosition(0)[:2] == (0, 0)
-        assert window.game_card_layout.getItemPosition(1)[:2] == (0, 1)
-        assert window.game_card_layout.getItemPosition(2)[:2] == (1, 0)
-        assert len({entry["card"].width() for entry in window._game_cards.values()}) == 1
+        assert window.process_table.columnWidth(window.COL_ICON) <= (
+            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
+        )
+        assert all(
+            window.process_table.rowHeight(row) >= window._TABLE_ROW_HEIGHT
+            for row in range(window.process_table.rowCount())
+        )
     finally:
         _stop_window(window, app)
 
 
 @pytest.mark.parametrize("process_count", [0, 1, 2, 3, 4, 8])
-def test_main_card_window_fits_all_cards_without_scroll(monkeypatch, tmp_path, process_count):
+def test_main_table_window_fits_all_rows_without_scroll(monkeypatch, tmp_path, process_count):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     processes = [
@@ -526,21 +534,21 @@ def test_main_card_window_fits_all_cards_without_scroll(monkeypatch, tmp_path, p
         window._adjust_window_size_to_content()
         app.processEvents()
 
-        assert window._game_card_columns == (1 if process_count <= 2 else 2)
-        assert not window.findChildren(QAbstractScrollArea)
+        assert window.process_table.rowCount() == process_count
+        assert window.process_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         assert window.minimumSize() == window.size()
         assert window.maximumSize() == window.size()
         assert window.size() == window.sizeHint().expandedTo(
             QSize(window._MIN_WINDOW_WIDTH, window._MIN_WINDOW_HEIGHT)
         )
-        for index, entry in enumerate(window._game_cards.values()):
-            row, column, row_span, column_span = window.game_card_layout.getItemPosition(index)
-            assert (row, column) == (
-                index // window._game_card_columns,
-                index % window._game_card_columns,
-            )
-            assert (row_span, column_span) == (1, 1)
-            assert entry["card"].isVisible()
+        expected_height = window.process_table.frameWidth() * 2 + sum(
+            window.process_table.rowHeight(row)
+            for row in range(window.process_table.rowCount())
+        )
+        if process_count == 0:
+            expected_height += window._TABLE_ROW_HEIGHT
+        assert window.process_table.height() == expected_height
     finally:
         _stop_window(window, app)
 

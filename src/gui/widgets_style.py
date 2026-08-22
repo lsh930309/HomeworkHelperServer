@@ -82,6 +82,9 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         control = getattr(window, attribute, None)
         if control is not None:
             control.setProperty("hhRole", name)
+    table = getattr(window, "process_table", None)
+    if table is not None:
+        table.setObjectName("processTable")
     if central.layout() is not None:
         central.layout().setContentsMargins(6, 6, 6, 6)
         central.layout().setSpacing(4)
@@ -118,17 +121,12 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QToolButton:hover, QToolButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
         QToolButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton:checked {{ background: {t['accent']}; color: {t['text']}; }}
-        QWidget#gameCardContainer {{ background: transparent; }}
-        QFrame[hhRole="gameCard"] {{
-            background: {t['surface_raised']}; border: none; border-radius: 6px;
+        QTableWidget#processTable {{
+            background: {t['surface_raised']}; alternate-background-color: {t['surface_raised']};
+            color: {t['text']}; border: none; outline: none; padding: 0px;
+            gridline-color: transparent; selection-background-color: transparent;
         }}
-        QLabel[hhRole="gameName"] {{ color: {t['text']}; font-weight: 600; }}
-        QLabel[hhRole="muted"] {{ color: {t['muted']}; }}
-        QLabel[hhRole="statusChip"] {{ padding: 2px 6px; border-radius: 5px; }}
-        QLabel[hhRole="statusChip"][hhState="default"] {{ background: {t['surface_hover']}; color: {t['muted']}; }}
-        QLabel[hhRole="statusChip"][hhState="running"] {{ background: {t['warning_soft']}; color: {t['warning']}; }}
-        QLabel[hhRole="statusChip"][hhState="incomplete"] {{ background: {t['danger_soft']}; color: {t['danger']}; }}
-        QLabel[hhRole="statusChip"][hhState="completed"] {{ background: {t['success_soft']}; color: {t['success']}; }}
+        QTableWidget#processTable::item {{ border: none; padding: 0px 2px; }}
         QProgressBar {{
             min-height: 6px; max-height: 6px; border: none; border-radius: 3px;
             background: {t['surface_hover']}; color: transparent; text-align: center;

@@ -13,11 +13,10 @@ logger = logging.getLogger(__name__)
 
 # PySide6 임포트
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
-    QPushButton, QSizePolicy, QFileIconProvider,
+    QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
+    QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
-    QFrame, QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QSize
 from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QCursor
@@ -96,7 +95,15 @@ class MainWindow(QMainWindow):
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
-    _CARD_ICON_LOGICAL_SIZE = 24
+    COL_ICON = 0
+    COL_NAME = 1
+    COL_LAST_PLAYED = 2
+    COL_LAUNCH_BTN = 3
+    COL_STATUS = 4
+    TOTAL_COLUMNS = 5
+    _TABLE_ROW_HEIGHT = 30
+    _TABLE_ICON_LOGICAL_SIZE = 24
+    _TABLE_ICON_COLUMN_PADDING = 4
     _QWIDGETSIZE_MAX = 16_777_215
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
@@ -294,15 +301,23 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(self.top_button_area_layout) # 메인 레이아웃에 상단 버튼 영역 추가
 
-        self.game_card_container = QWidget(self)
-        self.game_card_container.setObjectName("gameCardContainer")
-        self.game_card_layout = QGridLayout(self.game_card_container)
-        self.game_card_layout.setContentsMargins(0, 0, 0, 0)
-        self.game_card_layout.setHorizontalSpacing(4)
-        self.game_card_layout.setVerticalSpacing(4)
-        self._game_card_columns = 1
-        self._game_cards: dict[str, dict[str, QWidget]] = {}
-        main_layout.addWidget(self.game_card_container)
+        self.process_table = QTableWidget(self)
+        self.process_table.setObjectName("processTable")
+        self.process_table.setColumnCount(self.TOTAL_COLUMNS)
+        self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태"])
+        self._configure_table_header()
+        self.process_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.process_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.process_table.setShowGrid(False)
+        self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.process_table.customContextMenuRequested.connect(self.show_table_context_menu)
+        self.process_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.process_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.process_table.verticalHeader().setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
+        self.process_table.verticalHeader().setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
+        self.process_table.setIconSize(QSize(self._TABLE_ICON_LOGICAL_SIZE, self._TABLE_ICON_LOGICAL_SIZE))
+        main_layout.addWidget(self.process_table)
 
         # 초기 데이터 로드 및 UI 업데이트
         self.populate_process_list() # 프로세스 목록 채우기
@@ -669,7 +684,7 @@ class MainWindow(QMainWindow):
             web_ms = (time.time() - web_start) * 1000
 
             # 동기 repaint()는 복귀 직후 GUI 스레드 정체를 키울 수 있으므로 update()만 요청합니다.
-            self.game_card_container.update()
+            self.process_table.viewport().update()
 
             QTimer.singleShot(100, self._restore_window_state)
 
@@ -766,6 +781,54 @@ class MainWindow(QMainWindow):
         else:
             style = QApplication.style()
             self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+
+    def _configure_table_header(self) -> None:
+        """헤더 장식 없이 열 정렬만 유지하는 압축형 게임 표를 구성합니다."""
+        horizontal = self.process_table.horizontalHeader()
+        horizontal.hide()
+        horizontal.setSectionsClickable(False)
+        horizontal.setHighlightSections(False)
+        for column in range(self.TOTAL_COLUMNS):
+            horizontal.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+
+        vertical = self.process_table.verticalHeader()
+        vertical.hide()
+        vertical.setMinimumWidth(0)
+        vertical.setMaximumWidth(0)
+        vertical.setSectionsClickable(False)
+        vertical.setHighlightSections(False)
+        self.process_table.setCornerButtonEnabled(False)
+
+    def _table_default_colors(self) -> tuple[QColor, QColor]:
+        tokens = widgets_theme_tokens(self._is_effective_dark_theme())
+        return QColor(tokens["surface_raised"]), QColor(tokens["text"])
+
+    def _apply_table_status(self, item: QTableWidgetItem, status: str) -> None:
+        """현재 공통 테마의 semantic 색상을 상태 셀 하나에 적용합니다."""
+        tokens = widgets_theme_tokens(self._is_effective_dark_theme())
+        background = tokens["surface_raised"]
+        foreground = tokens["muted"]
+        if status == PROC_STATE_RUNNING:
+            background, foreground = tokens["warning_soft"], tokens["warning"]
+        elif status == PROC_STATE_INCOMPLETE:
+            background, foreground = tokens["danger_soft"], tokens["danger"]
+        elif status == PROC_STATE_COMPLETED:
+            background, foreground = tokens["success_soft"], tokens["success"]
+        item.setBackground(QColor(background))
+        item.setForeground(QColor(foreground))
+
+    def _refresh_table_theme_colors(self) -> None:
+        """테마 전환 시 기존 표 항목도 현재 토큰으로 즉시 다시 칠합니다."""
+        background, foreground = self._table_default_colors()
+        for row in range(self.process_table.rowCount()):
+            for column in (self.COL_ICON, self.COL_NAME):
+                item = self.process_table.item(row, column)
+                if item is not None:
+                    item.setBackground(background)
+                    item.setForeground(foreground)
+            status_item = self.process_table.item(row, self.COL_STATUS)
+            if status_item is not None:
+                self._apply_table_status(status_item, status_item.text())
 
     def _remote_pairing_endpoint(self) -> str:
         return f"{self._api_base_url()}/remote/pair/start"
@@ -982,8 +1045,10 @@ class MainWindow(QMainWindow):
         apply_widgets_palette(dark=dark)
         if self.centralWidget() is not None:
             apply_modern_widgets_style(self, dark=dark)
+        if hasattr(self, "process_table"):
+            self._refresh_table_theme_colors()
         self._sync_windows_title_bar_color()
-        if hasattr(self, "game_card_layout"):
+        if hasattr(self, "process_table"):
             QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _is_effective_dark_theme(self) -> bool:
@@ -1206,48 +1271,57 @@ class MainWindow(QMainWindow):
             logger.warning(f"scheduler_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def populate_process_list_slot(self):
-        """게임 카드 목록 새로고침 시그널에 연결된 슬롯입니다."""
+        """게임 표 새로고침 시그널에 연결된 슬롯입니다."""
         self.populate_process_list()
 
     def update_process_statuses_only(self):
-        """카드의 상태만 업데이트하여 실행 버튼 포커스를 유지합니다."""
-        if not hasattr(self, "_game_cards"):
+        """표의 상태만 업데이트하여 실행 버튼 포커스를 유지합니다."""
+        if not hasattr(self, "process_table"):
             return
-
         processes_by_id = {
             process.id: process
             for process in self.data_manager.managed_processes
         }
-        now_dt = datetime.datetime.now()
-        gs = self.data_manager.global_settings
-        if set(self._game_cards) != set(processes_by_id):
+        if self.process_table.rowCount() != len(processes_by_id):
             self.populate_process_list()
             return
 
+        now_dt = datetime.datetime.now()
+        gs = self.data_manager.global_settings
         has_changes = False
-        for process_id, card in self._game_cards.items():
-            p = processes_by_id[process_id]
-            st_str = self.scheduler.determine_process_visual_status(p, now_dt, gs)
-            status_label = card["status"]
-            if status_label.text() != st_str:
-                self._set_game_card_status(status_label, st_str)
-                has_changes = True
+        for row in range(self.process_table.rowCount()):
+            name_item = self.process_table.item(row, self.COL_NAME)
+            if name_item is None:
+                self.populate_process_list()
+                return
+            process_id = name_item.data(Qt.ItemDataRole.UserRole)
+            p = processes_by_id.get(process_id)
+            if p is None:
+                self.populate_process_list()
+                return
 
-            # 새로 실행된 프로세스에 기본 볼륨 자동 적용
+            st_str = self.scheduler.determine_process_visual_status(p, now_dt, gs)
+            status_item = self.process_table.item(row, self.COL_STATUS)
+            if status_item is not None and status_item.text() != st_str:
+                status_item.setText(st_str)
+                self._apply_table_status(status_item, st_str)
+                has_changes = True
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
 
+        self._refresh_progress_bars()
         if has_changes:
             self._record_status_event("프로세스 상태 업데이트됨.", 2000)
 
     def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
-        """카드에 표시할 앱 아이콘 라벨을 생성합니다."""
-        icon_size = self._CARD_ICON_LOGICAL_SIZE
+        """아이콘 전용 셀 안에 앱 아이콘을 중앙 정렬합니다."""
+        icon_size = self._TABLE_ICON_LOGICAL_SIZE
         label = QLabel()
         label.setObjectName("gameAppIcon")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setContentsMargins(0, 0, 0, 0)
-        label.setFixedSize(icon_size, icon_size)
+        label.setMinimumSize(icon_size, icon_size)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         if icon and not icon.isNull():
             label.setPixmap(icon.pixmap(QSize(icon_size, icon_size)))
         return label
@@ -1270,70 +1344,43 @@ class MainWindow(QMainWindow):
         return icon_label
 
     def populate_process_list(self):
-        """관리 대상 프로세스를 이름순 균형형 카드 그리드로 표시합니다."""
-        while self.game_card_layout.count():
-            item = self.game_card_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        for column in range(2):
-            self.game_card_layout.setColumnMinimumWidth(column, 0)
-            self.game_card_layout.setColumnStretch(column, 0)
-        self._game_cards.clear()
-
+        """관리 대상 프로세스를 기존 행·열 구조의 게임 표로 표시합니다."""
+        self.process_table.setSortingEnabled(False)
         processes = sorted(
             self.data_manager.managed_processes,
             key=lambda process: ((process.name or "").casefold(), process.id or ""),
         )
-        self._game_card_columns = 1 if len(processes) <= 2 else 2
+        self.process_table.setRowCount(len(processes))
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
+        default_background, default_foreground = self._table_default_colors()
 
-        if not processes:
-            empty = QLabel("등록된 게임이 없습니다. 상단의 ‘새 게임 추가’로 시작하세요.")
-            empty.setProperty("hhRole", "muted")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.game_card_layout.addWidget(empty, 0, 0)
-
-        for p in processes:
+        for row, p in enumerate(processes):
             qi = get_qicon_for_file(
                 p.monitoring_path,
-                icon_size=self._CARD_ICON_LOGICAL_SIZE,
+                icon_size=self._TABLE_ICON_LOGICAL_SIZE,
                 process_id=p.id,
             )
-            card = QFrame(self.game_card_container)
-            card.setProperty("hhRole", "gameCard")
-            card.setProperty("processId", p.id)
-            card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            card.customContextMenuRequested.connect(
-                lambda pos, process_id=p.id, source=card: self._show_process_context_menu(
-                    process_id, source.mapToGlobal(pos)
-                )
-            )
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(6, 6, 6, 6)
-            card_layout.setSpacing(4)
-            header = QHBoxLayout()
-            header.setContentsMargins(0, 0, 0, 0)
-            header.setSpacing(6)
-            header.addWidget(self._create_centered_app_icon_cell(qi))
+            icon_item = QTableWidgetItem()
+            icon_item.setBackground(default_background)
+            icon_item.setForeground(default_foreground)
+            self.process_table.setItem(row, self.COL_ICON, icon_item)
+            self.process_table.setCellWidget(row, self.COL_ICON, self._create_centered_app_icon_cell(qi))
 
-            name_label = QLabel(p.name, card)
-            name_label.setProperty("hhRole", "gameName")
-            name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-            header.addWidget(name_label, 1)
+            name_item = QTableWidgetItem(p.name)
+            name_item.setData(Qt.ItemDataRole.UserRole, p.id)
+            name_item.setBackground(default_background)
+            name_item.setForeground(default_foreground)
+            name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            status_label = QLabel(card)
-            status_label.setProperty("hhRole", "statusChip")
-            status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._set_game_card_status(status_label, self.scheduler.determine_process_visual_status(p, now_dt, gs))
-            header.addWidget(status_label)
+            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
+            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
+            self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
             btn = QPushButton("실행")
             btn.setProperty("hhRole", "primaryAction")
             btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id))
-
-            # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
             if p.monitoring_path != p.launch_path and p.launch_path:
                 btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
                 btn.customContextMenuRequested.connect(
@@ -1344,62 +1391,37 @@ class MainWindow(QMainWindow):
                     current_pref = "shortcut"
                 pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
                 btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
+            self.process_table.setCellWidget(row, self.COL_LAUNCH_BTN, btn)
 
-            header.addWidget(btn)
-            card_layout.addLayout(header)
-
-            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
-            progress_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            card_layout.addWidget(progress_widget)
-
-            index = len(self._game_cards)
-            self.game_card_layout.addWidget(
-                card,
-                index // self._game_card_columns,
-                index % self._game_card_columns,
-            )
-            self._game_cards[p.id] = {
-                "card": card,
-                "name": name_label,
-                "progress": progress_widget,
-                "status": status_label,
-                "launch": btn,
-            }
+            status = self.scheduler.determine_process_visual_status(p, now_dt, gs)
+            status_item = QTableWidgetItem(status)
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._apply_table_status(status_item, status)
+            self.process_table.setItem(row, self.COL_STATUS, status_item)
 
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
 
-        if self._game_cards:
-            card_width = max(entry["card"].sizeHint().width() for entry in self._game_cards.values())
-            for column in range(self._game_card_columns):
-                self.game_card_layout.setColumnMinimumWidth(column, card_width)
-                self.game_card_layout.setColumnStretch(column, 1)
-
         self.scheduler.invalidate_visual_status_snapshot()
         QTimer.singleShot(0, self._adjust_window_size_to_content)
 
-    def _set_game_card_status(self, label: QLabel, status: str) -> None:
-        state = "default"
-        if status == PROC_STATE_RUNNING:
-            state = "running"
-        elif status == PROC_STATE_INCOMPLETE:
-            state = "incomplete"
-        elif status == PROC_STATE_COMPLETED:
-            state = "completed"
-        label.setText(status)
-        label.setProperty("hhState", state)
-        label.style().unpolish(label)
-        label.style().polish(label)
-
-    def _show_process_context_menu(self, pid: str, global_pos: QPoint) -> None:
+    def show_table_context_menu(self, pos: QPoint) -> None:
+        item = self.process_table.itemAt(pos)
+        if item is None:
+            return
+        name_item = self.process_table.item(item.row(), self.COL_NAME)
+        if name_item is None:
+            return
+        pid = name_item.data(Qt.ItemDataRole.UserRole)
+        if not pid:
+            return
         menu = QMenu(self)
         edit_act = QAction("편집", self)
         del_act = QAction("삭제", self)
         edit_act.triggered.connect(functools.partial(self.handle_edit_action_for_row, pid))
         del_act.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid))
         menu.addActions([edit_act, del_act])
-        menu.exec(global_pos)
+        menu.exec(self.process_table.viewport().mapToGlobal(pos))
 
     def handle_edit_action_for_row(self, pid:str): # 게임 수정
         """선택된 게임 프로세스의 정보를 수정하는 대화 상자를 엽니다."""
@@ -1936,12 +1958,52 @@ class MainWindow(QMainWindow):
         if app_instance:
             app_instance.quit()
 
+    def _cell_content_width(self, row: int, column: int) -> int:
+        if column == self.COL_ICON:
+            return self._TABLE_ICON_LOGICAL_SIZE + self._TABLE_ICON_COLUMN_PADDING
+        widget = self.process_table.cellWidget(row, column)
+        widget_width = widget.sizeHint().width() if widget is not None else 0
+        item = self.process_table.item(row, column)
+        item_width = 0
+        if item is not None:
+            item_width = self.process_table.fontMetrics().horizontalAdvance(f"  {item.text()}  ")
+        return max(widget_width, item_width)
+
+    def _resize_table_to_contents(self) -> QSize:
+        """스크롤 없이 모든 행과 열이 보이는 최소 표 크기를 계산합니다."""
+        table = self.process_table
+        self._configure_table_header()
+        table.resizeRowsToContents()
+        for row in range(table.rowCount()):
+            table.setRowHeight(row, max(self._TABLE_ROW_HEIGHT, table.rowHeight(row)))
+
+        spacing = 4
+        for column in range(table.columnCount()):
+            width = max(
+                (self._cell_content_width(row, column) for row in range(table.rowCount())),
+                default=0,
+            )
+            if column == self.COL_ICON:
+                table.setColumnWidth(column, width)
+            else:
+                table.setColumnWidth(column, width + spacing)
+
+        frame = table.frameWidth() * 2
+        width = frame + sum(table.columnWidth(column) for column in range(table.columnCount()))
+        if table.rowCount():
+            height = frame + sum(table.rowHeight(row) for row in range(table.rowCount()))
+        else:
+            height = frame + self._TABLE_ROW_HEIGHT
+        target = QSize(max(1, width), max(1, height))
+        table.setFixedSize(target)
+        table.updateGeometry()
+        return target
+
     def _adjust_window_size_to_content(self):
         """현재 콘텐츠의 sizeHint를 단일 권위로 삼아 창을 정확히 고정합니다."""
         self.setMinimumSize(0, 0)
         self.setMaximumSize(self._QWIDGETSIZE_MAX, self._QWIDGETSIZE_MAX)
-        self.game_card_layout.invalidate()
-        self.game_card_layout.activate()
+        self._resize_table_to_contents()
         central = self.centralWidget()
         if central is not None and central.layout() is not None:
             central.layout().invalidate()
@@ -2395,7 +2457,7 @@ class MainWindow(QMainWindow):
 
 
     def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
-        """텍스트와 얇은 트랙을 분리한 카드용 진행률 위젯을 생성합니다."""
+        """텍스트와 얇은 트랙을 분리한 표 셀용 진행률 위젯을 생성합니다."""
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2480,17 +2542,21 @@ class MainWindow(QMainWindow):
         progress_bar.style().polish(progress_bar)
 
     def _refresh_progress_bars(self):
-        """카드의 진행률 텍스트와 트랙을 값이 바뀐 경우에만 갱신합니다."""
+        """표의 진행률 셀을 값이 바뀐 경우에만 갱신합니다."""
         start_time = time.time()
         now_dt = datetime.datetime.now()
         processes = {process.id: process for process in self.data_manager.managed_processes}
         updated_count = 0
 
-        for process_id, card in self._game_cards.items():
+        for row in range(self.process_table.rowCount()):
+            name_item = self.process_table.item(row, self.COL_NAME)
+            if name_item is None:
+                continue
+            process_id = name_item.data(Qt.ItemDataRole.UserRole)
             process = processes.get(process_id)
             if not process:
                 continue
-            current_widget = card["progress"]
+            current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
             percentage, time_str = self._calculate_progress_percentage(process, now_dt)
@@ -2498,10 +2564,7 @@ class MainWindow(QMainWindow):
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
                 replacement = self._create_progress_bar_widget(process, percentage, time_str)
-                replacement.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-                card["card"].layout().replaceWidget(current_widget, replacement)
-                current_widget.deleteLater()
-                card["progress"] = replacement
+                self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, replacement)
                 updated_count += 1
                 continue
 
@@ -2529,7 +2592,7 @@ class MainWindow(QMainWindow):
                     updated_count += 1
 
         if updated_count > 0:
-            self.game_card_container.update()
+            self.process_table.viewport().update()
             QTimer.singleShot(0, self._adjust_window_size_to_content)
 
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
