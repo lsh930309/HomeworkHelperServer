@@ -7,6 +7,9 @@ import time
 import datetime
 import functools
 import logging
+import ctypes
+import ctypes.wintypes
+import weakref
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -18,7 +21,10 @@ from PySide6.QtWidgets import (
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QSize
+from PySide6.QtCore import (
+    Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
+    QAbstractNativeEventFilter,
+)
 from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QCursor
 
 # --- 로컬 모듈 임포트 ---
@@ -37,6 +43,7 @@ from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
+    position_windows_window_bottom_right,
     snap_windows_moving_rect,
     set_startup_shortcut,
     get_startup_shortcut_status,
@@ -54,6 +61,35 @@ from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
 from src.gui.widgets_style import apply_modern_widgets_style, apply_widgets_palette, widgets_theme_tokens
+
+
+class _WindowsMovingEventFilter(QAbstractNativeEventFilter):
+    """메인 창의 WM_MOVING을 앱 수준에서 받아 작업 영역 자석을 적용합니다."""
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__()
+        self._window_ref = weakref.ref(window)
+
+    def nativeEventFilter(self, event_type, message):
+        window = self._window_ref()
+        if window is None:
+            return False
+        try:
+            if bytes(event_type) not in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
+                return False
+            native_message = ctypes.wintypes.MSG.from_address(int(message))
+            if native_message.message != 0x0216:  # WM_MOVING
+                return False
+            if int(native_message.hwnd) != int(window.winId()):
+                return False
+            snap_windows_moving_rect(
+                int(native_message.hwnd),
+                int(native_message.lParam),
+                threshold_logical=12,
+            )
+        except (AttributeError, TypeError, ValueError, OSError):
+            logger.debug("Windows 창 이동 자석 적용 실패", exc_info=True)
+        return False
 
 
 class IconDownloader(QThread):
@@ -111,6 +147,11 @@ class MainWindow(QMainWindow):
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
         MainWindow.INSTANCE = self
+        self._pending_bottom_right_placement = False
+        self._windows_moving_event_filter = _WindowsMovingEventFilter(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.installNativeEventFilter(self._windows_moving_event_filter)
         self._presentation_window = self
         self._host_ui_facade = None
         self.data_manager = data_manager
@@ -317,7 +358,7 @@ class MainWindow(QMainWindow):
         self.readiness_strip = QWidget(central_widget)
         self.readiness_strip.setObjectName("readinessStrip")
         readiness_layout = QHBoxLayout(self.readiness_strip)
-        readiness_layout.setContentsMargins(6, 3, 6, 2)
+        readiness_layout.setContentsMargins(6, 6, 6, 3)
         readiness_layout.setSpacing(8)
         self._readiness_status_widgets: dict[str, tuple[QLabel, QLabel]] = {}
         for key in ("beholder", "remote", "admin"):
@@ -646,30 +687,13 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         """창이 표시될 때 호출됩니다."""
         super().showEvent(event)
-        # 네이티브 프레임이 확정된 뒤 제목 표시줄과 실제 프레임 경계를 동기화합니다.
+        # 최종 콘텐츠 피팅이 끝난 뒤 네이티브 외곽 프레임을 우하단에 맞춥니다.
+        self._pending_bottom_right_placement = True
         QTimer.singleShot(0, self._apply_widgets_presentation)
-        QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
         # 트레이/복원/플랫폼별 native show 타이밍 이후에도 사이드바 모드를
         # 한 번 더 반영해, always 모드 손잡이가 시작 시점 경합으로 누락되는
         # 경로를 줄입니다.
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
-
-    def nativeEvent(self, event_type, message):
-        """Windows 이동 중 작업 영역 가장자리에만 위치 자석을 적용합니다."""
-        try:
-            if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
-                import ctypes
-
-                native_message = ctypes.wintypes.MSG.from_address(int(message))
-                if native_message.message == 0x0216:  # WM_MOVING
-                    snap_windows_moving_rect(
-                        int(native_message.hwnd),
-                        int(native_message.lParam),
-                        threshold_logical=12,
-                    )
-        except (AttributeError, TypeError, ValueError, OSError):
-            logger.debug("Windows 창 이동 자석 적용 실패", exc_info=True)
-        return super().nativeEvent(event_type, message)
 
     def _on_monitor_timer_tick(self):
         """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
@@ -1008,9 +1032,9 @@ class MainWindow(QMainWindow):
         self._menu_corner_layout = QHBoxLayout(self._menu_corner_container)
         corner_container = self._menu_corner_container
         corner_layout = self._menu_corner_layout
-        corner_layout.setContentsMargins(6, 0, 4, 0)
+        corner_layout.setContentsMargins(8, 3, 5, 3)
         corner_layout.setSpacing(6)
-        corner_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        corner_layout.addStretch(1)
         corner_layout.addWidget(
             self._always_on_top_cb,
             0,
@@ -1019,6 +1043,25 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self._volume_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         corner_container.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
+        self._fit_menu_corner_widget()
+
+    def _fit_menu_corner_widget(self) -> None:
+        """메뉴 코너의 실측 폭과 높이를 확보해 체크박스 인디케이터 잘림을 막습니다."""
+        container = getattr(self, "_menu_corner_container", None)
+        layout = getattr(self, "_menu_corner_layout", None)
+        if container is None or layout is None:
+            return
+        for control in (self._always_on_top_cb, self._volume_btn):
+            control.ensurePolished()
+        container.setMinimumSize(0, 0)
+        container.setMaximumSize(self._QWIDGETSIZE_MAX, self._QWIDGETSIZE_MAX)
+        layout.invalidate()
+        layout.activate()
+        hint = layout.sizeHint()
+        container.setFixedSize(
+            hint.width() + 2,
+            max(hint.height(), self.menuBar().sizeHint().height()),
+        )
 
     def _restart_app(self) -> None:
         """앱을 재시작합니다."""
@@ -1095,6 +1138,7 @@ class MainWindow(QMainWindow):
             apply_modern_widgets_style(self, dark=dark)
         if hasattr(self, "process_table"):
             self._refresh_table_theme_colors()
+        self._fit_menu_corner_widget()
         self._sync_windows_title_bar_color()
         if hasattr(self, "process_table"):
             QTimer.singleShot(0, self._adjust_window_size_to_content)
@@ -1914,6 +1958,14 @@ class MainWindow(QMainWindow):
     def _position_on_cursor_screen_bottom_right(self) -> None:
         """현재 커서가 있는 모니터의 작업 영역 우하단에 프레임을 맞춥니다."""
         try:
+            cursor = QCursor.pos()
+            if position_windows_window_bottom_right(
+                int(self.winId()),
+                cursor.x(),
+                cursor.y(),
+            ):
+                logger.debug("Win32 외곽 창을 커서 모니터 우하단에 배치")
+                return
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             if not screen:
                 return
@@ -2096,7 +2148,11 @@ class MainWindow(QMainWindow):
         self.setFixedSize(target)
         self.updateGeometry()
         self.update()
-        QTimer.singleShot(0, self._clamp_window_to_available_screen)
+        if self._pending_bottom_right_placement and self.isVisible():
+            self._pending_bottom_right_placement = False
+            QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
+        else:
+            QTimer.singleShot(0, self._clamp_window_to_available_screen)
 
     # ───────── 볼륨 패널 ─────────
 
@@ -2551,10 +2607,10 @@ class MainWindow(QMainWindow):
         value_layout = QHBoxLayout(value_row)
         value_layout.setContentsMargins(0, 0, 0, 0)
         value_layout.setSpacing(4)
-        value_layout.addStretch(1)
         icon_path = self._get_stamina_icon_path(process)
         if icon_path and os.path.exists(icon_path):
             value_layout.addWidget(self._create_centered_resource_icon_label(icon_path))
+        value_layout.addStretch(1)
 
         expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
         display_text = self._get_progress_bar_format(percentage, time_str) if expects_bar else time_str

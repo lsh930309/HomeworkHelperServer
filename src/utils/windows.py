@@ -105,6 +105,66 @@ def snap_windows_moving_rect(hwnd: int, rect_pointer: int, *, threshold_logical:
         logger.debug("Windows 창 이동 RECT 보정 실패: %s", exc)
         return False
 
+
+def position_windows_window_bottom_right(hwnd: int, cursor_x: int, cursor_y: int) -> bool:
+    """커서 모니터의 작업 영역 우하단에 Win32 외곽 창 전체를 맞춥니다."""
+    if not is_windows() or not hwnd:
+        return False
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.wintypes.DWORD),
+                ("rcMonitor", ctypes.wintypes.RECT),
+                ("rcWork", ctypes.wintypes.RECT),
+                ("dwFlags", ctypes.wintypes.DWORD),
+            ]
+
+        user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+        user32.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
+        user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
+        user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+        user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
+        user32.GetWindowRect.restype = ctypes.wintypes.BOOL
+        user32.SetWindowPos.argtypes = [
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+
+        monitor = user32.MonitorFromPoint(
+            ctypes.wintypes.POINT(int(cursor_x), int(cursor_y)),
+            2,  # MONITOR_DEFAULTTONEAREST
+        )
+        if not monitor:
+            return False
+        monitor_info = _MonitorInfo()
+        monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+        window_rect = ctypes.wintypes.RECT()
+        native_hwnd = ctypes.wintypes.HWND(hwnd)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+            return False
+        if not user32.GetWindowRect(native_hwnd, ctypes.byref(window_rect)):
+            return False
+
+        width = window_rect.right - window_rect.left
+        height = window_rect.bottom - window_rect.top
+        work = monitor_info.rcWork
+        left = work.right - width
+        top = work.bottom - height
+        flags = 0x0001 | 0x0004 | 0x0010  # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        return bool(user32.SetWindowPos(native_hwnd, None, left, top, 0, 0, flags))
+    except Exception as exc:
+        logger.debug("Windows 창 우하단 배치 실패: %s", exc)
+        return False
+
 def is_windows() -> bool:
     return os.name == 'nt'
 

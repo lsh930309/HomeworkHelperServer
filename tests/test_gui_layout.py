@@ -637,6 +637,9 @@ def test_main_window_position_is_not_persisted_when_show_always_reanchors():
     assert 'setValue("window_geometry"' not in source
     assert "restoreGeometry(" not in source
     assert "_position_on_cursor_screen_bottom_right" in source
+    assert "position_windows_window_bottom_right(" in source
+    assert "_pending_bottom_right_placement" in source
+    assert "_WindowsMovingEventFilter" in source
     assert "QApplication.screenAt(QCursor.pos())" in source
 
 
@@ -742,7 +745,16 @@ def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypat
 
         monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: str(icon_path))
         with_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        with_icon.resize(240, window._TABLE_ROW_HEIGHT)
+        with_icon.show()
+        app.processEvents()
         assert len(with_icon.findChildren(QLabel)) == 2
+        labels = with_icon.findChildren(QLabel)
+        resource_icon = next(label for label in labels if label.objectName() != "progressText")
+        progress_text = with_icon.findChild(QLabel, "progressText")
+        assert resource_icon.geometry().left() == with_icon.contentsRect().left()
+        assert progress_text.geometry().right() == with_icon.contentsRect().right()
+        assert resource_icon.geometry().right() < progress_text.geometry().left()
     finally:
         if without_icon is not None:
             without_icon.close()
@@ -757,11 +769,12 @@ def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, t
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
         margins = window._menu_corner_layout.contentsMargins()
-        assert margins.left() >= 6
-        assert margins.right() >= 4
-        assert window._menu_corner_layout.alignment() & Qt.AlignmentFlag.AlignRight
-        assert window._menu_corner_layout.alignment() & Qt.AlignmentFlag.AlignVCenter
-        assert window._menu_corner_container.sizeHint().width() >= window._always_on_top_cb.sizeHint().width()
+        assert margins.left() >= 8
+        assert margins.top() >= 3
+        assert margins.right() >= 5
+        assert window._menu_corner_layout.itemAt(0).spacerItem() is not None
+        assert window._menu_corner_container.width() >= window._menu_corner_layout.sizeHint().width()
+        assert window._menu_corner_container.height() >= window.menuBar().sizeHint().height()
     finally:
         _stop_window(window, app)
 

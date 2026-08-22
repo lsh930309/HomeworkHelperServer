@@ -94,8 +94,8 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
     window.setStyleSheet(
         f"""
         QWidget#hhMainSurface {{ background: {t['surface']}; color: {t['text']}; }}
-        QMenuBar {{ background: {t['surface']}; color: {t['text']}; padding: 1px 4px; spacing: 2px; }}
-        QMenuBar::item {{ padding: 4px 7px; border-radius: 4px; }}
+        QMenuBar {{ background: {t['surface']}; color: {t['text']}; padding: 4px 4px 3px 4px; spacing: 2px; }}
+        QMenuBar::item {{ padding: 5px 7px 4px 7px; border-radius: 4px; }}
         QMenuBar::item:selected {{ background: {t['surface_hover']}; }}
         QMenu {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 4px; }}
         QMenu::item {{ padding: 5px 16px 5px 8px; border-radius: 4px; }}
@@ -150,7 +150,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QLabel[hhRole="readinessDot"][hhState="green"] {{ color: {t['success']}; }}
         QLabel[hhRole="readinessDot"][hhState="yellow"] {{ color: {t['warning']}; }}
         QLabel[hhRole="readinessDot"][hhState="red"] {{ color: {t['danger']}; }}
-        QCheckBox {{ color: {t['text']}; spacing: 6px; }}
+        QCheckBox {{ color: {t['text']}; spacing: 6px; padding-left: 2px; }}
         QToolTip {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 5px; }}
         """
     )
