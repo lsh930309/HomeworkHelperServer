@@ -17,12 +17,13 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
 from src.utils.clipboard import copy_file_to_clipboard
+from src.gui.widgets_style import apply_sidebar_widgets_style
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class _HoverThumbCell(QLabel):
 
     _STYLE_NORMAL = (
         "QLabel { background: rgba(255,255,255,6);"
-        " border: 1px solid rgba(255,255,255,15); border-radius: 3px; }"
+        " border: none; border-radius: 3px; }"
     )
     _STYLE_HOVER = (
         "QLabel { background: rgba(255,255,255,10);"
@@ -316,25 +317,6 @@ QSlider::handle:horizontal:hover {
 }
 """
 
-_MUTE_BTN_STYLE = """
-QPushButton {
-    border: 1px solid rgba(255,255,255,22);
-    border-radius: 3px;
-    background: rgba(255,255,255,10);
-    color: white;
-    font-size: 10px;
-}
-QPushButton:checked {
-    background: rgba(80,130,220,160);
-    border-color: rgba(100,160,255,180);
-    color: white;
-}
-QPushButton:hover:!checked {
-    background: rgba(255,255,255,22);
-}
-"""
-
-
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
@@ -404,6 +386,7 @@ class SidebarWidget(QWidget):
         frame_layout.setSpacing(8)
 
         self._build_ui(frame_layout)
+        apply_sidebar_widgets_style(self, dark=True)
 
         # 슬라이드 애니메이션
         self._anim = QPropertyAnimation(self, b"geometry")
@@ -538,19 +521,6 @@ class SidebarWidget(QWidget):
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         close_btn = QPushButton("닫기")
         close_btn.setFixedHeight(28)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,10);
-                color: rgba(255,255,255,160);
-                border: 1px solid rgba(255,255,255,18);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: rgba(255,255,255,22);
-                color: white;
-            }
-        """)
         close_btn.clicked.connect(self.slide_out)
         layout.addWidget(close_btn)
 
@@ -712,10 +682,8 @@ class SidebarWidget(QWidget):
 
         구성: [아이콘 + 이름] / [오늘 플레이타임] / [게임 종료 버튼]
         """
-        cluster = QWidget()
-        cluster.setStyleSheet(
-            "QWidget { background: rgba(255,255,255,5); border: 1px solid rgba(255,255,255,10); border-radius: 8px; }"
-        )
+        cluster = QFrame()
+        cluster.setProperty("hhRole", "sidebarGroup")
         layout = QVBoxLayout(cluster)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(7)
@@ -726,9 +694,7 @@ class SidebarWidget(QWidget):
 
         icon_label = QLabel()
         icon_label.setFixedSize(40, 40)
-        icon_label.setStyleSheet(
-            "background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 10px;"
-        )
+        icon_label.setStyleSheet("background: rgba(255,255,255,8); border: none; border-radius: 10px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setScaledContents(True)
         header.addWidget(icon_label)
@@ -760,17 +726,7 @@ class SidebarWidget(QWidget):
         # ── 게임 종료 버튼 ──
         kill_btn = QPushButton("게임 종료")
         kill_btn.setFixedHeight(28)
-        kill_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(160, 30, 30, 160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(200, 60, 60, 120);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover  { background: rgba(200, 40, 40, 200); color: white; }
-            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
-        """)
+        kill_btn.setProperty("hhRole", "danger")
         kill_btn.clicked.connect(lambda _=False, p=pid: self._kill_process(p))
         layout.addWidget(kill_btn)
 
@@ -928,9 +884,7 @@ class SidebarWidget(QWidget):
         mute_btn = QPushButton()
         mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
-        mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
-        from PySide6.QtWidgets import QStyle
         style = QApplication.style()
         if style:
             icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
@@ -1147,16 +1101,6 @@ class SidebarWidget(QWidget):
         )
         self._capture_now_btn = QPushButton("지금 촬영")
         self._capture_now_btn.setFixedHeight(28)
-        self._capture_now_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,10);
-                color: rgba(255,255,255,160);
-                border: 1px solid rgba(255,255,255,18);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
-        """)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
         header.addWidget(title)
         header.addStretch()
@@ -1189,17 +1133,7 @@ class SidebarWidget(QWidget):
         )
         self._rec_start_btn = QPushButton("지금 녹화")
         self._rec_start_btn.setFixedHeight(28)
-        self._rec_start_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(180,40,40,160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(220,60,60,120);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(220,50,50,200); color: white; }
-            QPushButton:pressed { background: rgba(140,20,20,220); }
-        """)
+        self._rec_start_btn.setProperty("hhRole", "danger")
         self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
         self._rec_start_btn.hide()
         header.addWidget(title)
@@ -1207,41 +1141,20 @@ class SidebarWidget(QWidget):
         header.addWidget(self._rec_start_btn)
         layout.addLayout(header)
 
-        self._rec_status_label = QLabel("○ OBS 오프라인")
-        self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._rec_status_label = QLabel("OBS 오프라인")
+        self._rec_status_label.setProperty("hhState", "default")
         layout.addWidget(self._rec_status_label)
 
-        self._rec_stop_btn = QPushButton("■ 녹화 종료")
+        self._rec_stop_btn = QPushButton("녹화 종료")
         self._rec_stop_btn.setFixedHeight(28)
-        self._rec_stop_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(160, 30, 30, 160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(200, 60, 60, 120);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(200, 40, 40, 200); color: white; }
-            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
-        """)
+        self._rec_stop_btn.setProperty("hhRole", "danger")
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
         layout.addWidget(self._rec_stop_btn)
 
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
-        self._rec_connect_btn = QPushButton("↺ OBS 재연결")
+        self._rec_connect_btn = QPushButton("OBS 재연결")
         self._rec_connect_btn.setFixedHeight(26)
-        self._rec_connect_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,12);
-                color: rgba(180,200,240,200);
-                border: 1px solid rgba(255,255,255,25);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
-            QPushButton:pressed { background: rgba(255,255,255,8); }
-        """)
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
 
@@ -1296,26 +1209,26 @@ class SidebarWidget(QWidget):
                 self._rec_elapsed_sec = elapsed
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
-            self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
-            self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
+            self._rec_status_label.setText(f"REC  {hrs:02d}:{mins:02d}:{secs:02d}")
+            status_style = "error"
             self._rec_stop_btn.show()
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "idle":
-            self._rec_status_label.setText("● OBS 대기 중")
-            self._rec_status_label.setStyleSheet("color: #5aaa5a; font-size: 12px;")
+            self._rec_status_label.setText("OBS 대기 중")
+            status_style = "success"
             self._rec_stop_btn.hide()
             self._rec_start_btn.show()
             self._rec_connect_btn.hide()
         elif state == "connecting":
-            self._rec_status_label.setText("○ OBS 연결 중...")
-            self._rec_status_label.setStyleSheet("color: #aaa850; font-size: 12px;")
+            self._rec_status_label.setText("OBS 연결 중...")
+            status_style = "warning"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         else:  # obs_offline
-            self._rec_status_label.setText("○ OBS 오프라인")
-            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_status_label.setText("OBS 오프라인")
+            status_style = "default"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.show()
@@ -1323,6 +1236,9 @@ class SidebarWidget(QWidget):
             err = self._get_recording_error() if self._get_recording_error else ""
             self._rec_status_label.setToolTip(err if err else "")
             self._rec_connect_btn.setToolTip(err if err else "")
+        self._rec_status_label.setProperty("hhState", status_style)
+        self._rec_status_label.style().unpolish(self._rec_status_label)
+        self._rec_status_label.style().polish(self._rec_status_label)
 
     def _update_rec_timer(self) -> None:
         """1초 tick. recording 상태일 때 표시 시간을 갱신."""
@@ -1405,20 +1321,13 @@ class SidebarWidget(QWidget):
             self._thumb_grid_layout.addWidget(cell, row, col)
 
         # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_label = f"+{remaining}" if remaining > 0 else ""
         folder_btn = QPushButton(folder_label)
         folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
         folder_btn.setToolTip("스크린샷 폴더 열기")
-        folder_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,8);
-                color: rgba(180,200,240,200);
-                border: 1px dashed rgba(255,255,255,25);
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
-        """)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if remaining == 0:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         _dir = save_dir_str
 
         def _open_folder(d: str = _dir) -> None:
@@ -1613,20 +1522,13 @@ class SidebarWidget(QWidget):
             self._rec_thumb_grid_layout.addWidget(cell, row, col)
 
         # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_label = f"+{remaining}" if remaining > 0 else ""
         folder_btn = QPushButton(folder_label)
         folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
         folder_btn.setToolTip("녹화 폴더 열기")
-        folder_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,8);
-                color: rgba(180,200,240,200);
-                border: 1px dashed rgba(255,255,255,25);
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
-        """)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if remaining == 0:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         _dir = output_dir
 
         def _open_rec_folder(d: str = _dir) -> None:
