@@ -22,6 +22,75 @@ RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
+_MONITOR_DEFAULTTONEAREST = 2
+_SWP_FRAME_MOVE_FLAGS = 0x0001 | 0x0004 | 0x0010
+
+
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+    ]
+
+
+def _configure_window_geometry_api(user32) -> None:
+    user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
+    user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+    user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
+    user32.GetWindowRect.restype = ctypes.wintypes.BOOL
+    user32.SetWindowPos.argtypes = [
+        ctypes.wintypes.HWND,
+        ctypes.wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.wintypes.UINT,
+    ]
+    user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+
+
+def _get_monitor_work_area(user32, monitor):
+    monitor_info = _MonitorInfo()
+    monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+    if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+        return None
+    work = monitor_info.rcWork
+    return work.left, work.top, work.right, work.bottom
+
+
+def _get_window_frame_rects(user32, hwnd):
+    """Win32 외곽 RECT와 실제로 보이는 DWM 프레임 RECT를 함께 반환합니다."""
+    native_hwnd = ctypes.wintypes.HWND(hwnd)
+    outer = ctypes.wintypes.RECT()
+    if not user32.GetWindowRect(native_hwnd, ctypes.byref(outer)):
+        return None
+
+    visible = ctypes.wintypes.RECT(outer.left, outer.top, outer.right, outer.bottom)
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+        dwmapi.DwmGetWindowAttribute.argtypes = [
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.wintypes.DWORD,
+        ]
+        dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+        candidate = ctypes.wintypes.RECT()
+        result = dwmapi.DwmGetWindowAttribute(
+            native_hwnd,
+            _DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(candidate),
+            ctypes.sizeof(candidate),
+        )
+        if result == 0 and candidate.right > candidate.left and candidate.bottom > candidate.top:
+            visible = candidate
+    except (AttributeError, OSError):
+        pass
+    return outer, visible
 
 
 def snap_rect_to_work_area(
@@ -49,37 +118,25 @@ def snap_rect_to_work_area(
     return left, top, right, bottom
 
 
-def snap_windows_moving_rect(hwnd: int, rect_pointer: int, *, threshold_logical: int = 12) -> bool:
-    """WM_MOVING의 RECT를 가장 가까운 모니터 작업 영역에 맞춰 직접 보정합니다."""
-    if not is_windows() or not hwnd or not rect_pointer:
+def snap_windows_window_to_work_area(hwnd: int, *, threshold_logical: int = 15) -> bool:
+    """현재 창의 보이는 DWM 프레임을 가까운 모니터 작업 영역 경계에 붙입니다."""
+    if not is_windows() or not hwnd:
         return False
 
     try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        rect = ctypes.cast(
-            ctypes.c_void_p(rect_pointer),
-            ctypes.POINTER(ctypes.wintypes.RECT),
-        ).contents
-
-        class _MonitorInfo(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", ctypes.wintypes.DWORD),
-                ("rcMonitor", ctypes.wintypes.RECT),
-                ("rcWork", ctypes.wintypes.RECT),
-                ("dwFlags", ctypes.wintypes.DWORD),
-            ]
-
-        user32.MonitorFromRect.argtypes = [ctypes.POINTER(ctypes.wintypes.RECT), ctypes.wintypes.DWORD]
-        user32.MonitorFromRect.restype = ctypes.wintypes.HMONITOR
-        user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
-        user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
-        monitor = user32.MonitorFromRect(ctypes.byref(rect), 2)  # MONITOR_DEFAULTTONEAREST
+        _configure_window_geometry_api(user32)
+        user32.MonitorFromWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.wintypes.HMONITOR
+        native_hwnd = ctypes.wintypes.HWND(hwnd)
+        monitor = user32.MonitorFromWindow(native_hwnd, _MONITOR_DEFAULTTONEAREST)
         if not monitor:
             return False
-        monitor_info = _MonitorInfo()
-        monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
-        if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+        work_area = _get_monitor_work_area(user32, monitor)
+        frame_rects = _get_window_frame_rects(user32, hwnd)
+        if work_area is None or frame_rects is None:
             return False
+        outer, visible = frame_rects
 
         dpi = 96
         get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
@@ -90,77 +147,55 @@ def snap_windows_moving_rect(hwnd: int, rect_pointer: int, *, threshold_logical:
             if reported_dpi > 0:
                 dpi = reported_dpi
         threshold = max(1, round(threshold_logical * dpi / 96))
-        original = (rect.left, rect.top, rect.right, rect.bottom)
-        work = monitor_info.rcWork
+        original = (visible.left, visible.top, visible.right, visible.bottom)
         snapped = snap_rect_to_work_area(
             original,
-            (work.left, work.top, work.right, work.bottom),
+            work_area,
             threshold,
         )
         if snapped == original:
             return False
-        rect.left, rect.top, rect.right, rect.bottom = snapped
-        return True
+        left = outer.left + snapped[0] - visible.left
+        top = outer.top + snapped[1] - visible.top
+        return bool(user32.SetWindowPos(native_hwnd, None, left, top, 0, 0, _SWP_FRAME_MOVE_FLAGS))
     except Exception as exc:
-        logger.debug("Windows 창 이동 RECT 보정 실패: %s", exc)
+        logger.debug("Windows 창 가시 프레임 자석 적용 실패: %s", exc)
         return False
 
 
 def position_windows_window_bottom_right(hwnd: int, cursor_x: int, cursor_y: int) -> bool:
-    """커서 모니터의 작업 영역 우하단에 Win32 외곽 창 전체를 맞춥니다."""
+    """커서 모니터의 작업 영역 우하단에 보이는 DWM 프레임을 맞춥니다."""
     if not is_windows() or not hwnd:
         return False
 
     try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-        class _MonitorInfo(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", ctypes.wintypes.DWORD),
-                ("rcMonitor", ctypes.wintypes.RECT),
-                ("rcWork", ctypes.wintypes.RECT),
-                ("dwFlags", ctypes.wintypes.DWORD),
-            ]
-
+        _configure_window_geometry_api(user32)
         user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
         user32.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
-        user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
-        user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
-        user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
-        user32.GetWindowRect.restype = ctypes.wintypes.BOOL
-        user32.SetWindowPos.argtypes = [
-            ctypes.wintypes.HWND,
-            ctypes.wintypes.HWND,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.wintypes.UINT,
-        ]
-        user32.SetWindowPos.restype = ctypes.wintypes.BOOL
 
         monitor = user32.MonitorFromPoint(
             ctypes.wintypes.POINT(int(cursor_x), int(cursor_y)),
-            2,  # MONITOR_DEFAULTTONEAREST
+            _MONITOR_DEFAULTTONEAREST,
         )
         if not monitor:
             return False
-        monitor_info = _MonitorInfo()
-        monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
-        window_rect = ctypes.wintypes.RECT()
-        native_hwnd = ctypes.wintypes.HWND(hwnd)
-        if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+        work_area = _get_monitor_work_area(user32, monitor)
+        frame_rects = _get_window_frame_rects(user32, hwnd)
+        if work_area is None or frame_rects is None:
             return False
-        if not user32.GetWindowRect(native_hwnd, ctypes.byref(window_rect)):
-            return False
-
-        width = window_rect.right - window_rect.left
-        height = window_rect.bottom - window_rect.top
-        work = monitor_info.rcWork
-        left = work.right - width
-        top = work.bottom - height
-        flags = 0x0001 | 0x0004 | 0x0010  # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-        return bool(user32.SetWindowPos(native_hwnd, None, left, top, 0, 0, flags))
+        outer, visible = frame_rects
+        left = outer.left + work_area[2] - visible.right
+        top = outer.top + work_area[3] - visible.bottom
+        return bool(user32.SetWindowPos(
+            ctypes.wintypes.HWND(hwnd),
+            None,
+            left,
+            top,
+            0,
+            0,
+            _SWP_FRAME_MOVE_FLAGS,
+        ))
     except Exception as exc:
         logger.debug("Windows 창 우하단 배치 실패: %s", exc)
         return False

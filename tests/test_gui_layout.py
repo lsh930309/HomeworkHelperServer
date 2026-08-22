@@ -639,7 +639,10 @@ def test_main_window_position_is_not_persisted_when_show_always_reanchors():
     assert "_position_on_cursor_screen_bottom_right" in source
     assert "position_windows_window_bottom_right(" in source
     assert "_pending_bottom_right_placement" in source
-    assert "_WindowsMovingEventFilter" in source
+    assert "def moveEvent(self, event):" in source
+    assert "snap_windows_window_to_work_area(" in source
+    assert "_WindowsMovingEventFilter" not in source
+    assert "QAbstractNativeEventFilter" not in source
     assert "QApplication.screenAt(QCursor.pos())" in source
 
 
@@ -768,13 +771,43 @@ def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, t
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
+        window.show()
+        app.processEvents()
         margins = window._menu_corner_layout.contentsMargins()
-        assert margins.left() >= 8
-        assert margins.top() >= 3
-        assert margins.right() >= 5
-        assert window._menu_corner_layout.itemAt(0).spacerItem() is not None
-        assert window._menu_corner_container.width() >= window._menu_corner_layout.sizeHint().width()
-        assert window._menu_corner_container.height() >= window.menuBar().sizeHint().height()
+        assert margins.left() == 0
+        assert margins.top() == margins.bottom() == 0
+        assert margins.right() == 0
+        assert window._menu_corner_layout.count() == 2
+        assert window._menu_corner_layout.itemAt(0).widget() is window._always_on_top_cb
+        assert window._menu_corner_layout.itemAt(1).widget() is window._volume_btn
+        menu_rect = window.menuBar().contentsRect()
+        corner_rect = window._menu_corner_container.geometry()
+        # QMenuBar 자체의 4px 오른쪽 스타일 여백만 남고 별도 stretch는 없습니다.
+        assert 0 <= menu_rect.right() - corner_rect.right() <= 4
+        assert menu_rect.contains(corner_rect)
+    finally:
+        _stop_window(window, app)
+
+
+def test_move_event_uses_main_window_handle_and_15px_snap_threshold(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        main_window,
+        "snap_windows_window_to_work_area",
+        lambda hwnd, *, threshold_logical: calls.append((hwnd, threshold_logical)) or False,
+    )
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window.show()
+        app.processEvents()
+        calls.clear()
+        window.move(window.pos() + QPoint(20, 20))
+        app.processEvents()
+
+        assert calls
+        assert calls[-1] == (int(window.winId()), 15)
     finally:
         _stop_window(window, app)
 
