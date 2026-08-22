@@ -329,17 +329,30 @@ def test_menu_bar_dropdown_actions_are_text_only(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
-def test_main_window_uses_icon_only_remote_readiness_indicators():
+def test_main_window_uses_one_top_level_readiness_control():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
     assert "showMessage(" not in source
-    assert '("beholder", "●")' in source
-    assert '("remote", "●")' in source
-    assert '("admin", "●")' in source
-    assert "remoteReadiness_server" not in source
-    assert "remoteReadiness_power" not in source
-    assert "remoteReadiness_tailscale" not in source
-    assert "QGraphicsDropShadowEffect" in source
+    assert 'setObjectName("systemStatusButton")' in source
+    assert 'for key in ("beholder", "remote", "admin")' in source
+    assert "QGraphicsDropShadowEffect" not in source
+    assert "QStatusBar" not in source
+
+
+def test_system_status_button_aggregates_severity_and_shows_messages(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window._set_remote_readiness_indicator("remote", "yellow", "원격 연결 확인 필요")
+        assert window.system_status_button.property("hhState") == "warning"
+        assert any("원격 연결 확인 필요" in action.text() for action in window.system_status_button.menu().actions())
+
+        window._set_remote_readiness_indicator("beholder", "red", "데이터 보호 오류")
+        assert window.system_status_button.property("hhState") == "error"
+        assert "데이터 보호 오류" in window.system_status_button.toolTip()
+    finally:
+        _stop_window(window, app)
 
 
 def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
@@ -454,7 +467,7 @@ def test_process_dialog_returns_launch_args_opt_in(monkeypatch, tmp_path):
         app.processEvents()
 
 
-def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path):
+def test_main_game_cards_use_fixed_name_sort_and_centered_icons(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     icon_requests = []
@@ -475,33 +488,19 @@ def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path
         window._adjust_window_size_to_content()
         app.processEvents()
 
-        assert not window.process_table.horizontalHeader().isVisible()
-        assert not window.process_table.verticalHeader().isVisible()
-        assert window.process_table.verticalHeader().width() == 0
-        assert not window.process_table.isSortingEnabled()
-        assert [
-            window.process_table.item(row, window.COL_NAME).text()
-            for row in range(window.process_table.rowCount())
-        ] == ["Alpha", "Beta", "Zeta"]
+        assert [window._game_cards[key]["name"].text() for key in window._game_cards] == ["Alpha", "Beta", "Zeta"]
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
-        assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
-        assert window.process_table.iconSize().width() == window._TABLE_ICON_LOGICAL_SIZE
-        assert window.process_table.columnWidth(window.COL_ICON) <= (
-            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
-        )
-        icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
+        assert {request[1] for request in icon_requests} == {window._CARD_ICON_LOGICAL_SIZE}
+        icon_cell = window._game_cards["a"]["card"].findChildren(QLabel)[0]
         assert isinstance(icon_cell, QLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
-        assert all(
-            window._TABLE_ROW_HEIGHT <= window.process_table.rowHeight(row) <= window._TABLE_ROW_HEIGHT + 4
-            for row in range(window.process_table.rowCount())
-        )
+        assert all(card["card"].height() == window._CARD_HEIGHT for card in window._game_cards.values())
     finally:
         _stop_window(window, app)
 
 
-def test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen(monkeypatch, tmp_path):
+def test_main_card_window_remains_resizable_and_caps_initial_size(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     long_name = "Extremely Long Game Name " + ("X" * 800)
@@ -517,16 +516,17 @@ def test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen(monk
         app.processEvents()
 
         screen = window.screen() or QApplication.primaryScreen()
-        max_width = int(screen.availableGeometry().width() * window._SCREEN_SIZE_RATIO)
+        max_width = int(screen.availableGeometry().width() * window._SCREEN_WIDTH_RATIO)
         assert window.width() <= max(max_width, window._MIN_WINDOW_WIDTH)
-        assert window.minimumSize() == window.size()
-        assert window.maximumSize() == window.size()
-        assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert window.minimumSize() != window.size()
+        assert window.maximumWidth() > window.width()
+        assert window.game_card_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert window.game_card_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     finally:
         _stop_window(window, app)
 
 
-def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path):
+def test_restore_window_state_keeps_window_resizable(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(
@@ -540,37 +540,18 @@ def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path
         window._restore_window_state()
         app.processEvents()
 
-        assert window.minimumSize() == window.size()
-        assert window.maximumSize() == window.size()
+        assert window.minimumSize() != window.size()
+        assert window.maximumWidth() > window.width()
     finally:
         _stop_window(window, app)
 
 
-def test_relative_window_anchor_keeps_bottom_right_across_height_changes():
-    import src.gui.main_window as main_window
+def test_window_geometry_uses_single_qsettings_authority():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
-    virtual_available = QRect(0, 0, 2560, 1560)
-    window_rect = QRect(2200, 1260, 360, 300)
-
-    anchor = main_window.MainWindow._window_anchor_from_rect(
-        window_rect,
-        virtual_available,
-        "Moonlight",
-    )
-
-    assert anchor["horizontal"] == "right"
-    assert anchor["vertical"] == "bottom"
-    assert anchor["right_gap"] == 0
-    assert anchor["bottom_gap"] == 0
-
-    physical_available = QRect(0, 0, 2560, 1400)
-    restored = main_window.MainWindow._position_from_window_anchor(
-        anchor,
-        physical_available,
-        QSize(360, 300),
-    )
-
-    assert restored == QPoint(2200, 1100)
+    assert 'setValue("window_geometry", self.saveGeometry())' in source
+    assert "window_anchor_v1" not in source
+    assert 'setValue("window_position"' not in source
 
 
 def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
