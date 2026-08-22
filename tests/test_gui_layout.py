@@ -790,6 +790,8 @@ def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, t
         assert menu_rect.contains(corner_rect)
         assert checkbox_rect.center().y() == action_rect.center().y()
         assert volume_rect.center().y() == action_rect.center().y()
+        assert window._always_on_top_cb.width() >= window._always_on_top_cb.sizeHint().width()
+        assert checkbox_rect.right() + window._menu_corner_layout.spacing() < volume_rect.left()
 
         option = QStyleOptionButton()
         window._always_on_top_cb.initStyleOption(option)

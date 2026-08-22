@@ -1033,6 +1033,9 @@ class MainWindow(QMainWindow):
         self._volume_btn.setFixedSize(action_height, action_height)
         self._menu_corner_layout.invalidate()
         self._menu_corner_layout.activate()
+        self._menu_corner_container.adjustSize()
+        self._menu_corner_container.updateGeometry()
+        self.menuBar().updateGeometry()
 
     def _restart_app(self) -> None:
         """앱을 재시작합니다."""

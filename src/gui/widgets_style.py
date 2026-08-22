@@ -171,7 +171,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QLabel[hhRole="readinessDot"][hhState="yellow"] {{ color: {t['warning']}; }}
         QLabel[hhRole="readinessDot"][hhState="red"] {{ color: {t['danger']}; }}
         QCheckBox {{ color: {t['text']}; spacing: 6px; padding-left: 2px; }}
-        QCheckBox[hhRole="menuCornerToggle"] {{ padding: 1px 0px 1px 2px; }}
+        QCheckBox[hhRole="menuCornerToggle"] {{ padding: 1px 4px 1px 2px; }}
         QToolTip {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 5px; }}
         """
     )
