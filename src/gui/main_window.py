@@ -56,7 +56,7 @@ from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
-from src.gui.widgets_style import apply_modern_widgets_style, apply_widgets_palette, widgets_theme_tokens
+from src.gui.widgets_style import apply_modern_widgets_style, apply_widgets_palette, tint_icon, widgets_theme_tokens
 
 
 class IconDownloader(QThread):
@@ -993,9 +993,12 @@ class MainWindow(QMainWindow):
         self._volume_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
         self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
         self._volume_btn.setCheckable(True)
+        self._volume_btn.setProperty("hhRole", "menuCornerAction")
+        self._volume_btn.setIconSize(QSize(16, 16))
         self._volume_btn.clicked.connect(self._toggle_volume_panel)
 
         self._always_on_top_cb = QCheckBox("항상 위")
+        self._always_on_top_cb.setProperty("hhRole", "menuCornerToggle")
         self._always_on_top_cb.setToolTip("창을 항상 위에 표시")
         self._always_on_top_cb.setChecked(self.data_manager.global_settings.always_on_top)
         self._always_on_top_cb.toggled.connect(self._on_always_on_top_toggled)
@@ -1091,6 +1094,10 @@ class MainWindow(QMainWindow):
             apply_modern_widgets_style(self, dark=dark)
         if hasattr(self, "process_table"):
             self._refresh_table_theme_colors()
+        if hasattr(self, "_volume_btn"):
+            tokens = widgets_theme_tokens(dark)
+            volume_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
+            self._volume_btn.setIcon(tint_icon(volume_icon, QColor(tokens["text"])))
         self._sync_windows_title_bar_color()
         if hasattr(self, "process_table"):
             QTimer.singleShot(0, self._adjust_window_size_to_content)

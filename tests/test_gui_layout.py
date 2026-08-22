@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton, QStyle, QStyleOptionButton
 
 from src.data.data_models import (
     GlobalSettings,
@@ -782,9 +782,45 @@ def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, t
         assert window._menu_corner_layout.itemAt(1).widget() is window._volume_btn
         menu_rect = window.menuBar().contentsRect()
         corner_rect = window._menu_corner_container.geometry()
+        action_rect = window.menuBar().actionGeometry(window.menuBar().actions()[0])
+        checkbox_rect = window._always_on_top_cb.geometry().translated(corner_rect.topLeft())
+        volume_rect = window._volume_btn.geometry().translated(corner_rect.topLeft())
         # QMenuBar 자체의 4px 오른쪽 스타일 여백만 남고 별도 stretch는 없습니다.
         assert 0 <= menu_rect.right() - corner_rect.right() <= 4
         assert menu_rect.contains(corner_rect)
+        assert checkbox_rect.center().y() == action_rect.center().y()
+        assert volume_rect.center().y() == action_rect.center().y()
+
+        option = QStyleOptionButton()
+        window._always_on_top_cb.initStyleOption(option)
+        indicator_rect = window._always_on_top_cb.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator,
+            option,
+            window._always_on_top_cb,
+        )
+        assert indicator_rect.top() > 0
+        assert indicator_rect.bottom() < window._always_on_top_cb.height() - 1
+    finally:
+        _stop_window(window, app)
+
+
+def test_volume_button_icon_uses_theme_text_color(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window._apply_theme("dark")
+        app.processEvents()
+        image = window._volume_btn.icon().pixmap(16, 16).toImage()
+        visible_colors = [
+            image.pixelColor(x, y)
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        ]
+
+        assert visible_colors
+        assert all(color.lightness() > 200 for color in visible_colors)
     finally:
         _stop_window(window, app)
 

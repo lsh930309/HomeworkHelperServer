@@ -5,7 +5,8 @@ Runtime state remains owned by the existing GUI/controllers.
 """
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 
@@ -45,6 +46,22 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
         "danger_soft": "#fce8e6",
         "focus": "#45454b",
     }
+
+
+def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:
+    """표준 아이콘을 현재 테마의 명시적 전경색으로 변환합니다."""
+    pixmap = icon.pixmap(logical_size, logical_size)
+    if pixmap.isNull():
+        return icon
+    tinted = QPixmap(pixmap.size())
+    tinted.setDevicePixelRatio(pixmap.devicePixelRatio())
+    tinted.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(tinted)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(tinted.rect(), color)
+    painter.end()
+    return QIcon(tinted)
 
 
 def apply_widgets_palette(*, dark: bool) -> None:
@@ -124,6 +141,9 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QToolButton:hover, QToolButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
         QToolButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton:checked {{ background: {t['accent']}; color: {t['text']}; }}
+        QToolButton[hhRole="menuCornerAction"] {{
+            min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px;
+        }}
         QTableWidget#processTable {{
             background: {t['surface_raised']}; alternate-background-color: {t['surface_raised']};
             color: {t['text']}; border: none; outline: none; padding: 0px;
@@ -151,6 +171,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QLabel[hhRole="readinessDot"][hhState="yellow"] {{ color: {t['warning']}; }}
         QLabel[hhRole="readinessDot"][hhState="red"] {{ color: {t['danger']}; }}
         QCheckBox {{ color: {t['text']}; spacing: 6px; padding-left: 2px; }}
+        QCheckBox[hhRole="menuCornerToggle"] {{ padding: 1px 0px 1px 2px; }}
         QToolTip {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 5px; }}
         """
     )
