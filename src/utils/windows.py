@@ -23,6 +23,88 @@ _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36
 
+
+def snap_rect_to_work_area(
+    rect: tuple[int, int, int, int],
+    work_area: tuple[int, int, int, int],
+    threshold: int,
+) -> tuple[int, int, int, int]:
+    """창 크기를 유지한 채 가까운 작업 영역 경계에 사각형을 붙입니다."""
+    left, top, right, bottom = rect
+    work_left, work_top, work_right, work_bottom = work_area
+    width = right - left
+    height = bottom - top
+    distance = max(0, int(threshold))
+
+    if abs(left - work_left) <= distance:
+        left, right = work_left, work_left + width
+    elif abs(right - work_right) <= distance:
+        left, right = work_right - width, work_right
+
+    if abs(top - work_top) <= distance:
+        top, bottom = work_top, work_top + height
+    elif abs(bottom - work_bottom) <= distance:
+        top, bottom = work_bottom - height, work_bottom
+
+    return left, top, right, bottom
+
+
+def snap_windows_moving_rect(hwnd: int, rect_pointer: int, *, threshold_logical: int = 12) -> bool:
+    """WM_MOVING의 RECT를 가장 가까운 모니터 작업 영역에 맞춰 직접 보정합니다."""
+    if not is_windows() or not hwnd or not rect_pointer:
+        return False
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        rect = ctypes.cast(
+            ctypes.c_void_p(rect_pointer),
+            ctypes.POINTER(ctypes.wintypes.RECT),
+        ).contents
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.wintypes.DWORD),
+                ("rcMonitor", ctypes.wintypes.RECT),
+                ("rcWork", ctypes.wintypes.RECT),
+                ("dwFlags", ctypes.wintypes.DWORD),
+            ]
+
+        user32.MonitorFromRect.argtypes = [ctypes.POINTER(ctypes.wintypes.RECT), ctypes.wintypes.DWORD]
+        user32.MonitorFromRect.restype = ctypes.wintypes.HMONITOR
+        user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
+        user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+        monitor = user32.MonitorFromRect(ctypes.byref(rect), 2)  # MONITOR_DEFAULTTONEAREST
+        if not monitor:
+            return False
+        monitor_info = _MonitorInfo()
+        monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+            return False
+
+        dpi = 96
+        get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
+        if get_dpi_for_window is not None:
+            get_dpi_for_window.argtypes = [ctypes.wintypes.HWND]
+            get_dpi_for_window.restype = ctypes.wintypes.UINT
+            reported_dpi = int(get_dpi_for_window(ctypes.wintypes.HWND(hwnd)))
+            if reported_dpi > 0:
+                dpi = reported_dpi
+        threshold = max(1, round(threshold_logical * dpi / 96))
+        original = (rect.left, rect.top, rect.right, rect.bottom)
+        work = monitor_info.rcWork
+        snapped = snap_rect_to_work_area(
+            original,
+            (work.left, work.top, work.right, work.bottom),
+            threshold,
+        )
+        if snapped == original:
+            return False
+        rect.left, rect.top, rect.right, rect.bottom = snapped
+        return True
+    except Exception as exc:
+        logger.debug("Windows 창 이동 RECT 보정 실패: %s", exc)
+        return False
+
 def is_windows() -> bool:
     return os.name == 'nt'
 

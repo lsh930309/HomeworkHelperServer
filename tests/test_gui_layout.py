@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton
 
 from src.data.data_models import (
     GlobalSettings,
@@ -331,28 +331,34 @@ def test_menu_bar_dropdown_actions_are_text_only(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
-def test_main_window_uses_one_top_level_readiness_control():
+def test_main_window_uses_three_read_only_bottom_readiness_items():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
     assert "showMessage(" not in source
-    assert 'setObjectName("systemStatusButton")' in source
+    assert 'setObjectName("readinessStrip")' in source
+    assert "system_status_button" not in source
     assert 'for key in ("beholder", "remote", "admin")' in source
     assert "QGraphicsDropShadowEffect" not in source
     assert "QStatusBar" not in source
 
 
-def test_system_status_button_aggregates_severity_and_shows_messages(monkeypatch, tmp_path):
+def test_bottom_readiness_items_show_compact_state_and_keep_details_in_tooltips(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
         window._set_remote_readiness_indicator("remote", "yellow", "원격 연결 확인 필요")
-        assert window.system_status_button.property("hhState") == "warning"
-        assert any("원격 연결 확인 필요" in action.text() for action in window.system_status_button.menu().actions())
+        remote_dot, remote_text = window._readiness_status_widgets["remote"]
+        assert remote_dot.property("hhState") == "yellow"
+        assert remote_text.text() == "원격 준비 중"
+        assert remote_text.toolTip() == "원격 연결 확인 필요"
 
         window._set_remote_readiness_indicator("beholder", "red", "데이터 보호 오류")
-        assert window.system_status_button.property("hhState") == "error"
-        assert "데이터 보호 오류" in window.system_status_button.toolTip()
+        data_dot, data_text = window._readiness_status_widgets["beholder"]
+        assert data_dot.property("hhState") == "red"
+        assert data_text.text() == "데이터 오류"
+        assert data_text.toolTip() == "데이터 보호 오류"
+        assert all(not label.hasMouseTracking() for pair in window._readiness_status_widgets.values() for label in pair)
     finally:
         _stop_window(window, app)
 
@@ -507,9 +513,13 @@ def test_main_game_table_restores_name_sort_and_centered_icons(monkeypatch, tmp_
             window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
         )
         assert all(
-            window.process_table.rowHeight(row) >= window._TABLE_ROW_HEIGHT
+            window.process_table.rowHeight(row) == window._TABLE_ROW_HEIGHT
             for row in range(window.process_table.rowCount())
         )
+        launch_cell = window.process_table.cellWidget(0, window.COL_LAUNCH_BTN)
+        launch_button = launch_cell.findChild(QPushButton)
+        assert launch_button is not None
+        assert launch_button.height() == window._TABLE_LAUNCH_BUTTON_HEIGHT
     finally:
         _stop_window(window, app)
 
@@ -549,6 +559,8 @@ def test_main_table_window_fits_all_rows_without_scroll(monkeypatch, tmp_path, p
         if process_count == 0:
             expected_height += window._TABLE_ROW_HEIGHT
         assert window.process_table.height() == expected_height
+        assert window.top_button_area.width() == window.process_table.width()
+        assert window.readiness_strip.width() == window.process_table.width()
     finally:
         _stop_window(window, app)
 
@@ -619,12 +631,13 @@ def test_web_button_and_theme_changes_refit_through_same_fixed_size_path(monkeyp
         _stop_window(window, app)
 
 
-def test_window_geometry_uses_single_qsettings_authority():
+def test_main_window_position_is_not_persisted_when_show_always_reanchors():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
-    assert 'setValue("window_geometry", self.saveGeometry())' in source
-    assert "window_anchor_v1" not in source
-    assert 'setValue("window_position"' not in source
+    assert 'setValue("window_geometry"' not in source
+    assert "restoreGeometry(" not in source
+    assert "_position_on_cursor_screen_bottom_right" in source
+    assert "QApplication.screenAt(QCursor.pos())" in source
 
 
 def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
@@ -704,6 +717,84 @@ def test_resource_icon_label_centers_pixmap_in_fixed_space(monkeypatch, tmp_path
         assert label.pixmap().height() <= 16
     finally:
         _stop_window(window, app)
+
+
+def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe")
+    window = main_window.MainWindow(_FakeApiClient([process]))
+    icon_path = tmp_path / "resource.png"
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor("#5cc8ff"))
+    assert pixmap.save(str(icon_path))
+    without_icon = None
+    with_icon = None
+    try:
+        monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: None)
+        without_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        without_icon.resize(240, window._TABLE_ROW_HEIGHT)
+        without_icon.show()
+        app.processEvents()
+        assert len(without_icon.findChildren(QLabel)) == 1
+        assert without_icon.findChild(QLabel, "progressText").alignment() & Qt.AlignmentFlag.AlignRight
+        assert without_icon.findChild(QProgressBar).width() == without_icon.contentsRect().width()
+
+        monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: str(icon_path))
+        with_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        assert len(with_icon.findChildren(QLabel)) == 2
+    finally:
+        if without_icon is not None:
+            without_icon.close()
+        if with_icon is not None:
+            with_icon.close()
+        _stop_window(window, app)
+
+
+def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        margins = window._menu_corner_layout.contentsMargins()
+        assert margins.left() >= 6
+        assert margins.right() >= 4
+        assert window._menu_corner_layout.alignment() & Qt.AlignmentFlag.AlignRight
+        assert window._menu_corner_layout.alignment() & Qt.AlignmentFlag.AlignVCenter
+        assert window._menu_corner_container.sizeHint().width() >= window._always_on_top_cb.sizeHint().width()
+    finally:
+        _stop_window(window, app)
+
+
+@pytest.mark.parametrize(
+    ("rect", "expected"),
+    [
+        ((7, 200, 207, 300), (0, 200, 200, 300)),
+        ((1709, 200, 1909, 300), (1720, 200, 1920, 300)),
+        ((200, 8, 400, 108), (200, 0, 400, 100)),
+        ((200, 931, 400, 1031), (200, 940, 400, 1040)),
+        ((5, 935, 205, 1035), (0, 940, 200, 1040)),
+        ((20, 20, 220, 120), (20, 20, 220, 120)),
+    ],
+)
+def test_snap_rect_to_work_area_preserves_size_and_snaps_edges(rect, expected):
+    from src.utils.windows import snap_rect_to_work_area
+
+    snapped = snap_rect_to_work_area(rect, (0, 0, 1920, 1040), 12)
+
+    assert snapped == expected
+    assert snapped[2] - snapped[0] == rect[2] - rect[0]
+    assert snapped[3] - snapped[1] == rect[3] - rect[1]
+
+
+def test_snap_rect_to_offset_secondary_monitor_work_area():
+    from src.utils.windows import snap_rect_to_work_area
+
+    assert snap_rect_to_work_area(
+        (-1910, 50, -1710, 150),
+        (-1920, 40, 0, 1080),
+        12,
+    ) == (-1920, 40, -1720, 140)
 
 
 def test_sidebar_activates_when_running_cache_already_exists_without_monitor_change(monkeypatch, tmp_path):

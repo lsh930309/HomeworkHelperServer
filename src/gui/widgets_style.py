@@ -110,6 +110,9 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QPushButton[hhRole="primaryAction"] {{
             background: {t['accent']}; color: {t['text']}; font-weight: 600;
         }}
+        QTableWidget#processTable QPushButton[hhRole="primaryAction"] {{
+            min-height: 30px; max-height: 30px;
+        }}
         QPushButton[hhRole="primaryAction"]:hover {{ background: {t['accent_hover']}; }}
         QPushButton[hhRole="iconAction"] {{ min-width: 30px; max-width: 30px; padding: 0px; }}
         QPushButton[hhState="success"] {{ background: {t['success_soft']}; color: {t['success']}; }}
@@ -127,6 +130,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
             gridline-color: transparent; selection-background-color: transparent;
         }}
         QTableWidget#processTable::item {{ border: none; padding: 0px 2px; }}
+        QLabel#progressText {{ color: {t['muted']}; }}
         QProgressBar {{
             min-height: 6px; max-height: 6px; border: none; border-radius: 3px;
             background: {t['surface_hover']}; color: transparent; text-align: center;
@@ -136,14 +140,16 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QProgressBar[hhBucket="medium"]::chunk {{ background: {t['warning']}; }}
         QProgressBar[hhBucket="high"]::chunk {{ background: #e67e22; }}
         QProgressBar[hhBucket="full"]::chunk {{ background: {t['danger']}; }}
-        QToolButton#systemStatusButton {{
-            min-width: 30px; min-height: 26px; border: 1px solid transparent; border-radius: 5px;
-            background: transparent; color: {t['muted']}; padding: 0px 7px;
+        QWidget#readinessStrip {{
+            background: {t['surface']}; border-top: 1px solid {t['surface_hover']};
         }}
-        QToolButton#systemStatusButton:hover, QToolButton#systemStatusButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
-        QToolButton#systemStatusButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
-        QToolButton#systemStatusButton[hhState="warning"] {{ color: {t['warning']}; background: {t['warning_soft']}; }}
-        QToolButton#systemStatusButton[hhState="error"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
+        QWidget[hhRole="readinessItem"] {{ background: transparent; border: none; }}
+        QLabel[hhRole="readinessDot"], QLabel[hhRole="readinessText"] {{
+            background: transparent; border: none; color: {t['muted']};
+        }}
+        QLabel[hhRole="readinessDot"][hhState="green"] {{ color: {t['success']}; }}
+        QLabel[hhRole="readinessDot"][hhState="yellow"] {{ color: {t['warning']}; }}
+        QLabel[hhRole="readinessDot"][hhState="red"] {{ color: {t['danger']}; }}
         QCheckBox {{ color: {t['text']}; spacing: 6px; }}
         QToolTip {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 5px; }}
         """
