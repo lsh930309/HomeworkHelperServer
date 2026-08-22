@@ -2,11 +2,13 @@ import os
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QLabel
 
 from src.data.data_models import (
     GlobalSettings,
@@ -467,7 +469,7 @@ def test_process_dialog_returns_launch_args_opt_in(monkeypatch, tmp_path):
         app.processEvents()
 
 
-def test_main_game_cards_use_fixed_name_sort_and_centered_icons(monkeypatch, tmp_path):
+def test_main_game_cards_use_balanced_grid_name_sort_and_centered_icons(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     icon_requests = []
@@ -491,42 +493,59 @@ def test_main_game_cards_use_fixed_name_sort_and_centered_icons(monkeypatch, tmp
         assert [window._game_cards[key]["name"].text() for key in window._game_cards] == ["Alpha", "Beta", "Zeta"]
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
         assert {request[1] for request in icon_requests} == {window._CARD_ICON_LOGICAL_SIZE}
-        icon_cell = window._game_cards["a"]["card"].findChildren(QLabel)[0]
+        icon_cell = window._game_cards["a"]["card"].findChild(QLabel, "gameAppIcon")
         assert isinstance(icon_cell, QLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
-        assert all(card["card"].height() == window._CARD_HEIGHT for card in window._game_cards.values())
+        assert window._game_card_columns == 2
+        assert window.game_card_layout.getItemPosition(0)[:2] == (0, 0)
+        assert window.game_card_layout.getItemPosition(1)[:2] == (0, 1)
+        assert window.game_card_layout.getItemPosition(2)[:2] == (1, 0)
+        assert len({entry["card"].width() for entry in window._game_cards.values()}) == 1
     finally:
         _stop_window(window, app)
 
 
-def test_main_card_window_remains_resizable_and_caps_initial_size(monkeypatch, tmp_path):
+@pytest.mark.parametrize("process_count", [0, 1, 2, 3, 4, 8])
+def test_main_card_window_fits_all_cards_without_scroll(monkeypatch, tmp_path, process_count):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
-    long_name = "Extremely Long Game Name " + ("X" * 800)
-    window = main_window.MainWindow(
-        _FakeApiClient([
-            ManagedProcess(id="long", name=long_name, monitoring_path="long.exe", launch_path="long.exe"),
-        ])
-    )
+    processes = [
+        ManagedProcess(
+            id=f"game-{index}",
+            name=f"Game {index + 1}",
+            monitoring_path=f"game-{index}.exe",
+            launch_path=f"game-{index}.exe",
+        )
+        for index in range(process_count)
+    ]
+    window = main_window.MainWindow(_FakeApiClient(processes))
     try:
         window.show()
         app.processEvents()
         window._adjust_window_size_to_content()
         app.processEvents()
 
-        screen = window.screen() or QApplication.primaryScreen()
-        max_width = int(screen.availableGeometry().width() * window._SCREEN_WIDTH_RATIO)
-        assert window.width() <= max(max_width, window._MIN_WINDOW_WIDTH)
-        assert window.minimumSize() != window.size()
-        assert window.maximumWidth() > window.width()
-        assert window.game_card_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        assert window.game_card_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert window._game_card_columns == (1 if process_count <= 2 else 2)
+        assert not window.findChildren(QAbstractScrollArea)
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
+        assert window.size() == window.sizeHint().expandedTo(
+            QSize(window._MIN_WINDOW_WIDTH, window._MIN_WINDOW_HEIGHT)
+        )
+        for index, entry in enumerate(window._game_cards.values()):
+            row, column, row_span, column_span = window.game_card_layout.getItemPosition(index)
+            assert (row, column) == (
+                index // window._game_card_columns,
+                index % window._game_card_columns,
+            )
+            assert (row_span, column_span) == (1, 1)
+            assert entry["card"].isVisible()
     finally:
         _stop_window(window, app)
 
 
-def test_restore_window_state_keeps_window_resizable(monkeypatch, tmp_path):
+def test_restore_window_state_reapplies_content_fixed_size(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(
@@ -540,8 +559,54 @@ def test_restore_window_state_keeps_window_resizable(monkeypatch, tmp_path):
         window._restore_window_state()
         app.processEvents()
 
-        assert window.minimumSize() != window.size()
-        assert window.maximumWidth() > window.width()
+        assert window.minimumSize() == window.size()
+        assert window.maximumSize() == window.size()
+    finally:
+        _stop_window(window, app)
+
+
+def test_dashboard_button_uses_original_chart_glyph(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        assert window.dashboard_button.text() == "📊"
+        assert window.dashboard_button.icon().isNull()
+        assert window.dashboard_button.size() == window.add_web_shortcut_button.size()
+    finally:
+        _stop_window(window, app)
+
+
+def test_web_button_and_theme_changes_refit_through_same_fixed_size_path(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    client = _FakeApiClient([
+        ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe"),
+    ])
+    window = main_window.MainWindow(client)
+    try:
+        window.show()
+        app.processEvents()
+        initial_size = window.size()
+
+        client.web_shortcuts = [
+            WebShortcut(id=f"web-{index}", name=f"주요 서비스 바로가기 {index + 1}", url="https://example.com")
+            for index in range(5)
+        ]
+        window._load_and_display_web_buttons()
+        app.processEvents()
+        assert window.width() > initial_size.width()
+        assert window.minimumSize() == window.maximumSize() == window.size()
+
+        window._apply_theme("dark")
+        app.processEvents()
+        assert window.minimumSize() == window.maximumSize() == window.size()
+
+        client.web_shortcuts = []
+        window._load_and_display_web_buttons()
+        app.processEvents()
+        assert window.width() == initial_size.width()
+        assert window.minimumSize() == window.maximumSize() == window.size()
     finally:
         _stop_window(window, app)
 

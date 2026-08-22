@@ -11,7 +11,7 @@ from shiboken6 import Shiboken
 
 from src.gui.presentation import PresentationController, resolve_ui_renderer
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
-from src.gui.widgets_style import apply_modern_widgets_style
+from src.gui.widgets_style import apply_modern_widgets_style, widgets_theme_tokens
 
 
 def _qapp():
@@ -58,7 +58,29 @@ def test_modern_widgets_style_marks_surface_and_primary_action():
     apply_modern_widgets_style(window, dark=False)
     assert central.objectName() == "hhMainSurface"
     assert window.add_game_button.property("hhRole") == "primaryAction"
-    assert "#f5f6f8" in window.styleSheet()
+    assert "#f3f3f3" in window.styleSheet()
+
+
+def test_widgets_theme_uses_neutral_accents_and_stable_button_padding():
+    dark = widgets_theme_tokens(True)
+    light = widgets_theme_tokens(False)
+    assert dark["accent"] == "#2b2b2f"
+    assert light["accent"] == "#dedee2"
+
+    _qapp()
+    window = QMainWindow()
+    central = QWidget(window)
+    central.setLayout(QVBoxLayout())
+    window.setCentralWidget(central)
+    window.add_game_button = QPushButton("새 게임 추가", central)
+    central.layout().addWidget(window.add_game_button)
+    apply_modern_widgets_style(window, dark=True)
+    style = window.styleSheet()
+    assert "QPushButton:pressed" in style
+    assert "background: #3a3a3e" in style
+    assert "padding: 0px 8px" in style
+    assert "#6ea8fe" not in style
+    assert "#2563eb" not in style
 
 
 def test_slot_receiver_runs_in_its_qobject_thread():

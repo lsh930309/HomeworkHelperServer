@@ -12,36 +12,38 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 def widgets_theme_tokens(dark: bool) -> dict[str, str]:
     if dark:
         return {
-            "surface": "#202124",
-            "surface_raised": "#292b2f",
-            "surface_hover": "#32353a",
-            "text": "#f2f3f5",
-            "muted": "#aeb4bf",
-            "accent": "#6ea8fe",
-            "accent_hover": "#8bb9ff",
+            "surface": "#0f0f10",
+            "surface_raised": "#1a1a1c",
+            "surface_hover": "#27272a",
+            "surface_pressed": "#3a3a3e",
+            "text": "#f5f5f6",
+            "muted": "#a3a3aa",
+            "accent": "#2b2b2f",
+            "accent_hover": "#3a3a3f",
             "success": "#3fb950",
             "success_soft": "#203b28",
             "warning": "#d29922",
             "warning_soft": "#40351f",
             "danger": "#f85149",
             "danger_soft": "#472728",
-            "focus": "#6ea8fe",
+            "focus": "#d8d8dc",
         }
     return {
-        "surface": "#f5f6f8",
+        "surface": "#f3f3f3",
         "surface_raised": "#ffffff",
-        "surface_hover": "#edf1f7",
-        "text": "#202124",
-        "muted": "#667085",
-        "accent": "#2563eb",
-        "accent_hover": "#1d4ed8",
+        "surface_hover": "#e5e5e7",
+        "surface_pressed": "#cfcfd3",
+        "text": "#171719",
+        "muted": "#696970",
+        "accent": "#dedee2",
+        "accent_hover": "#cfcfd4",
         "success": "#188038",
         "success_soft": "#e6f4ea",
         "warning": "#9a6700",
         "warning_soft": "#fff4ce",
         "danger": "#c5221f",
         "danger_soft": "#fce8e6",
-        "focus": "#2563eb",
+        "focus": "#45454b",
     }
 
 
@@ -59,7 +61,7 @@ def apply_widgets_palette(*, dark: bool) -> None:
     palette.setColor(QPalette.ColorRole.Button, QColor(tokens["surface_raised"]))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(tokens["text"]))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(tokens["accent"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("white"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(tokens["text"]))
     app.setPalette(palette)
 
 
@@ -81,66 +83,67 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         if control is not None:
             control.setProperty("hhRole", name)
     if central.layout() is not None:
-        central.layout().setContentsMargins(12, 10, 12, 12)
-        central.layout().setSpacing(8)
+        central.layout().setContentsMargins(6, 6, 6, 6)
+        central.layout().setSpacing(4)
 
     t = widgets_theme_tokens(dark)
 
     window.setStyleSheet(
         f"""
         QWidget#hhMainSurface {{ background: {t['surface']}; color: {t['text']}; }}
-        QMenuBar {{ background: {t['surface']}; color: {t['text']}; padding: 2px 6px; spacing: 4px; }}
-        QMenuBar::item {{ padding: 6px 9px; border-radius: 5px; }}
+        QMenuBar {{ background: {t['surface']}; color: {t['text']}; padding: 1px 4px; spacing: 2px; }}
+        QMenuBar::item {{ padding: 4px 7px; border-radius: 4px; }}
         QMenuBar::item:selected {{ background: {t['surface_hover']}; }}
-        QMenu {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 5px; }}
-        QMenu::item {{ padding: 6px 18px 6px 10px; border-radius: 5px; }}
+        QMenu {{ background: {t['surface_raised']}; color: {t['text']}; border: none; padding: 4px; }}
+        QMenu::item {{ padding: 5px 16px 5px 8px; border-radius: 4px; }}
         QMenu::item:selected {{ background: {t['surface_hover']}; }}
         QPushButton {{
-            min-height: 28px; padding: 0px 11px; border-radius: 7px;
-            border: none; background: {t['surface_raised']}; color: {t['text']};
+            min-height: 26px; padding: 0px 8px; border-radius: 5px;
+            border: 1px solid transparent; background: {t['surface_raised']}; color: {t['text']};
         }}
-        QPushButton:hover {{ background: {t['surface_hover']}; }}
-        QPushButton:pressed {{ background: {t['surface_hover']}; }}
-        QPushButton:focus {{ border: 1px solid {t['focus']}; padding: 0px 10px; }}
+        QPushButton:hover {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
+        QPushButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
+        QPushButton:focus {{ border-color: {t['focus']}; }}
         QPushButton[hhRole="primaryAction"] {{
-            background: {t['accent']}; color: white; font-weight: 600;
+            background: {t['accent']}; color: {t['text']}; font-weight: 600;
         }}
         QPushButton[hhRole="primaryAction"]:hover {{ background: {t['accent_hover']}; }}
         QPushButton[hhRole="iconAction"] {{ min-width: 30px; max-width: 30px; padding: 0px; }}
         QPushButton[hhState="success"] {{ background: {t['success_soft']}; color: {t['success']}; }}
         QPushButton[hhState="danger"] {{ background: {t['danger_soft']}; color: {t['danger']}; }}
         QToolButton {{
-            min-width: 30px; min-height: 28px; border: none; border-radius: 7px;
+            min-width: 30px; min-height: 26px; border: 1px solid transparent; border-radius: 5px;
             background: transparent; color: {t['text']}; padding: 0px 7px;
         }}
-        QToolButton:hover {{ background: {t['surface_hover']}; }}
-        QToolButton:checked {{ background: {t['accent']}; color: white; }}
-        QScrollArea#gameCardScroll {{ background: transparent; border: none; }}
-        QWidget#gameCardViewport {{ background: transparent; }}
+        QToolButton:hover, QToolButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
+        QToolButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
+        QToolButton:checked {{ background: {t['accent']}; color: {t['text']}; }}
+        QWidget#gameCardContainer {{ background: transparent; }}
         QFrame[hhRole="gameCard"] {{
-            background: {t['surface_raised']}; border: none; border-radius: 9px;
+            background: {t['surface_raised']}; border: none; border-radius: 6px;
         }}
         QLabel[hhRole="gameName"] {{ color: {t['text']}; font-weight: 600; }}
         QLabel[hhRole="muted"] {{ color: {t['muted']}; }}
-        QLabel[hhRole="statusChip"] {{ padding: 3px 8px; border-radius: 7px; }}
+        QLabel[hhRole="statusChip"] {{ padding: 2px 6px; border-radius: 5px; }}
         QLabel[hhRole="statusChip"][hhState="default"] {{ background: {t['surface_hover']}; color: {t['muted']}; }}
         QLabel[hhRole="statusChip"][hhState="running"] {{ background: {t['warning_soft']}; color: {t['warning']}; }}
         QLabel[hhRole="statusChip"][hhState="incomplete"] {{ background: {t['danger_soft']}; color: {t['danger']}; }}
         QLabel[hhRole="statusChip"][hhState="completed"] {{ background: {t['success_soft']}; color: {t['success']}; }}
         QProgressBar {{
-            min-height: 8px; max-height: 8px; border: none; border-radius: 4px;
+            min-height: 6px; max-height: 6px; border: none; border-radius: 3px;
             background: {t['surface_hover']}; color: transparent; text-align: center;
         }}
-        QProgressBar::chunk {{ border-radius: 4px; }}
+        QProgressBar::chunk {{ border-radius: 3px; }}
         QProgressBar[hhBucket="low"]::chunk {{ background: {t['success']}; }}
         QProgressBar[hhBucket="medium"]::chunk {{ background: {t['warning']}; }}
         QProgressBar[hhBucket="high"]::chunk {{ background: #e67e22; }}
         QProgressBar[hhBucket="full"]::chunk {{ background: {t['danger']}; }}
         QToolButton#systemStatusButton {{
-            min-width: 30px; min-height: 28px; border: none; border-radius: 7px;
+            min-width: 30px; min-height: 26px; border: 1px solid transparent; border-radius: 5px;
             background: transparent; color: {t['muted']}; padding: 0px 7px;
         }}
-        QToolButton#systemStatusButton:hover {{ background: {t['surface_hover']}; }}
+        QToolButton#systemStatusButton:hover, QToolButton#systemStatusButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
+        QToolButton#systemStatusButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton#systemStatusButton[hhState="warning"] {{ color: {t['warning']}; background: {t['warning_soft']}; }}
         QToolButton#systemStatusButton[hhState="error"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
         QCheckBox {{ color: {t['text']}; spacing: 6px; }}
@@ -162,13 +165,14 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
-        QFrame[hhRole="sidebarGroup"] {{ background: rgba(255, 255, 255, 10); border: none; border-radius: 8px; }}
-        QPushButton {{ min-height: 28px; border: none; border-radius: 7px; padding: 0px 9px; background: rgba(255, 255, 255, 14); }}
-        QPushButton:hover {{ background: rgba(255, 255, 255, 28); }}
-        QPushButton:checked {{ color: white; background: {t['accent']}; }}
+        QFrame[hhRole="sidebarGroup"] {{ background: {t['surface_raised']}; border: none; border-radius: 6px; }}
+        QPushButton {{ min-height: 26px; border: 1px solid transparent; border-radius: 5px; padding: 0px 8px; background: {t['surface_raised']}; }}
+        QPushButton:hover, QPushButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
+        QPushButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
+        QPushButton:checked {{ color: {t['text']}; background: {t['accent']}; }}
         QPushButton[hhRole="danger"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
-        QPushButton[hhRole="primaryAction"] {{ color: white; background: {t['accent']}; font-weight: 600; }}
-        QPushButton[hhRole="folderAction"] {{ color: {t['muted']}; background: rgba(255, 255, 255, 8); }}
+        QPushButton[hhRole="primaryAction"] {{ color: {t['text']}; background: {t['accent']}; font-weight: 600; }}
+        QPushButton[hhRole="folderAction"] {{ color: {t['muted']}; background: {t['surface_raised']}; }}
         QLabel[hhState="error"] {{ color: {t['danger']}; }}
         QLabel[hhState="success"] {{ color: {t['success']}; }}
         QLabel[hhState="warning"] {{ color: {t['warning']}; }}

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QFileIconProvider,
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
-    QFrame, QScrollArea,
+    QFrame, QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QSize
 from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QCursor
@@ -96,11 +96,8 @@ class MainWindow(QMainWindow):
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
-    _CARD_HEIGHT = 64
-    _CARD_ICON_LOGICAL_SIZE = 32
-    _DEFAULT_WINDOW_WIDTH = 760
-    _SCREEN_WIDTH_RATIO = 0.90
-    _SCREEN_HEIGHT_RATIO = 0.80
+    _CARD_ICON_LOGICAL_SIZE = 24
+    _QWIDGETSIZE_MAX = 16_777_215
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
@@ -162,15 +159,9 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
         self._ensure_background_survival_mode()
 
-        # 첫 표시 크기는 카드 내용과 현재 모니터 유효 영역을 기준으로 조정합니다.
-        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
-        self.resize(self._DEFAULT_WINDOW_WIDTH, 300)
-
         # QSettings 초기화 (창 위치/크기 저장용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
-        self._has_restored_geometry = False
-        self._initial_size_applied = False
         self._wake_recovery_in_progress = False
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
@@ -262,9 +253,8 @@ class MainWindow(QMainWindow):
         self.top_button_area_layout.addWidget(self.add_web_shortcut_button) # 상단 버튼 영역에 웹 바로가기 추가 버튼 추가
 
         # 대시보드 버튼 추가
-        self.dashboard_button = QPushButton()
+        self.dashboard_button = QPushButton("📊")
         self.dashboard_button.setToolTip("통계 대시보드 열기")
-        self.dashboard_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
         self.dashboard_button.clicked.connect(self._open_dashboard)
         self.top_button_area_layout.addWidget(self.dashboard_button)
@@ -304,20 +294,15 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(self.top_button_area_layout) # 메인 레이아웃에 상단 버튼 영역 추가
 
-        self.game_card_scroll = QScrollArea(self)
-        self.game_card_scroll.setObjectName("gameCardScroll")
-        self.game_card_scroll.setWidgetResizable(True)
-        self.game_card_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.game_card_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.game_card_viewport = QWidget(self.game_card_scroll)
-        self.game_card_viewport.setObjectName("gameCardViewport")
-        self.game_card_layout = QVBoxLayout(self.game_card_viewport)
+        self.game_card_container = QWidget(self)
+        self.game_card_container.setObjectName("gameCardContainer")
+        self.game_card_layout = QGridLayout(self.game_card_container)
         self.game_card_layout.setContentsMargins(0, 0, 0, 0)
-        self.game_card_layout.setSpacing(8)
-        self.game_card_layout.addStretch(1)
-        self.game_card_scroll.setWidget(self.game_card_viewport)
+        self.game_card_layout.setHorizontalSpacing(4)
+        self.game_card_layout.setVerticalSpacing(4)
+        self._game_card_columns = 1
         self._game_cards: dict[str, dict[str, QWidget]] = {}
-        main_layout.addWidget(self.game_card_scroll, 1)
+        main_layout.addWidget(self.game_card_container)
 
         # 초기 데이터 로드 및 UI 업데이트
         self.populate_process_list() # 프로세스 목록 채우기
@@ -684,7 +669,7 @@ class MainWindow(QMainWindow):
             web_ms = (time.time() - web_start) * 1000
 
             # 동기 repaint()는 복귀 직후 GUI 스레드 정체를 키울 수 있으므로 update()만 요청합니다.
-            self.game_card_viewport.update()
+            self.game_card_container.update()
 
             QTimer.singleShot(100, self._restore_window_state)
 
@@ -742,25 +727,13 @@ class MainWindow(QMainWindow):
             timers_restarted.append('ui_refresh_timer')
 
     def _restore_window_state(self):
-        """절전 복귀 후 창 상태를 복원합니다.
-
-        핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
-        이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
-        """
-        # 창을 고정 크기로 만들지 않고 레이아웃과 DWM 갱신만 요청합니다.
-        w, h = self.width(), self.height()
-        self.resize(w + 1, h + 1)
-        self.resize(w, h)
-
-        # 레이아웃 강제 업데이트
+        """절전 복귀 후 레이아웃과 고정 피팅 크기를 다시 적용합니다."""
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
-
-        # 비동기 다시 그리기 및 프레임 경계 보정 요청
+        self._adjust_window_size_to_content()
         self.update()
-        QTimer.singleShot(0, self._clamp_window_to_available_screen)
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
@@ -1010,6 +983,8 @@ class MainWindow(QMainWindow):
         if self.centralWidget() is not None:
             apply_modern_widgets_style(self, dark=dark)
         self._sync_windows_title_bar_color()
+        if hasattr(self, "game_card_layout"):
+            QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _is_effective_dark_theme(self) -> bool:
         """현재 팔레트가 실질적으로 다크 테마인지 반환합니다."""
@@ -1269,6 +1244,7 @@ class MainWindow(QMainWindow):
         """카드에 표시할 앱 아이콘 라벨을 생성합니다."""
         icon_size = self._CARD_ICON_LOGICAL_SIZE
         label = QLabel()
+        label.setObjectName("gameAppIcon")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setContentsMargins(0, 0, 0, 0)
         label.setFixedSize(icon_size, icon_size)
@@ -1294,18 +1270,22 @@ class MainWindow(QMainWindow):
         return icon_label
 
     def populate_process_list(self):
-        """관리 대상 프로세스를 이름순 가로형 카드 목록으로 표시합니다."""
-        while self.game_card_layout.count() > 1:
+        """관리 대상 프로세스를 이름순 균형형 카드 그리드로 표시합니다."""
+        while self.game_card_layout.count():
             item = self.game_card_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        for column in range(2):
+            self.game_card_layout.setColumnMinimumWidth(column, 0)
+            self.game_card_layout.setColumnStretch(column, 0)
         self._game_cards.clear()
 
         processes = sorted(
             self.data_manager.managed_processes,
             key=lambda process: ((process.name or "").casefold(), process.id or ""),
         )
+        self._game_card_columns = 1 if len(processes) <= 2 else 2
         now_dt = datetime.datetime.now()
         gs = self.data_manager.global_settings
 
@@ -1313,8 +1293,7 @@ class MainWindow(QMainWindow):
             empty = QLabel("등록된 게임이 없습니다. 상단의 ‘새 게임 추가’로 시작하세요.")
             empty.setProperty("hhRole", "muted")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setMinimumHeight(96)
-            self.game_card_layout.insertWidget(0, empty)
+            self.game_card_layout.addWidget(empty, 0, 0)
 
         for p in processes:
             qi = get_qicon_for_file(
@@ -1322,44 +1301,36 @@ class MainWindow(QMainWindow):
                 icon_size=self._CARD_ICON_LOGICAL_SIZE,
                 process_id=p.id,
             )
-            card = QFrame(self.game_card_viewport)
+            card = QFrame(self.game_card_container)
             card.setProperty("hhRole", "gameCard")
             card.setProperty("processId", p.id)
-            card.setMinimumHeight(self._CARD_HEIGHT)
-            card.setMaximumHeight(self._CARD_HEIGHT)
             card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             card.customContextMenuRequested.connect(
                 lambda pos, process_id=p.id, source=card: self._show_process_context_menu(
                     process_id, source.mapToGlobal(pos)
                 )
             )
-            row = QHBoxLayout(card)
-            row.setContentsMargins(12, 8, 10, 8)
-            row.setSpacing(10)
-            row.addWidget(self._create_centered_app_icon_cell(qi))
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(6, 6, 6, 6)
+            card_layout.setSpacing(4)
+            header = QHBoxLayout()
+            header.setContentsMargins(0, 0, 0, 0)
+            header.setSpacing(6)
+            header.addWidget(self._create_centered_app_icon_cell(qi))
 
             name_label = QLabel(p.name, card)
             name_label.setProperty("hhRole", "gameName")
-            name_label.setMinimumWidth(130)
             name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-            row.addWidget(name_label)
-
-            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
-            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
-            progress_widget.setMinimumWidth(210)
-            progress_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            row.addWidget(progress_widget, 1)
+            header.addWidget(name_label, 1)
 
             status_label = QLabel(card)
             status_label.setProperty("hhRole", "statusChip")
             status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            status_label.setMinimumWidth(72)
             self._set_game_card_status(status_label, self.scheduler.determine_process_visual_status(p, now_dt, gs))
-            row.addWidget(status_label)
+            header.addWidget(status_label)
 
             btn = QPushButton("실행")
             btn.setProperty("hhRole", "primaryAction")
-            btn.setMinimumWidth(64)
             btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id))
 
             # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
@@ -1374,9 +1345,20 @@ class MainWindow(QMainWindow):
                 pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
                 btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
 
-            row.addWidget(btn)
+            header.addWidget(btn)
+            card_layout.addLayout(header)
 
-            self.game_card_layout.insertWidget(self.game_card_layout.count() - 1, card)
+            percentage, time_str = self._calculate_progress_percentage(p, now_dt)
+            progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
+            progress_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            card_layout.addWidget(progress_widget)
+
+            index = len(self._game_cards)
+            self.game_card_layout.addWidget(
+                card,
+                index // self._game_card_columns,
+                index % self._game_card_columns,
+            )
             self._game_cards[p.id] = {
                 "card": card,
                 "name": name_label,
@@ -1387,6 +1369,12 @@ class MainWindow(QMainWindow):
 
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
+
+        if self._game_cards:
+            card_width = max(entry["card"].sizeHint().width() for entry in self._game_cards.values())
+            for column in range(self._game_card_columns):
+                self.game_card_layout.setColumnMinimumWidth(column, card_width)
+                self.game_card_layout.setColumnStretch(column, 1)
 
         self.scheduler.invalidate_visual_status_snapshot()
         QTimer.singleShot(0, self._adjust_window_size_to_content)
@@ -1743,6 +1731,7 @@ class MainWindow(QMainWindow):
 
         # 웹 버튼 로드 완료 후 창 너비 조절
         self._adjust_window_size_to_content()
+        QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _handle_web_button_clicked(self, shortcut_id: str, url: str):
         """웹 바로가기 버튼 클릭 시 호출됩니다. URL을 열고, 필요한 경우 상태를 업데이트합니다."""
@@ -1857,8 +1846,8 @@ class MainWindow(QMainWindow):
         try:
             geometry = self._settings.value("window_geometry")
             if geometry:
-                self._has_restored_geometry = self.restoreGeometry(geometry)
-                logger.debug("저장된 창 geometry 복원 완료")
+                restored = self.restoreGeometry(geometry)
+                logger.debug("저장된 창 geometry 복원: success=%s", restored)
         except Exception as e:
             logger.error(f"창 위치 복원 실패: {e}", exc_info=True)
 
@@ -1872,14 +1861,6 @@ class MainWindow(QMainWindow):
             if not screen:
                 return
             avail = screen.availableGeometry()
-            if frame.width() > avail.width() or frame.height() > avail.height():
-                frame_extra_w = max(0, frame.width() - self.width())
-                frame_extra_h = max(0, frame.height() - self.height())
-                self.resize(
-                    min(self.width(), max(self.minimumWidth(), avail.width() - frame_extra_w)),
-                    min(self.height(), max(self.minimumHeight(), avail.height() - frame_extra_h)),
-                )
-                frame = self.frameGeometry()
             new_left = max(avail.left(), min(frame.left(), avail.right() - frame.width() + 1))
             new_top = max(avail.top(), min(frame.top(), avail.bottom() - frame.height() + 1))
             if new_left != frame.left() or new_top != frame.top():
@@ -1956,19 +1937,17 @@ class MainWindow(QMainWindow):
             app_instance.quit()
 
     def _adjust_window_size_to_content(self):
-        """첫 실행 크기만 내용에 맞추고 이후에는 사용자 크기를 보존합니다."""
-        if not self._has_restored_geometry and not self._initial_size_applied:
-            screen = QApplication.screenAt(QCursor.pos()) or self.screen() or QApplication.primaryScreen()
-            if screen is not None:
-                available = screen.availableGeometry()
-                width = min(self._DEFAULT_WINDOW_WIDTH, int(available.width() * self._SCREEN_WIDTH_RATIO))
-                card_count = max(1, len(self._game_cards))
-                content_height = 104 + card_count * self._CARD_HEIGHT + max(0, card_count - 1) * 8
-                height = min(max(220, content_height), int(available.height() * self._SCREEN_HEIGHT_RATIO))
-                self.resize(max(self._MIN_WINDOW_WIDTH, width), max(self._MIN_WINDOW_HEIGHT, height))
-            self._initial_size_applied = True
-
-        self.game_card_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        """현재 콘텐츠의 sizeHint를 단일 권위로 삼아 창을 정확히 고정합니다."""
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(self._QWIDGETSIZE_MAX, self._QWIDGETSIZE_MAX)
+        self.game_card_layout.invalidate()
+        self.game_card_layout.activate()
+        central = self.centralWidget()
+        if central is not None and central.layout() is not None:
+            central.layout().invalidate()
+            central.layout().activate()
+        target = self.sizeHint().expandedTo(QSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT))
+        self.setFixedSize(target)
         self.updateGeometry()
         self.update()
         QTimer.singleShot(0, self._clamp_window_to_available_screen)
@@ -2519,7 +2498,6 @@ class MainWindow(QMainWindow):
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
                 replacement = self._create_progress_bar_widget(process, percentage, time_str)
-                replacement.setMinimumWidth(210)
                 replacement.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
                 card["card"].layout().replaceWidget(current_widget, replacement)
                 current_widget.deleteLater()
@@ -2551,7 +2529,8 @@ class MainWindow(QMainWindow):
                     updated_count += 1
 
         if updated_count > 0:
-            self.game_card_viewport.update()
+            self.game_card_container.update()
+            QTimer.singleShot(0, self._adjust_window_size_to_content)
 
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
