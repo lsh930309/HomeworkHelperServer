@@ -593,6 +593,28 @@ def test_dashboard_button_uses_original_chart_glyph(monkeypatch, tmp_path):
         assert window.dashboard_button.text() == "📊"
         assert window.dashboard_button.icon().isNull()
         assert window.dashboard_button.size() == window.add_web_shortcut_button.size()
+        assert window.dashboard_button.size().toTuple() == (30, 30)
+        assert window.dashboard_button.size() == window.dashboard_button.sizeHint()
+    finally:
+        _stop_window(window, app)
+
+
+def test_style_controlled_main_buttons_are_not_smaller_than_size_hints(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="game", name="Game", monitoring_path="game.exe", launch_path="game.exe")
+    window = main_window.MainWindow(_FakeApiClient([process]))
+    try:
+        window.show()
+        app.processEvents()
+        buttons = window.findChildren(QPushButton)
+
+        assert buttons
+        assert all(
+            button.width() >= button.sizeHint().width()
+            and button.height() >= button.sizeHint().height()
+            for button in buttons
+        )
     finally:
         _stop_window(window, app)
 

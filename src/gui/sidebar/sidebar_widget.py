@@ -882,8 +882,8 @@ class SidebarWidget(QWidget):
         hl.addWidget(name_lbl, 1)
 
         mute_btn = QPushButton()
-        mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
+        mute_btn.setProperty("hhRole", "muteToggle")
 
         style = QApplication.style()
         if style:
@@ -1154,7 +1154,6 @@ class SidebarWidget(QWidget):
 
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
         self._rec_connect_btn = QPushButton("OBS 재연결")
-        self._rec_connect_btn.setFixedHeight(26)
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
 

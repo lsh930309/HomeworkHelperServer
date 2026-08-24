@@ -5,9 +5,9 @@ Runtime state remains owned by the existing GUI/controllers.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QProgressBar, QWidget
 
 
 def widgets_theme_tokens(dark: bool) -> dict[str, str]:
@@ -28,6 +28,8 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
             "danger": "#f85149",
             "danger_soft": "#472728",
             "focus": "#d8d8dc",
+            "mute_active": "rgba(80, 130, 220, 160)",
+            "mute_pressed": "rgba(65, 105, 190, 220)",
         }
     return {
         "surface": "#f3f3f3",
@@ -45,7 +47,55 @@ def widgets_theme_tokens(dark: bool) -> dict[str, str]:
         "danger": "#c5221f",
         "danger_soft": "#fce8e6",
         "focus": "#45454b",
+        "mute_active": "rgba(80, 130, 220, 160)",
+        "mute_pressed": "rgba(65, 105, 190, 220)",
     }
+
+
+class CapsuleProgressBar(QProgressBar):
+    """극소 진행률도 원형 끝을 유지하는 6px 캡슐 진행률 표시입니다."""
+
+    _BUCKET_COLORS = {
+        "low": "success",
+        "medium": "warning",
+        "high": "#e67e22",
+        "full": "danger",
+    }
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        del event
+        if self.width() <= 0 or self.height() <= 0:
+            return
+
+        palette = self.palette()
+        dark = (
+            palette.color(QPalette.ColorRole.WindowText).lightness()
+            > palette.color(QPalette.ColorRole.Window).lightness()
+        )
+        tokens = widgets_theme_tokens(dark)
+        rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
+        radius = rect.height() / 2.0
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(tokens["surface_hover"]))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        span = self.maximum() - self.minimum()
+        if span <= 0 or self.value() <= self.minimum():
+            painter.end()
+            return
+
+        ratio = min(1.0, max(0.0, (self.value() - self.minimum()) / span))
+        fill_width = min(rect.width(), max(rect.height(), rect.width() * ratio))
+        fill_rect = QRectF(rect.left(), rect.top(), fill_width, rect.height())
+        bucket = str(self.property("hhBucket") or "low")
+        color_key = self._BUCKET_COLORS.get(bucket, "success")
+        fill_color = tokens[color_key] if color_key in tokens else color_key
+        painter.setBrush(QColor(fill_color))
+        painter.drawRoundedRect(fill_rect, radius, radius)
+        painter.end()
 
 
 def tint_icon(icon: QIcon, color: QColor, logical_size: int = 16) -> QIcon:
@@ -122,8 +172,8 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
             border: 1px solid transparent; background: {t['surface_raised']}; color: {t['text']};
         }}
         QPushButton:hover {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
-        QPushButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QPushButton:focus {{ border-color: {t['focus']}; }}
+        QPushButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QPushButton[hhRole="primaryAction"] {{
             background: {t['accent']}; color: {t['text']}; font-weight: 600;
         }}
@@ -131,9 +181,15 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
             min-height: 30px; max-height: 30px;
         }}
         QPushButton[hhRole="primaryAction"]:hover {{ background: {t['accent_hover']}; }}
-        QPushButton[hhRole="iconAction"] {{ min-width: 30px; max-width: 30px; padding: 0px; }}
+        QPushButton[hhRole="primaryAction"]:pressed {{ background: {t['surface_pressed']}; }}
+        QPushButton[hhRole="iconAction"] {{
+            min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; padding: 0px;
+        }}
+        QPushButton[hhRole="iconAction"]:pressed {{ background: {t['surface_pressed']}; }}
         QPushButton[hhState="success"] {{ background: {t['success_soft']}; color: {t['success']}; }}
         QPushButton[hhState="danger"] {{ background: {t['danger_soft']}; color: {t['danger']}; }}
+        QPushButton[hhState="success"]:pressed,
+        QPushButton[hhState="danger"]:pressed {{ background: {t['surface_pressed']}; }}
         QToolButton {{
             min-width: 30px; min-height: 26px; border: 1px solid transparent; border-radius: 5px;
             background: transparent; color: {t['text']}; padding: 0px 7px;
@@ -141,6 +197,7 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QToolButton:hover, QToolButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
         QToolButton:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton:checked {{ background: {t['accent']}; color: {t['text']}; }}
+        QToolButton:checked:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
         QToolButton[hhRole="menuCornerAction"] {{
             min-width: 0px; min-height: 0px; padding: 0px;
         }}
@@ -153,13 +210,8 @@ def apply_modern_widgets_style(window: QMainWindow, *, dark: bool) -> None:
         QLabel#progressText {{ color: {t['muted']}; }}
         QProgressBar {{
             min-height: 6px; max-height: 6px; border: none; border-radius: 3px;
-            background: {t['surface_hover']}; color: transparent; text-align: center;
+            background: transparent; color: transparent; text-align: center;
         }}
-        QProgressBar::chunk {{ border-radius: 3px; }}
-        QProgressBar[hhBucket="low"]::chunk {{ background: {t['success']}; }}
-        QProgressBar[hhBucket="medium"]::chunk {{ background: {t['warning']}; }}
-        QProgressBar[hhBucket="high"]::chunk {{ background: #e67e22; }}
-        QProgressBar[hhBucket="full"]::chunk {{ background: {t['danger']}; }}
         QWidget#readinessStrip {{
             background: {t['surface']}; border-top: 1px solid {t['surface_hover']};
         }}
@@ -198,6 +250,21 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="danger"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
         QPushButton[hhRole="primaryAction"] {{ color: {t['text']}; background: {t['accent']}; font-weight: 600; }}
         QPushButton[hhRole="folderAction"] {{ color: {t['muted']}; background: {t['surface_raised']}; }}
+        QPushButton[hhRole="danger"]:pressed,
+        QPushButton[hhRole="primaryAction"]:pressed,
+        QPushButton[hhRole="folderAction"]:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
+        QPushButton[hhRole="muteToggle"] {{
+            min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px;
+            padding: 0px; background: {t['surface_raised']};
+        }}
+        QPushButton[hhRole="muteToggle"]:checked {{ background: {t['mute_active']}; color: white; }}
+        QPushButton[hhRole="muteToggle"]:checked:hover,
+        QPushButton[hhRole="muteToggle"]:checked:focus {{
+            background: {t['mute_active']}; border-color: {t['focus']};
+        }}
+        QPushButton[hhRole="muteToggle"]:checked:pressed {{
+            background: {t['mute_pressed']}; border-color: {t['focus']};
+        }}
         QLabel[hhState="error"] {{ color: {t['danger']}; }}
         QLabel[hhState="success"] {{ color: {t['success']}; }}
         QLabel[hhState="warning"] {{ color: {t['warning']}; }}

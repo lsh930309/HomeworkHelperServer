@@ -6,12 +6,20 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
 from src.gui.presentation import PresentationController, resolve_ui_renderer
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
-from src.gui.widgets_style import apply_modern_widgets_style, widgets_theme_tokens
+from src.gui.volume_panel import _MUTE_BTN_STYLE
+from src.gui.widgets_style import (
+    CapsuleProgressBar,
+    apply_modern_widgets_style,
+    apply_sidebar_widgets_style,
+    apply_widgets_palette,
+    widgets_theme_tokens,
+)
 
 
 def _qapp():
@@ -81,6 +89,203 @@ def test_widgets_theme_uses_neutral_accents_and_stable_button_padding():
     assert "padding: 0px 8px" in style
     assert "#6ea8fe" not in style
     assert "#2563eb" not in style
+
+
+def _button_background(button: QPushButton | QToolButton) -> QColor:
+    image = button.grab().toImage()
+    dpr = image.devicePixelRatio()
+    x = min(round(4 * dpr), image.width() - 1)
+    y = min(round(4 * dpr), image.height() - 1)
+    return image.pixelColor(x, y)
+
+
+@pytest.mark.parametrize(
+    ("role_property", "role_value"),
+    [
+        (None, None),
+        ("hhRole", "primaryAction"),
+        ("hhRole", "iconAction"),
+        ("hhState", "success"),
+        ("hhState", "danger"),
+    ],
+)
+def test_main_button_roles_render_distinct_pressed_feedback(role_property, role_value):
+    app = _qapp()
+    window = QMainWindow()
+    central = QWidget(window)
+    layout = QVBoxLayout(central)
+    window.setCentralWidget(central)
+    button = QPushButton("확인", central)
+    if role_property is not None:
+        button.setProperty(role_property, role_value)
+    layout.addWidget(button)
+    apply_widgets_palette(dark=True)
+    apply_modern_widgets_style(window, dark=True)
+    window.show()
+    app.processEvents()
+
+    normal = _button_background(button)
+    button.setDown(True)
+    button.update()
+    app.processEvents()
+    pressed = _button_background(button)
+    button.setDown(False)
+    button.update()
+    app.processEvents()
+
+    assert pressed != normal
+    assert _button_background(button) == normal
+    if role_value == "iconAction":
+        assert button.size().toTuple() == (30, 30)
+        assert button.size() == button.sizeHint()
+    window.close()
+
+
+def test_checked_tool_button_keeps_pressed_feedback():
+    app = _qapp()
+    window = QMainWindow()
+    central = QWidget(window)
+    layout = QVBoxLayout(central)
+    window.setCentralWidget(central)
+    button = QToolButton(central)
+    button.setCheckable(True)
+    button.setChecked(True)
+    layout.addWidget(button)
+    apply_widgets_palette(dark=True)
+    apply_modern_widgets_style(window, dark=True)
+    window.show()
+    app.processEvents()
+
+    checked = _button_background(button)
+    button.setDown(True)
+    button.update()
+    app.processEvents()
+
+    assert _button_background(button) != checked
+    window.close()
+
+
+@pytest.mark.parametrize("checked", [False, True])
+def test_volume_popover_mute_button_renders_pressed_feedback(checked):
+    app = _qapp()
+    button = QPushButton()
+    button.setCheckable(True)
+    button.setChecked(checked)
+    button.setFixedSize(28, 28)
+    button.setStyleSheet(_MUTE_BTN_STYLE)
+    button.show()
+    app.processEvents()
+
+    normal = _button_background(button)
+    button.setDown(True)
+    button.update()
+    app.processEvents()
+
+    assert _button_background(button) != normal
+    button.close()
+
+
+@pytest.mark.parametrize("role", ["danger", "primaryAction", "folderAction"])
+def test_sidebar_button_roles_render_distinct_pressed_feedback(role):
+    app = _qapp()
+    root = QWidget()
+    layout = QVBoxLayout(root)
+    button = QPushButton("동작", root)
+    button.setProperty("hhRole", role)
+    layout.addWidget(button)
+    apply_sidebar_widgets_style(root, dark=True)
+    root.show()
+    app.processEvents()
+
+    normal = _button_background(button)
+    button.setDown(True)
+    button.update()
+    app.processEvents()
+
+    assert _button_background(button) != normal
+    root.close()
+
+
+def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border():
+    app = _qapp()
+    root = QWidget()
+    layout = QVBoxLayout(root)
+    button = QPushButton(root)
+    button.setProperty("hhRole", "muteToggle")
+    button.setCheckable(True)
+    layout.addWidget(button)
+    apply_sidebar_widgets_style(root, dark=True)
+    root.show()
+    app.processEvents()
+
+    button.setChecked(True)
+    button.clearFocus()
+    button.update()
+    app.processEvents()
+    checked = _button_background(button)
+    assert checked.blue() > checked.red()
+    assert checked.blue() > checked.green()
+    assert button.size().toTuple() == (22, 22)
+    assert button.size() == button.sizeHint()
+
+    button.setDown(True)
+    button.update()
+    app.processEvents()
+    assert _button_background(button) != checked
+    button.setDown(False)
+    button.setFocus()
+    button.update()
+    app.processEvents()
+    focused = button.grab().toImage()
+    edge_points = (
+        (focused.width() // 2, 0),
+        (focused.width() - 1, focused.height() // 2),
+        (focused.width() // 2, focused.height() - 1),
+        (0, focused.height() // 2),
+    )
+    # Fractional DPI에서는 오른쪽/아래 1px이 focus 색과 배경의 안티앨리어싱 혼합색입니다.
+    assert all(
+        focused.pixelColor(x, y).lightness() > checked.lightness()
+        for x, y in edge_points
+    )
+    root.close()
+
+
+@pytest.mark.parametrize(
+    ("value", "filled_x", "track_x"),
+    [
+        (0, None, 2),
+        (1, 2, 6),
+        (10, 2, 6),
+        (500, 25, 55),
+        (1000, 98, None),
+    ],
+)
+def test_capsule_progress_bar_keeps_round_minimum_fill(value, filled_x, track_x):
+    app = _qapp()
+    apply_widgets_palette(dark=True)
+    bar = CapsuleProgressBar()
+    bar.setRange(0, 1000)
+    bar.setProperty("hhBucket", "low")
+    bar.resize(100, 6)
+    bar.setValue(value)
+    bar.show()
+    app.processEvents()
+    image = bar.grab().toImage()
+    tokens = widgets_theme_tokens(True)
+    dpr = image.devicePixelRatio()
+
+    def logical_pixel(x: int, y: int) -> QColor:
+        return image.pixelColor(
+            min(round(x * dpr), image.width() - 1),
+            min(round(y * dpr), image.height() - 1),
+        )
+
+    if filled_x is not None:
+        assert logical_pixel(filled_x, 3) == QColor(tokens["success"])
+    if track_x is not None:
+        assert logical_pixel(track_x, 3) == QColor(tokens["surface_hover"])
+    bar.close()
 
 
 def test_slot_receiver_runs_in_its_qobject_thread():

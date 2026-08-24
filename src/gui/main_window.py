@@ -56,7 +56,13 @@ from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
-from src.gui.widgets_style import apply_modern_widgets_style, apply_widgets_palette, tint_icon, widgets_theme_tokens
+from src.gui.widgets_style import (
+    CapsuleProgressBar,
+    apply_modern_widgets_style,
+    apply_widgets_palette,
+    tint_icon,
+    widgets_theme_tokens,
+)
 
 
 class IconDownloader(QThread):
@@ -261,16 +267,12 @@ class MainWindow(QMainWindow):
         self.add_web_shortcut_button = QPushButton("+") # 웹 바로가기 추가 버튼 생성
         self.add_web_shortcut_button.setToolTip("새로운 웹 바로 가기 버튼을 추가합니다.") # 툴팁 설정
 
-        icon_button_size = 30
-        self.add_web_shortcut_button.setFixedSize(icon_button_size, icon_button_size) # 버튼 크기 고정
-
         self.add_web_shortcut_button.clicked.connect(self._open_add_web_shortcut_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_web_shortcut_button) # 상단 버튼 영역에 웹 바로가기 추가 버튼 추가
 
         # 대시보드 버튼 추가
         self.dashboard_button = QPushButton("📊")
         self.dashboard_button.setToolTip("통계 대시보드 열기")
-        self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
         self.dashboard_button.clicked.connect(self._open_dashboard)
         self.top_button_area_layout.addWidget(self.dashboard_button)
 
@@ -279,7 +281,6 @@ class MainWindow(QMainWindow):
         self.github_button.setToolTip("GitHub 저장소 방문")
         self.github_button.setText("GH") # 아이콘 로딩 전 기본 텍스트
         # 크기를 다른 아이콘 버튼과 맞춤
-        self.github_button.setFixedSize(icon_button_size, icon_button_size)
         self.github_button.clicked.connect(lambda: self.open_webpage("https://github.com/lsh930309/HomeworkHelperServer"))
         self.top_button_area_layout.addWidget(self.github_button)
 
@@ -2626,7 +2627,7 @@ class MainWindow(QMainWindow):
 
     def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
         """공통 테마가 그리는 얇은 QProgressBar를 생성합니다."""
-        progress_bar = QProgressBar()
+        progress_bar = CapsuleProgressBar()
         progress_bar.setValue(self._progress_bar_value(percentage))
         progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
         progress_bar.setMinimum(0)

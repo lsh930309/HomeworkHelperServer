@@ -73,6 +73,15 @@ QPushButton:hover:!checked {
     background: rgba(255,255,255,22);
     color: white;
 }
+QPushButton:pressed:!checked {
+    background: rgba(255,255,255,38);
+    color: white;
+}
+QPushButton:checked:pressed {
+    background: rgba(65,105,190,220);
+    border-color: rgba(130,180,255,220);
+    color: white;
+}
 QPushButton:disabled {
     color: rgba(255,255,255,60);
     border-color: rgba(255,255,255,15);
