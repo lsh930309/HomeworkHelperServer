@@ -4,10 +4,12 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QThread, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTextEdit
 
 from src.gui.power_events import (
     PBT_APMRESUMEAUTOMATIC,
@@ -292,6 +294,192 @@ def test_exhausted_lifecycle_persistence_records_one_failure_for_token() -> None
     assert result.attempts == 6
     assert len(transport.failure_payloads) == 1
     assert transport.failure_payloads[0]["runtime_token"] == "instance:game-a:321:100.000000"
+
+
+def test_beholder_block_is_not_retried_or_reported_as_lifecycle_failure() -> None:
+    import requests
+    from src.api.client import BeholderIncidentRequired
+    from src.gui.main_window import MainWindow
+
+    response = requests.Response()
+    response.status_code = 409
+    incident = {"id": 7, "status": "pending", "operation_kind": "runtime_start"}
+
+    class ShutdownEvent:
+        def __init__(self) -> None:
+            self.delays: list[float] = []
+
+        def is_set(self) -> bool:
+            return False
+
+        def wait(self, delay: float) -> bool:
+            self.delays.append(delay)
+            return False
+
+    class Transport:
+        attempts = 0
+
+        def start_session(self, **_kwargs):
+            self.attempts += 1
+            raise BeholderIncidentRequired(response, incident)
+
+        def post_json(self, *_args, **_kwargs):
+            raise AssertionError("Beholder 차단은 lifecycle failure incident를 만들면 안 됩니다")
+
+    transport = Transport()
+    shutdown = ShutdownEvent()
+    window = SimpleNamespace(
+        _background_transport=transport,
+        _app_instance_id="instance",
+        _lifecycle_shutdown_event=shutdown,
+        _lifecycle_session_lock=threading.Lock(),
+        _lifecycle_session_ids={},
+    )
+
+    result = MainWindow._persist_lifecycle_command(window, _lifecycle_command())
+
+    assert result.blocked is True
+    assert result.beholder_incident == incident
+    assert result.attempts == 1
+    assert transport.attempts == 1
+    assert shutdown.delays == []
+
+
+def test_background_transport_preserves_beholder_409_payload(monkeypatch) -> None:
+    import src.api.client as client_module
+    from src.api.client import BackgroundApiTransport, BeholderIncidentRequired
+
+    incident = {"id": 8, "status": "pending", "operation_kind": "runtime_stop"}
+
+    class Response:
+        status_code = 409
+        text = "blocked"
+
+        def json(self):
+            return {"beholder_incident": incident}
+
+        def raise_for_status(self):
+            raise AssertionError("409 incident는 일반 HTTP 오류 경로로 보내면 안 됩니다")
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(client_module.requests, "Session", Session)
+
+    with pytest.raises(BeholderIncidentRequired) as raised:
+        BackgroundApiTransport("http://127.0.0.1:1").get_json("/blocked", timeout=1.0)
+
+    assert raised.value.incident == incident
+
+
+def test_incomplete_lifecycle_identity_is_rejected_without_api_call() -> None:
+    from dataclasses import replace
+    from src.gui.main_window import MainWindow
+
+    command = replace(_lifecycle_command(), runtime_token="")
+
+    class Transport:
+        def start_session(self, **_kwargs):
+            raise AssertionError("불완전한 lifecycle 명령은 API로 보내면 안 됩니다")
+
+    window = SimpleNamespace(
+        _background_transport=Transport(),
+        _app_instance_id="instance",
+        _lifecycle_shutdown_event=threading.Event(),
+        _lifecycle_session_lock=threading.Lock(),
+        _lifecycle_session_ids={},
+    )
+
+    result = MainWindow._persist_lifecycle_command(window, command)
+
+    assert result.succeeded is False
+    assert result.attempts == 0
+    assert result.error == "invalid lifecycle identity"
+
+
+def test_beholder_dialog_cannot_reenter_and_close_snoozes_for_current_run(monkeypatch) -> None:
+    import src.gui.main_window as main_window_module
+    from src.gui.main_window import MainWindow
+
+    incident = {"id": 41, "status": "pending", "operation_kind": "runtime_stop"}
+    opens: list[int] = []
+
+    class Dialog:
+        action = None
+
+        def __init__(self, _incident, _parent):
+            opens.append(1)
+
+        def exec(self):
+            MainWindow._apply_beholder_incidents(window, (incident,))
+            return 0
+
+    class DataManager:
+        def resolve_beholder_incident(self, *_args):
+            raise AssertionError("닫기/X는 DB 결정을 저장하면 안 됩니다")
+
+    window = SimpleNamespace(
+        _beholder_dialog_active=False,
+        _beholder_seen_incidents=set(),
+        data_manager=DataManager(),
+        process_monitor=SimpleNamespace(),
+        showNormal=lambda: None,
+        raise_=lambda: None,
+        activateWindow=lambda: None,
+    )
+    monkeypatch.setattr(main_window_module, "BeholderIncidentDialog", Dialog)
+
+    MainWindow._apply_beholder_incidents(window, (incident,))
+    MainWindow._apply_beholder_incidents(window, (incident,))
+
+    assert len(opens) == 1
+    assert window._beholder_dialog_active is False
+    assert window._beholder_seen_incidents == {41}
+
+
+def test_beholder_dialog_hides_internal_identity_until_technical_details() -> None:
+    from src.gui.beholder_dialog import BeholderIncidentDialog
+
+    _qapp()
+    dialog = BeholderIncidentDialog({
+        "id": 41,
+        "status": "pending",
+        "user_title": "이미 끝난 플레이 기록의 재종료를 차단했습니다",
+        "user_summary": "삭제된 게임 항목의 기존 기록은 이미 종료되어 있습니다.",
+        "user_impact": "현재 데이터는 변경되지 않았습니다.",
+        "safe_recommendation": "차단을 유지하세요.",
+        "operation_kind": "runtime_stop",
+        "actor": "process_monitor",
+        "target_summary": "session_id=1, process_id=secret-uuid",
+        "current_state_summary": "status=closed",
+        "proposed_change_summary": "end_timestamp=123",
+        "risk_factors": ["invalid_current_status:closed"],
+        "available_actions": [{
+            "id": "deny",
+            "label": "차단 유지",
+            "description": "기존 기록을 유지합니다.",
+            "outcome": "현재 데이터는 변경되지 않습니다.",
+            "recommended": True,
+        }],
+    })
+
+    visible_copy = "\n".join(label.text() for label in dialog.findChildren(QLabel))
+    details = dialog.findChild(QTextEdit)
+    button_copy = [button.text() for button in dialog.findChildren(QPushButton)]
+
+    assert "secret-uuid" not in visible_copy
+    assert "session_id" not in visible_copy
+    assert details is not None and details.isHidden()
+    assert "secret-uuid" in details.toPlainText()
+    assert any("차단 유지" in text for text in button_copy)
+    assert all("이번 한 번 허용" not in text for text in button_copy)
 
 
 def test_stop_persistence_keeps_cached_resource_baseline() -> None:

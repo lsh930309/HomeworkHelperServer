@@ -190,6 +190,7 @@ class MainWindow(QMainWindow):
         self._lifecycle_shutdown_event = threading.Event()
         self._lifecycle_session_lock = threading.Lock()
         self._lifecycle_session_ids: dict[str, int] = {}
+        self._beholder_dialog_active = False
         self._api_backoff_failures: dict[str, int] = {}
         self._api_backoff_until: dict[str, float] = {}
         self._timer_registry = DesiredTimerRegistry()
@@ -769,6 +770,8 @@ class MainWindow(QMainWindow):
 
     def _poll_beholder_incidents(self):
         """로컬 pending 사건을 우선 소비하고 원격 조회는 worker에 맡깁니다."""
+        if self._beholder_dialog_active:
+            return
         incident = self.data_manager.pop_latest_beholder_incident()
         if incident:
             self._apply_beholder_incidents((incident,))
@@ -781,25 +784,34 @@ class MainWindow(QMainWindow):
         return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
 
     def _apply_beholder_incidents(self, incidents: tuple[dict[str, Any], ...]) -> None:
+        if self._beholder_dialog_active:
+            return
         for item in incidents:
-            if not item:
+            if not item or item.get("status") != "pending":
                 continue
             incident_id = item.get("id")
             if incident_id in self._beholder_seen_incidents:
                 continue
+            # 모달의 중첩 이벤트 루프에서도 polling timer가 실행될 수 있으므로
+            # 창을 열기 전에 표시 완료와 active 상태를 먼저 확정합니다. 닫기/X는
+            # DB 결정을 남기지 않지만 이번 앱 실행에서는 다시 표시하지 않습니다.
+            if incident_id is not None:
+                self._beholder_seen_incidents.add(incident_id)
+            self._beholder_dialog_active = True
             self.showNormal()
             self.raise_()
             self.activateWindow()
             dialog = BeholderIncidentDialog(item, self)
-            if not dialog.exec() or not dialog.action:
+            try:
+                accepted = bool(dialog.exec())
+            finally:
+                self._beholder_dialog_active = False
+            if not accepted or not dialog.action:
                 break
             if dialog.action == "restore_backup":
-                if self._handle_beholder_restore_request() and incident_id is not None:
-                    self._beholder_seen_incidents.add(incident_id)
+                self._handle_beholder_restore_request()
             elif incident_id is not None:
                 result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
-                if result:
-                    self._beholder_seen_incidents.add(incident_id)
                 if result and hasattr(self, "process_monitor"):
                     self.process_monitor.apply_beholder_resolution(result)
                 if dialog.action == "allow_once" and result and result.get("override_token"):
