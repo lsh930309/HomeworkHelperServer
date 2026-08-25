@@ -488,7 +488,6 @@ class SidebarWidget(QWidget):
 
         # 볼륨 섹션 (항상 하단에 고정)
         self._vol_section = QWidget()
-        self._vol_section.setStyleSheet("background: transparent;")
         vol_section_layout = QVBoxLayout(self._vol_section)
         vol_section_layout.setContentsMargins(0, 10, 0, 0)
         vol_section_layout.setSpacing(4)
@@ -498,7 +497,6 @@ class SidebarWidget(QWidget):
         vol_section_layout.addWidget(vol_title)
 
         self._vol_list_container = QWidget()
-        self._vol_list_container.setStyleSheet("background: transparent;")
         self._vol_list_layout = QVBoxLayout(self._vol_list_container)
         self._vol_list_layout.setContentsMargins(0, 0, 0, 0)
         self._vol_list_layout.setSpacing(4)
@@ -863,7 +861,6 @@ class SidebarWidget(QWidget):
         """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet("background: transparent; border-radius: 4px;")
         hl = QHBoxLayout(row)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)

@@ -10,8 +10,10 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
+from src.data.data_models import ManagedProcess
 from src.gui.presentation import PresentationController, resolve_ui_renderer
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
+from src.gui.sidebar.sidebar_widget import SidebarWidget
 from src.gui.volume_panel import _MUTE_BTN_STYLE
 from src.gui.widgets_style import (
     CapsuleProgressBar,
@@ -251,6 +253,36 @@ def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border(
     root.close()
 
 
+def test_sidebar_volume_row_does_not_mask_checked_mute_background():
+    app = _qapp()
+    process = ManagedProcess(
+        id="game",
+        name="Game",
+        monitoring_path="game.exe",
+        launch_path="game.exe",
+        default_muted=True,
+    )
+    data_manager = SimpleNamespace(
+        global_settings=SimpleNamespace(sidebar_volume_section_enabled=True),
+        managed_processes=[process],
+    )
+    sidebar = SidebarWidget(data_manager)
+    sidebar._refresh_volumes_list()
+    sidebar.show()
+    app.processEvents()
+
+    mute_button = next(
+        button
+        for button in sidebar.findChildren(QPushButton)
+        if button.property("hhRole") == "muteToggle"
+    )
+    checked = _button_background(mute_button)
+    assert mute_button.isChecked()
+    assert checked.blue() > checked.red()
+    assert checked.blue() > checked.green()
+    sidebar.close()
+
+
 @pytest.mark.parametrize(
     ("value", "filled_x", "track_x"),
     [
@@ -284,8 +316,36 @@ def test_capsule_progress_bar_keeps_round_minimum_fill(value, filled_x, track_x)
     if filled_x is not None:
         assert logical_pixel(filled_x, 3) == QColor(tokens["success"])
     if track_x is not None:
-        assert logical_pixel(track_x, 3) == QColor(tokens["surface_hover"])
+        assert logical_pixel(track_x, 3) == QColor(tokens["surface"])
     bar.close()
+
+
+def test_capsule_progress_bar_uses_dark_track_under_real_main_qss():
+    app = _qapp()
+    window = QMainWindow()
+    central = QWidget(window)
+    layout = QVBoxLayout(central)
+    window.setCentralWidget(central)
+    bar = CapsuleProgressBar(central)
+    bar.setRange(0, 1000)
+    bar.setValue(500)
+    bar.setFixedWidth(100)
+    layout.addWidget(bar)
+    apply_widgets_palette(dark=True)
+    apply_modern_widgets_style(window, dark=True)
+    window.show()
+    app.processEvents()
+
+    image = bar.grab().toImage()
+    dpr = image.devicePixelRatio()
+    track = image.pixelColor(
+        min(round(80 * dpr), image.width() - 1),
+        min(round(3 * dpr), image.height() - 1),
+    )
+    expected = QColor(widgets_theme_tokens(True)["surface"])
+    assert track == expected
+    assert track.lightness() < QColor(widgets_theme_tokens(True)["surface_raised"]).lightness()
+    window.close()
 
 
 def test_slot_receiver_runs_in_its_qobject_thread():

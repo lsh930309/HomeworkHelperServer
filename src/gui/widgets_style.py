@@ -67,7 +67,8 @@ class CapsuleProgressBar(QProgressBar):
         if self.width() <= 0 or self.height() <= 0:
             return
 
-        palette = self.palette()
+        app = QApplication.instance()
+        palette = app.palette() if app is not None else self.palette()
         dark = (
             palette.color(QPalette.ColorRole.WindowText).lightness()
             > palette.color(QPalette.ColorRole.Window).lightness()
@@ -79,7 +80,7 @@ class CapsuleProgressBar(QProgressBar):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(tokens["surface_hover"]))
+        painter.setBrush(QColor(tokens["surface"]))
         painter.drawRoundedRect(rect, radius, radius)
 
         span = self.maximum() - self.minimum()
