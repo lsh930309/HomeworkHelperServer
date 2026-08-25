@@ -1080,21 +1080,15 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
         resource_status="ok",
     )
 
-    class FakeDataManager:
+    class FakeTransport:
         process_updates = []
         session_updates = []
 
-        def get_process_by_id(self, process_id):
-            assert process_id == "nikke"
-            return process
-
         def update_process_resource(self, process_id, percent, updated_at, status, label):
             self.process_updates.append((process_id, percent, updated_at, status, label))
-            return True
 
         def update_session_resource(self, session_id, resource_percent_at_end):
             self.session_updates.append((session_id, resource_percent_at_end))
-            return True
 
     class Finished:
         def __init__(self):
@@ -1107,7 +1101,7 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
         def __init__(self):
             self.finished = Finished()
 
-    data_manager = FakeDataManager()
+    transport = FakeTransport()
     signals = Signals()
     task = _ResourcePersistTask(
         process_id="nikke",
@@ -1122,15 +1116,15 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
         exit_timestamp=0.0,
         allow_session_correction=True,
         applied_session_percent=10.0,
-        data_manager=data_manager,
-        should_abort=lambda: False,
+        process_changed=True,
+        transport=transport,
         signals=signals,
     )
 
     task.run()
 
-    assert data_manager.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
-    assert data_manager.session_updates == [(7, pytest.approx(15.8333333333))]
+    assert transport.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
+    assert transport.session_updates == [(7, pytest.approx(15.8333333333))]
     assert signals.finished.payloads[0][3]["persist_succeeded"] is True
 
 
@@ -1163,6 +1157,7 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
     hoyolab_pool = FakePool()
     hoyolab = HoYoStaminaReconcileCoordinator.__new__(HoYoStaminaReconcileCoordinator)
     hoyolab._data_manager = FailIfCalledDataManager()
+    hoyolab._transport = object()
     hoyolab._health_pool = hoyolab_pool
     hoyolab._notifier = None
 
@@ -1192,6 +1187,7 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
     nikke_pool = FakePool()
     nikke = NikkeResourceReconcileCoordinator.__new__(NikkeResourceReconcileCoordinator)
     nikke._data_manager = FailIfCalledDataManager()
+    nikke._transport = object()
     nikke._health_pool = nikke_pool
     nikke._notifier = None
 

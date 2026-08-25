@@ -36,6 +36,7 @@ class _Noop:
 
 class _FakeApiClient:
     def __init__(self, processes):
+        self.app_instance_id = "gui-layout-test"
         self.managed_processes = processes
         self.web_shortcuts = []
         self.global_settings = GlobalSettings(
@@ -706,20 +707,10 @@ def test_dashboard_button_uses_data_manager_base_url(monkeypatch, tmp_path):
     data_manager.base_url = "http://127.0.0.1:43210"
     window = main_window.MainWindow(data_manager)
     opened = []
-    health_urls = []
-
-    class _Response:
-        status_code = 200
-
-        def json(self):
-            return {"ok": True, "dashboard_static_ready": True}
-
-    monkeypatch.setattr(main_window.requests, "get", lambda url, **_kwargs: health_urls.append(url) or _Response())
     window.open_webpage = lambda url: opened.append(url)
     try:
         window._open_dashboard()
 
-        assert health_urls == ["http://127.0.0.1:43210/api/gui/health"]
         assert opened == ["http://127.0.0.1:43210/dashboard"]
     finally:
         _stop_window(window, app)
@@ -1703,6 +1694,11 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     heartbeat_timer = FakeTimer()
     ui_timer = FakeTimer()
     process_monitor = types.SimpleNamespace(active_monitored_processes={"game-a": {"session_id": 1}})
+    timer_registry = main_window.DesiredTimerRegistry()
+    timer_registry.register("monitor", monitor_timer, interval_ms=1000)
+    timer_registry.register("scheduler", scheduler_timer, interval_ms=1000)
+    timer_registry.register("heartbeat", heartbeat_timer, interval_ms=30000)
+    timer_registry.register("ui_refresh", ui_timer, interval_ms=1000)
     window = types.SimpleNamespace(
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
@@ -1710,6 +1706,8 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
         runtime_heartbeat_timer=heartbeat_timer,
         ui_refresh_timer=ui_timer,
         _UI_REFRESH_INTERVAL_MS=1000,
+        _timer_registry=timer_registry,
+        _work_coordinator=types.SimpleNamespace(invalidate_telemetry=lambda: None),
     )
 
     main_window.MainWindow._suspend_runtime_after_beholder_restore(window)
