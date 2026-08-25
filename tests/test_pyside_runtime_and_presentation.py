@@ -253,7 +253,10 @@ def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border(
     root.close()
 
 
-def test_sidebar_volume_row_does_not_mask_checked_mute_background():
+def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
+    from src.gui.main_window import MainWindow
+
+    monkeypatch.setattr(MainWindow, "INSTANCE", None)
     app = _qapp()
     process = ManagedProcess(
         id="game",
