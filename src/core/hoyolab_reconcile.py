@@ -3,14 +3,17 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
+from src.api.client import BackgroundApiTransport
 from src.core import credential_health
 from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
 from src.data.data_models import ManagedProcess
+from src.gui.work_coordinator import retain_detached_qthreadpool
+from src.core.provider_activity import provider_activity
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +78,8 @@ class _StaminaFetchTask(QRunnable):
                 payload["provider_status"] = "auth_required"
                 payload["error"] = "HoYoLab 인증 정보가 없습니다."
             else:
-                stamina = service.get_stamina(self._game_id)
+                with provider_activity("hoyolab", "stamina_fetch"):
+                    stamina = service.get_stamina(self._game_id)
                 payload["stamina"] = stamina
                 if stamina is not None:
                     payload["fetched_at"] = stamina.updated_at.timestamp()
@@ -114,8 +118,8 @@ class _StaminaPersistTask(QRunnable):
         exit_timestamp: float,
         allow_session_correction: bool,
         applied_session_stamina: Optional[int],
-        data_manager,
-        should_abort: Callable[[], bool],
+        process_changed: bool,
+        transport: BackgroundApiTransport,
         signals: _StaminaPersistSignals,
     ):
         super().__init__()
@@ -130,8 +134,8 @@ class _StaminaPersistTask(QRunnable):
         self._exit_timestamp = exit_timestamp
         self._allow_session_correction = allow_session_correction
         self._applied_session_stamina = applied_session_stamina
-        self._data_manager = data_manager
-        self._should_abort = should_abort
+        self._process_changed = bool(process_changed)
+        self._transport = transport
         self._signals = signals
 
     def run(self) -> None:
@@ -143,54 +147,21 @@ class _StaminaPersistTask(QRunnable):
             "persist_succeeded": False,
         }
         try:
-            if self._should_abort():
-                result["aborted"] = True
-                return
-
-            live_process = self._data_manager.get_process_by_id(self._process_id)
-            if live_process is None:
-                result["error"] = "process missing during persistence"
-                return
-
-            updated_process = ManagedProcess.from_dict(live_process.to_dict())
-            process_changed = (
-                updated_process.stamina_current != self._fetched_current
-                or updated_process.stamina_max != self._fetched_max
-                or updated_process.stamina_updated_at != self._fetched_at
-            )
-            updated_process.stamina_current = self._fetched_current
-            updated_process.stamina_max = self._fetched_max
-            updated_process.stamina_updated_at = self._fetched_at
             process_persist_succeeded = True
 
-            if process_changed:
-                if self._should_abort():
-                    result["aborted"] = True
-                    return
-                if hasattr(self._data_manager, "update_process_stamina"):
-                    process_persist_succeeded = self._data_manager.update_process_stamina(
-                        self._process_id,
-                        self._fetched_current,
-                        self._fetched_max,
-                        self._fetched_at,
-                    )
-                else:
-                    process_persist_succeeded = self._data_manager.update_process_runtime_state(updated_process)
-                if process_persist_succeeded:
-                    logger.info(
-                        "[HoYoLab] 재동기화 반영: '%s' %s/%s",
-                        self._process_name,
-                        self._fetched_current,
-                        self._fetched_max,
-                    )
-                else:
-                    logger.warning(
-                        "[HoYoLab] 재동기화 저장 실패: '%s' %s/%s",
-                        self._process_name,
-                        self._fetched_current,
-                        self._fetched_max,
-                    )
-                    result["error"] = "process persistence failed"
+            if self._process_changed:
+                self._transport.update_process_stamina(
+                    self._process_id,
+                    self._fetched_current,
+                    self._fetched_max,
+                    self._fetched_at,
+                )
+                logger.info(
+                    "[HoYoLab] 재동기화 반영: '%s' %s/%s",
+                    self._process_name,
+                    self._fetched_current,
+                    self._fetched_max,
+                )
 
             session_persist_succeeded = True
             if self._allow_session_correction and self._session_id is not None:
@@ -205,28 +176,16 @@ class _StaminaPersistTask(QRunnable):
                 result["corrected_exit_current"] = corrected_exit_current
 
                 if corrected_exit_current != self._applied_session_stamina:
-                    if self._should_abort():
-                        result["aborted"] = True
-                        return
-                    session_persist_succeeded = self._data_manager.update_session_stamina(
+                    self._transport.update_session_stamina(
                         self._session_id,
                         corrected_exit_current,
                     )
-                    if session_persist_succeeded:
-                        logger.info(
-                            "[HoYoLab] 세션 보정 반영: '%s' session=%s stamina=%s",
-                            self._process_name,
-                            self._session_id,
-                            corrected_exit_current,
-                        )
-                    else:
-                        logger.warning(
-                            "[HoYoLab] 세션 보정 저장 실패: '%s' session=%s stamina=%s",
-                            self._process_name,
-                            self._session_id,
-                            corrected_exit_current,
-                        )
-                        result["error"] = "session persistence failed"
+                    logger.info(
+                        "[HoYoLab] 세션 보정 반영: '%s' session=%s stamina=%s",
+                        self._process_name,
+                        self._session_id,
+                        corrected_exit_current,
+                    )
 
             result["persist_succeeded"] = (
                 process_persist_succeeded and session_persist_succeeded
@@ -261,19 +220,20 @@ class HoYoStaminaReconcileCoordinator(QObject):
         """프로세스 lifecycle과 서버 재조회 결과를 연결할 상태와 워커를 준비합니다."""
         super().__init__(parent)
         self._data_manager = data_manager
+        self._transport = BackgroundApiTransport(getattr(data_manager, "base_url", None))
         self._process_monitor = process_monitor
         self._notifier = notifier
         self._lifecycle_tokens: dict[str, int] = {}
         self._jobs: dict[str, _ReconcileJob] = {}
         self._shutting_down = False
 
-        self._pool = QThreadPool(self)
+        self._pool = QThreadPool()
         self._pool.setMaxThreadCount(1)
-        self._health_pool = QThreadPool(self)
+        self._health_pool = QThreadPool()
         self._health_pool.setMaxThreadCount(1)
-        self._signals = _StaminaFetchSignals(self)
+        self._signals = _StaminaFetchSignals()
         self._signals.finished.connect(self._on_fetch_finished)
-        self._persist_signals = _StaminaPersistSignals(self)
+        self._persist_signals = _StaminaPersistSignals()
         self._persist_signals.finished.connect(self._on_persist_finished)
 
     def handle_process_started(self, event: ProcessLifecycleEvent) -> None:
@@ -347,13 +307,27 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._jobs[process.id] = job
             self._schedule_attempt(process.id, 0)
 
-    def shutdown(self) -> None:
+    def shutdown(self, deadline_ms: int = 2000) -> bool:
         """앱 종료 시 예약된 재동기화 작업을 중단합니다."""
         self._shutting_down = True
         for process_id in list(self._jobs):
             self._finish_job(process_id, "shutdown")
-        self._pool.waitForDone()
-        self._health_pool.waitForDone()
+        for signals, receiver in (
+            (self._signals, self._on_fetch_finished),
+            (self._persist_signals, self._on_persist_finished),
+        ):
+            try:
+                signals.finished.disconnect(receiver)
+            except (TypeError, RuntimeError):
+                pass
+        deadline = time.monotonic() + max(0, int(deadline_ms)) / 1000.0
+        primary = self._pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+        health = self._health_pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+        if not primary:
+            retain_detached_qthreadpool(self._pool)
+        if not health:
+            retain_detached_qthreadpool(self._health_pool)
+        return primary and health
 
     def _advance_lifecycle_token(self, process_id: str) -> int:
         """같은 프로세스의 이전 시작/종료 시퀀스를 무효화할 새 토큰을 발급합니다."""
@@ -479,12 +453,12 @@ class HoYoStaminaReconcileCoordinator(QObject):
                     exit_timestamp=job.exit_timestamp,
                     allow_session_correction=job.allow_session_correction,
                     applied_session_stamina=job.applied_session_stamina,
-                    data_manager=self._data_manager,
-                    should_abort=lambda pid=job.process_id, token=job.lifecycle_token, seq=job.request_seq: self._should_abort_persistence(
-                        pid,
-                        token,
-                        seq,
+                    process_changed=(
+                        process.stamina_current != stamina.current
+                        or process.stamina_max != stamina.max
+                        or process.stamina_updated_at != fetched_at
                     ),
+                    transport=self._transport,
                     signals=self._persist_signals,
                 )
             )
@@ -529,7 +503,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
 
         self._health_pool.start(
             ProviderHealthPersistTask(
-                self._data_manager,
+                self._transport,
                 payload,
                 context="HoYoLab stamina_tracking",
             )
@@ -606,6 +580,13 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
             return
 
+        signature = data.get("signature")
+        fetched_at = data.get("fetched_at")
+        if isinstance(signature, tuple) and len(signature) == 2 and isinstance(fetched_at, (int, float)):
+            process.stamina_current = int(signature[0])
+            process.stamina_max = int(signature[1])
+            process.stamina_updated_at = float(fetched_at)
+
         corrected_exit_current = data.get("corrected_exit_current")
         if corrected_exit_current is not None:
             job.applied_session_stamina = corrected_exit_current
@@ -614,7 +595,6 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._finish_job(process_id, "startup refresh completed")
             return
 
-        signature = data.get("signature")
         if isinstance(signature, tuple) and len(signature) == 2:
             if job.observed_signature == signature:
                 job.stable_hits += 1
@@ -642,17 +622,6 @@ class HoYoStaminaReconcileCoordinator(QObject):
             return
 
         self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-
-    def _should_abort_persistence(self, process_id: str, lifecycle_token: int, request_seq: int) -> bool:
-        """저장 작업이 더 이상 현재 job에 유효하지 않은지 확인합니다."""
-        job = self._jobs.get(process_id)
-        return (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-            or process_id in self._process_monitor.active_monitored_processes
-        )
 
     def _finish_job(self, process_id: str, reason: str) -> None:
         """프로세스의 active reconcile job과 연결된 타이머를 정리하고 종료합니다."""

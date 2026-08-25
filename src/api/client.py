@@ -177,15 +177,22 @@ class BackgroundApiTransport:
         *,
         session_id: int,
         end_timestamp: float,
+        stamina_at_end: int | None = None,
+        resource_percent_at_end: float | None = None,
         timeout: float = 10.0,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "end_timestamp": float(end_timestamp),
+            "session_duration": 0,
+            "close_reason": "process_exit",
+        }
+        if stamina_at_end is not None:
+            payload["stamina_at_end"] = int(stamina_at_end)
+        if resource_percent_at_end is not None:
+            payload["resource_percent_at_end"] = float(resource_percent_at_end)
         result = self.put_json(
             f"/sessions/{int(session_id)}/end",
-            {
-                "end_timestamp": float(end_timestamp),
-                "session_duration": 0,
-                "close_reason": "process_exit",
-            },
+            payload,
             timeout=timeout,
             headers={
                 "X-HH-Beholder-Actor": "process_monitor",
@@ -279,6 +286,32 @@ class BackgroundApiTransport:
                 "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
             },
         )
+
+    def update_provider_credential_health(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        provider = str(payload["provider"])
+        self.post_json(
+            f"/provider-health/{provider}",
+            dict(payload),
+            timeout=timeout,
+        )
+
+    def run_due_daily_checkins(
+        self,
+        *,
+        trigger: str,
+        timeout: float = 65.0,
+    ) -> dict[str, Any]:
+        result = self.post_json(
+            "/daily-checkin/run-due",
+            {"trigger": str(trigger)},
+            timeout=timeout,
+        )
+        return result.payload if isinstance(result.payload, dict) else {}
 
 
 class ApiClient:

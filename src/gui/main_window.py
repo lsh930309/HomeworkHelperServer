@@ -7,7 +7,10 @@ import time
 import datetime
 import functools
 import logging
-from typing import Optional
+import threading
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,7 @@ from PySide6.QtWidgets import (
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
 )
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
+    Qt, QTimer, Signal, Slot, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
 )
 from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QCursor
 
@@ -30,11 +33,11 @@ from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from src.utils.common import get_bundle_resource_path
-from src.api.runtime_config import dashboard_url, gui_health_url, resolve_local_api_base_url
+from src.api.runtime_config import dashboard_url, resolve_local_api_base_url
 import requests
 
 # --- 기타 로컬 유틸리티/데이터 모듈 임포트 ---
-from src.api.client import ApiClient
+from src.api.client import ApiClient, BackgroundApiTransport, DatabaseFaultedResponse
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
@@ -50,12 +53,20 @@ from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
 from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
+from src.core.process_monitor import (
+    ProcessLifecycleEvent,
+    ProcessScanSnapshot,
+    detect_running_process_ids,
+    scan_running_processes,
+)
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
+from src.gui.power_events import DesiredTimerRegistry, PowerResumeEvent, WindowsPowerEventFilter
+from src.gui.work_coordinator import GuiWorkCoordinator, WorkError, WorkResult
 from src.gui.widgets_style import (
     CapsuleProgressBar,
     apply_modern_widgets_style,
@@ -63,6 +74,27 @@ from src.gui.widgets_style import (
     tint_icon,
     widgets_theme_tokens,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleCommand:
+    kind: str
+    event: ProcessLifecycleEvent
+    pid: int
+    process_create_time: float
+    runtime_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecyclePersistenceResult:
+    command: _LifecycleCommand
+    session_id: int | None
+    succeeded: bool
+    attempts: int
+    error: str | None = None
+
+
+_GUI_CLEANUP_DEADLINE_SECONDS = 2.0
 
 
 class IconDownloader(QThread):
@@ -142,6 +174,22 @@ class MainWindow(QMainWindow):
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
+        self._shutting_down = False
+        self._app_instance_id = str(self.data_manager.app_instance_id)
+        self._background_transport = BackgroundApiTransport(self._api_base_url())
+        self._work_coordinator = GuiWorkCoordinator(self, max_threads=4)
+        self._work_coordinator.result_ready.connect(self._on_background_work_result)
+        self._work_coordinator.error_ready.connect(self._on_background_work_error)
+        self._lifecycle_shutdown_event = threading.Event()
+        self._lifecycle_session_lock = threading.Lock()
+        self._lifecycle_session_ids: dict[str, int] = {}
+        self._api_backoff_failures: dict[str, int] = {}
+        self._api_backoff_until: dict[str, float] = {}
+        self._timer_registry = DesiredTimerRegistry()
+        self._power_event_filter = WindowsPowerEventFilter(self._on_native_resume)
+        app_instance = QApplication.instance()
+        if app_instance is not None and sys.platform == "win32":
+            app_instance.installNativeEventFilter(self._power_event_filter)
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
         self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
             QApplication.applicationName(),
@@ -373,6 +421,15 @@ class MainWindow(QMainWindow):
         self.remote_readiness_timer = QTimer(self)
         self.remote_readiness_timer.timeout.connect(self._refresh_remote_readiness_indicators)
         self.remote_readiness_timer.start(5000)
+        for timer_name, timer, interval in (
+            ("monitor", self.monitor_timer, 1000),
+            ("scheduler", self.scheduler_timer, 1000),
+            ("ui_refresh", self.ui_refresh_timer, self._UI_REFRESH_INTERVAL_MS),
+            ("beholder", self.beholder_timer, 1500),
+            ("heartbeat", self.runtime_heartbeat_timer, 30000),
+            ("readiness", self.remote_readiness_timer, 5000),
+        ):
+            self._timer_registry.register(timer_name, timer, interval_ms=interval)
         # Reconcile stale open sessions before the first fresh heartbeat so
         # crash-recovery decisions can use the pre-crash heartbeat.
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
@@ -422,6 +479,160 @@ class MainWindow(QMainWindow):
             self._remote_readiness_states.setdefault(key, ("gray", "상태를 확인 중입니다."))
         self._refresh_readiness_strip()
 
+    def _submit_telemetry(self, key: str, function, *args, **kwargs) -> int | None:
+        """실패한 endpoint의 짧은 backoff를 지키며 최신 작업만 접수합니다."""
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return None
+        if time.monotonic() < self._api_backoff_until.get(key, 0.0):
+            return None
+        return self._work_coordinator.submit_telemetry(key, function, *args, **kwargs)
+
+    @Slot(object)
+    def _on_background_work_result(self, result: WorkResult) -> None:
+        self._api_backoff_failures.pop(result.key, None)
+        self._api_backoff_until.pop(result.key, None)
+        if result.lane == "lifecycle":
+            self._apply_lifecycle_persistence_result(result.value)
+            return
+        value = result.value
+        if result.key == "process_scan" and isinstance(value, ProcessScanSnapshot):
+            self._apply_process_scan_snapshot(value)
+        elif result.key == "remote_readiness" and isinstance(value, Mapping):
+            for key, state in value.items():
+                if isinstance(state, tuple) and len(state) == 2:
+                    self._set_remote_readiness_indicator(str(key), str(state[0]), str(state[1]))
+        elif result.key in {"beholder_incidents", "startup_reconcile"}:
+            incidents = tuple(item for item in value if isinstance(item, Mapping)) if isinstance(value, tuple) else ()
+            if incidents:
+                self._apply_beholder_incidents(incidents)
+
+    @Slot(object)
+    def _on_background_work_error(self, error: WorkError) -> None:
+        failures = self._api_backoff_failures.get(error.key, 0) + 1
+        self._api_backoff_failures[error.key] = failures
+        delay = (1.0, 2.0, 5.0, 10.0, 30.0)[min(failures - 1, 4)]
+        self._api_backoff_until[error.key] = time.monotonic() + delay
+        logger.warning(
+            "GUI background work failed: lane=%s key=%s error=%s: %s retry_after=%.1fs",
+            error.lane,
+            error.key,
+            error.exception_type,
+            error.message,
+            delay,
+        )
+        if error.key == "remote_readiness":
+            self._set_remote_readiness_indicator("beholder", "red", f"상태 확인 실패: {error.message}")
+
+    def _persist_lifecycle_command(self, command: _LifecycleCommand) -> _LifecyclePersistenceResult:
+        retry_delays = (1.0, 2.0, 5.0, 10.0, 30.0)
+        last_error: str | None = None
+        session_id = command.event.session_id
+        for attempt in range(1, len(retry_delays) + 2):
+            if self._lifecycle_shutdown_event.is_set():
+                return _LifecyclePersistenceResult(command, session_id, False, attempt - 1, "shutdown")
+            try:
+                if command.kind == "start":
+                    payload = self._background_transport.start_session(
+                        app_instance_id=self._app_instance_id,
+                        process_id=command.event.process_id,
+                        process_name=command.event.process_name,
+                        pid=command.pid,
+                        process_create_time=command.process_create_time,
+                        timeout=10.0,
+                    )
+                    session_id = int(payload["id"])
+                    with self._lifecycle_session_lock:
+                        self._lifecycle_session_ids[command.runtime_token] = session_id
+                    return _LifecyclePersistenceResult(command, session_id, True, attempt)
+
+                if session_id is None:
+                    with self._lifecycle_session_lock:
+                        session_id = self._lifecycle_session_ids.get(command.runtime_token)
+                if session_id is None:
+                    active = self._background_transport.get_json(
+                        f"/sessions/process/{command.event.process_id}/active", timeout=10.0
+                    )
+                    if isinstance(active.payload, Mapping) and active.payload.get("id") is not None:
+                        session_id = int(active.payload["id"])
+                if session_id is None:
+                    raise RuntimeError("active lifecycle session not found")
+                self._background_transport.end_session(
+                    session_id=session_id,
+                    end_timestamp=command.event.timestamp,
+                    stamina_at_end=command.event.stamina_at_end,
+                    resource_percent_at_end=command.event.resource_percent_at_end,
+                    timeout=10.0,
+                )
+                self._background_transport.patch_json(
+                    f"/processes/{command.event.process_id}/runtime-state",
+                    {"last_played_timestamp": command.event.timestamp},
+                    timeout=10.0,
+                    headers={
+                        "X-HH-Beholder-Actor": "process_monitor",
+                        "X-HH-Beholder-Operation": "process_runtime_state_update",
+                    },
+                )
+                with self._lifecycle_session_lock:
+                    self._lifecycle_session_ids.pop(command.runtime_token, None)
+                return _LifecyclePersistenceResult(command, session_id, True, attempt)
+            except DatabaseFaultedResponse as exc:
+                last_error = str(exc)
+                break
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt > len(retry_delays):
+                    break
+                if self._lifecycle_shutdown_event.wait(retry_delays[attempt - 1]):
+                    return _LifecyclePersistenceResult(command, session_id, False, attempt, "shutdown")
+
+        try:
+            self._background_transport.post_json(
+                "/api/beholder/runtime/lifecycle-failure",
+                {
+                    "kind": command.kind,
+                    "process_id": command.event.process_id,
+                    "process_name": command.event.process_name,
+                    "runtime_token": command.runtime_token,
+                    "attempts": attempt,
+                    "error_type": last_error or "unknown",
+                },
+                timeout=5.0,
+            )
+        except Exception:
+            logger.warning("lifecycle failure incident 기록 실패", exc_info=True)
+        return _LifecyclePersistenceResult(command, session_id, False, attempt, last_error)
+
+    @Slot(object)
+    def _apply_lifecycle_persistence_result(self, value: object) -> None:
+        if not isinstance(value, _LifecyclePersistenceResult):
+            return
+        command = value.command
+        active = self.process_monitor.active_monitored_processes
+        if not value.succeeded:
+            logger.warning(
+                "lifecycle persistence exhausted: kind=%s process_id=%s attempts=%s error=%s",
+                command.kind,
+                command.event.process_id,
+                value.attempts,
+                value.error,
+            )
+            self._poll_beholder_incidents()
+            return
+        event = replace(command.event, session_id=value.session_id)
+        if command.kind == "start":
+            entry = active.get(event.process_id)
+            if entry is not None and entry.get("runtime_token") == command.runtime_token:
+                entry["session_id"] = value.session_id
+            self._hoyolab_reconcile.handle_process_started(event)
+            self._nikke_resource_reconcile.handle_process_started(event)
+        else:
+            process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
+            if process is not None:
+                process.last_played_timestamp = event.timestamp
+            self._hoyolab_reconcile.handle_process_stopped(event)
+            self._nikke_resource_reconcile.handle_process_stopped(event)
+        self.update_process_statuses_only()
+
     def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
         if key not in self._remote_readiness_states:
             return
@@ -462,51 +673,53 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _refresh_remote_readiness_indicators(self) -> None:
-        """Refresh bottom-dot readiness without touching transient status messages."""
-        try:
-            incidents = self.data_manager.get_active_beholder_incidents() if hasattr(self.data_manager, "get_active_beholder_incidents") else []
-            if incidents:
-                self._set_remote_readiness_indicator("beholder", "yellow", f"Beholder incident {len(incidents)}건 확인 필요")
-            else:
-                self._set_remote_readiness_indicator("beholder", "green", "Beholder 대기 중인 incident 없음")
-        except Exception as exc:
-            self._set_remote_readiness_indicator("beholder", "red", f"Beholder 상태 확인 실패: {exc}")
+        """Readiness I/O를 하나의 coalesced worker에서 조회합니다."""
+        api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
+        externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
+        has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
+        remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
+        self._submit_telemetry(
+            "remote_readiness",
+            self._collect_remote_readiness,
+            externally_bound or remote_server_mode_enabled or has_token,
+        )
 
-        tailscale_message = "Tailscale 상태 미확인"
-        tailscale_ready = False
-        tailscale_installed = False
+    def _collect_remote_readiness(self, remote_exposed: bool) -> dict[str, tuple[str, str]]:
+        incidents_result = self._background_transport.get_json(
+            "/api/beholder/incidents/active", timeout=5.0
+        )
+        payload = incidents_result.payload if isinstance(incidents_result.payload, Mapping) else {}
+        incidents = payload.get("incidents") or []
+        beholder = (
+            ("yellow", f"Beholder incident {len(incidents)}건 확인 필요")
+            if incidents
+            else ("green", "Beholder 대기 중인 incident 없음")
+        )
         try:
             snapshot = tailscale_status(timeout_seconds=0.8, cache_ttl_seconds=30.0)
             tailscale_ready = snapshot.ready
             tailscale_installed = snapshot.installed
             tailscale_message = f"Tailscale IP: {', '.join(snapshot.self_ips)}" if snapshot.ready else snapshot.message
         except Exception as exc:
+            tailscale_ready = False
+            tailscale_installed = False
             tailscale_message = f"Tailscale 상태 확인 실패: {exc}"
-
-        api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
-        externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
-        has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
-        remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
-        remote_exposed = externally_bound or remote_server_mode_enabled or has_token
         remote_ready = remote_exposed and tailscale_ready
         if remote_ready:
-            remote_color = "green"
-            remote_message = f"Remote ready · {tailscale_message}"
+            remote = ("green", f"Remote ready · {tailscale_message}")
         elif remote_exposed or tailscale_installed:
-            remote_color = "yellow"
-            remote_message = (
-                f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}"
-            )
+            remote = ("yellow", f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}")
         else:
-            remote_color = "gray"
-            remote_message = "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요."
-        self._set_remote_readiness_indicator("remote", remote_color, remote_message)
-
-        self._set_remote_readiness_indicator(
-            "admin",
-            "green" if is_admin() else "gray",
-            "관리자 권한으로 실행 중입니다." if is_admin() else "일반 사용자 권한으로 실행 중입니다.",
-        )
+            remote = ("gray", "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요.")
+        admin = is_admin()
+        return {
+            "beholder": beholder,
+            "remote": remote,
+            "admin": (
+                "green" if admin else "gray",
+                "관리자 권한으로 실행 중입니다." if admin else "일반 사용자 권한으로 실행 중입니다.",
+            ),
+        }
 
     def _api_base_url(self) -> str:
         return resolve_local_api_base_url(getattr(self.data_manager, "base_url", None))
@@ -515,23 +728,24 @@ class MainWindow(QMainWindow):
         return dashboard_url(self._api_base_url())
 
     def _open_dashboard(self) -> None:
-        base_url = self._api_base_url()
-        try:
-            response = requests.get(gui_health_url(base_url), timeout=0.8)
-            if response.status_code == 200:
-                payload = response.json()
-                if not payload.get("dashboard_static_ready", True):
-                    logger.warning("Dashboard static files are not ready: %s", payload)
-            else:
-                logger.warning("Dashboard health check failed before open: status=%s", response.status_code)
-        except Exception as exc:
-            logger.warning("Dashboard health check failed before open: %s", exc)
+        # 대시보드 자체가 API 오류와 재시도를 표시한다. 버튼 callback에서
+        # 별도 health 요청을 기다리지 않아 브라우저 열기를 즉시 처리한다.
         self.open_webpage(self._dashboard_url())
 
     def _poll_beholder_incidents(self):
-        """Show Beholder incidents promptly in the PyQt main GUI."""
+        """로컬 pending 사건을 우선 소비하고 원격 조회는 worker에 맡깁니다."""
         incident = self.data_manager.pop_latest_beholder_incident()
-        incidents = [incident] if incident else self.data_manager.get_active_beholder_incidents()
+        if incident:
+            self._apply_beholder_incidents((incident,))
+            return
+        self._submit_telemetry("beholder_incidents", self._collect_beholder_incidents)
+
+    def _collect_beholder_incidents(self) -> tuple[dict[str, Any], ...]:
+        result = self._background_transport.get_json("/api/beholder/incidents/active", timeout=5.0)
+        payload = result.payload if isinstance(result.payload, Mapping) else {}
+        return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
+
+    def _apply_beholder_incidents(self, incidents: tuple[dict[str, Any], ...]) -> None:
         for item in incidents:
             if not item:
                 continue
@@ -568,16 +782,32 @@ class MainWindow(QMainWindow):
             controller.apply_settings(self.data_manager.global_settings)
 
     def _send_runtime_heartbeat(self):
-        if hasattr(self.data_manager, "send_runtime_heartbeat"):
-            self.data_manager.send_runtime_heartbeat(runtime_kind="pyqt")
+        self._submit_telemetry("runtime_heartbeat", self._collect_runtime_heartbeat, False)
+
+    def _collect_runtime_heartbeat(self, shutdown: bool) -> object:
+        return self._background_transport.post_json(
+            "/api/beholder/runtime/heartbeat",
+            {
+                "app_instance_id": self._app_instance_id,
+                "runtime_kind": "pyside",
+                "shutdown": bool(shutdown),
+            },
+            timeout=5.0,
+        ).payload
 
     def _reconcile_open_sessions_after_startup(self):
-        if not hasattr(self.data_manager, "reconcile_open_sessions"):
-            return
-        running_ids = list(self.process_monitor.detect_running_process_ids())
-        incidents = self.data_manager.reconcile_open_sessions(running_ids)
-        if incidents:
-            self._poll_beholder_incidents()
+        targets = self.process_monitor.process_scan_targets()
+        self._submit_telemetry("startup_reconcile", self._collect_startup_reconcile, targets)
+
+    def _collect_startup_reconcile(self, targets: tuple[object, ...]) -> tuple[dict[str, Any], ...]:
+        running_ids = sorted(detect_running_process_ids(targets))
+        result = self._background_transport.post_json(
+            "/api/beholder/open-sessions/reconcile",
+            {"running_process_ids": running_ids},
+            timeout=10.0,
+        )
+        payload = result.payload if isinstance(result.payload, Mapping) else {}
+        return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
 
     def _handle_beholder_restore_request(self) -> bool:
         backups = self.data_manager.get_beholder_backups()
@@ -622,10 +852,8 @@ class MainWindow(QMainWindow):
         self._beholder_restore_runtime_suspended = True
         if hasattr(self, "process_monitor"):
             self.process_monitor.active_monitored_processes.clear()
-        for timer_name in ("monitor_timer", "scheduler_timer", "runtime_heartbeat_timer"):
-            timer = getattr(self, timer_name, None)
-            if timer is not None and timer.isActive():
-                timer.stop()
+        self._timer_registry.suspend("database_restore", ("monitor", "scheduler", "heartbeat"))
+        self._work_coordinator.invalidate_telemetry()
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -671,15 +899,13 @@ class MainWindow(QMainWindow):
             logger.debug("Windows 창 이동 자석 적용 실패", exc_info=True)
 
     def _on_monitor_timer_tick(self):
-        """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
+        """타이머 지연을 기록하고 다음 process snapshot을 요청합니다."""
         start_time = time.time()
         current_time = time.time()
         elapsed = current_time - self._last_timer_tick
 
-        # 10초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격, 이전 5초 → 10초로 증가하여 오탐 방지)
         if elapsed > 10:
-            logger.warning(f"절전 복귀 감지: 타이머 간격 {elapsed:.1f}초 (정상: 1초)")
-            self._on_sleep_wake()
+            logger.warning("monitor timer gap: %.1fs (resume으로 간주하지 않음)", elapsed)
 
         self._last_timer_tick = current_time
         self.run_process_monitor_check()
@@ -689,60 +915,28 @@ class MainWindow(QMainWindow):
         if execution_time > 100:
             logger.warning(f"monitor_timer 실행 시간 초과: {execution_time:.1f}ms")
 
-    def _on_sleep_wake(self):
-        """절전 복귀 시 호출되는 메서드
-
-        절전모드 복귀 후 UI 갱신이 멈추는 문제 해결:
-        - 타이머는 작동하지만 Qt 렌더링이 트리거되지 않는 문제 대응
-        - 무거운 갱신을 한 이벤트 루프에 몰지 않고 단계화해 복귀 직후 버벅임을 줄임
-        """
+    def _on_native_resume(self, _event: PowerResumeEvent) -> None:
+        """Windows native 복귀 신호 한 건을 가벼운 비동기 복구로 변환합니다."""
         if self._wake_recovery_in_progress:
-            logger.info("절전 복귀 UI 갱신이 이미 진행 중이므로 중복 요청을 건너뜁니다.")
             return
-
         self._wake_recovery_in_progress = True
-        logger.info("절전 복귀 감지 - UI 단계적 갱신 시작")
+        logger.info("Windows native resume 감지")
+        self._background_transport.reset_connections()
+        self._work_coordinator.invalidate_telemetry()
+        self._timer_registry.restart_desired()
+        QTimer.singleShot(2000, lambda: self._submit_telemetry(
+            "resume_ping", self._background_transport.get_json, "/api/gui/ping", timeout=2.0
+        ))
+        QTimer.singleShot(3000, self.run_process_monitor_check)
+        QTimer.singleShot(6000, self._refresh_remote_readiness_indicators)
+        QTimer.singleShot(15000, self._run_wake_provider_followups)
+        QTimer.singleShot(16000, self._finish_native_resume)
 
-        # 타이머 상태 확인 및 재시작
-        self._ensure_timers_running()
+    def _run_wake_provider_followups(self) -> None:
         if hasattr(self, "_daily_checkin"):
             self._daily_checkin.handle_wake_recovery()
 
-        QTimer.singleShot(0, self._run_sleep_wake_refresh)
-
-    def _run_sleep_wake_refresh(self):
-        """절전 복귀 후 UI를 단계적으로 갱신합니다."""
-        refresh_start = time.time()
-        try:
-            # 카드 전체를 다시 만들어 진행률과 상태를 현재 시간에 맞게 갱신합니다.
-            populate_start = time.time()
-            self.populate_process_list()
-            populate_ms = (time.time() - populate_start) * 1000
-
-            # 웹 버튼 상태 갱신
-            web_start = time.time()
-            self._refresh_web_button_states()
-            web_ms = (time.time() - web_start) * 1000
-
-            # 동기 repaint()는 복귀 직후 GUI 스레드 정체를 키울 수 있으므로 update()만 요청합니다.
-            self.process_table.viewport().update()
-
-            QTimer.singleShot(100, self._restore_window_state)
-
-            total_ms = (time.time() - refresh_start) * 1000
-            if total_ms > 100:
-                logger.warning(
-                    "절전 복귀 UI 갱신 지연: total=%.1fms populate=%.1fms web=%.1fms",
-                    total_ms,
-                    populate_ms,
-                    web_ms,
-                )
-            else:
-                logger.info("절전 복귀 UI 갱신 완료: total=%.1fms", total_ms)
-        finally:
-            QTimer.singleShot(250, self._finish_sleep_wake_refresh)
-
-    def _finish_sleep_wake_refresh(self):
+    def _finish_native_resume(self) -> None:
         self._wake_recovery_in_progress = False
 
     def _on_ui_refresh_tick(self) -> None:
@@ -761,26 +955,8 @@ class MainWindow(QMainWindow):
             logger.warning(f"ui_refresh_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def _ensure_timers_running(self):
-        """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
-
-        Windows 절전 모드(슬립/최대 절전)에서 복귀할 때 QTimer가 중단될 수 있으므로,
-        타이머 상태를 확인하고 필요시 재시작합니다.
-        """
-        timers_restarted = []
-
-        runtime_suspended = getattr(self, "_beholder_restore_runtime_suspended", False)
-
-        if not runtime_suspended and hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
-            self.monitor_timer.start(1000)
-            timers_restarted.append('monitor_timer')
-
-        if not runtime_suspended and hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
-            self.scheduler_timer.start(1000)
-            timers_restarted.append('scheduler_timer')
-
-        if hasattr(self, 'ui_refresh_timer') and not self.ui_refresh_timer.isActive():
-            self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
-            timers_restarted.append('ui_refresh_timer')
+        """등록된 정상 실행 의도만 복원합니다."""
+        self._timer_registry.restart_desired()
 
     def _restore_window_state(self):
         """절전 복귀 후 레이아웃과 고정 피팅 크기를 다시 적용합니다."""
@@ -1253,25 +1429,99 @@ class MainWindow(QMainWindow):
             self._record_status_event("자동 실행 설정 중 문제 발생 가능.", 3000)
 
     def run_process_monitor_check(self):
-        """실행 중인 프로세스를 확인하고 상태 변경 시 카드 목록을 새로고침합니다."""
-        monitor_result = self.process_monitor.check_and_update_statuses() # 상태 변경 감지
+        """GUI 소유 입력을 확정하고 느린 psutil 스캔을 coalesce합니다."""
+        self._check_and_toggle_game_mode()
+        self._submit_telemetry(
+            "process_scan",
+            scan_running_processes,
+            self.process_monitor.process_scan_targets(),
+        )
 
-        for event in monitor_result.started:
-            self._hoyolab_reconcile.handle_process_started(event)
-            self._nikke_resource_reconcile.handle_process_started(event)
-        for event in monitor_result.stopped:
-            self._hoyolab_reconcile.handle_process_stopped(event)
-            self._nikke_resource_reconcile.handle_process_stopped(event)
+    def _apply_process_scan_snapshot(self, snapshot: ProcessScanSnapshot) -> None:
+        """OS snapshot을 GUI cache에 적용하고 lifecycle DB 작업만 FIFO로 보냅니다."""
+        detected = {item.process_id: item for item in snapshot.detected}
+        active = self.process_monitor.active_monitored_processes
+        processes = {item.id: item for item in self.data_manager.managed_processes}
+        changed = False
 
-        if monitor_result.changed:
+        for process_id, entry in tuple(active.items()):
+            observed = detected.get(process_id)
+            same_instance = bool(
+                observed is not None
+                and int(entry.get("pid") or 0) == observed.pid
+                and abs(float(entry.get("start_time_approx") or 0.0) - observed.create_time) <= 0.001
+            )
+            if same_instance:
+                continue
+            process = processes.get(process_id)
+            if process is not None:
+                event = ProcessLifecycleEvent(
+                    process_id=process.id,
+                    process_name=process.name,
+                    session_id=int(entry["session_id"]) if entry.get("session_id") is not None else None,
+                    timestamp=float(snapshot.observed_at),
+                    stamina_tracking_enabled=process.stamina_tracking_enabled,
+                    hoyolab_game_id=process.hoyolab_game_id,
+                    pid=int(entry.get("pid") or 0),
+                    stamina_at_end=process.stamina_current,
+                    stamina_max=process.stamina_max,
+                    resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
+                    resource_provider=getattr(process, "resource_provider", None),
+                    resource_key=getattr(process, "resource_key", None),
+                    resource_percent_at_end=getattr(process, "resource_percent", None),
+                )
+                command = _LifecycleCommand(
+                    "stop",
+                    event,
+                    int(entry.get("pid") or 0),
+                    float(entry.get("start_time_approx") or 0.0),
+                    str(entry.get("runtime_token") or ""),
+                )
+                self._work_coordinator.submit_lifecycle(
+                    process.id, self._persist_lifecycle_command, command
+                )
+            active.pop(process_id, None)
+            changed = True
+
+        for process_id, observed in detected.items():
+            if process_id in active:
+                continue
+            process = processes.get(process_id)
+            if process is None:
+                continue
+            runtime_token = (
+                f"{self._app_instance_id}:{process.id}:"
+                f"{observed.pid}:{observed.create_time:.6f}"
+            )
+            active[process.id] = {
+                "pid": observed.pid,
+                "exe": observed.executable,
+                "start_time_approx": observed.create_time,
+                "session_id": None,
+                "runtime_token": runtime_token,
+            }
+            event = ProcessLifecycleEvent(
+                process_id=process.id,
+                process_name=process.name,
+                session_id=None,
+                timestamp=observed.create_time,
+                stamina_tracking_enabled=process.stamina_tracking_enabled,
+                hoyolab_game_id=process.hoyolab_game_id,
+                pid=observed.pid,
+                resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
+                resource_provider=getattr(process, "resource_provider", None),
+                resource_key=getattr(process, "resource_key", None),
+            )
+            self._work_coordinator.submit_lifecycle(
+                process.id,
+                self._persist_lifecycle_command,
+                _LifecycleCommand("start", event, observed.pid, observed.create_time, runtime_token),
+            )
+            changed = True
+
+        if changed:
             self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
-            self.update_process_statuses_only() # 상태 컬럼만 업데이트
-
-        # 사이드바/게임 모드는 ProcessMonitor의 시작·종료 이벤트 외에도
-        # Beholder 복구, startup reconcile, 외부 캐시 재결합처럼 이미 실행 중인
-        # 상태가 캐시에 들어온 뒤 steady-state tick만 발생하는 경로가 있습니다.
-        # changed=True에만 묶으면 앱 기동 후 서랍 손잡이 트리거가 시작되지 않을 수
-        # 있으므로 매 tick 실제 active cache와 UI 모드를 재동기화합니다.
+            self.update_process_statuses_only()
         self._check_and_toggle_game_mode()
 
     def _check_and_toggle_game_mode(self):
@@ -1992,20 +2242,34 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        deadline = time.monotonic() + _GUI_CLEANUP_DEADLINE_SECONDS
 
-        # 1. 활성화된 타이머들 중지
-        if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
-            self.monitor_timer.stop()
-        if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive():
-            self.scheduler_timer.stop()
-        if hasattr(self, 'ui_refresh_timer') and self.ui_refresh_timer.isActive():
-            self.ui_refresh_timer.stop()
-        if hasattr(self, 'runtime_heartbeat_timer') and self.runtime_heartbeat_timer.isActive():
-            self.runtime_heartbeat_timer.stop()
-        if hasattr(self, 'remote_readiness_timer') and self.remote_readiness_timer.isActive():
-            self.remote_readiness_timer.stop()
-        if hasattr(self.data_manager, "send_runtime_heartbeat"):
-            self.data_manager.send_runtime_heartbeat(shutdown=True, runtime_kind="pyqt")
+        def remaining_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
+        self._timer_registry.shutdown()
+        self._lifecycle_shutdown_event.set()
+        app_instance = QApplication.instance()
+        if app_instance is not None and sys.platform == "win32":
+            try:
+                app_instance.removeNativeEventFilter(self._power_event_filter)
+            except RuntimeError:
+                pass
+        try:
+            self._background_transport.post_json(
+                "/api/beholder/runtime/heartbeat",
+                {
+                    "app_instance_id": self._app_instance_id,
+                    "runtime_kind": "pyside",
+                    "shutdown": True,
+                },
+                timeout=max(0.05, min(1.0, remaining_ms() / 1000.0)),
+            )
+        except Exception:
+            logger.debug("종료 heartbeat 전송 실패", exc_info=True)
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
@@ -2017,22 +2281,27 @@ class MainWindow(QMainWindow):
 
         # 3-1. 볼륨 패널 정리 (대기 중인 볼륨 저장 타이머 플러시)
         if hasattr(self, '_volume_panel') and self._volume_panel:
-            self._volume_panel.cleanup()
+            self._volume_panel.cleanup(remaining_ms())
 
         # 3-2. 사이드바 컨트롤러 정리
         if hasattr(self, '_sidebar_controller'):
-            self._sidebar_controller.cleanup()
+            self._sidebar_controller.cleanup(remaining_ms())
 
         # 3-2. 녹화 매니저 종료
         if hasattr(self, '_recording_manager'):
             self._recording_manager.shutdown()
 
         if hasattr(self, '_hoyolab_reconcile'):
-            self._hoyolab_reconcile.shutdown()
+            self._hoyolab_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_nikke_resource_reconcile'):
-            self._nikke_resource_reconcile.shutdown()
+            self._nikke_resource_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_daily_checkin'):
-            self._daily_checkin.shutdown()
+            self._daily_checkin.shutdown(remaining_ms())
+        drained = self._work_coordinator.shutdown(
+            deadline_seconds=remaining_ms() / 1000.0
+        )
+        if not drained:
+            logger.warning("GUI background work가 종료 기한 뒤에도 drain 중입니다.")
 
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
