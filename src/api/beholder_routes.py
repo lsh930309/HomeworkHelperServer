@@ -29,7 +29,7 @@ from src.data.database_coordination import (
 
 router = APIRouter(prefix="/api/beholder", tags=["beholder"])
 logger = logging.getLogger(__name__)
-_lifecycle_replay_lock = threading.Lock()
+_lifecycle_failure_lock = threading.Lock()
 
 
 database_coordinator = create_database_coordinator(data_dir)
@@ -243,13 +243,13 @@ def _record_lifecycle_failure_incident(
                 f"완료를 확인하지 못했습니다 ({error_type[:80]})."
             ),
             current_state_summary="OS 실행 상태 표시는 즉시 반영됐지만 DB lifecycle 확정은 보류됐습니다.",
-            proposed_change_summary="다음 startup reconcile에서 동일 lease token으로 재확인합니다.",
+            proposed_change_summary="다음 앱 시작 시 open-session reconcile로 실제 실행 상태를 다시 확인합니다.",
             risk_score=55,
             risk_factors=["runtime_state_ambiguous"],
             safe_recommendation="앱과 API 연결을 확인한 뒤 재시작하여 lifecycle reconcile을 수행하세요.",
             user_title=f"{process_name} 실행 기록을 확정하지 못했습니다",
             user_summary="게임 실행 표시는 유지되지만 플레이 기록 저장 여부를 다시 확인해야 합니다.",
-            user_impact="중복 기록을 만들지 않도록 동일 token 재시도 대상으로 보존했습니다.",
+            user_impact="동일 token의 실패 사건은 한 건만 표시하며 별도 재생 상태는 저장하지 않습니다.",
             recommended_action="quarantine",
             available_actions=[
                 {
@@ -275,7 +275,7 @@ def record_lifecycle_failure(
 ) -> dict[str, Any]:
     """Persist an exhausted GUI lifecycle retry as a user-visible incident."""
 
-    with _lifecycle_replay_lock:
+    with _lifecycle_failure_lock:
         existing = _record_lifecycle_failure_incident(
             db,
             kind=payload.kind,
