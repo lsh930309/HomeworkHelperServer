@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
+from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
 from src.gui.widgets_style import apply_sidebar_widgets_style
 
@@ -95,6 +96,16 @@ class _VideoThumbnailLoadTask(QRunnable):
     @staticmethod
     def _extract_thumbnail(path: str, w: int, h: int) -> Optional[QImage]:
         """Windows IShellItemImageFactory로 비디오 썸네일을 추출합니다."""
+        co_initialized = False
+        psi = None
+        psiif = None
+        hbm = None
+        hdc = None
+        release_si = None
+        release_siif = None
+        ole32 = None
+        gdi32 = None
+        user32 = None
         try:
             import ctypes
             import ctypes.wintypes as wintypes
@@ -105,7 +116,12 @@ class _VideoThumbnailLoadTask(QRunnable):
             gdi32 = ctypes.windll.gdi32
             user32 = ctypes.windll.user32
 
-            ole32.CoInitializeEx(None, 0)  # COINIT_APARTMENTTHREADED
+            # S_OK(0)와 S_FALSE(1)는 모두 이 스레드가 대응하는
+            # CoUninitialize()를 호출해야 하는 성공 결과다.
+            co_hr = int(ole32.CoInitializeEx(None, 0))  # COINIT_APARTMENTTHREADED
+            if co_hr not in (0, 1):
+                return None
+            co_initialized = True
 
             def _make_guid(s: str):
                 import uuid
@@ -125,11 +141,10 @@ class _VideoThumbnailLoadTask(QRunnable):
 
             vtbl = ctypes.cast(psi, POINTER(POINTER(c_void_p)))
             QI_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, POINTER(ctypes.c_byte * 16), POINTER(c_void_p))(vtbl[0][0])
-            Release_si = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl[0][2])
+            release_si = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl[0][2])
 
             psiif = c_void_p()
             hr = QI_fn(psi, byref(IID_ISIIF), byref(psiif))
-            Release_si(psi)
 
             if hr != 0 or not psiif:
                 return None
@@ -139,12 +154,11 @@ class _VideoThumbnailLoadTask(QRunnable):
 
             vtbl2 = ctypes.cast(psiif, POINTER(POINTER(c_void_p)))
             GetImage_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, _SIZE, c_uint, POINTER(wintypes.HBITMAP))(vtbl2[0][3])
-            Release_siif = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl2[0][2])
+            release_siif = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl2[0][2])
 
             SIIGBF_BIGGERSIZEOK = 0x1
             hbm = wintypes.HBITMAP()
             hr = GetImage_fn(psiif, _SIZE(w, h), SIIGBF_BIGGERSIZEOK, byref(hbm))
-            Release_siif(psiif)
 
             if hr != 0 or not hbm:
                 return None
@@ -160,6 +174,8 @@ class _VideoThumbnailLoadTask(QRunnable):
                 ]
 
             hdc = user32.GetDC(0)
+            if not hdc:
+                return None
             bih = _BITMAPINFOHEADER()
             bih.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
             bih.biWidth = w
@@ -169,9 +185,9 @@ class _VideoThumbnailLoadTask(QRunnable):
             bih.biCompression = 0  # BI_RGB
 
             buf = ctypes.create_string_buffer(w * h * 4)
-            gdi32.GetDIBits(hdc, hbm, 0, h, buf, byref(bih), 0)
-            user32.ReleaseDC(0, hdc)
-            gdi32.DeleteObject(hbm)
+            copied_rows = gdi32.GetDIBits(hdc, hbm, 0, h, buf, byref(bih), 0)
+            if copied_rows != h:
+                return None
 
             img = QImage(buf, w, h, w * 4, QImage.Format.Format_ARGB32)
             return img.copy()  # buf GC 전에 복사
@@ -179,6 +195,22 @@ class _VideoThumbnailLoadTask(QRunnable):
         except Exception as exc:
             logger.debug("비디오 썸네일 추출 실패 (%s): %s", path, exc)
             return None
+        finally:
+            cleanup_calls = (
+                ("DC", user32.ReleaseDC, (0, hdc)) if hdc and user32 is not None else None,
+                ("HBITMAP", gdi32.DeleteObject, (hbm,)) if hbm and gdi32 is not None else None,
+                ("IShellItemImageFactory", release_siif, (psiif,)) if psiif and release_siif is not None else None,
+                ("IShellItem", release_si, (psi,)) if psi and release_si is not None else None,
+                ("COM", ole32.CoUninitialize, ()) if co_initialized and ole32 is not None else None,
+            )
+            for cleanup in cleanup_calls:
+                if cleanup is None:
+                    continue
+                label, function, args = cleanup
+                try:
+                    function(*args)
+                except Exception:
+                    logger.debug("비디오 썸네일 %s 해제 실패", label, exc_info=True)
 
     @staticmethod
     def _make_placeholder(w: int, h: int) -> QImage:
@@ -420,19 +452,19 @@ class SidebarWidget(QWidget):
 
         # 볼륨 저장 전용 직렬 스레드풀
         self._volume_save_timers: dict = {}
-        self._save_pool = QThreadPool(self)
+        self._save_pool = QThreadPool()
         self._save_pool.setMaxThreadCount(1)
 
         # 스크린샷 썸네일 디코딩용 스레드풀
-        self._thumb_pool = QThreadPool(self)
+        self._thumb_pool = QThreadPool()
         self._thumb_pool.setMaxThreadCount(2)
-        self._thumb_signals = _ThumbnailLoadSignals(self)
+        self._thumb_signals = _ThumbnailLoadSignals()
         self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
 
         # 녹화 썸네일 디코딩용 스레드풀 (별도)
-        self._rec_thumb_pool = QThreadPool(self)
+        self._rec_thumb_pool = QThreadPool()
         self._rec_thumb_pool.setMaxThreadCount(2)
-        self._rec_thumb_signals = _ThumbnailLoadSignals(self)
+        self._rec_thumb_signals = _ThumbnailLoadSignals()
         self._rec_thumb_signals.loaded.connect(self._apply_rec_thumbnail_result)
 
         # Win32 외부 클릭 감지 상태
@@ -604,20 +636,36 @@ class SidebarWidget(QWidget):
         self._is_shown = False
         logger.debug("SidebarWidget 슬라이드아웃")
 
-    def cleanup(self) -> None:
+    def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
                 timer.timeout.emit()
         self._volume_save_timers.clear()
-        self._save_pool.waitForDone(2000)
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
+        self._rec_timer.stop()
         self._anim.stop()
+        for signals, receiver in (
+            (self._thumb_signals, self._apply_thumbnail_result),
+            (self._rec_thumb_signals, self._apply_rec_thumbnail_result),
+        ):
+            try:
+                signals.loaded.disconnect(receiver)
+            except (TypeError, RuntimeError):
+                pass
+        deadline = time.monotonic() + max(0, int(deadline_ms)) / 1000.0
+        drained = True
+        for pool in (self._save_pool, self._thumb_pool, self._rec_thumb_pool):
+            pool_drained = pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+            if not pool_drained:
+                retain_detached_qthreadpool(pool)
+            drained = drained and pool_drained
         self.hide()
+        return drained
 
     # ------------------------------------------------------------------
     # 이벤트 오버라이드
