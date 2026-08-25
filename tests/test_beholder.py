@@ -83,6 +83,89 @@ def test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open(mon
     assert db.query(models.BeholderIncident).count() == 1
 
 
+def test_equivalent_pending_and_denied_incidents_are_reused(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(
+        kind="runtime_stop",
+        actor="process_monitor",
+        evidence={
+            "changed_fields": ["end_timestamp"],
+            "context": {"session_id": 1, "process_id": "game-a"},
+            "proposed_values": {"end_timestamp": 200.0},
+        },
+    )
+    values = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "current_state_summary": "현재 상태=closed",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, **values)
+    pending_duplicate = beholder.create_incident(db, **values)
+
+    assert pending_duplicate.id == first.id
+    assert db.query(models.BeholderIncident).count() == 1
+
+    beholder.mark_incident(db, first.id, beholder.STATUS_DENIED)
+    denied_duplicate = beholder.create_incident(db, **values)
+
+    assert denied_duplicate.id == first.id
+    assert denied_duplicate.status == beholder.STATUS_DENIED
+    assert db.query(models.BeholderIncident).count() == 1
+
+
+def test_changed_incident_context_creates_a_new_incident(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor")
+    common = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, current_state_summary="현재 상태=closed", **common)
+    second = beholder.create_incident(db, current_state_summary="현재 상태=quarantined", **common)
+
+    assert second.id != first.id
+    assert db.query(models.BeholderIncident).count() == 2
+
+
+def test_fallback_user_summary_does_not_expose_internal_identity(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor"),
+        target_summary="session_id=1, process_id=secret-uuid",
+        suspected_cause="internal cause",
+        current_state_summary="owner=internal",
+        proposed_change_summary="end_timestamp=123",
+        risk_score=50,
+        risk_factors=["internal_factor"],
+        safe_recommendation="차단을 유지하세요.",
+    )
+
+    summary = beholder.incident_to_dict(incident)["user_summary"]
+
+    assert "session_id" not in summary
+    assert "secret-uuid" not in summary
+    assert "process_monitor" not in summary
+
+
 def test_beholder_allows_long_session_with_override_token(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -2165,4 +2248,3 @@ def test_process_monitor_retries_runtime_start_after_allow_once(monkeypatch):
     })
 
     assert "game-a" not in monitor.active_monitored_processes
-

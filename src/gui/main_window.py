@@ -37,7 +37,12 @@ from src.api.runtime_config import dashboard_url, resolve_local_api_base_url
 import requests
 
 # --- 기타 로컬 유틸리티/데이터 모듈 임포트 ---
-from src.api.client import ApiClient, BackgroundApiTransport, DatabaseFaultedResponse
+from src.api.client import (
+    ApiClient,
+    BackgroundApiTransport,
+    BeholderIncidentRequired,
+    DatabaseFaultedResponse,
+)
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
@@ -92,6 +97,8 @@ class _LifecyclePersistenceResult:
     succeeded: bool
     attempts: int
     error: str | None = None
+    blocked: bool = False
+    beholder_incident: Mapping[str, Any] | None = None
 
 
 _GUI_CLEANUP_DEADLINE_SECONDS = 2.0
@@ -527,6 +534,14 @@ class MainWindow(QMainWindow):
         retry_delays = (1.0, 2.0, 5.0, 10.0, 30.0)
         last_error: str | None = None
         session_id = command.event.session_id
+        if not str(command.event.process_id or "").strip() or not str(command.runtime_token or "").strip():
+            logger.error(
+                "불완전한 lifecycle 명령 거부: kind=%s process_id=%r runtime_token=%r",
+                command.kind,
+                command.event.process_id,
+                command.runtime_token,
+            )
+            return _LifecyclePersistenceResult(command, session_id, False, 0, "invalid lifecycle identity")
         for attempt in range(1, len(retry_delays) + 2):
             if self._lifecycle_shutdown_event.is_set():
                 return _LifecyclePersistenceResult(command, session_id, False, attempt - 1, "shutdown")
@@ -575,6 +590,16 @@ class MainWindow(QMainWindow):
                 with self._lifecycle_session_lock:
                     self._lifecycle_session_ids.pop(command.runtime_token, None)
                 return _LifecyclePersistenceResult(command, session_id, True, attempt)
+            except BeholderIncidentRequired as exc:
+                return _LifecyclePersistenceResult(
+                    command,
+                    session_id,
+                    False,
+                    attempt,
+                    "beholder_blocked",
+                    True,
+                    exc.incident,
+                )
             except DatabaseFaultedResponse as exc:
                 last_error = str(exc)
                 break
@@ -608,6 +633,16 @@ class MainWindow(QMainWindow):
             return
         command = value.command
         active = self.process_monitor.active_monitored_processes
+        if value.blocked:
+            logger.info(
+                "Beholder가 lifecycle 저장을 차단함: kind=%s process_id=%s incident_id=%s",
+                command.kind,
+                command.event.process_id,
+                (value.beholder_incident or {}).get("id"),
+            )
+            if value.beholder_incident:
+                self._apply_beholder_incidents((dict(value.beholder_incident),))
+            return
         if not value.succeeded:
             logger.warning(
                 "lifecycle persistence exhausted: kind=%s process_id=%s attempts=%s error=%s",

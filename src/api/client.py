@@ -87,6 +87,10 @@ class BackgroundApiTransport:
                 raise DatabaseMaintenanceResponse(response, int(retry_after or 2))
             if response.status_code == 503 and code == "database_faulted":
                 raise DatabaseFaultedResponse("database_faulted", response=response)
+            if response.status_code == 409 and isinstance(payload, dict):
+                incident = payload.get("beholder_incident")
+                if isinstance(incident, dict):
+                    raise BeholderIncidentRequired(response, incident)
             response.raise_for_status()
             return BackgroundHttpResult(
                 status_code=response.status_code,
@@ -349,7 +353,8 @@ class ApiClient:
                 body = {}
             incident = body.get("beholder_incident")
             if incident:
-                self.latest_beholder_incident = incident
+                if incident.get("status") == "pending":
+                    self.latest_beholder_incident = incident
                 raise BeholderIncidentRequired(response, incident)
         response.raise_for_status()
 
