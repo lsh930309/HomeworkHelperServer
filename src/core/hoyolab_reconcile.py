@@ -147,8 +147,6 @@ class _StaminaPersistTask(QRunnable):
             "persist_succeeded": False,
         }
         try:
-            process_persist_succeeded = True
-
             if self._process_changed:
                 self._transport.update_process_stamina(
                     self._process_id,
@@ -163,7 +161,6 @@ class _StaminaPersistTask(QRunnable):
                     self._fetched_max,
                 )
 
-            session_persist_succeeded = True
             if self._allow_session_correction and self._session_id is not None:
                 recovered = int(
                     max(0.0, self._fetched_at - self._exit_timestamp)
@@ -187,9 +184,7 @@ class _StaminaPersistTask(QRunnable):
                         corrected_exit_current,
                     )
 
-            result["persist_succeeded"] = (
-                process_persist_succeeded and session_persist_succeeded
-            )
+            result["persist_succeeded"] = True
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -456,7 +451,6 @@ class HoYoStaminaReconcileCoordinator(QObject):
                     process_changed=(
                         process.stamina_current != stamina.current
                         or process.stamina_max != stamina.max
-                        or process.stamina_updated_at != fetched_at
                     ),
                     transport=self._transport,
                     signals=self._persist_signals,

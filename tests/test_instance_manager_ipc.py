@@ -81,10 +81,14 @@ def _manager(window):
     return manager
 
 
-def test_parse_instance_command_accepts_only_show_window():
-    assert instance_manager.parse_instance_command(b"show_window\n") == instance_manager.InstanceCommand.SHOW_WINDOW
-    assert instance_manager.parse_instance_command("unsupported_command\n") is None
-    assert instance_manager.parse_instance_command("show_window_now\n") is None
+def test_parse_instance_message_accepts_only_versioned_show_window():
+    identity = instance_manager.instance_identity()
+
+    assert instance_manager.parse_instance_message(
+        instance_manager.encode_instance_command(instance_manager.InstanceCommand.SHOW_WINDOW, identity)
+    ) == (identity.digest, instance_manager.InstanceCommand.SHOW_WINDOW)
+    assert instance_manager.parse_instance_message(b"show_window\n") == (None, None)
+    assert instance_manager.parse_instance_message(b"HHIPC1 wrong unsupported_command\n") == ("wrong", None)
 
 
 def test_command_sender_uses_path_scoped_identity(monkeypatch):
@@ -117,7 +121,9 @@ def test_command_sender_distinguishes_missing_server_and_ack_timeout(monkeypatch
 def test_ipc_server_dispatches_show_window_and_acknowledges():
     window = _Window()
     manager = _manager(window)
-    socket = _FakeSocket(b"show_window\n")
+    socket = _FakeSocket(
+        instance_manager.encode_instance_command(instance_manager.InstanceCommand.SHOW_WINDOW, manager._identity)
+    )
     manager._active_client_sockets.add(socket)
 
     manager._read_ipc_message(socket)
@@ -141,14 +147,27 @@ def test_ipc_server_rejects_unknown_command():
     manager.cleanup()
 
 
-def test_legacy_blind_connection_still_activates_window():
+def test_payloadless_connection_never_activates_window():
     window = _Window()
     manager = _manager(window)
     socket = _FakeSocket(b"")
     manager._active_client_sockets.add(socket)
 
-    manager._handle_blind_ipc_connection(socket)
+    manager._finish_ipc_connection(socket)
 
-    assert window.shown == 1
-    assert socket.disconnected is True
+    assert window.shown == 0
     manager.cleanup()
+
+
+def test_cleanup_marks_connections_inactive_before_abort():
+    window = _Window()
+    manager = _manager(window)
+    socket = _FakeSocket(b"")
+    manager._active_client_sockets.add(socket)
+
+    manager.cleanup()
+    manager._finish_ipc_connection(socket)
+
+    assert manager._cleanup_done is True
+    assert socket._hh_received_command is True
+    assert window.shown == 0

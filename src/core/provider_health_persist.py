@@ -20,10 +20,7 @@ class ProviderHealthPersistTask(QRunnable):
         self._context = context
 
     def run(self) -> None:
-        updater = getattr(self._transport, "update_provider_credential_health", None)
-        if not callable(updater):
-            return
         try:
-            updater(self.payload)
+            self._transport.update_provider_credential_health(self.payload)
         except Exception as exc:  # pragma: no cover - defensive around UI background persistence
             logger.warning("%s provider health 저장 실패: %s", self._context, exc, exc_info=True)

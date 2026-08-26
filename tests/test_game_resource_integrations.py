@@ -3,6 +3,7 @@ import sqlite3
 import time
 import datetime as dt
 import inspect
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1126,6 +1127,23 @@ def test_nikke_resource_persist_task_updates_process_and_session_percent():
     assert transport.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
     assert transport.session_updates == [(7, pytest.approx(15.8333333333))]
     assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+
+
+def test_reconcile_unchanged_values_do_not_write_new_fetch_timestamp():
+    hoyolab_source = Path("src/core/hoyolab_reconcile.py").read_text(encoding="utf-8")
+    resource_source = Path("src/core/resource_reconcile.py").read_text(encoding="utf-8")
+
+    assert "process.stamina_updated_at != fetched_at" not in hoyolab_source
+    assert "process.resource_updated_at != fetched_at" not in resource_source
+
+
+def test_provider_health_persist_reports_unsupported_transport(caplog):
+    from src.core.provider_health_persist import ProviderHealthPersistTask
+
+    with caplog.at_level(logging.WARNING):
+        ProviderHealthPersistTask(object(), {"provider": "test"}, context="test").run()
+
+    assert "provider health 저장 실패" in caplog.text
 
 
 def test_reconcile_provider_health_writes_are_queued_off_main_path():

@@ -2,7 +2,6 @@ from pathlib import Path
 
 
 def test_product_runtime_contains_no_pyqt_or_sip_dependency():
-    roots = [Path("src"), Path("homework_helper.pyw")]
     files = list(Path("src").rglob("*.py")) + [Path("homework_helper.pyw")]
     forbidden = ("PyQt6", "pyqtSignal", "pyqtSlot", "from PySide6 import sip")
     violations = []

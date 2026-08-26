@@ -772,10 +772,10 @@ def run_server_main(shutdown_event=None):
     from src.data.database import SessionLocal, engine, auto_migrate_database, backup_database
     from src.data.database_coordination import (
         DatabaseAccessUnavailable,
+        database_access_exception_handler,
         database_access_error_response,
     )
     from src.api.beholder_routes import database_coordinator
-    from src.core.runtime_identity import runtime_identity
     from src.core.daily_checkin_singleflight import (
         DailyCheckInAlreadyInFlight,
         bounded_provider_timeout_seconds,
@@ -784,7 +784,6 @@ def run_server_main(shutdown_event=None):
         remaining_deadline_seconds,
     )
 
-    runtime_identity_payload = runtime_identity()
     database_faulted_at_startup = database_coordinator.snapshot().mode == "faulted"
     if database_faulted_at_startup:
         logger.error(
@@ -982,14 +981,13 @@ def run_server_main(shutdown_event=None):
         metadata["api_host"] = api_host
         metadata["api_port"] = api_port
         metadata["remote_exposed"] = api_host not in {"127.0.0.1", "localhost", "::1"}
-        metadata["release_id"] = runtime_identity_payload["release_id"]
-        metadata["git_sha"] = runtime_identity_payload["git_sha"]
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"API 바인딩 메타데이터 갱신 실패: {e}")
 
     app = FastAPI()
+    app.add_exception_handler(DatabaseAccessUnavailable, database_access_exception_handler)
     loopback_hosts = {"127.0.0.1", "localhost", "::1", "testclient"}
     remote_exposed = api_host not in {"127.0.0.1", "localhost", "::1"}
 
@@ -1447,8 +1445,6 @@ def run_server_main(shutdown_event=None):
             "port": api_port,
             "testbench_mode": is_testbench_mode(),
             "testbench_session_id": get_testbench_session_id(),
-            "release_id": runtime_identity_payload["release_id"],
-            "git_sha": runtime_identity_payload["git_sha"],
             "server_time": time.time(),
         }
 
@@ -1497,8 +1493,6 @@ def run_server_main(shutdown_event=None):
             "remote_exposed": remote_exposed,
             "testbench_mode": is_testbench_mode(),
             "testbench_session_id": get_testbench_session_id(),
-            "release_id": runtime_identity_payload["release_id"],
-            "git_sha": runtime_identity_payload["git_sha"],
             "db_ready": db_ready,
             "db_error": db_error,
             "db_probe_ms": round(db_probe_ms, 2),

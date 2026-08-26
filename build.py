@@ -141,6 +141,13 @@ def bootstrap_windows_build_runtime(
         if created.returncode != 0 or not managed_python.exists():
             raise BuildConfigError("Windows 프로젝트 Python 3.14 가상환경 생성에 실패했습니다.")
 
+    if current_python.resolve() != managed_python.resolve():
+        delegated = runner(
+            [str(managed_python), str(project_root / "build.py"), *argv],
+            cwd=project_root,
+        )
+        return int(delegated.returncode)
+
     print("[준비] requirements.txt 의존성 설치 및 업데이트")
     installed = runner(
         [
@@ -157,14 +164,7 @@ def bootstrap_windows_build_runtime(
     )
     if installed.returncode != 0:
         raise BuildConfigError("Windows 빌드 의존성 설치에 실패했습니다.")
-
-    if current_python.resolve() == managed_python.resolve():
-        return None
-    delegated = runner(
-        [str(managed_python), str(project_root / "build.py"), *argv],
-        cwd=project_root,
-    )
-    return int(delegated.returncode)
+    return None
 
 
 def installed_distribution_versions(names: tuple[str, ...]) -> dict[str, str]:
@@ -2222,6 +2222,7 @@ def main(argv: list[str] | None = None):
     """메인 함수"""
     configure_console_output()
     effective_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parse_args(effective_argv)
     try:
         delegated_exit = bootstrap_windows_build_runtime(effective_argv)
     except BuildConfigError as exc:
@@ -2229,8 +2230,6 @@ def main(argv: list[str] | None = None):
         return 1
     if delegated_exit is not None:
         return delegated_exit
-
-    args = parse_args(effective_argv)
     # 커스텀 폰트 로딩
     try:
         target = args.target or select_build_target()

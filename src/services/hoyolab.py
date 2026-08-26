@@ -69,6 +69,7 @@ class HoYoLabService:
     DAILY_CHECKIN_GAME_ORDER = ("honkai_starrail", "zenless_zone_zero")
     
     MAX_ASYNC_TIMEOUT_SECONDS = 30.0
+    CLOSE_TIMEOUT_SECONDS = 2.0
 
     def __init__(
         self,
@@ -484,25 +485,45 @@ class HoYoLabService:
             logger.error(f"ZZZ API 호출 실패: {e}")
             return None
     
-    def close(self) -> None:
+    def close(self) -> bool:
         """클라이언트 연결 종료"""
-        deadline = self._operation_deadline()
+        deadline = self._operation_deadline(min(self._async_timeout, self.CLOSE_TIMEOUT_SECONDS))
         try:
             with self._lock_until(self._client_lock, deadline, "client"):
                 self._closed = True
                 client = self._client
-                self._client = None
         except Exception as exc:
-            logger.debug("HoYoLab 클라이언트 종료 진입 중 예외 발생: %s", exc, exc_info=True)
-            return
+            logger.warning("HoYoLab 클라이언트 종료 진입 실패: %s", exc, exc_info=True)
+            return False
 
-        if client:
-            try:
-                with self._lock_until(self._request_lock, deadline, "request"):
+        if not client:
+            return True
+
+        try:
+            with self._lock_until(self._request_lock, deadline, "request"):
+                with self._lock_until(self._client_lock, deadline, "client"):
+                    if self._client is client:
+                        self._client = None
+                try:
                     self._run_async(client.close(), deadline=deadline)
-            except Exception as exc:
-                logger.debug("HoYoLab 클라이언트 종료 중 예외 발생: %s", exc, exc_info=True)
-            logger.info("HoYoLab 클라이언트 연결 종료")
+                except Exception:
+                    with self._client_lock:
+                        if self._client is None:
+                            self._client = client
+                        self._closed = False
+                    raise
+        except Exception as exc:
+            with self._client_lock:
+                self._closed = False
+            logger.warning(
+                "HoYoLab 클라이언트 종료 실패로 기존 인스턴스를 유지합니다: %s",
+                exc,
+                exc_info=True,
+            )
+            return False
+
+        logger.info("HoYoLab 클라이언트 연결 종료")
+        return True
 
 
 # 전역 서비스 인스턴스 (싱글톤)
@@ -523,6 +544,5 @@ def reset_hoyolab_service() -> None:
     """HoYoLabService 인스턴스 리셋 (설정 변경 시 호출)"""
     global _service_instance
     with _service_lock:
-        if _service_instance:
-            _service_instance.close()
-        _service_instance = None
+        if _service_instance is None or _service_instance.close():
+            _service_instance = None

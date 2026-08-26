@@ -5,7 +5,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QEventLoop, QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
@@ -363,6 +363,8 @@ def test_slot_receiver_runs_in_its_qobject_thread():
             self.fired.emit()
 
     class Receiver(QObject):
+        received = Signal()
+
         def __init__(self):
             super().__init__()
             self.observed = None
@@ -370,20 +372,24 @@ def test_slot_receiver_runs_in_its_qobject_thread():
         @Slot()
         def receive(self):
             self.observed = QThread.currentThread()
+            self.received.emit()
 
     emitter = Emitter()
     receiver = Receiver()
     emitter.moveToThread(thread)
     emitter.fired.connect(receiver.receive)
+    received_loop = QEventLoop()
+    receiver.received.connect(received_loop.quit)
     thread.started.connect(emitter.emit_from_worker)
-    thread.start()
-    deadline = 200
-    while receiver.observed is None and deadline:
-        app.processEvents()
-        QThread.msleep(1)
-        deadline -= 1
-    thread.quit()
-    assert thread.wait(1_000)
+    try:
+        thread.start()
+        if receiver.observed is None:
+            QTimer.singleShot(5_000, received_loop.quit)
+            received_loop.exec()
+        assert receiver.observed is not None
+    finally:
+        thread.quit()
+        assert thread.wait(1_000)
     assert receiver.observed == receiver.thread()
 
 

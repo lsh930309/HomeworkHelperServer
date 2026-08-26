@@ -968,7 +968,6 @@ class MainWindow(QMainWindow):
             return
         self._wake_recovery_in_progress = True
         logger.info("Windows native resume 감지")
-        self._background_transport.reset_connections()
         self._work_coordinator.invalidate_telemetry()
         self._timer_registry.restart_desired()
         QTimer.singleShot(2000, lambda: self._submit_telemetry(

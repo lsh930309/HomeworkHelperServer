@@ -36,7 +36,7 @@ def test_console_output_replaces_characters_unsupported_by_cp949(tmp_path):
     assert "? 빌드 완료" in output_path.read_text(encoding="cp949")
 
 
-def test_windows_bootstrap_creates_venv_updates_requirements_and_delegates(tmp_path):
+def test_windows_bootstrap_creates_venv_and_delegates_before_installing(tmp_path):
     calls = []
     managed_python = tmp_path / ".venv" / "Scripts" / "python.exe"
 
@@ -59,17 +59,7 @@ def test_windows_bootstrap_creates_venv_updates_requirements_and_delegates(tmp_p
 
     assert exit_code == 0
     assert calls[0][0][-2:] == ["venv", str(tmp_path / ".venv")]
-    assert calls[1][0] == [
-        str(managed_python),
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "--upgrade",
-        "-r",
-        str(tmp_path / "requirements.txt"),
-    ]
-    assert calls[2][0] == [str(managed_python), str(tmp_path / "build.py"), "--no-gui"]
+    assert calls[1][0] == [str(managed_python), str(tmp_path / "build.py"), "--no-gui"]
 
 
 def test_windows_bootstrap_reuses_managed_venv_without_activation(tmp_path):
@@ -94,6 +84,30 @@ def test_windows_bootstrap_reuses_managed_venv_without_activation(tmp_path):
     assert exit_code is None
     assert len(calls) == 1
     assert calls[0][1:4] == ["-m", "pip", "install"]
+
+
+def test_main_parses_help_before_windows_runtime_bootstrap(monkeypatch):
+    monkeypatch.setattr(
+        build,
+        "bootstrap_windows_build_runtime",
+        lambda _argv: (_ for _ in ()).throw(AssertionError("bootstrap must not run")),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        build.main(["--help"])
+
+    assert raised.value.code == 0
+
+
+def test_host_runtime_has_no_manifest_identity_contract():
+    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
+    coordination = Path("src/data/database_coordination.py").read_text(encoding="utf-8")
+    spec = Path("homework_helper.spec").read_text(encoding="utf-8")
+
+    assert not Path("src/core/runtime_identity.py").exists()
+    assert "runtime-manifest.json" not in source + coordination + spec
+    assert '"release_id": runtime_identity_payload' not in source
+    assert '"git_sha": runtime_identity_payload' not in source
 
 
 def test_windows_bootstrap_requires_python314_launcher(tmp_path):

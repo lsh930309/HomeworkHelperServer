@@ -151,8 +151,6 @@ class _ResourcePersistTask(QRunnable):
             "persist_succeeded": False,
         }
         try:
-            process_persist_succeeded = True
-
             if self._process_changed:
                 self._transport.update_process_resource(
                     self._process_id,
@@ -168,7 +166,6 @@ class _ResourcePersistTask(QRunnable):
                     self._fetched_percent,
                 )
 
-            session_persist_succeeded = True
             if self._allow_session_correction and self._session_id is not None:
                 recovered = (
                     max(0.0, self._fetched_at - self._exit_timestamp)
@@ -190,7 +187,7 @@ class _ResourcePersistTask(QRunnable):
                         corrected_exit_percent,
                     )
 
-            result["persist_succeeded"] = process_persist_succeeded and session_persist_succeeded
+            result["persist_succeeded"] = True
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -447,7 +444,6 @@ class NikkeResourceReconcileCoordinator(QObject):
                         applied_session_percent=job.applied_session_percent,
                         process_changed=(
                             process.resource_percent != normalized_percent
-                            or process.resource_updated_at != fetched_at
                             or process.resource_status != status
                             or process.resource_label != (getattr(snapshot, "label", None) or NIKKE_OUTPOST_LABEL)
                         ),

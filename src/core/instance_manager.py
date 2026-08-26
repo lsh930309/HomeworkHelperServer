@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-from PySide6.QtCore import QSharedMemory, QObject, QTimer
+from PySide6.QtCore import QSharedMemory, QObject
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QMessageBox
 
@@ -58,23 +58,12 @@ class InstanceCommandResult(IntEnum):
     UNSAFE_TARGET = 5
 
 
-def parse_instance_command(payload: bytes | str) -> InstanceCommand | None:
-    """Parse one newline-delimited IPC command without accepting prefixes."""
-    if isinstance(payload, bytes):
-        payload = payload.decode("utf-8", errors="replace")
-    command = payload.splitlines()[0].strip() if payload.splitlines() else payload.strip()
-    try:
-        return InstanceCommand(command)
-    except ValueError:
-        return None
-
-
 def encode_instance_command(command: InstanceCommand, identity: InstanceIdentity) -> bytes:
     return f"{IPC_PROTOCOL_VERSION} {identity.digest} {command.value}\n".encode("utf-8")
 
 
 def parse_instance_message(payload: bytes | str) -> tuple[str | None, InstanceCommand | None]:
-    """Parse the versioned protocol while retaining legacy show-window messages."""
+    """Parse one versioned, newline-delimited IPC command."""
     if isinstance(payload, bytes):
         payload = payload.decode("utf-8", errors="replace")
     line = payload.splitlines()[0].strip() if payload.splitlines() else payload.strip()
@@ -84,7 +73,7 @@ def parse_instance_message(payload: bytes | str) -> tuple[str | None, InstanceCo
             return parts[1], InstanceCommand(parts[2])
         except ValueError:
             return parts[1], None
-    return None, parse_instance_command(line)
+    return None, None
 
 
 def send_instance_command(
@@ -250,17 +239,12 @@ class SingleInstanceApplication(QObject):
             self._active_client_sockets.add(socket)
             socket.readyRead.connect(lambda active=socket: self._read_ipc_message(active))
             socket.disconnected.connect(lambda active=socket: self._finish_ipc_connection(active))
-            # Legacy clients treated connection itself as show_window and might send no payload.
-            QTimer.singleShot(150, lambda active=socket: self._handle_blind_ipc_connection(active))
             if socket.bytesAvailable():
                 self._read_ipc_message(socket)
 
     def _write_ipc_response(self, socket, response: str):
         socket.write((response + "\n").encode("utf-8"))
         socket.flush()
-
-    def _schedule_callback(self, delay_ms: int, callback):
-        QTimer.singleShot(delay_ms, callback)
 
     def _read_ipc_message(self, socket):
         if socket not in self._active_client_sockets or socket._hh_received_command:
@@ -270,11 +254,7 @@ class SingleInstanceApplication(QObject):
             return
         socket._hh_received_command = True
         message_identity, command = parse_instance_message(bytes(socket._hh_command_buffer))
-        if message_identity is not None and message_identity != self._identity.digest:
-            self._write_ipc_response(socket, "error:unsafe_target")
-            socket.disconnectFromServer()
-            return
-        if message_identity is None and command != InstanceCommand.SHOW_WINDOW:
+        if message_identity != self._identity.digest:
             self._write_ipc_response(socket, "error:unsafe_target")
             socket.disconnectFromServer()
             return
@@ -289,22 +269,7 @@ class SingleInstanceApplication(QObject):
             self._write_ipc_response(socket, "error:unsafe_target")
         socket.disconnectFromServer()
 
-    def _handle_blind_ipc_connection(self, socket):
-        if socket not in self._active_client_sockets or socket._hh_received_command:
-            return
-        socket._hh_received_command = True
-        callback = getattr(self._main_window_ref, "activate_and_show", None)
-        if callable(callback):
-            callback()
-        socket.disconnectFromServer()
-
     def _finish_ipc_connection(self, socket):
-        if not socket._hh_received_command:
-            # Compatibility with pre-command clients that used connect/disconnect as show_window.
-            socket._hh_received_command = True
-            callback = getattr(self._main_window_ref, "activate_and_show", None)
-            if callable(callback):
-                callback()
         if socket in self._active_client_sockets:
             self._active_client_sockets.remove(socket)
         socket.deleteLater()
@@ -314,6 +279,7 @@ class SingleInstanceApplication(QObject):
         # 중복 호출 방지 플래그 확인
         if hasattr(self, '_cleanup_done') and self._cleanup_done:
             return
+        self._cleanup_done = True
 
         print("InstanceManager: 리소스 정리 시작...")
 
@@ -323,6 +289,7 @@ class SingleInstanceApplication(QObject):
                 self._local_server.close()
                 print("IPC 서버가 닫혔습니다.")
             for socket in tuple(self._active_client_sockets):
+                socket._hh_received_command = True
                 socket.abort()
                 socket.deleteLater()
             self._active_client_sockets.clear()
@@ -345,8 +312,6 @@ class SingleInstanceApplication(QObject):
         # 만약 이 인스턴스가 공유 메모리를 create 했다면, QSharedMemory 객체가 소멸될 때 OS 레벨의 세그먼트도 정리됨 (참조 카운트 기반)
         print("InstanceManager: 리소스 정리 완료.")
 
-        # 중복 호출 방지 플래그 설정
-        self._cleanup_done = True
         if SingleInstanceApplication._instance_manager_singleton is self:
             SingleInstanceApplication._instance_manager_singleton = None
 
@@ -370,4 +335,3 @@ def run_with_single_instance_check(application_name: str, main_app_start_callbac
     else:
         # 이미 실행 중인 인스턴스가 있으므로, 해당 인스턴스에 신호를 보내고 현재 인스턴스는 종료
         instance_manager.signal_existing_instance_and_exit()
-

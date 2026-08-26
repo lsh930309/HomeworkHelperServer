@@ -330,6 +330,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "showSettingsWindow" not in show_primary_source
     assert "private var settingsWindow: NSWindow?" in app
     assert "private static var settingsOpener: (@MainActor () -> Void)?" in app
+    assert "private static var pendingSettingsOpen = false" in app
     assert "static func showSettingsWindow()" in app
     assert "static func installSettingsOpener" in app
     assert "static func registerSettingsWindow(_ window: NSWindow)" in app
@@ -341,7 +342,11 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "if let settingsWindow" in settings_open_source
     assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
     assert "settingsWindow.orderFrontRegardless()" in settings_open_source
-    assert "Self.settingsOpener?()" in settings_open_source
+    assert "guard let settingsOpener = Self.settingsOpener" in settings_open_source
+    assert "settingsOpener()" in settings_open_source
+    assert "Self.pendingSettingsOpen = true" in settings_open_source
+    assert "guard pendingSettingsOpen else { return }" in app
+    assert "pendingSettingsOpen = false" in app
     assert "popover.isShown" not in settings_open_source
     assert "NSHostingController(rootView: RemoteSettingsView" not in app
     assert "static let settingsWindowIdentifier" in app

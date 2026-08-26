@@ -59,6 +59,7 @@ def test_gui_health_endpoint_contract_is_present():
     assert '@app.middleware("http")' in source
     assert "slow_api_request method=%s path=%s status=%s duration_ms=%.1f pid=%s thread=%s" in source
     assert '@app.get("/api/gui/ping")' in source
+    assert "app.add_exception_handler(DatabaseAccessUnavailable, database_access_exception_handler)" in source
     assert '"server_time": time.time()' in source
     assert '@app.get("/api/gui/health")' in source
     assert '"db_ready": db_ready' in source
@@ -68,6 +69,8 @@ def test_gui_health_endpoint_contract_is_present():
     assert '"dashboard_static_ready": dashboard_static["ready"]' in source
     assert '"static_probe_ms": round(static_probe_ms, 2)' in source
     assert '"total_ms": round((time.perf_counter() - started_at) * 1000, 2)' in source
+    assert '"release_id"' not in source[source.index('@app.get("/api/gui/ping")') : source.index("import uvicorn")]
+    assert '"git_sha"' not in source[source.index('@app.get("/api/gui/ping")') : source.index("import uvicorn")]
 
 
 def test_sqlite_engine_uses_short_lived_connections_for_host_stability():

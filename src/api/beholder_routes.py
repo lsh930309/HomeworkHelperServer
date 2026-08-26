@@ -532,6 +532,20 @@ def restore_backup(payload: RestoreRequest) -> Any:
                         "restore_error": str(restore_exc),
                     },
                 )
+    except DatabaseFaultStatePersistenceError as exc:
+        logger.exception("DB restore 성공 후 fault sentinel 정리 실패")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "database restored but safety state could not be cleared",
+                "code": "database_restore_sentinel_clear_failed",
+                "database_restored": bool(live_replaced),
+                "sentinel_clear_error": str(exc),
+                "follow_up": "복원된 DB는 유지됩니다. fault sentinel을 확인한 뒤 복구를 다시 실행하세요.",
+                "restored_from": source,
+                "previous_snapshot": before_path,
+            },
+        )
     finally:
         engine.dispose()
         for temporary in (restore_tmp, rollback_tmp):

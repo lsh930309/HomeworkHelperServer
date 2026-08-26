@@ -189,7 +189,6 @@ class DatabaseMaintenanceCoordinator:
         self,
         *,
         fault_state_path: str | os.PathLike[str] | None = None,
-        release_id: str | None = None,
         clock=time.time,
         monotonic=time.monotonic,
     ):
@@ -199,7 +198,6 @@ class DatabaseMaintenanceCoordinator:
         self._clock = clock
         self._monotonic = monotonic
         self._fault_state_path = Path(fault_state_path) if fault_state_path else None
-        self._release_id = release_id or os.environ.get("HOMEWORK_HELPER_RELEASE_ID") or "unknown"
         self._mode: DatabaseAccessMode = "normal"
         self._active_requests = 0
         self._maintenance_reason: str | None = None
@@ -475,7 +473,6 @@ class DatabaseMaintenanceCoordinator:
             {
                 "code": "database_maintenance_interrupted",
                 "timestamp": self._clock(),
-                "release_id": self._release_id,
                 "database_path": str(database_path),
                 "database_sha256": database_sha256,
             },
@@ -518,7 +515,6 @@ class DatabaseMaintenanceCoordinator:
             payload = {
                 "code": fault_code,
                 "timestamp": fault_at,
-                "release_id": self._release_id,
                 "database_path": str(database_path),
                 "database_sha256": database_sha256,
             }
@@ -544,9 +540,6 @@ class DatabaseMaintenanceCoordinator:
 
 
 def create_database_coordinator(data_directory: str | os.PathLike[str]) -> DatabaseMaintenanceCoordinator:
-    from src.core.runtime_identity import runtime_identity
-
     return DatabaseMaintenanceCoordinator(
         fault_state_path=Path(data_directory) / "database_fault_state.json",
-        release_id=str(runtime_identity()["release_id"]),
     )

@@ -44,6 +44,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     private var popoverKeyDownMonitor: Any?
     private var settingsWindow: NSWindow?
     private static var settingsOpener: (@MainActor () -> Void)?
+    private static var pendingSettingsOpen = false
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -458,11 +459,18 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     static func showSettingsWindow() {
-        shared?.presentSettingsWindow()
+        guard let shared else {
+            pendingSettingsOpen = true
+            return
+        }
+        shared.presentSettingsWindow()
     }
 
     static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
         settingsOpener = opener
+        guard pendingSettingsOpen else { return }
+        pendingSettingsOpen = false
+        shared?.presentSettingsWindow()
     }
 
     static func registerSettingsWindow(_ window: NSWindow) {
@@ -479,7 +487,11 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             return
         }
         NSApp.activate(ignoringOtherApps: true)
-        Self.settingsOpener?()
+        guard let settingsOpener = Self.settingsOpener else {
+            Self.pendingSettingsOpen = true
+            return
+        }
+        settingsOpener()
     }
 
     static func hideSettingsWindow(_ window: NSWindow?) {

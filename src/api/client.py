@@ -45,15 +45,6 @@ class BackgroundApiTransport:
 
     def __init__(self, base_url: str = "http://127.0.0.1:8000"):
         self.base_url = resolve_local_api_base_url(base_url)
-        self._generation = 0
-
-    @property
-    def generation(self) -> int:
-        return self._generation
-
-    def reset_connections(self) -> int:
-        self._generation += 1
-        return self._generation
 
     def request_json(
         self,

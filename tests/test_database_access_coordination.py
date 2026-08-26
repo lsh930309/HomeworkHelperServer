@@ -342,6 +342,31 @@ def test_restore_prevalidation_and_successful_atomic_replace(monkeypatch, tmp_pa
     assert response.json()["previous_snapshot"]
 
 
+def test_restore_reports_sentinel_clear_failure_without_reverting_database(monkeypatch, tmp_path):
+    client, _routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    guard_path = current_db.parent / "database_fault_state.json.guard"
+    original_unlink = Path.unlink
+
+    def fail_guard_cleanup(path, *args, **kwargs):
+        if path == guard_path:
+            raise OSError("injected sentinel clear failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_guard_cleanup)
+
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_sentinel_clear_failed"
+    assert response.json()["database_restored"] is True
+    assert "injected sentinel clear failure" in response.json()["sentinel_clear_error"]
+    assert response.json()["previous_snapshot"]
+    assert _read_marker_database(current_db) == "new"
+    assert coordinator.snapshot().mode == "faulted"
+    assert coordinator.snapshot().fault_code == "database_fault_state_clear_failed"
+    assert guard_path.exists()
+
+
 @pytest.mark.parametrize(
     ("method", "path", "payload"),
     [

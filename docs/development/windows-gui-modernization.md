@@ -15,8 +15,8 @@ python homework_helper.pyw --ui-renderer=qml
 ```
 
 지원 값은 `widgets`, `qml`뿐이다. QML 로드에 실패하면 안정성을 위해 Widgets로
-복귀하며 원인은 GUI 로그에 기록된다. 런타임 manifest와 Windows incident ZIP에는
-binding, renderer, variant 식별자가 포함된다.
+복귀하며 원인은 GUI 로그에 기록된다. GUI 로그에는 binding, renderer, variant
+식별자가 포함된다.
 
 제품 기본 onedir는 Qt Quick 모듈을 제외해 Widgets 설치 크기를 QML 후보와 분리한다.
 QML 후보 설치본은 별도 출력 디렉터리에서 다음과 같이 만든다.

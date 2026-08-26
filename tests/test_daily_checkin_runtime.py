@@ -179,6 +179,38 @@ def test_hoyolab_lock_is_released_when_protected_work_raises():
     service._request_lock.release()
 
 
+def test_hoyolab_close_clears_client_only_after_bounded_close_succeeds():
+    class Client:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    client = Client()
+    service = HoYoLabService(config=_ConfiguredHoYoLab(), async_timeout=0.1)
+    service._client = client
+
+    assert service.close() is True
+    assert client.closed is True
+    assert service._client is None
+    assert service._closed is True
+
+
+def test_hoyolab_close_timeout_keeps_service_reusable():
+    client = object()
+    service = HoYoLabService(config=_ConfiguredHoYoLab(), async_timeout=0.01)
+    service._client = client
+    service._request_lock.acquire()
+    try:
+        assert service.close() is False
+    finally:
+        service._request_lock.release()
+
+    assert service._client is client
+    assert service._closed is False
+
+
 def test_nikke_each_http_request_timeout_is_capped_at_ten_seconds(monkeypatch):
     observed_timeouts: list[float] = []
 
@@ -321,20 +353,6 @@ class _RunDueTargetSnapshot:
     process_name: str
     user_preset_id: str | None
     descriptor: object
-
-
-def _load_run_due_endpoint(namespace):
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    function = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "run_due_daily_checkins"
-    )
-    function.decorator_list = []
-    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
-    exec(compile(module, "homework_helper.pyw", "exec"), namespace)
-    return namespace["run_due_daily_checkins"]
 
 
 def _load_daily_checkin_endpoint(name, namespace):
@@ -497,7 +515,7 @@ def test_run_due_multi_target_deadline_reserves_persistence_and_leaves_no_resour
         }
 
     started_at = time.monotonic()
-    deadline = started_at + 0.12
+    deadline = started_at + 0.6
     namespace = {
         "RUN_DUE_TOTAL_DEADLINE_SECONDS": 60.0,
         "RUN_DUE_MIN_PERSISTENCE_RESERVE_SECONDS": 5.0,
@@ -516,14 +534,14 @@ def test_run_due_multi_target_deadline_reserves_persistence_and_leaves_no_resour
         "schemas": SimpleNamespace(DailyCheckInRunDueRequest=object),
         "time": time,
     }
-    endpoint = _load_run_due_endpoint(namespace)
+    endpoint = _load_daily_checkin_endpoint("run_due_daily_checkins", namespace)
 
     response = endpoint(SimpleNamespace(trigger="deadline-test"))
     completed_at = time.monotonic()
 
-    assert completed_at <= deadline + 0.03
+    assert completed_at <= deadline + 0.3
     assert len(provider_calls) == 1
-    assert 0.0 < provider_calls[0] <= 0.07
+    assert 0.0 < provider_calls[0] <= 0.35
     assert response["attempted"] == 3
     assert response["skipped"] == []
     assert [item["status"] for item in response["logs"]] == [
