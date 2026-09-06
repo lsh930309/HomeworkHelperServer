@@ -26,7 +26,7 @@ except ImportError:  # Non-Windows development/test hosts
             raise RuntimeError("windows_toasts is unavailable on this platform")
 from typing import Optional, Callable, Dict
 import urllib.parse
-from PyQt6.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 class NotificationSignalBridge(QObject):
     """
@@ -35,7 +35,7 @@ class NotificationSignalBridge(QObject):
     시그널/슬롯 메커니즘을 통해 메인 스레드로 안전하게 전달합니다.
     """
     # 메인 스레드에서 처리할 알림 활성화 이벤트 시그널
-    notification_activated = pyqtSignal(str, str)  # (task_id, source)
+    notification_activated = Signal(str, str)  # (task_id, source)
 
     def on_notification_callback(self, event_args: ToastActivatedEventArgs):
         """

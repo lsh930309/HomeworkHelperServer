@@ -96,6 +96,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
+        'launchArgsEnabled = "launch_args_enabled"',
+        'launchArgs = "launch_args"',
         'userCycleHours = "user_cycle_hours"',
         'schemaVersion = "schema_version"',
         'baseValue = "base_value"',
@@ -323,35 +325,38 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     status_click_source = app.split("@objc func statusItemClicked", 1)[1].split("func clickStatusItemForUITest", 1)[0]
     show_popover_source = app.split("private func showPopoverFromStatusItem()", 1)[1].split("private func togglePopover", 1)[0]
     show_primary_source = app.split("static func showPrimaryInterface()", 1)[1].split("static func showUITestMainWindow", 1)[0]
-    assert "openSettingsWindow" not in status_click_source
-    assert "openSettingsWindow" not in show_popover_source
-    assert "openSettingsWindow" not in show_primary_source
-    assert "enum SettingsOpenSource" in app
-    assert "case popoverButton" in app
-    assert "case popoverShortcut" in app
-    assert "case uiTest" in app
-    settings_open_source = app.split("static func openSettingsWindow(source: SettingsOpenSource)", 1)[1].split("static func prepareSettingsWindow", 1)[0]
-    assert "guard source == .uiTest || shared?.popover.isShown == true else { return }" in settings_open_source
-    assert "beginExplicitSettingsOpen()" in settings_open_source
+    assert "showSettingsWindow" not in status_click_source
+    assert "showSettingsWindow" not in show_popover_source
+    assert "showSettingsWindow" not in show_primary_source
+    assert "private var settingsWindow: NSWindow?" in app
+    assert "private static var settingsOpener: (@MainActor () -> Void)?" in app
+    assert "private static var pendingSettingsOpen = false" in app
+    assert "static func showSettingsWindow()" in app
+    assert "static func installSettingsOpener" in app
+    assert "static func registerSettingsWindow(_ window: NSWindow)" in app
+    assert "private func presentSettingsWindow()" in app
+    assert "private func makeSettingsWindow() -> NSWindow" not in app
+    settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("static func hideSettingsWindow", 1)[0]
+    assert "closePopoverForFocusLoss()" in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
-    assert "focusExistingSettingsWindow()" in settings_open_source
-    assert "guard isExplicitSettingsOpenPending() else { return }" in settings_open_source
-    assert "guard NSApp.windows.contains(where:" not in settings_open_source
+    assert "if let settingsWindow" in settings_open_source
+    assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
+    assert "settingsWindow.orderFrontRegardless()" in settings_open_source
+    assert "guard let settingsOpener = Self.settingsOpener" in settings_open_source
+    assert "settingsOpener()" in settings_open_source
+    assert "Self.pendingSettingsOpen = true" in settings_open_source
+    assert "guard pendingSettingsOpen else { return }" in app
+    assert "pendingSettingsOpen = false" in app
+    assert "popover.isShown" not in settings_open_source
+    assert "NSHostingController(rootView: RemoteSettingsView" not in app
     assert "static let settingsWindowIdentifier" in app
-    assert "static let settingsWindowTitle" in app
-    assert "static func prepareSettingsWindow(_ window: NSWindow)" in app
     assert "static func hideSettingsWindow(_ window: NSWindow?)" in app
-    assert "restoreAccessoryIfNoVisibleUserWindows()" in app
-    assert "private static func focusExistingSettingsWindow() -> Bool" in app
-    assert "private static func settingsWindows() -> [NSWindow]" in app
-    assert "private static func isVisibleUserWindow(_ window: NSWindow) -> Bool" in app
-    assert "private static func beginExplicitSettingsOpen()" in app
-    assert "private static func isExplicitSettingsOpenPending() -> Bool" in app
-    assert "private static func clearExplicitSettingsOpen()" in app
+    assert "private static func settingsWindows() -> [NSWindow]" not in app
+    assert "explicitSettingsOpen" not in app
     assert "installPopoverKeyDownMonitor()" in app
     assert "removePopoverKeyDownMonitor()" in app
     assert "event.keyCode == 43 && event.modifierFlags.contains(.command)" in app
-    assert "openSettingsWindow(source: .popoverShortcut)" in app
+    assert "Self.showSettingsWindow()" in app
     assert "NSPopover" in app
     assert "RemoteMenuBarPopoverPanel" not in app
     assert "MenuBarPopoverView" in app
@@ -365,7 +370,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
-    scene_source = app.split("var body: some Scene", 1)[1].split("Settings {", 1)[0]
+    scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
     assert "RemoteDashboardView(viewModel" not in scene_source
     assert "SidebarCommands()" not in scene_source
     assert "homeworkHelperRemoteToggleSidebar" not in scene_source
@@ -373,19 +378,18 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "창 열기" not in app
     assert "창 숨기기" not in app
     assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
-    assert ".keyboardShortcut(\",\", modifiers: .command)" not in app
-    assert 'Button("설정…")' not in app
+    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
+    assert 'Button("설정…")' in app
     assert "CommandGroup(replacing: .appSettings)" in app
-    assert "RemoteAppDelegate.openSettingsWindow()" not in app
-    assert "RemoteAppDelegate.openSettingsWindow(source: .popoverButton)" in app
+    assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
     assert "RemoteSettingsOpenBridge" in app
     assert "@Environment(\\.openSettings)" in app
-    assert "homeworkHelperRemoteOpenSettings" in app
-    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings" in app
+    assert "RemoteAppDelegate.installSettingsOpener" in app
     assert "openSettings()" in app
-    assert 'Selector(("showSettingsWindow:"))' in app
-    assert 'Selector(("showPreferencesWindow:"))' in app
+    assert "homeworkHelperRemoteOpenSettings" not in app
+    assert 'Selector(("showSettingsWindow:"))' not in app
+    assert 'Selector(("showPreferencesWindow:"))' not in app
 
     assert "GlassEffectContainer" in app
     assert "RemoteAppKitLiquidGlassBackground" in liquid_glass
@@ -500,7 +504,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
     assert ".labelStyle(.iconOnly)" not in app
 
-    assert "Settings {" in app
+    assert "\n        Settings {" in app
     assert "RemoteSettingsView" in app
     assert "RemoteSettingsTab" in app
     assert "TabView(selection: $selectedTab)" in app
@@ -526,7 +530,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let contentWidth: CGFloat = 392" in app
     assert "static let maxWindowWidth: CGFloat = 480" in app
     assert "measured.width * 1.06" in app
-    assert "measured.height * 1.10" in app
+    assert "static let windowVerticalInset: CGFloat = 24" in app
+    assert "let paddedHeight = measured.height + RemoteSettingsLayout.windowVerticalInset" in app
     assert "SettingsActionGrid" in app
     assert ".toggleStyle(.switch)" in app
     assert 'SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)' in app
@@ -542,14 +547,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
     assert "RemoteSettingsWindowDelegate" in window_accessor
-    assert "RemoteAppDelegate.prepareSettingsWindow(window)" in window_accessor
     settings_window_accessor_source = window_accessor.split("struct RemoteSettingsWindowAccessor", 1)[1].split("struct RemoteSettingsKeyboardShortcutBridge", 1)[0]
     assert "makeKeyAndOrderFront" not in settings_window_accessor_source
     assert "orderFrontRegardless" not in settings_window_accessor_source
     assert "NSApp.activate" not in settings_window_accessor_source
-    prepare_settings_source = app.split("static func prepareSettingsWindow(_ window: NSWindow)", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "guard isExplicitSettingsOpenPending() else { return }" in prepare_settings_source
-    assert "focusSettingsWindow(prepared)" in prepare_settings_source
+    assert "window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.settingsWindowIdentifier)" in settings_window_accessor_source
+    assert "window.title =" not in settings_window_accessor_source
+    assert "window.isReleasedWhenClosed = false" in settings_window_accessor_source
+    assert "RemoteAppDelegate.registerSettingsWindow(window)" in settings_window_accessor_source
     assert "RemoteAppDelegate.hideSettingsWindow(sender)" in window_accessor
     assert "RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow)" in app
     settings_keyboard_source = window_accessor.split("struct RemoteSettingsKeyboardShortcutBridge", 1)[1]
@@ -970,6 +975,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "trackBadgeDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
+    progress_copy_source = view_model.split("private static func processWithLocalProgress", 1)[1].split("private static func locallyPlayedToday", 1)[0]
+    assert "launchArgsEnabled: process.launchArgsEnabled" in progress_copy_source
+    assert "launchArgs: process.launchArgs" in progress_copy_source
     assert "allowProjection: false" in view_model
     assert 'existing?.source == "server_tracked"' in view_model
     assert "projectedProgress(from:" in view_model

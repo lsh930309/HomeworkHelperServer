@@ -67,7 +67,7 @@ Base = declarative_base()
 # 앞으로 만들 DB 테이블 모델들은 모두 이 Base 클래스를 상속받아 만들어집니다.
 
 
-def auto_migrate_database():
+def auto_migrate_database(*, strict: bool = False):
     """
     자동 마이그레이션 실행 - 새 컬럼이 없으면 추가합니다.
     
@@ -94,6 +94,9 @@ def auto_migrate_database():
         ("managed_processes", "resource_status", "TEXT", None),
         # Process 테이블 - 사용자 프리셋 ID
         ("managed_processes", "user_preset_id", "TEXT", None),  # 사용자 설정 프리셋 ID
+        # Process 테이블 - 직접 실행 인자
+        ("managed_processes", "launch_args_enabled", "INTEGER", "0"),
+        ("managed_processes", "launch_args", "TEXT", "''"),
         # GlobalSettings 테이블 - 스태미나 알림 설정
         ("global_settings", "stamina_notify_enabled", "INTEGER", "1"),  # Boolean -> INTEGER
         ("global_settings", "stamina_notify_threshold", "INTEGER", "20"),
@@ -398,6 +401,8 @@ def auto_migrate_database():
 
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:
+        if strict:
+            raise
         print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")
 
 

@@ -10,19 +10,21 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve,
-    QRect, QTimer, QRunnable, QThreadPool, pyqtSignal, pyqtSlot,
+    QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
 )
-from PyQt6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
 from src.utils import audio_control
+from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
+from src.gui.widgets_style import apply_sidebar_widgets_style
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ _THUMB_HIRES_H = _THUMB_H * 2   # 114px
 
 
 class _ThumbnailLoadSignals(QObject):
-    loaded = pyqtSignal(int, str, object)
+    loaded = Signal(int, str, object)
 
 
 class _ThumbnailLoadTask(QRunnable):
@@ -94,6 +96,16 @@ class _VideoThumbnailLoadTask(QRunnable):
     @staticmethod
     def _extract_thumbnail(path: str, w: int, h: int) -> Optional[QImage]:
         """Windows IShellItemImageFactory로 비디오 썸네일을 추출합니다."""
+        co_initialized = False
+        psi = None
+        psiif = None
+        hbm = None
+        hdc = None
+        release_si = None
+        release_siif = None
+        ole32 = None
+        gdi32 = None
+        user32 = None
         try:
             import ctypes
             import ctypes.wintypes as wintypes
@@ -104,7 +116,12 @@ class _VideoThumbnailLoadTask(QRunnable):
             gdi32 = ctypes.windll.gdi32
             user32 = ctypes.windll.user32
 
-            ole32.CoInitializeEx(None, 0)  # COINIT_APARTMENTTHREADED
+            # S_OK(0)와 S_FALSE(1)는 모두 이 스레드가 대응하는
+            # CoUninitialize()를 호출해야 하는 성공 결과다.
+            co_hr = int(ole32.CoInitializeEx(None, 0))  # COINIT_APARTMENTTHREADED
+            if co_hr not in (0, 1):
+                return None
+            co_initialized = True
 
             def _make_guid(s: str):
                 import uuid
@@ -124,11 +141,10 @@ class _VideoThumbnailLoadTask(QRunnable):
 
             vtbl = ctypes.cast(psi, POINTER(POINTER(c_void_p)))
             QI_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, POINTER(ctypes.c_byte * 16), POINTER(c_void_p))(vtbl[0][0])
-            Release_si = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl[0][2])
+            release_si = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl[0][2])
 
             psiif = c_void_p()
             hr = QI_fn(psi, byref(IID_ISIIF), byref(psiif))
-            Release_si(psi)
 
             if hr != 0 or not psiif:
                 return None
@@ -138,12 +154,11 @@ class _VideoThumbnailLoadTask(QRunnable):
 
             vtbl2 = ctypes.cast(psiif, POINTER(POINTER(c_void_p)))
             GetImage_fn = ctypes.WINFUNCTYPE(c_int, c_void_p, _SIZE, c_uint, POINTER(wintypes.HBITMAP))(vtbl2[0][3])
-            Release_siif = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl2[0][2])
+            release_siif = ctypes.WINFUNCTYPE(c_uint, c_void_p)(vtbl2[0][2])
 
             SIIGBF_BIGGERSIZEOK = 0x1
             hbm = wintypes.HBITMAP()
             hr = GetImage_fn(psiif, _SIZE(w, h), SIIGBF_BIGGERSIZEOK, byref(hbm))
-            Release_siif(psiif)
 
             if hr != 0 or not hbm:
                 return None
@@ -159,6 +174,8 @@ class _VideoThumbnailLoadTask(QRunnable):
                 ]
 
             hdc = user32.GetDC(0)
+            if not hdc:
+                return None
             bih = _BITMAPINFOHEADER()
             bih.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
             bih.biWidth = w
@@ -168,9 +185,9 @@ class _VideoThumbnailLoadTask(QRunnable):
             bih.biCompression = 0  # BI_RGB
 
             buf = ctypes.create_string_buffer(w * h * 4)
-            gdi32.GetDIBits(hdc, hbm, 0, h, buf, byref(bih), 0)
-            user32.ReleaseDC(0, hdc)
-            gdi32.DeleteObject(hbm)
+            copied_rows = gdi32.GetDIBits(hdc, hbm, 0, h, buf, byref(bih), 0)
+            if copied_rows != h:
+                return None
 
             img = QImage(buf, w, h, w * 4, QImage.Format.Format_ARGB32)
             return img.copy()  # buf GC 전에 복사
@@ -178,11 +195,27 @@ class _VideoThumbnailLoadTask(QRunnable):
         except Exception as exc:
             logger.debug("비디오 썸네일 추출 실패 (%s): %s", path, exc)
             return None
+        finally:
+            cleanup_calls = (
+                ("DC", user32.ReleaseDC, (0, hdc)) if hdc and user32 is not None else None,
+                ("HBITMAP", gdi32.DeleteObject, (hbm,)) if hbm and gdi32 is not None else None,
+                ("IShellItemImageFactory", release_siif, (psiif,)) if psiif and release_siif is not None else None,
+                ("IShellItem", release_si, (psi,)) if psi and release_si is not None else None,
+                ("COM", ole32.CoUninitialize, ()) if co_initialized and ole32 is not None else None,
+            )
+            for cleanup in cleanup_calls:
+                if cleanup is None:
+                    continue
+                label, function, args = cleanup
+                try:
+                    function(*args)
+                except Exception:
+                    logger.debug("비디오 썸네일 %s 해제 실패", label, exc_info=True)
 
     @staticmethod
     def _make_placeholder(w: int, h: int) -> QImage:
         """썸네일 추출 실패 시 회색 플레이 아이콘 플레이스홀더."""
-        from PyQt6.QtGui import QPainter, QPainterPath
+        from PySide6.QtGui import QPainter, QPainterPath
         img = QImage(w, h, QImage.Format.Format_ARGB32)
         img.fill(QColor(40, 40, 50, 255))
         painter = QPainter(img)
@@ -210,7 +243,7 @@ class _HoverThumbCell(QLabel):
 
     _STYLE_NORMAL = (
         "QLabel { background: rgba(255,255,255,6);"
-        " border: 1px solid rgba(255,255,255,15); border-radius: 3px; }"
+        " border: none; border-radius: 3px; }"
     )
     _STYLE_HOVER = (
         "QLabel { background: rgba(255,255,255,10);"
@@ -274,8 +307,8 @@ def _tint_icon_white(icon) -> "QIcon":
     devicePixelRatio 를 원본에서 그대로 복사해야 HiDPI 환경에서
     논리 픽셀 크기가 보존됩니다.
     """
-    from PyQt6.QtGui import QPainter, QColor, QPixmap
-    from PyQt6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QPainter, QColor, QPixmap
+    from PySide6.QtCore import Qt as _Qt
     pixmap = icon.pixmap(16, 16)
     if pixmap.isNull():
         return icon
@@ -287,7 +320,7 @@ def _tint_icon_white(icon) -> "QIcon":
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(result.rect(), QColor("white"))
     painter.end()
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     return QIcon(result)
 
 
@@ -315,25 +348,6 @@ QSlider::handle:horizontal:hover {
     background: white;
 }
 """
-
-_MUTE_BTN_STYLE = """
-QPushButton {
-    border: 1px solid rgba(255,255,255,22);
-    border-radius: 3px;
-    background: rgba(255,255,255,10);
-    color: white;
-    font-size: 10px;
-}
-QPushButton:checked {
-    background: rgba(80,130,220,160);
-    border-color: rgba(100,160,255,180);
-    color: white;
-}
-QPushButton:hover:!checked {
-    background: rgba(255,255,255,22);
-}
-"""
-
 
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
@@ -404,6 +418,7 @@ class SidebarWidget(QWidget):
         frame_layout.setSpacing(8)
 
         self._build_ui(frame_layout)
+        apply_sidebar_widgets_style(self, dark=True)
 
         # 슬라이드 애니메이션
         self._anim = QPropertyAnimation(self, b"geometry")
@@ -437,19 +452,19 @@ class SidebarWidget(QWidget):
 
         # 볼륨 저장 전용 직렬 스레드풀
         self._volume_save_timers: dict = {}
-        self._save_pool = QThreadPool(self)
+        self._save_pool = QThreadPool()
         self._save_pool.setMaxThreadCount(1)
 
         # 스크린샷 썸네일 디코딩용 스레드풀
-        self._thumb_pool = QThreadPool(self)
+        self._thumb_pool = QThreadPool()
         self._thumb_pool.setMaxThreadCount(2)
-        self._thumb_signals = _ThumbnailLoadSignals(self)
+        self._thumb_signals = _ThumbnailLoadSignals()
         self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
 
         # 녹화 썸네일 디코딩용 스레드풀 (별도)
-        self._rec_thumb_pool = QThreadPool(self)
+        self._rec_thumb_pool = QThreadPool()
         self._rec_thumb_pool.setMaxThreadCount(2)
-        self._rec_thumb_signals = _ThumbnailLoadSignals(self)
+        self._rec_thumb_signals = _ThumbnailLoadSignals()
         self._rec_thumb_signals.loaded.connect(self._apply_rec_thumbnail_result)
 
         # Win32 외부 클릭 감지 상태
@@ -505,7 +520,6 @@ class SidebarWidget(QWidget):
 
         # 볼륨 섹션 (항상 하단에 고정)
         self._vol_section = QWidget()
-        self._vol_section.setStyleSheet("background: transparent;")
         vol_section_layout = QVBoxLayout(self._vol_section)
         vol_section_layout.setContentsMargins(0, 10, 0, 0)
         vol_section_layout.setSpacing(4)
@@ -515,7 +529,6 @@ class SidebarWidget(QWidget):
         vol_section_layout.addWidget(vol_title)
 
         self._vol_list_container = QWidget()
-        self._vol_list_container.setStyleSheet("background: transparent;")
         self._vol_list_layout = QVBoxLayout(self._vol_list_container)
         self._vol_list_layout.setContentsMargins(0, 0, 0, 0)
         self._vol_list_layout.setSpacing(4)
@@ -538,19 +551,6 @@ class SidebarWidget(QWidget):
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         close_btn = QPushButton("닫기")
         close_btn.setFixedHeight(28)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,10);
-                color: rgba(255,255,255,160);
-                border: 1px solid rgba(255,255,255,18);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: rgba(255,255,255,22);
-                color: white;
-            }
-        """)
         close_btn.clicked.connect(self.slide_out)
         layout.addWidget(close_btn)
 
@@ -636,20 +636,36 @@ class SidebarWidget(QWidget):
         self._is_shown = False
         logger.debug("SidebarWidget 슬라이드아웃")
 
-    def cleanup(self) -> None:
+    def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
                 timer.timeout.emit()
         self._volume_save_timers.clear()
-        self._save_pool.waitForDone(2000)
         self._auto_hide_timer.stop()
         self._playtime_timer.stop()
         self._clock_timer.stop()
         self._cursor_poll_timer.stop()
+        self._rec_timer.stop()
         self._anim.stop()
+        for signals, receiver in (
+            (self._thumb_signals, self._apply_thumbnail_result),
+            (self._rec_thumb_signals, self._apply_rec_thumbnail_result),
+        ):
+            try:
+                signals.loaded.disconnect(receiver)
+            except (TypeError, RuntimeError):
+                pass
+        deadline = time.monotonic() + max(0, int(deadline_ms)) / 1000.0
+        drained = True
+        for pool in (self._save_pool, self._thumb_pool, self._rec_thumb_pool):
+            pool_drained = pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+            if not pool_drained:
+                retain_detached_qthreadpool(pool)
+            drained = drained and pool_drained
         self.hide()
+        return drained
 
     # ------------------------------------------------------------------
     # 이벤트 오버라이드
@@ -712,10 +728,8 @@ class SidebarWidget(QWidget):
 
         구성: [아이콘 + 이름] / [오늘 플레이타임] / [게임 종료 버튼]
         """
-        cluster = QWidget()
-        cluster.setStyleSheet(
-            "QWidget { background: rgba(255,255,255,5); border: 1px solid rgba(255,255,255,10); border-radius: 8px; }"
-        )
+        cluster = QFrame()
+        cluster.setProperty("hhRole", "sidebarGroup")
         layout = QVBoxLayout(cluster)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(7)
@@ -726,9 +740,7 @@ class SidebarWidget(QWidget):
 
         icon_label = QLabel()
         icon_label.setFixedSize(40, 40)
-        icon_label.setStyleSheet(
-            "background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 10px;"
-        )
+        icon_label.setStyleSheet("background: rgba(255,255,255,8); border: none; border-radius: 10px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setScaledContents(True)
         header.addWidget(icon_label)
@@ -760,17 +772,7 @@ class SidebarWidget(QWidget):
         # ── 게임 종료 버튼 ──
         kill_btn = QPushButton("게임 종료")
         kill_btn.setFixedHeight(28)
-        kill_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(160, 30, 30, 160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(200, 60, 60, 120);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover  { background: rgba(200, 40, 40, 200); color: white; }
-            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
-        """)
+        kill_btn.setProperty("hhRole", "danger")
         kill_btn.clicked.connect(lambda _=False, p=pid: self._kill_process(p))
         layout.addWidget(kill_btn)
 
@@ -835,7 +837,7 @@ class SidebarWidget(QWidget):
 
     def _load_icon_async(self, process: ManagedProcess, icon_label: QLabel) -> None:
         """게임 아이콘을 백그라운드 스레드에서 추출해 icon_label 에 반영합니다."""
-        from PyQt6.QtCore import QThread, pyqtSignal as Signal
+        from PySide6.QtCore import QThread, Signal as Signal
 
         class _IconLoader(QThread):
             icon_loaded = Signal(object)
@@ -907,7 +909,6 @@ class SidebarWidget(QWidget):
         """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
         is_running = pid is not None
         row = QWidget()
-        row.setStyleSheet("background: transparent; border-radius: 4px;")
         hl = QHBoxLayout(row)
         hl.setContentsMargins(4, 2, 4, 2)
         hl.setSpacing(4)
@@ -926,11 +927,9 @@ class SidebarWidget(QWidget):
         hl.addWidget(name_lbl, 1)
 
         mute_btn = QPushButton()
-        mute_btn.setFixedSize(22, 22)
         mute_btn.setCheckable(True)
-        mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
+        mute_btn.setProperty("hhRole", "muteToggle")
 
-        from PyQt6.QtWidgets import QStyle
         style = QApplication.style()
         if style:
             icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
@@ -1096,7 +1095,7 @@ class SidebarWidget(QWidget):
             self._auto_hide_timer.start(self._auto_hide_ms)
 
     def _poll_cursor(self) -> None:
-        from PyQt6.QtGui import QCursor
+        from PySide6.QtGui import QCursor
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
 
@@ -1147,16 +1146,6 @@ class SidebarWidget(QWidget):
         )
         self._capture_now_btn = QPushButton("지금 촬영")
         self._capture_now_btn.setFixedHeight(28)
-        self._capture_now_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,10);
-                color: rgba(255,255,255,160);
-                border: 1px solid rgba(255,255,255,18);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
-        """)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
         header.addWidget(title)
         header.addStretch()
@@ -1189,17 +1178,7 @@ class SidebarWidget(QWidget):
         )
         self._rec_start_btn = QPushButton("지금 녹화")
         self._rec_start_btn.setFixedHeight(28)
-        self._rec_start_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(180,40,40,160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(220,60,60,120);
-                border-radius: 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(220,50,50,200); color: white; }
-            QPushButton:pressed { background: rgba(140,20,20,220); }
-        """)
+        self._rec_start_btn.setProperty("hhRole", "danger")
         self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
         self._rec_start_btn.hide()
         header.addWidget(title)
@@ -1207,41 +1186,19 @@ class SidebarWidget(QWidget):
         header.addWidget(self._rec_start_btn)
         layout.addLayout(header)
 
-        self._rec_status_label = QLabel("○ OBS 오프라인")
-        self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._rec_status_label = QLabel("OBS 오프라인")
+        self._rec_status_label.setProperty("hhState", "default")
         layout.addWidget(self._rec_status_label)
 
-        self._rec_stop_btn = QPushButton("■ 녹화 종료")
+        self._rec_stop_btn = QPushButton("녹화 종료")
         self._rec_stop_btn.setFixedHeight(28)
-        self._rec_stop_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(160, 30, 30, 160);
-                color: rgba(255,200,200,220);
-                border: 1px solid rgba(200, 60, 60, 120);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(200, 40, 40, 200); color: white; }
-            QPushButton:pressed { background: rgba(130, 20, 20, 220); }
-        """)
+        self._rec_stop_btn.setProperty("hhRole", "danger")
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
         layout.addWidget(self._rec_stop_btn)
 
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
-        self._rec_connect_btn = QPushButton("↺ OBS 재연결")
-        self._rec_connect_btn.setFixedHeight(26)
-        self._rec_connect_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,12);
-                color: rgba(180,200,240,200);
-                border: 1px solid rgba(255,255,255,25);
-                border-radius: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,22); color: white; }
-            QPushButton:pressed { background: rgba(255,255,255,8); }
-        """)
+        self._rec_connect_btn = QPushButton("OBS 재연결")
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
 
@@ -1296,26 +1253,26 @@ class SidebarWidget(QWidget):
                 self._rec_elapsed_sec = elapsed
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
-            self._rec_status_label.setText(f"● REC  {hrs:02d}:{mins:02d}:{secs:02d}")
-            self._rec_status_label.setStyleSheet("color: #e05555; font-size: 12px;")
+            self._rec_status_label.setText(f"REC  {hrs:02d}:{mins:02d}:{secs:02d}")
+            status_style = "error"
             self._rec_stop_btn.show()
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "idle":
-            self._rec_status_label.setText("● OBS 대기 중")
-            self._rec_status_label.setStyleSheet("color: #5aaa5a; font-size: 12px;")
+            self._rec_status_label.setText("OBS 대기 중")
+            status_style = "success"
             self._rec_stop_btn.hide()
             self._rec_start_btn.show()
             self._rec_connect_btn.hide()
         elif state == "connecting":
-            self._rec_status_label.setText("○ OBS 연결 중...")
-            self._rec_status_label.setStyleSheet("color: #aaa850; font-size: 12px;")
+            self._rec_status_label.setText("OBS 연결 중...")
+            status_style = "warning"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         else:  # obs_offline
-            self._rec_status_label.setText("○ OBS 오프라인")
-            self._rec_status_label.setStyleSheet("color: #888; font-size: 12px;")
+            self._rec_status_label.setText("OBS 오프라인")
+            status_style = "default"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.show()
@@ -1323,6 +1280,9 @@ class SidebarWidget(QWidget):
             err = self._get_recording_error() if self._get_recording_error else ""
             self._rec_status_label.setToolTip(err if err else "")
             self._rec_connect_btn.setToolTip(err if err else "")
+        self._rec_status_label.setProperty("hhState", status_style)
+        self._rec_status_label.style().unpolish(self._rec_status_label)
+        self._rec_status_label.style().polish(self._rec_status_label)
 
     def _update_rec_timer(self) -> None:
         """1초 tick. recording 상태일 때 표시 시간을 갱신."""
@@ -1358,7 +1318,7 @@ class SidebarWidget(QWidget):
         # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
         self._capture_now_btn.setEnabled(True)
 
-    @pyqtSlot()
+    @Slot()
     def _refresh_screenshot_thumbnails(self) -> None:
         """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
         self._thumb_request_id += 1
@@ -1405,20 +1365,13 @@ class SidebarWidget(QWidget):
             self._thumb_grid_layout.addWidget(cell, row, col)
 
         # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_label = f"+{remaining}" if remaining > 0 else ""
         folder_btn = QPushButton(folder_label)
         folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
         folder_btn.setToolTip("스크린샷 폴더 열기")
-        folder_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,8);
-                color: rgba(180,200,240,200);
-                border: 1px dashed rgba(255,255,255,25);
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
-        """)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if remaining == 0:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         _dir = save_dir_str
 
         def _open_folder(d: str = _dir) -> None:
@@ -1444,8 +1397,8 @@ class SidebarWidget(QWidget):
             os.startfile(path_str)
 
         def _show_context_menu() -> None:
-            from PyQt6.QtWidgets import QMenu, QMessageBox
-            from PyQt6.QtGui import QCursor
+            from PySide6.QtWidgets import QMenu, QMessageBox
+            from PySide6.QtGui import QCursor
             menu = QMenu()
             menu.setStyleSheet("""
                 QMenu {
@@ -1504,7 +1457,7 @@ class SidebarWidget(QWidget):
         cache: dict,
         refresh: Callable[[], None],
     ) -> None:
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
 
         reply = QMessageBox.question(
             self,
@@ -1527,7 +1480,7 @@ class SidebarWidget(QWidget):
         cache.pop(path, None)
         refresh()
 
-    @pyqtSlot(int, str, object)
+    @Slot(int, str, object)
     def _apply_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
         if request_id != self._thumb_request_id:
             return
@@ -1568,13 +1521,13 @@ class SidebarWidget(QWidget):
 
     def on_screenshot_captured(self, path: str) -> None:
         """외부(MainWindow)에서 캡처 완료 시 호출됩니다. 워커 스레드에서 호출 가능."""
-        from PyQt6.QtCore import QMetaObject, Qt
+        from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(
             self, "_refresh_screenshot_thumbnails",
             Qt.ConnectionType.QueuedConnection,
         )
 
-    @pyqtSlot()
+    @Slot()
     def _refresh_recording_thumbnails(self) -> None:
         """녹화 썸네일 그리드를 최신 MP4 파일로 갱신합니다."""
         self._rec_thumb_request_id += 1
@@ -1613,20 +1566,13 @@ class SidebarWidget(QWidget):
             self._rec_thumb_grid_layout.addWidget(cell, row, col)
 
         # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else "\U0001F4C2"
+        folder_label = f"+{remaining}" if remaining > 0 else ""
         folder_btn = QPushButton(folder_label)
         folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
         folder_btn.setToolTip("녹화 폴더 열기")
-        folder_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,8);
-                color: rgba(180,200,240,200);
-                border: 1px dashed rgba(255,255,255,25);
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,18); color: white; }
-        """)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if remaining == 0:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         _dir = output_dir
 
         def _open_rec_folder(d: str = _dir) -> None:
@@ -1650,8 +1596,8 @@ class SidebarWidget(QWidget):
             os.startfile(path_str)
 
         def _show_context_menu() -> None:
-            from PyQt6.QtWidgets import QMenu
-            from PyQt6.QtGui import QCursor
+            from PySide6.QtWidgets import QMenu
+            from PySide6.QtGui import QCursor
 
             menu = QMenu()
             menu.setStyleSheet("""
@@ -1696,7 +1642,7 @@ class SidebarWidget(QWidget):
         )
         return cell
 
-    @pyqtSlot(int, str, object)
+    @Slot(int, str, object)
     def _apply_rec_thumbnail_result(self, request_id: int, filepath: str, image: object) -> None:
         if request_id != self._rec_thumb_request_id:
             return

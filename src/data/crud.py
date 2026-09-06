@@ -13,10 +13,12 @@ import time
 import logging
 import os
 import psutil
+import threading
 
 from src.data.database import base_dir
 
 logger = logging.getLogger(__name__)
+_session_idempotency_lock = threading.Lock()
 
 
 def _require_snapshot(path: str | None, message: str) -> str:
@@ -80,6 +82,7 @@ def create_process(
     override_token: str | None = None,
 ):
     process_data = _dump_schema(process)
+    _normalize_process_launch_args(process_data)
     provided_id = process_data.pop('id', None)
     process_id = provided_id if provided_id else str(uuid.uuid4())
     guard_columns = {key for key, value in process_data.items() if key in beholder.PROCESS_EDITOR_FIELDS or value is not None} | {"id"}
@@ -144,6 +147,7 @@ def update_process(
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _dump_schema(process, exclude_unset=True)
+        _normalize_process_launch_args(update_data)
         update_data.pop("id", None)
         if actor == "process_editor":
             for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
@@ -432,6 +436,13 @@ def _dump_schema(model: Any, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)
     return model.dict(**kwargs)
+
+
+def _normalize_process_launch_args(data: dict[str, Any]) -> None:
+    if "launch_args" in data:
+        data["launch_args"] = str(data.get("launch_args") or "").strip()
+    if "launch_args_enabled" in data:
+        data["launch_args_enabled"] = bool(data.get("launch_args_enabled"))
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:
@@ -979,6 +990,38 @@ def create_session(
     override_token: str | None = None,
 ):
     """새로운 프로세스 세션 시작 기록"""
+    lease_token = getattr(session, "lease_token", None)
+    if lease_token:
+        with _session_idempotency_lock:
+            existing = db.query(models.ProcessSession).filter(
+                models.ProcessSession.lease_token == lease_token
+            ).first()
+            if existing is not None:
+                return existing
+            return _create_session_once(
+                db,
+                session,
+                operation_kind=operation_kind,
+                actor=actor,
+                override_token=override_token,
+            )
+    return _create_session_once(
+        db,
+        session,
+        operation_kind=operation_kind,
+        actor=actor,
+        override_token=override_token,
+    )
+
+
+def _create_session_once(
+    db: Session,
+    session: schemas.ProcessSessionCreate,
+    *,
+    operation_kind: str,
+    actor: str,
+    override_token: str | None,
+):
     runtime_evidence = getattr(session, "runtime_evidence", None) or {}
     context = {
         **runtime_evidence,
@@ -1035,6 +1078,15 @@ def end_session(
     """프로세스 세션 종료 기록"""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
+        if db_session.end_timestamp is not None:
+            same_end = abs(float(db_session.end_timestamp) - float(end_timestamp)) <= 0.001
+            same_stamina = stamina_at_end is None or db_session.stamina_at_end == stamina_at_end
+            same_resource = (
+                resource_percent_at_end is None
+                or db_session.resource_percent_at_end == resource_percent_at_end
+            )
+            if same_end and same_stamina and same_resource:
+                return db_session
         changed_fields = ["end_timestamp", "session_duration", "session_status", "close_reason", "heartbeat_timestamp"]
         proposed_values = {
             "end_timestamp": end_timestamp,

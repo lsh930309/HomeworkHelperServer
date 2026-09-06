@@ -29,6 +29,7 @@ STATUS_RESOLVED = "resolved"
 MAX_UNEVIDENCED_SESSION_SECONDS = 7 * 24 * 60 * 60
 MAX_HEARTBEAT_GAP_SECONDS = 10 * 60
 LEGACY_OPEN_SESSION_SECONDS = 24 * 60 * 60
+MAX_LAUNCH_ARGS_LENGTH = 512
 GLOBAL_SETTINGS_TABLE = "global_settings"
 MANAGED_PROCESSES_TABLE = "managed_processes"
 WEB_SHORTCUTS_TABLE = "web_shortcuts"
@@ -143,6 +144,8 @@ FIELD_LABELS: dict[str, str] = {
     "obs_watch_output_dir": "OBS 출력 폴더 감시",
     "obs_recording_output_dir": "OBS 녹화 저장 폴더",
     "preferred_launch_type": "실행 방식",
+    "launch_args_enabled": "직접 실행 인자 사용",
+    "launch_args": "직접 실행 인자",
     "user_cycle_hours": "반복 주기",
     "default_volume": "기본 볼륨",
     "last_played_timestamp": "마지막 플레이 시각",
@@ -225,16 +228,10 @@ def _operation_label(kind: str | None) -> str:
 
 
 def _compose_user_summary(incident: models.BeholderIncident) -> str:
-    actor = _actor_label(getattr(incident, "actor", None))
     operation = _operation_label(getattr(incident, "operation_kind", None))
-    target = getattr(incident, "target_summary", None) or "대상 데이터"
-    current = getattr(incident, "current_state_summary", None) or "현재 상태 정보 없음"
-    proposed = getattr(incident, "proposed_change_summary", None) or "변경 내용 정보 없음"
-    cause = getattr(incident, "suspected_cause", None) or "안전 근거가 부족합니다."
     return (
-        f"{actor}가 {target}에 대해 '{operation}' 작업을 수행하려 했습니다. "
-        f"현재 상태는 {current}이며, 요청된 변경은 {proposed}입니다. "
-        f"비홀더는 {cause} 때문에 사용자 확인이 필요하다고 판단했습니다."
+        f"앱이 {operation} 작업을 시도했지만 현재 데이터와 충돌할 가능성이 있어 저장 전에 차단했습니다. "
+        "현재 데이터는 변경되지 않았습니다. 아래에서 처리 방법을 선택해 주세요."
     )
 
 
@@ -382,6 +379,42 @@ def create_incident(
 ) -> models.BeholderIncident:
     metadata = dict(resolution_metadata or {})
     metadata.setdefault("override_scope", _override_scope(operation, target_summary=target_summary))
+    matching_values = {
+        "operation_kind": operation.kind,
+        "actor": operation.actor,
+        "target_summary": target_summary,
+        "suspected_cause": suspected_cause,
+        "current_state_summary": current_state_summary,
+        "proposed_change_summary": proposed_change_summary,
+        "risk_factors": sorted(risk_factors),
+        "override_scope": metadata.get("override_scope") or {},
+    }
+
+    def matching_existing() -> list[models.BeholderIncident]:
+        candidates = db.query(models.BeholderIncident).filter(
+            models.BeholderIncident.status.in_((STATUS_PENDING, STATUS_DENIED)),
+            models.BeholderIncident.operation_kind == operation.kind,
+            models.BeholderIncident.actor == operation.actor,
+            models.BeholderIncident.target_summary == target_summary,
+        ).order_by(models.BeholderIncident.created_at.asc(), models.BeholderIncident.id.asc()).all()
+        return [
+            item for item in candidates
+            if {
+                "operation_kind": item.operation_kind,
+                "actor": item.actor,
+                "target_summary": item.target_summary,
+                "suspected_cause": item.suspected_cause,
+                "current_state_summary": item.current_state_summary,
+                "proposed_change_summary": item.proposed_change_summary,
+                "risk_factors": sorted(item.risk_factors or []),
+                "override_scope": (item.resolution_metadata or {}).get("override_scope") or {},
+            } == matching_values
+        ]
+
+    existing = matching_existing()
+    if existing:
+        return existing[0]
+
     incident = models.BeholderIncident(
         severity=severity,
         status=STATUS_PENDING,
@@ -403,8 +436,29 @@ def create_incident(
         created_at=time.time(),
     )
     db.add(incident)
-    db.commit()
+    try:
+        db.commit()
+    except OperationalError as exc:
+        db.rollback()
+        if "locked" not in str(exc).casefold():
+            raise
+        # 동시에 먼저 commit한 동등 사건을 현재 요청의 결과로 사용합니다.
+        # busy timeout 뒤에도 canonical 행이 없다면 원래 lock 오류를 보존합니다.
+        existing = matching_existing()
+        if existing:
+            return existing[0]
+        raise
     db.refresh(incident)
+    # 서로 다른 API 요청이 같은 사건을 동시에 조회한 뒤 삽입했더라도
+    # SQLite의 직렬화된 commit 이후 가장 이른 한 건만 남깁니다. 별도
+    # fingerprint 컬럼이나 영속 lock은 만들지 않습니다.
+    existing = matching_existing()
+    canonical = existing[0] if existing else incident
+    if canonical.id != incident.id:
+        db.delete(incident)
+        db.commit()
+        db.refresh(canonical)
+        return canonical
     return incident
 
 
@@ -625,6 +679,10 @@ def _invalid_process_values(
 
     if "preferred_launch_type" in changed_fields and update_data.get("preferred_launch_type") not in {"shortcut", "direct", "launcher"}:
         invalid.append("preferred_launch_type")
+    if "launch_args" in changed_fields:
+        value = str(update_data.get("launch_args") or "")
+        if "\n" in value or "\r" in value or "\x00" in value or len(value) > MAX_LAUNCH_ARGS_LENGTH:
+            invalid.append("launch_args")
     if "user_cycle_hours" in changed_fields:
         value = update_data.get("user_cycle_hours")
         if not _is_number(value) or float(value) <= 0 or float(value) > 8760:
@@ -1077,6 +1135,43 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
     if risk_score >= 80:
         if consume_override_token(db, operation.override_token, operation):
             return
+        process_name = (getattr(session, "process_name", None) or "").strip()
+        if not process_name or process_name.casefold() in {"game", "unknown"}:
+            process_name = "삭제된 게임 항목"
+        started_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(start))
+        duration_seconds = max(0.0, float(getattr(session, "session_duration", 0.0) or 0.0))
+        if duration_seconds < 90:
+            duration_label = "약 1분"
+        elif duration_seconds < 3600:
+            duration_label = f"약 {max(1, round(duration_seconds / 60))}분"
+        else:
+            duration_label = f"약 {duration_seconds / 3600:.1f}시간"
+        invalid_closed_state = status in {"abandoned", "quarantined", "closed"}
+        if invalid_closed_state:
+            user_title = "이미 끝난 플레이 기록의 재종료를 차단했습니다"
+            user_summary = (
+                f"{process_name}의 {started_at} 플레이 기록은 이미 {duration_label} 동안 기록된 뒤 종료되어 있습니다. "
+                "앱이 같은 기록을 다시 종료하려 했기 때문에 변경을 차단했습니다."
+            )
+            user_impact = "차단을 유지하면 기존 플레이 기록과 현재 데이터는 변경되지 않습니다."
+            safe_recommendation = "이미 종료된 기록이므로 차단을 유지하세요."
+            available_actions = [
+                {
+                    "id": "deny",
+                    "label": "차단 유지",
+                    "description": "기존 기록을 바꾸지 않고 같은 재종료 요청도 계속 차단합니다.",
+                    "recommended": True,
+                }
+            ]
+        else:
+            user_title = "플레이 기록 종료 시간이 안전하지 않습니다"
+            user_summary = (
+                f"{process_name}의 플레이 종료 요청이 현재 기록 상태와 맞지 않아 "
+                "플레이 시간이 크게 왜곡될 수 있습니다."
+            )
+            user_impact = "저장하면 과도하게 길거나 잘못된 플레이 기록이 생길 수 있어 차단했습니다."
+            safe_recommendation = "차단을 유지하고 실제 플레이 기록을 확인하세요."
+            available_actions = None
         incident = create_incident(
             db,
             severity=SEVERITY_CRITICAL,
@@ -1093,10 +1188,12 @@ def guard_session_end(db: Session, session: models.ProcessSession, end_timestamp
             ),
             risk_score=min(100, risk_score),
             risk_factors=risk_factors,
-            safe_recommendation="이번 변경은 저장하지 않았습니다. 백업/세션 상태를 확인한 뒤 수동으로 결정하세요.",
-            user_title="플레이 기록 종료 시간이 안전하지 않습니다",
-            user_summary="현재 기록 상태와 종료 요청이 맞지 않아 플레이 시간이 크게 왜곡될 수 있습니다.",
-            user_impact="저장하면 과도하게 긴 기록이나 음수 기록이 생길 수 있어 차단했습니다.",
+            safe_recommendation=safe_recommendation,
+            user_title=user_title,
+            user_summary=user_summary,
+            user_impact=user_impact,
+            recommended_action="deny",
+            available_actions=available_actions,
         )
         raise BeholderBlocked(incident)
 

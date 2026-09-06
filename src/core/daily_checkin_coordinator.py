@@ -5,33 +5,33 @@ import logging
 import time
 from typing import Any
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
+from src.api.client import BackgroundApiTransport
 from src.core import daily_checkin
 from src.core import credential_health
+from src.gui.work_coordinator import retain_detached_qthreadpool
+from src.core.provider_activity import provider_activity
 
 logger = logging.getLogger(__name__)
 
 
 class _DailyCheckInSignals(QObject):
-    finished = pyqtSignal(str, object)
+    finished = Signal(str, object)
 
 
 class _RunDueDailyCheckInsTask(QRunnable):
-    def __init__(self, data_manager, trigger: str, signals: _DailyCheckInSignals):
+    def __init__(self, transport: BackgroundApiTransport, trigger: str, signals: _DailyCheckInSignals):
         super().__init__()
-        self._data_manager = data_manager
+        self._transport = transport
         self._trigger = trigger
         self._signals = signals
 
     def run(self) -> None:
         payload: dict[str, Any] = {"logs": [], "skipped": [], "attempted": 0}
         try:
-            runner = getattr(self._data_manager, "run_due_daily_checkins", None)
-            if callable(runner):
-                payload = runner(trigger=self._trigger) or payload
-            else:
-                payload["error"] = "daily check-in API client is not available"
+            with provider_activity("daily_checkin", self._trigger):
+                payload = self._transport.run_due_daily_checkins(trigger=self._trigger) or payload
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
@@ -46,10 +46,11 @@ class DailyCheckInCoordinator(QObject):
     def __init__(self, data_manager, notifier, parent: QObject | None = None):
         super().__init__(parent)
         self._data_manager = data_manager
+        self._transport = BackgroundApiTransport(getattr(data_manager, "base_url", None))
         self._notifier = notifier
-        self._pool = QThreadPool(self)
+        self._pool = QThreadPool()
         self._pool.setMaxThreadCount(1)
-        self._signals = _DailyCheckInSignals(self)
+        self._signals = _DailyCheckInSignals()
         self._signals.finished.connect(self._on_finished)
         self._in_flight = False
         self._shutting_down = False
@@ -73,17 +74,25 @@ class DailyCheckInCoordinator(QObject):
         self._last_periodic_at = now
         self._start_due_run("periodic")
 
-    def shutdown(self) -> None:
+    def shutdown(self, deadline_ms: int = 2000) -> bool:
         self._shutting_down = True
-        self._pool.waitForDone()
+        try:
+            self._signals.finished.disconnect(self._on_finished)
+        except (TypeError, RuntimeError):
+            pass
+        drained = self._pool.waitForDone(max(0, int(deadline_ms)))
+        if not drained:
+            retain_detached_qthreadpool(self._pool)
+        return drained
 
     def _start_due_run(self, trigger: str) -> None:
         if self._shutting_down or self._in_flight:
             return
         self._in_flight = True
-        task = _RunDueDailyCheckInsTask(self._data_manager, trigger, self._signals)
+        task = _RunDueDailyCheckInsTask(self._transport, trigger, self._signals)
         self._pool.start(task)
 
+    @Slot(str, object)
     def _on_finished(self, trigger: str, payload: object) -> None:
         self._in_flight = False
         if not isinstance(payload, dict):

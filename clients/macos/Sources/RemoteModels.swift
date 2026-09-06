@@ -539,6 +539,8 @@ struct RemoteProcess: Codable, Identifiable {
     let monitoringPath: String?
     let launchPath: String?
     let preferredLaunchType: String?
+    let launchArgsEnabled: Bool
+    let launchArgs: String?
     let lastPlayedTimestamp: Double?
     let userCycleHours: Int?
     let staminaTrackingEnabled: Bool
@@ -561,6 +563,8 @@ struct RemoteProcess: Codable, Identifiable {
         case monitoringPath = "monitoring_path"
         case launchPath = "launch_path"
         case preferredLaunchType = "preferred_launch_type"
+        case launchArgsEnabled = "launch_args_enabled"
+        case launchArgs = "launch_args"
         case lastPlayedTimestamp = "last_played_timestamp"
         case userCycleHours = "user_cycle_hours"
         case staminaTrackingEnabled = "stamina_tracking_enabled"
@@ -583,6 +587,8 @@ struct RemoteProcess: Codable, Identifiable {
         monitoringPath = try container.decodeIfPresent(String.self, forKey: .monitoringPath)
         launchPath = try container.decodeIfPresent(String.self, forKey: .launchPath)
         preferredLaunchType = try container.decodeIfPresent(String.self, forKey: .preferredLaunchType)
+        launchArgsEnabled = try container.decodeIfPresent(Bool.self, forKey: .launchArgsEnabled) ?? false
+        launchArgs = try container.decodeIfPresent(String.self, forKey: .launchArgs)
         lastPlayedTimestamp = try container.decodeIfPresent(Double.self, forKey: .lastPlayedTimestamp)
         userCycleHours = try container.decodeIfPresent(Int.self, forKey: .userCycleHours)
         staminaTrackingEnabled = try container.decodeIfPresent(Bool.self, forKey: .staminaTrackingEnabled) ?? false
@@ -604,6 +610,8 @@ struct RemoteProcess: Codable, Identifiable {
         monitoringPath: String?,
         launchPath: String?,
         preferredLaunchType: String?,
+        launchArgsEnabled: Bool = false,
+        launchArgs: String? = nil,
         lastPlayedTimestamp: Double?,
         userCycleHours: Int?,
         staminaTrackingEnabled: Bool,
@@ -623,6 +631,8 @@ struct RemoteProcess: Codable, Identifiable {
         self.monitoringPath = monitoringPath
         self.launchPath = launchPath
         self.preferredLaunchType = preferredLaunchType
+        self.launchArgsEnabled = launchArgsEnabled
+        self.launchArgs = launchArgs
         self.lastPlayedTimestamp = lastPlayedTimestamp
         self.userCycleHours = userCycleHours
         self.staminaTrackingEnabled = staminaTrackingEnabled

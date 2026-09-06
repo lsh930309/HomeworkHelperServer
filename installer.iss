@@ -274,7 +274,20 @@ begin
 
   if IsAppRunning() then
   begin
-    if MsgBox('HomeworkHelper가 현재 실행 중입니다.' + #13#10 + #13#10 +
+    if WizardSilent then
+    begin
+      // 자동 업데이트에서는 사용자 입력을 기다리지 않고 같은 종료 경로를 사용합니다.
+      KillAllAppProcesses();
+      Sleep(1000);
+
+      if IsAppRunning() then
+      begin
+        Log('무인 설치 중 HomeworkHelper 프로세스를 종료하지 못했습니다.');
+        Result := False;
+        Exit;
+      end;
+    end
+    else if MsgBox('HomeworkHelper가 현재 실행 중입니다.' + #13#10 + #13#10 +
               '설치를 계속하려면 프로그램을 종료해야 합니다.' + #13#10 +
               '자동으로 종료하고 계속 진행하시겠습니까?',
               mbConfirmation, MB_YESNO) = IDYES then

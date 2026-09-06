@@ -22,9 +22,11 @@ from src.data import models
 class _FakeLauncher:
     def __init__(self):
         self.targets: list[str] = []
+        self.launches: list[tuple[str, str | None]] = []
 
-    def launch_process(self, target: str) -> bool:
+    def launch_process(self, target: str, args=None) -> bool:
         self.targets.append(target)
+        self.launches.append((target, args))
         return True
 
 
@@ -209,8 +211,10 @@ def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boun
     assert body["accepted_at"]
     assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Users/me/Desktop/Game.url"]
+    assert launcher.launches == [("/Users/me/Desktop/Game.url", None)]
     assert auditor.events[-1]["command"] == "process.launch.shortcut"
     assert auditor.events[-1]["accepted"] is True
+    assert auditor.events[-1]["metadata"] == {"mode": "shortcut", "launch_args_applied": False}
 
 
 def test_remote_stop_terminates_only_managed_process_boundary():
@@ -696,7 +700,79 @@ def test_remote_launch_can_request_direct_mode_without_mutating_process_preferen
     assert body["command_id"].startswith("process.launch.direct:")
     assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Applications/Game.app"]
-    assert auditor.events[-1]["metadata"] == {"mode": "direct"}
+    assert launcher.launches == [("/Applications/Game.app", None)]
+    assert auditor.events[-1]["metadata"] == {"mode": "direct", "launch_args_applied": False}
+
+
+def test_remote_launch_direct_mode_applies_saved_process_launch_args():
+    client, launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="zzz",
+                name="Zenless Zone Zero",
+                monitoring_path="/Applications/ZenlessZoneZero.app",
+                launch_path="/Users/me/Desktop/ZenlessZoneZero.url",
+                preferred_launch_type="direct",
+                launch_args_enabled=True,
+                launch_args="  -use-d3d12  ",
+            )
+        ]
+    )
+
+    response = client.post("/remote/processes/zzz/launch", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["command"] == "process.launch.direct"
+    assert body["target"] == "/Applications/ZenlessZoneZero.app"
+    assert launcher.launches == [("/Applications/ZenlessZoneZero.app", "-use-d3d12")]
+    assert auditor.events[-1]["metadata"] == {"mode": "direct", "launch_args_applied": True}
+
+
+def test_remote_launch_ignores_saved_args_for_shortcut_url_targets():
+    client, launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="game-a",
+                name="Game A",
+                monitoring_path="/Applications/Game.app",
+                launch_path="/Users/me/Desktop/Game.url",
+                preferred_launch_type="shortcut",
+                launch_args_enabled=True,
+                launch_args="-use-d3d12",
+            )
+        ]
+    )
+
+    response = client.post("/remote/processes/game-a/launch", json={})
+
+    assert response.status_code == 200
+    assert response.json()["command"] == "process.launch.shortcut"
+    assert launcher.launches == [("/Users/me/Desktop/Game.url", None)]
+    assert auditor.events[-1]["metadata"] == {"mode": "shortcut", "launch_args_applied": False}
+
+
+def test_remote_launch_applies_saved_args_for_shortcut_mode_direct_executable_target():
+    client, launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[
+            models.Process(
+                id="zzz",
+                name="Zenless Zone Zero",
+                monitoring_path="/Applications/ZenlessZoneZero.app",
+                launch_path="/Applications/ZenlessZoneZero.app",
+                preferred_launch_type="shortcut",
+                launch_args_enabled=True,
+                launch_args="-use-d3d12",
+            )
+        ]
+    )
+
+    response = client.post("/remote/processes/zzz/launch", json={})
+
+    assert response.status_code == 200
+    assert response.json()["command"] == "process.launch.shortcut"
+    assert launcher.launches == [("/Applications/ZenlessZoneZero.app", "-use-d3d12")]
+    assert auditor.events[-1]["metadata"] == {"mode": "shortcut", "launch_args_applied": True}
 
 
 def test_remote_launch_launcher_mode_uses_preset_launcher_pattern(tmp_path):
@@ -728,7 +804,8 @@ def test_remote_launch_launcher_mode_uses_preset_launcher_pattern(tmp_path):
     assert body["command"] == "process.launch.launcher"
     assert body["target"] == str(launcher_path)
     assert launcher.targets == [str(launcher_path)]
-    assert auditor.events[-1]["metadata"] == {"mode": "launcher"}
+    assert launcher.launches == [(str(launcher_path), None)]
+    assert auditor.events[-1]["metadata"] == {"mode": "launcher", "launch_args_applied": False}
 
 
 def test_remote_shortcut_open_delegates_to_native_opener_and_records_command_result():
@@ -1270,12 +1347,25 @@ def test_power_controller_reports_client_managed_status_without_actions():
     assert restart_response.status_code == 404
 
 
-def test_remote_power_setup_reports_host_readiness_and_registers_public_key():
+def test_remote_power_setup_reports_host_readiness_and_registers_public_key(monkeypatch, tmp_path):
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
-    authorized_keys = Path(os.environ["HOME"]) / ".ssh" / "authorized_keys"
-    if authorized_keys.exists():
-        authorized_keys.unlink()
+    authorized_keys = tmp_path / ".ssh" / "authorized_keys"
+    monkeypatch.setattr(
+        remote_power_setup,
+        "_effective_authorized_keys_target",
+        lambda *, runner=None: {
+            "path": authorized_keys,
+            "scope": "user",
+            "user_authorized_keys_path": authorized_keys,
+            "admin_authorized_keys_path": tmp_path / "administrators_authorized_keys",
+            "sshd_config_path": None,
+            "current_user_is_admin": False,
+            "current_user_admin_message": "test",
+            "sshd_config_admin_match": False,
+            "administrators_authorized_keys_active": False,
+        },
+    )
     setup = client.get("/remote/power/setup")
     key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZha2VLZXlGb3JUZXN0T25seU5vdFJlYWw= macbook"
     registered = client.post("/remote/power/ssh-key", json={"public_key": key, "label": "MacBook"})
@@ -1382,7 +1472,19 @@ def test_removed_remote_smartthings_probe_api_is_not_exposed():
     assert not any(event["command"] == "power.smartthings.devices" for event in auditor.events)
 
 
-def test_remote_logging_config_and_purge_revoked_devices():
+def test_remote_logging_config_and_purge_revoked_devices(monkeypatch, tmp_path):
+    from src.core import remote_debug_log, remote_local_store
+
+    isolated_store = remote_local_store.RemoteLocalStore(
+        root=tmp_path / "remote",
+        legacy_root=tmp_path,
+    )
+    monkeypatch.setattr(remote_local_store, "_DEFAULT_STORE", isolated_store)
+    monkeypatch.setattr(
+        remote_debug_log,
+        "CONFIG_PATH",
+        isolated_store.path("remote_debug_logging.json"),
+    )
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
     start = client.post("/remote/pair/start")

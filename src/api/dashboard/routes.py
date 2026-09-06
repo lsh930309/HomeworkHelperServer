@@ -288,8 +288,8 @@ def _completed_session_filter(start_ts: float | None = None, end_ts: float | Non
     return clauses
 
 
-def _query_sessions(db: Any, start_dt: dt.datetime, end_dt: dt.datetime) -> list[models.ProcessSession]:
-    start_ts = start_dt.timestamp()
+def _query_sessions(db: Any, start_dt: dt.datetime | None, end_dt: dt.datetime) -> list[models.ProcessSession]:
+    start_ts = start_dt.timestamp() if start_dt is not None else None
     end_ts = end_dt.timestamp()
     query = db.query(models.ProcessSession).filter(*_completed_session_filter(start_ts, end_ts))
     return query.order_by(models.ProcessSession.start_timestamp.asc()).all()
@@ -353,7 +353,8 @@ def _sessions_for_range(
     game_id: str | None,
     show_unregistered: bool,
 ) -> tuple[dt.date, dt.date, dt.datetime, dt.datetime, list[models.ProcessSession]]:
-    sessions = _filter_registered(db, _query_sessions(db, start_dt, end_dt), show_unregistered)
+    query_start = None if start_date <= EPOCH_DATE else start_dt
+    sessions = _filter_registered(db, _query_sessions(db, query_start, end_dt), show_unregistered)
     sessions = _filter_sessions_by_game_key(sessions, game_id)
     start_date, end_date, start_dt, end_dt = _normalize_all_time_range(start_date, end_date, start_dt, end_dt, sessions)
     return start_date, end_date, start_dt, end_dt, sessions
