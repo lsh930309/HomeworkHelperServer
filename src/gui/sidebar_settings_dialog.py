@@ -1,11 +1,11 @@
 """사이드바 설정 대화 상자."""
 import os
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QDoubleSpinBox, QSpinBox, QLineEdit, QGroupBox,
     QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QFileDialog,
 )
-from PyQt6.QtCore import Qt, QMetaObject, pyqtSlot, Q_ARG
+from PySide6.QtCore import Qt, QMetaObject, Slot, Q_ARG
 
 from src.data.data_models import (
     GlobalSettings,
@@ -352,7 +352,7 @@ class SidebarSettingsDialog(QDialog):
             if cfg["exe_path"]:
                 self._obs_exe_edit.setText(cfg["exe_path"])
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "OBS 설정 불러오기", f"OBS 설정을 읽지 못했습니다:\n{e}")
 
     def _capture_trigger_key(self) -> None:
@@ -374,7 +374,7 @@ class SidebarSettingsDialog(QDialog):
             ),
         )
 
-    @pyqtSlot(int)
+    @Slot(int)
     def _on_trigger_captured(self, vk: int) -> None:
         from src.screenshot.key_capture import vk_to_display_name
         self._ss_trigger_vk = vk
@@ -382,7 +382,7 @@ class SidebarSettingsDialog(QDialog):
         self._ss_trigger_btn.setText("설정...")
         self._ss_trigger_btn.setEnabled(True)
 
-    @pyqtSlot()
+    @Slot()
     def _on_trigger_timeout(self) -> None:
         self._ss_trigger_btn.setText("설정...")
         self._ss_trigger_btn.setEnabled(True)

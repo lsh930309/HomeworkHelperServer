@@ -6,39 +6,49 @@ import sys
 import time
 import datetime
 import functools
-import json
 import logging
-from typing import Optional
+import threading
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# PyQt6 임포트
-from PyQt6.QtWidgets import (
+# PySide6 임포트
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
-    QMessageBox, QMenu, QStyle, QStatusBar, QMenuBar, QAbstractScrollArea, QCheckBox,
+    QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
     QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
-    QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QEvent, QThread, QSettings, QPoint, QRect, QSize
-from PyQt6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QScreen
+from PySide6.QtCore import (
+    Qt, QTimer, Signal, Slot, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
+)
+from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabase, QFont, QPixmap, QPalette, QCursor
 
 # --- 로컬 모듈 임포트 ---
-from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, NumericTableWidgetItem, WebShortcutDialog, HoYoLabSettingsDialog, RemoteSettingsDialog
+from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, WebShortcutDialog, HoYoLabSettingsDialog, RemoteSettingsDialog
 from src.gui.beholder_dialog import BeholderIncidentDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
 from src.utils.common import get_bundle_resource_path
-from src.api.runtime_config import dashboard_url, gui_health_url, resolve_local_api_base_url
+from src.api.runtime_config import dashboard_url, resolve_local_api_base_url
 import requests
 
 # --- 기타 로컬 유틸리티/데이터 모듈 임포트 ---
-from src.api.client import ApiClient
+from src.api.client import (
+    ApiClient,
+    BackgroundApiTransport,
+    BeholderIncidentRequired,
+    DatabaseFaultedResponse,
+)
 from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
+    position_windows_window_bottom_right,
+    snap_windows_window_to_work_area,
     set_startup_shortcut,
     get_startup_shortcut_status,
 )
@@ -48,12 +58,50 @@ from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
 from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
 from src.core.daily_checkin_coordinator import DailyCheckInCoordinator
+from src.core.process_monitor import (
+    ProcessLifecycleEvent,
+    ProcessScanSnapshot,
+    detect_running_process_ids,
+    scan_running_processes,
+)
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
 from src.utils.admin import is_admin, run_as_admin, restart_as_normal
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
 from src.gui.sidebar.sidebar_controller import SidebarController
+from src.gui.power_events import DesiredTimerRegistry, PowerResumeEvent, WindowsPowerEventFilter
+from src.gui.work_coordinator import GuiWorkCoordinator, WorkError, WorkResult
+from src.gui.widgets_style import (
+    CapsuleProgressBar,
+    apply_modern_widgets_style,
+    apply_widgets_palette,
+    tint_icon,
+    widgets_theme_tokens,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleCommand:
+    kind: str
+    event: ProcessLifecycleEvent
+    pid: int
+    process_create_time: float
+    runtime_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecyclePersistenceResult:
+    command: _LifecycleCommand
+    session_id: int | None
+    succeeded: bool
+    attempts: int
+    error: str | None = None
+    blocked: bool = False
+    beholder_incident: Mapping[str, Any] | None = None
+
+
+_GUI_CLEANUP_DEADLINE_SECONDS = 2.0
 
 
 class IconDownloader(QThread):
@@ -61,7 +109,7 @@ class IconDownloader(QThread):
     별도 스레드에서 URL로부터 아이콘을 다운로드하는 클래스.
     다운로드가 완료되면 icon_ready 시그널을 통해 QIcon 객체를 전달합니다.
     """
-    icon_ready = pyqtSignal(QIcon)
+    icon_ready = Signal(QIcon)
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
@@ -86,39 +134,34 @@ class IconDownloader(QThread):
 
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
-    request_table_refresh_signal = pyqtSignal() # 테이블 새로고침 요청 시그널
-    _recording_state_sig = pyqtSignal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
-    _gamepad_countdown_sig = pyqtSignal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
+    request_table_refresh_signal = Signal() # 기존 백그라운드 호출부가 사용하는 목록 새로고침 시그널
+    _recording_state_sig = Signal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
+    _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
 
-    # UI 색상 정의
-    COLOR_INCOMPLETE = QColor("red")      # 미완료 상태 색상
-    COLOR_COMPLETED = QColor("green")     # 완료 상태 색상
-    COLOR_RUNNING = QColor("yellow")      # 실행 중 상태 색상
-    COLOR_WEB_BTN_RED = QColor("red")     # 웹 버튼 (리셋 필요) 색상
-    COLOR_WEB_BTN_GREEN = QColor("green") # 웹 버튼 (리셋 완료) 색상
-
-    # 테이블 컬럼 인덱스 정의
-    COL_ICON = 0
-    COL_NAME = 1
-    COL_LAST_PLAYED = 2
-    COL_LAUNCH_BTN = 3
-    COL_STATUS = 4
-    TOTAL_COLUMNS = 5 # 전체 컬럼 개수
     _PROGRESS_BAR_SCALE = 10
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
     _UI_REFRESH_INTERVAL_MS = 1000
     _WEB_BUTTON_REFRESH_INTERVAL_TICKS = 60
     _MIN_WINDOW_WIDTH = 320
     _MIN_WINDOW_HEIGHT = 120
-    _SCREEN_SIZE_RATIO = 0.92
-    _TABLE_ROW_HEIGHT = 30
-    _TABLE_ICON_LOGICAL_SIZE = 24
-    _TABLE_ICON_COLUMN_PADDING = 4
-    _WINDOW_ANCHOR_SETTINGS_KEY = "window_anchor_v1"
+    COL_ICON = 0
+    COL_NAME = 1
+    COL_LAST_PLAYED = 2
+    COL_LAUNCH_BTN = 3
+    COL_STATUS = 4
+    TOTAL_COLUMNS = 5
+    _TABLE_ROW_HEIGHT = 40
+    _TABLE_ICON_LOGICAL_SIZE = 32
+    _TABLE_ICON_COLUMN_PADDING = 6
+    _TABLE_LAUNCH_BUTTON_HEIGHT = 32
+    _QWIDGETSIZE_MAX = 16_777_215
 
     def __init__(self, data_manager: ApiClient, instance_manager: Optional[SingleInstanceApplication] = None):
         super().__init__()
         MainWindow.INSTANCE = self
+        self._pending_bottom_right_placement = False
+        self._presentation_window = self
+        self._host_ui_facade = None
         self.data_manager = data_manager
         self._instance_manager = instance_manager # 종료 시 정리를 위해 인스턴스 매니저 참조 저장
         self.launcher = Launcher(run_as_admin=self.data_manager.global_settings.run_as_admin)
@@ -126,17 +169,35 @@ class MainWindow(QMainWindow):
         # Launcher 콜백 설정: 게임 런처 재시작 확인
         self.launcher.launcher_restart_callback = self._on_launcher_restart_request
 
-        # statusBar, menuBar 명시적 생성
-        self.setStatusBar(QStatusBar(self))
-        self._remote_readiness_indicator_labels: dict[str, QLabel] = {}
-        self._setup_remote_readiness_indicators()
+        # 기존 readiness 데이터는 하단의 세 가지 간결한 상태 표시에만 사용합니다.
+        self._remote_readiness_states: dict[str, tuple[str, str]] = {}
         initial_api_error = getattr(self.data_manager, "last_connection_error", None)
         if initial_api_error:
-            self._set_remote_readiness_indicator("beholder", "red", f"API 초기 연결 실패: {initial_api_error}")
+            self._remote_readiness_states["beholder"] = (
+                "red",
+                f"API 초기 연결 실패: {initial_api_error}",
+            )
         self.setMenuBar(QMenuBar(self))
 
         from src.core.process_monitor import ProcessMonitor # 순환 참조 방지를 위한 동적 임포트
         self.process_monitor = ProcessMonitor(self.data_manager)
+        self._shutting_down = False
+        self._app_instance_id = str(self.data_manager.app_instance_id)
+        self._background_transport = BackgroundApiTransport(self._api_base_url())
+        self._work_coordinator = GuiWorkCoordinator(self, max_threads=4)
+        self._work_coordinator.result_ready.connect(self._on_background_work_result)
+        self._work_coordinator.error_ready.connect(self._on_background_work_error)
+        self._lifecycle_shutdown_event = threading.Event()
+        self._lifecycle_session_lock = threading.Lock()
+        self._lifecycle_session_ids: dict[str, int] = {}
+        self._beholder_dialog_active = False
+        self._api_backoff_failures: dict[str, int] = {}
+        self._api_backoff_until: dict[str, float] = {}
+        self._timer_registry = DesiredTimerRegistry()
+        self._power_event_filter = WindowsPowerEventFilter(self._on_native_resume)
+        app_instance = QApplication.instance()
+        if app_instance is not None and sys.platform == "win32":
+            app_instance.installNativeEventFilter(self._power_event_filter)
         self.gui_notification_handler = GuiNotificationHandler(self) # GUI 알림 처리기 생성
         self.system_notifier = Notifier( # 시스템 알림 객체 생성 (콜백을 생성자에 전달하여 시그널 연결 보장)
             QApplication.applicationName(),
@@ -170,27 +231,18 @@ class MainWindow(QMainWindow):
         self.preset_manager = GamePresetManager()
 
         self.setWindowTitle(QApplication.applicationName() or "숙제 관리자") # 창 제목 설정
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
         self._ensure_background_survival_mode()
 
-        # 창 크기: 테이블/버튼 실제 sizeHint를 기반으로 동적으로 최적화합니다.
-        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
-        self.resize(470, 300) # 최초 표시 전 임시 크기
-
-        # QSettings 초기화 (창 위치/크기 저장용)
+        # QSettings 초기화 (Game Bar 복원 등 런타임 설정용)
         self._settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                     "HomeworkHelper", "display_settings")
-        # 절전 복귀 시 창 상태 복원을 위한 geometry 저장 변수
-        self._saved_geometry = None
-        self._saved_size = None
         self._wake_recovery_in_progress = False
-        self._pending_window_anchor = self._load_window_anchor()
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
         self._beholder_seen_incidents: set[int] = set()
         self._beholder_restore_runtime_suspended = False
 
-        # 저장된 창 위치 복원
-        self._restore_window_geometry()
         self._recover_gamebar_setting_if_needed()
 
         self._set_window_icon() # 창 아이콘 설정
@@ -253,7 +305,11 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget) # 메인 수직 레이아웃 생성
 
         # 상단 버튼 영역 레이아웃 (게임 추가 버튼 + 동적 웹 버튼들 + 웹 바로가기 추가 버튼)
-        self.top_button_area_layout = QHBoxLayout() # 수평 레이아웃
+        self.top_button_area = QWidget(central_widget)
+        self.top_button_area.setObjectName("topButtonArea")
+        self.top_button_area_layout = QHBoxLayout(self.top_button_area) # 수평 레이아웃
+        self.top_button_area_layout.setContentsMargins(0, 0, 0, 0)
+        self.top_button_area_layout.setSpacing(4)
         self.add_game_button = QPushButton("새 게임 추가") # '새 게임 추가' 버튼 생성
         self.add_game_button.clicked.connect(self.open_add_process_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_game_button) # 레이아웃에 버튼 추가
@@ -267,20 +323,12 @@ class MainWindow(QMainWindow):
         self.add_web_shortcut_button = QPushButton("+") # 웹 바로가기 추가 버튼 생성
         self.add_web_shortcut_button.setToolTip("새로운 웹 바로 가기 버튼을 추가합니다.") # 툴팁 설정
 
-        # '+' 버튼 크기를 텍스트에 맞게 조절
-        font_metrics = self.add_web_shortcut_button.fontMetrics()
-        text_width = font_metrics.horizontalAdvance(" + ") # 텍스트 너비 계산 (양 옆 공백 포함)
-        icon_button_size = text_width + 8 # 아이콘 버튼 크기 (여유 공간 추가)
-        self.add_web_shortcut_button.setFixedSize(icon_button_size, icon_button_size) # 버튼 크기 고정
-
         self.add_web_shortcut_button.clicked.connect(self._open_add_web_shortcut_dialog) # 버튼 클릭 시그널 연결
         self.top_button_area_layout.addWidget(self.add_web_shortcut_button) # 상단 버튼 영역에 웹 바로가기 추가 버튼 추가
 
         # 대시보드 버튼 추가
-        self.dashboard_button = QPushButton()
+        self.dashboard_button = QPushButton("📊")
         self.dashboard_button.setToolTip("통계 대시보드 열기")
-        self.dashboard_button.setText("📊")  # 차트 이모지
-        self.dashboard_button.setFixedSize(icon_button_size, icon_button_size)
         self.dashboard_button.clicked.connect(self._open_dashboard)
         self.top_button_area_layout.addWidget(self.dashboard_button)
 
@@ -289,7 +337,6 @@ class MainWindow(QMainWindow):
         self.github_button.setToolTip("GitHub 저장소 방문")
         self.github_button.setText("GH") # 아이콘 로딩 전 기본 텍스트
         # 크기를 다른 아이콘 버튼과 맞춤
-        self.github_button.setFixedSize(icon_button_size, icon_button_size)
         self.github_button.clicked.connect(lambda: self.open_webpage("https://github.com/lsh930309/HomeworkHelperServer"))
         self.top_button_area_layout.addWidget(self.github_button)
 
@@ -308,42 +355,57 @@ class MainWindow(QMainWindow):
         self.icon_downloader.icon_ready.connect(self.set_github_button_icon) # 아이콘 다운로더에 연결
         self.icon_downloader.start()
 
-        main_layout.addLayout(self.top_button_area_layout) # 메인 레이아웃에 상단 버튼 영역 추가
+        main_layout.addWidget(self.top_button_area, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # 프로세스 테이블 설정
-        self.process_table = QTableWidget() # 테이블 위젯 생성
-        self.process_table.setColumnCount(self.TOTAL_COLUMNS) # 컬럼 개수 설정
-        self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태"]) # 헤더 라벨 설정
-        self._configure_table_header() # 테이블 헤더 상세 설정
-        self.process_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers) # 편집 불가 설정
-        self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # 선택 불가 설정
-        self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu) # 컨텍스트 메뉴 정책 설정
-        self.process_table.customContextMenuRequested.connect(self.show_table_context_menu) # 컨텍스트 메뉴 요청 시그널 연결
-
-        # 테이블 크기 정책 설정 - 스크롤바 없이 내용에 맞게 조절
+        self.process_table = QTableWidget(self)
+        self.process_table.setObjectName("processTable")
+        self.process_table.setColumnCount(self.TOTAL_COLUMNS)
+        self.process_table.setHorizontalHeaderLabels(["", "이름", "진행률", "실행", "상태"])
+        self._configure_table_header()
+        self.process_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.process_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.process_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.process_table.setShowGrid(False)
+        self.process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.process_table.customContextMenuRequested.connect(self.show_table_context_menu)
         self.process_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.process_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.process_table.verticalHeader().setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
+        self.process_table.verticalHeader().setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
+        self.process_table.setIconSize(QSize(self._TABLE_ICON_LOGICAL_SIZE, self._TABLE_ICON_LOGICAL_SIZE))
+        main_layout.addWidget(self.process_table, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # 테이블 행 높이 및 아이콘 크기 설정
-        vh = self.process_table.verticalHeader()
-        if vh:
-            vh.setDefaultSectionSize(self._TABLE_ROW_HEIGHT)
-            vh.setMinimumSectionSize(self._TABLE_ROW_HEIGHT)
-
-        # 아이콘 크기: Image #1에 가까운 압축 비율을 유지하면서도 캐시 아이콘을 선명하게 배치합니다.
-        # DPI 배율은 get_qicon_for_file 내부에서 적용합니다.
-        self._table_icon_logical_size = self._TABLE_ICON_LOGICAL_SIZE
-        self.process_table.setIconSize(QSize(self._table_icon_logical_size, self._table_icon_logical_size))
-
-        main_layout.addWidget(self.process_table) # 메인 레이아웃에 테이블 추가
+        self.readiness_strip = QWidget(central_widget)
+        self.readiness_strip.setObjectName("readinessStrip")
+        readiness_layout = QHBoxLayout(self.readiness_strip)
+        readiness_layout.setContentsMargins(6, 6, 6, 3)
+        readiness_layout.setSpacing(8)
+        self._readiness_status_widgets: dict[str, tuple[QLabel, QLabel]] = {}
+        for key in ("beholder", "remote", "admin"):
+            item = QWidget(self.readiness_strip)
+            item.setProperty("hhRole", "readinessItem")
+            item_layout = QHBoxLayout(item)
+            item_layout.setContentsMargins(0, 0, 0, 0)
+            item_layout.setSpacing(4)
+            dot = QLabel("●", item)
+            dot.setProperty("hhRole", "readinessDot")
+            text = QLabel(item)
+            text.setProperty("hhRole", "readinessText")
+            item_layout.addWidget(dot)
+            item_layout.addWidget(text)
+            item_layout.addStretch(1)
+            readiness_layout.addWidget(item, 1)
+            self._readiness_status_widgets[key] = (dot, text)
+        main_layout.addWidget(self.readiness_strip, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._setup_remote_readiness_indicators()
 
         # 초기 데이터 로드 및 UI 업데이트
         self.populate_process_list() # 프로세스 목록 채우기
         self._load_and_display_web_buttons() # 웹 바로가기 버튼 로드 및 표시
-        self._adjust_window_height_for_table_rows() # 테이블 내용에 맞게 창 높이 조절
+        self._adjust_window_size_to_content()
 
         # 시그널 및 타이머 설정
-        self.request_table_refresh_signal.connect(self.populate_process_list_slot) # 테이블 새로고침 시그널 연결
+        self.request_table_refresh_signal.connect(self.populate_process_list_slot)
         self._last_timer_tick = time.time()  # 절전 복귀 감지용 마지막 타이머 틱 시간
         self._ui_refresh_tick_count = 0
         self.monitor_timer = QTimer(self)
@@ -367,6 +429,15 @@ class MainWindow(QMainWindow):
         self.remote_readiness_timer = QTimer(self)
         self.remote_readiness_timer.timeout.connect(self._refresh_remote_readiness_indicators)
         self.remote_readiness_timer.start(5000)
+        for timer_name, timer, interval in (
+            ("monitor", self.monitor_timer, 1000),
+            ("scheduler", self.scheduler_timer, 1000),
+            ("ui_refresh", self.ui_refresh_timer, self._UI_REFRESH_INTERVAL_MS),
+            ("beholder", self.beholder_timer, 1500),
+            ("heartbeat", self.runtime_heartbeat_timer, 30000),
+            ("readiness", self.remote_readiness_timer, 5000),
+        ):
+            self._timer_registry.register(timer_name, timer, interval_ms=interval)
         # Reconcile stale open sessions before the first fresh heartbeat so
         # crash-recovery decisions can use the pre-crash heartbeat.
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
@@ -381,6 +452,8 @@ class MainWindow(QMainWindow):
         # Qt6 자동 High DPI 스케일링에 의존 (커스텀 DPI 핸들러 제거됨)
 
         self._record_status_event("준비 완료.")
+
+        self._apply_widgets_presentation()
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
 
@@ -405,108 +478,284 @@ class MainWindow(QMainWindow):
 
 
     def _record_status_event(self, message: str, *_args: object) -> None:
-        """Keep legacy transient UI messages out of the persistent indicator bar."""
+        """Record transient UI events without creating a persistent status bar."""
         logger.info("UI status event: %s", message)
 
     def _setup_remote_readiness_indicators(self) -> None:
-        """Add textless, compact readiness indicators to the persistent status bar."""
-        status_bar = self.statusBar()
-        if status_bar is None:
+        """기존 readiness 상태를 하단의 세 가지 읽기 전용 표시에 연결합니다."""
+        for key in ("beholder", "remote", "admin"):
+            self._remote_readiness_states.setdefault(key, ("gray", "상태를 확인 중입니다."))
+        self._refresh_readiness_strip()
+
+    def _submit_telemetry(self, key: str, function, *args, **kwargs) -> int | None:
+        """실패한 endpoint의 짧은 backoff를 지키며 최신 작업만 접수합니다."""
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return None
+        if time.monotonic() < self._api_backoff_until.get(key, 0.0):
+            return None
+        return self._work_coordinator.submit_telemetry(key, function, *args, **kwargs)
+
+    @Slot(object)
+    def _on_background_work_result(self, result: WorkResult) -> None:
+        self._api_backoff_failures.pop(result.key, None)
+        self._api_backoff_until.pop(result.key, None)
+        if result.lane == "lifecycle":
+            self._apply_lifecycle_persistence_result(result.value)
             return
-        status_bar.setStyleSheet("QStatusBar::item { border: 0px; }")
-        for key, glyph in [
-            ("beholder", "●"),
-            ("remote", "●"),
-            ("admin", "●"),
-        ]:
-            widget = QLabel(glyph, self)
-            widget.setObjectName(f"remoteReadiness_{key}")
-            widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            widget.setFixedWidth(24)
-            widget.setToolTip("원격 제어 준비 상태를 확인 중입니다.")
-            widget.setStyleSheet(
-                f"QLabel#{widget.objectName()} {{ color: #808080; background: transparent; border: 0px; padding: 0px; }}"
+        value = result.value
+        if result.key == "process_scan" and isinstance(value, ProcessScanSnapshot):
+            self._apply_process_scan_snapshot(value)
+        elif result.key == "remote_readiness" and isinstance(value, Mapping):
+            for key, state in value.items():
+                if isinstance(state, tuple) and len(state) == 2:
+                    self._set_remote_readiness_indicator(str(key), str(state[0]), str(state[1]))
+        elif result.key in {"beholder_incidents", "startup_reconcile"}:
+            incidents = tuple(item for item in value if isinstance(item, Mapping)) if isinstance(value, tuple) else ()
+            if incidents:
+                self._apply_beholder_incidents(incidents)
+
+    @Slot(object)
+    def _on_background_work_error(self, error: WorkError) -> None:
+        failures = self._api_backoff_failures.get(error.key, 0) + 1
+        self._api_backoff_failures[error.key] = failures
+        delay = (1.0, 2.0, 5.0, 10.0, 30.0)[min(failures - 1, 4)]
+        self._api_backoff_until[error.key] = time.monotonic() + delay
+        logger.warning(
+            "GUI background work failed: lane=%s key=%s error=%s: %s retry_after=%.1fs",
+            error.lane,
+            error.key,
+            error.exception_type,
+            error.message,
+            delay,
+        )
+        if error.key == "remote_readiness":
+            self._set_remote_readiness_indicator("beholder", "red", f"상태 확인 실패: {error.message}")
+
+    def _persist_lifecycle_command(self, command: _LifecycleCommand) -> _LifecyclePersistenceResult:
+        retry_delays = (1.0, 2.0, 5.0, 10.0, 30.0)
+        last_error: str | None = None
+        session_id = command.event.session_id
+        if not str(command.event.process_id or "").strip() or not str(command.runtime_token or "").strip():
+            logger.error(
+                "불완전한 lifecycle 명령 거부: kind=%s process_id=%r runtime_token=%r",
+                command.kind,
+                command.event.process_id,
+                command.runtime_token,
             )
-            status_bar.addPermanentWidget(widget)
-            self._remote_readiness_indicator_labels[key] = widget
+            return _LifecyclePersistenceResult(command, session_id, False, 0, "invalid lifecycle identity")
+        for attempt in range(1, len(retry_delays) + 2):
+            if self._lifecycle_shutdown_event.is_set():
+                return _LifecyclePersistenceResult(command, session_id, False, attempt - 1, "shutdown")
+            try:
+                if command.kind == "start":
+                    payload = self._background_transport.start_session(
+                        app_instance_id=self._app_instance_id,
+                        process_id=command.event.process_id,
+                        process_name=command.event.process_name,
+                        pid=command.pid,
+                        process_create_time=command.process_create_time,
+                        timeout=10.0,
+                    )
+                    session_id = int(payload["id"])
+                    with self._lifecycle_session_lock:
+                        self._lifecycle_session_ids[command.runtime_token] = session_id
+                    return _LifecyclePersistenceResult(command, session_id, True, attempt)
+
+                if session_id is None:
+                    with self._lifecycle_session_lock:
+                        session_id = self._lifecycle_session_ids.get(command.runtime_token)
+                if session_id is None:
+                    active = self._background_transport.get_json(
+                        f"/sessions/process/{command.event.process_id}/active", timeout=10.0
+                    )
+                    if isinstance(active.payload, Mapping) and active.payload.get("id") is not None:
+                        session_id = int(active.payload["id"])
+                if session_id is None:
+                    raise RuntimeError("active lifecycle session not found")
+                self._background_transport.end_session(
+                    session_id=session_id,
+                    end_timestamp=command.event.timestamp,
+                    stamina_at_end=command.event.stamina_at_end,
+                    resource_percent_at_end=command.event.resource_percent_at_end,
+                    timeout=10.0,
+                )
+                self._background_transport.patch_json(
+                    f"/processes/{command.event.process_id}/runtime-state",
+                    {"last_played_timestamp": command.event.timestamp},
+                    timeout=10.0,
+                    headers={
+                        "X-HH-Beholder-Actor": "process_monitor",
+                        "X-HH-Beholder-Operation": "process_runtime_state_update",
+                    },
+                )
+                with self._lifecycle_session_lock:
+                    self._lifecycle_session_ids.pop(command.runtime_token, None)
+                return _LifecyclePersistenceResult(command, session_id, True, attempt)
+            except BeholderIncidentRequired as exc:
+                return _LifecyclePersistenceResult(
+                    command,
+                    session_id,
+                    False,
+                    attempt,
+                    "beholder_blocked",
+                    True,
+                    exc.incident,
+                )
+            except DatabaseFaultedResponse as exc:
+                last_error = str(exc)
+                break
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt > len(retry_delays):
+                    break
+                if self._lifecycle_shutdown_event.wait(retry_delays[attempt - 1]):
+                    return _LifecyclePersistenceResult(command, session_id, False, attempt, "shutdown")
+
+        try:
+            self._background_transport.post_json(
+                "/api/beholder/runtime/lifecycle-failure",
+                {
+                    "kind": command.kind,
+                    "process_id": command.event.process_id,
+                    "process_name": command.event.process_name,
+                    "runtime_token": command.runtime_token,
+                    "attempts": attempt,
+                    "error_type": last_error or "unknown",
+                },
+                timeout=5.0,
+            )
+        except Exception:
+            logger.warning("lifecycle failure incident 기록 실패", exc_info=True)
+        return _LifecyclePersistenceResult(command, session_id, False, attempt, last_error)
+
+    @Slot(object)
+    def _apply_lifecycle_persistence_result(self, value: object) -> None:
+        if not isinstance(value, _LifecyclePersistenceResult):
+            return
+        command = value.command
+        active = self.process_monitor.active_monitored_processes
+        if value.blocked:
+            logger.info(
+                "Beholder가 lifecycle 저장을 차단함: kind=%s process_id=%s incident_id=%s",
+                command.kind,
+                command.event.process_id,
+                (value.beholder_incident or {}).get("id"),
+            )
+            if value.beholder_incident:
+                self._apply_beholder_incidents((dict(value.beholder_incident),))
+            return
+        if not value.succeeded:
+            logger.warning(
+                "lifecycle persistence exhausted: kind=%s process_id=%s attempts=%s error=%s",
+                command.kind,
+                command.event.process_id,
+                value.attempts,
+                value.error,
+            )
+            self._poll_beholder_incidents()
+            return
+        event = replace(command.event, session_id=value.session_id)
+        if command.kind == "start":
+            entry = active.get(event.process_id)
+            if entry is not None and entry.get("runtime_token") == command.runtime_token:
+                entry["session_id"] = value.session_id
+            self._hoyolab_reconcile.handle_process_started(event)
+            self._nikke_resource_reconcile.handle_process_started(event)
+        else:
+            process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
+            if process is not None:
+                process.last_played_timestamp = event.timestamp
+            self._hoyolab_reconcile.handle_process_stopped(event)
+            self._nikke_resource_reconcile.handle_process_stopped(event)
+        self.update_process_statuses_only()
 
     def _set_remote_readiness_indicator(self, key: str, color: str, message: str) -> None:
-        widget = self._remote_readiness_indicator_labels.get(key)
-        if widget is None:
+        if key not in self._remote_readiness_states:
             return
-        palette = {
-            "green": ("#22c55e", "rgba(34, 197, 94, 45)", "rgba(34, 197, 94, 125)"),
-            "yellow": ("#eab308", "rgba(234, 179, 8, 42)", "rgba(234, 179, 8, 120)"),
-            "red": ("#ef4444", "rgba(239, 68, 68, 45)", "rgba(239, 68, 68, 125)"),
-            "gray": ("#808080", "rgba(128, 128, 128, 22)", "rgba(128, 128, 128, 55)"),
+        self._remote_readiness_states[key] = (color, message)
+        self._refresh_readiness_strip()
+
+    def _refresh_readiness_strip(self) -> None:
+        widgets = getattr(self, "_readiness_status_widgets", None)
+        if not widgets:
+            return
+        labels = {
+            "beholder": {
+                "green": "데이터 정상", "yellow": "데이터 확인", "red": "데이터 오류", "gray": "데이터 확인 중",
+            },
+            "remote": {
+                "green": "원격 연결", "yellow": "원격 준비 중", "red": "원격 오류", "gray": "원격 미설정",
+            },
+            "admin": {
+                "green": "관리자 권한", "yellow": "권한 확인", "red": "권한 오류", "gray": "일반 권한",
+            },
         }
-        foreground, background, border = palette.get(color, palette["gray"])
-        widget.setStyleSheet(
-            f"""
-            QLabel#{widget.objectName()} {{
-                color: {foreground};
-                background-color: {background};
-                border: 1px solid {border};
-                border-radius: 8px;
-                padding: 0px;
-                font-size: 13px;
-                font-weight: 900;
-            }}
-            """
-        )
-        glow = QGraphicsDropShadowEffect(widget)
-        glow.setBlurRadius(14 if color != "gray" else 6)
-        glow.setColor(QColor(foreground))
-        glow.setOffset(0, 0)
-        widget.setGraphicsEffect(glow)
-        widget.setToolTip(message)
+        layout_changed = False
+        for key in ("beholder", "remote", "admin"):
+            color, message = self._remote_readiness_states[key]
+            state = color if color in {"green", "yellow", "red"} else "gray"
+            dot, text = widgets[key]
+            dot.setProperty("hhState", state)
+            new_text = labels[key][state]
+            if text.text() != new_text:
+                text.setText(new_text)
+                layout_changed = True
+            text.setToolTip(message)
+            dot.setToolTip(message)
+            for control in (dot, text):
+                control.style().unpolish(control)
+                control.style().polish(control)
+        if layout_changed and hasattr(self, "process_table"):
+            QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _refresh_remote_readiness_indicators(self) -> None:
-        """Refresh bottom-dot readiness without touching transient status messages."""
-        try:
-            incidents = self.data_manager.get_active_beholder_incidents() if hasattr(self.data_manager, "get_active_beholder_incidents") else []
-            if incidents:
-                self._set_remote_readiness_indicator("beholder", "yellow", f"Beholder incident {len(incidents)}건 확인 필요")
-            else:
-                self._set_remote_readiness_indicator("beholder", "green", "Beholder 대기 중인 incident 없음")
-        except Exception as exc:
-            self._set_remote_readiness_indicator("beholder", "red", f"Beholder 상태 확인 실패: {exc}")
+        """Readiness I/O를 하나의 coalesced worker에서 조회합니다."""
+        api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
+        externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
+        has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
+        remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
+        self._submit_telemetry(
+            "remote_readiness",
+            self._collect_remote_readiness,
+            externally_bound or remote_server_mode_enabled or has_token,
+        )
 
-        tailscale_message = "Tailscale 상태 미확인"
-        tailscale_ready = False
-        tailscale_installed = False
+    def _collect_remote_readiness(self, remote_exposed: bool) -> dict[str, tuple[str, str]]:
+        incidents_result = self._background_transport.get_json(
+            "/api/beholder/incidents/active", timeout=5.0
+        )
+        payload = incidents_result.payload if isinstance(incidents_result.payload, Mapping) else {}
+        incidents = payload.get("incidents") or []
+        beholder = (
+            ("yellow", f"Beholder incident {len(incidents)}건 확인 필요")
+            if incidents
+            else ("green", "Beholder 대기 중인 incident 없음")
+        )
         try:
             snapshot = tailscale_status(timeout_seconds=0.8, cache_ttl_seconds=30.0)
             tailscale_ready = snapshot.ready
             tailscale_installed = snapshot.installed
             tailscale_message = f"Tailscale IP: {', '.join(snapshot.self_ips)}" if snapshot.ready else snapshot.message
         except Exception as exc:
+            tailscale_ready = False
+            tailscale_installed = False
             tailscale_message = f"Tailscale 상태 확인 실패: {exc}"
-
-        api_host = os.environ.get("HH_API_HOST", "127.0.0.1")
-        externally_bound = api_host not in {"127.0.0.1", "localhost", "::1"}
-        has_token = bool(os.environ.get("HH_REMOTE_TOKEN"))
-        remote_server_mode_enabled = bool(getattr(self.data_manager.global_settings, "remote_server_mode_enabled", False))
-        remote_exposed = externally_bound or remote_server_mode_enabled or has_token
         remote_ready = remote_exposed and tailscale_ready
         if remote_ready:
-            remote_color = "green"
-            remote_message = f"Remote ready · {tailscale_message}"
+            remote = ("green", f"Remote ready · {tailscale_message}")
         elif remote_exposed or tailscale_installed:
-            remote_color = "yellow"
-            remote_message = (
-                f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}"
-            )
+            remote = ("yellow", f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}")
         else:
-            remote_color = "gray"
-            remote_message = "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요."
-        self._set_remote_readiness_indicator("remote", remote_color, remote_message)
-
-        self._set_remote_readiness_indicator(
-            "admin",
-            "green" if is_admin() else "gray",
-            "관리자 권한으로 실행 중입니다." if is_admin() else "일반 사용자 권한으로 실행 중입니다.",
-        )
+            remote = ("gray", "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요.")
+        admin = is_admin()
+        return {
+            "beholder": beholder,
+            "remote": remote,
+            "admin": (
+                "green" if admin else "gray",
+                "관리자 권한으로 실행 중입니다." if admin else "일반 사용자 권한으로 실행 중입니다.",
+            ),
+        }
 
     def _api_base_url(self) -> str:
         return resolve_local_api_base_url(getattr(self.data_manager, "base_url", None))
@@ -515,42 +764,54 @@ class MainWindow(QMainWindow):
         return dashboard_url(self._api_base_url())
 
     def _open_dashboard(self) -> None:
-        base_url = self._api_base_url()
-        try:
-            response = requests.get(gui_health_url(base_url), timeout=0.8)
-            if response.status_code == 200:
-                payload = response.json()
-                if not payload.get("dashboard_static_ready", True):
-                    logger.warning("Dashboard static files are not ready: %s", payload)
-            else:
-                logger.warning("Dashboard health check failed before open: status=%s", response.status_code)
-        except Exception as exc:
-            logger.warning("Dashboard health check failed before open: %s", exc)
+        # 대시보드 자체가 API 오류와 재시도를 표시한다. 버튼 callback에서
+        # 별도 health 요청을 기다리지 않아 브라우저 열기를 즉시 처리한다.
         self.open_webpage(self._dashboard_url())
 
     def _poll_beholder_incidents(self):
-        """Show Beholder incidents promptly in the PyQt main GUI."""
+        """로컬 pending 사건을 우선 소비하고 원격 조회는 worker에 맡깁니다."""
+        if self._beholder_dialog_active:
+            return
         incident = self.data_manager.pop_latest_beholder_incident()
-        incidents = [incident] if incident else self.data_manager.get_active_beholder_incidents()
+        if incident:
+            self._apply_beholder_incidents((incident,))
+            return
+        self._submit_telemetry("beholder_incidents", self._collect_beholder_incidents)
+
+    def _collect_beholder_incidents(self) -> tuple[dict[str, Any], ...]:
+        result = self._background_transport.get_json("/api/beholder/incidents/active", timeout=5.0)
+        payload = result.payload if isinstance(result.payload, Mapping) else {}
+        return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
+
+    def _apply_beholder_incidents(self, incidents: tuple[dict[str, Any], ...]) -> None:
+        if self._beholder_dialog_active:
+            return
         for item in incidents:
-            if not item:
+            if not item or item.get("status") != "pending":
                 continue
             incident_id = item.get("id")
             if incident_id in self._beholder_seen_incidents:
                 continue
+            # 모달의 중첩 이벤트 루프에서도 polling timer가 실행될 수 있으므로
+            # 창을 열기 전에 표시 완료와 active 상태를 먼저 확정합니다. 닫기/X는
+            # DB 결정을 남기지 않지만 이번 앱 실행에서는 다시 표시하지 않습니다.
+            if incident_id is not None:
+                self._beholder_seen_incidents.add(incident_id)
+            self._beholder_dialog_active = True
             self.showNormal()
             self.raise_()
             self.activateWindow()
             dialog = BeholderIncidentDialog(item, self)
-            if not dialog.exec() or not dialog.action:
+            try:
+                accepted = bool(dialog.exec())
+            finally:
+                self._beholder_dialog_active = False
+            if not accepted or not dialog.action:
                 break
             if dialog.action == "restore_backup":
-                if self._handle_beholder_restore_request() and incident_id is not None:
-                    self._beholder_seen_incidents.add(incident_id)
+                self._handle_beholder_restore_request()
             elif incident_id is not None:
                 result = self.data_manager.resolve_beholder_incident(incident_id, dialog.action)
-                if result:
-                    self._beholder_seen_incidents.add(incident_id)
                 if result and hasattr(self, "process_monitor"):
                     self.process_monitor.apply_beholder_resolution(result)
                 if dialog.action == "allow_once" and result and result.get("override_token"):
@@ -568,16 +829,32 @@ class MainWindow(QMainWindow):
             controller.apply_settings(self.data_manager.global_settings)
 
     def _send_runtime_heartbeat(self):
-        if hasattr(self.data_manager, "send_runtime_heartbeat"):
-            self.data_manager.send_runtime_heartbeat(runtime_kind="pyqt")
+        self._submit_telemetry("runtime_heartbeat", self._collect_runtime_heartbeat, False)
+
+    def _collect_runtime_heartbeat(self, shutdown: bool) -> object:
+        return self._background_transport.post_json(
+            "/api/beholder/runtime/heartbeat",
+            {
+                "app_instance_id": self._app_instance_id,
+                "runtime_kind": "pyside",
+                "shutdown": bool(shutdown),
+            },
+            timeout=5.0,
+        ).payload
 
     def _reconcile_open_sessions_after_startup(self):
-        if not hasattr(self.data_manager, "reconcile_open_sessions"):
-            return
-        running_ids = list(self.process_monitor.detect_running_process_ids())
-        incidents = self.data_manager.reconcile_open_sessions(running_ids)
-        if incidents:
-            self._poll_beholder_incidents()
+        targets = self.process_monitor.process_scan_targets()
+        self._submit_telemetry("startup_reconcile", self._collect_startup_reconcile, targets)
+
+    def _collect_startup_reconcile(self, targets: tuple[object, ...]) -> tuple[dict[str, Any], ...]:
+        running_ids = sorted(detect_running_process_ids(targets))
+        result = self._background_transport.post_json(
+            "/api/beholder/open-sessions/reconcile",
+            {"running_process_ids": running_ids},
+            timeout=10.0,
+        )
+        payload = result.payload if isinstance(result.payload, Mapping) else {}
+        return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
 
     def _handle_beholder_restore_request(self) -> bool:
         backups = self.data_manager.get_beholder_backups()
@@ -622,10 +899,8 @@ class MainWindow(QMainWindow):
         self._beholder_restore_runtime_suspended = True
         if hasattr(self, "process_monitor"):
             self.process_monitor.active_monitored_processes.clear()
-        for timer_name in ("monitor_timer", "scheduler_timer", "runtime_heartbeat_timer"):
-            timer = getattr(self, timer_name, None)
-            if timer is not None and timer.isActive():
-                timer.stop()
+        self._timer_registry.suspend("database_restore", ("monitor", "scheduler", "heartbeat"))
+        self._work_coordinator.invalidate_telemetry()
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -646,34 +921,38 @@ class MainWindow(QMainWindow):
                 # 타이머 상태 확인 및 재시작 (절전 복귀 대응)
                 self._ensure_timers_running()
 
-                if self._saved_size:
-                    # 저장된 크기와 현재 크기 비교
-                    current_size = self.size()
-                    if current_size != self._saved_size:
-                        QTimer.singleShot(100, self._restore_window_state)
-
         super().changeEvent(event)
 
     def showEvent(self, event):
         """창이 표시될 때 호출됩니다."""
         super().showEvent(event)
-        # Qt6 자동 High DPI 스케일링에 의존하므로 수동 레이아웃 새로고침 불필요
-        QTimer.singleShot(0, self._sync_windows_title_bar_color)
+        # 최종 콘텐츠 피팅이 끝난 뒤 네이티브 외곽 프레임을 우하단에 맞춥니다.
+        self._pending_bottom_right_placement = True
+        QTimer.singleShot(0, self._apply_widgets_presentation)
         # 트레이/복원/플랫폼별 native show 타이밍 이후에도 사이드바 모드를
         # 한 번 더 반영해, always 모드 손잡이가 시작 시점 경합으로 누락되는
         # 경로를 줄입니다.
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
+    def moveEvent(self, event):
+        """Windows에서 보이는 창 프레임을 가까운 작업 영역 경계에 붙입니다."""
+        super().moveEvent(event)
+        try:
+            snap_windows_window_to_work_area(
+                int(self.winId()),
+                threshold_logical=15,
+            )
+        except Exception:
+            logger.debug("Windows 창 이동 자석 적용 실패", exc_info=True)
+
     def _on_monitor_timer_tick(self):
-        """프로세스 모니터 타이머 틱 처리 (절전 복귀 감지 포함)"""
+        """타이머 지연을 기록하고 다음 process snapshot을 요청합니다."""
         start_time = time.time()
         current_time = time.time()
         elapsed = current_time - self._last_timer_tick
 
-        # 10초 이상 경과했으면 절전 복귀로 판단 (정상: 1초 간격, 이전 5초 → 10초로 증가하여 오탐 방지)
         if elapsed > 10:
-            logger.warning(f"절전 복귀 감지: 타이머 간격 {elapsed:.1f}초 (정상: 1초)")
-            self._on_sleep_wake()
+            logger.warning("monitor timer gap: %.1fs (resume으로 간주하지 않음)", elapsed)
 
         self._last_timer_tick = current_time
         self.run_process_monitor_check()
@@ -683,64 +962,27 @@ class MainWindow(QMainWindow):
         if execution_time > 100:
             logger.warning(f"monitor_timer 실행 시간 초과: {execution_time:.1f}ms")
 
-    def _on_sleep_wake(self):
-        """절전 복귀 시 호출되는 메서드
-
-        절전모드 복귀 후 UI 갱신이 멈추는 문제 해결:
-        - 타이머는 작동하지만 Qt 렌더링이 트리거되지 않는 문제 대응
-        - 무거운 갱신을 한 이벤트 루프에 몰지 않고 단계화해 복귀 직후 버벅임을 줄임
-        """
+    def _on_native_resume(self, _event: PowerResumeEvent) -> None:
+        """Windows native 복귀 신호 한 건을 가벼운 비동기 복구로 변환합니다."""
         if self._wake_recovery_in_progress:
-            logger.info("절전 복귀 UI 갱신이 이미 진행 중이므로 중복 요청을 건너뜁니다.")
             return
-
         self._wake_recovery_in_progress = True
-        logger.info("절전 복귀 감지 - UI 단계적 갱신 시작")
+        logger.info("Windows native resume 감지")
+        self._work_coordinator.invalidate_telemetry()
+        self._timer_registry.restart_desired()
+        QTimer.singleShot(2000, lambda: self._submit_telemetry(
+            "resume_ping", self._background_transport.get_json, "/api/gui/ping", timeout=2.0
+        ))
+        QTimer.singleShot(3000, self.run_process_monitor_check)
+        QTimer.singleShot(6000, self._refresh_remote_readiness_indicators)
+        QTimer.singleShot(15000, self._run_wake_provider_followups)
+        QTimer.singleShot(16000, self._finish_native_resume)
 
-        # 타이머 상태 확인 및 재시작
-        self._ensure_timers_running()
+    def _run_wake_provider_followups(self) -> None:
         if hasattr(self, "_daily_checkin"):
             self._daily_checkin.handle_wake_recovery()
 
-        QTimer.singleShot(0, self._run_sleep_wake_refresh)
-
-    def _run_sleep_wake_refresh(self):
-        """절전 복귀 후 UI를 단계적으로 갱신합니다."""
-        refresh_start = time.time()
-        try:
-            # 테이블 전체 다시 채우기 (모든 위젯 강제 재생성)
-            # 이렇게 하면 Progress Bar, 상태 컬럼 등 모든 셀이 현재 시간에 맞게 다시 그려짐
-            populate_start = time.time()
-            self.populate_process_list()
-            populate_ms = (time.time() - populate_start) * 1000
-
-            # 웹 버튼 상태 갱신
-            web_start = time.time()
-            self._refresh_web_button_states()
-            web_ms = (time.time() - web_start) * 1000
-
-            # 동기 repaint()는 복귀 직후 GUI 스레드 정체를 키울 수 있으므로 update()만 요청합니다.
-            if self.process_table.viewport():
-                self.process_table.viewport().update()
-
-            # 창 크기 복원 (절전 복귀 시 창 렌더링 문제 대응)
-            if self._saved_size:
-                QTimer.singleShot(100, self._restore_window_state)
-
-            total_ms = (time.time() - refresh_start) * 1000
-            if total_ms > 100:
-                logger.warning(
-                    "절전 복귀 UI 갱신 지연: total=%.1fms populate=%.1fms web=%.1fms",
-                    total_ms,
-                    populate_ms,
-                    web_ms,
-                )
-            else:
-                logger.info("절전 복귀 UI 갱신 완료: total=%.1fms", total_ms)
-        finally:
-            QTimer.singleShot(250, self._finish_sleep_wake_refresh)
-
-    def _finish_sleep_wake_refresh(self):
+    def _finish_native_resume(self) -> None:
         self._wake_recovery_in_progress = False
 
     def _on_ui_refresh_tick(self) -> None:
@@ -759,57 +1001,33 @@ class MainWindow(QMainWindow):
             logger.warning(f"ui_refresh_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def _ensure_timers_running(self):
-        """모든 주기적 타이머가 실행 중인지 확인하고, 중단된 경우 재시작합니다.
-
-        Windows 절전 모드(슬립/최대 절전)에서 복귀할 때 QTimer가 중단될 수 있으므로,
-        타이머 상태를 확인하고 필요시 재시작합니다.
-        """
-        timers_restarted = []
-
-        runtime_suspended = getattr(self, "_beholder_restore_runtime_suspended", False)
-
-        if not runtime_suspended and hasattr(self, 'monitor_timer') and not self.monitor_timer.isActive():
-            self.monitor_timer.start(1000)
-            timers_restarted.append('monitor_timer')
-
-        if not runtime_suspended and hasattr(self, 'scheduler_timer') and not self.scheduler_timer.isActive():
-            self.scheduler_timer.start(1000)
-            timers_restarted.append('scheduler_timer')
-
-        if hasattr(self, 'ui_refresh_timer') and not self.ui_refresh_timer.isActive():
-            self.ui_refresh_timer.start(self._UI_REFRESH_INTERVAL_MS)
-            timers_restarted.append('ui_refresh_timer')
+        """등록된 정상 실행 의도만 복원합니다."""
+        self._timer_registry.restart_desired()
 
     def _restore_window_state(self):
-        """절전 복귀 후 창 상태를 복원합니다.
-
-        핵심: 창 크기를 +1/-1 픽셀 조정하여 Qt 렌더링 파이프라인을 강제 초기화.
-        이 방법이 Windows DWM과 Qt 간의 좌표 불일치를 해결하는 가장 확실한 방법입니다.
-        """
-        # 1. 창 크기 +1 픽셀 조정 후 복구 (렌더링 파이프라인 강제 초기화)
-        #    이 트릭이 유령 렌더링(Ghost Window)을 제거하는 핵심입니다.
-        w, h = self.width(), self.height()
-        self.setFixedSize(w + 1, h + 1)
-        self.setFixedSize(w, h)
-
-        # 2. 저장된 geometry가 있으면 위치도 복원
-        if self._saved_geometry:
-            self.move(self._saved_geometry.x(), self._saved_geometry.y())
-
-        # 3. 레이아웃 강제 업데이트
+        """절전 복귀 후 레이아웃과 고정 피팅 크기를 다시 적용합니다."""
         central_widget = self.centralWidget()
         if central_widget and central_widget.layout():
             central_widget.layout().invalidate()
             central_widget.layout().activate()
-
-        # 4. 비동기 다시 그리기 요청
+        self._adjust_window_size_to_content()
         self.update()
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
+        if self._presentation_window is not self and self._host_ui_facade is not None:
+            self._host_ui_facade.activateAndShow()
+            return
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
+
+    def set_presentation_window(self, window, facade=None) -> None:
+        self._presentation_window = window or self
+        self._host_ui_facade = facade
+
+    def presentation_window(self):
+        return self._presentation_window
 
     def open_webpage(self, url: str):
         """주어진 URL을 기본 웹 브라우저에서 엽니다."""
@@ -827,26 +1045,53 @@ class MainWindow(QMainWindow):
             style = QApplication.style()
             self.setWindowIcon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
 
-    def _configure_table_header(self):
-        h = self.process_table.horizontalHeader()
-        if h:
-            h.hide()
-            h.setSectionsClickable(False)
-            h.setHighlightSections(False)
-            for col in range(self.TOTAL_COLUMNS):
-                h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+    def _configure_table_header(self) -> None:
+        """헤더 장식 없이 열 정렬만 유지하는 압축형 게임 표를 구성합니다."""
+        horizontal = self.process_table.horizontalHeader()
+        horizontal.hide()
+        horizontal.setSectionsClickable(False)
+        horizontal.setHighlightSections(False)
+        for column in range(self.TOTAL_COLUMNS):
+            horizontal.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
 
-        vh = self.process_table.verticalHeader()
-        if vh:
-            vh.hide()
-            vh.setHidden(True)
-            vh.setVisible(False)
-            vh.setMinimumWidth(0)
-            vh.setMaximumWidth(0)
-            vh.setFixedWidth(0)
-            vh.setSectionsClickable(False)
-            vh.setHighlightSections(False)
+        vertical = self.process_table.verticalHeader()
+        vertical.hide()
+        vertical.setMinimumWidth(0)
+        vertical.setMaximumWidth(0)
+        vertical.setSectionsClickable(False)
+        vertical.setHighlightSections(False)
         self.process_table.setCornerButtonEnabled(False)
+
+    def _table_default_colors(self) -> tuple[QColor, QColor]:
+        tokens = widgets_theme_tokens(self._is_effective_dark_theme())
+        return QColor(tokens["surface_raised"]), QColor(tokens["text"])
+
+    def _apply_table_status(self, item: QTableWidgetItem, status: str) -> None:
+        """현재 공통 테마의 semantic 색상을 상태 셀 하나에 적용합니다."""
+        tokens = widgets_theme_tokens(self._is_effective_dark_theme())
+        background = tokens["surface_raised"]
+        foreground = tokens["muted"]
+        if status == PROC_STATE_RUNNING:
+            background, foreground = tokens["warning_soft"], tokens["warning"]
+        elif status == PROC_STATE_INCOMPLETE:
+            background, foreground = tokens["danger_soft"], tokens["danger"]
+        elif status == PROC_STATE_COMPLETED:
+            background, foreground = tokens["success_soft"], tokens["success"]
+        item.setBackground(QColor(background))
+        item.setForeground(QColor(foreground))
+
+    def _refresh_table_theme_colors(self) -> None:
+        """테마 전환 시 기존 표 항목도 현재 토큰으로 즉시 다시 칠합니다."""
+        background, foreground = self._table_default_colors()
+        for row in range(self.process_table.rowCount()):
+            for column in (self.COL_ICON, self.COL_NAME):
+                item = self.process_table.item(row, column)
+                if item is not None:
+                    item.setBackground(background)
+                    item.setForeground(foreground)
+            status_item = self.process_table.item(row, self.COL_STATUS)
+            if status_item is not None:
+                self._apply_table_status(status_item, status_item.text())
 
     def _remote_pairing_endpoint(self) -> str:
         return f"{self._api_base_url()}/remote/pair/start"
@@ -968,43 +1213,52 @@ class MainWindow(QMainWindow):
 
         # 메뉴바 오른쪽 끝: [항상 위] 체크박스 + 볼륨 토글 버튼
         self._volume_btn = QToolButton()
-        self._volume_btn.setText("🔊")
+        self._volume_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
         self._volume_btn.setToolTip("볼륨 조절 패널 열기/닫기")
         self._volume_btn.setCheckable(True)
+        self._volume_btn.setProperty("hhRole", "menuCornerAction")
+        self._volume_btn.setIconSize(QSize(16, 16))
         self._volume_btn.clicked.connect(self._toggle_volume_panel)
-        self._volume_btn.setStyleSheet("""
-            QToolButton {
-                border: 1px solid transparent;
-                border-radius: 4px;
-                background: transparent;
-                padding: 2px 6px;
-            }
-            QToolButton:hover {
-                background: palette(midlight);
-                border-color: palette(mid);
-            }
-            QToolButton:checked {
-                background: palette(highlight);
-                color: palette(highlighted-text);
-                border-color: palette(highlight);
-            }
-            QToolButton:pressed {
-                background: palette(dark);
-            }
-        """)
 
         self._always_on_top_cb = QCheckBox("항상 위")
+        self._always_on_top_cb.setProperty("hhRole", "menuCornerToggle")
         self._always_on_top_cb.setToolTip("창을 항상 위에 표시")
         self._always_on_top_cb.setChecked(self.data_manager.global_settings.always_on_top)
         self._always_on_top_cb.toggled.connect(self._on_always_on_top_toggled)
 
-        corner_container = QWidget()
-        corner_layout = QHBoxLayout(corner_container)
-        corner_layout.setContentsMargins(0, 0, 4, 0)
+        # PySide6에서는 setCornerWidget()에 넘긴 지역 wrapper가 사라지면
+        # 자식 위젯 wrapper도 무효화될 수 있으므로 명시적으로 보유합니다.
+        self._menu_corner_container = QWidget()
+        self._menu_corner_layout = QHBoxLayout(self._menu_corner_container)
+        corner_container = self._menu_corner_container
+        corner_layout = self._menu_corner_layout
+        corner_layout.setContentsMargins(0, 0, 0, 0)
         corner_layout.setSpacing(6)
-        corner_layout.addWidget(self._always_on_top_cb)
-        corner_layout.addWidget(self._volume_btn)
+        corner_layout.addWidget(
+            self._always_on_top_cb,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        corner_layout.addWidget(self._volume_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         mb.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
+
+    def _sync_menu_corner_metrics(self) -> None:
+        """플랫폼별 메뉴 액션 높이에 코너 컨트롤의 실제 중심선을 맞춥니다."""
+        if not hasattr(self, "_menu_corner_layout"):
+            return
+        actions = self.menuBar().actions()
+        if not actions:
+            return
+        action_height = self.menuBar().actionGeometry(actions[0]).height()
+        if action_height <= 0:
+            return
+        self._always_on_top_cb.setFixedHeight(action_height)
+        self._volume_btn.setFixedSize(action_height, action_height)
+        self._menu_corner_layout.invalidate()
+        self._menu_corner_layout.activate()
+        self._menu_corner_container.adjustSize()
+        self._menu_corner_container.updateGeometry()
+        self.menuBar().updateGeometry()
 
     def _restart_app(self) -> None:
         """앱을 재시작합니다."""
@@ -1064,60 +1318,31 @@ class MainWindow(QMainWindow):
             return
         # setStyle() 호출 시 앱 폰트가 스타일 기본값으로 초기화되는 문제 방지
         saved_font = app.font()
-        if theme == "dark":
+        if theme in ("dark", "light"):
             app.setStyle("Fusion")
-            palette = QPalette()
-            dark_base = QColor(42, 42, 42)
-            dark_window = QColor(53, 53, 53)
-            dark_text = QColor(220, 220, 220)
-            highlight = QColor(42, 130, 218)
-            palette.setColor(QPalette.ColorRole.Window, dark_window)
-            palette.setColor(QPalette.ColorRole.WindowText, dark_text)
-            palette.setColor(QPalette.ColorRole.Base, dark_base)
-            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(66, 66, 66))
-            palette.setColor(QPalette.ColorRole.ToolTipBase, dark_base)
-            palette.setColor(QPalette.ColorRole.ToolTipText, dark_text)
-            palette.setColor(QPalette.ColorRole.Text, dark_text)
-            palette.setColor(QPalette.ColorRole.Button, dark_window)
-            palette.setColor(QPalette.ColorRole.ButtonText, dark_text)
-            palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
-            palette.setColor(QPalette.ColorRole.Link, highlight)
-            palette.setColor(QPalette.ColorRole.Highlight, highlight)
-            palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-            palette.setColor(QPalette.ColorRole.Mid, QColor(80, 80, 80))
-            palette.setColor(QPalette.ColorRole.Shadow, QColor(20, 20, 20))
-            palette.setColor(QPalette.ColorRole.Light, QColor(90, 90, 90))
-            palette.setColor(QPalette.ColorRole.Midlight, QColor(65, 65, 65))
-            app.setPalette(palette)
-        elif theme == "light":
-            app.setStyle("Fusion")
-            # standardPalette() 대신 모든 색상 명시적 정의:
-            # 시스템 다크 모드가 활성화된 환경에서도 라이트 팔레트 강제 적용
-            palette = QPalette()
-            palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
-            palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
-            palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
-            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 231, 227))
-            palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
-            palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
-            palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
-            palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
-            palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
-            palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-            palette.setColor(QPalette.ColorRole.Link, QColor(0, 0, 255))
-            palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-            palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-            palette.setColor(QPalette.ColorRole.Mid, QColor(160, 160, 160))
-            palette.setColor(QPalette.ColorRole.Shadow, QColor(105, 105, 105))
-            palette.setColor(QPalette.ColorRole.Light, QColor(255, 255, 255))
-            palette.setColor(QPalette.ColorRole.Midlight, QColor(227, 227, 227))
-            app.setPalette(palette)
         else:  # system
             app.setStyle(self._original_style_name or "")
             app.setPalette(QPalette())
         # 스타일 변경 후 폰트 복원
         app.setFont(saved_font)
+        self._apply_widgets_presentation()
+
+    def _apply_widgets_presentation(self) -> None:
+        """팔레트, QSS, DWM 제목 표시줄을 같은 색상 원천으로 동기화합니다."""
+        dark = self._is_effective_dark_theme()
+        apply_widgets_palette(dark=dark)
+        if self.centralWidget() is not None:
+            apply_modern_widgets_style(self, dark=dark)
+        if hasattr(self, "process_table"):
+            self._refresh_table_theme_colors()
+        if hasattr(self, "_volume_btn"):
+            self._sync_menu_corner_metrics()
+            tokens = widgets_theme_tokens(dark)
+            volume_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
+            self._volume_btn.setIcon(tint_icon(volume_icon, QColor(tokens["text"])))
         self._sync_windows_title_bar_color()
+        if hasattr(self, "process_table"):
+            QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _is_effective_dark_theme(self) -> bool:
         """현재 팔레트가 실질적으로 다크 테마인지 반환합니다."""
@@ -1131,27 +1356,15 @@ class MainWindow(QMainWindow):
 
     def _sync_windows_title_bar_color(self) -> bool:
         """가능한 Windows 환경에서 표준 제목 표시줄 색상을 앱 GUI 팔레트와 맞춥니다."""
-        palette = self.palette()
-        window = palette.color(QPalette.ColorRole.Window)
-        text = palette.color(QPalette.ColorRole.WindowText)
+        tokens = widgets_theme_tokens(self._is_effective_dark_theme())
+        window = QColor(tokens["surface"])
+        text = QColor(tokens["text"])
         return apply_windows_title_bar_color(
             int(self.winId()),
             caption_color=(window.red(), window.green(), window.blue()),
             text_color=(text.red(), text.green(), text.blue()),
             dark_mode=self._is_effective_dark_theme(),
         )
-
-    def _table_default_colors(self) -> tuple[QColor, QColor]:
-        """테이블 기본 배경/전경색을 반환합니다.
-
-        일부 플랫폼 스타일은 앱 팔레트가 다크여도 QTableWidgetItem에 저장한
-        palette(base) 브러시를 밝은 기본색으로 해석할 수 있어, 다크 테마에서는
-        명시 색상을 사용해 셀 배경이 창 배경과 어긋나지 않게 합니다.
-        """
-        if self._is_effective_dark_theme():
-            return QColor(42, 42, 42), QColor(220, 220, 220)
-        palette = self.process_table.palette()
-        return palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Text)
 
     def open_global_settings_dialog(self):
         """전역 설정 대화 상자를 엽니다."""
@@ -1200,9 +1413,7 @@ class MainWindow(QMainWindow):
                         _log_admin_debug("재시작 실패, 설정 롤백")
                         upd_gs.run_as_admin = False
                         self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
-                        status_bar = self.statusBar()
-                        if status_bar:
-                            self._record_status_event("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
+                        self._record_status_event("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
                         return
                 elif not upd_gs.run_as_admin and is_admin():
                     # 관리자 → 일반: 일반 권한으로 재시작
@@ -1217,9 +1428,7 @@ class MainWindow(QMainWindow):
                         QApplication.quit()
                         return
                     else:
-                        status_bar = self.statusBar()
-                        if status_bar:
-                            self._record_status_event("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
+                        self._record_status_event("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
             else:
                 _log_admin_debug("권한 설정 변경 없음 - 조건문 통과하지 않음")
 
@@ -1232,22 +1441,18 @@ class MainWindow(QMainWindow):
             self._apply_theme(getattr(upd_gs, 'theme', 'system'))
             self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
 
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event("전역 설정 저장됨.", 3000) # 상태 표시줄 메시지
+            self._record_status_event("전역 설정 저장됨.", 3000)
             self.apply_startup_setting() # 시작 프로그램 설정 적용
-            self.populate_process_list() # 전체 테이블 새로고침 (전역 설정 변경)
+            self.populate_process_list() # 전역 설정 변경을 카드 목록에 반영
             self._refresh_web_button_states() # 웹 버튼 상태 새로고침 (전역 설정 변경이 웹 버튼에 영향을 줄 수 있는 경우)
-            self._adjust_window_height_for_table_rows() # 창 높이 조절
+            self._adjust_window_size_to_content()
 
             # 시작 프로그램 상태 확인 및 메시지 표시
             current_status = get_startup_shortcut_status()
-            status_bar = self.statusBar()
-            if status_bar:
-                if current_status:
-                    self._record_status_event("시작 프로그램에 등록되어 있습니다.", 3000)
-                else:
-                    self._record_status_event("시작 프로그램에 등록되어 있지 않습니다.", 3000)
+            if current_status:
+                self._record_status_event("시작 프로그램에 등록되어 있습니다.", 3000)
+            else:
+                self._record_status_event("시작 프로그램에 등록되어 있지 않습니다.", 3000)
 
     def open_remote_settings_dialog(self):
         """원격 설정 대화 상자를 엽니다."""
@@ -1264,36 +1469,105 @@ class MainWindow(QMainWindow):
 
         """시작 프로그램 자동 실행 설정을 적용합니다."""
         run = self.data_manager.global_settings.run_on_startup # 자동 실행 여부 가져오기
-        status_bar = self.statusBar()
         if set_startup_shortcut(run): # 바로가기 설정 시도
-            if status_bar:
-                self._record_status_event(f"시작 시 자동 실행: {'활성' if run else '비활성'}", 3000)
+            self._record_status_event(f"시작 시 자동 실행: {'활성' if run else '비활성'}", 3000)
         else:
-            if status_bar:
-                self._record_status_event("자동 실행 설정 중 문제 발생 가능.", 3000)
+            self._record_status_event("자동 실행 설정 중 문제 발생 가능.", 3000)
 
     def run_process_monitor_check(self):
-        """실행 중인 프로세스를 확인하고 상태 변경 시 테이블을 새로고침합니다."""
-        monitor_result = self.process_monitor.check_and_update_statuses() # 상태 변경 감지
+        """GUI 소유 입력을 확정하고 느린 psutil 스캔을 coalesce합니다."""
+        self._check_and_toggle_game_mode()
+        self._submit_telemetry(
+            "process_scan",
+            scan_running_processes,
+            self.process_monitor.process_scan_targets(),
+        )
 
-        for event in monitor_result.started:
-            self._hoyolab_reconcile.handle_process_started(event)
-            self._nikke_resource_reconcile.handle_process_started(event)
-        for event in monitor_result.stopped:
-            self._hoyolab_reconcile.handle_process_stopped(event)
-            self._nikke_resource_reconcile.handle_process_stopped(event)
+    def _apply_process_scan_snapshot(self, snapshot: ProcessScanSnapshot) -> None:
+        """OS snapshot을 GUI cache에 적용하고 lifecycle DB 작업만 FIFO로 보냅니다."""
+        detected = {item.process_id: item for item in snapshot.detected}
+        active = self.process_monitor.active_monitored_processes
+        processes = {item.id: item for item in self.data_manager.managed_processes}
+        changed = False
 
-        if monitor_result.changed:
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
-            self.update_process_statuses_only() # 상태 컬럼만 업데이트
+        for process_id, entry in tuple(active.items()):
+            observed = detected.get(process_id)
+            same_instance = bool(
+                observed is not None
+                and int(entry.get("pid") or 0) == observed.pid
+                and abs(float(entry.get("start_time_approx") or 0.0) - observed.create_time) <= 0.001
+            )
+            if same_instance:
+                continue
+            process = processes.get(process_id)
+            if process is not None:
+                event = ProcessLifecycleEvent(
+                    process_id=process.id,
+                    process_name=process.name,
+                    session_id=int(entry["session_id"]) if entry.get("session_id") is not None else None,
+                    timestamp=float(snapshot.observed_at),
+                    stamina_tracking_enabled=process.stamina_tracking_enabled,
+                    hoyolab_game_id=process.hoyolab_game_id,
+                    pid=int(entry.get("pid") or 0),
+                    stamina_at_end=process.stamina_current,
+                    stamina_max=process.stamina_max,
+                    resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
+                    resource_provider=getattr(process, "resource_provider", None),
+                    resource_key=getattr(process, "resource_key", None),
+                    resource_percent_at_end=getattr(process, "resource_percent", None),
+                )
+                command = _LifecycleCommand(
+                    "stop",
+                    event,
+                    int(entry.get("pid") or 0),
+                    float(entry.get("start_time_approx") or 0.0),
+                    str(entry.get("runtime_token") or ""),
+                )
+                self._work_coordinator.submit_lifecycle(
+                    process.id, self._persist_lifecycle_command, command
+                )
+            active.pop(process_id, None)
+            changed = True
 
-        # 사이드바/게임 모드는 ProcessMonitor의 시작·종료 이벤트 외에도
-        # Beholder 복구, startup reconcile, 외부 캐시 재결합처럼 이미 실행 중인
-        # 상태가 캐시에 들어온 뒤 steady-state tick만 발생하는 경로가 있습니다.
-        # changed=True에만 묶으면 앱 기동 후 서랍 손잡이 트리거가 시작되지 않을 수
-        # 있으므로 매 tick 실제 active cache와 UI 모드를 재동기화합니다.
+        for process_id, observed in detected.items():
+            if process_id in active:
+                continue
+            process = processes.get(process_id)
+            if process is None:
+                continue
+            runtime_token = (
+                f"{self._app_instance_id}:{process.id}:"
+                f"{observed.pid}:{observed.create_time:.6f}"
+            )
+            active[process.id] = {
+                "pid": observed.pid,
+                "exe": observed.executable,
+                "start_time_approx": observed.create_time,
+                "session_id": None,
+                "runtime_token": runtime_token,
+            }
+            event = ProcessLifecycleEvent(
+                process_id=process.id,
+                process_name=process.name,
+                session_id=None,
+                timestamp=observed.create_time,
+                stamina_tracking_enabled=process.stamina_tracking_enabled,
+                hoyolab_game_id=process.hoyolab_game_id,
+                pid=observed.pid,
+                resource_tracking_enabled=getattr(process, "resource_tracking_enabled", False),
+                resource_provider=getattr(process, "resource_provider", None),
+                resource_key=getattr(process, "resource_key", None),
+            )
+            self._work_coordinator.submit_lifecycle(
+                process.id,
+                self._persist_lifecycle_command,
+                _LifecycleCommand("start", event, observed.pid, observed.create_time, runtime_token),
+            )
+            changed = True
+
+        if changed:
+            self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
+            self.update_process_statuses_only()
         self._check_and_toggle_game_mode()
 
     def _check_and_toggle_game_mode(self):
@@ -1321,9 +1595,7 @@ class MainWindow(QMainWindow):
             self._is_game_mode_active = True
             if hide_enabled:
                 self._hide_main_window_to_tray("game_started")
-                status_bar = self.statusBar()
-                if status_bar:
-                    self._record_status_event("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
+                self._record_status_event("게임 실행 중: 창이 트레이로 숨겨졌습니다.", 3000)
             if hasattr(self, '_sidebar_controller') and running_process is not None:
                 self._sidebar_controller.activate_for_game(
                     running_process,
@@ -1344,12 +1616,10 @@ class MainWindow(QMainWindow):
                 self._sidebar_controller.deactivate()
             if hide_enabled:
                 self.activate_and_show() # 창을 다시 표시
-                status_bar = self.statusBar()
-                if status_bar:
-                    self._record_status_event("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
+                self._record_status_event("모든 게임 종료: 창이 다시 표시되었습니다.", 3000)
 
     def run_scheduler_check(self):
-        """스케줄러 검사를 실행하고 상태 변경이 있을 때만 테이블을 업데이트합니다."""
+        """스케줄러 검사를 실행하고 상태 변경이 있을 때만 카드 목록을 업데이트합니다."""
         start_time = time.time()
 
         # 스케줄러 검사 실행 (알림 발송 등)
@@ -1368,81 +1638,57 @@ class MainWindow(QMainWindow):
             logger.warning(f"scheduler_timer 실행 시간 초과: {execution_time:.1f}ms")
 
     def populate_process_list_slot(self):
-        """테이블 새로고침 시그널에 연결된 슬롯입니다."""
+        """게임 표 새로고침 시그널에 연결된 슬롯입니다."""
         self.populate_process_list()
 
     def update_process_statuses_only(self):
-        """프로세스 상태 컬럼만 업데이트합니다. 버튼은 유지하여 포커스 문제를 방지합니다."""
-        if not hasattr(self, 'process_table') or not self.process_table:
+        """표의 상태만 업데이트하여 실행 버튼 포커스를 유지합니다."""
+        if not hasattr(self, "process_table"):
             return
-
         processes_by_id = {
             process.id: process
             for process in self.data_manager.managed_processes
         }
-        now_dt = datetime.datetime.now()
-        gs = self.data_manager.global_settings
-        df_bg, df_fg = self._table_default_colors()
-
-        # 현재 테이블의 행 수와 프로세스 수가 다르면 전체 새로고침 필요
         if self.process_table.rowCount() != len(processes_by_id):
             self.populate_process_list()
             return
 
+        now_dt = datetime.datetime.now()
+        gs = self.data_manager.global_settings
         has_changes = False
-        for r in range(self.process_table.rowCount()):
-            name_item = self.process_table.item(r, self.COL_NAME)
-            if not name_item:
+        for row in range(self.process_table.rowCount()):
+            name_item = self.process_table.item(row, self.COL_NAME)
+            if name_item is None:
                 self.populate_process_list()
                 return
-
             process_id = name_item.data(Qt.ItemDataRole.UserRole)
             p = processes_by_id.get(process_id)
             if p is None:
                 self.populate_process_list()
                 return
 
-            # 상태 컬럼만 업데이트
             st_str = self.scheduler.determine_process_visual_status(p, now_dt, gs)
-            st_item = self.process_table.item(r, self.COL_STATUS)
-            if st_item and st_item.text() != st_str:
-                st_item.setText(st_str)
-                st_item.setForeground(df_fg)  # 기본 글자색 설정
-
-                # 상태에 따른 배경색 설정
-                if st_str == PROC_STATE_RUNNING:
-                    st_item.setBackground(self.COLOR_RUNNING)
-                    st_item.setForeground(QColor("black"))
-                elif st_str == PROC_STATE_INCOMPLETE:
-                    st_item.setBackground(self.COLOR_INCOMPLETE)
-                elif st_str == PROC_STATE_COMPLETED:
-                    st_item.setBackground(self.COLOR_COMPLETED)
-                else:
-                    st_item.setBackground(df_bg)
+            status_item = self.process_table.item(row, self.COL_STATUS)
+            if status_item is not None and status_item.text() != st_str:
+                status_item.setText(st_str)
+                self._apply_table_status(status_item, st_str)
                 has_changes = True
-
-            # 새로 실행된 프로세스에 기본 볼륨 자동 적용
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
 
-        # 상태 변경과 별개로 진행률 컬럼은 전용 refresh 루프에서 갱신한다.
         self._refresh_progress_bars()
-
-        # 실제 변경사항이 있을 때만 상태바 메시지 표시
         if has_changes:
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event("프로세스 상태 업데이트됨.", 2000)
+            self._record_status_event("프로세스 상태 업데이트됨.", 2000)
 
     def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
-        """앱 아이콘을 아이콘 전용 셀 중앙에 배치하는 라벨을 생성합니다."""
-        icon_size = getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE)
+        """아이콘 전용 셀 안에 앱 아이콘을 중앙 정렬합니다."""
+        icon_size = self._TABLE_ICON_LOGICAL_SIZE
         label = QLabel()
+        label.setObjectName("gameAppIcon")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setContentsMargins(0, 0, 0, 0)
         label.setMinimumSize(icon_size, icon_size)
         label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        label.setStyleSheet("QLabel { background: transparent; border: none; }")
         if icon and not icon.isNull():
             label.setPixmap(icon.pixmap(QSize(icon_size, icon_size)))
         return label
@@ -1464,71 +1710,70 @@ class MainWindow(QMainWindow):
             )
         return icon_label
 
+    def _create_launch_button_cell(self, process: ManagedProcess) -> QWidget:
+        """고정 높이 실행 버튼을 표 셀 정중앙에 배치합니다."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 0, 2, 0)
+        button = QPushButton("실행", container)
+        button.setProperty("hhRole", "primaryAction")
+        button.setFixedHeight(self._TABLE_LAUNCH_BUTTON_HEIGHT)
+        button.clicked.connect(functools.partial(self.handle_launch_button_in_row, process.id))
+        if process.monitoring_path != process.launch_path and process.launch_path:
+            button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            button.customContextMenuRequested.connect(
+                functools.partial(self._show_launch_context_menu, process.id, button)
+            )
+            current_pref = getattr(process, "preferred_launch_type", "shortcut")
+            if current_pref == "auto":
+                current_pref = "shortcut"
+            pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
+            button.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
+        layout.addWidget(button, 1, Qt.AlignmentFlag.AlignVCenter)
+        return container
+
     def populate_process_list(self):
-        """관리 대상 프로세스 목록을 테이블에 채웁니다."""
-        self.process_table.setSortingEnabled(False) # 사용자가 바꿀 수 없는 고정 정렬
+        """관리 대상 프로세스를 기존 행·열 구조의 게임 표로 표시합니다."""
+        self.process_table.setSortingEnabled(False)
         processes = sorted(
             self.data_manager.managed_processes,
             key=lambda process: ((process.name or "").casefold(), process.id or ""),
         )
-        self.process_table.setRowCount(len(processes)) # 행 개수 설정
+        self.process_table.setRowCount(len(processes))
+        now_dt = datetime.datetime.now()
+        gs = self.data_manager.global_settings
+        default_background, default_foreground = self._table_default_colors()
 
-        now_dt = datetime.datetime.now() # 현재 시각
-        gs = self.data_manager.global_settings # 전역 설정
-        df_bg, df_fg = self._table_default_colors() # 기본 배경색 및 글자색
-
-        for r, p in enumerate(processes): # 각 프로세스에 대해 반복
-            # 아이콘 컬럼
-            icon_item = QTableWidgetItem()
+        for row, p in enumerate(processes):
             qi = get_qicon_for_file(
                 p.monitoring_path,
-                icon_size=getattr(self, '_table_icon_logical_size', self._TABLE_ICON_LOGICAL_SIZE),
+                icon_size=self._TABLE_ICON_LOGICAL_SIZE,
                 process_id=p.id,
             )
-            icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.process_table.setItem(r, self.COL_ICON, icon_item); icon_item.setBackground(df_bg); icon_item.setForeground(df_fg)
-            self.process_table.setCellWidget(r, self.COL_ICON, self._create_centered_app_icon_cell(qi))
+            icon_item = QTableWidgetItem()
+            icon_item.setBackground(default_background)
+            icon_item.setForeground(default_foreground)
+            self.process_table.setItem(row, self.COL_ICON, icon_item)
+            self.process_table.setCellWidget(row, self.COL_ICON, self._create_centered_app_icon_cell(qi))
 
-            # 이름 컬럼 (UserRole에 ID 저장)
             name_item = QTableWidgetItem(p.name)
-            name_item.setData(Qt.ItemDataRole.UserRole, p.id) # UserRole에 프로세스 ID 저장
-            self.process_table.setItem(r, self.COL_NAME, name_item); name_item.setBackground(df_bg); name_item.setForeground(df_fg)
+            name_item.setData(Qt.ItemDataRole.UserRole, p.id)
+            name_item.setBackground(default_background)
+            name_item.setForeground(default_foreground)
+            name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            self.process_table.setItem(row, self.COL_NAME, name_item)
 
-            # 마지막 플레이 컬럼 (진행률 표시)
             percentage, time_str = self._calculate_progress_percentage(p, now_dt)
             progress_widget = self._create_progress_bar_widget(p, percentage, time_str)
-            self.process_table.setCellWidget(r, self.COL_LAST_PLAYED, progress_widget)
+            self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, progress_widget)
 
-            # 실행 버튼 컬럼
-            btn = QPushButton("실행")
-            btn.clicked.connect(functools.partial(self.handle_launch_button_in_row, p.id)) # 버튼 클릭 시그널 연결
+            self.process_table.setCellWidget(row, self.COL_LAUNCH_BTN, self._create_launch_button_cell(p))
 
-            # 모니터링 경로와 실행 경로가 다른 경우 우클릭 메뉴 활성화
-            if p.monitoring_path != p.launch_path and p.launch_path:
-                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                btn.customContextMenuRequested.connect(
-                    functools.partial(self._show_launch_context_menu, p.id, btn)
-                )
-                current_pref = getattr(p, "preferred_launch_type", "shortcut")
-                if current_pref == "auto":
-                    current_pref = "shortcut"
-                pref_label = "바로가기 선호" if current_pref == "shortcut" else "프로세스 선호"
-                btn.setToolTip(f"좌클릭: 실행 / 우클릭: 기본 실행 방식 설정 (현재: {pref_label})")
-
-            self.process_table.setCellWidget(r, self.COL_LAUNCH_BTN, btn) # 셀에 버튼 위젯 설정
-
-            # 상태 컬럼
-            st_str = self.scheduler.determine_process_visual_status(p, now_dt, gs) # 시각적 상태 결정
-            st_item = QTableWidgetItem(st_str)
-            st_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter) # 텍스트 가운데 정렬
-            self.process_table.setItem(r, self.COL_STATUS, st_item)
-            st_item.setForeground(df_fg) # 기본 글자색 설정
-
-            # 상태에 따른 배경색 설정
-            if st_str == PROC_STATE_RUNNING: st_item.setBackground(self.COLOR_RUNNING); st_item.setForeground(QColor("black")) # 실행 중: 노란색 배경, 검은색 글자
-            elif st_str == PROC_STATE_INCOMPLETE: st_item.setBackground(self.COLOR_INCOMPLETE) # 미완료: 빨간색 배경
-            elif st_str == PROC_STATE_COMPLETED: st_item.setBackground(self.COLOR_COMPLETED) # 완료: 초록색 배경
-            else: st_item.setBackground(df_bg) # 그 외: 기본 배경색
+            status = self.scheduler.determine_process_visual_status(p, now_dt, gs)
+            status_item = QTableWidgetItem(status)
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._apply_table_status(status_item, status)
+            self.process_table.setItem(row, self.COL_STATUS, status_item)
 
             pid = self._get_active_pid(p.id)
             self._sync_default_volume_state(p, pid)
@@ -1536,26 +1781,23 @@ class MainWindow(QMainWindow):
         self.scheduler.invalidate_visual_status_snapshot()
         QTimer.singleShot(0, self._adjust_window_size_to_content)
 
-    def show_table_context_menu(self, pos): # 게임 테이블용 컨텍스트 메뉴
-        """게임 테이블의 항목에 대한 컨텍스트 메뉴를 표시합니다."""
-        item = self.process_table.itemAt(pos) # 클릭 위치의 아이템 가져오기
-        if not item: return # 아이템 없으면 반환
-
-        name_item = self.process_table.item(item.row(), self.COL_NAME)
-        if not name_item:
+    def show_table_context_menu(self, pos: QPoint) -> None:
+        item = self.process_table.itemAt(pos)
+        if item is None:
             return
-        pid = name_item.data(Qt.ItemDataRole.UserRole) # 선택된 행의 프로세스 ID 가져오기
-        if not pid: return # ID 없으면 반환
-
-        menu = QMenu(self) # 컨텍스트 메뉴 생성
-        edit_act = QAction("편집", self) # 편집 액션
-        del_act = QAction("삭제", self) # 삭제 액션
-
-        edit_act.triggered.connect(functools.partial(self.handle_edit_action_for_row, pid)) # 편집 액션 시그널 연결
-        del_act.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid)) # 삭제 액션 시그널 연결
-
-        menu.addActions([edit_act, del_act]) # 메뉴에 액션 추가
-        menu.exec(self.process_table.mapToGlobal(pos)) # 컨텍스트 메뉴 표시
+        name_item = self.process_table.item(item.row(), self.COL_NAME)
+        if name_item is None:
+            return
+        pid = name_item.data(Qt.ItemDataRole.UserRole)
+        if not pid:
+            return
+        menu = QMenu(self)
+        edit_act = QAction("편집", self)
+        del_act = QAction("삭제", self)
+        edit_act.triggered.connect(functools.partial(self.handle_edit_action_for_row, pid))
+        del_act.triggered.connect(functools.partial(self.handle_delete_action_for_row, pid))
+        menu.addActions([edit_act, del_act])
+        menu.exec(self.process_table.viewport().mapToGlobal(pos))
 
     def handle_edit_action_for_row(self, pid:str): # 게임 수정
         """선택된 게임 프로세스의 정보를 수정하는 대화 상자를 엽니다."""
@@ -1593,12 +1835,9 @@ class MainWindow(QMainWindow):
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
-                    self.populate_process_list() # 전체 테이블 새로고침 (프로세스 정보 변경)
-                    # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
-                    QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
-                    status_bar = self.statusBar()
-                    if status_bar:
-                        self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
+                    self.populate_process_list()
+                    QTimer.singleShot(0, self._adjust_window_size_to_content)
+                    self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
                 else: QMessageBox.warning(self, "오류", "프로세스 수정 실패.")
 
     def handle_delete_action_for_row(self, pid:str): # 게임 삭제
@@ -1612,12 +1851,9 @@ class MainWindow(QMainWindow):
                                      QMessageBox.StandardButton.No) # 기본 선택은 'No'
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_process(pid): # 프로세스 삭제
-                self.populate_process_list() # 전체 테이블 새로고침 (프로세스 삭제)
-                # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
-                QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
-                status_bar = self.statusBar()
-                if status_bar:
-                    self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
+                self.populate_process_list()
+                QTimer.singleShot(0, self._adjust_window_size_to_content)
+                self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
             else: QMessageBox.warning(self, "오류", "프로세스 삭제 실패.")
 
     def _launch_args_for_process(self, process: ManagedProcess, launch_mode: str, launch_target: str | None) -> str | None:
@@ -1666,15 +1902,11 @@ class MainWindow(QMainWindow):
         launch_args = self._launch_args_for_process(p_launch, launch_type, launch_target)
 
         if self.launcher.launch_process(launch_target, args=launch_args): # 프로세스 실행 시도
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event(f"'{p_launch.name}' 실행 시도.", 3000)
+            self._record_status_event(f"'{p_launch.name}' 실행 시도.", 3000)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
+            self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
 
     def _launch_with_specific_path(self, pid: str, use_shortcut: bool):
         """특정 경로로 프로세스 실행 (우클릭 메뉴용)"""
@@ -1690,15 +1922,11 @@ class MainWindow(QMainWindow):
         launch_args = self._launch_args_for_process(p_launch, launch_mode, launch_target)
 
         if self.launcher.launch_process(launch_target, args=launch_args):
-            status_bar = self.statusBar()
-            if status_bar:
-                path_type = "바로가기" if use_shortcut else "직접 실행"
-                self._record_status_event(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
+            path_type = "바로가기" if use_shortcut else "직접 실행"
+            self._record_status_event(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
             self.update_process_statuses_only()
         else:
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
+            self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
 
     def _set_launch_preference(self, pid: str, preference: str):
         """기본 실행 방식을 영구 저장"""
@@ -1711,9 +1939,7 @@ class MainWindow(QMainWindow):
             current_pref = "shortcut"
 
         if current_pref == preference:
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
+            self._record_status_event(f"이미 '{('바로가기' if preference == 'shortcut' else '프로세스')}' 선호로 설정되어 있습니다.", 3000)
             return
 
         updated_data = p.to_dict() if hasattr(p, "to_dict") else p.__dict__.copy()
@@ -1722,18 +1948,16 @@ class MainWindow(QMainWindow):
 
         if self.data_manager.update_process(updated_process):
             self.populate_process_list()
-            status_bar = self.statusBar()
-            if status_bar:
-                self._record_status_event(
-                    f"기본 실행 방식이 '{('바로가기 선호' if preference == 'shortcut' else '프로세스 선호')}'로 저장되었습니다.",
-                    4000
-                )
+            self._record_status_event(
+                f"기본 실행 방식이 '{('바로가기 선호' if preference == 'shortcut' else '프로세스 선호')}'로 저장되었습니다.",
+                4000
+            )
         else:
             QMessageBox.warning(self, "저장 실패", "기본 실행 방식을 저장하지 못했습니다.")
 
     def _show_launch_context_menu(self, pid: str, button: QPushButton, pos):
         """실행 버튼 우클릭 시 컨텍스트 메뉴 표시"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
 
         p = self.data_manager.get_process_by_id(pid)
         if not p: return
@@ -1791,12 +2015,9 @@ class MainWindow(QMainWindow):
                                        resource_key=data.get("resource_key"),
                                        resource_label=data.get("resource_label"))
                 self.data_manager.add_process(new_p) # 데이터 매니저에 프로세스 추가
-                self.populate_process_list() # 전체 테이블 새로고침 (프로세스 추가)
-                # 테이블이 완전히 렌더링된 후 창 높이 조절 (다음 이벤트 루프에서 실행)
-                QTimer.singleShot(0, self._adjust_window_height_for_table_rows)
-                status_bar = self.statusBar()
-                if status_bar:
-                    self._record_status_event(f"'{new_p.name}' 추가 완료.", 3000)
+                self.populate_process_list()
+                QTimer.singleShot(0, self._adjust_window_size_to_content)
+                self._record_status_event(f"'{new_p.name}' 추가 완료.", 3000)
 
     # --- 웹 바로 가기 버튼 관련 메소드들 ---
     def _clear_layout(self, layout: QHBoxLayout):
@@ -1839,12 +2060,11 @@ class MainWindow(QMainWindow):
             return "GREEN" if last_reset_dt >= yesterdays_refresh_event_dt else "DEFAULT"
 
     def _apply_button_style(self, button: QPushButton, state: str):
-        """버튼 상태에 따라 스타일시트를 적용합니다."""
-        button.setStyleSheet("") # 기존 스타일 초기화
-        if state == "RED":
-            button.setStyleSheet(f"background-color: {self.COLOR_WEB_BTN_RED.name()};") # 빨간색 배경
-        elif state == "GREEN":
-            button.setStyleSheet(f"background-color: {self.COLOR_WEB_BTN_GREEN.name()};") # 초록색 배경
+        """웹 바로가기 상태를 공통 테마의 semantic 속성으로 적용합니다."""
+        semantic = {"RED": "danger", "GREEN": "success"}.get(state, "default")
+        button.setProperty("hhState", semantic)
+        button.style().unpolish(button)
+        button.style().polish(button)
 
     def _refresh_web_button_states(self):
         """동적으로 생성된 모든 웹 바로가기 버튼의 상태를 새로고침합니다."""
@@ -1865,58 +2085,9 @@ class MainWindow(QMainWindow):
                         self._apply_button_style(button, state) # 스타일 적용
 
     def _refresh_status_columns(self):
-        """테이블의 상태 컬럼만 새로고침합니다."""
+        """게임 카드의 상태 칩만 새로고침합니다."""
         start_time = time.time()
-        current_dt = datetime.datetime.now()
-        gs = self.data_manager.global_settings
-        status_changes = 0
-
-        for r in range(self.process_table.rowCount()):
-            # 이름 컬럼에서 프로세스 ID 가져오기
-            name_item = self.process_table.item(r, self.COL_NAME)
-            if not name_item:
-                continue
-            process_id = name_item.data(Qt.ItemDataRole.UserRole)
-            if not process_id:
-                continue
-
-            # 프로세스 정보 가져오기
-            process = self.data_manager.get_process_by_id(process_id)
-            if not process:
-                continue
-
-            # 새로운 상태 결정
-            new_status = self.scheduler.determine_process_visual_status(process, current_dt, gs)
-
-            # 상태 컬럼 아이템 가져오기
-            status_item = self.process_table.item(r, self.COL_STATUS)
-            if not status_item:
-                continue
-
-            # 상태가 변경된 경우에만 업데이트
-            if status_item.text() != new_status:
-                old_status = status_item.text()
-                status_item.setText(new_status)
-                status_changes += 1
-
-                # 상태에 따른 배경색 설정
-                df_bg, df_fg = self._table_default_colors()
-
-                status_item.setBackground(df_bg)  # 기본 배경색으로 초기화
-                status_item.setForeground(df_fg)  # 기본 글자색으로 초기화
-
-                if new_status == PROC_STATE_RUNNING:
-                    status_item.setBackground(self.COLOR_RUNNING)
-                    status_item.setForeground(QColor("black"))
-                elif new_status == PROC_STATE_INCOMPLETE:
-                    status_item.setBackground(self.COLOR_INCOMPLETE)
-                elif new_status == PROC_STATE_COMPLETED:
-                    status_item.setBackground(self.COLOR_COMPLETED)
-
-        # 상태 변경이 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
-        if status_changes > 0:
-            if self.process_table.viewport():
-                self.process_table.viewport().update()
+        self.update_process_statuses_only()
 
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
@@ -1957,7 +2128,8 @@ class MainWindow(QMainWindow):
             self.dynamic_web_buttons_layout.addWidget(button) # 레이아웃에 버튼 추가
 
         # 웹 버튼 로드 완료 후 창 너비 조절
-        self._adjust_window_width_for_web_buttons()
+        self._adjust_window_size_to_content()
+        QTimer.singleShot(0, self._adjust_window_size_to_content)
 
     def _handle_web_button_clicked(self, shortcut_id: str, url: str):
         """웹 바로가기 버튼 클릭 시 호출됩니다. URL을 열고, 필요한 경우 상태를 업데이트합니다."""
@@ -1990,10 +2162,8 @@ class MainWindow(QMainWindow):
                                            refresh_time_str=data.get("refresh_time_str")) # refresh_time_str은 선택 사항
                 if self.data_manager.add_web_shortcut(new_shortcut): # 데이터 매니저에 추가
                     self._load_and_display_web_buttons() # 버튼 목록 새로고침
-                    self._adjust_window_width_for_web_buttons() # 창 너비 조절
-                    status_bar = self.statusBar()
-                    if status_bar:
-                        self._record_status_event(f"웹 바로 가기 '{new_shortcut.name}' 추가됨.", 3000)
+                    self._adjust_window_size_to_content()
+                    self._record_status_event(f"웹 바로 가기 '{new_shortcut.name}' 추가됨.", 3000)
                 else:
                     QMessageBox.warning(self, "추가 실패", "웹 바로 가기 추가에 실패했습니다.")
 
@@ -2035,10 +2205,8 @@ class MainWindow(QMainWindow):
 
                 if self.data_manager.update_web_shortcut(updated_shortcut): # 데이터 매니저 통해 정보 업데이트
                     self._load_and_display_web_buttons() # 버튼 목록 새로고침
-                    self._adjust_window_width_for_web_buttons() # 창 너비 조절
-                    status_bar = self.statusBar()
-                    if status_bar:
-                        self._record_status_event(f"웹 바로 가기 '{updated_shortcut.name}' 수정됨.", 3000)
+                    self._adjust_window_size_to_content()
+                    self._record_status_event(f"웹 바로 가기 '{updated_shortcut.name}' 수정됨.", 3000)
                 else:
                     QMessageBox.warning(self, "수정 실패", "웹 바로 가기 수정에 실패했습니다.")
 
@@ -2057,229 +2225,61 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_web_shortcut(shortcut_id): # 데이터 매니저 통해 삭제
                 self._load_and_display_web_buttons() # 버튼 목록 새로고침
-                self._adjust_window_width_for_web_buttons() # 창 너비 조절
-                status_bar = self.statusBar()
-                if status_bar:
-                    self._record_status_event(f"웹 바로 가기 '{shortcut_to_delete.name}' 삭제됨.", 3000)
+                self._adjust_window_size_to_content()
+                self._record_status_event(f"웹 바로 가기 '{shortcut_to_delete.name}' 삭제됨.", 3000)
             else:
                 QMessageBox.warning(self, "삭제 실패", "웹 바로 가기 삭제에 실패했습니다.")
 
-    def _save_window_geometry(self):
-        """현재 창 위치를 QSettings에 저장합니다.
-
-        새 저장값은 해상도 변화에도 위치 의도를 유지하도록 화면 유효 영역 기준
-        상대 앵커를 사용합니다. 기존 geometry/position 값은 이전 버전 fallback 용도로만
-        함께 유지합니다.
-        """
+    def _position_on_cursor_screen_bottom_right(self) -> None:
+        """현재 커서가 있는 모니터의 작업 영역 우하단에 프레임을 맞춥니다."""
         try:
-            anchor = self._build_current_window_anchor()
-            if anchor:
-                self._settings.setValue(self._WINDOW_ANCHOR_SETTINGS_KEY, json.dumps(anchor, ensure_ascii=False))
-            self._settings.setValue("window_geometry", self.saveGeometry())
-            self._settings.setValue("window_position", self.pos())
-            self._settings.sync()
-            logger.debug("창 위치 저장: pos=%s size=%s anchor=%s", self.pos(), self.size(), anchor)
-        except Exception as e:
-            logger.error(f"창 위치 저장 실패: {e}", exc_info=True)
-
-    def _restore_window_geometry(self):
-        """저장된 창 위치와 크기를 복원합니다."""
-        try:
-            # 상대 앵커가 있으면 최종 content-size 계산 뒤 적용합니다.
-            # 여기서 saveGeometry()를 먼저 복원하면 예전 해상도의 크기까지 되살아날 수
-            # 있으므로, 새 포맷은 위치 복원만 지연합니다.
-            if self._pending_window_anchor:
-                logger.debug("저장된 창 상대 앵커 복원 대기: %s", self._pending_window_anchor)
+            cursor = QCursor.pos()
+            if position_windows_window_bottom_right(
+                int(self.winId()),
+                cursor.x(),
+                cursor.y(),
+            ):
+                logger.debug("Win32 외곽 창을 커서 모니터 우하단에 배치")
                 return
-
-            # 저장된 geometry가 있으면 복원
-            geometry = self._settings.value("window_geometry")
-            if geometry:
-                self.restoreGeometry(geometry)
-                logger.debug("저장된 창 geometry 복원 완료")
-                self._clamp_window_to_available_screen()
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+            if not screen:
                 return
-
-            # geometry가 없으면 position만 복원
-            position = self._settings.value("window_position")
-            if position:
-                self.move(position)
-                logger.debug(f"저장된 창 위치 복원: {position}")
-                self._clamp_window_to_available_screen()
+            frame = self.frameGeometry()
+            available = screen.availableGeometry()
+            frame_left = available.right() - frame.width() + 1
+            frame_top = available.bottom() - frame.height() + 1
+            client_offset = self.geometry().topLeft() - frame.topLeft()
+            self.move(QPoint(frame_left, frame_top) + client_offset)
+            logger.debug(
+                "커서 모니터 우하단에 창 배치: screen=%s frame=(%s, %s)",
+                screen.name(),
+                frame_left,
+                frame_top,
+            )
         except Exception as e:
-            logger.error(f"창 위치 복원 실패: {e}", exc_info=True)
-
-    def _load_window_anchor(self) -> Optional[dict]:
-        """QSettings에서 상대 창 위치 앵커를 읽습니다."""
-        raw = self._settings.value(self._WINDOW_ANCHOR_SETTINGS_KEY)
-        if not raw:
-            return None
-        try:
-            if isinstance(raw, dict):
-                anchor = raw
-            else:
-                anchor = json.loads(str(raw))
-            if anchor.get("version") != 1:
-                return None
-            if anchor.get("horizontal") not in {"left", "right"}:
-                return None
-            if anchor.get("vertical") not in {"top", "bottom"}:
-                return None
-            return anchor
-        except Exception as e:
-            logger.warning("저장된 창 상대 앵커를 읽을 수 없습니다: %s", e)
-            return None
-
-    def _build_current_window_anchor(self) -> Optional[dict]:
-        """현재 창 위치를 화면 유효 영역 기준 상대 앵커로 변환합니다."""
-        screen = QApplication.screenAt(self.geometry().center())
-        if not screen:
-            screen = self.screen() or QApplication.primaryScreen()
-        if not screen:
-            return None
-        screen_name = screen.name() if hasattr(screen, "name") else ""
-        return self._window_anchor_from_rect(self.geometry(), screen.availableGeometry(), screen_name)
-
-    @staticmethod
-    def _window_anchor_from_rect(window_rect: QRect, available_geometry: QRect, screen_name: str = "") -> dict:
-        """창 rect를 availableGeometry 기준 상대 앵커로 직렬화 가능한 dict로 변환합니다."""
-        left_gap = max(0, window_rect.left() - available_geometry.left())
-        right_gap = max(0, available_geometry.right() - window_rect.right())
-        top_gap = max(0, window_rect.top() - available_geometry.top())
-        bottom_gap = max(0, available_geometry.bottom() - window_rect.bottom())
-        horizontal = "right" if right_gap <= left_gap else "left"
-        vertical = "bottom" if bottom_gap <= top_gap else "top"
-        return {
-            "version": 1,
-            "screen_name": screen_name,
-            "horizontal": horizontal,
-            "vertical": vertical,
-            "left_gap": left_gap,
-            "right_gap": right_gap,
-            "top_gap": top_gap,
-            "bottom_gap": bottom_gap,
-        }
-
-    @staticmethod
-    def _position_from_window_anchor(anchor: dict, available_geometry: QRect, size: QSize) -> QPoint:
-        """저장된 상대 앵커와 현재 화면 크기로 창 좌상단 좌표를 계산합니다."""
-        if anchor.get("horizontal") == "right":
-            x = available_geometry.right() - size.width() + 1 - int(anchor.get("right_gap", 0))
-        else:
-            x = available_geometry.left() + int(anchor.get("left_gap", 0))
-
-        if anchor.get("vertical") == "bottom":
-            y = available_geometry.bottom() - size.height() + 1 - int(anchor.get("bottom_gap", 0))
-        else:
-            y = available_geometry.top() + int(anchor.get("top_gap", 0))
-
-        max_x = available_geometry.right() - size.width() + 1
-        max_y = available_geometry.bottom() - size.height() + 1
-        return QPoint(
-            max(available_geometry.left(), min(x, max_x)),
-            max(available_geometry.top(), min(y, max_y)),
-        )
-
-    def _screen_for_window_anchor(self, anchor: dict) -> Optional[QScreen]:
-        """저장된 화면 이름을 우선 사용하고, 없으면 현재/기본 화면으로 fallback합니다."""
-        screen_name = anchor.get("screen_name")
-        if screen_name:
-            for screen in QApplication.screens():
-                if screen.name() == screen_name:
-                    return screen
-        return QApplication.screenAt(self.geometry().center()) or self.screen() or QApplication.primaryScreen()
-
-    def _restore_pending_window_anchor(self) -> bool:
-        """지연된 상대 앵커 복원을 적용합니다."""
-        anchor = self._pending_window_anchor
-        if not anchor:
-            return False
-        screen = self._screen_for_window_anchor(anchor)
-        if not screen:
-            return False
-        position = self._position_from_window_anchor(anchor, screen.availableGeometry(), self.size())
-        self.move(position)
-        self._pending_window_anchor = None
-        logger.debug("저장된 창 상대 앵커 복원: %s -> %s", anchor, position)
-        return True
+            logger.error(f"창 우하단 배치 실패: {e}", exc_info=True)
 
     def _clamp_window_to_available_screen(self):
-        """창이 상태 표시줄/Dock 등을 제외한 화면 유효 영역 안에 위치하도록 보정합니다."""
+        """네이티브 프레임 전체를 현재 화면의 유효 영역 안으로 보정합니다."""
         try:
-            screen = QApplication.screenAt(self.pos())
+            frame = self.frameGeometry()
+            screen = QApplication.screenAt(frame.center())
             if not screen:
-                screen = QApplication.primaryScreen()
+                screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             if not screen:
                 return
             avail = screen.availableGeometry()
-            # 창 크기가 가용 영역을 초과하면 먼저 크기를 줄임 (위치 계산 전)
-            if self.height() > avail.height():
-                self.resize(self.width(), avail.height())
-            if self.width() > avail.width():
-                self.resize(avail.width(), self.height())
-            pos = self.pos()
-            size = self.size()
-            new_x = max(avail.left(), min(pos.x(), avail.right() - size.width() + 1))
-            new_y = max(avail.top(), min(pos.y(), avail.bottom() - size.height() + 1))
-            if new_x != pos.x() or new_y != pos.y():
-                self.move(new_x, new_y)
-                logger.debug(f"창 위치 화면 영역으로 보정: ({new_x}, {new_y})")
+            new_left = max(avail.left(), min(frame.left(), avail.right() - frame.width() + 1))
+            new_top = max(avail.top(), min(frame.top(), avail.bottom() - frame.height() + 1))
+            if new_left != frame.left() or new_top != frame.top():
+                client_offset = self.geometry().topLeft() - frame.topLeft()
+                self.move(QPoint(new_left, new_top) + client_offset)
+                logger.debug("창 프레임을 화면 영역으로 보정: (%s, %s)", new_left, new_top)
         except Exception as e:
             logger.error(f"창 위치 보정 실패: {e}", exc_info=True)
 
-    def moveEvent(self, event):
-        """창 이동 이벤트 - 마그넷 스냅 기능 구현"""
-        super().moveEvent(event)
-
-        # 마그넷 스냅 활성화 (화면 가장자리에 자동 정렬)
-        try:
-            # 현재 창 위치와 크기
-            window_rect = self.frameGeometry()
-            window_pos = window_rect.topLeft()
-
-            # 현재 창이 있는 스크린 찾기
-            screen = QApplication.screenAt(window_pos)
-            if not screen:
-                screen = QApplication.primaryScreen()
-
-            if screen:
-                # 사용 가능한 화면 영역 (작업 표시줄 제외)
-                available_geometry = screen.availableGeometry()
-
-                # 마그넷 감도 (픽셀 단위)
-                snap_threshold = 15
-
-                new_x = window_pos.x()
-                new_y = window_pos.y()
-
-                # 왼쪽 가장자리 스냅
-                if abs(window_rect.left() - available_geometry.left()) < snap_threshold:
-                    new_x = available_geometry.left()
-
-                # 오른쪽 가장자리 스냅
-                if abs(window_rect.right() - available_geometry.right()) < snap_threshold:
-                    new_x = available_geometry.right() - window_rect.width()
-
-                # 위쪽 가장자리 스냅
-                if abs(window_rect.top() - available_geometry.top()) < snap_threshold:
-                    new_y = available_geometry.top()
-
-                # 아래쪽 가장자리 스냅 (덜 자주 사용되므로 선택적)
-                if abs(window_rect.bottom() - available_geometry.bottom()) < snap_threshold:
-                    new_y = available_geometry.bottom() - window_rect.height()
-
-                # 위치가 변경되었으면 이동
-                if new_x != window_pos.x() or new_y != window_pos.y():
-                    self.move(new_x, new_y)
-
-        except Exception as e:
-            logger.error(f"마그넷 스냅 처리 중 오류: {e}", exc_info=True)
-
     def closeEvent(self, event: QEvent):
         """창 닫기 이벤트를 처리합니다. 트레이 관리자가 있으면 트레이로 숨깁니다."""
-        # 창 위치 저장 (트레이로 숨기기 전에 저장)
-        self._save_window_geometry()
-
         if hasattr(self, 'tray_manager') and self.tray_manager:
             self.tray_manager.handle_window_close_event(event) # 트레이 관리자에게 이벤트 처리 위임
         else: # 트레이 관리자 없으면 기본 동작 (숨기기)
@@ -2288,23 +2288,34 @@ class MainWindow(QMainWindow):
 
     def initiate_quit_sequence(self):
         """애플리케이션 종료 절차를 시작합니다 (타이머 중지, 아이콘 숨기기, 리소스 정리 등)."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        deadline = time.monotonic() + _GUI_CLEANUP_DEADLINE_SECONDS
 
-        # 0. 창 위치 저장 (앱 종료 시)
-        self._save_window_geometry()
+        def remaining_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
 
-        # 1. 활성화된 타이머들 중지
-        if hasattr(self, 'monitor_timer') and self.monitor_timer.isActive():
-            self.monitor_timer.stop()
-        if hasattr(self, 'scheduler_timer') and self.scheduler_timer.isActive():
-            self.scheduler_timer.stop()
-        if hasattr(self, 'ui_refresh_timer') and self.ui_refresh_timer.isActive():
-            self.ui_refresh_timer.stop()
-        if hasattr(self, 'runtime_heartbeat_timer') and self.runtime_heartbeat_timer.isActive():
-            self.runtime_heartbeat_timer.stop()
-        if hasattr(self, 'remote_readiness_timer') and self.remote_readiness_timer.isActive():
-            self.remote_readiness_timer.stop()
-        if hasattr(self.data_manager, "send_runtime_heartbeat"):
-            self.data_manager.send_runtime_heartbeat(shutdown=True, runtime_kind="pyqt")
+        self._timer_registry.shutdown()
+        self._lifecycle_shutdown_event.set()
+        app_instance = QApplication.instance()
+        if app_instance is not None and sys.platform == "win32":
+            try:
+                app_instance.removeNativeEventFilter(self._power_event_filter)
+            except RuntimeError:
+                pass
+        try:
+            self._background_transport.post_json(
+                "/api/beholder/runtime/heartbeat",
+                {
+                    "app_instance_id": self._app_instance_id,
+                    "runtime_kind": "pyside",
+                    "shutdown": True,
+                },
+                timeout=max(0.05, min(1.0, remaining_ms() / 1000.0)),
+            )
+        except Exception:
+            logger.debug("종료 heartbeat 전송 실패", exc_info=True)
 
         # 2. 트레이 아이콘 숨기기
         if hasattr(self, 'tray_manager') and self.tray_manager:
@@ -2316,22 +2327,27 @@ class MainWindow(QMainWindow):
 
         # 3-1. 볼륨 패널 정리 (대기 중인 볼륨 저장 타이머 플러시)
         if hasattr(self, '_volume_panel') and self._volume_panel:
-            self._volume_panel.cleanup()
+            self._volume_panel.cleanup(remaining_ms())
 
         # 3-2. 사이드바 컨트롤러 정리
         if hasattr(self, '_sidebar_controller'):
-            self._sidebar_controller.cleanup()
+            self._sidebar_controller.cleanup(remaining_ms())
 
         # 3-2. 녹화 매니저 종료
         if hasattr(self, '_recording_manager'):
             self._recording_manager.shutdown()
 
         if hasattr(self, '_hoyolab_reconcile'):
-            self._hoyolab_reconcile.shutdown()
+            self._hoyolab_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_nikke_resource_reconcile'):
-            self._nikke_resource_reconcile.shutdown()
+            self._nikke_resource_reconcile.shutdown(remaining_ms())
         if hasattr(self, '_daily_checkin'):
-            self._daily_checkin.shutdown()
+            self._daily_checkin.shutdown(remaining_ms())
+        drained = self._work_coordinator.shutdown(
+            deadline_seconds=remaining_ms() / 1000.0
+        )
+        if not drained:
+            logger.warning("GUI background work가 종료 기한 뒤에도 drain 중입니다.")
 
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
@@ -2341,167 +2357,96 @@ class MainWindow(QMainWindow):
         if app_instance:
             app_instance.quit()
 
-    def _visible_table_columns(self) -> list[int]:
-        return [
-            column
-            for column in range(self.process_table.columnCount())
-            if not self.process_table.isColumnHidden(column)
-        ]
-
     def _cell_content_width(self, row: int, column: int) -> int:
-        """아이템/셀 위젯의 실제 sizeHint를 함께 반영한 컬럼 최소 폭."""
         if column == self.COL_ICON:
-            # 아이콘 전용 컬럼은 QTableWidgetItem.sizeHint()의 플랫폼별 기본 여백을
-            # 신뢰하지 않고, 표시 아이콘 + 최소 여백만으로 고정해 불필요한 빈 폭을 막습니다.
-            return self.process_table.iconSize().width() + self._TABLE_ICON_COLUMN_PADDING
-
-        style = self.process_table.style() or self.style()
-        focus_margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) if style else 2
-        metrics = self.process_table.fontMetrics()
-        padding = max(metrics.horizontalAdvance("  "), focus_margin * 2 + self.process_table.frameWidth() * 2)
-
+            return self._TABLE_ICON_LOGICAL_SIZE + self._TABLE_ICON_COLUMN_PADDING
         widget = self.process_table.cellWidget(row, column)
         widget_width = widget.sizeHint().width() if widget is not None else 0
-
         item = self.process_table.item(row, column)
         item_width = 0
         if item is not None:
-            item_width = max(
-                item.sizeHint().width(),
-                metrics.horizontalAdvance(f" {item.text()} ") + padding,
-            )
-            if not item.icon().isNull():
-                item_width += self.process_table.iconSize().width() + padding
-
+            item_width = self.process_table.fontMetrics().horizontalAdvance(f"  {item.text()}  ")
         return max(widget_width, item_width)
 
-    def _resize_table_to_contents(self, max_table_size: Optional[QSize] = None) -> QSize:
-        """헤더 없이도 각 셀 내용에 맞는 테이블 고정 크기를 계산합니다."""
+    def _resize_table_to_contents(self, target_width: Optional[int] = None) -> QSize:
+        """모든 행을 표시하고 선택 폭의 여유는 진행률 열에만 배분합니다."""
         table = self.process_table
         self._configure_table_header()
-        table.resizeRowsToContents()
-
-        default_row_height = max(self._TABLE_ROW_HEIGHT, table.verticalHeader().defaultSectionSize())
+        table.setMinimumSize(0, 0)
+        table.setMaximumSize(self._QWIDGETSIZE_MAX, self._QWIDGETSIZE_MAX)
         for row in range(table.rowCount()):
-            table.setRowHeight(row, max(default_row_height, table.rowHeight(row)))
+            table.setRowHeight(row, self._TABLE_ROW_HEIGHT)
 
-        visible_columns = self._visible_table_columns()
-        style = table.style() or self.style()
-        column_gap = style.pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing) if style else 6
-        column_gap = max(4, column_gap)
-
-        for column in visible_columns:
-            max_width = 0
-            for row in range(table.rowCount()):
-                max_width = max(max_width, self._cell_content_width(row, column))
-            if table.rowCount() == 0:
-                max_width = max(max_width, table.fontMetrics().horizontalAdvance("빈 목록") + column_gap * 2)
+        spacing = 4
+        for column in range(table.columnCount()):
+            width = max(
+                (self._cell_content_width(row, column) for row in range(table.rowCount())),
+                default=0,
+            )
             if column == self.COL_ICON:
-                table.setColumnWidth(column, max_width)
+                table.setColumnWidth(column, width)
             else:
-                table.setColumnWidth(column, max_width + column_gap)
+                table.setColumnWidth(column, width + spacing)
 
         frame = table.frameWidth() * 2
-        content_width = sum(table.columnWidth(column) for column in visible_columns) + frame
-        content_height = frame
-        if table.rowCount() > 0:
-            content_height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+        natural_width = frame + sum(table.columnWidth(column) for column in range(table.columnCount()))
+        width = max(natural_width, target_width or 0)
+        if width > natural_width:
+            table.setColumnWidth(
+                self.COL_LAST_PLAYED,
+                table.columnWidth(self.COL_LAST_PLAYED) + width - natural_width,
+            )
+        if table.rowCount():
+            height = frame + sum(table.rowHeight(row) for row in range(table.rowCount()))
         else:
-            content_height += max(default_row_height, table.fontMetrics().height() + column_gap * 2)
-
-        max_width = max_table_size.width() if max_table_size and max_table_size.width() > 0 else None
-        max_height = max_table_size.height() if max_table_size and max_table_size.height() > 0 else None
-
-        horizontal_overflow = max_width is not None and content_width > max_width
-        vertical_overflow = max_height is not None and content_height > max_height
-        table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded if horizontal_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded if vertical_overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-
-        target_width = content_width
-        target_height = content_height
-        if vertical_overflow and not horizontal_overflow:
-            target_width += table.verticalScrollBar().sizeHint().width()
-        if horizontal_overflow:
-            target_height += table.horizontalScrollBar().sizeHint().height()
-
-        if max_width is not None:
-            target_width = min(target_width, max_width)
-        if max_height is not None:
-            target_height = min(target_height, max_height)
-
-        target = QSize(max(target_width, 1), max(target_height, 1))
+            height = frame + self._TABLE_ROW_HEIGHT
+        target = QSize(max(1, width), max(1, height))
         table.setFixedSize(target)
         table.updateGeometry()
         return target
 
     def _adjust_window_size_to_content(self):
-        """현재 테이블/웹 버튼/상태바 sizeHint에 맞춰 창 크기를 동적으로 최적화합니다."""
-        table_size = self._resize_table_to_contents()
+        """상단·표·상태 표시 폭을 통일한 뒤 전체 콘텐츠에 창을 정확히 맞춥니다."""
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(self._QWIDGETSIZE_MAX, self._QWIDGETSIZE_MAX)
+        central = self.centralWidget()
+        if central is None or central.layout() is None:
+            return
 
-        central_widget = self.centralWidget()
-        if central_widget and central_widget.layout():
-            central_widget.layout().invalidate()
-            central_widget.layout().activate()
+        for widget in (self.top_button_area, self.readiness_strip):
+            widget.setMinimumWidth(0)
+            widget.setMaximumWidth(self._QWIDGETSIZE_MAX)
+            if widget.layout() is not None:
+                widget.layout().invalidate()
+                widget.layout().activate()
 
-        self.setMinimumSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT)
-        target = self.sizeHint().expandedTo(self.minimumSizeHint())
+        natural_table = self._resize_table_to_contents()
+        margins = central.layout().contentsMargins()
+        horizontal_margins = margins.left() + margins.right()
+        menu_width = max(0, self.menuBar().sizeHint().width() - horizontal_margins)
+        minimum_content_width = max(1, self._MIN_WINDOW_WIDTH - horizontal_margins)
+        shared_width = max(
+            natural_table.width(),
+            self.top_button_area.sizeHint().width(),
+            self.readiness_strip.sizeHint().width(),
+            menu_width,
+            minimum_content_width,
+        )
+        self.top_button_area.setFixedWidth(shared_width)
+        self.readiness_strip.setFixedWidth(shared_width)
+        self._resize_table_to_contents(shared_width)
 
-        screen = self.screen() or QApplication.primaryScreen()
-        max_width: Optional[int] = None
-        max_height: Optional[int] = None
-        if screen is not None:
-            available = screen.availableGeometry()
-            max_width = max(self._MIN_WINDOW_WIDTH, int(available.width() * self._SCREEN_SIZE_RATIO))
-            max_height = max(self._MIN_WINDOW_HEIGHT, int(available.height() * self._SCREEN_SIZE_RATIO))
-
-        if (
-            (max_width is not None and target.width() > max_width)
-            or (max_height is not None and target.height() > max_height)
-        ):
-            extra_width = max(0, target.width() - table_size.width())
-            extra_height = max(0, target.height() - table_size.height())
-            capped_table_size = QSize(
-                max(1, (max_width or target.width()) - extra_width),
-                max(1, (max_height or target.height()) - extra_height),
-            )
-            self._resize_table_to_contents(capped_table_size)
-            if central_widget and central_widget.layout():
-                central_widget.layout().invalidate()
-                central_widget.layout().activate()
-            target = self.sizeHint().expandedTo(self.minimumSizeHint())
-
-        target.setWidth(max(target.width(), self.minimumSizeHint().width(), self._MIN_WINDOW_WIDTH))
-        target.setHeight(max(target.height(), self.minimumSizeHint().height(), self._MIN_WINDOW_HEIGHT))
-        if max_width is not None:
-            target.setWidth(min(target.width(), max_width))
-        if max_height is not None:
-            target.setHeight(min(target.height(), max_height))
-
+        central.layout().invalidate()
+        central.layout().activate()
+        target = self.sizeHint().expandedTo(QSize(self._MIN_WINDOW_WIDTH, self._MIN_WINDOW_HEIGHT))
         self.setFixedSize(target)
         self.updateGeometry()
         self.update()
-
-        if not self._restore_pending_window_anchor():
-            self._clamp_window_to_available_screen()
-
-        self._saved_size = self.size()
-        self._saved_geometry = self.geometry()
-
-    def _adjust_window_height_to_table(self):
-        """기존 메서드명 호환성을 위한 별칭"""
-        self._adjust_window_size_to_content()
-
-    def _adjust_window_width_for_web_buttons(self):
-        """웹 바로가기 변경 후 전체 content 기반 크기 계산을 다시 수행합니다."""
-        self._adjust_window_size_to_content()
-
-    def _adjust_window_height_for_table_rows(self):
-        """기존 호출부 호환: 전체 content 기반 크기 계산을 수행합니다."""
-        self._adjust_window_size_to_content()
+        if self._pending_bottom_right_placement and self.isVisible():
+            self._pending_bottom_right_placement = False
+            QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
+        else:
+            QTimer.singleShot(0, self._clamp_window_to_available_screen)
 
     # ───────── 볼륨 패널 ─────────
 
@@ -2510,7 +2455,6 @@ class MainWindow(QMainWindow):
         if self._volume_panel.isVisible():
             self._volume_panel.hide()
             self._volume_btn.setChecked(False)
-            self._volume_btn.setText("🔊")
         else:
             all_entries = []
             for p in self.data_manager.managed_processes:
@@ -2523,7 +2467,6 @@ class MainWindow(QMainWindow):
     def _on_volume_panel_hidden(self):
         """볼륨 패널이 숨겨질 때 (외부 클릭 포함) 토글 버튼 상태를 초기화합니다."""
         self._volume_btn.setChecked(False)
-        self._volume_btn.setText("🔊")
 
     def _get_active_pid(self, process_id: str) -> Optional[int]:
         """process_id에 대해 현재 활성 PID를 반환합니다. 실행 중이 아니면 None."""
@@ -2706,7 +2649,7 @@ class MainWindow(QMainWindow):
 
     def _on_recording_state_changed(self, state: str) -> None:
         """RecordingManager 상태 변경 콜백 — 백그라운드 스레드에서 호출될 수 있음.
-        pyqtSignal을 통해 메인 스레드로 안전하게 릴레이."""
+        Signal을 통해 메인 스레드로 안전하게 릴레이."""
         self._recording_state_sig.emit(state)
 
     def _dispatch_recording_state_to_sidebar(self, state: str) -> None:
@@ -2737,7 +2680,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, '_recording_manager'):
             return
         from src.gui.countdown_overlay import CountdownOverlay
-        from PyQt6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         screen = QApplication.primaryScreen()
         self._countdown_overlay = CountdownOverlay(
             on_complete=self._recording_manager.start_recording,
@@ -2948,85 +2891,32 @@ class MainWindow(QMainWindow):
 
 
     def _create_progress_bar_widget(self, process, percentage: float, time_str: str) -> QWidget:
-        """진행률을 표시하는 QProgressBar 위젯을 생성합니다."""
-        if percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")):
-            # 기록이 없는 경우 - 동일한 레이아웃 구조 유지
-            container = QWidget()
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(2, 0, 2, 0)
-            layout.setSpacing(4)
-
-            # 프리셋 아이콘 표시
-            icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
-            layout.addWidget(icon_label)
-
-            # 텍스트 라벨
-            text_label = QLabel(time_str)
-            text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(text_label, 1)  # stretch factor 1로 남은 공간 채움
-
-            return container
-
-        # 범용 리소스 형식 감지: "RESOURCE:key:label:percent"
-        if time_str.startswith("RESOURCE:"):
-            try:
-                parts = time_str.split(":", 3)
-                if len(parts) >= 4:
-                    resource_text = parts[3]
-
-                    container = QWidget()
-                    layout = QHBoxLayout(container)
-                    layout.setContentsMargins(2, 0, 2, 0)
-                    layout.setSpacing(4)
-
-                    icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
-                    layout.addWidget(icon_label)
-
-                    progress_bar = self._create_styled_progress_bar(percentage, resource_text)
-                    layout.addWidget(progress_bar, 1)
-                    return container
-            except Exception as e:
-                logger.error(f"리소스 위젯 생성 오류: {e}", exc_info=True)
-
-        # 스태미나 형식 감지: "STAMINA:game_id:current/max"
-        if time_str.startswith("STAMINA:"):
-            try:
-                parts = time_str.split(":")
-                if len(parts) >= 3:
-                    game_id = parts[1]
-                    stamina_text = parts[2]
-
-                    # 아이콘 + Progress Bar를 포함하는 컨테이너 위젯 생성
-                    container = QWidget()
-                    layout = QHBoxLayout(container)
-                    layout.setContentsMargins(2, 0, 2, 0)
-                    layout.setSpacing(4)
-
-                    # 아이콘 라벨
-                    icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
-                    layout.addWidget(icon_label)
-
-                    # Progress Bar
-                    progress_bar = self._create_styled_progress_bar(percentage, stamina_text)
-                    layout.addWidget(progress_bar, 1)
-
-                    return container
-            except Exception as e:
-                logger.error(f"스태미나 위젯 생성 오류: {e}", exc_info=True)
-
-        # 일반 시간 기반 Progress Bar (프리셋 아이콘 포함)
+        """우측 값 행과 셀 전체 폭의 얇은 트랙을 가진 진행률 위젯을 생성합니다."""
         container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(4)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
 
-        # 프리셋 아이콘 표시
-        icon_label = self._create_centered_resource_icon_label(self._get_stamina_icon_path(process))
-        layout.addWidget(icon_label)
+        value_row = QWidget(container)
+        value_layout = QHBoxLayout(value_row)
+        value_layout.setContentsMargins(0, 0, 0, 0)
+        value_layout.setSpacing(4)
+        icon_path = self._get_stamina_icon_path(process)
+        if icon_path and os.path.exists(icon_path):
+            value_layout.addWidget(self._create_centered_resource_icon_label(icon_path))
+        value_layout.addStretch(1)
 
-        # Progress Bar
-        progress_bar = self._create_styled_progress_bar(percentage, f"{percentage:.1f}%")
-        layout.addWidget(progress_bar, 1)  # stretch factor 1로 남은 공간 채움
+        expects_bar = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
+        display_text = self._get_progress_bar_format(percentage, time_str) if expects_bar else time_str
+        text_label = QLabel(display_text, value_row)
+        text_label.setObjectName("progressText")
+        text_label.setProperty("hhRole", "muted")
+        text_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        value_layout.addWidget(text_label)
+        layout.addWidget(value_row)
+
+        if expects_bar:
+            layout.addWidget(self._create_styled_progress_bar(percentage, display_text))
 
         return container
 
@@ -3051,17 +2941,13 @@ class MainWindow(QMainWindow):
         return resolve_preset_icon_path(icon_path, icon_type)
 
     def _create_styled_progress_bar(self, percentage: float, format_text: str) -> QProgressBar:
-        """스타일이 적용된 QProgressBar 생성"""
-        progress_bar = QProgressBar()
+        """공통 테마가 그리는 얇은 QProgressBar를 생성합니다."""
+        progress_bar = CapsuleProgressBar()
         progress_bar.setValue(self._progress_bar_value(percentage))
         progress_bar.setMaximum(self._PROGRESS_BAR_MAX)
         progress_bar.setMinimum(0)
 
-        # 높이 설정 (행 높이에 맞게 자동 조절)
-        progress_bar.setMinimumHeight(20)
-
-        # 텍스트 표시 설정
-        progress_bar.setTextVisible(True)
+        progress_bar.setTextVisible(False)
         progress_bar.setFormat(format_text)
         progress_bar.setProperty("color_bucket", self._progress_color_bucket(percentage))
         self._apply_progress_bar_style(progress_bar, percentage)
@@ -3083,102 +2969,48 @@ class MainWindow(QMainWindow):
             return 1
         return 0
 
-    def _progress_bar_stylesheet(self, chunk_color: str) -> str:
-        """공통 ProgressBar 스타일시트를 생성합니다."""
-        return f"""
-            QProgressBar {{
-                border: 1px solid #404040;
-                border-radius: 2px;
-                text-align: center;
-                background-color: #2d2d2d;
-                color: white;
-                font-weight: bold;
-            }}
-            QProgressBar::chunk {{
-                background-color: {chunk_color};
-                border-radius: 1px;
-            }}
-        """
-
     def _apply_progress_bar_style(self, progress_bar: QProgressBar, percentage: float) -> None:
-        """진행률 구간에 맞는 스타일을 ProgressBar에 적용합니다."""
-        if percentage >= 100:
-            chunk_color = "#ff4444"
-        elif percentage >= 80:
-            chunk_color = "#ff8800"
-        elif percentage >= 50:
-            chunk_color = "#ffcc00"
-        else:
-            chunk_color = "#44cc44"
-        progress_bar.setStyleSheet(self._progress_bar_stylesheet(chunk_color))
+        """진행률 구간을 공통 QSS가 소비하는 semantic 속성으로 적용합니다."""
+        bucket = ("low", "medium", "high", "full")[self._progress_color_bucket(percentage)]
+        progress_bar.setProperty("hhBucket", bucket)
+        progress_bar.style().unpolish(progress_bar)
+        progress_bar.style().polish(progress_bar)
 
     def _refresh_progress_bars(self):
-        """프로그레스 바들을 실시간으로 갱신합니다.
-
-        최적화:
-        - 값이 실제로 변경되었을 때만 업데이트
-        - 스타일시트는 색상 구간 변경 시에만 적용
-        - 컨테이너 내부의 Progress Bar 처리
-        """
+        """표의 진행률 셀을 값이 바뀐 경우에만 갱신합니다."""
         start_time = time.time()
         now_dt = datetime.datetime.now()
-        processes = self.data_manager.managed_processes
+        processes = {process.id: process for process in self.data_manager.managed_processes}
         updated_count = 0
 
-        # 테이블의 각 행을 순회하면서 해당 행의 프로세스 ID를 찾아서 갱신
         for row in range(self.process_table.rowCount()):
-            # 해당 행의 이름 컬럼에서 프로세스 ID 가져오기
             name_item = self.process_table.item(row, self.COL_NAME)
-            if not name_item:
+            if name_item is None:
                 continue
-
             process_id = name_item.data(Qt.ItemDataRole.UserRole)
-            if not process_id:
-                continue
-
-            # 프로세스 ID로 해당 프로세스 찾기
-            process = None
-            for p in processes:
-                if p.id == process_id:
-                    process = p
-                    break
-
+            process = processes.get(process_id)
             if not process:
                 continue
-
-            # 현재 셀의 위젯 가져오기
             current_widget = self.process_table.cellWidget(row, self.COL_LAST_PLAYED)
             if not current_widget:
                 continue
-
-            # 새로운 진행률 계산
             percentage, time_str = self._calculate_progress_percentage(process, now_dt)
-
-            # 컨테이너 위젯인 경우 내부 Progress Bar 찾기 (Task #2에서 변경된 구조)
-            progress_bar = None
-            if isinstance(current_widget, QWidget):
-                # 컨테이너 내부에서 QProgressBar 찾기
-                for child in current_widget.findChildren(QProgressBar):
-                    progress_bar = child
-                    break
-            elif isinstance(current_widget, QProgressBar):
-                # 직접 QProgressBar인 경우 (하위 호환)
-                progress_bar = current_widget
-
-            # Progress Bar 업데이트
+            progress_bar = current_widget.findChild(QProgressBar)
             expects_progress_widget = not (percentage == 0.0 and not time_str.startswith(("STAMINA:", "RESOURCE:")))
             if expects_progress_widget != (progress_bar is not None):
-                self.process_table.setCellWidget(
-                    row,
-                    self.COL_LAST_PLAYED,
-                    self._create_progress_bar_widget(process, percentage, time_str),
-                )
+                replacement = self._create_progress_bar_widget(process, percentage, time_str)
+                self.process_table.setCellWidget(row, self.COL_LAST_PLAYED, replacement)
                 updated_count += 1
                 continue
 
+            new_format = self._get_progress_bar_format(percentage, time_str) if expects_progress_widget else time_str
+            text_label = current_widget.findChild(QLabel, "progressText")
+            if text_label is not None and text_label.text() != new_format:
+                text_label.setText(new_format)
+                updated_count += 1
+
             if progress_bar:
                 new_value = self._progress_bar_value(percentage)
-                new_format = self._get_progress_bar_format(percentage, time_str)
                 new_bucket = self._progress_color_bucket(percentage)
 
                 if progress_bar.value() != new_value:
@@ -3194,18 +3026,9 @@ class MainWindow(QMainWindow):
                     self._apply_progress_bar_style(progress_bar, percentage)
                     updated_count += 1
 
-            # QLabel 업데이트 (컨테이너 내부의 라벨 - "기록 없음" 표시)
-            else:
-                for child in current_widget.findChildren(QLabel):
-                    if child.text() != time_str:
-                        child.setText(time_str)
-                        updated_count += 1
-                    break
-
-        # 업데이트가 있었으면 viewport 강제 갱신 (절전 복귀 후 화면 그리기 문제 대응)
         if updated_count > 0:
-            if self.process_table.viewport():
-                self.process_table.viewport().update()
+            self.process_table.viewport().update()
+            QTimer.singleShot(0, self._adjust_window_size_to_content)
 
         # 타이머 실행 시간 로깅 (100ms 이상 걸리면 경고)
         execution_time = (time.time() - start_time) * 1000
@@ -3251,7 +3074,7 @@ class MainWindow(QMainWindow):
             True: 사용자가 재시작에 동의
             False: 사용자가 재시작 거부
         """
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
 
         # 런처명을 사용자 친화적으로 변환
         friendly_name = launcher_name.replace('.exe', '').replace('Launcher', ' Launcher')

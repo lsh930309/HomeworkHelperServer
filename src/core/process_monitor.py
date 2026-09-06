@@ -89,6 +89,88 @@ class ProcessMonitorTickResult:
     stopped: List[ProcessLifecycleEvent] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class DetectedRuntimeProcess:
+    """GUI thread로 전달할 수 있는 불변 OS 프로세스 관측값입니다."""
+
+    process_id: str
+    pid: int
+    executable: str
+    create_time: float
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessScanSnapshot:
+    detected: tuple[DetectedRuntimeProcess, ...]
+    observed_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessScanTarget:
+    process_id: str
+    monitoring_path: str
+
+
+def _normalize_process_path(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    try:
+        return os.path.normcase(os.path.abspath(path))
+    except Exception:
+        return path
+
+
+def detect_running_process_ids(targets: tuple[ProcessScanTarget, ...]) -> set[str]:
+    """불변 대상 목록만으로 현재 실행 중인 관리 프로세스 ID를 찾습니다."""
+    running_exes: set[str] = set()
+    for proc in psutil.process_iter(["exe"]):
+        try:
+            exe_path = _normalize_process_path(proc.info["exe"])
+            if exe_path:
+                running_exes.add(exe_path)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
+            continue
+    return {
+        target.process_id
+        for target in targets
+        if (normalized := _normalize_process_path(target.monitoring_path)) and normalized in running_exes
+    }
+
+
+def scan_running_processes(targets: tuple[ProcessScanTarget, ...]) -> ProcessScanSnapshot:
+    """DB/provider/cache 참조 없이 OS 프로세스 표를 불변 snapshot으로 읽습니다."""
+    managed_paths = {
+        normalized: target.process_id
+        for target in targets
+        if (normalized := _normalize_process_path(target.monitoring_path))
+    }
+    detected_by_id: dict[str, DetectedRuntimeProcess] = {}
+    for proc in psutil.process_iter(["pid", "exe", "create_time"]):
+        try:
+            executable = _normalize_process_path(proc.info.get("exe"))
+            process_id = managed_paths.get(executable)
+            if process_id is None or process_id in detected_by_id:
+                continue
+            detected_by_id[process_id] = DetectedRuntimeProcess(
+                process_id=process_id,
+                pid=int(proc.info.get("pid") or proc.pid),
+                executable=str(executable),
+                create_time=float(proc.info.get("create_time") or proc.create_time()),
+            )
+        except (
+            psutil.NoSuchProcess,
+            psutil.AccessDenied,
+            TypeError,
+            ValueError,
+            FileNotFoundError,
+        ):
+            continue
+    return ProcessScanSnapshot(
+        detected=tuple(detected_by_id[key] for key in sorted(detected_by_id)),
+        observed_at=time.time(),
+    )
+
+
 class ProcessMonitor:
     def __init__(self, data_manager: ProcessesDataPort):
         """실행 중 프로세스 캐시를 초기화합니다."""
@@ -216,29 +298,29 @@ class ProcessMonitor:
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
         """실행 파일 경로를 비교 가능한 절대 경로 형태로 정규화합니다."""
-        if not path: 
-            return None
-        try: 
-            return os.path.normcase(os.path.abspath(path))
-        except Exception: 
-            return path 
+        return _normalize_process_path(path)
 
-    def detect_running_process_ids(self) -> set[str]:
+    def process_scan_targets(self) -> tuple[ProcessScanTarget, ...]:
+        """GUI 소유 모델에서 스캔에 필요한 값만 확정해 반환합니다."""
+        return tuple(
+            ProcessScanTarget(str(process.id), str(process.monitoring_path or ""))
+            for process in tuple(self.data_manager.managed_processes)
+        )
+
+    def detect_running_process_ids(
+        self,
+        targets: tuple[ProcessScanTarget, ...] | None = None,
+    ) -> set[str]:
         """Return managed process IDs currently visible in the OS process table."""
-        running_exes: set[str] = set()
-        for proc in psutil.process_iter(['exe']):
-            try:
-                exe_path = self._normalize_path(proc.info['exe'])
-                if exe_path:
-                    running_exes.add(exe_path)
-            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
-                continue
-        running_ids: set[str] = set()
-        for managed_proc in self.data_manager.managed_processes:
-            normalized_monitoring_path = self._normalize_path(managed_proc.monitoring_path)
-            if normalized_monitoring_path and normalized_monitoring_path in running_exes:
-                running_ids.add(managed_proc.id)
-        return running_ids
+        scan_targets = targets if targets is not None else self.process_scan_targets()
+        return detect_running_process_ids(scan_targets)
+
+    def scan_running_processes(
+        self,
+        targets: tuple[ProcessScanTarget, ...],
+    ) -> ProcessScanSnapshot:
+        """DB/provider/cache를 건드리지 않고 OS 프로세스 표만 읽습니다."""
+        return scan_running_processes(targets)
 
     def check_and_update_statuses(self) -> ProcessMonitorTickResult:
         """시스템 프로세스 스냅샷과 내부 캐시를 비교해 시작/종료 이벤트를 기록합니다."""

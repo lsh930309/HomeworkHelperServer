@@ -2,11 +2,13 @@ import os
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt
-from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import QApplication, QLabel
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton, QStyle, QStyleOptionButton
 
 from src.data.data_models import (
     GlobalSettings,
@@ -34,6 +36,7 @@ class _Noop:
 
 class _FakeApiClient:
     def __init__(self, processes):
+        self.app_instance_id = "gui-layout-test"
         self.managed_processes = processes
         self.web_shortcuts = []
         self.global_settings = GlobalSettings(
@@ -329,17 +332,36 @@ def test_menu_bar_dropdown_actions_are_text_only(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
-def test_main_window_uses_icon_only_remote_readiness_indicators():
+def test_main_window_uses_three_read_only_bottom_readiness_items():
     source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
     assert "showMessage(" not in source
-    assert '("beholder", "●")' in source
-    assert '("remote", "●")' in source
-    assert '("admin", "●")' in source
-    assert "remoteReadiness_server" not in source
-    assert "remoteReadiness_power" not in source
-    assert "remoteReadiness_tailscale" not in source
-    assert "QGraphicsDropShadowEffect" in source
+    assert 'setObjectName("readinessStrip")' in source
+    assert "system_status_button" not in source
+    assert 'for key in ("beholder", "remote", "admin")' in source
+    assert "QGraphicsDropShadowEffect" not in source
+    assert "QStatusBar" not in source
+
+
+def test_bottom_readiness_items_show_compact_state_and_keep_details_in_tooltips(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window._set_remote_readiness_indicator("remote", "yellow", "원격 연결 확인 필요")
+        remote_dot, remote_text = window._readiness_status_widgets["remote"]
+        assert remote_dot.property("hhState") == "yellow"
+        assert remote_text.text() == "원격 준비 중"
+        assert remote_text.toolTip() == "원격 연결 확인 필요"
+
+        window._set_remote_readiness_indicator("beholder", "red", "데이터 보호 오류")
+        data_dot, data_text = window._readiness_status_widgets["beholder"]
+        assert data_dot.property("hhState") == "red"
+        assert data_text.text() == "데이터 오류"
+        assert data_text.toolTip() == "데이터 보호 오류"
+        assert all(not label.hasMouseTracking() for pair in window._readiness_status_widgets.values() for label in pair)
+    finally:
+        _stop_window(window, app)
 
 
 def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
@@ -454,7 +476,7 @@ def test_process_dialog_returns_launch_args_opt_in(monkeypatch, tmp_path):
         app.processEvents()
 
 
-def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path):
+def test_main_game_table_restores_name_sort_and_centered_icons(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     icon_requests = []
@@ -477,7 +499,6 @@ def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path
 
         assert not window.process_table.horizontalHeader().isVisible()
         assert not window.process_table.verticalHeader().isVisible()
-        assert window.process_table.verticalHeader().width() == 0
         assert not window.process_table.isSortingEnabled()
         assert [
             window.process_table.item(row, window.COL_NAME).text()
@@ -485,48 +506,67 @@ def test_main_table_hides_headers_and_uses_fixed_name_sort(monkeypatch, tmp_path
         ] == ["Alpha", "Beta", "Zeta"]
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
         assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
-        assert window.process_table.iconSize().width() == window._TABLE_ICON_LOGICAL_SIZE
-        assert window.process_table.columnWidth(window.COL_ICON) <= (
-            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
-        )
         icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
         assert isinstance(icon_cell, QLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
+        assert window.process_table.columnWidth(window.COL_ICON) <= (
+            window._TABLE_ICON_LOGICAL_SIZE + window._TABLE_ICON_COLUMN_PADDING
+        )
         assert all(
-            window._TABLE_ROW_HEIGHT <= window.process_table.rowHeight(row) <= window._TABLE_ROW_HEIGHT + 4
+            window.process_table.rowHeight(row) == window._TABLE_ROW_HEIGHT
             for row in range(window.process_table.rowCount())
         )
+        launch_cell = window.process_table.cellWidget(0, window.COL_LAUNCH_BTN)
+        launch_button = launch_cell.findChild(QPushButton)
+        assert launch_button is not None
+        assert launch_button.height() == window._TABLE_LAUNCH_BUTTON_HEIGHT
     finally:
         _stop_window(window, app)
 
 
-def test_main_table_enables_overflow_scrollbar_instead_of_oversizing_screen(monkeypatch, tmp_path):
+@pytest.mark.parametrize("process_count", [0, 1, 2, 3, 4, 8])
+def test_main_table_window_fits_all_rows_without_scroll(monkeypatch, tmp_path, process_count):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
-    long_name = "Extremely Long Game Name " + ("X" * 800)
-    window = main_window.MainWindow(
-        _FakeApiClient([
-            ManagedProcess(id="long", name=long_name, monitoring_path="long.exe", launch_path="long.exe"),
-        ])
-    )
+    processes = [
+        ManagedProcess(
+            id=f"game-{index}",
+            name=f"Game {index + 1}",
+            monitoring_path=f"game-{index}.exe",
+            launch_path=f"game-{index}.exe",
+        )
+        for index in range(process_count)
+    ]
+    window = main_window.MainWindow(_FakeApiClient(processes))
     try:
         window.show()
         app.processEvents()
         window._adjust_window_size_to_content()
         app.processEvents()
 
-        screen = window.screen() or QApplication.primaryScreen()
-        max_width = int(screen.availableGeometry().width() * window._SCREEN_SIZE_RATIO)
-        assert window.width() <= max(max_width, window._MIN_WINDOW_WIDTH)
+        assert window.process_table.rowCount() == process_count
+        assert window.process_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         assert window.minimumSize() == window.size()
         assert window.maximumSize() == window.size()
-        assert window.process_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert window.size() == window.sizeHint().expandedTo(
+            QSize(window._MIN_WINDOW_WIDTH, window._MIN_WINDOW_HEIGHT)
+        )
+        expected_height = window.process_table.frameWidth() * 2 + sum(
+            window.process_table.rowHeight(row)
+            for row in range(window.process_table.rowCount())
+        )
+        if process_count == 0:
+            expected_height += window._TABLE_ROW_HEIGHT
+        assert window.process_table.height() == expected_height
+        assert window.top_button_area.width() == window.process_table.width()
+        assert window.readiness_strip.width() == window.process_table.width()
     finally:
         _stop_window(window, app)
 
 
-def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path):
+def test_restore_window_state_reapplies_content_fixed_size(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     window = main_window.MainWindow(
@@ -546,31 +586,87 @@ def test_restore_window_state_preserves_fixed_content_size(monkeypatch, tmp_path
         _stop_window(window, app)
 
 
-def test_relative_window_anchor_keeps_bottom_right_across_height_changes():
-    import src.gui.main_window as main_window
+def test_dashboard_button_uses_original_chart_glyph(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        assert window.dashboard_button.text() == "📊"
+        assert window.dashboard_button.icon().isNull()
+        assert window.dashboard_button.size() == window.add_web_shortcut_button.size()
+        assert window.dashboard_button.size().toTuple() == (30, 30)
+        assert window.dashboard_button.size() == window.dashboard_button.sizeHint()
+    finally:
+        _stop_window(window, app)
 
-    virtual_available = QRect(0, 0, 2560, 1560)
-    window_rect = QRect(2200, 1260, 360, 300)
 
-    anchor = main_window.MainWindow._window_anchor_from_rect(
-        window_rect,
-        virtual_available,
-        "Moonlight",
-    )
+def test_style_controlled_main_buttons_are_not_smaller_than_size_hints(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="game", name="Game", monitoring_path="game.exe", launch_path="game.exe")
+    window = main_window.MainWindow(_FakeApiClient([process]))
+    try:
+        window.show()
+        app.processEvents()
+        buttons = window.findChildren(QPushButton)
 
-    assert anchor["horizontal"] == "right"
-    assert anchor["vertical"] == "bottom"
-    assert anchor["right_gap"] == 0
-    assert anchor["bottom_gap"] == 0
+        assert buttons
+        assert all(
+            button.width() >= button.sizeHint().width()
+            and button.height() >= button.sizeHint().height()
+            for button in buttons
+        )
+    finally:
+        _stop_window(window, app)
 
-    physical_available = QRect(0, 0, 2560, 1400)
-    restored = main_window.MainWindow._position_from_window_anchor(
-        anchor,
-        physical_available,
-        QSize(360, 300),
-    )
 
-    assert restored == QPoint(2200, 1100)
+def test_web_button_and_theme_changes_refit_through_same_fixed_size_path(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    client = _FakeApiClient([
+        ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe"),
+    ])
+    window = main_window.MainWindow(client)
+    try:
+        window.show()
+        app.processEvents()
+        initial_size = window.size()
+
+        client.web_shortcuts = [
+            WebShortcut(id=f"web-{index}", name=f"주요 서비스 바로가기 {index + 1}", url="https://example.com")
+            for index in range(5)
+        ]
+        window._load_and_display_web_buttons()
+        app.processEvents()
+        assert window.width() > initial_size.width()
+        assert window.minimumSize() == window.maximumSize() == window.size()
+
+        window._apply_theme("dark")
+        app.processEvents()
+        assert window.minimumSize() == window.maximumSize() == window.size()
+
+        client.web_shortcuts = []
+        window._load_and_display_web_buttons()
+        app.processEvents()
+        assert window.width() == initial_size.width()
+        assert window.minimumSize() == window.maximumSize() == window.size()
+    finally:
+        _stop_window(window, app)
+
+
+def test_main_window_position_is_not_persisted_when_show_always_reanchors():
+    source = Path("src/gui/main_window.py").read_text(encoding="utf-8")
+
+    assert 'setValue("window_geometry"' not in source
+    assert "restoreGeometry(" not in source
+    assert "_position_on_cursor_screen_bottom_right" in source
+    assert "position_windows_window_bottom_right(" in source
+    assert "_pending_bottom_right_placement" in source
+    assert "def moveEvent(self, event):" in source
+    assert "snap_windows_window_to_work_area(" in source
+    assert "_WindowsMovingEventFilter" not in source
+    assert "QAbstractNativeEventFilter" not in source
+    assert "QApplication.screenAt(QCursor.pos())" in source
 
 
 def test_web_shortcut_click_uses_runtime_marker(monkeypatch, tmp_path):
@@ -611,20 +707,10 @@ def test_dashboard_button_uses_data_manager_base_url(monkeypatch, tmp_path):
     data_manager.base_url = "http://127.0.0.1:43210"
     window = main_window.MainWindow(data_manager)
     opened = []
-    health_urls = []
-
-    class _Response:
-        status_code = 200
-
-        def json(self):
-            return {"ok": True, "dashboard_static_ready": True}
-
-    monkeypatch.setattr(main_window.requests, "get", lambda url, **_kwargs: health_urls.append(url) or _Response())
     window.open_webpage = lambda url: opened.append(url)
     try:
         window._open_dashboard()
 
-        assert health_urls == ["http://127.0.0.1:43210/api/gui/health"]
         assert opened == ["http://127.0.0.1:43210/dashboard"]
     finally:
         _stop_window(window, app)
@@ -650,6 +736,162 @@ def test_resource_icon_label_centers_pixmap_in_fixed_space(monkeypatch, tmp_path
         assert label.pixmap().height() <= 16
     finally:
         _stop_window(window, app)
+
+
+def test_progress_cell_uses_full_width_bar_and_only_real_resource_icon(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    process = ManagedProcess(id="a", name="Alpha", monitoring_path="a.exe", launch_path="a.exe")
+    window = main_window.MainWindow(_FakeApiClient([process]))
+    icon_path = tmp_path / "resource.png"
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor("#5cc8ff"))
+    assert pixmap.save(str(icon_path))
+    without_icon = None
+    with_icon = None
+    try:
+        monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: None)
+        without_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        without_icon.resize(240, window._TABLE_ROW_HEIGHT)
+        without_icon.show()
+        app.processEvents()
+        assert len(without_icon.findChildren(QLabel)) == 1
+        assert without_icon.findChild(QLabel, "progressText").alignment() & Qt.AlignmentFlag.AlignRight
+        assert without_icon.findChild(QProgressBar).width() == without_icon.contentsRect().width()
+
+        monkeypatch.setattr(window, "_get_stamina_icon_path", lambda _process: str(icon_path))
+        with_icon = window._create_progress_bar_widget(process, 50.0, "50분")
+        with_icon.resize(240, window._TABLE_ROW_HEIGHT)
+        with_icon.show()
+        app.processEvents()
+        assert len(with_icon.findChildren(QLabel)) == 2
+        labels = with_icon.findChildren(QLabel)
+        resource_icon = next(label for label in labels if label.objectName() != "progressText")
+        progress_text = with_icon.findChild(QLabel, "progressText")
+        assert resource_icon.geometry().left() == with_icon.contentsRect().left()
+        assert progress_text.geometry().right() == with_icon.contentsRect().right()
+        assert resource_icon.geometry().right() < progress_text.geometry().left()
+    finally:
+        if without_icon is not None:
+            without_icon.close()
+        if with_icon is not None:
+            with_icon.close()
+        _stop_window(window, app)
+
+
+def test_always_on_top_corner_has_safe_margin_and_right_alignment(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window.show()
+        app.processEvents()
+        margins = window._menu_corner_layout.contentsMargins()
+        assert margins.left() == 0
+        assert margins.top() == margins.bottom() == 0
+        assert margins.right() == 0
+        assert window._menu_corner_layout.count() == 2
+        assert window._menu_corner_layout.itemAt(0).widget() is window._always_on_top_cb
+        assert window._menu_corner_layout.itemAt(1).widget() is window._volume_btn
+        menu_rect = window.menuBar().contentsRect()
+        corner_rect = window._menu_corner_container.geometry()
+        action_rect = window.menuBar().actionGeometry(window.menuBar().actions()[0])
+        checkbox_rect = window._always_on_top_cb.geometry().translated(corner_rect.topLeft())
+        volume_rect = window._volume_btn.geometry().translated(corner_rect.topLeft())
+        # QMenuBar 자체의 4px 오른쪽 스타일 여백만 남고 별도 stretch는 없습니다.
+        assert 0 <= menu_rect.right() - corner_rect.right() <= 4
+        assert menu_rect.contains(corner_rect)
+        assert checkbox_rect.center().y() == action_rect.center().y()
+        assert volume_rect.center().y() == action_rect.center().y()
+        assert window._always_on_top_cb.width() >= window._always_on_top_cb.sizeHint().width()
+        assert checkbox_rect.right() + window._menu_corner_layout.spacing() < volume_rect.left()
+
+        option = QStyleOptionButton()
+        window._always_on_top_cb.initStyleOption(option)
+        indicator_rect = window._always_on_top_cb.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator,
+            option,
+            window._always_on_top_cb,
+        )
+        assert indicator_rect.top() > 0
+        assert indicator_rect.bottom() < window._always_on_top_cb.height() - 1
+    finally:
+        _stop_window(window, app)
+
+
+def test_volume_button_icon_uses_theme_text_color(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window._apply_theme("dark")
+        app.processEvents()
+        image = window._volume_btn.icon().pixmap(16, 16).toImage()
+        visible_colors = [
+            image.pixelColor(x, y)
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        ]
+
+        assert visible_colors
+        assert all(color.lightness() > 200 for color in visible_colors)
+    finally:
+        _stop_window(window, app)
+
+
+def test_move_event_uses_main_window_handle_and_15px_snap_threshold(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        main_window,
+        "snap_windows_window_to_work_area",
+        lambda hwnd, *, threshold_logical: calls.append((hwnd, threshold_logical)) or False,
+    )
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window.show()
+        app.processEvents()
+        calls.clear()
+        window.move(window.pos() + QPoint(20, 20))
+        app.processEvents()
+
+        assert calls
+        assert calls[-1] == (int(window.winId()), 15)
+    finally:
+        _stop_window(window, app)
+
+
+@pytest.mark.parametrize(
+    ("rect", "expected"),
+    [
+        ((7, 200, 207, 300), (0, 200, 200, 300)),
+        ((1709, 200, 1909, 300), (1720, 200, 1920, 300)),
+        ((200, 8, 400, 108), (200, 0, 400, 100)),
+        ((200, 931, 400, 1031), (200, 940, 400, 1040)),
+        ((5, 935, 205, 1035), (0, 940, 200, 1040)),
+        ((20, 20, 220, 120), (20, 20, 220, 120)),
+    ],
+)
+def test_snap_rect_to_work_area_preserves_size_and_snaps_edges(rect, expected):
+    from src.utils.windows import snap_rect_to_work_area
+
+    snapped = snap_rect_to_work_area(rect, (0, 0, 1920, 1040), 12)
+
+    assert snapped == expected
+    assert snapped[2] - snapped[0] == rect[2] - rect[0]
+    assert snapped[3] - snapped[1] == rect[3] - rect[1]
+
+
+def test_snap_rect_to_offset_secondary_monitor_work_area():
+    from src.utils.windows import snap_rect_to_work_area
+
+    assert snap_rect_to_work_area(
+        (-1910, 50, -1710, 150),
+        (-1920, 40, 0, 1080),
+        12,
+    ) == (-1920, 40, -1720, 140)
 
 
 def test_sidebar_activates_when_running_cache_already_exists_without_monitor_change(monkeypatch, tmp_path):
@@ -1452,6 +1694,11 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     heartbeat_timer = FakeTimer()
     ui_timer = FakeTimer()
     process_monitor = types.SimpleNamespace(active_monitored_processes={"game-a": {"session_id": 1}})
+    timer_registry = main_window.DesiredTimerRegistry()
+    timer_registry.register("monitor", monitor_timer, interval_ms=1000)
+    timer_registry.register("scheduler", scheduler_timer, interval_ms=1000)
+    timer_registry.register("heartbeat", heartbeat_timer, interval_ms=30000)
+    timer_registry.register("ui_refresh", ui_timer, interval_ms=1000)
     window = types.SimpleNamespace(
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
@@ -1459,6 +1706,8 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
         runtime_heartbeat_timer=heartbeat_timer,
         ui_refresh_timer=ui_timer,
         _UI_REFRESH_INTERVAL_MS=1000,
+        _timer_registry=timer_registry,
+        _work_coordinator=types.SimpleNamespace(invalidate_telemetry=lambda: None),
     )
 
     main_window.MainWindow._suspend_runtime_after_beholder_restore(window)

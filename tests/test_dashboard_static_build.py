@@ -92,3 +92,13 @@ def test_host_window_icon_uses_current_packaged_asset():
     assert r"img\app_icon.ico" not in main_window
     assert "assets/icons/app/app_icon.ico" in spec
     assert r"assets\icons\app\app_icon.ico" in installer
+
+
+def test_dashboard_requests_have_deadline_abort_and_retry_ui():
+    source = Path("src/api/dashboard/frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "REQUEST_TIMEOUT_MS = 10_000" in source
+    assert "new AbortController()" in source
+    assert "controller.abort()" in source
+    assert "fetch(url, { signal })" in source
+    assert "다시 시도" in source

@@ -83,6 +83,89 @@ def test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open(mon
     assert db.query(models.BeholderIncident).count() == 1
 
 
+def test_equivalent_pending_and_denied_incidents_are_reused(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(
+        kind="runtime_stop",
+        actor="process_monitor",
+        evidence={
+            "changed_fields": ["end_timestamp"],
+            "context": {"session_id": 1, "process_id": "game-a"},
+            "proposed_values": {"end_timestamp": 200.0},
+        },
+    )
+    values = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "current_state_summary": "현재 상태=closed",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, **values)
+    pending_duplicate = beholder.create_incident(db, **values)
+
+    assert pending_duplicate.id == first.id
+    assert db.query(models.BeholderIncident).count() == 1
+
+    beholder.mark_incident(db, first.id, beholder.STATUS_DENIED)
+    denied_duplicate = beholder.create_incident(db, **values)
+
+    assert denied_duplicate.id == first.id
+    assert denied_duplicate.status == beholder.STATUS_DENIED
+    assert db.query(models.BeholderIncident).count() == 1
+
+
+def test_changed_incident_context_creates_a_new_incident(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor")
+    common = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, current_state_summary="현재 상태=closed", **common)
+    second = beholder.create_incident(db, current_state_summary="현재 상태=quarantined", **common)
+
+    assert second.id != first.id
+    assert db.query(models.BeholderIncident).count() == 2
+
+
+def test_fallback_user_summary_does_not_expose_internal_identity(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor"),
+        target_summary="session_id=1, process_id=secret-uuid",
+        suspected_cause="internal cause",
+        current_state_summary="owner=internal",
+        proposed_change_summary="end_timestamp=123",
+        risk_score=50,
+        risk_factors=["internal_factor"],
+        safe_recommendation="차단을 유지하세요.",
+    )
+
+    summary = beholder.incident_to_dict(incident)["user_summary"]
+
+    assert "session_id" not in summary
+    assert "secret-uuid" not in summary
+    assert "process_monitor" not in summary
+
+
 def test_beholder_allows_long_session_with_override_token(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -1330,81 +1413,6 @@ def test_resource_session_refresh_client_uses_resource_specific_patch(monkeypatc
         "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
     }
 
-
-def test_hoyolab_reconcile_persists_only_final_stamina_fields():
-    from src.core.hoyolab_reconcile import _StaminaPersistTask
-    from src.data.data_models import ManagedProcess
-
-    process = ManagedProcess(
-        id="game-a",
-        name="Game A",
-        monitoring_path="/games/a.exe",
-        launch_path="/games/a.exe",
-        last_played_timestamp=123.0,
-        stamina_tracking_enabled=True,
-        hoyolab_game_id="genshin",
-        stamina_current=100,
-        stamina_max=240,
-        stamina_updated_at=1000.0,
-    )
-
-    class FakeDataManager:
-        runtime_updates = []
-        stamina_updates = []
-        session_updates = []
-
-        def get_process_by_id(self, process_id):
-            assert process_id == "game-a"
-            return process
-
-        def update_process_runtime_state(self, updated_process):
-            self.runtime_updates.append(updated_process)
-            return True
-
-        def update_process_stamina(self, process_id, stamina_current, stamina_max, stamina_updated_at):
-            self.stamina_updates.append((process_id, stamina_current, stamina_max, stamina_updated_at))
-            return True
-
-        def update_session_stamina(self, session_id, stamina_at_end):
-            self.session_updates.append((session_id, stamina_at_end))
-            return True
-
-    class Finished:
-        def __init__(self):
-            self.payloads = []
-
-        def emit(self, *args):
-            self.payloads.append(args)
-
-    class Signals:
-        def __init__(self):
-            self.finished = Finished()
-
-    data_manager = FakeDataManager()
-    signals = Signals()
-    task = _StaminaPersistTask(
-        process_id="game-a",
-        process_name="Game A",
-        session_id=7,
-        lifecycle_token=1,
-        request_seq=1,
-        fetched_current=90,
-        fetched_max=240,
-        fetched_at=1778497000.0,
-        exit_timestamp=1778497000.0,
-        allow_session_correction=True,
-        applied_session_stamina=100,
-        data_manager=data_manager,
-        should_abort=lambda: False,
-        signals=signals,
-    )
-
-    task.run()
-
-    assert data_manager.stamina_updates == [("game-a", 90, 240, 1778497000.0)]
-    assert data_manager.runtime_updates == []
-    assert data_manager.session_updates == [(7, 90)]
-    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
 
 
 def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):

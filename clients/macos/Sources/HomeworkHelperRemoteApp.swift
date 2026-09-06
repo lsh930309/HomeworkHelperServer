@@ -5,7 +5,6 @@ extension Notification.Name {
     static let homeworkHelperRemoteMainWindowWillShow = Notification.Name("HomeworkHelperRemoteMainWindowWillShow")
     static let homeworkHelperRemoteToggleSidebar = Notification.Name("HomeworkHelperRemoteToggleSidebar")
     static let homeworkHelperRemoteRefreshRequested = Notification.Name("HomeworkHelperRemoteRefreshRequested")
-    static let homeworkHelperRemoteOpenSettings = Notification.Name("HomeworkHelperRemoteOpenSettings")
     static let homeworkHelperRemoteMenuBarIconDidChange = Notification.Name("HomeworkHelperRemoteMenuBarIconDidChange")
     static let homeworkHelperRemoteMenuBarStatusDidChange = Notification.Name("HomeworkHelperRemoteMenuBarStatusDidChange")
     static let homeworkHelperRemoteGlobalShortcutPressed = Notification.Name("HomeworkHelperRemoteGlobalShortcutPressed")
@@ -27,31 +26,25 @@ enum RemoteSharedModel {
 
 @MainActor
 final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    enum SettingsOpenSource {
-        case popoverButton
-        case popoverShortcut
-        case uiTest
-    }
-
     static let mainWindowIdentifier = "HomeworkHelperRemoteMainWindow"
     static let mainWindowTitle = "HomeworkHelper Remote"
     static let placeholderWindowIdentifier = "HomeworkHelperRemotePlaceholderWindow"
     static let placeholderWindowTitle = "HomeworkHelper Remote Hidden"
     static let settingsWindowIdentifier = "HomeworkHelperRemoteSettingsWindow"
-    static let settingsWindowTitle = "HomeworkHelper Remote 설정"
 
     private static weak var shared: RemoteAppDelegate?
     private static let moonlightBundleIdentifier = "com.moonlight-stream.Moonlight"
     private static var isOpeningMainWindow = false
     private static var uiTestMainWindow: NSWindow?
     private static var uiTestPopoverWindow: NSWindow?
-    private static var explicitSettingsOpenExpiresAt: Date?
-    private static let explicitSettingsOpenWindow: TimeInterval = 1.0
 
     private var statusItem: NSStatusItem?
     private var statusItemClickMonitor: Any?
     private var popoverOutsideClickMonitor: Any?
     private var popoverKeyDownMonitor: Any?
+    private var settingsWindow: NSWindow?
+    private static var settingsOpener: (@MainActor () -> Void)?
+    private static var pendingSettingsOpen = false
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -85,7 +78,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
         if RemoteUITestFlags.openSettings {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                Self.openSettingsWindow(source: .uiTest)
+                Self.showSettingsWindow()
             }
         } else if RemoteUITestFlags.clickStatusItem {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -214,7 +207,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
                 return event
             }
             guard self.isCommandComma(event) else { return event }
-            Self.openSettingsWindow(source: .popoverShortcut)
+            Self.showSettingsWindow()
             return nil
         }
     }
@@ -465,110 +458,49 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
         }
     }
 
-    static func openSettingsWindow(source: SettingsOpenSource) {
-        guard source == .uiTest || shared?.popover.isShown == true else { return }
-        beginExplicitSettingsOpen()
-        shared?.closePopoverForFocusLoss()
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
-        if focusExistingSettingsWindow() {
-            clearExplicitSettingsOpen()
+    static func showSettingsWindow() {
+        guard let shared else {
+            pendingSettingsOpen = true
             return
         }
-        NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings, object: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            guard isExplicitSettingsOpenPending() else { return }
-            if focusExistingSettingsWindow() {
-                clearExplicitSettingsOpen()
-                return
-            }
-            if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-                return
-            }
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+        shared.presentSettingsWindow()
     }
 
-    static func prepareSettingsWindow(_ window: NSWindow) {
-        window.identifier = NSUserInterfaceItemIdentifier(settingsWindowIdentifier)
-        window.title = settingsWindowTitle
-        window.isReleasedWhenClosed = false
+    static func installSettingsOpener(_ opener: @escaping @MainActor () -> Void) {
+        settingsOpener = opener
+        guard pendingSettingsOpen else { return }
+        pendingSettingsOpen = false
+        shared?.presentSettingsWindow()
+    }
+
+    static func registerSettingsWindow(_ window: NSWindow) {
+        shared?.settingsWindow = window
+    }
+
+    private func presentSettingsWindow() {
+        closePopoverForFocusLoss()
         NSApp.setActivationPolicy(.accessory)
-        let prepared = deduplicateSettingsWindows(preferred: window) ?? window
-        guard isExplicitSettingsOpenPending() else { return }
+        if let settingsWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            settingsWindow.makeKeyAndOrderFront(nil)
+            settingsWindow.orderFrontRegardless()
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
-        focusSettingsWindow(prepared)
-        clearExplicitSettingsOpen()
+        guard let settingsOpener = Self.settingsOpener else {
+            Self.pendingSettingsOpen = true
+            return
+        }
+        settingsOpener()
     }
 
     static func hideSettingsWindow(_ window: NSWindow?) {
-        if let window {
-            window.orderOut(nil)
-        } else {
-            settingsWindows().forEach { $0.orderOut(nil) }
-        }
-        restoreAccessoryIfNoVisibleUserWindows()
-    }
-
-    @discardableResult
-    private static func focusExistingSettingsWindow() -> Bool {
-        guard isExplicitSettingsOpenPending() else { return false }
-        guard let window = deduplicateSettingsWindows() else { return false }
+        (window ?? shared?.settingsWindow)?.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
-        focusSettingsWindow(window)
-        return true
     }
 
     private static func mainWindows() -> [NSWindow] {
         NSApp.windows.filter(isMainWindowCandidate)
-    }
-
-    private static func settingsWindows() -> [NSWindow] {
-        NSApp.windows.filter(isSettingsWindowCandidate)
-    }
-
-    private static func deduplicateSettingsWindows(preferred preferredWindow: NSWindow? = nil) -> NSWindow? {
-        let candidates = settingsWindows()
-        guard !candidates.isEmpty else { return nil }
-        let keeper = preferredWindow.flatMap { preferred in
-            candidates.first { $0 === preferred }
-        } ?? candidates.first(where: { $0.isKeyWindow })
-            ?? candidates.first(where: { $0.isVisible })
-            ?? candidates[0]
-        for window in candidates where window !== keeper {
-            window.orderOut(nil)
-        }
-        return keeper
-    }
-
-    private static func focusSettingsWindow(_ window: NSWindow) {
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-    }
-
-    private static func restoreAccessoryIfNoVisibleUserWindows() {
-        DispatchQueue.main.async {
-            guard NSApp.windows.contains(where: isVisibleUserWindow) == false else { return }
-            NSApp.setActivationPolicy(.accessory)
-        }
-    }
-
-    private static func beginExplicitSettingsOpen() {
-        explicitSettingsOpenExpiresAt = Date().addingTimeInterval(explicitSettingsOpenWindow)
-    }
-
-    private static func isExplicitSettingsOpenPending() -> Bool {
-        guard let expiresAt = explicitSettingsOpenExpiresAt else { return false }
-        if Date() <= expiresAt {
-            return true
-        }
-        explicitSettingsOpenExpiresAt = nil
-        return false
-    }
-
-    private static func clearExplicitSettingsOpen() {
-        explicitSettingsOpenExpiresAt = nil
     }
 
     private static func isMainWindowCandidate(_ window: NSWindow) -> Bool {
@@ -581,19 +513,6 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
             || window.title == mainWindowTitle
     }
 
-    private static func isSettingsWindowCandidate(_ window: NSWindow) -> Bool {
-        window.identifier?.rawValue == settingsWindowIdentifier
-            || window.title == settingsWindowTitle
-    }
-
-    private static func isVisibleUserWindow(_ window: NSWindow) -> Bool {
-        guard window.isVisible else { return false }
-        if window.identifier?.rawValue == placeholderWindowIdentifier || window.title == placeholderWindowTitle {
-            return false
-        }
-        let typeName = String(describing: type(of: window))
-        return typeName.contains("Popover") == false
-    }
 }
 
 @main
@@ -616,6 +535,10 @@ struct HomeworkHelperRemoteApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .appSettings) {
+                Button("설정…") {
+                    RemoteAppDelegate.showSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
             }
             CommandMenu("원격") {
                 Button("새로고침") {
@@ -636,8 +559,10 @@ struct RemoteSettingsOpenBridge: View {
 
     var body: some View {
         Color.clear
-            .onReceive(NotificationCenter.default.publisher(for: .homeworkHelperRemoteOpenSettings)) { _ in
-                openSettings()
+            .onAppear {
+                RemoteAppDelegate.installSettingsOpener {
+                    openSettings()
+                }
             }
     }
 }
@@ -1095,7 +1020,7 @@ struct MenuBarPopoverView: View {
                 }
                 if !viewModel.isPaired {
                     Button {
-                        RemoteAppDelegate.openSettingsWindow(source: .popoverButton)
+                        RemoteAppDelegate.showSettingsWindow()
                     } label: {
                         Label("페어링 필요 · 설정 열기", systemImage: "link.badge.plus")
                             .frame(maxWidth: .infinity)
@@ -1121,7 +1046,7 @@ struct MenuBarPopoverView: View {
                 Divider()
                 HStack(spacing: 8) {
                     MenuBarFooterButton(title: "설정", systemImage: "gearshape") {
-                        RemoteAppDelegate.openSettingsWindow(source: .popoverButton)
+                        RemoteAppDelegate.showSettingsWindow()
                     }
                     MenuBarMoonlightButton(viewModel: viewModel)
                     MenuBarFooterButton(title: "앱 종료", systemImage: "power", tone: .destructive) {
@@ -1381,7 +1306,7 @@ enum RemoteSettingsLayout {
     static let tabPadding: CGFloat = 12
     static let sectionSpacing: CGFloat = 12
     static let windowHorizontalInset: CGFloat = 34
-    static let windowVerticalInset: CGFloat = 72
+    static let windowVerticalInset: CGFloat = 24
     static let minWindowWidth: CGFloat = 430
     static let maxWindowWidth: CGFloat = 480
     static let minWindowHeight: CGFloat = 180
@@ -1403,7 +1328,7 @@ struct RemoteSettingsView: View {
     private var targetSize: CGSize {
         let measured = measuredSizes[selectedTab] ?? CGSize(width: RemoteSettingsLayout.contentWidth, height: 260)
         let paddedWidth = measured.width * 1.06 + RemoteSettingsLayout.windowHorizontalInset
-        let paddedHeight = measured.height * 1.10 + RemoteSettingsLayout.windowVerticalInset
+        let paddedHeight = measured.height + RemoteSettingsLayout.windowVerticalInset
         let visible = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1180, height: 800)
         return CGSize(
             width: min(RemoteSettingsLayout.maxWindowWidth, min(max(RemoteSettingsLayout.minWindowWidth, paddedWidth), max(RemoteSettingsLayout.minWindowWidth, visible.width - 80))),

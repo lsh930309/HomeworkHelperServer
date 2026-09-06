@@ -1,6 +1,7 @@
 # api_client.py
 
 import requests
+from dataclasses import dataclass
 from typing import Any, List, Optional
 import uuid
 from src.api.runtime_config import resolve_local_api_base_url
@@ -14,6 +15,298 @@ class BeholderIncidentRequired(requests.HTTPError):
     def __init__(self, response: requests.Response, incident: dict[str, Any]):
         self.incident = incident
         super().__init__(incident.get("safe_recommendation") or response.text, response=response)
+
+
+class DatabaseMaintenanceResponse(requests.HTTPError):
+    """A background request was rejected while DB maintenance drains traffic."""
+
+    def __init__(self, response: requests.Response, retry_after_seconds: int = 2):
+        self.retry_after_seconds = int(retry_after_seconds)
+        super().__init__("database_maintenance", response=response)
+
+
+class DatabaseFaultedResponse(requests.HTTPError):
+    """DB access is intentionally disabled until a verified restore succeeds."""
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundHttpResult:
+    status_code: int
+    payload: Any
+    elapsed_seconds: float
+
+
+class BackgroundApiTransport:
+    """Pure, cache-free HTTP transport intended for Qt worker threads.
+
+    A fresh Session is used per request so suspend/resume cannot leave a pooled
+    socket adapter wedged.  This class never mutates GUI-owned model caches.
+    """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:8000"):
+        self.base_url = resolve_local_api_base_url(base_url)
+
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> BackgroundHttpResult:
+        import time
+
+        started_at = time.monotonic()
+        with requests.Session() as session:
+            response = session.request(
+                method,
+                f"{self.base_url}{path}",
+                params=params,
+                json=json_body,
+                headers=headers,
+                timeout=max(0.001, float(timeout)),
+            )
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            code = payload.get("code") if isinstance(payload, dict) else None
+            if response.status_code == 503 and code == "database_maintenance":
+                retry_after = payload.get("retry_after_seconds", 2)
+                raise DatabaseMaintenanceResponse(response, int(retry_after or 2))
+            if response.status_code == 503 and code == "database_faulted":
+                raise DatabaseFaultedResponse("database_faulted", response=response)
+            if response.status_code == 409 and isinstance(payload, dict):
+                incident = payload.get("beholder_incident")
+                if isinstance(incident, dict):
+                    raise BeholderIncidentRequired(response, incident)
+            response.raise_for_status()
+            return BackgroundHttpResult(
+                status_code=response.status_code,
+                payload=payload,
+                elapsed_seconds=time.monotonic() - started_at,
+            )
+
+    def get_json(self, path: str, *, timeout: float = 10.0) -> BackgroundHttpResult:
+        return self.request_json("GET", path, timeout=timeout)
+
+    def post_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+        headers: dict[str, str] | None = None,
+    ) -> BackgroundHttpResult:
+        return self.request_json("POST", path, timeout=timeout, json_body=payload, headers=headers)
+
+    def put_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+        headers: dict[str, str] | None = None,
+    ) -> BackgroundHttpResult:
+        return self.request_json("PUT", path, timeout=timeout, json_body=payload, headers=headers)
+
+    def delete_json(
+        self,
+        path: str,
+        *,
+        timeout: float = 10.0,
+        headers: dict[str, str] | None = None,
+    ) -> BackgroundHttpResult:
+        return self.request_json("DELETE", path, timeout=timeout, headers=headers)
+
+    def start_session(
+        self,
+        *,
+        app_instance_id: str,
+        process_id: str,
+        process_name: str,
+        pid: int,
+        process_create_time: float,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        lease_token = (
+            f"{app_instance_id}:{process_id}:{int(pid)}:{float(process_create_time):.6f}"
+        )
+        result = self.post_json(
+            "/sessions",
+            {
+                "process_id": process_id,
+                "process_name": process_name,
+                "start_timestamp": float(process_create_time),
+                "session_owner": "process_monitor",
+                "lease_token": lease_token,
+                "runtime_evidence": {
+                    "current_process_running": True,
+                    "app_instance_id": app_instance_id,
+                    "pid": int(pid),
+                    "process_create_time": float(process_create_time),
+                },
+            },
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "process_monitor",
+                "X-HH-Beholder-Operation": "runtime_start",
+            },
+        )
+        return result.payload if isinstance(result.payload, dict) else {}
+
+    def patch_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+        headers: dict[str, str] | None = None,
+    ) -> BackgroundHttpResult:
+        return self.request_json("PATCH", path, timeout=timeout, json_body=payload, headers=headers)
+
+    def end_session(
+        self,
+        *,
+        session_id: int,
+        end_timestamp: float,
+        stamina_at_end: int | None = None,
+        resource_percent_at_end: float | None = None,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "end_timestamp": float(end_timestamp),
+            "session_duration": 0,
+            "close_reason": "process_exit",
+        }
+        if stamina_at_end is not None:
+            payload["stamina_at_end"] = int(stamina_at_end)
+        if resource_percent_at_end is not None:
+            payload["resource_percent_at_end"] = float(resource_percent_at_end)
+        result = self.put_json(
+            f"/sessions/{int(session_id)}/end",
+            payload,
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "process_monitor",
+                "X-HH-Beholder-Operation": "runtime_stop",
+            },
+        )
+        return result.payload if isinstance(result.payload, dict) else {}
+
+    def update_process_stamina(
+        self,
+        process_id: str,
+        stamina_current: int,
+        stamina_max: int,
+        stamina_updated_at: float,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Persist stamina fields without touching an ``ApiClient`` cache."""
+        self.patch_json(
+            f"/processes/{process_id}/stamina",
+            {
+                "stamina_current": int(stamina_current),
+                "stamina_max": int(stamina_max),
+                "stamina_updated_at": float(stamina_updated_at),
+            },
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "hoyolab_slow_followup",
+                "X-HH-Beholder-Operation": "process_stamina_refresh",
+            },
+        )
+
+    def update_process_resource(
+        self,
+        process_id: str,
+        resource_percent: float | None,
+        resource_updated_at: float | None,
+        resource_status: str | None,
+        resource_label: str | None = None,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Persist external-resource fields without mutating GUI state."""
+        self.patch_json(
+            f"/processes/{process_id}/resource",
+            {
+                "resource_percent": resource_percent,
+                "resource_updated_at": resource_updated_at,
+                "resource_status": resource_status,
+                "resource_label": resource_label,
+            },
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "resource_tracker",
+                "X-HH-Beholder-Operation": "process_resource_update",
+            },
+        )
+
+    def update_session_stamina(
+        self,
+        session_id: int,
+        stamina_at_end: int,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        self.request_json(
+            "PATCH",
+            f"/sessions/{int(session_id)}/stamina",
+            params={"stamina_at_end": int(stamina_at_end)},
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "hoyolab_slow_followup",
+                "X-HH-Beholder-Operation": "hoyolab_session_stamina_rewrite",
+            },
+        )
+
+    def update_session_resource(
+        self,
+        session_id: int,
+        resource_percent_at_end: float,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        self.request_json(
+            "PATCH",
+            f"/sessions/{int(session_id)}/resource",
+            params={"resource_percent_at_end": float(resource_percent_at_end)},
+            timeout=timeout,
+            headers={
+                "X-HH-Beholder-Actor": "resource_slow_followup",
+                "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
+            },
+        )
+
+    def update_provider_credential_health(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        provider = str(payload["provider"])
+        self.post_json(
+            f"/provider-health/{provider}",
+            dict(payload),
+            timeout=timeout,
+        )
+
+    def run_due_daily_checkins(
+        self,
+        *,
+        trigger: str,
+        timeout: float = 65.0,
+    ) -> dict[str, Any]:
+        result = self.post_json(
+            "/daily-checkin/run-due",
+            {"trigger": str(trigger)},
+            timeout=timeout,
+        )
+        return result.payload if isinstance(result.payload, dict) else {}
 
 
 class ApiClient:
@@ -51,7 +344,8 @@ class ApiClient:
                 body = {}
             incident = body.get("beholder_incident")
             if incident:
-                self.latest_beholder_incident = incident
+                if incident.get("status") == "pending":
+                    self.latest_beholder_incident = incident
                 raise BeholderIncidentRequired(response, incident)
         response.raise_for_status()
 
@@ -452,7 +746,7 @@ class ApiClient:
             response = requests.post(
                 f"{self.base_url}/daily-checkin/run",
                 json={"process_id": process_id, "game_id": game_id, "trigger": trigger},
-                timeout=45,
+                timeout=35,
             )
             self._raise_for_status(response)
             return response.json()
@@ -471,7 +765,7 @@ class ApiClient:
             response = requests.post(
                 f"{self.base_url}/daily-checkin/status",
                 json={"process_id": process_id, "game_id": game_id},
-                timeout=30,
+                timeout=35,
             )
             self._raise_for_status(response)
             return response.json()
@@ -485,7 +779,7 @@ class ApiClient:
             response = requests.post(
                 f"{self.base_url}/daily-checkin/run-due",
                 json={"trigger": trigger},
-                timeout=90,
+                timeout=65,
             )
             self._raise_for_status(response)
             payload = response.json()
@@ -648,16 +942,30 @@ class ApiClient:
 
     # --- ProcessSession 관련 메서드 ---
 
-    def start_session(self, process_id: str, process_name: str, start_timestamp: float) -> Optional[ProcessSession]:
+    def start_session(
+        self,
+        process_id: str,
+        process_name: str,
+        start_timestamp: float,
+        *,
+        pid: int | None = None,
+        process_create_time: float | None = None,
+    ) -> Optional[ProcessSession]:
         """새로운 프로세스 세션 시작"""
         try:
+            create_time = float(process_create_time if process_create_time is not None else start_timestamp)
+            stable_pid = int(pid or 0)
             data = {
                 "process_id": process_id,
                 "process_name": process_name,
                 "start_timestamp": start_timestamp,
+                "session_owner": "process_monitor",
+                "lease_token": f"{self.app_instance_id}:{process_id}:{stable_pid}:{create_time:.6f}",
                 "runtime_evidence": {
                     "current_process_running": True,
                     "app_instance_id": self.app_instance_id,
+                    "pid": stable_pid,
+                    "process_create_time": create_time,
                 },
             }
             response = requests.post(

@@ -67,7 +67,7 @@ Base = declarative_base()
 # 앞으로 만들 DB 테이블 모델들은 모두 이 Base 클래스를 상속받아 만들어집니다.
 
 
-def auto_migrate_database():
+def auto_migrate_database(*, strict: bool = False):
     """
     자동 마이그레이션 실행 - 새 컬럼이 없으면 추가합니다.
     
@@ -401,6 +401,8 @@ def auto_migrate_database():
 
         print("[Migration] 자동 마이그레이션 완료")
     except Exception as e:
+        if strict:
+            raise
         print(f"[Migration] 마이그레이션 중 오류 (무시됨): {e}")
 
 

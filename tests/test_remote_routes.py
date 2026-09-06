@@ -1347,12 +1347,25 @@ def test_power_controller_reports_client_managed_status_without_actions():
     assert restart_response.status_code == 404
 
 
-def test_remote_power_setup_reports_host_readiness_and_registers_public_key():
+def test_remote_power_setup_reports_host_readiness_and_registers_public_key(monkeypatch, tmp_path):
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
-    authorized_keys = Path(os.environ["HOME"]) / ".ssh" / "authorized_keys"
-    if authorized_keys.exists():
-        authorized_keys.unlink()
+    authorized_keys = tmp_path / ".ssh" / "authorized_keys"
+    monkeypatch.setattr(
+        remote_power_setup,
+        "_effective_authorized_keys_target",
+        lambda *, runner=None: {
+            "path": authorized_keys,
+            "scope": "user",
+            "user_authorized_keys_path": authorized_keys,
+            "admin_authorized_keys_path": tmp_path / "administrators_authorized_keys",
+            "sshd_config_path": None,
+            "current_user_is_admin": False,
+            "current_user_admin_message": "test",
+            "sshd_config_admin_match": False,
+            "administrators_authorized_keys_active": False,
+        },
+    )
     setup = client.get("/remote/power/setup")
     key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZha2VLZXlGb3JUZXN0T25seU5vdFJlYWw= macbook"
     registered = client.post("/remote/power/ssh-key", json={"public_key": key, "label": "MacBook"})
@@ -1459,7 +1472,19 @@ def test_removed_remote_smartthings_probe_api_is_not_exposed():
     assert not any(event["command"] == "power.smartthings.devices" for event in auditor.events)
 
 
-def test_remote_logging_config_and_purge_revoked_devices():
+def test_remote_logging_config_and_purge_revoked_devices(monkeypatch, tmp_path):
+    from src.core import remote_debug_log, remote_local_store
+
+    isolated_store = remote_local_store.RemoteLocalStore(
+        root=tmp_path / "remote",
+        legacy_root=tmp_path,
+    )
+    monkeypatch.setattr(remote_local_store, "_DEFAULT_STORE", isolated_store)
+    monkeypatch.setattr(
+        remote_debug_log,
+        "CONFIG_PATH",
+        isolated_store.path("remote_debug_logging.json"),
+    )
     client, _launcher, _opened_urls, auditor, _registry = _client_with_seed()
 
     start = client.post("/remote/pair/start")

@@ -4,7 +4,7 @@ HomeworkHelper는 Windows 호스트 앱과 macOS 메뉴바 원격 클라이언�
 
 ## 현재 지원 범위
 
-- **Windows host app**: PyQt 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
+- **Windows host app**: PySide6 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
 - **Remote Agent**: 호스트 앱의 FastAPI 서버를 통해 상태 조회, 프로세스 실행/종료, 대시보드 요약, pairing/token 기반 보호 endpoint를 제공합니다.
 - **macOS remote client**: 메뉴바 popover 중심의 네이티브 Swift 클라이언트입니다. pairing, host 상태 확인, Moonlight 실행 상태 반영, 원격 quick action을 담당합니다.
 - **Dashboard frontend**: `src/api/dashboard/frontend`의 Vite/React 앱을 빌드 시 `build/dashboard-static`으로 생성해 PyInstaller 패키지에 포함합니다.
@@ -21,6 +21,9 @@ python -m venv .venv
 pip install -r requirements.txt
 python homework_helper.pyw
 ```
+
+기본 화면은 modernized Widgets이며 독립 Qt Quick 후보 실행 및 검증 방법은
+[`docs/development/windows-gui-modernization.md`](docs/development/windows-gui-modernization.md)에 정리되어 있습니다.
 
 서버만 확인할 때는 GUI 단일 인스턴스 경로를 우회합니다.
 

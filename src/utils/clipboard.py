@@ -10,9 +10,9 @@ import struct
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QBuffer, QIODevice, QMimeData, QUrl
-from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore import QBuffer, QIODevice, QMimeData, QUrl
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
 
 logger = logging.getLogger(__name__)
 
