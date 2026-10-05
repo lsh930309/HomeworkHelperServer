@@ -378,3 +378,31 @@ def test_s3_preflight_denial_never_accepts_or_schedules_power(system):
     with pytest.raises(NotImplementedError, match="UnsupportedS3"):
         controller.handle({"operation":"power", "action":"sleep"}, caller)
     assert backend.effects == []
+
+
+@pytest.mark.parametrize("mode", ["status", "power", "error"])
+def test_control_json_preserves_unicode_over_a_windows_code_page(monkeypatch, mode):
+    import io
+    import sys
+    import homework_helper_service
+
+    message = "권한 서비스 응답입니다. 🔌"
+    payload = {"accepted": True, "status": "ready", "message": message}
+    def status(_client):
+        if mode == "error":
+            raise PrivilegeServiceUnavailable(message)
+        return payload
+    def power(client, action):
+        reply = dict(payload, status="accepted", action=action)
+        client._before_ack(reply)
+        return reply
+    monkeypatch.setattr(HostPrivilegeClient, "status", status)
+    monkeypatch.setattr(HostPrivilegeClient, "control_power", power)
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp949", write_through=True)
+    monkeypatch.setattr(sys, "stdout", stream)
+    args = ["--control", "power", "sleep"] if mode == "power" else ["--control", "status"]
+    assert homework_helper_service.main(args) == (1 if mode == "error" else 0)
+    received = json.loads(raw.getvalue().decode("utf-8"))
+    assert received["message"] == message
+    assert received["accepted"] is (mode != "error")

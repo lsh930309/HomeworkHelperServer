@@ -206,11 +206,12 @@ def main(argv=None) -> int:
                 def emit_before_ack(result):
                     if result.get("accepted") is True:
                         # Write the SSH-visible receipt before service power is released by ACK.
-                        print(json.dumps(result, ensure_ascii=False), flush=True)
+                        # ASCII JSON survives Windows console code pages; JSON restores the text.
+                        print(json.dumps(result, ensure_ascii=True), flush=True)
                 HostPrivilegeClient(before_ack=emit_before_ack).control_power(args.action)
             else:
                 result = HostPrivilegeClient().status()
-                print(json.dumps(result, ensure_ascii=False), flush=True)
+                print(json.dumps(result, ensure_ascii=True), flush=True)
             return 0
         if values[:1] == ["--user-launch"]:
             if len(values) != 2:
@@ -240,7 +241,7 @@ def main(argv=None) -> int:
             error.status if isinstance(error, PrivilegeServiceError) else "error")
         result = {"accepted":False, "status":status,
                   "message":str(error)}
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=True), flush=True)
         return 1
 
 
