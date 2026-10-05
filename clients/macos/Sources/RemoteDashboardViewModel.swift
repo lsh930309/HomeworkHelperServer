@@ -511,12 +511,16 @@ final class RemoteDashboardViewModel: ObservableObject {
         didSet {
             RemoteClientPreferences.saveBaseURL(baseURLText)
             refreshMoonlightSnapshot()
+            resetHostObservations()
+            requestImmediateMirror(trigger: "host.changed")
         }
     }
     @Published var selectedMoonlightHostUUID = RemoteClientPreferences.loadSelectedMoonlightHostUUID() {
         didSet {
             RemoteClientPreferences.saveSelectedMoonlightHostUUID(selectedMoonlightHostUUID)
             refreshMoonlightSnapshot()
+            resetHostObservations()
+            requestImmediateMirror(trigger: "moonlight.hostChanged")
         }
     }
     @Published private(set) var moonlightPublicIPCache = RemoteClientPreferences.loadMoonlightPublicIPCache()
@@ -544,6 +548,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var tokenText = "" {
         didSet {
             tokenStore.save(tokenText)
+            resetHostObservations()
             postMenuBarStatusDidChange()
         }
     }
@@ -555,7 +560,11 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var gameLinkProcessID = ""
     @Published var gameLinkAndroidPackage = ""
     @Published var powerConfig = RemoteClientPreferences.loadPowerPreferences() {
-        didSet { RemoteClientPreferences.savePowerPreferences(powerConfig) }
+        didSet {
+            RemoteClientPreferences.savePowerPreferences(powerConfig)
+            resetHostObservations()
+            requestImmediateMirror(trigger: "power.configChanged")
+        }
     }
     @Published var powerSetup: RemotePowerSetupResponse?
     @Published var localSSHKey: LocalSSHKeyPair?
@@ -576,6 +585,10 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published var remoteDesktopLoggingEnabled = RemoteClientPreferences.loadDesktopLoggingEnabled()
     @Published var remoteDesktopLoggingPath = RemoteClientDesktopLogger.logPath()
     @Published var pairingRecoveryMessage = ""
+    @Published private var hostObservationStore = RemoteHostObservationStore()
+    private var connectionScreenVisible = false
+    private var acceptedPowerTransition: String?
+    var hostObservations: RemoteHostObservationSnapshot { hostObservationStore.snapshot }
     @Published var hostConnectionState = "unknown"
     @Published var hostAvailabilityState: RemoteHostAvailabilityState = .unknown
     @Published var status: RemoteStatus?
@@ -587,7 +600,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
     @Published var gameLinks: [RemoteGameLink] = []
     @Published var mobileSessions: [RemoteMobileSession] = []
-    @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses() {
+    @Published var processes: [RemoteProcess] = RemoteClientCache.loadProcesses(baseURL: URL(string: RemoteClientPreferences.loadBaseURL())) {
         didSet { postMenuBarStatusDidChange() }
     }
     @Published var devices: [RemoteDevice] = [] {
@@ -685,7 +698,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         let powerDetail = "\(wakeDetail) · \(sshDetail)"
         return [
             ("1. Mac Tailscale", localTailscale?.running == true ? "준비됨: \(localTailscale?.selfIPs.joined(separator: ", ") ?? "")" : "기반환경 상태: \(localTailscale?.foundationState ?? "unknown") · Tailscale 설치/실행/로그인 필요", localTailscale?.running == true),
-            ("2. Windows 서버", hostConnectionState == "offline" ? "호스트 서버가 꺼져 있거나 Remote Agent에 연결할 수 없습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
+            ("2. Windows 서버", hostConnectionState == "offline" ? "PC 응답 또는 HomeworkHelper 앱 준비를 확인하지 못했습니다." : (readiness?.serverModeReadiness.color == "green" ? readiness?.serverModeReadiness.message ?? "준비됨" : "Windows 앱의 설정 > 원격 설정에서 서버 모드와 페어링 코드를 확인"), hostConnectionState != "offline" && readiness?.serverModeReadiness.color == "green"),
             ("3. 페어링", pairingRecoveryMessage.isEmpty ? (tokenText.isEmpty ? "페어링 코드를 입력해 이 Mac을 등록" : "Keychain 토큰 저장됨") : pairingRecoveryMessage, pairingHealthy),
             ("4. 전원 관리", powerDetail, powerHealthy),
             ("5. 서버 Tailscale", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green" ? "서버 Tailscale 준비됨" : "페어링 후 서버 Tailscale 확인/복구 실행", serverTailscaleEnsure?.ready == true || readiness?.tailscaleReadiness.color == "green")
@@ -814,15 +827,72 @@ final class RemoteDashboardViewModel: ObservableObject {
         message = "시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 HomeworkHelper Remote 권한을 확인하세요."
     }
 
-    private func isMoonlightAutoWakeEligibleState(_ state: RemoteHostAvailabilityState) -> Bool {
-        switch state {
-        case .offlineExpected, .agentUnavailable, .reconnecting, .waking:
-            return true
-        case .unknown:
-            return hostConnectionState == "offline"
-        case .online, .goingOffline, .restarting, .authRejected:
-            return false
+    private var currentHostIdentity: RemoteHostIdentity {
+        RemoteHostIdentity(baseURL: baseURLText.trimmingCharacters(in: .whitespacesAndNewlines),
+            moonlightHostUUID: moonlightSnapshot.targetHost?.uuid ?? selectedMoonlightHostUUID,
+            token: tokenText, sshHost: powerConfig.sshHost, sshUser: powerConfig.sshUser,
+            sshKeyPath: powerConfig.normalizedLocalSSHKeyPath(), sshPort: powerConfig.sshPort)
+    }
+
+    private func resetHostObservations() {
+        guard hostObservationStore.identity != currentHostIdentity else { return }
+        let hostChanged = hostObservationStore.identity?.baseURL != currentHostIdentity.baseURL
+        hostObservationStore.reset(to: currentHostIdentity)
+        launchChaseTasks.values.forEach { $0.cancel() }
+        stopChaseTasks.values.forEach { $0.cancel() }
+        launchChaseTasks.removeAll()
+        stopChaseTasks.removeAll()
+        pendingLaunchProcessIDs.removeAll()
+        pendingStopProcessIDs.removeAll()
+        if hostChanged {
+            processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
+            dashboardSummary = nil
+            beholderIncidents = []
+            gameLinks = []
+            mobileSessions = []
+            devices = []
+            readiness = nil
+            powerSetup = nil
         }
+        localSSHHealth = nil
+        lastStateRevision = nil
+        status = nil
+        pendingMoonlightWakeAction = nil
+        acceptedPowerTransition = nil
+        setHostAvailability(.unknown)
+    }
+
+    private func isSameHost(_ left: String, _ right: String) -> Bool {
+        func normalized(_ value: String) -> String {
+            value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".[]")).lowercased()
+        }
+        let lhs = normalized(left), rhs = normalized(right)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        if lhs == rhs { return true }
+        return localTailscale?.peers.contains { peer in
+            let aliases = ([peer.hostname, peer.dnsName, peer.dnsStem] + peer.ips).map(normalized)
+            return aliases.contains(lhs) && aliases.contains(rhs)
+        } == true
+    }
+
+    private func observeSSH(config: RemotePowerConfigPayload, host: String) async -> LocalSSHPowerManager.HealthResult {
+        guard isSameHost(host, config.sshHost) else {
+            return LocalSSHPowerManager.HealthResult(host: config.sshHost, outcome: .unavailable,
+                message: "SSH 전원 대상과 관측 중인 호스트가 일치하지 않습니다.", executablePath: "/usr/bin/ssh",
+                exitStatus: nil, authenticated: false, stdout: "", stderr: "")
+        }
+        return await LocalSSHPowerManager.health(config: config, timeoutSeconds: 3)
+    }
+
+    private func observeConnectionNow(trigger: String) async {
+        guard bootstrapEnabled, let client else { return }
+        _ = await evaluateConnectivity(using: RemoteDashboardService(client: client), client: client, trigger: trigger)
+    }
+
+    func connectionScreenVisibilityChanged(_ visible: Bool) {
+        connectionScreenVisible = visible
+        if visible { requestImmediateMirror(trigger: "screen.opened") }
     }
 
     var moonlightPublicIPDisplay: String {
@@ -962,7 +1032,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
         }
-        guard hostAvailabilityState == .online else {
+        await observeConnectionNow(trigger: "moonlight.clicked")
+        guard hostObservations.canStream else {
             await prepareMoonlightAutoWake(action: .streamOnly)
             return
         }
@@ -982,8 +1053,10 @@ final class RemoteDashboardViewModel: ObservableObject {
             message = "SmartThings Wake 설정이 준비되어야 호스트를 자동으로 깨운 뒤 Moonlight를 시작할 수 있습니다."
             return
         }
-        guard isMoonlightAutoWakeEligibleState(hostAvailabilityState) else {
-            message = "현재 호스트 상태(\(hostAvailabilityState.label))에서는 자동 깨우기 후 Moonlight 동작을 시작하지 않습니다."
+        guard hostObservations.shouldWake else {
+            message = hostObservations.pc == .reachable
+                ? "PC가 연결되어 있습니다. Apollo 스트리밍 준비 상태를 확인하세요."
+                : "PC 응답 여부를 확인한 뒤 자동 깨우기를 사용할 수 있습니다."
             return
         }
 
@@ -998,8 +1071,11 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
 
+        let identity = currentHostIdentity
         message = "호스트를 깨운 뒤 \(action.label)을 이어갑니다."
-        guard await localWake() else {
+        let accepted = await localWake()
+        guard currentHostIdentity == identity else { return }
+        guard accepted else {
             pendingMoonlightWakeAction = nil
             return
         }
@@ -1009,7 +1085,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func resumePendingMoonlightWakeActionIfReady(trigger: String) async {
         guard pendingMoonlightWakeAction != nil,
-              hostAvailabilityState == .online else { return }
+              hostObservations.canStream else { return }
         pendingMoonlightWakeAction = nil
         if !moonlightBindingEnabled {
             moonlightBindingEnabled = true
@@ -1019,23 +1095,17 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func clearPendingMoonlightWakeActionIfBlocked() {
-        guard let action = pendingMoonlightWakeAction else { return }
-        switch hostAvailabilityState {
-        case .authRejected:
-            pendingMoonlightWakeAction = nil
-            message = "호스트 인증이 거부되어 \(action.label)을 중단했습니다. 페어링 상태를 확인하세요."
-        case .offlineExpected, .agentUnavailable:
-            guard reconnectSchedule.isEmpty else { return }
-            pendingMoonlightWakeAction = nil
-            message = "호스트가 온라인으로 복구되지 않아 \(action.label)을 중단했습니다. 전원/네트워크 상태를 확인한 뒤 다시 시도하세요."
-        default:
-            break
-        }
+        guard let action = pendingMoonlightWakeAction,
+              !hostObservations.canStream,
+              reconnectSchedule.isEmpty else { return }
+        pendingMoonlightWakeAction = nil
+        message = "Apollo 스트리밍 준비를 확인하지 못해 \(action.label)을 중단했습니다. PC·Apollo 상태를 확인한 뒤 다시 시도하세요."
     }
 
     private func ensureMoonlightDesktopVisible(trigger: String) async -> Bool {
+        let identity = currentHostIdentity
         guard moonlightBindingEnabled else { return false }
-        guard hostAvailabilityState == .online else { return false }
+        guard hostObservations.canStream else { return false }
         guard moonlightSnapshot.readiness == .ready,
               let target = moonlightSnapshot.targetHost,
               let installation = moonlightSnapshot.installation else {
@@ -1045,6 +1115,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         guard ensureMoonlightAccessibilityIfNeeded() else { return false }
 
         moonlightSetupInProgress = true
+        defer { moonlightSetupInProgress = false }
         moonlightLastCommandSummary = ""
         refreshMoonlightSessionSnapshot()
 
@@ -1054,6 +1125,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             refreshMoonlightSessionSnapshot()
         }
 
+        guard currentHostIdentity == identity else { return false }
         if !moonlightSessionSnapshot.hasDesktopSession {
             let start = LocalMoonlightManager.startDesktopStream(host: target.targetHostArgument, installation: installation)
             moonlightLastCommandSummary = [moonlightLastCommandSummary, start.outputSummary]
@@ -1070,6 +1142,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             refreshMoonlightSessionSnapshot()
         }
 
+        guard currentHostIdentity == identity else { return false }
         let focus = await focusMoonlightOnPreferredScreen()
         moonlightLastCommandSummary = [moonlightLastCommandSummary, focus.outputSummary]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1277,29 +1350,29 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var localSSHHealthReady: Bool {
-        localSSHHealth?.authenticated == true
+        hostObservations.sshPowerReady
     }
 
     var localSSHHealthSummary: String {
         guard let localSSHHealth else { return "SSH health 미확인" }
-        if localSSHHealth.authenticated { return "SSH 인증 확인됨" }
+        if localSSHHealthReady { return "SSH 인증 · 권한 서비스 준비됨" }
         return localSSHHealth.message
     }
 
     var hostStatusLabel: String {
-        if !isPaired { return "페어링 해제됨" }
-        if isLoading, hostAvailabilityState == .online, pendingLaunchProcessIDs.isEmpty { return "동기화 중" }
-        if hostAvailabilityState == .authRejected { return RemoteHostAvailabilityState.authRejected.label }
-        return hostAvailabilityState.label
+        hostObservations.label(expectedPowerTransition: acceptedPowerTransition != nil)
     }
 
     var hostStatusColor: Color {
-        if isLoading, hostAvailabilityState == .online, pendingLaunchProcessIDs.isEmpty { return .blue }
-        return isPaired ? hostAvailabilityState.color : .secondary
+        if hostObservations.appReady { return .green }
+        if hostObservations.pc == .reachable || hostObservations.canStream {
+            return hostObservations.app == .authRejected ? .orange : .blue
+        }
+        return .secondary
     }
 
     var hostAllowsRemoteCommands: Bool {
-        isPaired && hostAvailabilityState == .online
+        isPaired && hostObservations.appReady
     }
 
     var sortedDevices: [RemoteDevice] {
@@ -1334,7 +1407,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func deviceConnectivityDisplay(_ device: RemoteDevice) -> String {
         if isCurrentDevice(device) { return "-" }
-        if device.role == "host" { return hostAvailabilityState.label }
+        if device.role == "host" { return hostStatusLabel }
         if device.role == "client" { return "표시 불가" }
         switch device.connectivityState {
         case "active": return "정상"
@@ -1356,11 +1429,11 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isProcessRunningCurrent(_ process: RemoteProcess) -> Bool {
-        hostAvailabilityState == .online && process.isRunning
+        hostObservations.appReady && process.isRunning
     }
 
     func menuBarPresentationState() -> RemoteMenuBarPresentationState {
-        guard isPaired, hostAvailabilityState == .online else { return .offline }
+        guard hostObservations.pc == .reachable || hostObservations.canStream || hostObservations.appReady else { return .offline }
         if displayProcesses.contains(where: { isProcessRunningCurrent($0) }) {
             return .running
         }
@@ -1413,7 +1486,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func isStopEnabled(_ process: RemoteProcess) -> Bool {
         process.isRunning
-            && hostAvailabilityState == .online
+            && hostAllowsRemoteCommands
             && (status?.capabilities.processStop ?? false)
             && !pendingStopProcessIDs.contains(process.id)
     }
@@ -1461,8 +1534,6 @@ final class RemoteDashboardViewModel: ObservableObject {
     private var smartScheduleTask: Task<Void, Never>?
     private var resumeObservers: [NSObjectProtocol] = []
     private var lastStateRevision: String?
-    private var unchangedRevisionPollCount = 0
-    private var slowStatusPollCount = 0
     private var consecutiveMirrorFailures = 0
     private var reconnectSchedule: [UInt64] = []
     private var mirrorExecutionInProgress = false
@@ -1516,7 +1587,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.hostAvailabilityState != .online else { return }
+                guard let self else { return }
                 await self.handleClientResumed()
             }
         }
@@ -1525,6 +1596,8 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func applyUITestSnapshot() {
         tokenText = "ui-test-token"
+        let observationRequest = hostObservationStore.begin(for: currentHostIdentity)
+        _ = hostObservationStore.accept(RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready, sshPowerReady: true, observedAt: Date()), for: observationRequest)
         setHostAvailability(.online, clearPairingRecovery: true)
         pairingRecoveryMessage = ""
         message = "GUI 검수 모드: 외부 상태 접근 없이 샘플 데이터를 표시합니다."
@@ -1632,13 +1705,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         case skipped(ConnectivityProbeDetail)
     }
 
-    private enum TailnetManagementReachability {
-        case reachable(ConnectivityProbeDetail)
-        case unreachable(ConnectivityProbeDetail)
-        case unavailable(ConnectivityProbeDetail)
-        case skipped(ConnectivityProbeDetail)
-    }
-
     private struct ConnectivityProbeDetail {
         let outcome: String
         let message: String
@@ -1672,12 +1738,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         static func skipped(_ message: String) -> ConnectivityProbeDetail {
             ConnectivityProbeDetail(outcome: "skipped", message: message, elapsedSeconds: 0)
         }
-    }
-
-    private struct TailnetManagementProbe {
-        let reachability: TailnetManagementReachability
-        let tailscale: ConnectivityProbeDetail?
-        let ssh: ConnectivityProbeDetail?
     }
 
     private struct ConnectivityEvaluationLog {
@@ -1810,7 +1870,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             if !moonlightBindingEnabled {
                 moonlightBindingEnabled = true
             }
-            if hostAvailabilityState == .online {
+            await runMirrorRemoteState(trigger: "smartSchedule.observe", syncScope: .revisionAware)
+            if hostObservations.canStream {
                 _ = await ensureMoonlightDesktopVisible(trigger: "smartSchedule.\(rule.id)")
             } else if rule.wakeHost {
                 await prepareMoonlightAutoWake(action: .streamOnly)
@@ -1838,7 +1899,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func applyConnectionDecision(_ decision: RemoteConnectionDecision, updateMessage: Bool = true) {
         if decision.shouldLoadCache, processes.isEmpty {
-            processes = RemoteClientCache.loadProcesses()
+            processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
         }
         if let schedule = decision.reconnectSchedule {
             reconnectSchedule = schedule
@@ -1902,54 +1963,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .unreachable:
             return .unreachable(detail)
         case .unavailable:
-            return .unreachable(detail)
-        }
-    }
-
-    private func shouldProbeSSHHealth(for client: RemoteAPIClient) -> Bool {
-        guard powerConfig.localSSHConfigured else { return false }
-        let sshHost = powerConfig.sshHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !sshHost.isEmpty else { return false }
-        guard let httpHost = client.baseURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !httpHost.isEmpty else {
-            return Self.isLikelyTailscaleHost(sshHost)
-        }
-        return sshHost == httpHost || Self.isLikelyTailscaleHost(sshHost)
-    }
-
-    private func probeTailnetManagementReachability(for client: RemoteAPIClient) async -> TailnetManagementProbe {
-        switch await probeHostReachability(for: client) {
-        case .reachable(let detail):
-            let management = ConnectivityProbeDetail(outcome: "reachable", message: "tailscale ping OK: \(detail.message)", elapsedSeconds: detail.elapsedSeconds)
-            return TailnetManagementProbe(reachability: .reachable(management), tailscale: detail, ssh: nil)
-        case .unreachable(let detail):
-            return TailnetManagementProbe(reachability: .unreachable(detail), tailscale: detail, ssh: nil)
-        case .skipped(let detail):
-            guard shouldProbeSSHHealth(for: client) else {
-                return TailnetManagementProbe(reachability: .skipped(detail), tailscale: detail, ssh: nil)
-            }
-            let startedAt = Date()
-            let ssh = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
-            let sshDetail = ConnectivityProbeDetail(
-                outcome: "\(ssh.outcome)",
-                message: ssh.message,
-                elapsedSeconds: Date().timeIntervalSince(startedAt),
-                executablePath: ssh.executablePath,
-                exitStatus: ssh.exitStatus.map(String.init) ?? "",
-                stdout: ssh.stdout,
-                stderr: ssh.stderr,
-                timedOut: false
-            )
-            switch ssh.outcome {
-            case .reachable:
-                let management = ConnectivityProbeDetail(outcome: "reachable", message: "SSH management OK: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
-                return TailnetManagementProbe(reachability: .reachable(management), tailscale: detail, ssh: sshDetail)
-            case .unreachable:
-                let management = ConnectivityProbeDetail(outcome: "unreachable", message: "tailscale ping skipped; SSH health unreachable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
-                return TailnetManagementProbe(reachability: .unreachable(management), tailscale: detail, ssh: sshDetail)
-            case .unavailable:
-                let management = ConnectivityProbeDetail(outcome: "unavailable", message: "tailscale ping skipped; SSH health unavailable: \(ssh.message)", elapsedSeconds: sshDetail.elapsedSeconds)
-                return TailnetManagementProbe(reachability: .unavailable(management), tailscale: detail, ssh: sshDetail)
-            }
+            return .skipped(detail)
         }
     }
 
@@ -1976,52 +1990,80 @@ final class RemoteDashboardViewModel: ObservableObject {
         trigger: String,
         updateMessage: Bool = true
     ) async -> (status: RemoteStatus, decision: RemoteConnectionDecision)? {
+        let identity = currentHostIdentity
+        let request = hostObservationStore.begin(for: identity)
+        let target = moonlightSnapshot.targetHost
+        let sshConfig = powerConfig
+        let host = client.baseURL.host ?? ""
+        async let pcProbe = probeHostReachability(for: client)
+        async let apolloProbe = RemoteApolloProbe.observe(host: host, target: target)
+        async let sshProbe = observeSSH(config: sshConfig, host: host)
+        let apiResult: Result<RemoteStatus, Error>?
+        if identity.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            apiResult = nil
+        } else {
+            do { apiResult = .success(try await service.status()) }
+            catch { apiResult = .failure(error) }
+        }
+        let pc = await pcProbe
+        let apollo = await apolloProbe
+        let ssh = await sshProbe
+        guard currentHostIdentity == identity else { return nil }
+        let pcObservation: RemotePCObservation
         var evaluationLog = ConnectivityEvaluationLog(trigger: trigger)
-        let httpStartedAt = Date()
-        do {
-            let latestStatus = try await service.status()
-            let decision = applyRemoteStatus(latestStatus)
+        switch pc {
+        case .reachable(let detail): pcObservation = .reachable; evaluationLog.tailscale = detail
+        case .unreachable(let detail): pcObservation = .unreachable; evaluationLog.tailscale = detail
+        case .skipped(let detail): pcObservation = .unavailable; evaluationLog.tailscale = detail
+        }
+        let appObservation: RemoteAppObservation
+        switch apiResult {
+        case .success: appObservation = .ready
+        case .failure(let error): appObservation = failureKind(for: error) == .authRejected ? .authRejected : .waiting
+        case nil: appObservation = .notPaired
+        }
+        let observed = RemoteHostObservationSnapshot(pc: pcObservation, apollo: apollo,
+            app: appObservation, sshPowerReady: ssh.authenticated, observedAt: Date())
+        guard hostObservationStore.accept(observed, for: request) else { return nil }
+        localSSHHealth = ssh
+        if observed.appReady && hostAvailabilityState != .goingOffline { acceptedPowerTransition = nil }
+        evaluationLog.ssh = ConnectivityProbeDetail(outcome: "\(ssh.outcome)", message: ssh.message, elapsedSeconds: 0, executablePath: ssh.executablePath, exitStatus: ssh.exitStatus.map(String.init) ?? "", stdout: ssh.stdout, stderr: ssh.stderr)
+        let decision: RemoteConnectionDecision
+        let pendingWakeSchedule = pendingMoonlightWakeAction == nil ? nil : reconnectSchedule
+        switch apiResult {
+        case .success(let latestStatus):
             evaluationLog.httpOutcome = "success"
-            evaluationLog.httpElapsedSeconds = Date().timeIntervalSince(httpStartedAt)
-            evaluationLog.finalState = hostAvailabilityState.rawValue
-            evaluationLog.finalMessage = message
+            decision = applyRemoteStatus(latestStatus)
+            if let pendingWakeSchedule, !observed.canStream { reconnectSchedule = pendingWakeSchedule }
+            evaluationLog.finalState = hostStatusLabel
             writeConnectivityEvaluationLog(evaluationLog)
+            await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
+            clearPendingMoonlightWakeActionIfBlocked()
             return (latestStatus, decision)
-        } catch {
-            let kind = failureKind(for: error)
+        case .failure(let error):
             evaluationLog.httpOutcome = "failed"
-            evaluationLog.httpFailureKind = "\(kind)"
+            evaluationLog.httpFailureKind = "\(failureKind(for: error))"
             evaluationLog.httpMessage = error.localizedDescription
-            evaluationLog.httpElapsedSeconds = Date().timeIntervalSince(httpStartedAt)
-            if kind == .authRejected {
-                let decision = supervisorDecision(.httpStatusFailed(kind: kind))
+            if appObservation == .authRejected {
+                decision = supervisorDecision(.httpStatusFailed(kind: .authRejected))
                 applyConnectionDecision(decision, updateMessage: updateMessage)
                 preservePairingAfterAuthRejected(error, updateMessage: updateMessage)
-                evaluationLog.finalState = hostAvailabilityState.rawValue
-                evaluationLog.finalMessage = decision.message ?? message
-                writeConnectivityEvaluationLog(evaluationLog)
-                return nil
+            } else if pcObservation == .unreachable && apollo != .ready {
+                decision = markHostUnreachable("PC의 최신 Tailscale ping 응답이 없습니다.", updateMessage: updateMessage)
+            } else {
+                decision = markHTTPAgentUnavailable(error, detail: "PC와 스트리밍 상태는 별도로 관측합니다.", updateMessage: updateMessage)
             }
-
-            let management = await probeTailnetManagementReachability(for: client)
-            evaluationLog.tailscale = management.tailscale
-            evaluationLog.ssh = management.ssh
-            let decision: RemoteConnectionDecision
-            switch management.reachability {
-            case .unreachable(let detail):
-                decision = markHostUnreachable(detail.message, updateMessage: updateMessage)
-            case .reachable(let detail):
-                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
-            case .unavailable(let detail):
-                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
-            case .skipped(let detail):
-                decision = markHTTPAgentUnavailable(error, detail: detail.message, updateMessage: updateMessage)
-            }
-            evaluationLog.finalState = hostAvailabilityState.rawValue
-            evaluationLog.finalMessage = decision.message ?? message
-            writeConnectivityEvaluationLog(evaluationLog)
-            return nil
+        case nil:
+            decision = .none
+            if updateMessage { message = observed.label() }
         }
+        if let pendingWakeSchedule, !observed.canStream { reconnectSchedule = pendingWakeSchedule }
+        evaluationLog.finalState = hostStatusLabel
+        evaluationLog.finalMessage = decision.message ?? message
+        writeConnectivityEvaluationLog(evaluationLog)
+        await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
+        clearPendingMoonlightWakeActionIfBlocked()
+        return nil
     }
 
     private func handlePayloadSyncFailure(_ error: Error, fallbackMessage: String? = nil) {
@@ -2030,7 +2072,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             return
         }
         if processes.isEmpty {
-            processes = RemoteClientCache.loadProcesses()
+            processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
         }
         refreshLocalProcessDisplay()
         message = fallbackMessage ?? "Remote Agent 상태는 응답했지만 일부 데이터 동기화에 실패했습니다. 캐시 데이터와 standalone 진행률을 유지합니다. (\(error.localizedDescription))"
@@ -2076,6 +2118,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func beginPowerTransition(for action: String) {
+        acceptedPowerTransition = Self.disconnectingPowerActions.contains(action) ? action : nil
         consecutiveMirrorFailures = 0
         applyConnectionDecision(supervisorDecision(.powerIntentAccepted(action: action)), updateMessage: false)
         if remoteDesktopLoggingEnabled {
@@ -2102,16 +2145,10 @@ final class RemoteDashboardViewModel: ObservableObject {
         let exhaustedDecision = supervisorDecision(.scheduleExhausted)
         if exhaustedDecision != .none {
             applyConnectionDecision(exhaustedDecision, updateMessage: false)
-            return 60
+            return RemoteHostObservationStore.pollDelaySeconds(screenVisible: connectionScreenVisible || NSApp.isActive, userBaseIntervalSeconds: mirrorPollIntervalSeconds)
         }
-        return RemoteSmartPollController.steadyDelaySeconds(
-            availabilityState: hostAvailabilityState,
-            consecutiveMirrorFailures: consecutiveMirrorFailures,
-            userBaseIntervalSeconds: mirrorPollIntervalSeconds,
-            appIsActive: NSApp.isActive,
-            unchangedRevisionPollCount: unchangedRevisionPollCount,
-            slowStatusPollCount: slowStatusPollCount
-        )
+        return RemoteHostObservationStore.pollDelaySeconds(screenVisible: connectionScreenVisible || NSApp.isActive, userBaseIntervalSeconds: mirrorPollIntervalSeconds)
+
     }
 
     private func isAuthFailure(_ error: Error) -> Bool {
@@ -2227,7 +2264,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .online:
             return isPaired ? "저장된 Keychain 토큰으로 자동 연결했습니다." : "서버를 찾았습니다. Windows 원격 설정에서 페어링 코드를 발급해 입력하세요."
         case .offlineExpected:
-            return "호스트 Tailscale ping 응답이 없어 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다. 캐시 데이터는 standalone으로 유지합니다."
+            return "PC 응답이 없습니다. 전원 상태와 Tailscale 연결을 확인하세요. 캐시 데이터는 보존합니다."
         case .agentUnavailable:
             return "호스트 관리 계층은 확인됐지만 Windows Remote Agent HTTP 첫 응답이 지연되고 있습니다. 호스트 앱/API 서버가 굼뜨거나 DB 작업에 막혔는지 확인하세요."
         case .waking:
@@ -2287,14 +2324,14 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func requestImmediateMirror(trigger: String, syncScope: RemotePayloadSyncScope = .revisionAware) {
-        guard bootstrapEnabled, isPaired else { return }
+        guard bootstrapEnabled else { return }
         Task { [weak self] in
             await self?.runMirrorRemoteState(trigger: trigger, syncScope: syncScope)
         }
     }
 
     private func requestScheduledMirror(trigger: String, syncScope: RemotePayloadSyncScope = .revisionAware) {
-        guard bootstrapEnabled, isPaired else { return }
+        guard bootstrapEnabled else { return }
         Task { [weak self] in
             let seconds: UInt64 = await MainActor.run {
                 guard let self else { return 15 }
@@ -2348,7 +2385,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private func handleClientResumed() async {
         let decision = supervisorDecision(.clientResumed)
         applyConnectionDecision(decision, updateMessage: false)
-        guard decision.shouldProbeImmediately, isPaired else { return }
+        guard decision.shouldProbeImmediately else { return }
         await runMirrorRemoteState(trigger: "clientResumed", syncScope: .revisionAware)
     }
 
@@ -2883,37 +2920,25 @@ final class RemoteDashboardViewModel: ObservableObject {
         await refresh(using: RemoteDashboardService(client: client), includeDevices: !tokenText.isEmpty)
     }
 
-    private func updateSmartPollingSignals(latestStatus: RemoteStatus, willSyncPayload: Bool) {
-        if willSyncPayload || lastStateRevision == nil || latestStatus.stateRevision != lastStateRevision {
-            unchangedRevisionPollCount = 0
-        } else {
-            unchangedRevisionPollCount += 1
-        }
-
-        if RemoteSmartPollController.shouldTreatStatusAsSlow(durationMilliseconds: latestStatus.diagnostics?.durationMS) {
-            slowStatusPollCount += 1
-        } else {
-            slowStatusPollCount = 0
-        }
-    }
-
     private func mirrorRemoteState(trigger: String = "mirror", syncScope: RemotePayloadSyncScope = .revisionAware) async {
         refreshMoonlightSessionSnapshot()
         guard let client else { return }
+        let identity = currentHostIdentity
         let service = RemoteDashboardService(client: client)
         let previousAvailabilityState = hostAvailabilityState
         guard let evaluation = await evaluateConnectivity(using: service, client: client, trigger: trigger, updateMessage: false) else {
             return
         }
+        guard currentHostIdentity == identity else { return }
         let latestStatus = evaluation.status
         let shouldRefreshSSHHealthAfterRecovery = shouldRefreshLocalSSHHealthAfterOnlineRecovery(
             previousState: previousAvailabilityState,
             decision: evaluation.decision
         )
         await applyReadiness(from: latestStatus, using: service)
+        guard currentHostIdentity == identity else { return }
         let revisionRequiresSync = evaluation.decision.shouldForcePayloadSync || latestStatus.stateRevision != lastStateRevision || lastStateRevision == nil
         let shouldSyncPayload = revisionRequiresSync || syncScope != .revisionAware
-        updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: shouldSyncPayload)
         guard shouldSyncPayload else {
             refreshLocalProcessDisplay()
             refreshMoonlightSessionSnapshot()
@@ -2932,9 +2957,11 @@ final class RemoteDashboardViewModel: ObservableObject {
         case .forceProcesses:
             await syncRemoteProcesses(using: service, client: client)
         }
+        guard currentHostIdentity == identity else { return }
         if shouldRefreshSSHHealthAfterRecovery {
             await refreshLocalSSHHealthAfterOnlineRecovery(using: service)
         }
+        guard currentHostIdentity == identity else { return }
         await resumePendingMoonlightWakeActionIfReady(trigger: trigger)
         clearPendingMoonlightWakeActionIfBlocked()
         refreshMoonlightSessionSnapshot()
@@ -2949,28 +2976,37 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async {
-        powerSetup = try? await service.powerSetup()
+        let identity = currentHostIdentity
+        let received = try? await service.powerSetup()
+        guard currentHostIdentity == identity else { return }
+        powerSetup = received
         fillDefaultSSHFields()
         _ = await verifyLocalSSHHealth(updateMessage: false)
     }
 
     private func applyReadiness(from status: RemoteStatus, using service: RemoteDashboardService) async {
+        let identity = currentHostIdentity
         if status.readiness == nil || status.readiness?.tailscaleReadiness.details == nil {
-            readiness = try? await service.readiness()
+            let received = try? await service.readiness()
+            guard currentHostIdentity == identity else { return }
+            readiness = received
         } else {
             readiness = status.readiness
         }
     }
 
     private func syncRemoteProcesses(using service: RemoteDashboardService, client: RemoteAPIClient) async {
+        let identity = currentHostIdentity
         do {
             let remoteProcesses = try await service.processes()
-            RemoteClientCache.saveProcesses(remoteProcesses)
+            guard currentHostIdentity == identity else { return }
+            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
+            guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
-                processes = RemoteClientCache.loadProcesses()
+                processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
             }
             refreshLocalProcessDisplay()
             handlePayloadSyncFailure(
@@ -2981,16 +3017,23 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func syncRemotePayloads(using service: RemoteDashboardService, client: RemoteAPIClient) async {
+        let identity = currentHostIdentity
         do {
-            dashboardSummary = try await service.dashboardSummary()
-            beholderIncidents = try await service.beholderIncidents()
+            let receivedSummary = try await service.dashboardSummary()
+            guard currentHostIdentity == identity else { return }
+            let receivedIncidents = try await service.beholderIncidents()
+            guard currentHostIdentity == identity else { return }
+            dashboardSummary = receivedSummary
+            beholderIncidents = receivedIncidents
             let remoteProcesses = try await service.processes()
-            RemoteClientCache.saveProcesses(remoteProcesses)
+            guard currentHostIdentity == identity else { return }
+            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
         } catch {
+            guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
-                processes = RemoteClientCache.loadProcesses()
+                processes = RemoteClientCache.loadProcesses(baseURL: URL(string: baseURLText))
             }
             refreshLocalProcessDisplay()
             handlePayloadSyncFailure(error)
@@ -2999,9 +3042,13 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func refreshDashboardSummaryForDisplay() async {
         guard showPlaySummary, dashboardSummary == nil, let service else { return }
+        let identity = currentHostIdentity
         do {
-            dashboardSummary = try await service.dashboardSummary()
+            let received = try await service.dashboardSummary()
+            guard currentHostIdentity == identity else { return }
+            dashboardSummary = received
         } catch {
+            guard currentHostIdentity == identity else { return }
             handlePayloadSyncFailure(
                 error,
                 fallbackMessage: "플레이 요약을 불러오지 못했습니다. 연결 상태를 확인한 뒤 새로고침하세요. (\(error.localizedDescription))"
@@ -3010,6 +3057,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func refresh(using service: RemoteDashboardService, includeDevices: Bool) async {
+        let identity = currentHostIdentity
         isLoading = true
         defer { isLoading = false }
         guard let client else { return }
@@ -3019,22 +3067,34 @@ final class RemoteDashboardViewModel: ObservableObject {
             // Keep refreshes sequential. The Remote Agent's file-backed device
             // registry updates token last-seen metadata during auth checks, so
             // parallel authenticated requests can race on that registry file.
-            updateSmartPollingSignals(latestStatus: latestStatus, willSyncPayload: true)
             lastStateRevision = latestStatus.stateRevision
             await applyReadiness(from: latestStatus, using: service)
-            dashboardSummary = try await service.dashboardSummary()
-            beholderIncidents = try await service.beholderIncidents()
-            gameLinks = try await service.gameLinks()
-            mobileSessions = try await service.activeMobileSessions()
-            powerSetup = try? await service.powerSetup()
+            let receivedSummary = try await service.dashboardSummary()
+            guard currentHostIdentity == identity else { return }
+            let receivedIncidents = try await service.beholderIncidents()
+            guard currentHostIdentity == identity else { return }
+            let receivedLinks = try await service.gameLinks()
+            guard currentHostIdentity == identity else { return }
+            let receivedSessions = try await service.activeMobileSessions()
+            guard currentHostIdentity == identity else { return }
+            dashboardSummary = receivedSummary
+            beholderIncidents = receivedIncidents
+            gameLinks = receivedLinks
+            mobileSessions = receivedSessions
+            let receivedPowerSetup = try? await service.powerSetup()
+            guard currentHostIdentity == identity else { return }
+            powerSetup = receivedPowerSetup
             fillDefaultSSHFields()
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
-            RemoteClientCache.saveProcesses(remoteProcesses)
+            guard currentHostIdentity == identity else { return }
+            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
             processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
             await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
             if includeDevices {
-                applyDevices(try await service.devices())
+                let receivedDevices = try await service.devices()
+                guard currentHostIdentity == identity else { return }
+                applyDevices(receivedDevices)
             }
             let hadPendingMoonlightWakeAction = pendingMoonlightWakeAction != nil
             await resumePendingMoonlightWakeActionIfReady(trigger: "refresh")
@@ -3042,6 +3102,7 @@ final class RemoteDashboardViewModel: ObservableObject {
                 message = "동기화 완료: 게임 \(processes.count)개, 연결 \(gameLinks.count)개, 모바일 세션 \(mobileSessions.count)개"
             }
         } catch {
+            guard currentHostIdentity == identity else { return }
             handlePayloadSyncFailure(error)
             if isAuthFailure(error) {
                 setupProgress = pairingRecoveryMessage
@@ -3205,6 +3266,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func stop(_ process: RemoteProcess) async {
+        await observeConnectionNow(trigger: "game.stop.clicked")
+        let identity = currentHostIdentity
         guard isStopEnabled(process) else {
             message = hostAvailabilityState == .online ? "게임 종료를 요청할 수 없는 상태입니다." : "호스트 연결이 복구된 뒤 실행 중 게임을 종료할 수 있습니다."
             return
@@ -3214,6 +3277,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         pendingStopProcessIDs.insert(processID)
         do {
             let result = try await service.stopProcess(id: process.id)
+            guard currentHostIdentity == identity else { return }
             message = result.message
             if result.accepted {
                 startStopChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
@@ -3237,6 +3301,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func launch(_ process: RemoteProcess) async {
+        await observeConnectionNow(trigger: "game.launch.clicked")
+        let identity = currentHostIdentity
         guard isLaunchEnabled(process) else {
             message = hostAvailabilityState == .online ? "이미 실행 중이거나 실행 확인 중입니다." : "호스트 연결이 복구된 뒤 실행할 수 있습니다. 캐시된 게임 상태는 standalone으로 계속 갱신합니다."
             return
@@ -3246,6 +3312,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         pendingLaunchProcessIDs.insert(processID)
         do {
             let result = try await service.launchProcess(id: process.id)
+            guard currentHostIdentity == identity else { return }
             message = result.message
             if result.accepted {
                 startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)
@@ -3266,22 +3333,23 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
-    private static func isDisconnectedPowerState(_ state: RemoteHostAvailabilityState) -> Bool {
-        [.offlineExpected, .waking, .restarting, .goingOffline, .reconnecting, .agentUnavailable, .authRejected].contains(state)
-    }
-
     func isPowerActionEnabled(_ action: String) -> Bool {
         if action == "wake", powerConfig.localWakeConfigured { return true }
         if Self.disconnectingPowerActions.contains(action),
            powerConfig.localSSHConfigured,
-           localSSHHealthReady,
-           !Self.isDisconnectedPowerState(hostAvailabilityState) {
+           localSSHHealthReady {
             return true
         }
         return false
     }
 
     func power(_ action: String) async {
+        await observeConnectionNow(trigger: "power.clicked")
+        let identity = currentHostIdentity
+        if action == "wake", !hostObservations.shouldWake {
+            message = "PC가 응답하거나 아직 응답 여부를 확인하지 못했습니다. Wake를 중복 전송하지 않습니다."
+            return
+        }
         guard isPowerActionEnabled(action) else {
             message = "전원 명령은 클라이언트의 SmartThings/OpenSSH 직접 경로가 준비되어야 사용할 수 있습니다."
             return
@@ -3290,14 +3358,14 @@ final class RemoteDashboardViewModel: ObservableObject {
             RemoteClientDesktopLogger.write("power.click", ["action": action])
         }
         if action == "wake", powerConfig.localWakeConfigured {
-            if await localWake() {
+            if await localWake(), currentHostIdentity == identity {
                 beginPowerTransition(for: "wake")
             }
             return
         }
 
         if Self.disconnectingPowerActions.contains(action), powerConfig.localSSHConfigured {
-            if await localSSH(action) {
+            if await localSSH(action), currentHostIdentity == identity {
                 beginPowerTransition(for: action)
             }
             return
@@ -3339,11 +3407,17 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     @discardableResult
     private func verifyLocalSSHHealth(updateMessage: Bool = true) async -> Bool {
+        let identity = currentHostIdentity
+        let request = hostObservationStore.begin(for: identity)
         guard powerConfig.localSSHConfigured else {
             localSSHHealth = nil
             return false
         }
-        let result = await LocalSSHPowerManager.health(config: powerConfig, timeoutSeconds: 3)
+        let result = await observeSSH(config: powerConfig, host: URL(string: baseURLText)?.host ?? "")
+        guard currentHostIdentity == identity else { return false }
+        var observed = hostObservations
+        observed.sshPowerReady = result.authenticated
+        guard hostObservationStore.accept(observed, for: request) else { return false }
         localSSHHealth = result
         if remoteDesktopLoggingEnabled {
             RemoteClientDesktopLogger.write(
@@ -3360,8 +3434,8 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
         if updateMessage {
             message = result.authenticated
-                ? "SSH health 인증 확인 완료: \(result.host)"
-                : "SSH key 등록은 확인했지만 실제 SSH 인증은 실패했습니다: \(result.message)"
+                ? "SSH 인증 · 권한 서비스 준비 확인: \(result.host)"
+                : "SSH 인증 또는 권한 서비스 준비를 확인하지 못했습니다: \(result.message)"
         }
         return result.authenticated
     }

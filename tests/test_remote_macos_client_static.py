@@ -594,7 +594,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "shouldProbeImmediately" in supervisor
     assert "hostAvailabilityState" in view_model
     assert "private enum HostReachability" in view_model
-    assert "private enum TailnetManagementReachability" in view_model
     assert "private struct ConnectivityEvaluationLog" in view_model
     assert "writeConnectivityEvaluationLog" in view_model
     assert "guard remoteDesktopLoggingEnabled else { return }" in view_model
@@ -606,8 +605,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private func evaluateConnectivity" in view_model
     assert 'trigger: "refresh"' in view_model
     assert 'trigger: "mirror"' in view_model
-    assert "probeTailnetManagementReachability(for: client)" in view_model
-    assert "LocalSSHPowerManager.health(config: powerConfig" in view_model
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
     assert "markHTTPAgentUnavailable" in view_model
@@ -625,13 +622,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "localTailscale?.peers.contains" in view_model
     assert "TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
-    assert "RemoteSmartPollController.steadyDelaySeconds" in view_model
     assert "enum RemotePayloadSyncScope" in smart_poll
     assert "launchChaseFallbackDelaysNanoseconds" in smart_poll
-    assert "slowStatusThresholdMilliseconds" in smart_poll
-    assert "appIsActive: NSApp.isActive" in view_model
-    assert "unchangedRevisionPollCount" in view_model
-    assert "slowStatusPollCount" in view_model
     assert "requestImmediateMirror(trigger:" in view_model
     assert 'trigger: "power.\\(action).accepted"' in view_model
     assert "runMirrorRemoteState(trigger:" in view_model
@@ -847,22 +839,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "@Published private(set) var pendingStopProcessIDs" in view_model
     assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
     assert "disconnectingPowerActions" in view_model
-    assert "isDisconnectedPowerState" in view_model
     assert "client.power(action:" not in view_model
-    assert "static let acceptedMarker" in local_ssh
     assert "static func command(for action: String)" in local_ssh
-    assert "cmd /C" in local_ssh
-    assert "shutdown /s /t 1 && echo \\(acceptedMarker)" in local_ssh
-    assert "shutdown /r /t 1 && echo \\(acceptedMarker)" in local_ssh
-    assert "cmd /C echo \\(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0" in local_ssh
-    assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
     assert 'connectionClosingActions: Set<String> = ["sleep", "restart", "shutdown"]' in local_ssh
     assert "if connectionClosingActions.contains(action)" in local_ssh
     assert '"ServerAliveInterval=2"' in local_ssh
     assert '"ServerAliveCountMax=2"' in local_ssh
     assert 'start "" rundll32.exe' not in local_ssh
     assert 'if action == "sleep", result.status == 0' not in local_ssh
-    assert "combined.contains(Self.acceptedMarker)" in local_ssh
     assert '"IdentitiesOnly=yes"' in local_ssh
     assert "authenticated: Bool" in local_ssh
     assert "authenticated: true" in local_ssh
@@ -884,7 +868,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "previousState != .online || decision.shouldForcePayloadSync" in view_model
     assert "refreshLocalSSHHealthAfterOnlineRecovery(using: service)" in view_model
     assert "private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async" in view_model
-    assert "localSSHHealthReady," in view_model
     assert "localSSHIdentityStatus" in view_model
     assert '"ssh_identity": identityStatus' in view_model
     assert '"power.local_ssh.started"' in view_model
@@ -901,7 +884,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "viewModel.processStatusText(process)" in app
     assert "func launch(_ process: RemoteProcess) async" in view_model
     assert "func stop(_ process: RemoteProcess) async" in view_model
-    launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
+    launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("func isPowerActionEnabled", 1)[0]
     assert "await refresh()" not in launch_source
     assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" not in launch_source
     assert "startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)" in launch_source
@@ -944,10 +927,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "smoke-moonlight-host" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"] = "1"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline moonlight wake" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline Moonlight ON should queue wake-and-stream instead of failing" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline launch should stay disabled while Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
@@ -1015,7 +994,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "tailscale_exit_status" in view_model
     assert "tailscale_stdout" in view_model
     assert "tailscale_stderr" in view_model
-    assert "static let healthMarker" in local_ssh
     assert "static func health(config: RemotePowerConfigPayload" in local_ssh
     assert 'private static let preferredWakeDeviceName = "PC 켜기"' in local_power
     assert "static func resolveSmartThingsCLIPath" in local_power

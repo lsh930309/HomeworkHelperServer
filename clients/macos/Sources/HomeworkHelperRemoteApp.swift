@@ -235,6 +235,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     func popoverDidClose(_ notification: Notification) {
+        RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(false)
         removePopoverOutsideClickMonitor()
         removePopoverKeyDownMonitor()
         NSApp.setActivationPolicy(.accessory)
@@ -291,6 +292,7 @@ final class RemoteAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegat
     }
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        RemoteSharedModel.viewModel.connectionScreenVisibilityChanged(true)
         RemoteSharedModel.viewModel.refreshMoonlightSessionSnapshot()
         updatePopoverContentSize()
         NSApp.setActivationPolicy(.accessory)

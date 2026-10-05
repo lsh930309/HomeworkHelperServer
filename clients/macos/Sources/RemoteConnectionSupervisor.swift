@@ -28,7 +28,7 @@ enum RemoteHostAvailabilityState: String, Equatable {
         case .unknown: return "상태 확인 중"
         case .online: return "페어링됨"
         case .goingOffline: return "종료 대기 중"
-        case .offlineExpected: return "호스트 꺼짐"
+        case .offlineExpected: return "PC 응답 없음"
         case .waking: return "부팅 대기 중"
         case .restarting: return "재시동 대기 중"
         case .reconnecting: return "재연결 중"
@@ -204,7 +204,7 @@ enum RemoteConnectionSupervisor {
             return disconnectedDecision(
                 state: .offlineExpected,
                 schedule: [],
-                message: "호스트 Tailscale ping 응답이 없습니다. 호스트가 최대 절전/종료 상태이거나 Tailscale이 비활성화된 것으로 판단했습니다." + suffix
+                message: "PC Tailscale ping 응답이 없습니다. 전원 상태와 네트워크 연결을 확인하세요." + suffix
             )
         }
     }
@@ -256,7 +256,7 @@ enum RemoteConnectionSupervisor {
             return disconnectedDecision(
                 state: .offlineExpected,
                 schedule: [],
-                message: "호스트가 절전/종료 상태로 전환된 것으로 판단했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+                message: "종료·절전 명령 이후 앱 응답이 없습니다. PC 도달 여부는 별도로 확인하며 토큰과 캐시를 보존합니다."
             )
         case .waking, .restarting:
             if reconnectScheduleIsEmpty {
@@ -321,7 +321,7 @@ enum RemoteConnectionSupervisor {
             return disconnectedDecision(
                 state: .offlineExpected,
                 schedule: [],
-                message: "호스트가 절전/종료 상태로 전환된 것으로 판단했습니다. 저장된 토큰과 캐시 데이터는 보존합니다."
+                message: "종료·절전 명령 이후 앱 응답이 없습니다. PC 도달 여부는 별도로 확인하며 토큰과 캐시를 보존합니다."
             )
         case .waking, .restarting:
             if reconnectScheduleIsEmpty {
