@@ -1733,3 +1733,21 @@ def test_windows_title_bar_color_noops_off_windows(monkeypatch):
         text_color=(220, 220, 220),
         dark_mode=True,
     ) is False
+
+
+def test_admin_feature_setting_is_saved_without_restart_or_rollback(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    data = _FakeApiClient([])
+    window = main_window.MainWindow(data)
+    updated = GlobalSettings(run_as_admin=True, run_on_startup=True, sidebar_enabled=False)
+    dialog = SimpleNamespace(exec=lambda: True, get_updated_settings=lambda: updated)
+    monkeypatch.setattr(main_window, "GlobalSettingsDialog", lambda *_args: dialog)
+    try:
+        window.open_global_settings_dialog()
+        assert data.global_settings.run_as_admin is True
+        assert data.global_settings.run_on_startup is True
+        assert window.launcher.run_as_admin is True
+        assert window.isVisible()
+    finally:
+        _stop_window(window, app)

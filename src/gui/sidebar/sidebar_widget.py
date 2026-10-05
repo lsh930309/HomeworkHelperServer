@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.data.data_models import ManagedProcess
+from src.core.process_monitor import terminate_managed_process
 from src.utils import audio_control
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
@@ -48,6 +49,36 @@ _THUMB_HIRES_H = _THUMB_H * 2   # 114px
 
 class _ThumbnailLoadSignals(QObject):
     loaded = Signal(int, str, object)
+
+
+class _ProcessStopSignals(QObject):
+    completed = Signal(str, object)
+
+
+class _ProcessStopTask(QRunnable):
+    """GUI에서 확정한 등록 대상과 OS identity만 사용하는 종료 작업."""
+
+    def __init__(self, process: ManagedProcess, pid: int, create_time: float,
+                 run_as_admin: bool, signals: _ProcessStopSignals):
+        super().__init__()
+        self._process = process
+        self._pid = pid
+        self._create_time = create_time
+        self._run_as_admin = run_as_admin
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            result = terminate_managed_process(
+                self._process,
+                run_as_admin=self._run_as_admin,
+                pid=self._pid,
+                create_time=self._create_time,
+            )
+        except Exception as exc:
+            logger.warning("게임 종료 요청 실패: %s", exc)
+            result = {"accepted": False, "status": "failed", "message": str(exc)}
+        self._signals.completed.emit(self._process.name, result)
 
 
 class _ThumbnailLoadTask(QRunnable):
@@ -467,6 +498,9 @@ class SidebarWidget(QWidget):
         self._rec_thumb_signals = _ThumbnailLoadSignals()
         self._rec_thumb_signals.loaded.connect(self._apply_rec_thumbnail_result)
 
+        self._process_stop_signals = _ProcessStopSignals()
+        self._process_stop_signals.completed.connect(self._on_process_stop_completed)
+
         # Win32 외부 클릭 감지 상태
         self._lbutton_was_down: bool = False
 
@@ -548,6 +582,10 @@ class SidebarWidget(QWidget):
         self._main_scroll.setWidget(self._scroll_content)
         layout.addWidget(self._main_scroll, 1)
 
+        self._process_stop_status = QLabel()
+        self._process_stop_status.setWordWrap(True)
+        self._process_stop_status.hide()
+        layout.addWidget(self._process_stop_status)
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         close_btn = QPushButton("닫기")
         close_btn.setFixedHeight(28)
@@ -703,8 +741,8 @@ class SidebarWidget(QWidget):
         from src.gui.main_window import MainWindow
         if not MainWindow.INSTANCE:
             return []
-        # dict 복사 - process_monitor 스레드가 동시에 수정할 수 있음
-        active = dict(MainWindow.INSTANCE.process_monitor.active_monitored_processes)
+        # cache는 GUI thread가 소유합니다. 버튼에는 PID와 생성 시각을 값으로 캡처합니다.
+        active = MainWindow.INSTANCE.process_monitor.active_monitored_processes
         managed = getattr(self._data_manager, 'managed_processes', [])
         managed_map = {p.id: p for p in managed}
 
@@ -773,30 +811,45 @@ class SidebarWidget(QWidget):
         kill_btn = QPushButton("게임 종료")
         kill_btn.setFixedHeight(28)
         kill_btn.setProperty("hhRole", "danger")
-        kill_btn.clicked.connect(lambda _=False, p=pid: self._kill_process(p))
+        kill_btn.setEnabled(pid is not None and start_ts > 0)
+        kill_btn.clicked.connect(
+            lambda _=False, process_id=process.id, path=process.monitoring_path,
+            target_pid=pid, created=start_ts: self._kill_process(process_id, path, target_pid, created)
+        )
         layout.addWidget(kill_btn)
 
         return cluster
 
-    def _kill_process(self, pid: Optional[int]) -> None:
-        """프로세스를 백그라운드 스레드에서 종료합니다."""
-        if pid is None:
+    def _kill_process(self, process_id: str, monitoring_path: str,
+                      pid: Optional[int], create_time: float) -> None:
+        """등록 대상과 기존 관측 identity를 확정하고 종료를 비동기로 요청합니다."""
+        process = next((item for item in self._data_manager.managed_processes
+                        if item.id == process_id and item.monitoring_path == monitoring_path), None)
+        if process is None or pid is None or create_time <= 0:
+            self._process_stop_status.setText("등록 대상 또는 실행 정보가 변경되었습니다. 새로 확인해 주세요.")
+            self._process_stop_status.show()
             return
+        snapshot = ManagedProcess(
+            id=process.id, name=process.name, monitoring_path=process.monitoring_path,
+            launch_path=process.launch_path,
+        )
+        run_as_admin = bool(getattr(self._data_manager.global_settings, "run_as_admin", False))
+        self._process_stop_status.setText(f"{snapshot.name} 종료 요청 중…")
+        self._process_stop_status.show()
+        self._auto_hide_timer.stop()
+        QThreadPool.globalInstance().start(_ProcessStopTask(
+            snapshot, int(pid), float(create_time), run_as_admin, self._process_stop_signals
+        ))
 
-        class _KillRunnable(QRunnable):
-            def __init__(self, target_pid: int):
-                super().__init__()
-                self._pid = target_pid
-
-            def run(self):
-                try:
-                    import psutil
-                    psutil.Process(self._pid).terminate()
-                except Exception:
-                    pass
-
-        QThreadPool.globalInstance().start(_KillRunnable(pid))
-        self.slide_out()
+    @Slot(str, object)
+    def _on_process_stop_completed(self, process_name: str, result: dict) -> None:
+        message = str(result.get("message") or "게임 종료 요청에 실패했습니다.")
+        self._process_stop_status.setText(f"{process_name}: {message}")
+        self._process_stop_status.show()
+        if result.get("accepted"):
+            self.slide_out()
+        else:
+            self._reset_auto_hide()
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 플레이타임

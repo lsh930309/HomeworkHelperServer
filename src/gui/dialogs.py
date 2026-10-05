@@ -1655,8 +1655,8 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setRange(0.0, 12.0)
         self.cycle_advance_hours_spinbox.setSingleStep(0.25)
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
-        self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
-        self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
+        self.run_on_startup_checkbox = QCheckBox("Windows 로그인 시 자동 실행")
+        self.run_as_admin_checkbox = QCheckBox("관리자 기능 사용 (권한 서비스 필요)")
 
         # 테마 선택 (라디오 버튼)
         self.theme_system_rb = QRadioButton("시스템")

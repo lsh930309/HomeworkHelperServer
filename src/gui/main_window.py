@@ -49,10 +49,9 @@ from src.utils.windows import (
     apply_windows_title_bar_color,
     position_windows_window_bottom_right,
     snap_windows_window_to_work_area,
-    set_startup_shortcut,
-    get_startup_shortcut_status,
 )
-from src.core.launcher import Launcher, launch_target_accepts_args
+from src.core.launcher import Launcher
+from src.core.launch_target import launcher_candidates, resolve_launch_target, resolve_launch_args
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -65,7 +64,7 @@ from src.core.process_monitor import (
     scan_running_processes,
 )
 from src.core.scheduler import Scheduler, PROC_STATE_INCOMPLETE, PROC_STATE_COMPLETED, PROC_STATE_RUNNING
-from src.utils.admin import is_admin, run_as_admin, restart_as_normal
+from src.utils.admin import privilege_service_status
 from src.utils.game_preset_manager import GamePresetManager
 from src.utils import audio_control
 from src.gui.volume_panel import VolumePopoverPanel
@@ -687,7 +686,7 @@ class MainWindow(QMainWindow):
                 "green": "원격 연결", "yellow": "원격 준비 중", "red": "원격 오류", "gray": "원격 미설정",
             },
             "admin": {
-                "green": "관리자 권한", "yellow": "권한 확인", "red": "권한 오류", "gray": "일반 권한",
+                "green": "관리자 기능 준비", "yellow": "권한 서비스 확인", "red": "권한 서비스 오류", "gray": "관리자 기능 대기",
             },
         }
         layout_changed = False
@@ -747,13 +746,13 @@ class MainWindow(QMainWindow):
             remote = ("yellow", f"Remote 준비 중 · exposed={remote_exposed} · tailscale={tailscale_message}")
         else:
             remote = ("gray", "Remote 설정 전입니다. 설정 > 원격 설정에서 최초 페어링을 진행하세요.")
-        admin = is_admin()
+        admin_ready, admin_message = privilege_service_status()
         return {
             "beholder": beholder,
             "remote": remote,
             "admin": (
-                "green" if admin else "gray",
-                "관리자 권한으로 실행 중입니다." if admin else "일반 사용자 권한으로 실행 중입니다.",
+                "green" if admin_ready else "gray",
+                admin_message,
             ),
         }
 
@@ -844,10 +843,10 @@ class MainWindow(QMainWindow):
 
     def _reconcile_open_sessions_after_startup(self):
         targets = self.process_monitor.process_scan_targets()
-        self._submit_telemetry("startup_reconcile", self._collect_startup_reconcile, targets)
+        self._submit_telemetry("startup_reconcile", functools.partial(self._collect_startup_reconcile, run_as_admin=bool(self.data_manager.global_settings.run_as_admin)), targets)
 
-    def _collect_startup_reconcile(self, targets: tuple[object, ...]) -> tuple[dict[str, Any], ...]:
-        running_ids = sorted(detect_running_process_ids(targets))
+    def _collect_startup_reconcile(self, targets: tuple[object, ...], *, run_as_admin: bool = False) -> tuple[dict[str, Any], ...]:
+        running_ids = sorted(detect_running_process_ids(targets, run_as_admin=run_as_admin))
         result = self._background_transport.post_json(
             "/api/beholder/open-sessions/reconcile",
             {"running_process_ids": running_ids},
@@ -1371,7 +1370,6 @@ class MainWindow(QMainWindow):
         # 중요: 대화상자를 열 때마다 data_manager로부터 최신 설정 객체를 가져와야 합니다.
         # ApiClient는 설정을 저장할 때마다 내부의 global_settings 객체를 새로 교체하기 때문입니다.
         latest_settings = self.data_manager.global_settings
-        previous_run_as_admin = latest_settings.run_as_admin  # 이전 설정 값 저장
 
         dlg = GlobalSettingsDialog(latest_settings, self) # 최신 설정으로 대화 상자 생성
         if dlg.exec(): # 대화 상자 실행 및 'OK' 클릭 시
@@ -1380,57 +1378,6 @@ class MainWindow(QMainWindow):
             if not self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog"):
                 QMessageBox.warning(self, "저장 실패", "전역 설정 저장이 차단되었거나 실패했습니다. 변경 사항은 적용하지 않습니다.")
                 return
-
-            # 관리자 권한 설정이 변경되었는지 확인 (디버깅용 로그 파일 기록)
-            def _log_admin_debug(msg):
-                """디버깅 로그를 파일에 기록"""
-                try:
-                    import datetime
-                    log_dir = os.path.join(os.getenv('APPDATA', ''), 'HomeworkHelper')
-                    os.makedirs(log_dir, exist_ok=True)
-                    log_file = os.path.join(log_dir, 'admin_debug.log')
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"[{datetime.datetime.now()}] {msg}\n")
-                except:
-                    pass
-
-            _log_admin_debug(f"previous_run_as_admin: {previous_run_as_admin}, upd_gs.run_as_admin: {upd_gs.run_as_admin}, is_admin(): {is_admin()}")
-            if previous_run_as_admin != upd_gs.run_as_admin:
-                if upd_gs.run_as_admin and not is_admin():
-                    # 일반 → 관리자: UAC 프롬프트로 관리자 권한 재시작
-                    _log_admin_debug("일반 → 관리자 권한 재시작 시도")
-                    result = run_as_admin()
-                    _log_admin_debug(f"run_as_admin() 반환값: {result}")
-                    if result:
-                        # 재시작 플래그 설정 후 즉시 종료
-                        import homework_helper
-                        homework_helper._restart_in_progress = True
-                        _log_admin_debug("QApplication.quit() 호출")
-                        QApplication.quit()
-                        return
-                    else:
-                        # 재시작 실패 시 설정 롤백
-                        _log_admin_debug("재시작 실패, 설정 롤백")
-                        upd_gs.run_as_admin = False
-                        self.data_manager.save_global_settings(upd_gs, actor="global_settings_dialog")
-                        self._record_status_event("관리자 권한으로 재시작 실패. 설정이 롤백되었습니다.", 5000)
-                        return
-                elif not upd_gs.run_as_admin and is_admin():
-                    # 관리자 → 일반: 일반 권한으로 재시작
-                    _log_admin_debug("관리자 → 일반 권한 재시작 시도")
-                    result = restart_as_normal()
-                    _log_admin_debug(f"restart_as_normal() 반환값: {result}")
-                    if result:
-                        # 재시작 플래그 설정 후 즉시 종료
-                        import homework_helper
-                        homework_helper._restart_in_progress = True
-                        _log_admin_debug("QApplication.quit() 호출")
-                        QApplication.quit()
-                        return
-                    else:
-                        self._record_status_event("일반 권한으로 재시작 실패. 앱을 수동으로 재시작해주세요.", 5000)
-            else:
-                _log_admin_debug("권한 설정 변경 없음 - 조건문 통과하지 않음")
 
             # Launcher 인스턴스의 관리자 권한 설정 업데이트
             self.launcher.run_as_admin = upd_gs.run_as_admin
@@ -1447,13 +1394,6 @@ class MainWindow(QMainWindow):
             self._refresh_web_button_states() # 웹 버튼 상태 새로고침 (전역 설정 변경이 웹 버튼에 영향을 줄 수 있는 경우)
             self._adjust_window_size_to_content()
 
-            # 시작 프로그램 상태 확인 및 메시지 표시
-            current_status = get_startup_shortcut_status()
-            if current_status:
-                self._record_status_event("시작 프로그램에 등록되어 있습니다.", 3000)
-            else:
-                self._record_status_event("시작 프로그램에 등록되어 있지 않습니다.", 3000)
-
     def open_remote_settings_dialog(self):
         """원격 설정 대화 상자를 엽니다."""
         dlg = RemoteSettingsDialog(self.data_manager, self)
@@ -1466,20 +1406,16 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def apply_startup_setting(self):
-
-        """시작 프로그램 자동 실행 설정을 적용합니다."""
-        run = self.data_manager.global_settings.run_on_startup # 자동 실행 여부 가져오기
-        if set_startup_shortcut(run): # 바로가기 설정 시도
-            self._record_status_event(f"시작 시 자동 실행: {'활성' if run else '비활성'}", 3000)
-        else:
-            self._record_status_event("자동 실행 설정 중 문제 발생 가능.", 3000)
+        """DB 설정을 로그인 시 서비스가 읽으며 GUI는 별도 writer를 만들지 않습니다."""
+        enabled = bool(self.data_manager.global_settings.run_on_startup)
+        self._record_status_event(f"로그인 시 자동 실행: {'활성' if enabled else '비활성'}", 3000)
 
     def run_process_monitor_check(self):
         """GUI 소유 입력을 확정하고 느린 psutil 스캔을 coalesce합니다."""
         self._check_and_toggle_game_mode()
         self._submit_telemetry(
             "process_scan",
-            scan_running_processes,
+            functools.partial(scan_running_processes, run_as_admin=bool(self.data_manager.global_settings.run_as_admin)),
             self.process_monitor.process_scan_targets(),
         )
 
@@ -1858,62 +1794,39 @@ class MainWindow(QMainWindow):
 
     def _launch_args_for_process(self, process: ManagedProcess, launch_mode: str, launch_target: str | None) -> str | None:
         """직접 실행 대상에만 저장된 추가 인자를 적용합니다."""
-        if launch_mode == "launcher" or not launch_target_accepts_args(launch_target):
-            return None
-        if not getattr(process, "launch_args_enabled", False):
-            return None
-        launch_args = str(getattr(process, "launch_args", "") or "").strip()
-        return launch_args or None
+        return resolve_launch_args(process, launch_mode, launch_target)
+
+    def _resolve_process_launch_target(self, process: ManagedProcess, mode: str | None = None):
+        preset = self.preset_manager.get_preset_by_id(process.user_preset_id) if process.user_preset_id else None
+        patterns = preset.get("launcher_patterns", ()) if preset else ()
+        existing = tuple(item for item in launcher_candidates(process, patterns) if os.path.exists(item))
+        return resolve_launch_target(process, mode, launcher_patterns=patterns, existing_paths=existing)
 
     def handle_launch_button_in_row(self, pid:str): # 게임 실행
         """선택된 게임 프로세스를 실행합니다."""
         p_launch = self.data_manager.get_process_by_id(pid) # ID로 프로세스 정보 가져오기
         if not p_launch: QMessageBox.warning(self, "오류", f"ID '{pid}' 프로세스 없음."); return
 
-        # preferred_launch_type에 따라 실행 경로 결정
-        launch_type = getattr(p_launch, 'preferred_launch_type', 'shortcut') or 'shortcut'
-        if launch_type == 'direct':
-            # 직접 실행 선호: 모니터링 경로 사용, 없으면 실행 경로 사용
-            launch_target = p_launch.monitoring_path or p_launch.launch_path
-        elif launch_type == 'shortcut':
-            # 바로가기 선호: 실행 경로 사용, 없으면 모니터링 경로 사용
-            launch_target = p_launch.launch_path or p_launch.monitoring_path
-        elif launch_type == 'launcher':
-            # 런처 우선: 프리셋에서 런처 패턴 확인 후 사용, 없으면 shortcut 방식으로 폴백
-            # 런처 경로를 찾기 위한 로직: 프리셋의 launcher_patterns 활용
-            launcher_path = None
-            if hasattr(p_launch, 'user_preset_id') and p_launch.user_preset_id:
-                preset = self.preset_manager.get_preset_by_id(p_launch.user_preset_id)
-                if preset and preset.get('launcher_patterns'):
-                    # 런처 패턴으로 경로 탐색 (간단히 실행 경로에서 런처 탐색)
-                    launch_dir = os.path.dirname(p_launch.launch_path or p_launch.monitoring_path or '')
-                    for pattern in preset['launcher_patterns']:
-                        potential_launcher = os.path.join(launch_dir, pattern)
-                        if os.path.exists(potential_launcher):
-                            launcher_path = potential_launcher
-                            break
-            launch_target = launcher_path or p_launch.launch_path or p_launch.monitoring_path
-        else:
-            # 레거시 'auto' 등: 실행 경로가 있으면 사용, 없으면 모니터링 경로
-            launch_target = p_launch.launch_path or p_launch.monitoring_path
+        launch_target, launch_type = self._resolve_process_launch_target(p_launch)
 
         if not launch_target: QMessageBox.warning(self, "오류", f"'{p_launch.name}' 실행 경로 없음."); return
 
         launch_args = self._launch_args_for_process(p_launch, launch_type, launch_target)
 
-        if self.launcher.launch_process(launch_target, args=launch_args): # 프로세스 실행 시도
+        if self.launcher.launch_process(launch_target, args=launch_args, managed_process_id=pid, launch_mode=launch_type): # 프로세스 실행 시도
             self._record_status_event(f"'{p_launch.name}' 실행 시도.", 3000)
             # 실행 성공 시 즉시 상태 업데이트
             self.update_process_statuses_only()
         else: # 실행 실패 시
-            self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
+            self._record_status_event(self.launcher.last_error or f"'{p_launch.name}' 실행 실패.", 5000)
 
     def _launch_with_specific_path(self, pid: str, use_shortcut: bool):
         """특정 경로로 프로세스 실행 (우클릭 메뉴용)"""
         p_launch = self.data_manager.get_process_by_id(pid)
         if not p_launch: return
 
-        launch_target = p_launch.launch_path if use_shortcut else p_launch.monitoring_path
+        launch_mode = "shortcut" if use_shortcut else "direct"
+        launch_target, launch_mode = self._resolve_process_launch_target(p_launch, launch_mode)
         if not launch_target:
             QMessageBox.warning(self, "오류", f"해당 경로가 없습니다.")
             return
@@ -1921,12 +1834,12 @@ class MainWindow(QMainWindow):
         launch_mode = "shortcut" if use_shortcut else "direct"
         launch_args = self._launch_args_for_process(p_launch, launch_mode, launch_target)
 
-        if self.launcher.launch_process(launch_target, args=launch_args):
+        if self.launcher.launch_process(launch_target, args=launch_args, managed_process_id=pid, launch_mode=launch_mode):
             path_type = "바로가기" if use_shortcut else "직접 실행"
             self._record_status_event(f"'{p_launch.name}' {path_type}으로 실행 시도.", 3000)
             self.update_process_statuses_only()
         else:
-            self._record_status_event(f"'{p_launch.name}' 실행 실패.", 3000)
+            self._record_status_event(self.launcher.last_error or f"'{p_launch.name}' 실행 실패.", 5000)
 
     def _set_launch_preference(self, pid: str, preference: str):
         """기본 실행 방식을 영구 저장"""

@@ -23,10 +23,12 @@ class _FakeLauncher:
     def __init__(self):
         self.targets: list[str] = []
         self.launches: list[tuple[str, str | None]] = []
+        self.managed_launches: list[tuple[str | None, str]] = []
 
-    def launch_process(self, target: str, args=None) -> bool:
+    def launch_process(self, target: str, args=None, *, managed_process_id=None, launch_mode="auto") -> bool:
         self.targets.append(target)
         self.launches.append((target, args))
+        self.managed_launches.append((managed_process_id, launch_mode))
         return True
 
 
@@ -211,6 +213,7 @@ def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boun
     assert body["accepted_at"]
     assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Users/me/Desktop/Game.url"]
+    assert launcher.managed_launches == [("game-a", "shortcut")]
     assert launcher.launches == [("/Users/me/Desktop/Game.url", None)]
     assert auditor.events[-1]["command"] == "process.launch.shortcut"
     assert auditor.events[-1]["accepted"] is True
@@ -700,6 +703,7 @@ def test_remote_launch_can_request_direct_mode_without_mutating_process_preferen
     assert body["command_id"].startswith("process.launch.direct:")
     assert body["refresh_after_ms"] == 750
     assert launcher.targets == ["/Applications/Game.app"]
+    assert launcher.managed_launches == [("game-a", "direct")]
     assert launcher.launches == [("/Applications/Game.app", None)]
     assert auditor.events[-1]["metadata"] == {"mode": "direct", "launch_args_applied": False}
 
@@ -1742,3 +1746,37 @@ def test_remote_status_revision_changes_for_resource_updates():
     assert changed_process["progress"]["source"] == "server_tracked"
     assert changed_process["progress"]["kind"] == "resource"
     assert changed_process["progress"]["key"] == "nikke_outpost_storage"
+
+
+def test_remote_stop_uses_registered_target_and_current_admin_feature_setting(monkeypatch):
+    from src.api import remote_routes
+    calls = []
+    def stop(process, *, run_as_admin):
+        calls.append((process.id, process.monitoring_path, run_as_admin))
+        return {"accepted": True, "status": "stopped", "message": "registered stop", "stopped": [{"pid": 456}]}
+    monkeypatch.setattr(remote_routes, "terminate_managed_process", stop)
+    monkeypatch.setattr(remote_routes.crud, "get_settings", lambda _db: SimpleNamespace(run_as_admin=True))
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="registered", name="Game", monitoring_path="C:/Games/game.exe", launch_path="C:/Games/game.url")]
+    )
+    response = client.post("/remote/processes/registered/stop")
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    assert calls == [("registered", "C:/Games/game.exe", True)]
+    assert auditor.events[-1]["metadata"]["pids"] == [456]
+
+
+def test_remote_stop_reports_service_failure_without_direct_termination(monkeypatch):
+    from src.api import remote_routes
+    from src.host_service.client import PrivilegeServiceUnavailable
+    def unavailable(*_args, **_kwargs):
+        raise PrivilegeServiceUnavailable("broker unavailable")
+    monkeypatch.setattr(remote_routes, "terminate_managed_process", unavailable)
+    client, _launcher, _opened_urls, auditor, _registry = _client_with_seed(
+        processes=[models.Process(id="registered", name="Game", monitoring_path="C:/Games/game.exe", launch_path="C:/Games/game.url")]
+    )
+    response = client.post("/remote/processes/registered/stop")
+    assert response.status_code == 200
+    assert response.json()["accepted"] is False
+    assert response.json()["message"] == "broker unavailable"
+    assert auditor.events[-1]["metadata"]["pids"] == []

@@ -2594,6 +2594,8 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
 
+    check_admin_requirement()
+
     if _wants_server_only_mode():
         run_server_main()
         sys.exit(0)
@@ -2642,7 +2644,6 @@ if __name__ == "__main__":
         # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
 
     # GUI 애플리케이션 실행
-    check_admin_requirement()
 
     # 단일 인스턴스 실행 확인 로직을 통해 애플리케이션 시작
     def start_primary_application(instance_manager: SingleInstanceApplication):
