@@ -15,13 +15,13 @@ def read_url_target(file_path: str) -> Optional[str]:
     """
     try:
         # interpolation=None으로 설정하여 '%' 문자로 인한 오류 방지
-        parser = configparser.ConfigParser(interpolation=None) 
+        parser = configparser.ConfigParser(interpolation=None)
 
         # .url 파일은 다양한 인코딩을 가질 수 있습니다. utf-8을 먼저 시도하고, 실패 시 시스템 기본 인코딩을 시도합니다.
         # BOM(Byte Order Mark)이 있는 UTF-8 파일도 처리하기 위해 utf-8-sig 사용 가능성 고려
         try:
             # configparser.read는 파일 목록을 받을 수 있으므로 리스트로 전달
-            parsed_files = parser.read(file_path, encoding='utf-8-sig') 
+            parsed_files = parser.read(file_path, encoding='utf-8-sig')
             if not parsed_files: # 파일 읽기 실패 시 (예: 파일 없음, 권한 없음)
                 # utf-8-sig로 실패 시 일반 utf-8로 재시도
                 parsed_files = parser.read(file_path, encoding='utf-8')
@@ -48,7 +48,7 @@ def read_url_target(file_path: str) -> Optional[str]:
         if 'InternetShortcut' in parser and 'URL' in parser['InternetShortcut']:
             url = parser['InternetShortcut']['URL']
             # 가끔 URL 값 양쪽에 불필요한 따옴표가 있는 경우가 있어 제거
-            return url.strip('"') 
+            return url.strip('"')
 
         # configparser로 못찾았거나, 섹션이 없는 매우 단순한 .url 파일 (URL=... 만 있는 경우)
         print(f"  '{file_path}' 에서 [InternetShortcut] 섹션의 URL을 찾지 못함. 수동으로 'URL=' 패턴 검색 시도.")
@@ -339,4 +339,3 @@ def parse_lnk_admin_requirement(lnk_file_path: str) -> bool:
         print(f"  .lnk 파일 수동 파싱 중 오류: {e}")
         # 오류 발생 시 기본적으로 관리자 권한 필요로 가정
         return True
-
