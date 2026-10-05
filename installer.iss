@@ -73,12 +73,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 ; 설치 완료 후 프로그램 실행 옵션
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [InstallDelete]
 ; PyInstaller onedir 업데이트 시 이전 _internal 잔여 모듈이 새 exe와 섞이면
 ; 런타임 entrypoint/모듈 버전이 불일치할 수 있으므로 새 파일 복사 전에 제거합니다.
 Type: files; Name: "{app}\{#MyAppExeName}"
+Type: files; Name: "{app}\homework_helper_service.exe"
 Type: filesandordirs; Name: "{app}\_internal"
 
 [UninstallDelete]
@@ -87,42 +88,49 @@ Type: filesandordirs; Name: "{app}\_internal"
 
 [Code]
 // ============================================================
-// 예약 작업 등록/해제 (관리자 권한 재시작 기능용)
-// admin.py의 _ADMIN_TASK_NAME, _NORMAL_TASK_NAME과 반드시 일치해야 함
+// 권한 서비스 설치/해제. 운영 호스트 적용은 사용자 설치 실행 시에만 수행합니다.
 // ============================================================
 
-procedure RegisterScheduledTasks();
+procedure InstallPrivilegeService();
 var
-  AppExe, ScriptPath, Script: String;
+  ServiceExe, Owner: String;
   ResultCode: Integer;
 begin
-  AppExe := ExpandConstant('{app}\homework_helper.exe');
-  ScriptPath := ExpandConstant('{tmp}\hh_register_tasks.ps1');
+  ServiceExe := ExpandConstant('{app}\homework_helper_service.exe');
+  Owner := ExpandConstant('{param:HostUser|lsh93}');
+  // User/SID syntax cannot include a quote. Account resolution is owned by the service CLI.
+  if (Pos('"', Owner) > 0) or (Owner = '') then
+    RaiseException('호스트 사용자 이름이 올바르지 않습니다.');
+  if not Exec(ServiceExe, 'install --owner "' + Owner + '"',
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException('권한 서비스 설치 프로그램을 실행하지 못했습니다.');
+  if ResultCode <> 0 then
+    RaiseException('권한 서비스 설치 실패. 종료 코드: ' + IntToStr(ResultCode));
+  Log('권한 서비스 설치 완료: ' + Owner);
+end;
 
-  // PowerShell 스크립트를 임시 파일로 작성 후 실행
-  // (경로에 공백이 있어도 안전하게 처리)
-  Script :=
-    '$exe = ''' + AppExe + '''' + #13#10 +
-    '$action  = New-ScheduledTaskAction -Execute $exe' + #13#10 +
-    '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries' + #13#10 +
-    '$user = $env:USERNAME' + #13#10 +
-    '# 관리자 권한 작업 (UAC 없이 highest privilege로 실행)' + #13#10 +
-    '$pa = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest' + #13#10 +
-    'Register-ScheduledTask -TaskName "HomeworkHelper_Admin" -Action $action -Principal $pa -Settings $settings -Force | Out-Null' + #13#10 +
-    '# 일반 권한 작업 (관리자 → 일반 전환용, 표준 토큰으로 실행)' + #13#10 +
-    '$pn = New-ScheduledTaskPrincipal -UserId $user -RunLevel Limited' + #13#10 +
-    'Register-ScheduledTask -TaskName "HomeworkHelper_Normal" -Action $action -Principal $pn -Settings $settings -Force | Out-Null';
-
+procedure RemoveLegacyStartupShortcut();
+var
+  ScriptPath, Script, Owner: String;
+  ResultCode: Integer;
+begin
+  Owner := ExpandConstant('{param:HostUser|lsh93}');
+  if (Pos('''', Owner) > 0) or (Pos('"', Owner) > 0) then
+    RaiseException('호스트 사용자 이름이 올바르지 않습니다.');
+  ScriptPath := ExpandConstant('{tmp}\hh_remove_legacy_startup.ps1');
+  Script := '$ErrorActionPreference = "Stop"' + #13#10 +
+    '$sid = ([Security.Principal.NTAccount]''' + Owner + ''').Translate([Security.Principal.SecurityIdentifier]).Value' + #13#10 +
+    '$profile = (Get-ItemProperty ("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + $sid)).ProfileImagePath' + #13#10 +
+    '$link = Join-Path ([Environment]::ExpandEnvironmentVariables($profile)) "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\GameCycleHelper.lnk"' + #13#10 +
+    'if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force }' + #13#10 +
+    '$run = "Registry::HKEY_USERS\" + $sid + "\Software\Microsoft\Windows\CurrentVersion\Run"' + #13#10 +
+    'if (Test-Path $run) { Remove-ItemProperty -Path $run -Name GameCycleHelper -ErrorAction SilentlyContinue }';
   SaveStringToFile(ScriptPath, Script, False);
-
-  Exec('powershell.exe',
-    '-NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  if ResultCode = 0 then
-    Log('예약 작업 등록 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
-  else
-    Log('예약 작업 등록 실패. ResultCode=' + IntToStr(ResultCode));
+  if not Exec('powershell.exe', '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException('이전 자동 실행 경로를 정리하지 못했습니다.');
+  if ResultCode <> 0 then
+    RaiseException('이전 자동 실행 경로 정리 실패. 종료 코드: ' + IntToStr(ResultCode));
 end;
 
 function TailscaleExePath(): String;
@@ -186,7 +194,7 @@ begin
     '  (Join-Path $env:LocalAppData "Tailscale\tailscale.exe")' + #13#10 +
     ') | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1' + #13#10 +
     'if ($exe) {' + #13#10 +
-    '  $p = Start-Process -FilePath $exe -ArgumentList @("up", "--accept-routes") -WindowStyle Hidden -PassThru' + #13#10 +
+    '  $p = Start-Process -FilePath $exe -ArgumentList @("up", "--accept-routes", "--unattended=true") -WindowStyle Hidden -PassThru' + #13#10 +
     '  if (-not $p.WaitForExit(15000)) { try { $p.Kill() } catch {} }' + #13#10 +
     '}';
 
@@ -204,12 +212,18 @@ end;
 
 procedure DeleteScheduledTasks();
 var
-  RC1, RC2: Integer;
+  RC1, RC2, QueryAdmin, QueryNormal: Integer;
 begin
   Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Admin" /f',
     '', SW_HIDE, ewWaitUntilTerminated, RC1);
   Exec('schtasks.exe', '/delete /tn "HomeworkHelper_Normal" /f',
     '', SW_HIDE, ewWaitUntilTerminated, RC2);
+  Exec('schtasks.exe', '/query /tn "HomeworkHelper_Admin"',
+    '', SW_HIDE, ewWaitUntilTerminated, QueryAdmin);
+  Exec('schtasks.exe', '/query /tn "HomeworkHelper_Normal"',
+    '', SW_HIDE, ewWaitUntilTerminated, QueryNormal);
+  if (QueryAdmin = 0) or (QueryNormal = 0) then
+    RaiseException('이전 자동 실행 예약 작업이 남아 있습니다. 서비스 전환을 완료하지 못했습니다.');
   if (RC1 = 0) and (RC2 = 0) then
     Log('예약 작업 삭제 완료 (HomeworkHelper_Admin, HomeworkHelper_Normal)')
   else
@@ -219,13 +233,26 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    RegisterScheduledTasks();
+  begin
+    InstallPrivilegeService();
+    DeleteScheduledTasks();
+    RemoveLegacyStartupShortcut();
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UninstallServiceResult: Integer;
 begin
-  if CurUninstallStep = usPostUninstall then
+  if CurUninstallStep = usUninstall then
+  begin
+    if not Exec(ExpandConstant('{app}\homework_helper_service.exe'), 'uninstall',
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, UninstallServiceResult) then
+      RaiseException('권한 서비스를 제거하지 못했습니다.');
+    if UninstallServiceResult <> 0 then
+      RaiseException('권한 서비스 제거 실패. 종료 코드: ' + IntToStr(UninstallServiceResult));
     DeleteScheduledTasks();
+  end;
 end;
 
 // ============================================================
@@ -325,9 +352,28 @@ end;
 
 // 설치 전 준비 단계에서 추가 확인 (PrepareToInstall)
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ServiceExe: String;
+  ServiceResult: Integer;
 begin
   Result := '';
   NeedsRestart := False;
+
+  ServiceExe := ExpandConstant('{app}\homework_helper_service.exe');
+  if FileExists(ServiceExe) then
+  begin
+    if not Exec(ServiceExe, 'stop', ExpandConstant('{app}'), SW_HIDE,
+      ewWaitUntilTerminated, ServiceResult) then
+    begin
+      Result := '업데이트 전에 권한 서비스를 정지하지 못했습니다.';
+      Exit;
+    end;
+    if ServiceResult <> 0 then
+    begin
+      Result := '권한 서비스 정지 실패. 종료 코드: ' + IntToStr(ServiceResult);
+      Exit;
+    end;
+  end;
 
   if WizardIsTaskSelected('tailscalebootstrap') then
   begin

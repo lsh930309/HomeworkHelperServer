@@ -338,6 +338,23 @@ def test_installer_removes_old_pyinstaller_onedir_payload_before_copy():
     assert 'type: filesandordirs; name: "{app}\\_internal"' in installer
 
 
+def test_windows_signing_includes_both_app_and_privilege_service(monkeypatch, tmp_path):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    app = app_dir / "homework_helper.exe"
+    service = app_dir / "homework_helper_service.exe"
+    app.touch()
+    service.touch()
+    monkeypatch.setattr(build, "APP_FOLDER", app_dir)
+    monkeypatch.setattr(build, "find_signtool", lambda: Path("signtool.exe"))
+    monkeypatch.setenv("HH_CERT_THUMBPRINT", "test-certificate")
+    signed = []
+    monkeypatch.setattr(build, "sign_file", lambda _ui, filename, *_args: signed.append(filename) or True)
+    ui = SimpleNamespace(log_section=lambda *_: None, log=lambda *_: None, set_status=lambda *_: None)
+    assert build.sign_build_artifacts(ui, {}) is True
+    assert signed == [app, service]
+
+
 def test_macos_pkg_preinstall_script_stops_running_client(tmp_path):
     scripts_dir = build.prepare_macos_pkg_scripts_dir(tmp_path / "pkg-scripts")
     preinstall = scripts_dir / "preinstall"

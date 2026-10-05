@@ -1489,7 +1489,7 @@ def sign_build_artifacts(gui, _version_info, target_files=None):
     # 서명 대상 파일 결정
     if target_files is None:
         main_exe = APP_FOLDER / "homework_helper.exe"
-        target_files = [main_exe]
+        target_files = [main_exe, APP_FOLDER / "homework_helper_service.exe"]
 
     # 서명 수행
     signed_count = 0
@@ -2063,6 +2063,7 @@ def run_build_process(
     archive_days: int = 90,
     prune_archives: bool = True,
     deep_clean: bool = False,
+    open_output_folder: bool = True,
 ):
     """빌드 프로세스 실행 (별도 스레드)"""
     build_result = {"success": False}
@@ -2104,7 +2105,7 @@ def run_build_process(
                     display_path = version_config_path
                 gui.log(f"\n✓ 버전 정보 저장: {display_path}", 'success')
             publish_release_if_requested(gui, version_info, enabled=publish_release)
-            folder_opened = open_release_folder(gui)
+            folder_opened = open_release_folder(gui) if open_output_folder else False
             gui.show_complete(True, auto_close_delay=3000 if folder_opened else 0)
 
         except Exception as e:
@@ -2270,6 +2271,7 @@ def main(argv: list[str] | None = None):
         archive_days=args.archive_days,
         prune_archives=not args.no_prune_archives,
         deep_clean=args.deep_clean,
+        open_output_folder=not args.no_gui,
     )
 
     if has_gui:

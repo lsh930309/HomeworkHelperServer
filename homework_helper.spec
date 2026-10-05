@@ -86,6 +86,26 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# The service has its own import graph. It never imports the desktop entrypoint
+# or database writer, and shares only immutable runtime binaries in onedir.
+service_analysis = Analysis(
+    ['homework_helper_service.py'],
+    pathex=[], binaries=[], datas=[],
+    hiddenimports=[
+        'win32api', 'win32security', 'win32process', 'win32con', 'win32ts',
+        'win32service', 'win32serviceutil', 'servicemanager',
+        'win32pipe', 'win32file', 'win32event', 'pywintypes', 'psutil',
+    ],
+    excludes=['PySide6', 'fastapi', 'uvicorn', 'sqlalchemy', 'tkinter'],
+    noarchive=False, optimize=0,
+)
+service_exe = EXE(
+    PYZ(service_analysis.pure), service_analysis.scripts, [],
+    exclude_binaries=True, name='homework_helper_service',
+    debug=False, strip=False, upx=False, console=True,
+    icon=['assets/icons/app/app_icon.ico'],
+)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -107,8 +127,11 @@ exe = EXE(
 
 coll = COLLECT(
     exe,
+    service_exe,
     a.binaries,
+    service_analysis.binaries,
     a.datas,
+    service_analysis.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

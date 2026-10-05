@@ -115,3 +115,8 @@ hh-{target}-v{semver}-b{build}
 ./.venv/bin/python -m py_compile build.py
 ./.venv/bin/python -m pytest tests/test_build_release.py -q
 ```
+# Windows 로그인·권한 경계
+
+Windows 패키지는 일반 권한 앱과 headless 권한 서비스를 함께 포함합니다.
+설치·사용자 계정·포터블 등록·실기기 검수 범위는
+[Windows 호스트 수명주기 계약](../development/windows-host-lifecycle.md)을 따릅니다.

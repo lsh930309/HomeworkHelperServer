@@ -226,8 +226,9 @@ def test_macos_smokes_use_real_server_process_and_production_swift_client():
     assert "macOS RemoteDashboardViewModel smoke passed" in viewmodel
     assert "RemoteConnectionSupervisor.swift" in viewmodel
     assert "ssh power acceptance command" in viewmodel
-    assert "LocalSSHPowerManager.command(for: \"sleep\")" in viewmodel
-    assert "LocalSSHPowerManager.acceptedMarker" in viewmodel
+    assert "LocalSSHPowerManager.command(for: action)" in viewmodel
+    assert "LocalSSHPowerManager.serviceResponse(from:" in viewmodel
+    assert "RemoteHostObservation.swift" in viewmodel
     assert "HH_REMOTE_CACHE_DIR" in viewmodel
     assert "HH_REMOTE_PREFS_SUITE" in viewmodel
     assert "_assert_production_cache_unchanged" in viewmodel
