@@ -8,6 +8,7 @@ from src.utils.resource_tracking import (
     clamp_percent,
     is_nikke_outpost_resource,
     predict_nikke_outpost_percent,
+    predict_stamina_value,
 )
 
 SIDEBAR_MODE_ALWAYS = "always"
@@ -170,17 +171,17 @@ class ManagedProcess:
         """범용 외부 리소스 추적이 활성화되어 있는지 확인"""
         return bool(self.resource_tracking_enabled and self.resource_provider and self.resource_key)
 
-    def get_resource_percentage(self) -> Optional[float]:
+    def get_resource_percentage(self, *, now: float | None = None) -> Optional[float]:
         """범용 리소스 백분율 반환 (0.0 ~ 100.0)."""
         if not self.is_external_resource_game():
             return None
         if self.resource_percent is None or self.resource_status not in (None, "ok"):
             return None
         if is_nikke_outpost_resource(self.resource_provider, self.resource_key):
-            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at)
+            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at, now=now)
         return clamp_percent(self.resource_percent)
     
-    def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
+    def get_predicted_stamina(self, *, now: float | None = None) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.
         
         6분에 1씩 회복되는 것을 기준으로 로컬 연산합니다.
@@ -188,17 +189,14 @@ class ManagedProcess:
         Returns:
             (predicted_current, max_stamina) 또는 스태미나 정보가 없으면 None
         """
-        if self.stamina_current is None or self.stamina_max is None:
+        predicted = predict_stamina_value(
+            self.stamina_current,
+            self.stamina_max,
+            self.stamina_updated_at,
+            now=time.time() if now is None else now,
+        )
+        if predicted is None:
             return None
-        
-        if self.stamina_updated_at is None:
-            return (self.stamina_current, self.stamina_max)
-        
-        # 6분에 1씩 회복
-        elapsed_seconds = time.time() - self.stamina_updated_at
-        recovered = int(elapsed_seconds / 360)  # 360초 = 6분
-        predicted = min(self.stamina_current + recovered, self.stamina_max)
-        
         return (predicted, self.stamina_max)
     
     def get_stamina_percentage(self) -> Optional[float]:

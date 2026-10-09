@@ -1,508 +1,95 @@
-"""HoYoLab 스태미나 종료 후 재동기화 코디네이터."""
+"""HoYoLab 조회를 직렬 저장하고 각 종료 세션을 독립적으로 보정한다."""
+from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import Optional
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
-
-from src.api.client import BackgroundApiTransport
 from src.core import credential_health
-from src.core.provider_health_persist import ProviderHealthPersistTask
-from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
-from src.data.data_models import ManagedProcess
-from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.core.provider_activity import provider_activity
+from src.core.provider_health_persist import ProviderHealthPersistTask
+from src.core.resource_reconcile import _ResourceFollowupCoordinator
+from src.data.data_models import ManagedProcess
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class _ReconcileJob:
-    process_id: str
-    process_name: str
-    session_id: Optional[int]
-    game_id: str
-    exit_timestamp: float
-    lifecycle_token: int
-    allow_session_correction: bool = True
-    finish_on_success: bool = False
-    timer: Optional[QTimer] = None
-    in_flight: bool = False
-    request_seq: int = 0
-    attempts_started: int = 0
-    baseline_signature: Optional[tuple[int, int]] = None
-    observed_signature: Optional[tuple[int, int]] = None
-    saw_non_baseline_signature: bool = False
-    stable_hits: int = 0
-    applied_session_stamina: Optional[int] = None
-
-
-class _StaminaFetchSignals(QObject):
-    finished = Signal(str, int, int, object)
-
-
-class _StaminaPersistSignals(QObject):
-    finished = Signal(str, int, int, object)
-
-
-class _StaminaFetchTask(QRunnable):
-    def __init__(
-        self,
-        process_id: str,
-        lifecycle_token: int,
-        request_seq: int,
-        game_id: str,
-        signals: _StaminaFetchSignals,
-    ):
-        """백그라운드 fetch 결과를 현재 reconcile job에 다시 매칭할 식별자를 저장합니다."""
-        super().__init__()
-        self._process_id = process_id
-        self._lifecycle_token = lifecycle_token
-        self._request_seq = request_seq
-        self._game_id = game_id
-        self._signals = signals
-
-    def run(self) -> None:
-        """워커 스레드에서 HoYoLab 스태미나를 조회하고 결과를 메인 스레드로 전달합니다."""
-        payload = {"stamina": None, "fetched_at": time.time()}
-        try:
-            from src.services.hoyolab import get_hoyolab_service
-
-            service = get_hoyolab_service()
-            if not service or not service.is_available():
-                payload["provider_status"] = "unavailable"
-                payload["error"] = "HoYoLab 서비스를 사용할 수 없습니다."
-            elif not service.is_configured():
-                payload["provider_status"] = "auth_required"
-                payload["error"] = "HoYoLab 인증 정보가 없습니다."
-            else:
-                with provider_activity("hoyolab", "stamina_fetch"):
-                    stamina = service.get_stamina(self._game_id)
-                payload["stamina"] = stamina
-                if stamina is not None:
-                    payload["fetched_at"] = stamina.updated_at.timestamp()
-                else:
-                    payload["provider_status"] = "network_error"
-                    payload["error"] = "HoYoLab 스태미나 조회에 실패했습니다."
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:
-            payload["error"] = str(exc)
-            logger.warning(
-                "[HoYoLab] 재동기화 fetch 실패: process_id=%s, error=%s",
-                self._process_id,
-                exc,
-            )
-
-        self._signals.finished.emit(
-            self._process_id,
-            self._lifecycle_token,
-            self._request_seq,
-            payload,
+def _persist_stamina_observation(job, payload, transport, is_current) -> dict:
+    stamina = payload["stamina"]
+    fetched_at = payload["fetched_at"]
+    result = {"process_row": None, "session_succeeded": False}
+    try:
+        # 같은 관측값에서 회복 기준을 유지할지는 DB writer가 판단한다.
+        result["process_row"] = transport.update_process_stamina(
+            job.process_id, stamina.current, stamina.max, fetched_at,
         )
-
-
-class _StaminaPersistTask(QRunnable):
-    def __init__(
-        self,
-        process_id: str,
-        process_name: str,
-        session_id: Optional[int],
-        lifecycle_token: int,
-        request_seq: int,
-        fetched_current: int,
-        fetched_max: int,
-        fetched_at: float,
-        exit_timestamp: float,
-        allow_session_correction: bool,
-        applied_session_stamina: Optional[int],
-        process_changed: bool,
-        transport: BackgroundApiTransport,
-        signals: _StaminaPersistSignals,
-    ):
-        super().__init__()
-        self._process_id = process_id
-        self._process_name = process_name
-        self._session_id = session_id
-        self._lifecycle_token = lifecycle_token
-        self._request_seq = request_seq
-        self._fetched_current = fetched_current
-        self._fetched_max = fetched_max
-        self._fetched_at = fetched_at
-        self._exit_timestamp = exit_timestamp
-        self._allow_session_correction = allow_session_correction
-        self._applied_session_stamina = applied_session_stamina
-        self._process_changed = bool(process_changed)
-        self._transport = transport
-        self._signals = signals
-
-    def run(self) -> None:
-        result = {
-            "signature": (self._fetched_current, self._fetched_max),
-            "fetched_at": self._fetched_at,
-            "corrected_exit_current": self._applied_session_stamina,
-            "aborted": False,
-            "persist_succeeded": False,
-        }
+    except Exception as exc:
+        result["process_error"] = str(exc)
+    if job.session_id is not None and is_current(job):
+        recovered = int(max(0.0, fetched_at - job.exit_timestamp) / HoYoStaminaReconcileCoordinator.RECOVERY_RATE_SEC)
+        corrected = max(0, min(stamina.current - recovered, stamina.max))
         try:
-            if self._process_changed:
-                self._transport.update_process_stamina(
-                    self._process_id,
-                    self._fetched_current,
-                    self._fetched_max,
-                    self._fetched_at,
-                )
-                logger.info(
-                    "[HoYoLab] 재동기화 반영: '%s' %s/%s",
-                    self._process_name,
-                    self._fetched_current,
-                    self._fetched_max,
-                )
-
-            if self._allow_session_correction and self._session_id is not None:
-                recovered = int(
-                    max(0.0, self._fetched_at - self._exit_timestamp)
-                    / HoYoStaminaReconcileCoordinator.RECOVERY_RATE_SEC
-                )
-                corrected_exit_current = max(
-                    0,
-                    min(self._fetched_current - recovered, self._fetched_max),
-                )
-                result["corrected_exit_current"] = corrected_exit_current
-
-                if corrected_exit_current != self._applied_session_stamina:
-                    self._transport.update_session_stamina(
-                        self._session_id,
-                        corrected_exit_current,
-                    )
-                    logger.info(
-                        "[HoYoLab] 세션 보정 반영: '%s' session=%s stamina=%s",
-                        self._process_name,
-                        self._session_id,
-                        corrected_exit_current,
-                    )
-
-            result["persist_succeeded"] = True
-        except (KeyboardInterrupt, SystemExit):
-            raise
+            transport.update_session_stamina(job.session_id, corrected)
+            result["corrected_exit_stamina"] = corrected
+            result["session_succeeded"] = True
         except Exception as exc:
-            result["error"] = str(exc)
-            logger.warning(
-                "[HoYoLab] 재동기화 persistence 실패: process_id=%s, error=%s",
-                self._process_id,
-                exc,
-            )
-        finally:
-            self._signals.finished.emit(
-                self._process_id,
-                self._lifecycle_token,
-                self._request_seq,
-                result,
-            )
+            result["session_error"] = str(exc)
+    return result
 
 
-class HoYoStaminaReconcileCoordinator(QObject):
-    """게임 종료 후 짧은 시간 동안 HoYoLab 스태미나를 재동기화합니다."""
+class HoYoStaminaReconcileCoordinator(_ResourceFollowupCoordinator):
+    """재실행에 취소되지 않는 HoYoLab 종료별 follow-up을 제공한다."""
 
-    RECONCILE_WINDOW_SEC = 180
-    RECONCILE_INTERVAL_MS = 60_000
-    REQUIRED_STABLE_HITS = 2
     RECOVERY_RATE_SEC = 360
 
-    def __init__(self, data_manager, process_monitor: ProcessMonitor, notifier=None, parent: Optional[QObject] = None):
-        """프로세스 lifecycle과 서버 재조회 결과를 연결할 상태와 워커를 준비합니다."""
-        super().__init__(parent)
-        self._data_manager = data_manager
-        self._transport = BackgroundApiTransport(getattr(data_manager, "base_url", None))
-        self._process_monitor = process_monitor
-        self._notifier = notifier
-        self._lifecycle_tokens: dict[str, int] = {}
-        self._jobs: dict[str, _ReconcileJob] = {}
-        self._shutting_down = False
+    def _get_service(self):
+        from src.services.hoyolab import get_hoyolab_service
+        return get_hoyolab_service()
 
-        self._pool = QThreadPool()
-        self._pool.setMaxThreadCount(1)
-        self._health_pool = QThreadPool()
-        self._health_pool.setMaxThreadCount(1)
-        self._signals = _StaminaFetchSignals()
-        self._signals.finished.connect(self._on_fetch_finished)
-        self._persist_signals = _StaminaPersistSignals()
-        self._persist_signals.finished.connect(self._on_persist_finished)
+    def _target(self, process):
+        return (process.hoyolab_game_id,) if process.is_hoyoverse_game() else None
 
-    def handle_process_started(self, event: ProcessLifecycleEvent) -> None:
-        """프로세스 재시작 시 이전 종료 재동기화 작업을 무효화합니다."""
-        self._advance_lifecycle_token(event.process_id)
-        self._finish_job(event.process_id, "process restarted")
+    def _event_target(self, event):
+        return (event.hoyolab_game_id,) if event.is_hoyoverse_game() else None
 
-    def handle_process_stopped(self, event: ProcessLifecycleEvent) -> None:
-        """프로세스 종료 후 follow-up 재동기화 작업을 예약합니다."""
-        self._advance_lifecycle_token(event.process_id)
-        self._finish_job(event.process_id, "new stop event")
+    def _fetch_observation(self, job):
+        service = job.service
+        payload = {"stamina": None, "fetched_at": time.time(), "observation_succeeded": False}
+        if not service or not service.is_available():
+            payload.update(provider_status="unavailable", error="HoYoLab 서비스를 사용할 수 없습니다.")
+        elif not service.is_configured():
+            payload.update(provider_status="auth_required", error="HoYoLab 인증 정보가 없습니다.")
+        else:
+            with provider_activity("hoyolab", "stamina_fetch"):
+                stamina = service.get_stamina(job.target[0])
+            payload["stamina"] = stamina
+            if stamina is not None:
+                payload.update(fetched_at=stamina.updated_at.timestamp(), provider_status="ok", observation_succeeded=True)
+            else:
+                payload.update(provider_status="network_error", error="HoYoLab 스태미나 조회에 실패했습니다.")
+        return payload
 
-        if not event.is_hoyoverse_game():
-            return
+    def _persist_observation(self, job, payload, is_current):
+        return _persist_stamina_observation(job, payload, self._transport, is_current)
 
-        token = self._current_lifecycle_token(event.process_id)
-        process = self._data_manager.get_process_by_id(event.process_id)
-        baseline_current = event.stamina_at_end
-        baseline_max = event.stamina_max
-        if process is not None:
-            if baseline_current is None:
-                baseline_current = process.stamina_current
-            if baseline_max is None:
-                baseline_max = process.stamina_max
+    def _apply_process_row(self, process, row):
+        for key in ("stamina_current", "stamina_max", "stamina_updated_at"):
+            setattr(process, key, row[key])
 
-        baseline_signature = None
-        if baseline_current is not None and baseline_max is not None:
-            baseline_signature = (baseline_current, baseline_max)
-
-        job = _ReconcileJob(
-            process_id=event.process_id,
-            process_name=event.process_name,
-            session_id=event.session_id,
-            game_id=event.hoyolab_game_id or "",
-            exit_timestamp=event.timestamp,
-            lifecycle_token=token,
-            baseline_signature=baseline_signature,
-            observed_signature=baseline_signature,
-            applied_session_stamina=event.stamina_at_end,
-        )
-        self._jobs[event.process_id] = job
-
-        initial_delay_ms = 0 if event.stamina_at_end is None else self.RECONCILE_INTERVAL_MS
-        self._schedule_attempt(event.process_id, initial_delay_ms)
-
-    def schedule_startup_refreshes(self) -> None:
-        """앱 시작 직후 idle 상태의 HoYoLab 데이터를 1회 최신화합니다."""
-        if self._shutting_down:
-            return
-
-        now = time.time()
-        for process in self._data_manager.managed_processes:
-            if not process.is_hoyoverse_game():
-                continue
-            if process.id in self._process_monitor.active_monitored_processes:
-                continue
-
-            self._advance_lifecycle_token(process.id)
-            self._finish_job(process.id, "startup refresh rescheduled")
-
-            job = _ReconcileJob(
-                process_id=process.id,
-                process_name=process.name,
-                session_id=None,
-                game_id=process.hoyolab_game_id or "",
-                exit_timestamp=now,
-                lifecycle_token=self._current_lifecycle_token(process.id),
-                allow_session_correction=False,
-                finish_on_success=True,
+    def _record_observation_health(self, process, payload):
+        status = payload.get("provider_status")
+        if status:
+            self._record_provider_health_from_status(
+                process, status, payload.get("error") or "HoYoLab 스태미나 조회 성공", payload["fetched_at"],
             )
-            self._jobs[process.id] = job
-            self._schedule_attempt(process.id, 0)
 
-    def shutdown(self, deadline_ms: int = 2000) -> bool:
-        """앱 종료 시 예약된 재동기화 작업을 중단합니다."""
-        self._shutting_down = True
-        for process_id in list(self._jobs):
-            self._finish_job(process_id, "shutdown")
-        for signals, receiver in (
-            (self._signals, self._on_fetch_finished),
-            (self._persist_signals, self._on_persist_finished),
-        ):
-            try:
-                signals.finished.disconnect(receiver)
-            except (TypeError, RuntimeError):
-                pass
-        deadline = time.monotonic() + max(0, int(deadline_ms)) / 1000.0
-        primary = self._pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
-        health = self._health_pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
-        if not primary:
-            retain_detached_qthreadpool(self._pool)
-        if not health:
-            retain_detached_qthreadpool(self._health_pool)
-        return primary and health
-
-    def _advance_lifecycle_token(self, process_id: str) -> int:
-        """같은 프로세스의 이전 시작/종료 시퀀스를 무효화할 새 토큰을 발급합니다."""
-        next_token = self._lifecycle_tokens.get(process_id, 0) + 1
-        self._lifecycle_tokens[process_id] = next_token
-        return next_token
-
-    def _current_lifecycle_token(self, process_id: str) -> int:
-        """현재 프로세스에 대해 가장 최근에 발급된 lifecycle 토큰을 반환합니다."""
-        return self._lifecycle_tokens.get(process_id, 0)
-
-    def _reconcile_window_elapsed(self, exit_timestamp: float) -> bool:
-        """재동기화 윈도우 만료 여부를 로컬 wall-clock 기준으로 판단합니다."""
-        return time.time() - exit_timestamp >= self.RECONCILE_WINDOW_SEC
-
-    def _schedule_attempt(self, process_id: str, delay_ms: int) -> None:
-        """기존 예약을 교체하고 지정한 지연 뒤에 다음 재조회 시도를 예약합니다."""
-        job = self._jobs.get(process_id)
-        if job is None or self._shutting_down:
-            return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed before scheduling")
-            return
-
-        if job.timer is not None:
-            job.timer.stop()
-            job.timer.deleteLater()
-
-        remaining_ms = max(
-            0,
-            int((self.RECONCILE_WINDOW_SEC - max(0.0, time.time() - job.exit_timestamp)) * 1000),
-        )
-        effective_delay_ms = max(0, min(delay_ms, remaining_ms))
-
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(lambda pid=process_id, token=job.lifecycle_token: self._start_attempt(pid, token))
-        timer.start(effective_delay_ms)
-        job.timer = timer
-
-    def _start_attempt(self, process_id: str, lifecycle_token: int) -> None:
-        """현재 job/token이 여전히 유효할 때만 백그라운드 fetch를 시작합니다."""
-        job = self._jobs.get(process_id)
-        if (
-            job is None
-            or self._shutting_down
-            or lifecycle_token != job.lifecycle_token
-            or job.in_flight
-        ):
-            return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed before fetch")
-            return
-
-        job.in_flight = True
-        job.request_seq += 1
-        job.attempts_started += 1
-        if job.timer is not None:
-            job.timer.deleteLater()
-            job.timer = None
-
-        self._pool.start(
-            _StaminaFetchTask(
-                process_id=job.process_id,
-                lifecycle_token=job.lifecycle_token,
-                request_seq=job.request_seq,
-                game_id=job.game_id,
-                signals=self._signals,
-            )
-        )
-
-    @Slot(str, int, int, object)
-    def _on_fetch_finished(
-        self,
-        process_id: str,
-        lifecycle_token: int,
-        request_seq: int,
-        payload: object,
-    ) -> None:
-        """유효한 응답만 반영하고, 안정화 여부에 따라 다음 시도 또는 종료를 결정합니다."""
-        job = self._jobs.get(process_id)
-        if (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-        ):
-            return
-
-        if process_id in self._process_monitor.active_monitored_processes:
-            self._finish_job(process_id, "process running again")
-            return
-
-        data = payload if isinstance(payload, dict) else {}
-        stamina = data.get("stamina")
-        fetched_at_value = data.get("fetched_at")
-        if not isinstance(fetched_at_value, (int, float)):
-            fetched_at_value = time.time()
-        fetched_at = float(fetched_at_value)
-        process = self._data_manager.get_process_by_id(process_id)
-        if (
-            process is None
-            or not process.is_hoyoverse_game()
-            or process.hoyolab_game_id != job.game_id
-        ):
-            self._finish_job(process_id, "process metadata changed")
-            return
-
-        if stamina is not None:
-            self._record_provider_health_from_status(process, "ok", "HoYoLab 스태미나 조회 성공", fetched_at)
-            self._pool.start(
-                _StaminaPersistTask(
-                    process_id=job.process_id,
-                    process_name=job.process_name,
-                    session_id=job.session_id,
-                    lifecycle_token=job.lifecycle_token,
-                    request_seq=job.request_seq,
-                    fetched_current=stamina.current,
-                    fetched_max=stamina.max,
-                    fetched_at=fetched_at,
-                    exit_timestamp=job.exit_timestamp,
-                    allow_session_correction=job.allow_session_correction,
-                    applied_session_stamina=job.applied_session_stamina,
-                    process_changed=(
-                        process.stamina_current != stamina.current
-                        or process.stamina_max != stamina.max
-                    ),
-                    transport=self._transport,
-                    signals=self._persist_signals,
-                )
-            )
-            return
-
-        provider_status = str(data.get("provider_status") or "")
-        if provider_status:
-            self._record_provider_health_from_status(process, provider_status, str(data.get("error") or provider_status), fetched_at)
-            if provider_status in {"auth_required", "challenge_required"}:
-                self._finish_job(process_id, f"provider health {provider_status}")
-                return
-
-        job.in_flight = False
-        if job.finish_on_success:
-            self._finish_job(process_id, "startup refresh failed")
-            return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed")
-            return
-
-        self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-
-    def _record_provider_health_from_status(
-        self,
-        process: ManagedProcess,
-        status: str,
-        message: str,
-        fetched_at: float,
-    ) -> None:
+    def _record_provider_health_from_status(self, process: ManagedProcess, status: str, message: str, fetched_at: float) -> None:
         payload = credential_health.update_payload_for_reason(
-            credential_health.PROVIDER_HOYOLAB,
-            status,
-            message=message,
-            source="stamina_tracking",
-            process_id=process.id,
-            game_id=getattr(process, "hoyolab_game_id", None),
-            detected_at=fetched_at,
+            credential_health.PROVIDER_HOYOLAB, status, message=message, source="stamina_tracking",
+            process_id=process.id, game_id=getattr(process, "hoyolab_game_id", None), detected_at=fetched_at,
         )
         if payload is None:
             return
-
-        self._health_pool.start(
-            ProviderHealthPersistTask(
-                self._transport,
-                payload,
-                context="HoYoLab stamina_tracking",
-            )
-        )
-
+        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="HoYoLab stamina_tracking"))
         if credential_health.is_alertable_health(payload["status"], payload["reason"]):
             self._send_provider_health_notification(process, payload)
 
@@ -513,123 +100,7 @@ class HoYoStaminaReconcileCoordinator(QObject):
             self._notifier.send_notification(
                 title=f"{process.name} 계정/토큰 확인 필요",
                 message=str(payload.get("message") or payload.get("reason") or ""),
-                task_id_to_highlight=process.id,
-                button_text="확인",
-                button_action="show",
+                task_id_to_highlight=process.id, button_text="확인", button_action="show",
             )
         except Exception as exc:
             logger.debug("[HoYoLab] provider health 알림 전송 실패: %s", exc, exc_info=True)
-
-    @Slot(str, int, int, object)
-    def _on_persist_finished(
-        self,
-        process_id: str,
-        lifecycle_token: int,
-        request_seq: int,
-        payload: object,
-    ) -> None:
-        """백그라운드 저장 완료 후 job 상태를 정리하고 다음 시도를 결정합니다."""
-        job = self._jobs.get(process_id)
-        if (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-        ):
-            return
-
-        job.in_flight = False
-
-        if process_id in self._process_monitor.active_monitored_processes:
-            self._finish_job(process_id, "process running again")
-            return
-
-        data = payload if isinstance(payload, dict) else {}
-        process = self._data_manager.get_process_by_id(process_id)
-        if (
-            process is None
-            or not process.is_hoyoverse_game()
-            or process.hoyolab_game_id != job.game_id
-        ):
-            self._finish_job(process_id, "process metadata changed")
-            return
-
-        if data.get("error"):
-            logger.warning(
-                "[HoYoLab] 재동기화 저장 후처리 실패: process_id=%s, error=%s",
-                process_id,
-                data["error"],
-            )
-            if job.finish_on_success:
-                self._finish_job(process_id, "startup refresh failed")
-                return
-
-        if not data.get("persist_succeeded", False):
-            if job.finish_on_success:
-                self._finish_job(process_id, "startup refresh failed")
-                return
-            if self._reconcile_window_elapsed(job.exit_timestamp):
-                self._finish_job(process_id, "reconcile window elapsed")
-                return
-            self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-            return
-
-        signature = data.get("signature")
-        fetched_at = data.get("fetched_at")
-        if isinstance(signature, tuple) and len(signature) == 2 and isinstance(fetched_at, (int, float)):
-            process.stamina_current = int(signature[0])
-            process.stamina_max = int(signature[1])
-            process.stamina_updated_at = float(fetched_at)
-
-        corrected_exit_current = data.get("corrected_exit_current")
-        if corrected_exit_current is not None:
-            job.applied_session_stamina = corrected_exit_current
-
-        if job.finish_on_success:
-            self._finish_job(process_id, "startup refresh completed")
-            return
-
-        if isinstance(signature, tuple) and len(signature) == 2:
-            if job.observed_signature == signature:
-                job.stable_hits += 1
-            else:
-                job.observed_signature = signature
-                job.stable_hits = 1
-
-            if job.baseline_signature is not None and not job.saw_non_baseline_signature:
-                if signature != job.baseline_signature:
-                    job.saw_non_baseline_signature = True
-                else:
-                    # 종료 직후 stale 응답과 같은 값이 반복되는 것만으로는
-                    # 서버 반영이 끝났다고 볼 수 없으므로 전체 윈도우 동안 계속 재조회한다.
-                    job.stable_hits = 0
-
-            allow_stabilized_finish = (
-                job.baseline_signature is None or job.saw_non_baseline_signature
-            )
-            if allow_stabilized_finish and job.stable_hits >= self.REQUIRED_STABLE_HITS:
-                self._finish_job(process_id, "stamina stabilized")
-                return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed")
-            return
-
-        self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-
-    def _finish_job(self, process_id: str, reason: str) -> None:
-        """프로세스의 active reconcile job과 연결된 타이머를 정리하고 종료합니다."""
-        job = self._jobs.pop(process_id, None)
-        if job is None:
-            return
-
-        if job.timer is not None:
-            job.timer.stop()
-            job.timer.deleteLater()
-
-        logger.debug(
-            "[HoYoLab] reconcile 종료: process_id=%s, reason=%s, attempts=%s",
-            process_id,
-            reason,
-            job.attempts_started,
-        )

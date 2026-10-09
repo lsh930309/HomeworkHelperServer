@@ -4,6 +4,7 @@ from src.data import models
 from src.data import schemas
 from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
+from src.utils.resource_tracking import is_nikke_outpost_resource, predict_nikke_outpost_percent, predict_stamina_value
 from typing import Any, Optional
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ import json
 import uuid
 import time
 import logging
+import math
 import os
 import psutil
 import threading
@@ -174,6 +176,62 @@ def update_process(
         db.refresh(db_process)
     return db_process
 
+def _stamina_observation_values(
+    process: models.Process,
+    current: int | None,
+    maximum: int | None,
+    observed_at: float | None,
+) -> dict[str, Any]:
+    """Keep the recovery anchor when the observed count matches its projection."""
+    values = {"stamina_current": current, "stamina_max": maximum, "stamina_updated_at": observed_at}
+    values = {key: value for key, value in values.items() if value is not None}
+    if (
+        current is not None and observed_at is not None
+        and math.isfinite(observed_at) and observed_at >= 0
+        and process.stamina_updated_at is not None
+    ):
+        prediction_maximum = maximum if maximum is not None else process.stamina_max
+        predicted = predict_stamina_value(
+            process.stamina_current, prediction_maximum, process.stamina_updated_at, now=observed_at,
+        )
+        # A reduced maximum cannot keep a stored base outside the new valid range.
+        if predicted == current and process.stamina_current <= prediction_maximum:
+            values.pop("stamina_current", None)
+            values.pop("stamina_updated_at", None)
+    return values
+
+
+def _resource_observation_values(
+    process: models.Process,
+    percent: float | None,
+    observed_at: float | None,
+    status: str | None,
+    label: str | None,
+) -> dict[str, Any]:
+    """Store metadata independently from the successful value's recovery anchor."""
+    values = {"resource_status": status, "resource_label": label}
+    values = {key: value for key, value in values.items() if value is not None}
+    if percent is None or status not in (None, "ok"):
+        return values
+    is_nikke = is_nikke_outpost_resource(process.resource_provider, process.resource_key)
+    # Preserve invalid input for the existing Beholder guard rather than rounding it into range.
+    observed_percent = round(float(percent), 1) if is_nikke and 0 <= float(percent) <= 100 else percent
+    if (
+        observed_at is not None and math.isfinite(observed_at) and observed_at >= 0
+        and process.resource_updated_at is not None
+    ):
+        predicted = (
+            predict_nikke_outpost_percent(process.resource_percent, process.resource_updated_at, now=observed_at)
+            if is_nikke else process.resource_percent
+        )
+        if predicted is not None and (round(predicted, 1) if is_nikke else predicted) == observed_percent:
+            return values
+    values["resource_percent"] = observed_percent
+    if observed_at is not None:
+        values["resource_updated_at"] = observed_at
+    return values
+
+
 @db_retry_on_lock
 def update_process_stamina(
     db: Session,
@@ -188,11 +246,7 @@ def update_process_stamina(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "stamina_current": stamina_current,
-            "stamina_max": stamina_max,
-            "stamina_updated_at": stamina_updated_at,
-        }
+        update_data = _stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at)
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
@@ -231,13 +285,9 @@ def update_process_resource(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "resource_percent": resource_percent,
-            "resource_updated_at": resource_updated_at,
-            "resource_status": resource_status,
-            "resource_label": resource_label,
-        }
-        update_data = {key: value for key, value in update_data.items() if value is not None}
+        update_data = _resource_observation_values(
+            db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+        )
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
@@ -280,17 +330,12 @@ def update_process_runtime_state(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "last_played_timestamp": last_played_timestamp,
-            "stamina_current": stamina_current,
-            "stamina_max": stamina_max,
-            "stamina_updated_at": stamina_updated_at,
-            "resource_percent": resource_percent,
-            "resource_updated_at": resource_updated_at,
-            "resource_status": resource_status,
-            "resource_label": resource_label,
-        }
+        update_data = {"last_played_timestamp": last_played_timestamp}
         update_data = {key: value for key, value in update_data.items() if value is not None}
+        update_data.update(_stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at))
+        update_data.update(_resource_observation_values(
+            db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+        ))
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,

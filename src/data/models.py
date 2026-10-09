@@ -33,7 +33,7 @@ class Process(Base):
     hoyolab_game_id = Column(String, nullable=True)      # 추적할 호요버스 게임 ID
     stamina_current = Column(Integer, nullable=True)      # 현재 스태미나
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
-    stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
+    stamina_updated_at = Column(Float, nullable=True)     # 자연 회복 계산의 기준 시각 (timestamp)
 
     # 범용 외부 리소스 연동 필드 (예: NIKKE ShiftyPad 전초기지 방어 보상)
     resource_tracking_enabled = Column(Boolean, default=False)

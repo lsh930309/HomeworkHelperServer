@@ -204,9 +204,9 @@ class BackgroundApiTransport:
         stamina_updated_at: float,
         *,
         timeout: float = 10.0,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Persist stamina fields without touching an ``ApiClient`` cache."""
-        self.patch_json(
+        result = self.patch_json(
             f"/processes/{process_id}/stamina",
             {
                 "stamina_current": int(stamina_current),
@@ -219,6 +219,9 @@ class BackgroundApiTransport:
                 "X-HH-Beholder-Operation": "process_stamina_refresh",
             },
         )
+        if not isinstance(result.payload, dict):
+            raise ValueError("스태미나 저장 API가 저장된 프로세스를 반환하지 않았습니다.")
+        return result.payload
 
     def update_process_resource(
         self,
@@ -229,9 +232,9 @@ class BackgroundApiTransport:
         resource_label: str | None = None,
         *,
         timeout: float = 10.0,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Persist external-resource fields without mutating GUI state."""
-        self.patch_json(
+        result = self.patch_json(
             f"/processes/{process_id}/resource",
             {
                 "resource_percent": resource_percent,
@@ -245,6 +248,9 @@ class BackgroundApiTransport:
                 "X-HH-Beholder-Operation": "process_resource_update",
             },
         )
+        if not isinstance(result.payload, dict):
+            raise ValueError("리소스 저장 API가 저장된 프로세스를 반환하지 않았습니다.")
+        return result.payload
 
     def update_session_stamina(
         self,
@@ -404,7 +410,7 @@ class ApiClient:
             print(f"Beholder incident 결정 저장 실패: {e}")
             return None
 
-    def send_runtime_heartbeat(self, *, shutdown: bool = False, runtime_kind: str = "pyqt") -> dict[str, Any] | None:
+    def send_runtime_heartbeat(self, *, shutdown: bool = False, runtime_kind: str = "pyside6") -> dict[str, Any] | None:
         try:
             response = requests.post(
                 f"{self.base_url}/api/beholder/runtime/heartbeat",
@@ -542,28 +548,11 @@ class ApiClient:
             return False
 
     def update_process_runtime_state(self, updated_process: ManagedProcess) -> bool:
-        """Persist only runtime-owned process fields after monitor stop/calibration."""
+        """Persist the monitor-owned last-played value, without cached resource fields."""
         actor, operation = "process_monitor", "process_runtime_state_update"
         payloads: list[dict[str, Any]] = []
         if updated_process.last_played_timestamp is not None:
             payloads.append({"last_played_timestamp": updated_process.last_played_timestamp})
-        stamina_payload = {
-            "stamina_current": updated_process.stamina_current,
-            "stamina_max": updated_process.stamina_max,
-            "stamina_updated_at": updated_process.stamina_updated_at,
-        }
-        stamina_payload = {key: value for key, value in stamina_payload.items() if value is not None}
-        if stamina_payload:
-            payloads.append(stamina_payload)
-        resource_payload = {
-            "resource_percent": getattr(updated_process, "resource_percent", None),
-            "resource_updated_at": getattr(updated_process, "resource_updated_at", None),
-            "resource_status": getattr(updated_process, "resource_status", None),
-            "resource_label": getattr(updated_process, "resource_label", None),
-        }
-        resource_payload = {key: value for key, value in resource_payload.items() if value is not None}
-        if resource_payload:
-            payloads.append(resource_payload)
         if not payloads:
             return True
         try:
