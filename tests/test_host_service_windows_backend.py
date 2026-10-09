@@ -1,5 +1,6 @@
-"""Privilege invariants tested with inert native objects on every platform."""
+"""Privilege invariants with inert effects and a read-only native Windows folder check."""
 from dataclasses import dataclass, replace
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +8,28 @@ import pytest
 
 from src.host_service.controller import ProcessIdentity, Session
 from src.host_service import windows_backend as native
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires actual Windows Known Folder APIs and registry")
+def test_actual_windows_program_files_roots_match_os_paths():
+    """Read both native folders without service registration, elevation or filesystem writes."""
+    import winreg
+
+    # Match the process architecture, independently of GUID literals in product code.
+    registry_view = (winreg.KEY_WOW64_64KEY if native.ctypes.sizeof(native.ctypes.c_void_p) == 8
+                     else winreg.KEY_WOW64_32KEY)
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion",
+                        0, winreg.KEY_READ | registry_view) as key:
+        program_files = Path(winreg.QueryValueEx(key, "ProgramFilesDir")[0]).resolve(strict=True)
+        try:
+            program_files_x86 = Path(winreg.QueryValueEx(key, "ProgramFilesDir (x86)")[0]).resolve(strict=True)
+        except FileNotFoundError:
+            # Windows 32-bit has one Program Files folder for both documented IDs.
+            program_files_x86 = program_files
+    roots = set(native._program_files_roots())
+    assert roots == {program_files, program_files_x86}
+    assert all(root.is_dir() and root.is_absolute() for root in roots)
 
 
 @dataclass

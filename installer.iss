@@ -89,6 +89,9 @@ Type: filesandordirs; Name: "{app}\_internal"
 ; 필요 시 사용자에게 안내 메시지만 표시
 
 [Code]
+var
+  PostInstallSucceeded: Boolean;
+
 // ============================================================
 // 권한 서비스 설치/해제. 운영 호스트 적용은 사용자 설치 실행 시에만 수행합니다.
 // ============================================================
@@ -257,7 +260,18 @@ begin
     InstallPrivilegeService();
     DeleteScheduledTasks();
     RemoveLegacyStartupShortcut();
+    PostInstallSucceeded := True;
   end;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  // Inno can return 0 after a suppressed ssPostInstall exception. Success
+  // requires the service registration and startup cleanup to finish together.
+  if PostInstallSucceeded then
+    Result := 0
+  else
+    Result := 1;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

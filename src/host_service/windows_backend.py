@@ -228,7 +228,7 @@ def _program_files_roots() -> tuple[Path, ...]:
     # The OS defines these paths; environment variables are not a trust boundary.
     return tuple({
         _known_folder_path("905E63B6-C1BF-494E-B29C-65B732D3D21A").resolve(strict=True),
-        _known_folder_path("7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FAE").resolve(strict=True),
+        _known_folder_path("7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E").resolve(strict=True),
     })
 
 
