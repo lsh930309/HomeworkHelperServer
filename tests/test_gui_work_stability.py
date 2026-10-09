@@ -131,19 +131,79 @@ def test_completion_is_delivered_on_gui_thread_and_late_result_is_discarded() ->
 
     def blocked() -> str:
         started.set()
-        release.wait(1.0)
+        release.wait()
         return "late"
 
-    coordinator.submit_telemetry("readiness", blocked)
-    assert started.wait(1.0)
     before = len(receiver.threads)
-    started_at = time.monotonic()
-    assert coordinator.shutdown(deadline_seconds=0.02) is False
-    assert time.monotonic() - started_at < 0.2
-    release.set()
-    time.sleep(0.03)
+    try:
+        coordinator.submit_telemetry("readiness", blocked)
+        assert started.wait(1.0)
+        assert coordinator.shutdown(deadline_seconds=0.02) is False
+    finally:
+        release.set()
+        assert coordinator.shutdown(deadline_seconds=2.0)
     app.processEvents()
     assert len(receiver.threads) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="실제 Windows 호스트의 Qt 종료 응답 시간 계약")
+def test_windows_shutdown_returns_before_running_worker_finishes() -> None:
+    app = _qapp()
+    coordinator = GuiWorkCoordinator(max_threads=1)
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked():
+        started.set()
+        release.wait()
+
+    try:
+        coordinator.submit_telemetry("blocked", blocked)
+        assert started.wait(1.0)
+        started_at = time.monotonic()
+        assert coordinator.shutdown(deadline_seconds=0.02) is False
+        assert time.monotonic() - started_at < 0.2
+    finally:
+        release.set()
+        assert coordinator.shutdown(deadline_seconds=2.0)
+    app.processEvents()
+
+
+@pytest.mark.parametrize("scenario", ["spurious_wakes", "expired", "completed"])
+def test_shutdown_wait_uses_remaining_absolute_deadline(monkeypatch, scenario) -> None:
+    import src.gui.work_coordinator as work_module
+
+    # Model only the uncertain clock/wait boundary. No OS scheduling or Qt
+    # worker is needed to establish the absolute-deadline state transitions.
+    clock = SimpleNamespace(now=5.02 if scenario == "expired" else 5.0)
+    requested_waits = []
+    lifetime = work_module._PoolLifetime.__new__(work_module._PoolLifetime)
+    lifetime.outstanding = 1
+    wakes = iter((5.01, 5.019, 5.021))
+
+    class Condition:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def wait(self, timeout):
+            requested_waits.append(timeout)
+            if scenario == "completed":
+                clock.now = 5.005
+                lifetime.outstanding = 0
+            else:
+                clock.now = next(wakes)
+
+    lifetime.condition = Condition()
+    monkeypatch.setattr(work_module, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    result = lifetime.wait_until(5.02)
+    expected_waits = {
+        "spurious_wakes": [0.02, 0.01, 0.001], "expired": [], "completed": [0.02],
+    }
+    assert requested_waits == pytest.approx(expected_waits[scenario])
+    assert result is (scenario == "completed")
 
 
 def test_power_resume_parser_debounces_and_filter_never_consumes_event() -> None:

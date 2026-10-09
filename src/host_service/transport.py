@@ -38,6 +38,17 @@ def decode_message(data: bytes) -> dict:
     return value
 
 
+def _cancel_owned_io(handle, overlap):
+    """Cancel and finish the one overlapped operation issued by this same thread."""
+    types, _api, _con, _event, file, _pipe, _security = _windows()
+    file.CancelIo(handle)
+    try:
+        file.GetOverlappedResult(handle, overlap, True)
+    except types.error as error:
+        if error.winerror != 995:  # ERROR_OPERATION_ABORTED is cancellation completion.
+            raise
+
+
 def _overlapped_io(handle, *, data=None, timeout_ms=IPC_TIMEOUT_MS):
     pywintypes, win32api, _con, win32event, win32file, _pipe, _security = _windows()
     overlap = pywintypes.OVERLAPPED()
@@ -51,12 +62,8 @@ def _overlapped_io(handle, *, data=None, timeout_ms=IPC_TIMEOUT_MS):
             result, _ = win32file.WriteFile(handle, buffer, overlap)
         if result == 997:
             if win32event.WaitForSingleObject(overlap.hEvent, timeout_ms) != win32event.WAIT_OBJECT_0:
-                win32file.CancelIoEx(handle, overlap)
                 # Keep buffer alive until cancellation completed.
-                try:
-                    win32file.GetOverlappedResult(handle, overlap, True)
-                except OSError:
-                    pass
+                _cancel_owned_io(handle, overlap)
                 raise TimeoutError("권한 서비스 IPC 응답 시간이 초과되었습니다.")
         count = win32file.GetOverlappedResult(handle, overlap, False)
         return bytes(buffer[:count]) if data is None else count
@@ -119,11 +126,7 @@ class NamedPipeServer:
                         raise
                 waited = event.WaitForMultipleObjects((self.stop_event, overlap.hEvent), False, event.INFINITE)
                 if waited == event.WAIT_OBJECT_0:
-                    file.CancelIoEx(handle, overlap)
-                    try:
-                        file.GetOverlappedResult(handle, overlap, True)
-                    except OSError:
-                        pass
+                    _cancel_owned_io(handle, overlap)
                     return
                 request = decode_message(_overlapped_io(handle))
                 caller = self.controller.backend.authenticate(handle)
@@ -149,11 +152,16 @@ class NamedPipeServer:
                 reply = None
             finally:
                 try:
-                    pipe.DisconnectNamedPipe(handle)
-                except OSError:
-                    pass
-                win32api.CloseHandle(handle)
-                win32api.CloseHandle(overlap.hEvent)
+                    try:
+                        pipe.DisconnectNamedPipe(handle)
+                    except types.error as error:
+                        if error.winerror != 233:  # ERROR_PIPE_NOT_CONNECTED after cancelled connect.
+                            raise
+                finally:
+                    try:
+                        win32api.CloseHandle(handle)
+                    finally:
+                        win32api.CloseHandle(overlap.hEvent)
             if reply is not None and reply.after_send is not None:
                 try:
                     reply.after_send()

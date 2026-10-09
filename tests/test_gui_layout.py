@@ -6,7 +6,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton, QStyle, QStyleOptionButton
 
@@ -82,6 +82,31 @@ def _qapp():
 
 def _patch_main_window_deps(monkeypatch, tmp_path):
     import src.gui.main_window as main_window
+    from src.api.client import BackgroundApiTransport, BackgroundHttpResult
+
+    class LayoutTimer(QTimer):
+        @staticmethod
+        def singleShot(interval, callback):
+            # Each layout window is destroyed while this shared test QApplication
+            # stays alive. Bind queued callbacks to the window's QObject lifetime.
+            QTimer.singleShot(interval, main_window.MainWindow.INSTANCE, callback)
+
+    monkeypatch.setattr(main_window, "QTimer", LayoutTimer)
+
+    # Layout tests already use a fake data manager. Keep its background HTTP,
+    # Tailscale and privilege-service observations on that same test boundary.
+    def empty_api_result(*_args, **_kwargs):
+        return BackgroundHttpResult(
+            status_code=200, elapsed_seconds=0.0,
+            payload={"incidents": [], "logs": [], "skipped": [], "attempted": 0},
+        )
+
+    monkeypatch.setattr(BackgroundApiTransport, "get_json", empty_api_result)
+    monkeypatch.setattr(BackgroundApiTransport, "post_json", empty_api_result)
+    monkeypatch.setattr(main_window, "tailscale_status", lambda **_kwargs: SimpleNamespace(
+        ready=False, installed=False, self_ips=(), message="테스트 Tailscale 미설정",
+    ))
+    monkeypatch.setattr(main_window, "privilege_service_status", lambda: (False, "테스트 권한 서비스 미설정"))
 
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setattr(main_window.IconDownloader, "start", lambda self: None)
@@ -385,19 +410,16 @@ def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
 
 
 def _stop_window(window, app):
-    for attr in (
-        "monitor_timer",
-        "scheduler_timer",
-        "ui_refresh_timer",
-        "beholder_timer",
-        "runtime_heartbeat_timer",
-    ):
-        timer = getattr(window, attr, None)
-        if timer and timer.isActive():
-            timer.stop()
+    window._shutting_down = True
+    window._timer_registry.shutdown()
+    assert window._suspend_runtime_after_beholder_restore()
+    # DeferredDelete is not dispatched by processEvents alone without an outer
+    # event loop. Deliver it now so hidden windows cannot leak into the next test.
+    if type(window).INSTANCE is window:
+        type(window).INSTANCE = None
     window.hide()
     window.deleteLater()
-    app.processEvents()
+    QCoreApplication.sendPostedEvents(window, QEvent.Type.DeferredDelete)
 
 
 def test_main_window_launch_args_apply_only_to_direct_targets():
