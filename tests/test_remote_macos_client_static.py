@@ -288,6 +288,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
     assert 'InMemoryTokenStore(initialToken: "ui-test-token")' in app
+    assert "init(tokenStore: any RemoteTokenStore, bootstrapEnabled: Bool = true)" in view_model
+    assert "tokenStore: any RemoteTokenStore = KeychainTokenStore()" not in view_model
     assert "NSStatusItem" in app
     assert "statusItem(withLength: NSStatusItem.squareLength)" in app
     assert "image.isTemplate = true" in app

@@ -1544,7 +1544,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     private static let staminaRecoverySecondsPerPoint: Double = 360
     private static let disconnectingPowerActions: Set<String> = ["shutdown", "sleep", "restart"]
 
-    init(tokenStore: any RemoteTokenStore = KeychainTokenStore(), bootstrapEnabled: Bool = true) {
+    init(tokenStore: any RemoteTokenStore, bootstrapEnabled: Bool = true) {
         self.tokenStore = tokenStore
         self.bootstrapEnabled = bootstrapEnabled
         tokenText = bootstrapEnabled ? tokenStore.load() : "ui-test-token"
