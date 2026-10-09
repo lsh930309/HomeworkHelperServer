@@ -101,16 +101,26 @@ ShellExecute `runas`, 임시 예약 작업 등 자동 상승 fallback은 제공�
 PC 도달 여부는 최신 Tailscale ping, 스트리밍 응답은 Apollo `serverinfo`, 전체 앱 기능은
 기존 Remote API 인증과 응답으로 관측한다. 익명 `PairStatus`는 Moonlight 페어링 판정에
 사용하지 않는다. 페어링과 Desktop 대상은 기존 Moonlight 설정을 사용한다.
-관측 대상은 저장된 Base URL 및 선택 Moonlight host와 같은 호스트여야 한다.
+관측과 Moonlight 실행 대상은 HomeworkHelper에 저장된 Base URL의 호스트가 소유한다.
+별도 Moonlight host 선택 UI·설정·우선 선택 경로를 두지 않는다. 기존 Moonlight 등록에서
+해당 호스트의 주소·이름과 일치하는 Desktop 대상을 찾으며, 관련 없는 등록을 대신 고르지 않는다.
+Apollo 응답의 서버 식별자와 등록된 식별자 검증은 유지한다. 서버의 페어링 정보가 실제로
+바뀌면 기존 PIN 페어링 절차를 사용하며, 자동 승인하거나 저장된 인증서를 재작성하지 않는다.
 
 | 관측 | 사용자 결과 |
 | --- | --- |
-| PC/Apollo 응답, API 없음 | PC 연결됨 · HomeworkHelper 대기; Moonlight 가능 |
-| PC 응답, Apollo 없음 | PC 연결됨 · 스트리밍 준비 안 됨; Wake 재전송 금지 |
-| API 인증 성공 | 기존 전체 기능 사용 |
-| API 인증 거부, Apollo 응답 | 앱 인증 문제 표시; Moonlight 유지 |
-| PC 무응답 | PC 응답 없음; 물리 전원 꺼짐으로 확정하지 않음 |
-| 수락한 power 이후 무응답 | 종료·절전 예상 상태 |
+| PC/Apollo 응답, API 없음 | 호스트 대기; Moonlight 가능 |
+| PC 응답, Apollo 없음 | 스트리밍 대기; Wake 재전송 금지 |
+| API 인증 성공 | 기존 페어링됨·동기화 중 표시와 전체 기능 사용 |
+| API 인증 거부, Apollo 응답 | 기존 인증 확인 필요 표시; Moonlight 유지 |
+| PC 무응답 | 호스트 응답 없음; 물리 전원 꺼짐으로 확정하지 않음 |
+| Tailscale 검사 실행 실패 | Tailscale 오류; 검사 생략과 구분 |
+| 수락한 power 이후 전환 확인 | 기존 종료·부팅·재시동 대기 중 표시 유지 |
+
+기존 페어링 해제됨·상태 확인 중·페어링됨·동기화 중·종료 대기 중·호스트 꺼짐·
+부팅 대기 중·재시동 대기 중·재연결 중·서버 응답 없음·인증 확인 필요 문구는 유지한다.
+단순한 네트워크 무응답은 새 호스트 응답 없음으로 표시한다. 별도 호스트 불일치 상태는
+표시하지 않으며 Moonlight 등록·페어링 안내는 기존 설정 화면에서 제공한다.
 
 관측 주기는 화면 사용 중 기본 5초(기존 사용자 간격 설정을 존중), 배경에서 15초다. 화면 열기, Mac 복귀, 호스트 변경,
 버튼 클릭 시 즉시 관측한다. 호스트 identity가 다른 늦은 응답은 반영하지 않는다.

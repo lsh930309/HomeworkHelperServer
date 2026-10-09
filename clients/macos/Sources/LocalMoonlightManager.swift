@@ -156,7 +156,6 @@ enum LocalMoonlightReadiness: String, Equatable {
     case missingConfig
     case noHosts
     case needsTailscaleRegistration
-    case ambiguous
     case ready
 
     var label: String {
@@ -169,8 +168,6 @@ enum LocalMoonlightReadiness: String, Equatable {
             return "Host 없음"
         case .needsTailscaleRegistration:
             return "Tailscale 등록 필요"
-        case .ambiguous:
-            return "Host 선택 필요"
         case .ready:
             return "준비됨"
         }
@@ -182,7 +179,6 @@ struct LocalMoonlightSnapshot: Equatable {
     let preferencesPath: String
     let preferencesReadable: Bool
     let hosts: [LocalMoonlightHostCandidate]
-    let selectedHostUUID: String
     let targetHost: LocalMoonlightHostCandidate?
     let readiness: LocalMoonlightReadiness
     let message: String
@@ -194,7 +190,6 @@ struct LocalMoonlightSnapshot: Equatable {
         preferencesPath: String,
         preferencesReadable: Bool,
         hosts: [LocalMoonlightHostCandidate],
-        selectedHostUUID: String,
         targetHost: LocalMoonlightHostCandidate?,
         readiness: LocalMoonlightReadiness,
         message: String,
@@ -205,7 +200,6 @@ struct LocalMoonlightSnapshot: Equatable {
         self.preferencesPath = preferencesPath
         self.preferencesReadable = preferencesReadable
         self.hosts = hosts
-        self.selectedHostUUID = selectedHostUUID
         self.targetHost = targetHost
         self.readiness = readiness
         self.message = message
@@ -265,7 +259,6 @@ enum LocalMoonlightManager {
     private static let ignoreRunningAppsKey = "HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"
 
     static func snapshot(
-        selectedHostUUID: String,
         baseURLHost: String?,
         hostNameHints: [String] = [],
         publicIPHints: [String] = [],
@@ -273,7 +266,6 @@ enum LocalMoonlightManager {
     ) -> LocalMoonlightSnapshot {
         let installation = resolveInstallation()
         let preferencesPath = resolvePreferencesPath()
-        let selected = selectedHostUUID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard installation != nil else {
             return LocalMoonlightSnapshot(
@@ -281,7 +273,6 @@ enum LocalMoonlightManager {
                 preferencesPath: preferencesPath,
                 preferencesReadable: false,
                 hosts: [],
-                selectedHostUUID: selected,
                 targetHost: nil,
                 readiness: .missingApp,
                 message: "Moonlight 앱을 찾지 못했습니다. /Applications 또는 사용자 Applications에 설치되어 있는지 확인하세요."
@@ -295,7 +286,6 @@ enum LocalMoonlightManager {
                 preferencesPath: preferencesPath,
                 preferencesReadable: false,
                 hosts: [],
-                selectedHostUUID: selected,
                 targetHost: nil,
                 readiness: .missingConfig,
                 message: parseResult.message.isEmpty ? "Moonlight 설정 파일을 읽지 못했습니다. Moonlight에서 host를 먼저 추가/pair하세요." : parseResult.message
@@ -310,28 +300,14 @@ enum LocalMoonlightManager {
                 preferencesPath: preferencesPath,
                 preferencesReadable: true,
                 hosts: hosts,
-                selectedHostUUID: selected,
                 targetHost: nil,
                 readiness: .noHosts,
                 message: hosts.isEmpty ? "Moonlight에 저장된 host가 없습니다." : "Moonlight host는 있지만 Desktop 앱이 노출된 후보가 없습니다."
             )
         }
 
-        if !selected.isEmpty, let host = usableHosts.first(where: { $0.uuid == selected }) {
-            return readySnapshot(
-                installation: installation,
-                preferencesPath: preferencesPath,
-                hosts: hosts,
-                selectedHostUUID: selected,
-                targetHost: host,
-                reason: "저장된 Moonlight host 선택값을 사용합니다.",
-                publicIPCache: publicIPCache,
-                publicIPHints: publicIPHints
-            )
-        }
-
         let normalizedBaseHost = normalizedHost(baseURLHost)
-        let usableBaseURLHost = normalizedBaseHost.flatMap { Self.isLoopbackHost($0) ? nil : $0 }
+        let usableBaseURLHost = normalizedBaseHost
         let usableHostNameHints = hostNameHints.compactMap(normalizedHost)
         let usablePublicIPHints = publicIPHints.compactMap(normalizedHost).filter(isLikelyPublicIPv4)
         let hasHomeworkHelperIdentityHints = usableBaseURLHost != nil || !usableHostNameHints.isEmpty || !usablePublicIPHints.isEmpty
@@ -341,7 +317,6 @@ enum LocalMoonlightManager {
                 installation: installation,
                 preferencesPath: preferencesPath,
                 hosts: hosts,
-                selectedHostUUID: selected,
                 targetHost: match,
                 reason: "Remote Agent Base URL host와 일치하는 Moonlight host를 찾았습니다.",
                 publicIPCache: publicIPCache,
@@ -354,7 +329,6 @@ enum LocalMoonlightManager {
                 installation: installation,
                 preferencesPath: preferencesPath,
                 hosts: hosts,
-                selectedHostUUID: selected,
                 targetHost: match,
                 reason: "Tailscale/Remote device hostname과 일치하는 Moonlight host를 찾았습니다.",
                 publicIPCache: publicIPCache,
@@ -367,36 +341,8 @@ enum LocalMoonlightManager {
                 installation: installation,
                 preferencesPath: preferencesPath,
                 hosts: hosts,
-                selectedHostUUID: selected,
                 targetHost: match,
                 reason: "호스트 공인 IP와 일치하는 Moonlight host를 찾았습니다.",
-                publicIPCache: publicIPCache,
-                publicIPHints: publicIPHints
-            )
-        }
-
-        if hasHomeworkHelperIdentityHints {
-            return LocalMoonlightSnapshot(
-                installation: installation,
-                preferencesPath: preferencesPath,
-                preferencesReadable: true,
-                hosts: hosts,
-                selectedHostUUID: selected,
-                targetHost: nil,
-                readiness: .needsTailscaleRegistration,
-                message: "HomeworkHelper host와 일치하는 Moonlight Desktop host를 찾지 못했습니다. 기존 설정은 수정하지 않고, Tailscale direct 경로로 새 host 등록을 준비하세요.",
-                publicIPCache: publicIPCache
-            )
-        }
-
-        if usableHosts.count == 1, let host = usableHosts.first {
-            return readySnapshot(
-                installation: installation,
-                preferencesPath: preferencesPath,
-                hosts: hosts,
-                selectedHostUUID: selected,
-                targetHost: host,
-                reason: "Desktop 앱이 있는 Moonlight host 후보가 1개입니다.",
                 publicIPCache: publicIPCache,
                 publicIPHints: publicIPHints
             )
@@ -407,10 +353,11 @@ enum LocalMoonlightManager {
             preferencesPath: preferencesPath,
             preferencesReadable: true,
             hosts: hosts,
-            selectedHostUUID: selected,
             targetHost: nil,
-            readiness: .ambiguous,
-            message: "Desktop 앱이 있는 Moonlight host 후보가 \(usableHosts.count)개입니다. 사용할 host를 선택하세요.",
+            readiness: .needsTailscaleRegistration,
+            message: hasHomeworkHelperIdentityHints
+                ? "HomeworkHelper 호스트와 일치하는 Moonlight Desktop 등록이 없습니다. 해당 호스트를 Tailscale Direct로 등록하세요."
+                : "HomeworkHelper 호스트 주소를 먼저 설정하세요.",
             publicIPCache: publicIPCache
         )
     }
@@ -635,7 +582,6 @@ enum LocalMoonlightManager {
         installation: LocalMoonlightAppInstallation?,
         preferencesPath: String,
         hosts: [LocalMoonlightHostCandidate],
-        selectedHostUUID: String,
         targetHost: LocalMoonlightHostCandidate,
         reason: String,
         publicIPCache: LocalMoonlightPublicIPCache?,
@@ -646,7 +592,6 @@ enum LocalMoonlightManager {
             preferencesPath: preferencesPath,
             preferencesReadable: true,
             hosts: hosts,
-            selectedHostUUID: selectedHostUUID,
             targetHost: targetHost,
             readiness: .ready,
             message: "\(reason) \(targetHost.displayTitle)의 Desktop 스트림 후보를 확인했습니다.",
@@ -736,11 +681,6 @@ enum LocalMoonlightManager {
         if parts[0] == 100 && (64...127).contains(parts[1]) { return false }
         if parts[0] >= 224 { return false }
         return true
-    }
-
-    private static func isLoopbackHost(_ value: String) -> Bool {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "localhost" || normalized == "::1" || normalized.hasPrefix("127.")
     }
 
     private static func resolvePreferencesPath() -> String {

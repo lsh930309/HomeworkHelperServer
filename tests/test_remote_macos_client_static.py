@@ -538,7 +538,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".toggleStyle(.switch)" in app
     assert 'SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)' in app
     assert 'SettingsToggleRow(title: "Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)' in app
-    assert 'SettingsControlRow("Moonlight host 선택")' in app
+    assert 'SettingsControlRow("Moonlight host 선택")' not in app
     assert 'SettingsControlRow("Moonlight 표시")' in app
     assert "MenuBarIconPickerRow(title: \"대기 상태 아이콘\", selection: $viewModel.menuBarIdleIconSymbol)" in app
     assert "MenuBarIconPickerRow(title: \"실행 중 아이콘\", selection: $viewModel.menuBarRunningIconSymbol)" in app
@@ -711,8 +711,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "viewModel.moonlightStalePublicIPWarning" in app
     assert "준비된 Desktop 세션은 popover에서 바로 실행합니다" in app
     assert "viewModel.moonlightSnapshot.readiness.label" in app
-    assert "$viewModel.selectedMoonlightHostUUID" in app
-    assert "viewModel.moonlightSelectableHosts" in app
+    assert "$viewModel.selectedMoonlightHostUUID" not in app
+    assert "viewModel.moonlightSelectableHosts" not in app
     assert "LocalMoonlightManager" in local_moonlight
     assert "com.moonlight-stream.Moonlight" in local_moonlight
     assert "HH_REMOTE_MOONLIGHT_APP_PATHS" in local_moonlight
@@ -813,8 +813,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "remote.moonlight.hostPublicIPCache" in view_model
     assert "srvcert" not in app
     assert "macAddress" not in local_moonlight
-    assert "selectedMoonlightHostUUIDKey" in view_model
-    assert "remote.moonlight.selectedHostUUID" in view_model
+    assert "selectedMoonlightHostUUIDKey" not in view_model
+    assert "remote.moonlight.selectedHostUUID" not in view_model
     assert "refreshMoonlightSnapshot" in view_model
     assert "moonlightSnapshot" in view_model
     assert "LocalMoonlightManager.snapshot" in view_model

@@ -14,7 +14,7 @@ final class RemoteHostObservationTests: XCTestCase {
             XCTAssertFalse(observed.appReady)
             XCTAssertFalse(observed.shouldWake)
             XCTAssertTrue(observed.sshPowerReady)
-            XCTAssertTrue(observed.label().contains("PC 연결됨"))
+            XCTAssertEqual(observed.label(), app == .authRejected ? "인증 확인 필요" : "호스트 대기")
         }
     }
 
@@ -22,20 +22,36 @@ final class RemoteHostObservationTests: XCTestCase {
         let observed = RemoteHostObservationSnapshot(pc: .reachable, apollo: .unavailable, app: .waiting)
         XCTAssertFalse(observed.shouldWake)
         XCTAssertFalse(observed.canStream)
-        XCTAssertEqual(observed.label(), "PC 연결됨 · 스트리밍 준비 안 됨")
+        XCTAssertEqual(observed.label(), "스트리밍 대기")
     }
 
     func testUnavailablePingCannotDeclareThePCOffOrTriggerWake() {
         let observed = RemoteHostObservationSnapshot(pc: .unavailable, apollo: .unavailable, app: .waiting)
         XCTAssertFalse(observed.shouldWake)
-        XCTAssertEqual(observed.label(), "PC 관측 불가 · Tailscale 확인 필요")
+        XCTAssertEqual(observed.label(), "Tailscale 오류")
     }
 
     func testAcceptedPowerIntentIsAnExpectationNotPhysicalOffProof() {
         let observed = RemoteHostObservationSnapshot(pc: .unreachable, apollo: .unavailable, app: .waiting)
         XCTAssertTrue(observed.shouldWake)
-        XCTAssertEqual(observed.label(), "PC 응답 없음")
-        XCTAssertEqual(observed.label(expectedPowerTransition: true), "종료·절전 예상 상태 · PC 응답 없음")
+        XCTAssertEqual(observed.label(), "호스트 응답 없음")
+        XCTAssertEqual(observed.label(availability: .goingOffline), "종료 대기 중")
+    }
+
+    func testExistingStatusLabelsAndAdditionalPreloginStates() {
+        let ready = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready)
+        XCTAssertEqual(ready.label(), "페어링됨")
+        XCTAssertEqual(ready.label(isSyncing: true), "동기화 중")
+        XCTAssertEqual(ready.label(isPaired: false), "페어링 해제됨")
+        let waiting = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .waiting)
+        XCTAssertEqual(waiting.label(), "호스트 대기")
+        for state in [RemoteHostAvailabilityState.goingOffline, .waking, .restarting, .reconnecting, .authRejected] {
+            XCTAssertEqual(waiting.label(availability: state), state.label)
+        }
+        XCTAssertEqual(RemoteHostObservationSnapshot().label(), "상태 확인 중")
+        XCTAssertEqual(RemoteHostObservationSnapshot().label(availability: .agentUnavailable), "서버 응답 없음")
+        XCTAssertEqual(RemoteHostObservationSnapshot(pc: .unreachable).label(availability: .offlineExpected), "호스트 응답 없음")
+        XCTAssertEqual(RemoteHostObservationSnapshot(pc: .reachable, apollo: .identityMismatch).label(), "스트리밍 대기")
     }
 
     func testChangingHostRejectsItsLateResponsesAndClearsPowerCapability() {

@@ -28,7 +28,7 @@ enum RemoteHostAvailabilityState: String, Equatable {
         case .unknown: return "상태 확인 중"
         case .online: return "페어링됨"
         case .goingOffline: return "종료 대기 중"
-        case .offlineExpected: return "PC 응답 없음"
+        case .offlineExpected: return "호스트 꺼짐"
         case .waking: return "부팅 대기 중"
         case .restarting: return "재시동 대기 중"
         case .reconnecting: return "재연결 중"

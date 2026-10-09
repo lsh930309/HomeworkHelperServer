@@ -102,7 +102,6 @@ private enum RemoteClientPreferences {
     private static let mirrorPollIntervalSecondsKey = "remote.mirrorPollIntervalSeconds"
     private static let popoverGlassTransparencyKey = "remote.popoverGlassTransparency"
     private static let popoverGlobalShortcutEnabledKey = "remote.popoverGlobalShortcutEnabled"
-    private static let selectedMoonlightHostUUIDKey = "remote.moonlight.selectedHostUUID"
     private static let moonlightPublicIPCacheKey = "remote.moonlight.hostPublicIPCache"
     private static let moonlightBindingEnabledKey = "remote.moonlight.bindingEnabled"
     private static let smartScheduleRulesKey = "remote.smartSchedule.rules"
@@ -247,19 +246,6 @@ private enum RemoteClientPreferences {
 
     static func saveMirrorPollIntervalSeconds(_ seconds: Int) {
         defaults.set(min(60, max(1, seconds)), forKey: mirrorPollIntervalSecondsKey)
-    }
-
-    static func loadSelectedMoonlightHostUUID() -> String {
-        defaults.string(forKey: selectedMoonlightHostUUIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    static func saveSelectedMoonlightHostUUID(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            defaults.removeObject(forKey: selectedMoonlightHostUUIDKey)
-            return
-        }
-        defaults.set(trimmed, forKey: selectedMoonlightHostUUIDKey)
     }
 
     static func loadMoonlightPublicIPCache() -> LocalMoonlightPublicIPCache? {
@@ -515,17 +501,8 @@ final class RemoteDashboardViewModel: ObservableObject {
             requestImmediateMirror(trigger: "host.changed")
         }
     }
-    @Published var selectedMoonlightHostUUID = RemoteClientPreferences.loadSelectedMoonlightHostUUID() {
-        didSet {
-            RemoteClientPreferences.saveSelectedMoonlightHostUUID(selectedMoonlightHostUUID)
-            refreshMoonlightSnapshot()
-            resetHostObservations()
-            requestImmediateMirror(trigger: "moonlight.hostChanged")
-        }
-    }
     @Published private(set) var moonlightPublicIPCache = RemoteClientPreferences.loadMoonlightPublicIPCache()
     @Published private(set) var moonlightSnapshot = LocalMoonlightManager.snapshot(
-        selectedHostUUID: RemoteClientPreferences.loadSelectedMoonlightHostUUID(),
         baseURLHost: URL(string: RemoteClientPreferences.loadBaseURL())?.host,
         publicIPCache: RemoteClientPreferences.loadMoonlightPublicIPCache()
     )
@@ -720,10 +697,6 @@ final class RemoteDashboardViewModel: ObservableObject {
         return trimmed.isEmpty ? "미등록" : trimmed
     }
 
-    var moonlightSelectableHosts: [LocalMoonlightHostCandidate] {
-        moonlightSnapshot.usableHosts.filter { !$0.uuid.isEmpty }
-    }
-
     var moonlightSelectedHostDisplay: String {
         guard let target = moonlightSnapshot.targetHost else {
             return moonlightSnapshot.readiness.label
@@ -829,7 +802,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private var currentHostIdentity: RemoteHostIdentity {
         RemoteHostIdentity(baseURL: baseURLText.trimmingCharacters(in: .whitespacesAndNewlines),
-            moonlightHostUUID: moonlightSnapshot.targetHost?.uuid ?? selectedMoonlightHostUUID,
+            moonlightHostUUID: moonlightSnapshot.targetHost?.uuid ?? "",
             token: tokenText, sshHost: powerConfig.sshHost, sshUser: powerConfig.sshUser,
             sshKeyPath: powerConfig.normalizedLocalSSHKeyPath(), sshPort: powerConfig.sshPort)
     }
@@ -919,8 +892,7 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     func refreshMoonlightSnapshot() {
         moonlightSnapshot = LocalMoonlightManager.snapshot(
-            selectedHostUUID: selectedMoonlightHostUUID,
-            baseURLHost: URL(string: baseURLText)?.host,
+                baseURLHost: URL(string: baseURLText)?.host,
             hostNameHints: moonlightHostNameHints(),
             publicIPHints: moonlightPublicIPHints(),
             publicIPCache: moonlightPublicIPCache
@@ -1240,48 +1212,18 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func preferredMoonlightEndpointPeer(from peers: [LocalTailscalePeer]) -> LocalTailscalePeer? {
-        guard !peers.isEmpty else { return nil }
-        let currentTarget = moonlightSnapshot.targetHost?.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if !currentTarget.isEmpty,
-           let matched = peers.first(where: { $0.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == currentTarget }) {
-            return matched
+        guard let baseHost = URL(string: baseURLText)?.host?.lowercased() else { return nil }
+        return peers.first { peer in
+            peer.ips.map { $0.lowercased() }.contains(baseHost)
+                || peerMatchesHostName(peer, hint: baseHost)
         }
-        return peers.count == 1 ? peers[0] : nil
     }
 
     private func moonlightTailscaleRegistrationPeer() -> LocalTailscalePeer? {
         guard let localTailscale, localTailscale.running else { return nil }
-        let windowsPeers = localTailscale.peers.filter { peer in
-            peer.online
-                && peer.primaryIPv4 != nil
-                && (peer.os.lowercased().contains("windows")
-                    || "\(peer.hostname) \(peer.dnsName)".lowercased().contains("desktop"))
-        }
-        guard !windowsPeers.isEmpty else { return nil }
-
-        if let baseHost = URL(string: baseURLText)?.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-           !baseHost.isEmpty,
-           let matched = windowsPeers.first(where: { peer in
-               peer.ips.map { $0.lowercased() }.contains(baseHost)
-                   || peer.dnsName.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == baseHost
-                   || peer.dnsStem.lowercased() == baseHost
-           }) {
-            return matched
-        }
-
-        let hostDeviceHints = devices
-            .filter { $0.role == "host" }
-            .flatMap { device -> [String] in
-                [device.name, device.tailnetHostname ?? ""]
-            }
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        for hint in hostDeviceHints {
-            if let matched = windowsPeers.first(where: { peerMatchesHostName($0, hint: hint) }) {
-                return matched
-            }
-        }
-
-        return windowsPeers.count == 1 ? windowsPeers[0] : nil
+        return preferredMoonlightEndpointPeer(from: localTailscale.peers.filter {
+            $0.online && $0.primaryIPv4 != nil
+        })
     }
 
     private func moonlightTailscaleRegistrationHost(from peer: LocalTailscalePeer) -> String? {
@@ -1297,28 +1239,23 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private func moonlightHostNameHints() -> [String] {
-        var hints: [String] = []
-        if let localTailscale {
-            for peer in localTailscale.peers {
-                hints.append(peer.hostname)
-                hints.append(peer.dnsName)
-                hints.append(peer.dnsStem)
-            }
-        }
-        for device in devices where device.role == "host" {
-            hints.append(device.name)
-            if let tailnetHostname = device.tailnetHostname { hints.append(tailnetHostname) }
+        guard let baseHost = URL(string: baseURLText)?.host else { return [] }
+        var hints = [baseHost]
+        if let localTailscale, let peer = preferredMoonlightEndpointPeer(from: localTailscale.peers) {
+            hints.append(contentsOf: [peer.hostname, peer.dnsName, peer.dnsStem])
         }
         return Self.uniqueNonEmpty(hints)
     }
 
     private func moonlightPublicIPHints() -> [String] {
         var hints: [String] = []
-        if let moonlightPublicIPCache {
-            hints.append(moonlightPublicIPCache.ip)
+        let names = Set(moonlightHostNameHints().map(Self.canonicalHostToken))
+        if let cache = moonlightPublicIPCache,
+           names.contains(Self.canonicalHostToken(cache.matchedPeerHostName)) {
+            hints.append(cache.ip)
         }
-        if let localTailscale {
-            hints.append(contentsOf: localTailscale.peers.flatMap { $0.publicEndpointHosts })
+        if let localTailscale, let peer = preferredMoonlightEndpointPeer(from: localTailscale.peers) {
+            hints.append(contentsOf: peer.publicEndpointHosts)
         }
         return Self.uniqueNonEmpty(hints)
     }
@@ -1335,13 +1272,17 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     private static func canonicalHostToken(_ value: String) -> String {
-        value
+        let host = value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            .split(separator: ".")
+            .lowercased()
+        let parts = host.split(separator: ".")
+        if host.contains(":") || (parts.count == 4 && parts.allSatisfy({ Int($0) != nil })) {
+            return host
+        }
+        return parts
             .first
             .map(String.init)?
-            .lowercased()
             .replacingOccurrences(of: "_", with: "-") ?? ""
     }
 
@@ -1360,7 +1301,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     var hostStatusLabel: String {
-        hostObservations.label(expectedPowerTransition: acceptedPowerTransition != nil)
+        hostObservations.label(availability: hostAvailabilityState, isPaired: isPaired,
+            isSyncing: isLoading && hostAvailabilityState == .online && pendingLaunchProcessIDs.isEmpty)
     }
 
     var hostStatusColor: Color {
@@ -2014,7 +1956,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         switch pc {
         case .reachable(let detail): pcObservation = .reachable; evaluationLog.tailscale = detail
         case .unreachable(let detail): pcObservation = .unreachable; evaluationLog.tailscale = detail
-        case .skipped(let detail): pcObservation = .unavailable; evaluationLog.tailscale = detail
+        case .skipped(let detail):
+            pcObservation = detail.outcome == "skipped" ? .unknown : .unavailable
+            evaluationLog.tailscale = detail
         }
         let appObservation: RemoteAppObservation
         switch apiResult {
@@ -2025,6 +1969,9 @@ final class RemoteDashboardViewModel: ObservableObject {
         let observed = RemoteHostObservationSnapshot(pc: pcObservation, apollo: apollo,
             app: appObservation, sshPowerReady: ssh.authenticated, observedAt: Date())
         guard hostObservationStore.accept(observed, for: request) else { return nil }
+        if apollo == .identityMismatch {
+            moonlightLastCommandSummary = "해당 호스트의 Apollo 서버 식별자가 기존 Moonlight 등록과 다릅니다. 서버 등록이 변경됐다면 기존 Tailscale Direct PIN 페어링으로 다시 등록하세요."
+        }
         localSSHHealth = ssh
         if observed.appReady && hostAvailabilityState != .goingOffline { acceptedPowerTransition = nil }
         evaluationLog.ssh = ConnectivityProbeDetail(outcome: "\(ssh.outcome)", message: ssh.message, elapsedSeconds: 0, executablePath: ssh.executablePath, exitStatus: ssh.exitStatus.map(String.init) ?? "", stdout: ssh.stdout, stderr: ssh.stderr)

@@ -1561,19 +1561,6 @@ struct RemoteSettingsView: View {
                     if !viewModel.moonlightSnapshot.installed {
                         SidebarInfoRow(label: "Homebrew", value: viewModel.moonlightHomebrewDisplay, systemImage: "shippingbox")
                     }
-                    if viewModel.moonlightSelectableHosts.count > 1 {
-                        SettingsControlRow("Moonlight host 선택") {
-                            Picker("", selection: $viewModel.selectedMoonlightHostUUID) {
-                                Text("자동 감지").tag("")
-                                ForEach(viewModel.moonlightSelectableHosts) { host in
-                                    Text("\(host.displayTitle) · \(host.uuid)").tag(host.uuid)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                        }
-                    }
-
                     DisclosureGroup("상세 진단") {
                         VStack(alignment: .leading, spacing: 8) {
                             SidebarInfoRow(label: "설정 파일", value: viewModel.moonlightSnapshot.preferencesReadable ? viewModel.moonlightSnapshot.preferencesPath : "읽기 실패 · \(viewModel.moonlightSnapshot.preferencesPath)", systemImage: "doc.text")

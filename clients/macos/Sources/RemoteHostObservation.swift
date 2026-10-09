@@ -27,18 +27,26 @@ struct RemoteHostObservationSnapshot: Equatable {
     var shouldWake: Bool { pc == .unreachable && apollo != .ready && app != .ready }
     var appReady: Bool { app == .ready }
 
-    func label(expectedPowerTransition: Bool = false) -> String {
+    func label(availability: RemoteHostAvailabilityState = .unknown, isPaired: Bool = true, isSyncing: Bool = false) -> String {
+        if !isPaired { return "페어링 해제됨" }
+        if isSyncing && app == .ready { return "동기화 중" }
+        switch availability {
+        case .goingOffline, .waking, .restarting, .reconnecting, .authRejected:
+            return availability.label
+        default:
+            break
+        }
         if pc == .unreachable && apollo != .ready && app != .ready {
-            return expectedPowerTransition ? "종료·절전 예상 상태 · PC 응답 없음" : "PC 응답 없음"
+            return "호스트 응답 없음"
         }
         if pc == .reachable || apollo == .ready || app == .ready {
-            if app == .ready { return "PC 연결됨 · HomeworkHelper 준비됨" }
-            if app == .authRejected { return "PC 연결됨 · 앱 인증 확인 필요" }
-            if apollo == .identityMismatch { return "PC 연결됨 · Moonlight 호스트 불일치" }
-            if apollo != .ready { return "PC 연결됨 · 스트리밍 준비 안 됨" }
-            return "PC 연결됨 · HomeworkHelper 대기"
+            if app == .ready { return "페어링됨" }
+            if app == .authRejected { return "인증 확인 필요" }
+            if apollo != .ready { return "스트리밍 대기" }
+            return "호스트 대기"
         }
-        return pc == .unavailable ? "PC 관측 불가 · Tailscale 확인 필요" : "PC 상태 확인 중"
+        if pc == .unavailable { return "Tailscale 오류" }
+        return availability == .agentUnavailable ? availability.label : "상태 확인 중"
     }
 }
 

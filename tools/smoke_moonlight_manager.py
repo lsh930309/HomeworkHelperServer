@@ -92,34 +92,34 @@ def _swift_source(app_path: Path, plist_path: Path) -> str:
                 setenv("HH_REMOTE_MOONLIGHT_APP_PATHS", "{app_path}", 1)
                 setenv("HH_REMOTE_MOONLIGHT_PREFS_PATH", "{plist_path}", 1)
 
-                let ambiguous = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil)
-                expect(ambiguous.readiness == .ambiguous, "two Desktop hosts without a base URL match should be ambiguous")
+                let ambiguous = LocalMoonlightManager.snapshot(baseURLHost: nil)
+                expect(ambiguous.readiness == .needsTailscaleRegistration, "Moonlight registrations must not choose a host without HomeworkHelper identity")
                 expect(ambiguous.hosts.count == 2, "fixture should expose two hosts")
                 expect(ambiguous.usableHosts.count == 2, "both fixture hosts should expose Desktop")
 
-                let matched = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: "172.30.1.34")
+                let matched = LocalMoonlightManager.snapshot(baseURLHost: "172.30.1.34")
                 expect(matched.readiness == .ready, "base URL host should select matching Moonlight host")
                 expect(matched.targetHost?.uuid == "HOST-2", "base URL host should select HOST-2")
                 expect(matched.targetHost?.targetHostArgument == "HOST-2", "future stream target should prefer Moonlight uuid")
 
-                let matchedByName = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, hostNameHints: ["lsh-desktop"])
+                let matchedByName = LocalMoonlightManager.snapshot(baseURLHost: nil, hostNameHints: ["lsh-desktop"])
                 expect(matchedByName.readiness == .ready, "hostname hint should select matching Moonlight host")
                 expect(matchedByName.targetHost?.uuid == "HOST-2", "hostname hint should select HOST-2")
 
-                let matchedByPublicIP = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, publicIPHints: ["211.216.28.65"])
+                let matchedByPublicIP = LocalMoonlightManager.snapshot(baseURLHost: nil, publicIPHints: ["211.216.28.65"])
                 expect(matchedByPublicIP.readiness == .ready, "public IP hint should select matching Moonlight host")
                 expect(matchedByPublicIP.targetHost?.uuid == "HOST-2", "public IP hint should select HOST-2")
 
-                let needsRegistration = LocalMoonlightManager.snapshot(selectedHostUUID: "", baseURLHost: nil, hostNameHints: ["homework-host"], publicIPHints: ["203.0.113.5"])
+                let needsRegistration = LocalMoonlightManager.snapshot(baseURLHost: nil, hostNameHints: ["homework-host"], publicIPHints: ["203.0.113.5"])
                 expect(needsRegistration.readiness == .needsTailscaleRegistration, "identity hints without a matching Moonlight host should request Tailscale registration")
                 expect(needsRegistration.targetHost == nil, "unmatched HomeworkHelper identity hints must not auto-select an unrelated Moonlight host")
 
-                let stale = LocalMoonlightManager.snapshot(selectedHostUUID: "HOST-1", baseURLHost: nil, publicIPHints: ["211.216.28.65"])
+                let stale = LocalMoonlightManager.snapshot(baseURLHost: "192.168.20.65", publicIPHints: ["211.216.28.65"])
                 expect(!stale.stalePublicIPWarning.isEmpty, "selected host should warn when collected public IP differs from saved remote address")
 
-                let selected = LocalMoonlightManager.snapshot(selectedHostUUID: "HOST-1", baseURLHost: "172.30.1.34")
-                expect(selected.readiness == .ready, "stored host selection should override auto-match")
-                expect(selected.targetHost?.uuid == "HOST-1", "stored host selection should select HOST-1")
+                let selected = LocalMoonlightManager.snapshot(baseURLHost: "172.30.1.34")
+                expect(selected.readiness == .ready, "HomeworkHelper address must own the stream target")
+                expect(selected.targetHost?.uuid == "HOST-2", "HomeworkHelper address must select HOST-2")
                 expect(selected.installation?.version == "6.1.0-fixture", "fake app version should be detected")
 
                 print("LocalMoonlightManager smoke passed: hosts=\\(selected.hosts.count), target=\\(selected.targetHost?.displayTitle ?? "-")")
@@ -150,9 +150,12 @@ def main() -> int:
             print(compile_result.stdout, file=sys.stderr)
             return compile_result.returncode
         env = os.environ.copy()
+        fixture_before = plist_path.read_bytes()
         run_result = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, check=False)
         if run_result.stdout:
             print(run_result.stdout, end="")
+        if plist_path.read_bytes() != fixture_before:
+            raise RuntimeError("Moonlight registration lookup modified its fixture")
         return run_result.returncode
 
 

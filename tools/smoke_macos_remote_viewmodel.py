@@ -147,10 +147,10 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
         }
 
         @MainActor
-        func waitForUnavailableLoopback(_ viewModel: RemoteDashboardViewModel) async {
+        func waitForClosedLoopback(_ viewModel: RemoteDashboardViewModel) async {
             let deadline = Date().addingTimeInterval(3)
             while Date() < deadline {
-                if viewModel.hostObservations.pc == .unavailable,
+                if viewModel.hostObservations.pc == .unknown,
                    viewModel.hostObservations.app == .waiting { return }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
@@ -162,6 +162,20 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
             @MainActor
             static func main() async {
                 smokeStep("init")
+                let ready = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready)
+                let waiting = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .waiting)
+                guard ready.label() == "페어링됨",
+                      ready.label(isSyncing: true) == "동기화 중",
+                      ready.label(isPaired: false) == "페어링 해제됨",
+                      waiting.label() == "호스트 대기",
+                      waiting.label(availability: .restarting) == "재시동 대기 중",
+                      RemoteHostObservationSnapshot(pc: .reachable, app: .authRejected).label() == "인증 확인 필요",
+                      RemoteHostObservationSnapshot(pc: .reachable, apollo: .unavailable).label() == "스트리밍 대기",
+                      RemoteHostObservationSnapshot(pc: .unavailable).label() == "Tailscale 오류",
+                      RemoteHostObservationSnapshot(pc: .unreachable).label() == "호스트 응답 없음",
+                      RemoteHostObservationSnapshot().label(availability: .offlineExpected) == "상태 확인 중" else {
+                    fatalError("existing statuses and prelogin observations must keep distinct, concise labels")
+                }
                 if let suite = ProcessInfo.processInfo.environment["HH_REMOTE_PREFS_SUITE"],
                    let defaults = UserDefaults(suiteName: suite) {
                     defaults.removePersistentDomain(forName: suite)
@@ -174,7 +188,6 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 let store = SmokeInMemoryTokenStore()
                 let viewModel = RemoteDashboardViewModel(tokenStore: store)
-                viewModel.selectedMoonlightHostUUID = "smoke-moonlight-host"
                 guard viewModel.menuBarIdleIconSymbol == "sparkles",
                       viewModel.menuBarRunningIconSymbol == "play.circle.fill",
                       viewModel.menuBarOfflineIconSymbol == "power.circle.fill" else {
@@ -292,7 +305,7 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 smokeStep("launch command scoped mirror")
                 await viewModel.launch(launchProcess)
                 guard viewModel.hostStatusLabel == hostLabelBeforeLaunch,
-                      viewModel.hostStatusLabel == "PC 연결됨 · HomeworkHelper 준비됨" else {
+                      viewModel.hostStatusLabel == "페어링됨" else {
                     fatalError("launch should not churn the host connection pill: before=\(hostLabelBeforeLaunch) after=\(viewModel.hostStatusLabel)")
                 }
                 guard viewModel.isLaunchPending(launchProcess) else {
@@ -510,16 +523,16 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 ]
                 RemoteClientCache.saveProcesses(viewModel.processes, baseURL: URL(string: "__OFFLINE_BASE_URL__")!)
                 await viewModel.refresh()
-                await waitForUnavailableLoopback(viewModel)
+                await waitForClosedLoopback(viewModel)
                 guard viewModel.hostAvailabilityState != .online else {
                     fatalError("closed port refresh should not leave host online")
                 }
                 guard !viewModel.processes.isEmpty else {
                     fatalError("closed port refresh should preserve cached standalone process cards")
                 }
-                guard viewModel.hostObservations.pc == .unavailable,
+                guard viewModel.hostObservations.pc == .unknown,
                       !viewModel.hostObservations.appReady,
-                      viewModel.hostStatusLabel == "PC 관측 불가 · Tailscale 확인 필요" else {
+                      viewModel.hostStatusLabel == "서버 응답 없음" else {
                     fatalError("an unavailable loopback app must not claim the PC is powered off")
                 }
                 guard viewModel.menuBarPresentationState() == .offline,
@@ -599,12 +612,10 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="hh-macos-viewmodel-smoke-") as temp_root:
         temp_dir = Path(temp_root)
-        home = temp_dir / "home"
-        home.mkdir()
         env = os.environ.copy()
         env.update(
             {
-                "HOME": str(home),
+                "HH_TEST_APPDATA_DIR": str(temp_dir / "host-appdata"),
                 "HH_API_HOST": args.host,
                 "HH_API_PORT": str(port),
                 "HH_REMOTE_REQUIRE_AUTH": "0",
