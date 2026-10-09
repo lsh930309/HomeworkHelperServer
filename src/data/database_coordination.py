@@ -141,7 +141,7 @@ class DatabaseLease:
 
 
 class MaintenanceLease:
-    """Idempotent exclusive maintenance state transition lease."""
+    """Return to the entry state unless a verified success is explicit."""
 
     def __init__(
         self,
@@ -172,9 +172,6 @@ class MaintenanceLease:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        if exc_type is None:
-            self.release()
-            return
         with self._release_lock:
             if self._released:
                 return

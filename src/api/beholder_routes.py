@@ -1,9 +1,10 @@
-"""Beholder incident API shared by the PyQt GUI and internal runtime checks."""
+"""Beholder incident API shared by the PySide6 GUI and internal runtime checks."""
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -65,6 +66,30 @@ def _copy_sqlite_database(source: str | Path, target: str | Path) -> None:
     finally:
         dst.close()
         src.close()
+
+
+def _copy_raw_database(source: str | Path, target: str | Path) -> None:
+    """Preserve faulted DB bytes and existing sidecars without opening SQLite."""
+
+    for suffix in ("", "-wal", "-shm"):
+        source_file = Path(str(source) + suffix)
+        if not source_file.exists():
+            continue
+        with source_file.open("rb") as original, Path(str(target) + suffix).open("wb") as snapshot:
+            shutil.copyfileobj(original, snapshot)
+            snapshot.flush()
+            os.fsync(snapshot.fileno())
+
+
+def _replace_raw_database(source: str | Path, target: str | Path) -> None:
+    """Restore a preserved faulted original; it does not imply DB validity."""
+
+    _remove_database_sidecars(target)
+    os.replace(source, target)
+    for suffix in ("-wal", "-shm"):
+        source_file = str(source) + suffix
+        if os.path.exists(source_file):
+            os.replace(source_file, str(target) + suffix)
 
 
 def _checkpoint_live_database(path: str | Path) -> None:
@@ -144,7 +169,7 @@ class ResolveRequest(BaseModel):
 
 class RuntimeHeartbeatRequest(BaseModel):
     app_instance_id: str
-    runtime_kind: str = "pyqt"
+    runtime_kind: str = "pyside6"
     shutdown: bool = False
 
 
@@ -464,28 +489,36 @@ def restore_backup(payload: RestoreRequest) -> Any:
         )
 
     live_replaced = False
+    recovering_fault = snapshot.mode == "faulted"
     try:
         with maintenance:
             try:
                 engine.dispose()
-                if os.path.exists(db_path):
+                if recovering_fault:
+                    _copy_raw_database(db_path, before_path)
+                elif os.path.exists(db_path):
                     _copy_sqlite_database(db_path, before_path)
                     _require_valid_sqlite_backup(before_path)
-                _checkpoint_live_database(db_path)
-                _remove_database_sidecars(db_path)
+                if not recovering_fault:
+                    _checkpoint_live_database(db_path)
                 os.replace(restore_tmp, db_path)
                 live_replaced = True
+                _remove_database_sidecars(db_path)
                 _strict_prepare_live_database()
             except Exception as restore_exc:
                 engine.dispose()
                 if live_replaced:
                     if os.path.exists(before_path):
                         try:
-                            _copy_sqlite_database(before_path, rollback_tmp)
-                            _require_valid_sqlite_backup(rollback_tmp)
-                            _remove_database_sidecars(db_path)
-                            os.replace(rollback_tmp, db_path)
-                            _strict_prepare_live_database()
+                            if recovering_fault:
+                                _copy_raw_database(before_path, rollback_tmp)
+                                _replace_raw_database(rollback_tmp, db_path)
+                            else:
+                                _copy_sqlite_database(before_path, rollback_tmp)
+                                _require_valid_sqlite_backup(rollback_tmp)
+                                _remove_database_sidecars(db_path)
+                                os.replace(rollback_tmp, db_path)
+                                _strict_prepare_live_database()
                         except Exception as rollback_exc:
                             try:
                                 maintenance.mark_faulted("database_restore_rollback_failed")
@@ -532,6 +565,7 @@ def restore_backup(payload: RestoreRequest) -> Any:
                         "restore_error": str(restore_exc),
                     },
                 )
+            maintenance.release()
     except DatabaseFaultStatePersistenceError as exc:
         logger.exception("DB restore 성공 후 fault sentinel 정리 실패")
         return JSONResponse(

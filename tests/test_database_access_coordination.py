@@ -247,6 +247,36 @@ def test_fault_state_is_persistent_and_only_fault_recovery_can_clear_it(tmp_path
     assert not state_path.exists()
 
 
+@pytest.mark.parametrize("raise_failure", [False, True])
+def test_fault_recovery_context_without_explicit_success_preserves_original_fault(
+    tmp_path,
+    raise_failure,
+):
+    state_path = tmp_path / "database_fault_state.json"
+    coordinator = DatabaseMaintenanceCoordinator(fault_state_path=state_path)
+    coordinator.begin_maintenance("prepare-fault").mark_faulted("original_fault")
+    original_state = state_path.read_bytes()
+
+    def unsuccessful_recovery():
+        with coordinator.begin_fault_recovery("restore"):
+            if raise_failure:
+                raise RuntimeError("recovery failed")
+            return False
+
+    if raise_failure:
+        with pytest.raises(RuntimeError, match="recovery failed"):
+            unsuccessful_recovery()
+    else:
+        assert unsuccessful_recovery() is False
+
+    assert coordinator.snapshot().mode == "faulted"
+    assert coordinator.snapshot().fault_code == "original_fault"
+    assert state_path.read_bytes() == original_state
+    restarted = DatabaseMaintenanceCoordinator(fault_state_path=state_path)
+    with pytest.raises(DatabaseAccessUnavailable):
+        restarted.acquire_request("after-restart")
+
+
 @pytest.mark.parametrize("failure_point", ["mkdir", "write", "replace"])
 def test_fault_state_persistence_failure_keeps_restart_admission_fail_closed(
     monkeypatch,
@@ -618,3 +648,200 @@ def test_restore_rollback_error_contract_survives_fault_sentinel_write_failure(
         fault_state_path=tmp_path / "homework_helper_data" / "database_fault_state.json"
     )
     assert restarted.snapshot().mode == "faulted"
+
+
+def _damage_live_database(coordinator, current_db):
+    originals = {
+        "": b"damaged SQLite original\x00\xff",
+        "-wal": b"original WAL bytes\x00\xfe",
+        "-shm": b"original SHM bytes\x00\xfd",
+    }
+    for suffix, content in originals.items():
+        Path(str(current_db) + suffix).write_bytes(content)
+    coordinator.begin_maintenance("prepare-fault").mark_faulted("original_fault")
+    return originals
+
+
+def _assert_original_files(path, originals):
+    for suffix, content in originals.items():
+        assert Path(str(path) + suffix).read_bytes() == content
+
+
+def test_faulted_damaged_database_restores_valid_backup_and_preserves_raw_originals(
+    monkeypatch,
+    tmp_path,
+):
+    client, routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    copy_sqlite = routes._copy_sqlite_database
+
+    def copy_backup_only(source, target):
+        assert Path(source) != current_db
+        assert "before_beholder_restore" not in str(source)
+        copy_sqlite(source, target)
+
+    monkeypatch.setattr(routes, "_copy_sqlite_database", copy_backup_only)
+    monkeypatch.setattr(
+        routes,
+        "_checkpoint_live_database",
+        lambda _path: pytest.fail("faulted original must not require a SQLite checkpoint"),
+    )
+
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 200, response.text
+    _assert_original_files(response.json()["previous_snapshot"], originals)
+    assert _read_marker_database(current_db) == "new"
+    assert not Path(str(current_db) + "-wal").exists()
+    assert not Path(str(current_db) + "-shm").exists()
+    assert coordinator.snapshot().mode == "normal"
+    restarted = DatabaseMaintenanceCoordinator(
+        fault_state_path=current_db.parent / "database_fault_state.json"
+    )
+    assert restarted.snapshot().mode == "normal"
+
+
+@pytest.mark.parametrize("failure_suffix", ["", "-wal", "-shm"])
+def test_faulted_original_preservation_failure_does_not_replace_or_unblock_database(
+    monkeypatch,
+    tmp_path,
+    failure_suffix,
+):
+    client, _routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    original_open = Path.open
+
+    def fail_snapshot_open(path, mode="r", *args, **kwargs):
+        if "before_beholder_restore" in path.name and mode == "wb" and str(path).endswith(
+            ".db" + failure_suffix
+        ):
+            raise OSError("original preservation failed")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_open)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_failed"
+    assert "original preservation failed" in response.json()["restore_error"]
+    _assert_original_files(current_db, originals)
+    assert coordinator.snapshot().mode == "faulted"
+    assert coordinator.snapshot().fault_code == "original_fault"
+    restarted = DatabaseMaintenanceCoordinator(
+        fault_state_path=current_db.parent / "database_fault_state.json"
+    )
+    assert restarted.snapshot().mode == "faulted"
+    assert client.get("/api/beholder/backups").status_code == 200
+    assert client.post("/api/beholder/backups/restore-preview", json={"slot": 1}).status_code == 200
+
+
+def test_faulted_replace_failure_preserves_live_original_and_sidecars(monkeypatch, tmp_path):
+    client, routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    original_replace = routes.os.replace
+
+    def fail_live_replace(source, target):
+        if Path(target) == current_db:
+            raise OSError("live replacement failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(routes.os, "replace", fail_live_replace)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_failed"
+    _assert_original_files(current_db, originals)
+    assert coordinator.snapshot().mode == "faulted"
+
+
+def test_faulted_restore_validation_failure_rolls_back_raw_original_but_keeps_protection(
+    monkeypatch,
+    tmp_path,
+):
+    client, routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    preparation_calls = []
+
+    def reject_new_database():
+        preparation_calls.append(_read_marker_database(current_db))
+        raise RuntimeError("restored database preparation failed")
+
+    monkeypatch.setattr(routes, "_strict_prepare_live_database", reject_new_database)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_rolled_back"
+    assert preparation_calls == ["new"]
+    _assert_original_files(current_db, originals)
+    preserved = list(current_db.parent.glob("app_data.before_beholder_restore.*.db"))
+    assert len(preserved) == 1
+    _assert_original_files(preserved[0], originals)
+    assert coordinator.snapshot().mode == "faulted"
+    assert coordinator.snapshot().fault_code == "original_fault"
+    restarted = DatabaseMaintenanceCoordinator(
+        fault_state_path=current_db.parent / "database_fault_state.json"
+    )
+    assert restarted.snapshot().mode == "faulted"
+    with pytest.raises(DatabaseAccessUnavailable):
+        coordinator.acquire_request("ordinary-after-raw-rollback")
+
+
+def test_faulted_raw_rollback_failure_keeps_original_snapshot_and_restart_protection(
+    monkeypatch,
+    tmp_path,
+):
+    client, routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    monkeypatch.setattr(
+        routes,
+        "_strict_prepare_live_database",
+        lambda: (_ for _ in ()).throw(RuntimeError("restored database preparation failed")),
+    )
+    original_replace = routes.os.replace
+
+    def fail_raw_rollback(source, target):
+        if "rollback_tmp" in str(source):
+            raise OSError("raw rollback failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(routes.os, "replace", fail_raw_rollback)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_rollback_failed"
+    assert "raw rollback failed" in response.json()["rollback_error"]
+    preserved = list(current_db.parent.glob("app_data.before_beholder_restore.*.db"))
+    assert len(preserved) == 1
+    _assert_original_files(preserved[0], originals)
+    assert coordinator.snapshot().mode == "faulted"
+    restarted = DatabaseMaintenanceCoordinator(
+        fault_state_path=current_db.parent / "database_fault_state.json"
+    )
+    assert restarted.snapshot().mode == "faulted"
+
+
+def test_faulted_restore_sentinel_clear_failure_keeps_new_database_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    client, _routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    originals = _damage_live_database(coordinator, current_db)
+    state_path = current_db.parent / "database_fault_state.json"
+    original_unlink = Path.unlink
+
+    def fail_fault_cleanup(path, *args, **kwargs):
+        if path == state_path:
+            raise OSError("fault state cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_fault_cleanup)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "database_restore_sentinel_clear_failed"
+    assert response.json()["database_restored"] is True
+    assert _read_marker_database(current_db) == "new"
+    _assert_original_files(response.json()["previous_snapshot"], originals)
+    with pytest.raises(DatabaseAccessUnavailable):
+        coordinator.acquire_request("after-sentinel-clear-failure")
+    assert DatabaseMaintenanceCoordinator(fault_state_path=state_path).snapshot().mode == "faulted"
