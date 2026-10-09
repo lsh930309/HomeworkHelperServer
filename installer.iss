@@ -24,6 +24,8 @@ AppUpdatesURL={#MyAppURL}
 
 ; 설치 경로
 DefaultDirName={autopf}\{#MyAppName}
+DisableDirPage=yes
+UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 
@@ -193,21 +195,37 @@ begin
     '  (Join-Path ${env:ProgramFiles(x86)} "Tailscale\tailscale.exe"),' + #13#10 +
     '  (Join-Path $env:LocalAppData "Tailscale\tailscale.exe")' + #13#10 +
     ') | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1' + #13#10 +
-    'if ($exe) {' + #13#10 +
-    '  $p = Start-Process -FilePath $exe -ArgumentList @("up", "--accept-routes", "--unattended=true") -WindowStyle Hidden -PassThru' + #13#10 +
-    '  if (-not $p.WaitForExit(15000)) { try { $p.Kill() } catch {} }' + #13#10 +
-    '}';
+    'if (-not $exe) { throw "Tailscale executable was not found after installation" }' + #13#10 +
+    'function Invoke-Tailscale([string[]]$Arguments) {' + #13#10 +
+    '  $stdout = Join-Path $env:TEMP ([guid]::NewGuid().ToString() + ".out")' + #13#10 +
+    '  $stderr = Join-Path $env:TEMP ([guid]::NewGuid().ToString() + ".err")' + #13#10 +
+    '  try {' + #13#10 +
+    '    $p = Start-Process -FilePath $exe -ArgumentList $Arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr' + #13#10 +
+    '    if (-not $p.WaitForExit(15000)) { $p.Kill(); $p.WaitForExit(); throw "Tailscale command timed out" }' + #13#10 +
+    '    $p.WaitForExit()' + #13#10 +
+    '    if ($p.ExitCode -ne 0) { throw ("Tailscale command failed: " + $p.ExitCode + " " + [IO.File]::ReadAllText($stderr)) }' + #13#10 +
+    '    return [IO.File]::ReadAllText($stdout)' + #13#10 +
+    '  } finally {' + #13#10 +
+    '    Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue' + #13#10 +
+    '  }' + #13#10 +
+    '}' + #13#10 +
+    '$null = Invoke-Tailscale @("set", "--unattended=true")' + #13#10 +
+    '$applied = (Invoke-Tailscale @("get", "--json", "unattended")) | ConvertFrom-Json' + #13#10 +
+    'if ($applied.unattended -ne $true) { throw "Tailscale unattended setting was not applied" }';
 
   SaveStringToFile(ScriptPath, Script, False);
 
-  Exec('powershell.exe',
+  if not Exec('powershell.exe',
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException('Tailscale 설정 프로그램을 실행하지 못했습니다.');
 
-  if ResultCode = 0 then
-    Log('Tailscale prerequisite bootstrap completed')
-  else
-    Log('Tailscale prerequisite bootstrap failed. Runtime app will show guided setup. ResultCode=' + IntToStr(ResultCode));
+  if ResultCode <> 0 then
+  begin
+    Log('Tailscale unattended setup failed. ResultCode=' + IntToStr(ResultCode));
+    RaiseException('Tailscale 무인 실행 설정을 완료하지 못했습니다. 종료 코드: ' + IntToStr(ResultCode));
+  end;
+  Log('Tailscale unattended setting applied and verified');
 end;
 
 procedure DeleteScheduledTasks();

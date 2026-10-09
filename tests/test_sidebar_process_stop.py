@@ -122,5 +122,6 @@ def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_proc
     environment = os.environ.copy()
     environment['QT_QPA_PLATFORM'] = 'offscreen'
     environment['HH_TEST_APPDATA_DIR'] = str(tmp_path / 'appdata')
-    result = subprocess.run([sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=15)
+    environment['PYTHONIOENCODING'] = 'utf-8'
+    result = subprocess.run([sys.executable, '-c', script], env=environment, capture_output=True, text=True, encoding='utf-8', timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr

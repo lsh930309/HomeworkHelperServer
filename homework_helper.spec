@@ -3,18 +3,8 @@
 # HomeworkHelper - PyInstaller spec (onedir 모드)
 # Label Studio Helper 분리 후 정리된 버전
 
-import os
 import sys
 from pathlib import Path
-
-
-include_qml = os.environ.get('HH_INCLUDE_QML', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-qml_hiddenimports = [
-    'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickControls2',
-] if include_qml else []
-qml_excludes = [] if include_qml else [
-    'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickControls2',
-]
 
 
 def collect_tree(src, dest, excludes=()):
@@ -51,7 +41,7 @@ a = Analysis(
         
         # GUI
         'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
-        'PySide6.QtNetwork', *qml_hiddenimports,
+        'PySide6.QtNetwork',
         
         # Windows
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
@@ -78,7 +68,7 @@ a = Analysis(
         # 영상/이미지 처리 (LSH로 이동)
         'cv2', 'av', 'skimage', 'scipy', 'matplotlib',
         'numpy', 'imageio',
-        *qml_excludes,
+        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickControls2',
     ],
     noarchive=False,
     optimize=0,
