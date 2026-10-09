@@ -10,7 +10,9 @@ import base64
 import json
 import os
 from pathlib import Path
+from queue import SimpleQueue
 import sys
+from threading import Event, Thread
 import time
 
 from src.host_service.constants import SERVICE_DISPLAY_NAME, SERVICE_NAME
@@ -29,31 +31,33 @@ def service_class():
         _exe_name_ = sys.executable
 
         def __init__(self, args):
-            super().__init__(args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
+            self.startup_stop = Event()
+            self.session_events = SimpleQueue()
             self.controller = None
+            # ServiceFramework registers SCM callbacks in its constructor.
+            super().__init__(args)
 
         def GetAcceptedControls(self):
             return super().GetAcceptedControls() | win32service.SERVICE_ACCEPT_SESSIONCHANGE
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            self.startup_stop.set()
             win32event.SetEvent(self.stop_event)
 
         def SvcShutdown(self):
             self.SvcStop()
 
         def SvcOtherEx(self, control, event_type, data):
-            if control != win32service.SERVICE_CONTROL_SESSIONCHANGE or self.controller is None:
+            if control != win32service.SERVICE_CONTROL_SESSIONCHANGE:
                 return
             # pywin32 supplies WTSSESSION_NOTIFICATION as the single-element tuple.
             session_id = int(data[0])
-            event = {5:"logon", 6:"logoff"}.get(event_type)
+            event = {2:"disconnect", 5:"logon", 6:"logoff"}.get(event_type)
             if event is not None:
-                try:
-                    self.controller.on_session_change(event, session_id)
-                except Exception as error:
-                    servicemanager.LogErrorMsg(f"{SERVICE_NAME} login operation: {error}")
+                # Available from __init__, so initialization never drops a new logon.
+                self.session_events.put((event, session_id, time.monotonic()))
 
         def SvcDoRun(self):
             from src.host_service.controller import PrivilegeController
@@ -66,10 +70,21 @@ def service_class():
             owner_sid = read_owner_sid()
             if not owner_sid:
                 raise RuntimeError("권한 서비스의 설치 사용자 SID가 없습니다.")
-            self.controller = PrivilegeController(owner_sid, install_dir, backend, ReadOnlyUserRepository())
-            self.controller.seed_logged_on_sessions()
+            self.controller = PrivilegeController(
+                owner_sid, install_dir, backend, ReadOnlyUserRepository(),
+                session_events=self.session_events, log_error=servicemanager.LogErrorMsg,
+            )
+            startup_worker = Thread(target=self.controller.run_session_startup,
+                                    args=(self.startup_stop,), name="logon-startup", daemon=True)
+            startup_worker.start()
             servicemanager.LogInfoMsg(f"{SERVICE_NAME} ready")
-            NamedPipeServer(self.controller, self.stop_event, log_error=servicemanager.LogErrorMsg).run()
+            try:
+                NamedPipeServer(self.controller, self.stop_event, log_error=servicemanager.LogErrorMsg).run()
+            finally:
+                self.startup_stop.set()
+                startup_worker.join(timeout=5)
+                if startup_worker.is_alive():
+                    servicemanager.LogErrorMsg(f"{SERVICE_NAME} login worker did not stop within 5s")
 
     HomeworkHelperPrivilegeService.__module__ = "homework_helper_service"
     return HomeworkHelperPrivilegeService

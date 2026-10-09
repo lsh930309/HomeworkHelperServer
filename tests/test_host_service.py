@@ -5,6 +5,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
+import sys
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -48,6 +50,7 @@ class Backend:
 
     def startup(self, session):
         self.effects.append(("startup", session))
+        return {"accepted":True, "pid":100}
 
     def power(self, action):
         self.effects.append(("power", action))
@@ -197,16 +200,20 @@ def test_exact_observed_identity_terminates_only_registered_process(system):
 def test_logon_starts_once_unlock_and_recovery_do_not_reopen_app(system):
     controller, backend, _repository, _caller = system
     controller.on_session_change("logon", 4)
+    controller.process_session_events()
     controller.on_session_change("unlock", 4)
     controller.on_session_change("logon", 4)
+    controller.process_session_events()
     assert len(backend.effects) == 1
     controller.on_session_change("logoff", 4)
     backend.session = replace(backend.session, logon_id="logon-b")
     controller.on_session_change("logon", 4)
+    controller.process_session_events()
     assert len(backend.effects) == 2
     recovery = PrivilegeController(OWNER, INSTALL, backend, Repository())
     recovery.seed_logged_on_sessions()
     recovery.on_session_change("logon", 4)
+    recovery.process_session_events()
     assert len(backend.effects) == 2
 
 
@@ -215,7 +222,289 @@ def test_disabled_startup_or_other_user_logon_does_not_start_app(system):
     repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(True, False))
     controller.on_session_change("logon", 4)
     controller.on_session_change("logon", 7)
+    controller.process_session_events()
     assert backend.effects == []
+
+
+@pytest.fixture
+def startup_system(system):
+    controller, backend, repository, _caller = system
+    clock = [0.0]
+    errors = []
+    controller._clock = lambda: clock[0]
+    controller._log_error = errors.append
+    return controller, backend, repository, clock, errors
+
+
+def test_logon_callback_does_not_read_settings_or_create_process(startup_system):
+    controller, backend, repository, _clock, _errors = startup_system
+    controller.on_session_change("logon", 4)
+    assert repository.reads == 0 and backend.effects == []
+    controller.process_session_events()
+    assert repository.reads == 1 and len(backend.effects) == 1
+
+
+def test_logon_during_initialization_is_not_seeded_as_existing(startup_system):
+    controller, backend, _repository, _clock, _errors = startup_system
+    controller.on_session_change("logon", 4)
+    controller.seed_logged_on_sessions()
+    controller.process_session_events()
+    assert len(backend.effects) == 1
+
+
+def test_token_preparation_retries_once_per_second_then_starts_once(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    session = backend.session
+    backend.session = None
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    clock[0] = 0.5
+    backend.session = session
+    controller.process_session_events()
+    assert backend.effects == [] and repository.reads == 0
+    clock[0] = 1
+    controller.process_session_events()
+    assert len(backend.effects) == 1
+    controller.on_session_change("logon", 4)
+    clock[0] = 20
+    controller.process_session_events()
+    assert len(backend.effects) == 1 and repository.reads == 1 and not errors
+
+
+def test_missing_token_stops_retrying_at_120_seconds(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    session = backend.session
+    backend.session = None
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    clock[0] = 120
+    backend.session = session
+    controller.process_session_events()
+    controller.on_session_change("logon", 4)
+    clock[0] = 121
+    controller.process_session_events()
+    assert repository.reads == 0 and backend.effects == []
+    assert len(errors) == 1 and "120s" in errors[0]
+
+
+@pytest.mark.parametrize("code", [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_busy_settings_read_retries_without_consuming_logon(startup_system, code):
+    controller, backend, repository, clock, errors = startup_system
+    read = repository.read
+    attempts = []
+    def temporarily_busy(session, **kwargs):
+        attempts.append(session)
+        if len(attempts) == 1:
+            error = sqlite3.OperationalError("database busy")
+            error.sqlite_errorcode = code
+            raise error
+        return read(session, **kwargs)
+    repository.read = temporarily_busy
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    assert backend.effects == []
+    clock[0] = 1
+    controller.process_session_events()
+    assert len(attempts) == 2 and len(backend.effects) == 1 and not errors
+
+
+@pytest.mark.parametrize("error", [LookupError("설정 없음"), sqlite3.DatabaseError("손상된 DB"),
+                                   sqlite3.OperationalError("unable to open database file"),
+                                   PermissionError("접근 거부")])
+def test_permanent_settings_error_is_reported_without_guess_or_retry(startup_system, error):
+    controller, backend, repository, clock, errors = startup_system
+    attempts = []
+    def failed_read(session, **_kwargs):
+        attempts.append(session)
+        raise error
+    repository.read = failed_read
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    clock[0] = 1
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    assert len(attempts) == 1 and backend.effects == []
+    assert len(errors) == 1 and str(error) in errors[0]
+
+
+def test_first_createprocess_token_failure_retries_then_launches(startup_system):
+    controller, backend, _repository, clock, errors = startup_system
+    startup = backend.startup
+    attempts = []
+    def token_not_ready(session):
+        attempts.append(session)
+        if len(attempts) == 1:
+            error = OSError("token not ready")
+            error.winerror = 1008
+            raise error
+        return startup(session)
+    backend.startup = token_not_ready
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    clock[0] = 1
+    controller.process_session_events()
+    assert len(attempts) == 2 and len(backend.effects) == 1 and not errors
+
+
+@pytest.mark.parametrize("event", ["logoff", "disconnect"])
+def test_ended_or_switched_session_cancels_pending_startup(startup_system, event):
+    controller, backend, repository, clock, _errors = startup_system
+    session = backend.session
+    backend.session = None
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    controller.on_session_change(event, 4)
+    backend.session = session
+    clock[0] = 1
+    controller.process_session_events()
+    assert repository.reads == 0 and backend.effects == []
+
+
+@pytest.mark.parametrize("change", [{"session_id":7}, {"owner_sid":"other"}, {"logon_id":"logon-b"}])
+def test_bound_startup_does_not_rebind_after_temporary_failure(startup_system, change):
+    controller, backend, repository, clock, errors = startup_system
+    def locked(_session, **_kwargs):
+        error = sqlite3.OperationalError("locked")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        raise error
+    repository.read = locked
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    backend.session = replace(backend.session, **change)
+    clock[0] = 1
+    controller.process_session_events()
+    assert backend.effects == [] and len(errors) == 1
+
+
+def test_new_authentication_id_can_start_even_when_session_id_is_reused(startup_system):
+    controller, backend, _repository, _clock, _errors = startup_system
+    controller.seed_logged_on_sessions()
+    backend.session = replace(backend.session, logon_id="logon-b")
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    assert len(backend.effects) == 1 and backend.effects[0][1].logon_id == "logon-b"
+
+
+def test_logoff_arriving_during_settings_read_prevents_creation(startup_system):
+    controller, backend, repository, _clock, _errors = startup_system
+    read = repository.read
+    def logoff_during_read(session, **kwargs):
+        snapshot = read(session, **kwargs)
+        controller.on_session_change("logoff", 4)
+        return snapshot
+    repository.read = logoff_during_read
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    assert backend.effects == []
+
+
+def test_service_stop_during_settings_read_prevents_creation(startup_system):
+    controller, backend, repository, _clock, _errors = startup_system
+    stop = Event()
+    read = repository.read
+    def stop_during_read(session, **kwargs):
+        snapshot = read(session, **kwargs)
+        stop.set()
+        return snapshot
+    repository.read = stop_during_read
+    controller.on_session_change("logon", 4)
+    controller.process_session_events(stop)
+    assert backend.effects == []
+
+
+def test_expired_preparation_does_not_start_after_slow_settings_read(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    read = repository.read
+    def slow_read(session, **kwargs):
+        snapshot = read(session, **kwargs)
+        clock[0] = 120
+        return snapshot
+    repository.read = slow_read
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    controller.process_session_events()
+    assert backend.effects == [] and len(errors) == 1
+
+
+def test_worker_can_stop_while_waiting_for_preparation(startup_system):
+    controller, backend, _repository, _clock, _errors = startup_system
+    backend.session = None
+    controller.on_session_change("logon", 4)
+    stop = Event()
+    worker = Thread(target=controller.run_session_startup, args=(stop,))
+    worker.start()
+    stop.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive() and backend.effects == []
+
+
+def test_already_running_app_completes_logon_without_duplicate_creation(startup_system):
+    controller, backend, repository, _clock, errors = startup_system
+    existing = []
+    backend.startup = lambda session: existing.append(session) or {
+        "accepted":True, "pid":321, "already_running":True,
+    }
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    assert len(existing) == 1 and repository.reads == 1 and not errors
+
+
+def test_disabled_startup_decision_does_not_read_again_or_start_after_setting_change(startup_system):
+    controller, backend, repository, _clock, errors = startup_system
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(True, False))
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(True, True))
+    controller.on_session_change("logon", 4)
+    controller.on_session_change("unlock", 4)
+    controller.process_session_events()
+    assert repository.reads == 1 and backend.effects == [] and not errors
+
+
+def test_unknown_launch_result_is_not_automatically_retried(startup_system):
+    controller, backend, _repository, clock, errors = startup_system
+    attempts = []
+    backend.startup = lambda session: attempts.append(session) or {"accepted":True}
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    clock[0] = 1
+    controller.process_session_events()
+    assert len(attempts) == 1 and len(errors) == 1
+    assert "실행 완료" in errors[0]
+
+
+def test_scm_callback_retains_initial_events_and_stop_cancels_worker(monkeypatch):
+    import homework_helper_service as entry
+    class Framework:
+        def __init__(self, _args):
+            self.statuses = []
+            self.SvcOtherEx(14, 5, (3,))
+        def ReportServiceStatus(self, status):
+            self.statuses.append(status)
+    stop_handle = object()
+    signalled = []
+    monkeypatch.setitem(sys.modules, "servicemanager", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "win32serviceutil", SimpleNamespace(ServiceFramework=Framework))
+    monkeypatch.setitem(sys.modules, "win32event", SimpleNamespace(
+        CreateEvent=lambda *_args: stop_handle, SetEvent=signalled.append,
+    ))
+    monkeypatch.setitem(sys.modules, "win32service", SimpleNamespace(
+        SERVICE_CONTROL_SESSIONCHANGE=14, SERVICE_STOP_PENDING=3,
+    ))
+    service = entry.service_class()([])
+    assert service.controller is None
+    service.SvcOtherEx(14, 5, (4,))
+    # A configured controller must not be invoked by the callback either.
+    service.controller = SimpleNamespace(on_session_change=lambda *_args: pytest.fail("blocking callback"))
+    service.SvcOtherEx(14, 2, (4,))
+    service.SvcOtherEx(14, 6, (4,))
+    assert [service.session_events.get_nowait()[:2] for _ in range(4)] == [
+        ("logon", 3), ("logon", 4), ("disconnect", 4), ("logoff", 4),
+    ]
+    service.SvcStop()
+    assert service.startup_stop.is_set() and signalled == [stop_handle]
 
 
 def _create_db(appdata, *, wal=False):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ntpath
+from queue import Empty, SimpleQueue
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +49,17 @@ class Reply:
     after_send: Callable[[], object] | None = None
 
 
+@dataclass
+class _StartupAttempt:
+    """One in-memory decision for a Windows logon, owned by the startup worker."""
+
+    deadline: float
+    next_attempt: float
+    session: Session | None = None
+    outcome: str = "pending"
+    previous_logon: tuple[str, int, str | None] | None = None
+
+
 def windows_path(value: str | Path) -> str:
     return ntpath.normcase(ntpath.normpath(str(value)))
 
@@ -57,7 +70,8 @@ class PrivilegeController:
     capabilities = ("status", "power", "launch_managed", "inspect_managed", "stop_managed")
 
     def __init__(self, owner_sid: str, install_dir: Path, backend, repository,
-                 *, resolver=None, argument_resolver=None, admin_required=None, preset_inputs=None):
+                 *, resolver=None, argument_resolver=None, admin_required=None, preset_inputs=None,
+                 session_events=None, clock=time.monotonic, log_error=None):
         self.owner_sid = owner_sid
         self.install_dir = Path(install_dir)
         self.backend = backend
@@ -70,8 +84,11 @@ class PrivilegeController:
         self.argument_resolver = argument_resolver
         self.admin_required = admin_required
         self.preset_inputs = preset_inputs
-        # This state exists only for current Windows logon lifecycle, never as a second setting.
-        self._seen_logons: set[int] = set()
+        # SCM callbacks only put events. The startup worker alone changes these decisions.
+        self._session_events = session_events if session_events is not None else SimpleQueue()
+        self._clock = clock
+        self._log_error = log_error or (lambda message: None)
+        self._startup_attempts: dict[int, _StartupAttempt] = {}
 
     def authorize(self, caller: Caller) -> None:
         if caller.sid not in {self.owner_sid, SYSTEM_SID}:
@@ -211,20 +228,124 @@ class PrivilegeController:
 
     def seed_logged_on_sessions(self) -> None:
         """Service recovery must not reopen an app that the user intentionally closed."""
-        self._seen_logons.update(s.session_id for s in self.backend.sessions(self.owner_sid))
+        sessions = self.backend.sessions(self.owner_sid)
+        events = self._take_session_events()
+        # A logon received while SCM initialized is new, even if its token is now ready.
+        new_logons = {session_id for event, session_id, _at in events if event == "logon"}
+        for session in sessions:
+            if session.session_id not in new_logons:
+                self._startup_attempts[session.session_id] = _StartupAttempt(
+                    0, 0, session=session, outcome="existing",
+                )
+        self._apply_session_events(events)
 
     def on_session_change(self, event: str, session_id: int) -> None:
-        if event == "logoff":
-            self._seen_logons.discard(session_id)
-            return
-        if event != "logon" or session_id in self._seen_logons:
-            return
-        self._seen_logons.add(session_id)
+        """Queue only: no token lookup, SQLite read or process creation in SCM callback."""
+        if event in {"logon", "logoff", "disconnect"}:
+            self._session_events.put((event, session_id, self._clock()))
+
+    def _take_session_events(self) -> list[tuple[str, int, float]]:
+        events = []
+        while True:
+            try:
+                events.append(self._session_events.get_nowait())
+            except Empty:
+                return events
+
+    def _apply_session_events(self, events) -> None:
+        for event, session_id, observed_at in events:
+            attempt = self._startup_attempts.get(session_id)
+            if event == "logoff":
+                self._startup_attempts.pop(session_id, None)
+            elif event == "disconnect":
+                if attempt is not None and attempt.outcome == "pending":
+                    self._startup_attempts.pop(session_id, None)
+            elif event == "logon":
+                if attempt is None or (attempt.outcome != "pending" and attempt.session is not None):
+                    previous_logon = None
+                    if attempt is not None:
+                        previous_logon = (attempt.session.owner_sid, attempt.session.session_id,
+                                          attempt.session.logon_id)
+                    self._startup_attempts[session_id] = _StartupAttempt(
+                        deadline=observed_at + 120, next_attempt=observed_at,
+                        previous_logon=previous_logon,
+                    )
+
+    @staticmethod
+    def _temporary_startup_error(error: Exception) -> bool:
+        if isinstance(error, sqlite3.OperationalError):
+            code = getattr(error, "sqlite_errorcode", None)
+            return code is not None and (code & 0xff) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+        # These token/session/busy errors describe an unavailable effect, not an
+        # unknown launch result. Missing settings, access denied and corrupt DBs fail explicitly.
+        return getattr(error, "winerror", None) in {87, 170, 1008, 1237, 7022}
+
+    def _startup_is_current(self, session_id, attempt, stop_event) -> bool:
+        self._apply_session_events(self._take_session_events())
+        return (not (stop_event is not None and stop_event.is_set())
+                and self._startup_attempts.get(session_id) is attempt
+                and attempt.outcome == "pending" and self._clock() < attempt.deadline)
+
+    def _try_startup(self, session_id, attempt, stop_event) -> bool:
         session = self.backend.current_session(self.owner_sid)
-        if session is None or session.session_id != session_id:
-            return
+        if session is None or session.logon_id is None:
+            return False
+        if session.owner_sid != self.owner_sid or session.session_id != session_id:
+            raise RequestDenied("자동 시작 대상의 사용자 또는 Windows 세션이 변경되었습니다.")
+        if attempt.previous_logon == (session.owner_sid, session.session_id, session.logon_id):
+            # The same authentication ID is a duplicate event/service recovery, not a new login.
+            attempt.session = session
+            attempt.outcome = "existing"
+            return True
+        if attempt.session is not None and attempt.session != session:
+            raise RequestDenied("자동 시작 대상의 Windows 로그온 식별이 변경되었습니다.")
+        attempt.session = session
         with self.backend.read_as_user(session):
             snapshot = self.repository.read(session, settings_only=True)
+        if not self._startup_is_current(session_id, attempt, stop_event):
+            return False
+        self._still_current(session)
         if snapshot.settings.run_on_startup:
-            self._still_current(session)
-            self.backend.startup(session)
+            result = self.backend.startup(session)
+            if (not isinstance(result, dict) or result.get("accepted") is not True
+                    or type(result.get("pid")) is not int or result["pid"] <= 0):
+                raise RuntimeError("앱 자동 시작의 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
+        attempt.outcome = "completed"
+        return True
+
+    def process_session_events(self, stop_event=None) -> None:
+        """One worker tick. Tests advance its clock without sleeping or native effects."""
+        self._apply_session_events(self._take_session_events())
+        for session_id, attempt in list(self._startup_attempts.items()):
+            if stop_event is not None and stop_event.is_set():
+                self._startup_attempts.clear()
+                return
+            if attempt.outcome != "pending":
+                continue
+            now = self._clock()
+            if now >= attempt.deadline:
+                attempt.outcome = "failed"
+                self._log_error(f"로그인 자동 시작 제한 시간 초과: session={session_id}, timeout=120s")
+                continue
+            if now < attempt.next_attempt:
+                continue
+            try:
+                if not self._try_startup(session_id, attempt, stop_event):
+                    attempt.next_attempt = self._clock() + 1
+            except Exception as error:
+                if self._temporary_startup_error(error):
+                    attempt.next_attempt = self._clock() + 1
+                else:
+                    attempt.outcome = "failed"
+                    self._log_error(f"로그인 자동 시작 실패: session={session_id}: {error}")
+
+    def run_session_startup(self, stop_event) -> None:
+        """A single worker consumes initial events, new events and bounded readiness retries."""
+        try:
+            self.seed_logged_on_sessions()
+        except Exception as error:
+            self._log_error(f"서비스 시작 시 기존 로그인 확인 실패: {error}")
+        while not stop_event.is_set():
+            self.process_session_events(stop_event)
+            stop_event.wait(1)
+        self._startup_attempts.clear()
