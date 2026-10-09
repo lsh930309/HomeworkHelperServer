@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Callable, Iterable, Protocol
 
-from PySide6.QtCore import QAbstractNativeEventFilter
+from PySide6.QtCore import QAbstractNativeEventFilter, QByteArray
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +67,13 @@ class WindowsPowerEventFilter(QAbstractNativeEventFilter):
         self._parser = parser or WindowsPowerEventParser()
         self._decoder = decoder
 
-    def nativeEventFilter(self, event_type: bytes | bytearray | str, message: object):
-        value = bytes(event_type).lower() if isinstance(event_type, (bytes, bytearray)) else str(event_type).encode().lower()
+    def nativeEventFilter(self, event_type: QByteArray | bytes | bytearray | str, message: object):
+        if isinstance(event_type, (QByteArray, bytes, bytearray)):
+            value = bytes(event_type).lower()
+        elif isinstance(event_type, str):
+            value = event_type.encode().lower()
+        else:
+            return False, 0
         if value not in {b"windows_generic_msg", b"windows_dispatcher_msg"}:
             return False, 0
         decoded = self._decoder(message)

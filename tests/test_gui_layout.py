@@ -1669,6 +1669,7 @@ def test_process_icon_prefers_process_id_cache_without_existing_exe(monkeypatch,
 
 
 def test_restore_suspends_runtime_timers_and_monitor_cache():
+    import threading
     import types
     import src.gui.main_window as main_window
 
@@ -1694,12 +1695,15 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     heartbeat_timer = FakeTimer()
     ui_timer = FakeTimer()
     process_monitor = types.SimpleNamespace(active_monitored_processes={"game-a": {"session_id": 1}})
+    resource_shutdown_calls = []
     timer_registry = main_window.DesiredTimerRegistry()
     timer_registry.register("monitor", monitor_timer, interval_ms=1000)
     timer_registry.register("scheduler", scheduler_timer, interval_ms=1000)
     timer_registry.register("heartbeat", heartbeat_timer, interval_ms=30000)
     timer_registry.register("ui_refresh", ui_timer, interval_ms=1000)
     window = types.SimpleNamespace(
+        _beholder_restore_runtime_suspended=False,
+        _lifecycle_shutdown_event=threading.Event(),
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
         scheduler_timer=scheduler_timer,
@@ -1707,10 +1711,16 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
         ui_refresh_timer=ui_timer,
         _UI_REFRESH_INTERVAL_MS=1000,
         _timer_registry=timer_registry,
-        _work_coordinator=types.SimpleNamespace(invalidate_telemetry=lambda: None),
+        _work_coordinator=types.SimpleNamespace(
+            invalidate_telemetry=lambda: None,
+            shutdown=lambda **_kwargs: resource_shutdown_calls.append("work") or True,
+        ),
+        _hoyolab_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("hoyo") or True),
+        _nikke_resource_reconcile=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("nikke") or True),
+        _daily_checkin=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("checkin") or True),
     )
 
-    main_window.MainWindow._suspend_runtime_after_beholder_restore(window)
+    assert main_window.MainWindow._suspend_runtime_after_beholder_restore(window) is True
     main_window.MainWindow._ensure_timers_running(window)
 
     assert window._beholder_restore_runtime_suspended is True
@@ -1720,6 +1730,8 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     assert heartbeat_timer.stop_calls == 1
     assert monitor_timer.start_calls == []
     assert scheduler_timer.start_calls == []
+    assert resource_shutdown_calls == ["hoyo", "nikke", "checkin", "work"]
+    assert window._lifecycle_shutdown_event.is_set()
 
 
 def test_windows_title_bar_color_noops_off_windows(monkeypatch):

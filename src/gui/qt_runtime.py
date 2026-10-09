@@ -12,12 +12,12 @@ UI_BINDING = "pyside6"
 UI_VARIANT = "newgui-2nd"
 
 
-def binding_diagnostics(renderer: str = "widgets") -> dict[str, str]:
+def binding_diagnostics() -> dict[str, str]:
     return {
         "ui_binding": UI_BINDING,
         "binding_version": str(PySide6.__version__),
         "qt_version": str(qVersion()),
-        "ui_renderer": str(renderer or "widgets").strip().lower(),
+        "ui_renderer": "widgets",
         "ui_variant": UI_VARIANT,
     }
 

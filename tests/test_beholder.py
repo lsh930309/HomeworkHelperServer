@@ -485,7 +485,7 @@ def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch):
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -522,7 +522,7 @@ def test_open_session_recovery_decide_later_keeps_incident_pending(monkeypatch):
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -606,7 +606,7 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
     assert settings.sidebar_height_ratio == 1.0
 
 
-def test_sidebar_settings_actor_is_labeled_as_pyqt_sidebar_dialog(monkeypatch, tmp_path):
+def test_sidebar_settings_actor_has_binding_independent_identity(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -904,7 +904,7 @@ def test_close_at_heartbeat_resolution_aborts_when_session_snapshot_fails(monkey
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -1286,7 +1286,7 @@ def test_runtime_heartbeat_keeps_unused_override_token(monkeypatch):
     assert client._pending_beholder_overrides[("runtime_start", "process_monitor")] == "token"
 
 
-def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
+def test_runtime_state_client_only_writes_last_played_timestamp(monkeypatch):
     from src.api.client import ApiClient
     from src.data.data_models import ManagedProcess
 
@@ -1328,10 +1328,7 @@ def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
 
     assert client.update_process_runtime_state(process) is True
 
-    assert payloads == [
-        {"last_played_timestamp": 123.0},
-        {"stamina_current": 120, "stamina_max": 100, "stamina_updated_at": 124.0},
-    ]
+    assert payloads == [{"last_played_timestamp": 123.0}]
     assert client.managed_processes == ["fresh"]
 
 
@@ -2173,7 +2170,7 @@ def test_process_monitor_rejects_reused_pid_for_late_resolution(monkeypatch):
     ) is False
 
 
-def test_process_monitor_pending_stop_skips_hoyolab_exit_refresh(monkeypatch):
+def test_process_monitor_pending_stop_preserves_runtime_timestamp(monkeypatch):
     from src.core.process_monitor import ProcessMonitor
     from src.data.data_models import ManagedProcess
     import src.core.process_monitor as process_monitor_module
@@ -2192,11 +2189,6 @@ def test_process_monitor_pending_stop_skips_hoyolab_exit_refresh(monkeypatch):
         managed_processes = [process]
 
     monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
-    monkeypatch.setattr(
-        ProcessMonitor,
-        "_update_stamina_on_game_exit",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pending stop should skip stamina refresh")),
-    )
 
     monitor = ProcessMonitor(FakeDataManager())
     monitor.active_monitored_processes["game-a"] = {

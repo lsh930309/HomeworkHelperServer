@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QWidget,
     QHeaderView, QPushButton, QSizePolicy, QFileIconProvider, QAbstractItemView,
     QMessageBox, QMenu, QStyle, QMenuBar, QCheckBox,
-    QLabel, QProgressBar, QSlider, QToolButton, QInputDialog, QDialog, QLineEdit,
+    QLabel, QProgressBar, QSlider, QToolButton, QDialog, QLineEdit,
 )
 from PySide6.QtCore import (
     Qt, QTimer, Signal, Slot, QUrl, QEvent, QThread, QSettings, QPoint, QSize,
@@ -28,7 +28,7 @@ from PySide6.QtGui import QAction, QIcon, QColor, QDesktopServices, QFontDatabas
 
 # --- 로컬 모듈 임포트 ---
 from src.gui.dialogs import ProcessDialog, GlobalSettingsDialog, WebShortcutDialog, HoYoLabSettingsDialog, RemoteSettingsDialog
-from src.gui.beholder_dialog import BeholderIncidentDialog
+from src.gui.beholder_dialog import BeholderBackupRestoreDialog, BeholderIncidentDialog
 from src.gui.tray_manager import TrayManager
 from src.gui.gui_notification_handler import GuiNotificationHandler
 from src.core.instance_manager import run_with_single_instance_check, SingleInstanceApplication
@@ -159,8 +159,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         MainWindow.INSTANCE = self
         self._pending_bottom_right_placement = False
-        self._presentation_window = self
-        self._host_ui_facade = None
         self.data_manager = data_manager
         self._instance_manager = instance_manager # 종료 시 정리를 위해 인스턴스 매니저 참조 저장
         self.launcher = Launcher(run_as_admin=self.data_manager.global_settings.run_as_admin)
@@ -214,6 +212,9 @@ class MainWindow(QMainWindow):
             self.system_notifier,
             self,
         )
+
+        self._hoyolab_reconcile.resource_updated.connect(self.populate_process_list_slot)
+        self._nikke_resource_reconcile.resource_updated.connect(self.populate_process_list_slot)
 
         self._daily_checkin = DailyCheckInCoordinator(
             self.data_manager,
@@ -835,7 +836,7 @@ class MainWindow(QMainWindow):
             "/api/beholder/runtime/heartbeat",
             {
                 "app_instance_id": self._app_instance_id,
-                "runtime_kind": "pyside",
+                "runtime_kind": "pyside6",
                 "shutdown": bool(shutdown),
             },
             timeout=5.0,
@@ -856,50 +857,39 @@ class MainWindow(QMainWindow):
         return tuple(item for item in payload.get("incidents", ()) if isinstance(item, dict))
 
     def _handle_beholder_restore_request(self) -> bool:
-        backups = self.data_manager.get_beholder_backups()
-        if not backups:
-            QMessageBox.warning(self, "Beholder 백업 복구", "사용 가능한 DB 백업을 찾지 못했습니다.")
-            return False
-        labels = [
-            f"backup.{item.get('slot')} · {datetime.datetime.fromtimestamp(item.get('modified_at', 0)).strftime('%Y-%m-%d %H:%M:%S')} · {item.get('size', 0)} bytes"
-            for item in backups
-        ]
-        choice, ok = QInputDialog.getItem(
-            self,
-            "Beholder 백업 복구",
-            "복구할 백업을 선택하세요. 현재 DB는 복구 직전 별도 snapshot으로 보존됩니다.",
-            labels,
-            0,
-            False,
+        dialog = BeholderBackupRestoreDialog(
+            self._api_base_url(), self,
+            before_restore=self._suspend_runtime_after_beholder_restore,
         )
-        if not ok or not choice:
-            return False
-        slot = backups[labels.index(choice)].get("slot")
-        confirm = QMessageBox.question(
-            self,
-            "백업 복구 확인",
-            f"backup.{slot}로 DB를 교체합니다. 계속할까요?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return False
-        result = self.data_manager.restore_beholder_backup(int(slot))
-        if result and result.get("ok"):
-            self._suspend_runtime_after_beholder_restore()
+        if dialog.exec() and dialog.restored:
             QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
             return True
-        else:
-            QMessageBox.warning(self, "Beholder 백업 복구", "복구에 실패했습니다.")
-            return False
+        if dialog.restart_required or self._beholder_restore_runtime_suspended:
+            QMessageBox.information(
+                self, "Beholder 백업 복구",
+                "복구 시도로 일반 작업과 자원 조회를 중지했습니다. 계속 사용하려면 앱을 재시작해 주세요.",
+            )
+        return False
 
-    def _suspend_runtime_after_beholder_restore(self) -> None:
-        """Stop runtime DB writers after replacing the live DB until the user restarts."""
-        self._beholder_restore_runtime_suspended = True
-        if hasattr(self, "process_monitor"):
+    def _suspend_runtime_after_beholder_restore(self) -> bool:
+        """복구 POST 전에 writer를 중지·배수하고 실패 뒤에도 재시작까지 중지한다."""
+        if not self._beholder_restore_runtime_suspended:
+            self._beholder_restore_runtime_suspended = True
             self.process_monitor.active_monitored_processes.clear()
-        self._timer_registry.suspend("database_restore", ("monitor", "scheduler", "heartbeat"))
-        self._work_coordinator.invalidate_telemetry()
+            self._timer_registry.suspend("database_restore", ("monitor", "scheduler", "heartbeat"))
+            self._work_coordinator.invalidate_telemetry()
+        self._lifecycle_shutdown_event.set()
+        deadline = time.monotonic() + _GUI_CLEANUP_DEADLINE_SECONDS
+
+        def remaining_ms():
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
+        # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
+        hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
+        nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
+        checkin = self._daily_checkin.shutdown(remaining_ms())
+        work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
+        return hoyo and nikke and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -1014,19 +1004,9 @@ class MainWindow(QMainWindow):
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
-        if self._presentation_window is not self and self._host_ui_facade is not None:
-            self._host_ui_facade.activateAndShow()
-            return
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
-
-    def set_presentation_window(self, window, facade=None) -> None:
-        self._presentation_window = window or self
-        self._host_ui_facade = facade
-
-    def presentation_window(self):
-        return self._presentation_window
 
     def open_webpage(self, url: str):
         """주어진 URL을 기본 웹 브라우저에서 엽니다."""
@@ -1404,6 +1384,8 @@ class MainWindow(QMainWindow):
         """자원 추적/자동 출석 관리 다이얼로그를 엽니다."""
         dlg = HoYoLabSettingsDialog(self)
         dlg.exec()
+        self._hoyolab_reconcile.cancel_changed_targets()
+        self._nikke_resource_reconcile.cancel_changed_targets()
 
     def apply_startup_setting(self):
         """DB 설정을 로그인 시 서비스가 읽으며 GUI는 별도 writer를 만들지 않습니다."""
@@ -1771,6 +1753,8 @@ class MainWindow(QMainWindow):
                                        default_volume=getattr(p_edit, 'default_volume', None))  # 기존 볼륨 설정 보존
 
                 if self.data_manager.update_process(upd_p): # 프로세스 정보 업데이트
+                    self._hoyolab_reconcile.cancel_changed_targets()
+                    self._nikke_resource_reconcile.cancel_changed_targets()
                     self.populate_process_list()
                     QTimer.singleShot(0, self._adjust_window_size_to_content)
                     self._record_status_event(f"'{upd_p.name}' 수정 완료.", 3000)
@@ -1787,6 +1771,8 @@ class MainWindow(QMainWindow):
                                      QMessageBox.StandardButton.No) # 기본 선택은 'No'
         if reply == QMessageBox.StandardButton.Yes: # 'Yes' 클릭 시
             if self.data_manager.remove_process(pid): # 프로세스 삭제
+                self._hoyolab_reconcile.cancel_changed_targets()
+                self._nikke_resource_reconcile.cancel_changed_targets()
                 self.populate_process_list()
                 QTimer.singleShot(0, self._adjust_window_size_to_content)
                 self._record_status_event(f"'{p_del.name}' 삭제 완료.", 3000)
@@ -2222,7 +2208,7 @@ class MainWindow(QMainWindow):
                 "/api/beholder/runtime/heartbeat",
                 {
                     "app_instance_id": self._app_instance_id,
-                    "runtime_kind": "pyside",
+                    "runtime_kind": "pyside6",
                     "shutdown": True,
                 },
                 timeout=max(0.05, min(1.0, remaining_ms() / 1000.0)),

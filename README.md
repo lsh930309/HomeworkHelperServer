@@ -22,7 +22,7 @@ pip install -r requirements.txt
 python homework_helper.pyw
 ```
 
-기본 화면은 modernized Widgets이며 독립 Qt Quick 후보 실행 및 검증 방법은
+Windows GUI는 PySide6 + Qt Widgets를 사용하며 실행·검증 계약은
 [`docs/development/windows-gui-modernization.md`](docs/development/windows-gui-modernization.md)에 정리되어 있습니다.
 
 서버만 확인할 때는 GUI 단일 인스턴스 경로를 우회합니다.

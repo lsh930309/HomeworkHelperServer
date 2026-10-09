@@ -1,10 +1,135 @@
-"""PyQt dialog for Beholder data-safety incidents."""
+"""PySide6 Widgets for Beholder incidents and database backup recovery."""
 
 from __future__ import annotations
 
-from typing import Any
+import datetime
+from typing import Any, Callable
 
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QPushButton, QTextEdit, QVBoxLayout
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
+    QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
+)
+
+from src.api.client import BackgroundApiTransport
+
+
+class BeholderBackupRestoreDialog(QDialog):
+    """Use only recovery APIs, including before the normal API client exists."""
+
+    def __init__(
+        self, base_url: str, parent=None, *, database_faulted: bool = False,
+        before_restore: Callable[[], bool] | None = None,
+    ):
+        super().__init__(parent)
+        self._transport = BackgroundApiTransport(base_url)
+        self._before_restore = before_restore
+        self._restore_allowed = True
+        self.restored = False
+        self.restart_required = False
+        self.setWindowTitle("Beholder 백업 복구")
+        self.setMinimumWidth(560)
+        lead = QLabel(
+            "DB 보호 상태로 일반 기능을 시작하지 않았습니다. 백업으로 복구하거나 앱을 종료할 수 있습니다."
+            if database_faulted else
+            "복구할 백업을 선택하세요. 기존 DB는 교체 전에 별도로 보존됩니다."
+        )
+        lead.setWordWrap(True)
+        self._backups = QComboBox(self)
+        self._summary = QLabel(self)
+        self._summary.setWordWrap(True)
+        self._restart_notice = QLabel(self)
+        self._restart_notice.setWordWrap(True)
+        self._refresh_button = QPushButton("백업 다시 조회", self)
+        self._restore_button = QPushButton("선택한 백업으로 복구", self)
+        close_button = QPushButton("앱 종료" if database_faulted else "취소", self)
+        self._refresh_button.clicked.connect(self._load_backups)
+        self._restore_button.clicked.connect(self._restore_selected)
+        close_button.clicked.connect(self.reject)
+        self._backups.currentIndexChanged.connect(self._show_backup_summary)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self._refresh_button)
+        buttons.addWidget(self._restore_button)
+        buttons.addWidget(close_button)
+        layout = QVBoxLayout(self)
+        layout.addWidget(lead)
+        layout.addWidget(self._backups)
+        layout.addWidget(self._summary)
+        layout.addWidget(self._restart_notice)
+        layout.addLayout(buttons)
+        self._load_backups()
+
+    def activate_and_show(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _show_backup_summary(self) -> None:
+        backup = self._backups.currentData()
+        if isinstance(backup, dict):
+            self._summary.setText(str(backup.get("user_summary") or "선택한 백업을 복구 전에 확인합니다."))
+
+    def _load_backups(self) -> None:
+        self._backups.clear()
+        self._restore_button.setEnabled(False)
+        try:
+            payload = self._transport.get_json("/api/beholder/backups", timeout=5.0).payload
+            for item in payload.get("backups", []):
+                timestamp = datetime.datetime.fromtimestamp(item.get("modified_at", 0))
+                label = f"백업 {item['slot']} · {timestamp:%Y-%m-%d %H:%M:%S} · {item.get('size', 0)} bytes"
+                self._backups.addItem(label, item)
+            self._restore_button.setEnabled(self._restore_allowed and self._backups.count() > 0)
+            if self._backups.count() == 0:
+                self._summary.setText("사용 가능한 백업이 없습니다. 백업을 준비한 뒤 다시 조회하거나 종료하세요.")
+        except Exception as exc:
+            self._summary.setText(f"백업 목록을 조회하지 못했습니다. 다시 조회할 수 있습니다.\n{exc}")
+
+    def _restore_selected(self) -> None:
+        if not self._restore_allowed:
+            return
+        backup = self._backups.currentData()
+        if not isinstance(backup, dict):
+            return
+        slot = int(backup["slot"])
+        self._restore_button.setEnabled(False)
+        self._refresh_button.setEnabled(False)
+        try:
+            preview = self._transport.post_json(
+                "/api/beholder/backups/restore-preview", {"slot": slot}, timeout=10.0
+            ).payload
+            summary = preview.get("impact", {}).get("summary") or "현재 DB를 선택한 백업으로 교체합니다."
+            confirmed = QMessageBox.question(
+                self, "백업 복구 확인", f"{summary}\n계속할까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirmed != QMessageBox.StandardButton.Yes:
+                return
+            if self._before_restore is not None:
+                callback, self._before_restore = self._before_restore, None
+                self.restart_required = True
+                self._restore_allowed = False
+                if callback() is not True:
+                    raise RuntimeError("데이터 기록 작업의 중단을 확인하지 못했습니다. 앱을 재시작하세요.")
+                self._restore_allowed = True
+                self._restart_notice.setText(
+                    "복구를 위해 앱의 데이터 기록 작업을 중단했습니다. 복구 여부와 관계없이 앱 재시작이 필요합니다."
+                )
+            result = self._transport.post_json(
+                "/api/beholder/backups/restore", {"slot": slot}, timeout=20.0
+            ).payload
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                raise RuntimeError("복구 완료를 확인하지 못했습니다.")
+            self.restored = True
+            self.accept()
+        except Exception as exc:
+            if not self._restore_allowed:
+                self._restart_notice.setText("데이터 기록 작업의 중단을 확인하지 못해 복구를 진행하지 않았습니다. 앱을 재시작하세요.")
+                self._summary.setText(f"복구를 진행할 수 없습니다.\n{exc}")
+            else:
+                self._summary.setText(f"복구에 실패했습니다. 데이터 보호를 유지하며 다시 시도할 수 있습니다.\n{exc}")
+        finally:
+            self._refresh_button.setEnabled(True)
+            self._restore_button.setEnabled(self._restore_allowed and self._backups.count() > 0)
 
 
 class BeholderIncidentDialog(QDialog):

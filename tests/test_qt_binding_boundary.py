@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -13,16 +14,22 @@ def test_product_runtime_contains_no_pyqt_or_sip_dependency():
     assert violations == []
 
 
-def test_pyinstaller_keeps_qml_candidate_opt_in_and_collects_network_module():
+def test_pyinstaller_uses_widgets_only_and_collects_network_module():
     spec = Path("homework_helper.spec").read_text(encoding="utf-8")
-    assert "HH_INCLUDE_QML" in spec
-    assert "qml_hiddenimports" in spec
-    assert "qml_excludes" in spec
+    assert "HH_INCLUDE_QML" not in spec
+    assert "qml_hiddenimports" not in spec
     for module in (
         "PySide6.QtWidgets",
         "PySide6.QtNetwork",
-        "PySide6.QtQml",
-        "PySide6.QtQuick",
-        "PySide6.QtQuickControls2",
     ):
         assert module in spec
+    tree = ast.parse(spec)
+    excluded = [
+        set(ast.literal_eval(keyword.value))
+        for node in ast.walk(tree) if isinstance(node, ast.Call)
+        for keyword in node.keywords if keyword.arg == "excludes"
+    ]
+    assert any(
+        {"PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickControls2"}.issubset(modules)
+        for modules in excluded
+    )

@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QStyle, QWidget
+from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QStyle
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import QObject, Qt # QObject는 많은 Qt 클래스의 기본 클래스입니다
 
@@ -18,10 +18,6 @@ class TrayManager(QObject): # 내부적으로 시그널/슬롯을 사용한다�
         self.tray_icon = QSystemTrayIcon(self.main_window) # 부모가 올바르게 설정되었습니다
 
         self._setup_tray_icon_and_menu()
-
-    def _presentation_window(self):
-        getter = getattr(self.main_window, "presentation_window", None)
-        return getter() if callable(getter) else self.main_window
 
     def _setup_tray_icon_and_menu(self):
         """트레이 아이콘, 툴팁 및 컨텍스트 메뉴를 설정합니다."""
@@ -70,31 +66,22 @@ class TrayManager(QObject): # 내부적으로 시그널/슬롯을 사용한다�
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.setQuitOnLastWindowClosed(False)
-        target = self._presentation_window()
-        if isinstance(target, QWidget):
-            target.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+        self.main_window.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
 
     def hide_window_to_tray(self, reason: str = "manual"):
         """메인 창만 숨기고 앱 프로세스와 트레이 아이콘은 유지합니다."""
         self._ensure_background_survival()
-        self._presentation_window().hide()
+        self.main_window.hide()
         print(f"TrayManager: 창 숨김 처리 완료. reason={reason}")
 
     def toggle_window_visibility(self):
         """메인 창을 보여주거나 숨깁니다."""
-        target = self._presentation_window()
-        is_minimized = bool(target.isMinimized()) if hasattr(target, "isMinimized") else False
+        target = self.main_window
+        is_minimized = target.isMinimized()
         if target.isVisible() and not is_minimized:
             self.hide_window_to_tray("toggle")
         else:
-            activate = getattr(self.main_window, "activate_and_show", None)
-            if callable(activate):
-                activate()
-            else:
-                target.show()
-                target.raise_()
-                if hasattr(target, "requestActivate"):
-                    target.requestActivate()
+            self.main_window.activate_and_show()
             print("TrayManager: 창 보임.")
 
     def _handle_tray_icon_activation(self, reason: QSystemTrayIcon.ActivationReason):

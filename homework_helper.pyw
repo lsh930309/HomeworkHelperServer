@@ -94,7 +94,8 @@ _restart_in_progress = False  # 권한 변경으로 인한 재시작 시 True로
 # 새로 분리된 모듈 imports
 from src.utils.admin import check_admin_requirement, is_admin
 from src.gui.main_window import MainWindow
-from src.gui.presentation import PresentationController, resolve_ui_renderer
+from src.gui.beholder_dialog import BeholderBackupRestoreDialog
+from src.gui.qt_runtime import binding_diagnostics
 from src.core.instance_manager import (
     SingleInstanceApplication,
     run_with_single_instance_check,
@@ -164,32 +165,36 @@ def _server_health_payload(base_url: str | None = None, timeout: float = 0.5) ->
         return None
 
 
-def _is_existing_server_healthy(base_url: str | None = None) -> bool:
-    payload = _server_health_payload(base_url=base_url, timeout=0.7)
-    return bool(payload and payload.get("ok") is True and payload.get("db_ready") is True)
+def _is_existing_server_alive(base_url: str | None = None) -> bool:
+    import requests
+
+    try:
+        response = requests.get(f"{resolve_local_api_base_url(base_url)}/api/gui/ping", timeout=0.7)
+        return response.status_code == 200 and response.json().get("ok") is True
+    except (requests.RequestException, ValueError, AttributeError):
+        return False
 
 
 def wait_for_server_ready(max_wait_seconds: int = 10, base_url: str | None = None) -> bool:
-    """서버가 준비될 때까지 대기합니다."""
-    print("API 서버 준비 대기 중...")
+    """Wait for server liveness; DB readiness is checked before GUI initialization."""
+    print("API 서버 응답 대기 중...")
     import requests
     base_url = resolve_local_api_base_url(base_url)
     iterations = int(max_wait_seconds / 0.2)
 
     for i in range(iterations):
         try:
-            response = requests.get(gui_health_url(base_url), timeout=0.5)
+            response = requests.get(f"{base_url}/api/gui/ping", timeout=0.5)
             if response.status_code == 200 and response.json().get("ok") is True:
-                print(f"API 서버 준비 완료. ({i * 0.2:.1f}초 소요)")
+                print(f"API 서버 응답 확인. ({i * 0.2:.1f}초 소요)")
                 return True
         except requests.ConnectionError:
-            time.sleep(0.2)
+            pass
         except ValueError as e:
-            print(f"API 서버 health 응답 파싱 오류: {e}")
-            time.sleep(0.2)
+            print(f"API 서버 ping 응답 파싱 오류: {e}")
         except Exception as e:
             print(f"API 서버 확인 중 오류: {e}")
-            time.sleep(0.2)
+        time.sleep(0.2)
 
     print("API 서버가 시간 내에 응답하지 않았습니다.")
     return False
@@ -563,7 +568,7 @@ def start_api_server() -> bool:
         # 이미 서버가 실행 중인지 확인
         server_listening = is_server_running()
         if server_listening:
-            if _is_existing_server_healthy() and _is_existing_api_server_reusable():
+            if _is_existing_server_alive() and _is_existing_api_server_reusable():
                 print("기존 API 서버가 정상 응답 중입니다. 재사용합니다.")
                 return True
             _terminate_existing_api_server(timeout=API_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
@@ -2506,6 +2511,34 @@ def ensure_process_table_schema():
         print(f"테이블 스키마 확인/수정 중 오류: {e}")
 
 
+def _prepare_gui_database(instance_manager: SingleInstanceApplication) -> bool:
+    """Admit normal GUI work only after health; fault recovery stays DB-independent."""
+    while True:
+        health = _server_health_payload(timeout=5.0)
+        if health and health.get("ok") is True and health.get("db_ready") is True:
+            return True
+        access = (health.get("database_access") or {}) if health else {}
+        if health and (health.get("db_error") == "database_faulted" or access.get("mode") == "faulted"):
+            dialog = BeholderBackupRestoreDialog(resolve_local_api_base_url(), database_faulted=True)
+            instance_manager.start_ipc_server(main_window_to_activate=dialog)
+            if dialog.exec() and dialog.restored:
+                if not stop_api_server():
+                    QMessageBox.critical(None, "복구 후 재시작 실패", "API 서버를 종료하지 못했습니다. 앱을 종료한 뒤 다시 실행하세요.")
+                    return False
+                instance_manager.cleanup()
+                QApplication.quit()
+                arguments = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+                os.execv(sys.executable, [sys.executable, *arguments])
+            return False
+        result = QMessageBox.warning(
+            None, "DB 준비 확인", "DB를 정상적으로 사용할 수 있는지 확인하지 못했습니다. 일반 기능을 시작하지 않았습니다.",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
+            QMessageBox.StandardButton.Retry,
+        )
+        if result != QMessageBox.StandardButton.Retry:
+            return False
+
+
 def start_main_application(instance_manager: SingleInstanceApplication):
     """메인 애플리케이션을 설정하고 실행합니다."""
     # DPI 스케일링 설정은 파일 상단에서 환경 변수로 처리됨 (앱 시작 전에 설정 필요)
@@ -2534,23 +2567,16 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     
     app.setQuitOnLastWindowClosed(False) # 마지막 창이 닫혀도 애플리케이션 종료되지 않도록 설정 (트레이 아이콘 사용 시 필수)
 
-    # 데이터 저장 폴더 경로 설정
-    data_folder_name = "homework_helper_data"
-    if getattr(sys, 'frozen', False): # PyInstaller 등으로 패키징된 경우
-        application_path = os.path.dirname(sys.executable)
-    else: # 일반 파이썬 스크립트로 실행된 경우
-        application_path = os.path.dirname(os.path.abspath(__file__))
-    # data_path = os.path.join(application_path, data_folder_name)
-    # data_manager_instance = DataManager(data_folder=data_path) # 데이터 매니저 생성
-    api_client_instance = ApiClient() # API 클라이언트 생성 (기본 URL: http://127.0.0.1:8000)
-    
+    import logging
+    logging.getLogger(__name__).info("UI runtime: %s", binding_diagnostics())
+    if not _prepare_gui_database(instance_manager):
+        stop_api_server()
+        instance_manager.cleanup()
+        sys.exit(0)
+    api_client_instance = ApiClient()
 
     # 메인 윈도우 생성 (인스턴스 매니저 전달)
     main_window = MainWindow(api_client_instance, instance_manager=instance_manager)
-    renderer = resolve_ui_renderer(sys.argv[1:])
-    presentation = PresentationController(main_window, renderer)
-    # QObject 부모 관계 외에도 Python 수명주기를 명시적으로 고정합니다.
-    main_window._presentation_controller = presentation
 
     # === Graceful Shutdown: signal 및 atexit 핸들러 등록 ===
     def gui_signal_handler(signum, frame):
@@ -2583,7 +2609,7 @@ def start_main_application(instance_manager: SingleInstanceApplication):
 
     # IPC 서버 시작 (다른 인스턴스로부터의 활성화 요청 처리용)
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
-    presentation.show() # 선택된 Widgets/QML presentation 표시
+    main_window.show()
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
     if not stop_api_server():
         print("API 서버 종료에 실패했습니다.")

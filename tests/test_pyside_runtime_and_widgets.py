@@ -5,13 +5,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QByteArray, QEventLoop, QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
 from src.data.data_models import ManagedProcess
-from src.gui.presentation import PresentationController, resolve_ui_renderer
+from src.gui.power_events import PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST, WindowsPowerEventFilter
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
 from src.gui.sidebar.sidebar_widget import SidebarWidget
 from src.gui.volume_panel import _MUTE_BTN_STYLE
@@ -29,11 +29,12 @@ def _qapp():
 
 
 def test_runtime_reports_only_pyside6_binding():
-    diagnostics = binding_diagnostics("widgets")
+    diagnostics = binding_diagnostics()
     assert diagnostics["ui_binding"] == "pyside6"
     assert diagnostics["binding_version"].startswith("6.11.")
     assert diagnostics["qt_version"].startswith("6.11.")
     assert diagnostics["ui_variant"] == "newgui-2nd"
+    assert diagnostics["ui_renderer"] == "widgets"
 
 
 def test_qobject_validity_and_thread_guard_follow_shiboken_lifetime():
@@ -45,16 +46,6 @@ def test_qobject_validity_and_thread_guard_follow_shiboken_lifetime():
     assert not is_qobject_valid(owner)
     with pytest.raises(RuntimeError, match="no longer valid"):
         require_object_thread(owner, "test")
-
-
-def test_renderer_selection_defaults_to_widgets_and_accepts_qml(monkeypatch):
-    monkeypatch.delenv("HH_UI_RENDERER", raising=False)
-    assert resolve_ui_renderer([]) == "widgets"
-    assert resolve_ui_renderer(["--ui-renderer=qml"]) == "qml"
-    monkeypatch.setenv("HH_UI_RENDERER", "qml")
-    assert resolve_ui_renderer([]) == "qml"
-    with pytest.raises(ValueError, match="지원하지 않는"):
-        resolve_ui_renderer(["--ui-renderer=web"])
 
 
 def test_modern_widgets_style_marks_surface_and_primary_action():
@@ -393,45 +384,40 @@ def test_slot_receiver_runs_in_its_qobject_thread():
     assert receiver.observed == receiver.thread()
 
 
-class _RefreshTimer(QObject):
-    timeout = Signal()
+@pytest.mark.parametrize("event_type", [
+    QByteArray(b"windows_generic_MSG"), b"windows_generic_MSG",
+    bytearray(b"windows_dispatcher_msg"), "windows_dispatcher_msg",
+])
+def test_pyside_native_power_event_dispatches_resume(event_type):
+    observed = []
+    event_filter = WindowsPowerEventFilter(
+        observed.append,
+        decoder=lambda _message: (WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC),
+    )
+    assert event_filter.nativeEventFilter(event_type, object()) == (False, 0)
+    assert len(observed) == 1
 
 
-class _FakeWindow(QObject):
-    request_table_refresh_signal = Signal()
+def test_tray_and_activation_restore_the_same_widgets_window():
+    from src.gui.main_window import MainWindow
+    from src.gui.tray_manager import TrayManager
 
-    def __init__(self):
-        super().__init__()
-        self.ui_refresh_timer = _RefreshTimer(self)
-        self.data_manager = SimpleNamespace(
-            managed_processes=[],
-            global_settings=SimpleNamespace(),
-        )
-        self.scheduler = SimpleNamespace(determine_process_visual_status=lambda *_args: "대기")
-        self.presentation = None
-
-    def _calculate_progress_percentage(self, *_args):
-        return 0.0, ""
-
-    def _is_effective_dark_theme(self):
-        return False
-
-    def set_presentation_window(self, window, facade=None):
-        self.presentation = (window, facade)
-
-    def hide(self):
-        return None
-
-
-def test_qml_candidate_loads_as_independent_quick_window():
     app = _qapp()
-    owner = _FakeWindow()
-    controller = PresentationController(owner, "qml")
-    assert controller.engine is not None
-    assert controller.window is not owner
-    assert owner.presentation[0] is controller.window
-    controller.show()
+
+    class WidgetsWindow(QMainWindow):
+        activate_and_show = MainWindow.activate_and_show
+
+    window = WidgetsWindow()
+    tray = TrayManager(window)
+    window.show()
     app.processEvents()
-    assert controller.window.isVisible()
-    controller.window.hide()
-    controller.shutdown()
+    tray.hide_window_to_tray()
+    assert not window.isVisible()
+    assert not app.quitOnLastWindowClosed()
+    tray.toggle_window_visibility()
+    app.processEvents()
+    assert window.isVisible()
+    assert tray.main_window is window
+    assert not hasattr(window, "_presentation_window")
+    tray.hide_tray_icon()
+    window.close()

@@ -75,11 +75,12 @@ class DailyCheckInCoordinator(QObject):
         self._start_due_run("periodic")
 
     def shutdown(self, deadline_ms: int = 2000) -> bool:
-        self._shutting_down = True
-        try:
-            self._signals.finished.disconnect(self._on_finished)
-        except (TypeError, RuntimeError):
-            pass
+        if not self._shutting_down:
+            self._shutting_down = True
+            try:
+                self._signals.finished.disconnect(self._on_finished)
+            except (TypeError, RuntimeError):
+                pass
         drained = self._pool.waitForDone(max(0, int(deadline_ms)))
         if not drained:
             retain_detached_qthreadpool(self._pool)
