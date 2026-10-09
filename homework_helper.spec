@@ -6,6 +6,18 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks.qt import pyside6_library_info
+
+# The Windows wheel's platforminputcontexts contains only Qt Virtual Keyboard.
+# QtGui's default hook collects it even for Widgets, pulling Quick/QML back into
+# the binary dependency graph. Keep native platform, style, SVG and network
+# plugins; exclude this unused QML input frontend at the collection boundary.
+qt_gui_info = pyside6_library_info.python_modules['QtGui']
+qt_gui_info.plugins = [
+    plugin_type for plugin_type in qt_gui_info.plugins
+    if plugin_type != 'platforminputcontexts'
+]
+
 
 def collect_tree(src, dest, excludes=()):
     src_path = Path(src)
@@ -68,7 +80,9 @@ a = Analysis(
         # 영상/이미지 처리 (LSH로 이동)
         'cv2', 'av', 'skimage', 'scipy', 'matplotlib',
         'numpy', 'imageio',
-        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickControls2',
+        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuick3D',
+        'PySide6.QtQuickControls2', 'PySide6.QtQuickTest', 'PySide6.QtQuickWidgets',
+        'PySide6.QtWebEngineQuick',
     ],
     noarchive=False,
     optimize=0,
