@@ -37,16 +37,17 @@ python homework_helper.pyw --server
 swift build --package-path clients/macos
 ```
 
-앱 번들 패키징은 Python helper 또는 통합 빌드 스크립트를 사용합니다.
+앱 번들·설치 패키지는 해당 macOS 환경에서 통합 빌드 스크립트로 생성합니다.
 
 ```bash
-./.venv/bin/python tools/package_macos_remote_app.py
 python build.py --target macos-client
 ```
 
 ## 빌드
 
-단일 진입점은 `build.py`입니다. 현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
+빌드·패키지 배포 작업을 시작하기 전에 [`빌드 가이드`](docs/guides/build-guide.md)를 반드시 읽습니다.
+각 대상 환경에서 `build.py`를 실행하면 스크립트가 빌드·서명·패키징·버전 관리·산출물 보관과 정리를 처리합니다.
+현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
 
 ```bash
 # 현재 OS 기준 target 자동 선택 + GUI version selector
