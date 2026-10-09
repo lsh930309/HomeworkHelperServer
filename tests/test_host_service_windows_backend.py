@@ -32,6 +32,14 @@ def test_actual_windows_program_files_roots_match_os_paths():
     assert all(root.is_dir() and root.is_absolute() for root in roots)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Requires actual pywin32 security module")
+def test_actual_windows_pipe_impersonation_is_available_in_security_module():
+    # pywin32 exports this function in win32security, not win32pipe.
+    # https://mhammond.github.io/pywin32/win32security.html
+    api = native._win32()
+    assert callable(api.security.ImpersonateNamedPipeClient)
+
+
 @dataclass
 class Token:
     sid: str = "owner"
@@ -70,6 +78,7 @@ class Security:
         self.impersonated = None
         self.reverted = 0
         self.opened_tokens = []
+        self.impersonated_pipes = []
 
     def GetTokenInformation(self, token, kind):
         if kind == self.TokenLinkedToken:
@@ -107,6 +116,10 @@ class Security:
     def ImpersonateLoggedOnUser(self, token):
         self.impersonated = token
 
+    def ImpersonateNamedPipeClient(self, handle):
+        self.impersonated_pipes.append(handle)
+        self.impersonated = self.harness.pipe_token
+
     def RevertToSelf(self):
         self.impersonated = None
         self.reverted += 1
@@ -124,7 +137,6 @@ class Harness:
             security=self.security,
             ts=SimpleNamespace(WTSQueryUserToken=lambda session: self.user_token),
             api=SimpleNamespace(OpenProcess=self.open_process, GetCurrentThread=lambda: -2),
-            pipe=SimpleNamespace(ImpersonateNamedPipeClient=lambda handle: None),
             process=SimpleNamespace(TerminateProcess=self.terminate_process),
             error=OSError,
         )
@@ -272,6 +284,7 @@ def test_pipe_authentication_identifies_actual_process_and_endpoint_token(backen
         123, "owner", 7, harness.handle.path,
     )
     assert harness.security.reverted == 1
+    assert harness.security.impersonated_pipes == [999]
     assert harness.handle.closed
     assert all(token.closed for token in harness.security.opened_tokens)
 

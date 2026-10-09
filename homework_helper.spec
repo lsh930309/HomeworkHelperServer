@@ -98,7 +98,8 @@ service_analysis = Analysis(
     hiddenimports=[
         'win32api', 'win32security', 'win32process', 'win32con', 'win32ts',
         'win32service', 'win32serviceutil', 'servicemanager',
-        'win32pipe', 'win32file', 'win32event', 'pywintypes', 'psutil',
+        # pywintypes imports this dynamically when native token times are materialized.
+        'win32pipe', 'win32file', 'win32event', 'win32timezone', 'pywintypes', 'psutil',
     ],
     excludes=['PySide6', 'fastapi', 'uvicorn', 'sqlalchemy', 'tkinter'],
     noarchive=False, optimize=0,

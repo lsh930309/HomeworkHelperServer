@@ -76,14 +76,13 @@ def _win32():
     import win32api
     import win32con
     import win32event
-    import win32pipe
     import win32process
     import win32profile
     import win32security
     import win32ts
 
     return SimpleNamespace(
-        psutil=psutil, api=win32api, con=win32con, pipe=win32pipe,
+        psutil=psutil, api=win32api, con=win32con,
         process=win32process, profile=win32profile, security=win32security,
         event=win32event,
         ts=win32ts, error=pywintypes.error,
@@ -392,7 +391,7 @@ class WindowsBackend:
         if not _kernel32().GetNamedPipeClientProcessId(int(pipe_handle), ctypes.byref(client_pid)):
             raise ctypes.WinError(ctypes.get_last_error())
         # Obtain the pipe endpoint's token, not just a potentially recycled PID.
-        api.pipe.ImpersonateNamedPipeClient(pipe_handle)
+        api.security.ImpersonateNamedPipeClient(pipe_handle)
         token = None
         try:
             token = api.security.OpenThreadToken(

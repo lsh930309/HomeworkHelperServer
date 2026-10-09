@@ -28,12 +28,18 @@ def registration(monkeypatch):
         monkeypatch.setitem(sys.modules, "pywintypes", SimpleNamespace(error=error_type))
 
     effects = []
+    requested_service_access = []
+
+    def open_service(_manager, _name, access):
+        requested_service_access.append(access)
+        return "service"
+
     service = SimpleNamespace(
         SERVICE_STOPPED=1, SERVICE_STOP_PENDING=3, SERVICE_AUTO_START=2,
-        SC_MANAGER_CONNECT=1, SERVICE_CHANGE_CONFIG=2, SERVICE_CONFIG_FAILURE_ACTIONS=2,
+        SC_MANAGER_CONNECT=1, SERVICE_CHANGE_CONFIG=2, SERVICE_START=16, SERVICE_CONFIG_FAILURE_ACTIONS=2,
         SC_ACTION_RESTART=1, SC_ACTION_NONE=0, SERVICE_RUNNING=4,
         OpenSCManager=lambda *_args: "manager",
-        OpenService=lambda *_args: "service",
+        OpenService=open_service,
         ChangeServiceConfig2=lambda *_args: effects.append("recovery"),
         CloseServiceHandle=lambda handle: effects.append(("close", handle)),
     )
@@ -53,7 +59,8 @@ def registration(monkeypatch):
     monkeypatch.setattr(native, "validate_protected_install", lambda _path: effects.append("validate"))
     monkeypatch.setattr(native, "write_owner_sid", lambda _owner: effects.append("owner-written"))
     monkeypatch.setattr(native, "remove_owner_sid", lambda: effects.append("owner-removed"))
-    return SimpleNamespace(error=error_type, service=service, util=service_util, effects=effects)
+    return SimpleNamespace(error=error_type, service=service, util=service_util, effects=effects,
+                           requested_service_access=requested_service_access)
 
 
 def raises(error):
@@ -108,6 +115,26 @@ def test_existing_install_updates_config_only_for_native_1073(registration):
     assert registration.effects.count("update") == 1
     assert registration.effects.index("update") < registration.effects.index("owner-written")
     assert "wait-running" in registration.effects
+
+
+@pytest.mark.parametrize("already_installed", [False, True])
+def test_restart_recovery_configuration_has_minimum_required_handle_rights(registration, already_installed):
+    if already_installed:
+        registration.util.InstallService = raises(registration.error(1073, "CreateService", "already exists"))
+
+    def configure_recovery(_handle, _kind, configuration):
+        # ChangeServiceConfig2's documented restart requirement, independently of product access selection.
+        # https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-changeserviceconfig2w
+        assert any(action == registration.service.SC_ACTION_RESTART for action, _delay in configuration["Actions"])
+        required = 0x0002 | 0x0010  # SERVICE_CHANGE_CONFIG | SERVICE_START
+        if registration.requested_service_access[-1] & required != required:
+            raise registration.error(5, "ChangeServiceConfig2", "access denied")
+        registration.effects.append("recovery")
+
+    registration.service.ChangeServiceConfig2 = configure_recovery
+    entry.install_service("owner")
+    assert registration.requested_service_access == [0x0012]
+    assert registration.effects.index("recovery") < registration.effects.index("start")
 
 
 @pytest.mark.parametrize("code", [5, 1060, 1722])

@@ -135,7 +135,10 @@ def install_service(owner: str):
     write_owner_sid(owner)
     manager = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
     try:
-        handle = win32service.OpenService(manager, SERVICE_NAME, win32service.SERVICE_CHANGE_CONFIG)
+        # Configuring SC_ACTION_RESTART additionally requires SERVICE_START on this handle.
+        handle = win32service.OpenService(
+            manager, SERVICE_NAME, win32service.SERVICE_CHANGE_CONFIG | win32service.SERVICE_START,
+        )
         try:
             win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS,
                                              {"ResetPeriod":86400, "RebootMsg":"", "Command":"",
