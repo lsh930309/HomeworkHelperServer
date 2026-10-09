@@ -91,6 +91,7 @@ def service_class():
 
 
 def stop_service(*, timeout=30):
+    import pywintypes
     import win32service
     import win32serviceutil
 
@@ -104,14 +105,15 @@ def stop_service(*, timeout=30):
                 if time.monotonic() >= deadline:
                     raise TimeoutError("권한 서비스가 제한 시간 내 중지되지 않았습니다.")
                 time.sleep(0.2)
-    except OSError as error:
-        if getattr(error, "winerror", error.args[0]) != 1060:
+    except pywintypes.error as error:
+        if error.winerror != 1060:
             raise
 
 
 def install_service(owner: str):
     if not getattr(sys, "frozen", False):
         raise RuntimeError("서명된 배포 실행 파일에서만 서비스를 설치할 수 있습니다.")
+    import pywintypes
     import win32service
     import win32serviceutil
     from src.host_service.windows_backend import validate_protected_install, write_owner_sid
@@ -125,8 +127,8 @@ def install_service(owner: str):
     try:
         win32serviceutil.InstallService("homework_helper_service.HomeworkHelperPrivilegeService",
                                        SERVICE_NAME, SERVICE_DISPLAY_NAME, **options)
-    except OSError as error:
-        if getattr(error, "winerror", error.args[0]) != 1073:
+    except pywintypes.error as error:
+        if error.winerror != 1073:
             raise
         win32serviceutil.ChangeServiceConfig("homework_helper_service.HomeworkHelperPrivilegeService",
                                             SERVICE_NAME, displayName=SERVICE_DISPLAY_NAME, **options)
@@ -149,6 +151,7 @@ def install_service(owner: str):
 
 
 def uninstall_service():
+    import pywintypes
     import win32serviceutil
     from src.host_service.windows_backend import remove_owner_sid
 
@@ -156,8 +159,8 @@ def uninstall_service():
     remove_owner_sid()
     try:
         win32serviceutil.RemoveService(SERVICE_NAME)
-    except OSError as error:
-        if getattr(error, "winerror", error.args[0]) != 1060:
+    except pywintypes.error as error:
+        if error.winerror != 1060:
             raise
 
 
