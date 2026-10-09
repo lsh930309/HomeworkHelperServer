@@ -1393,6 +1393,7 @@ def test_remote_power_setup_reports_host_readiness_and_registers_public_key(monk
 
 
 def test_windows_admin_power_setup_uses_programdata_authorized_keys(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_power_setup, "_current_user_is_windows_admin", lambda runner=None: (True, "Administrators group"))
     user_profile = tmp_path / "Users" / "lsh93"
     program_data = tmp_path / "ProgramData"
     ssh_dir = program_data / "ssh"
@@ -1409,8 +1410,6 @@ def test_windows_admin_power_setup_uses_programdata_authorized_keys(monkeypatch,
 
     def runner(command, **_kwargs):
         joined = " ".join(command)
-        if command[:2] == ["whoami", "/groups"]:
-            return SimpleNamespace(returncode=0, stdout="BUILTIN\\Administrators S-1-5-32-544", stderr="")
         if "Get-Service sshd" in joined:
             return SimpleNamespace(returncode=0, stdout='{"Status":"Running","StartType":"Automatic"}', stderr="")
         if "Get-NetFirewallRule" in joined:
@@ -1428,6 +1427,7 @@ def test_windows_admin_power_setup_uses_programdata_authorized_keys(monkeypatch,
 
 
 def test_windows_admin_public_key_registration_targets_programdata_and_repairs_acl(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_power_setup, "_current_user_is_windows_admin", lambda runner=None: (True, "Administrators group"))
     user_profile = tmp_path / "Users" / "lsh93"
     program_data = tmp_path / "ProgramData"
     ssh_dir = program_data / "ssh"
@@ -1445,10 +1445,8 @@ def test_windows_admin_public_key_registration_targets_programdata_and_repairs_a
 
     def runner(command, **_kwargs):
         commands.append(command)
-        if command[:2] == ["whoami", "/groups"]:
-            return SimpleNamespace(returncode=0, stdout="S-1-5-32-544", stderr="")
         if command and command[0] == "icacls":
-            return SimpleNamespace(returncode=0, stdout="processed file", stderr="")
+            return SimpleNamespace(returncode=0, stdout=b"processed file", stderr=b"")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZha2VLZXlGb3JUZXN0T25seU5vdFJlYWw= MacBook"

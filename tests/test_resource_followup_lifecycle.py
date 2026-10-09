@@ -20,6 +20,11 @@ from src.core.resource_reconcile import NikkeResourceReconcileCoordinator
 from src.data.data_models import ManagedProcess
 
 
+# Windows CRT는 1970년 초의 naive datetime.timestamp()를 거부할 수 있다.
+# 관측 시각은 실제 제공자처럼 현대 epoch를 사용하고 monotonic 기간은 별도로 유지한다.
+_TIMESTAMP_BASE = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp()
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
@@ -72,11 +77,11 @@ def tracking(request, monkeypatch, app):
         id="game", name="동일 게임", monitoring_path="/game.exe", launch_path="/game.exe",
         stamina_tracking_enabled=request.param == "hoyolab",
         hoyolab_game_id="honkai_starrail" if request.param == "hoyolab" else None,
-        stamina_current=100, stamina_max=240, stamina_updated_at=100.0,
+        stamina_current=100, stamina_max=240, stamina_updated_at=_TIMESTAMP_BASE + 100.0,
         resource_tracking_enabled=request.param == "nikke",
         resource_provider="nikke_blablalink" if request.param == "nikke" else None,
         resource_key="nikke_outpost_storage" if request.param == "nikke" else None,
-        resource_percent=25.0, resource_updated_at=100.0, resource_status="ok",
+        resource_percent=25.0, resource_updated_at=_TIMESTAMP_BASE + 100.0, resource_status="ok",
     )
     manager = SimpleNamespace(
         managed_processes=[process],
@@ -86,7 +91,7 @@ def tracking(request, monkeypatch, app):
     calls = []
     observation = SimpleNamespace(
         current=120, max=240, percent=30.0, status="ok", label="전초기지 방어 보상",
-        updated_at=dt.datetime.fromtimestamp(1360.0), message="",
+        updated_at=dt.datetime.fromtimestamp(_TIMESTAMP_BASE + 1360.0), message="",
     )
 
     class Service:
@@ -121,13 +126,13 @@ def tracking(request, monkeypatch, app):
             if self.fail_process:
                 raise RuntimeError("current write failed")
             # DB에서 유지한 타이머가 조회 시각과 달라도 그대로 GUI에 전달해야 한다.
-            return {"id": pid, "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": 100.0}
+            return {"id": pid, "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": _TIMESTAMP_BASE + 100.0}
 
         def update_process_resource(self, pid, percent, updated_at, status, label):
             calls.append(("process", pid, percent, updated_at, status, label))
             if self.fail_process:
                 raise RuntimeError("current write failed")
-            return {"id": pid, "resource_percent": 25.0, "resource_updated_at": 100.0, "resource_status": status, "resource_label": label}
+            return {"id": pid, "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 100.0, "resource_status": status, "resource_label": label}
 
         def update_session_stamina(self, sid, current):
             calls.append(("session", sid, current))
@@ -142,7 +147,7 @@ def tracking(request, monkeypatch, app):
     transport = Transport()
     coordinator._transport = transport
 
-    def event(sid, timestamp=1000.0):
+    def event(sid, timestamp=_TIMESTAMP_BASE + 1000.0):
         return ProcessLifecycleEvent(
             process_id=process.id, process_name=process.name, session_id=sid, timestamp=timestamp,
             stamina_tracking_enabled=process.stamina_tracking_enabled, hoyolab_game_id=process.hoyolab_game_id,
@@ -161,7 +166,7 @@ def tracking(request, monkeypatch, app):
     coordinator.shutdown()
 
 
-def start_registered_job(state, sid=11, timestamp=1000.0):
+def start_registered_job(state, sid=11, timestamp=_TIMESTAMP_BASE + 1000.0):
     state.coordinator.handle_process_stopped(state.event(sid, timestamp))
     job = state.coordinator._jobs[("game", sid)]
     assert job.timer.delay == 0
@@ -174,7 +179,7 @@ def test_each_end_session_survives_restart_and_additional_stop(tracking):
     first = start_registered_job(state, 11)
     state.monitor.active_monitored_processes["game"] = object()
     state.coordinator.handle_process_started(state.event(12))
-    second = start_registered_job(state, 12, timestamp=1060.0)
+    second = start_registered_job(state, 12, timestamp=_TIMESTAMP_BASE + 1060.0)
     assert state.coordinator._jobs[("game", 11)] is first
     assert state.coordinator._jobs[("game", 12)] is second
 
@@ -208,7 +213,7 @@ def test_same_values_never_finish_followup_before_all_slots(tracking):
 
 def test_registration_clock_not_old_exit_time_controls_window(tracking):
     state = tracking
-    job = start_registered_job(state, timestamp=-1000.0)
+    job = start_registered_job(state, timestamp=_TIMESTAMP_BASE - 1000.0)
     state.coordinator._pool.run_next()
     assert any(call[0] == "fetch" for call in state.calls)
     assert job.timer.delay == 60_000
@@ -263,8 +268,8 @@ def test_unchanged_timer_comes_from_canonical_row_not_response_time(tracking):
     start_registered_job(state)
     state.coordinator._pool.run_next()
     field = "stamina_updated_at" if state.provider == "hoyolab" else "resource_updated_at"
-    assert getattr(state.process, field) == 100.0
-    assert state.observation.updated_at.timestamp() == 1360.0
+    assert getattr(state.process, field) == _TIMESTAMP_BASE + 100.0
+    assert state.observation.updated_at.timestamp() == _TIMESTAMP_BASE + 1360.0
 
 
 def test_current_write_failure_does_not_prevent_own_session_correction(tracking):

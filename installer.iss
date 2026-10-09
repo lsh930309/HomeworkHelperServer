@@ -201,6 +201,8 @@ begin
     '  $stderr = Join-Path $env:TEMP ([guid]::NewGuid().ToString() + ".err")' + #13#10 +
     '  try {' + #13#10 +
     '    $p = Start-Process -FilePath $exe -ArgumentList $Arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr' + #13#10 +
+    '    # Retain the native handle so Windows PowerShell 5.1 preserves ExitCode after exit.' + #13#10 +
+    '    $null = $p.Handle' + #13#10 +
     '    if (-not $p.WaitForExit(15000)) { $p.Kill(); $p.WaitForExit(); throw "Tailscale command timed out" }' + #13#10 +
     '    $p.WaitForExit()' + #13#10 +
     '    if ($p.ExitCode -ne 0) { throw ("Tailscale command failed: " + $p.ExitCode + " " + [IO.File]::ReadAllText($stderr)) }' + #13#10 +

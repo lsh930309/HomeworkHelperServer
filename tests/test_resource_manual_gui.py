@@ -19,6 +19,10 @@ import src.services.nikke as nikke_module
 import src.utils.game_preset_manager as preset_module
 
 
+# Windows CRT에서도 현재 제공자의 naive datetime 변환과 같은 조건을 사용한다.
+_TIMESTAMP_BASE = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp()
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
@@ -32,11 +36,11 @@ def manual(request, monkeypatch, app):
         id="game", name="게임", monitoring_path="/game.exe", launch_path="/game.exe",
         stamina_tracking_enabled=provider == "hoyolab",
         hoyolab_game_id="honkai_starrail" if provider == "hoyolab" else None,
-        stamina_current=100, stamina_max=240, stamina_updated_at=1000.0,
+        stamina_current=100, stamina_max=240, stamina_updated_at=_TIMESTAMP_BASE + 1000.0,
         resource_tracking_enabled=provider == "nikke",
         resource_provider="nikke_blablalink" if provider == "nikke" else None,
         resource_key="nikke_outpost_storage" if provider == "nikke" else None,
-        resource_percent=25.0, resource_updated_at=1000.0, resource_status="ok",
+        resource_percent=25.0, resource_updated_at=_TIMESTAMP_BASE + 1000.0, resource_status="ok",
     )
     processes = {process.id: process}
 
@@ -70,7 +74,7 @@ def manual(request, monkeypatch, app):
     observation = SimpleNamespace(
         current=120, max=240, recover_time=720, full_time=None,
         percent=35.0, status="ok", label="전초기지 방어 보상", message="",
-        updated_at=dt.datetime.fromtimestamp(1300.0),
+        updated_at=dt.datetime.fromtimestamp(_TIMESTAMP_BASE + 1300.0),
     )
     provider_calls = []
 
@@ -101,13 +105,13 @@ def manual(request, monkeypatch, app):
 
     def result(**overrides):
         row = (
-            {"id": "game", "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": 1000.0}
+            {"id": "game", "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": _TIMESTAMP_BASE + 1000.0}
             if provider == "hoyolab" else
-            {"id": "game", "resource_percent": 25.0, "resource_updated_at": 1000.0, "resource_status": "ok", "resource_label": observation.label}
+            {"id": "game", "resource_percent": 25.0, "resource_updated_at": _TIMESTAMP_BASE + 1000.0, "resource_status": "ok", "resource_label": observation.label}
         )
         payload = {
             "process_id": "game", "stamina" if provider == "hoyolab" else "snapshot": observation,
-            "fetched_at": 1300.0, "process_row": row,
+            "fetched_at": _TIMESTAMP_BASE + 1300.0, "process_row": row,
         }
         payload.update(overrides)
         return payload
@@ -357,11 +361,11 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
         patch_json=lambda *args, **kwargs: writes.append("queued-runtime"),
     )
     event = ProcessLifecycleEvent(
-        process_id="game", process_name="게임", session_id=11, timestamp=1000,
+        process_id="game", process_name="게임", session_id=11, timestamp=_TIMESTAMP_BASE + 1000,
         stamina_tracking_enabled=False, hoyolab_game_id=None,
     )
-    start = main_window._LifecycleCommand("start", event, 1, 1000, "instance")
-    stop = main_window._LifecycleCommand("stop", event, 1, 1000, "instance")
+    start = main_window._LifecycleCommand("start", event, 1, _TIMESTAMP_BASE + 1000, "instance")
+    stop = main_window._LifecycleCommand("stop", event, 1, _TIMESTAMP_BASE + 1000, "instance")
     work.submit_lifecycle("game", lambda: main_window.MainWindow._persist_lifecycle_command(window, start))
     assert lifecycle_started.wait(2)
     work.submit_lifecycle("game", lambda: main_window.MainWindow._persist_lifecycle_command(window, stop))
