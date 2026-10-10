@@ -213,8 +213,6 @@ class OBSClient:
             return
         self._identified = False
         self._connected = False
-        if self._on_connection_closed:
-            self._on_connection_closed()
         if close_status_code:
             if close_status_code == 4009:
                 self._last_error = f"인증 실패 (code {close_status_code}) — 사이드바 설정에서 OBS 비밀번호를 확인하세요."
@@ -226,3 +224,6 @@ class OBSClient:
             )
         if hasattr(self, "_ready_event") and not self._ready_event.is_set():
             self._ready_event.set()
+        callback = self._on_connection_closed
+        if callback:
+            callback()

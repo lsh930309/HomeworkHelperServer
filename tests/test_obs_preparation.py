@@ -172,3 +172,22 @@ def test_real_websocket_close_notifies_offline_only_for_current_connection():
     assert not closed and client.is_connected()
     client._on_close(current, None, None)
     assert closed == [True] and not client.is_connected()
+
+
+def test_close_error_is_available_when_offline_notification_arrives():
+    client = OBSClient()
+    client._ws = object()
+    errors = []
+    client.set_on_connection_closed(lambda:errors.append(client.get_last_error()))
+    client._on_close(client._ws, 4009, "fixture")
+    assert errors and "4009" in errors[0]
+
+
+def test_request_during_thread_handoff_does_not_start_second_worker(isolated_obs):
+    manager, launches = isolated_obs
+    # The existing lock also covers the interval before Thread.start(): callbacks
+    # can synchronously request reconnect when the state becomes connecting.
+    manager.set_on_state_changed(lambda state: manager.reconnect() if state == "connecting" else None)
+    manager.prepare_for_startup(settings(True))
+    finish(manager)
+    assert len(launches) == 1 and len(manager._client.calls) == 1

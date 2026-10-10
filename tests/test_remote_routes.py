@@ -370,7 +370,10 @@ def test_remote_capabilities_endpoint_matches_status_capability_contract():
 
 
 
-def test_remote_readiness_reports_tailscale_and_power_sections():
+def test_remote_readiness_reports_tailscale_and_power_sections(monkeypatch):
+    # This TestClient tests the default-port contract, independent of a host
+    # testbench's isolated port. It never binds an actual network listener.
+    monkeypatch.setenv("HH_API_PORT", "8000")
     class _Snapshot:
         def as_dict(self):
             return {

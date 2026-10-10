@@ -115,8 +115,9 @@ class RecordingManager:
                     self._recording_start_time = time.monotonic()
                 elif state != "recording":
                     self._recording_start_time = None
-        if changed and self._on_state_changed:
-            self._on_state_changed(state)
+        callback = self._on_state_changed
+        if changed and callback:
+            callback(state)
 
     def _on_record_state_changed_from_obs(self, active: bool) -> None:
         self._set_state("recording" if active else "idle")
@@ -126,15 +127,18 @@ class RecordingManager:
 
     def _try_connect_async(self, then_record: bool = False, launch_requested: bool = False,
                            connect_requested: Optional[bool] = True) -> None:
-        if self._connect_thread and self._connect_thread.is_alive():
-            return
+        with self._lock:
+            active = self._connect_thread
+            if active and (active.ident is None or active.is_alive()):
+                return
+            thread = threading.Thread(
+                target=self._connect_worker,
+                args=(then_record, launch_requested, connect_requested, dict(self._settings)),
+                daemon=True,
+            )
+            self._connect_thread = thread
         self._set_state("connecting")
-        self._connect_thread = threading.Thread(
-            target=self._connect_worker,
-            args=(then_record, launch_requested, connect_requested, dict(self._settings)),
-            daemon=True,
-        )
-        self._connect_thread.start()
+        thread.start()
 
     def _connect_worker(self, then_record: bool, launch_requested: bool,
                         connect_requested: Optional[bool], s: dict) -> None:
