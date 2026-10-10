@@ -105,6 +105,17 @@ python build.py --archive-keep 20 --archive-days 180
 python build.py --no-prune-archives
 ```
 
+dev-alwayson 잔여 보완 동안 기준 산출물은 위의 지원 옵션으로 보존한다. 추가 후보 사본을
+만들지 않는다. 과거 아카이브 부재의 원인은 삭제 기록 없이 추정하지 않는다.
+
+## macOS 서명 identity
+
+기존 인증서·개인키·신뢰·운영 인증 토큰은 유지한다. Keychain 표시 라벨은 제품·용도와
+fingerprint 일부로 구분하고 인증서를 재발급하지 않는다. build.py는 유효한 identity를
+정확히 찾은 SHA-1 fingerprint로 codesign을 호출한다. 환경변수 지정도 정확히 검증하며
+중복 이름은 임의 선택하지 않는다. 로컬 fingerprint를 저장소에 고정하지 않는다.
+외부 배포용 PKG 서명·공증은 별도 범위다.
+
 ## 선택적 GitHub Release 게시
 
 `--publish-release`는 기본 비활성화이다. 활성화해도 조건이 맞지 않으면 빌드 실패로 처리하지 않고 게시만 건너뛴다.
