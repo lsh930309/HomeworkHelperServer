@@ -49,6 +49,7 @@ def instance_identity(
 
 class InstanceCommand(str, Enum):
     SHOW_WINDOW = "show_window"
+    PREPARE_DATABASE_RESTORE = "prepare_database_restore"
 
 
 class InstanceCommandResult(IntEnum):
@@ -265,6 +266,12 @@ class SingleInstanceApplication(QObject):
             else:
                 callback()
                 self._write_ipc_response(socket, f"ack:{self._identity.digest}:show_window")
+        elif command == InstanceCommand.PREPARE_DATABASE_RESTORE:
+            callback = getattr(self._main_window_ref, "prepare_database_restore", None)
+            if callable(callback) and callback() is True:
+                self._write_ipc_response(socket, f"ack:{self._identity.digest}:{command.value}")
+            else:
+                self._write_ipc_response(socket, "error:restore_not_ready")
         else:
             self._write_ipc_response(socket, "error:unsafe_target")
         socket.disconnectFromServer()

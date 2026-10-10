@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -443,6 +446,30 @@ def restore_preview(payload: RestoreRequest) -> Any:
         }
 
 
+def _prepare_restore_runtime() -> bool:
+    """Require the owning GUI's completed drain; server-only has no GUI writers."""
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return True
+    import json
+    import psutil
+    try:
+        metadata = json.loads(Path(data_dir, "db_server_meta.json").read_text(encoding="utf-8"))
+        process = psutil.Process(parent.pid)
+        if (metadata.get("parent_pid") != parent.pid or
+                abs(process.create_time() - float(metadata["parent_create_time"])) > 0.001):
+            return False
+        command = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            command.append(str(Path(__file__).resolve().parents[2] / "homework_helper.pyw"))
+        command.append("--prepare-database-restore")
+        result = subprocess.run(command, timeout=7.0, check=False, capture_output=True)
+        return result.returncode == 0
+    except (OSError, ValueError, KeyError, psutil.Error, subprocess.TimeoutExpired):
+        logger.exception("GUI restore preparation did not complete")
+        return False
+
+
 @router.post("/backups/restore")
 def restore_backup(payload: RestoreRequest) -> Any:
     files = {item["slot"]: item for item in _backup_files()}
@@ -450,6 +477,11 @@ def restore_backup(payload: RestoreRequest) -> Any:
         raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
     source = files[payload.slot]["path"]
     _require_valid_sqlite_backup(source)
+    if not _prepare_restore_runtime():
+        return JSONResponse(status_code=409, content={
+            "code": "database_restore_runtime_not_ready",
+            "detail": "데이터 기록 작업의 중지 완료를 확인하지 못해 DB를 교체하지 않았습니다. 앱을 재시작하세요.",
+        })
     timestamp = int(time.time() * 1000)
     operation_id = f"{timestamp}.{uuid.uuid4().hex}"
     before_path = os.path.join(data_dir, f"app_data.before_beholder_restore.{operation_id}.db")

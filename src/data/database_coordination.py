@@ -324,6 +324,10 @@ class DatabaseMaintenanceCoordinator:
         with self._condition:
             self._last_checkpoint_at = self._clock() if timestamp is None else float(timestamp)
 
+    def mark_faulted(self, code: str) -> None:
+        """Block startup access even when no normal request was admitted yet."""
+        self._finish_faulted(code)
+
     def _release_request(self) -> None:
         with self._condition:
             if self._active_requests <= 0:

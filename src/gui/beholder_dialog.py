@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, Callable
+from typing import Any
+from PySide6.QtCore import QThread, Signal
 
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
@@ -13,16 +14,32 @@ from PySide6.QtWidgets import (
 from src.api.client import BackgroundApiTransport
 
 
+class _RestoreRequest(QThread):
+    completed = Signal(object, object)
+
+    def __init__(self, transport, slot, parent):
+        super().__init__(parent)
+        self.transport, self.slot = transport, slot
+
+    def run(self):
+        try:
+            result = self.transport.post_json(
+                "/api/beholder/backups/restore", {"slot": self.slot}, timeout=20.0
+            ).payload
+            self.completed.emit(result, None)
+        except Exception as exc:
+            self.completed.emit(None, exc)
+
+
 class BeholderBackupRestoreDialog(QDialog):
     """Use only recovery APIs, including before the normal API client exists."""
 
     def __init__(
         self, base_url: str, parent=None, *, database_faulted: bool = False,
-        before_restore: Callable[[], bool] | None = None,
     ):
         super().__init__(parent)
         self._transport = BackgroundApiTransport(base_url)
-        self._before_restore = before_restore
+        self._request_worker = None
         self._restore_allowed = True
         self.restored = False
         self.restart_required = False
@@ -104,23 +121,12 @@ class BeholderBackupRestoreDialog(QDialog):
             )
             if confirmed != QMessageBox.StandardButton.Yes:
                 return
-            if self._before_restore is not None:
-                callback, self._before_restore = self._before_restore, None
-                self.restart_required = True
-                self._restore_allowed = False
-                if callback() is not True:
-                    raise RuntimeError("데이터 기록 작업의 중단을 확인하지 못했습니다. 앱을 재시작하세요.")
-                self._restore_allowed = True
-                self._restart_notice.setText(
-                    "복구를 위해 앱의 데이터 기록 작업을 중단했습니다. 복구 여부와 관계없이 앱 재시작이 필요합니다."
-                )
-            result = self._transport.post_json(
-                "/api/beholder/backups/restore", {"slot": slot}, timeout=20.0
-            ).payload
-            if not isinstance(result, dict) or result.get("ok") is not True:
-                raise RuntimeError("복구 완료를 확인하지 못했습니다.")
-            self.restored = True
-            self.accept()
+            self.restart_required = True
+            self._restart_notice.setText("복구 준비 후에는 앱 재시작이 필요합니다.")
+            self._request_worker = _RestoreRequest(self._transport, slot, self)
+            self._request_worker.completed.connect(self._restore_completed)
+            self._request_worker.finished.connect(self._request_finished)
+            self._request_worker.start()
         except Exception as exc:
             if not self._restore_allowed:
                 self._restart_notice.setText("데이터 기록 작업의 중단을 확인하지 못해 복구를 진행하지 않았습니다. 앱을 재시작하세요.")
@@ -128,8 +134,34 @@ class BeholderBackupRestoreDialog(QDialog):
             else:
                 self._summary.setText(f"복구에 실패했습니다. 데이터 보호를 유지하며 다시 시도할 수 있습니다.\n{exc}")
         finally:
-            self._refresh_button.setEnabled(True)
-            self._restore_button.setEnabled(self._restore_allowed and self._backups.count() > 0)
+            if self._request_worker is None:
+                self._enable_retry()
+
+    def prepare_database_restore(self) -> bool:
+        # Startup recovery has no normal runtime consumers.
+        return True
+
+    def reject(self) -> None:
+        if self._request_worker is None:
+            super().reject()
+
+    def _restore_completed(self, result, error) -> None:
+        if error is None and isinstance(result, dict) and result.get("ok") is True:
+            self.restored = True
+        else:
+            self._summary.setText(f"복구에 실패했습니다. 데이터 보호를 유지하며 다시 시도할 수 있습니다.\n{error or '복구 완료를 확인하지 못했습니다.'}")
+
+    def _request_finished(self) -> None:
+        worker, self._request_worker = self._request_worker, None
+        worker.deleteLater()
+        if self.restored:
+            self.accept()
+        else:
+            self._enable_retry()
+
+    def _enable_retry(self) -> None:
+        self._refresh_button.setEnabled(True)
+        self._restore_button.setEnabled(self._restore_allowed and self._backups.count() > 0)
 
 
 class BeholderIncidentDialog(QDialog):
@@ -206,6 +238,9 @@ class BeholderIncidentDialog(QDialog):
                 role = QDialogButtonBox.ButtonRole.RejectRole
             buttons.addButton(button, role)
             button.clicked.connect(lambda _checked=False, selected=action_id: self._finish(selected))
+        restore_button = QPushButton("백업으로 복구")
+        buttons.addButton(restore_button, QDialogButtonBox.ButtonRole.ActionRole)
+        restore_button.clicked.connect(lambda: self._finish("restore_backup"))
         choices = QLabel("\n".join(action_explanations))
         choices.setWordWrap(True)
         layout = QVBoxLayout(self)

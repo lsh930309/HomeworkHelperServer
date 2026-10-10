@@ -407,6 +407,44 @@ def auto_migrate_database(*, strict: bool = False):
 
 
 # 5. DB 롤링 백업 함수
+def validate_database_integrity(path: str) -> None:
+    """Inspect existing bytes without opening the application WAL writer."""
+    import sqlite3
+    from contextlib import closing
+    from pathlib import Path
+
+    with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        results = conn.execute("PRAGMA integrity_check").fetchall()
+        if results != [("ok",)]:
+            raise sqlite3.DatabaseError(f"database integrity check failed: {results}")
+
+
+def prepare_database_startup(coordinator, prepare_schema=None) -> bool:
+    """Validate before any startup writer; preserve recovery endpoints on failure."""
+    import logging
+    logger = logging.getLogger("DBServer")
+    if coordinator.snapshot().mode == "faulted":
+        return False
+    try:
+        if os.path.exists(db_path):
+            validate_database_integrity(db_path)
+            backup_database()
+        auto_migrate_database(strict=True)
+        Base.metadata.create_all(bind=engine)
+        if prepare_schema is not None:
+            prepare_schema()
+        validate_database_integrity(db_path)
+        return True
+    except Exception:
+        logger.exception("DB startup failed; normal writers remain blocked")
+        from src.data.database_coordination import DatabaseFaultStatePersistenceError
+        try:
+            coordinator.mark_faulted("database_startup_validation_failed")
+        except DatabaseFaultStatePersistenceError:
+            logger.exception("DB fault marker persistence failed; in-process protection remains active")
+        return False
+
+
 def backup_database(max_backups: int = 3) -> bool:
     """앱 시작 시 이전 세션의 DB를 롤링 백업합니다.
 
@@ -430,25 +468,25 @@ def backup_database(max_backups: int = 3) -> bool:
 
     try:
         import contextlib
-        # 롤링: backup.N 삭제 → backup.(N-1)→N 순으로 밀기
-        for i in range(max_backups, 0, -1):
-            current = os.path.join(backup_dir, f"app_data.backup.{i}.db")
-            if i == max_backups:
-                if os.path.exists(current):
-                    os.remove(current)
-            else:
-                next_slot = os.path.join(backup_dir, f"app_data.backup.{i + 1}.db")
-                if os.path.exists(current):
-                    os.rename(current, next_slot)
-
         # 현재 DB → backup.1.db (SQLite Online Backup API, 원자적 교체)
         backup_path = os.path.join(backup_dir, "app_data.backup.1.db")
         temp_path = backup_path + ".tmp"
         replaced = False
         try:
-            with contextlib.closing(_sqlite3.connect(db_path)) as src_conn:
+            validate_database_integrity(db_path)
+            from pathlib import Path
+            with contextlib.closing(_sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src_conn:
                 with contextlib.closing(_sqlite3.connect(temp_path)) as dst_conn:
                     src_conn.backup(dst_conn)
+            validate_database_integrity(temp_path)
+            # Only a complete healthy replacement may displace an old backup.
+            for i in range(max_backups, 0, -1):
+                current = os.path.join(backup_dir, f"app_data.backup.{i}.db")
+                if i == max_backups:
+                    if os.path.exists(current):
+                        os.remove(current)
+                elif os.path.exists(current):
+                    os.replace(current, os.path.join(backup_dir, f"app_data.backup.{i + 1}.db"))
             os.replace(temp_path, backup_path)
             replaced = True
         finally:

@@ -631,3 +631,33 @@ def test_shell_thumbnail_balances_com_on_early_return(monkeypatch) -> None:
 
     assert _VideoThumbnailLoadTask._extract_thumbnail("missing.mp4", 8, 8) is None
     assert ole32.uninitializes == 1
+
+
+def test_saved_stop_survives_last_played_failure_and_starts_followup_once():
+    from src.gui.main_window import MainWindow, _LifecycleCommand
+    event = ProcessLifecycleEvent(process_id="game-a", process_name="Game", session_id=77, timestamp=200.0)
+    command = _LifecycleCommand("stop", event, 321, 100.0, "runtime-game-a")
+    calls = []
+    class Transport:
+        def end_session(self, **kwargs):
+            calls.append("end")
+        def patch_json(self, *args, **kwargs):
+            calls.append("last_played")
+            raise RuntimeError("timestamp write failed")
+        def post_json(self, *args, **kwargs):
+            calls.append("report")
+    window = SimpleNamespace(
+        _background_transport=Transport(), _lifecycle_session_lock=threading.Lock(),
+        _lifecycle_session_ids={}, _lifecycle_shutdown_event=SimpleNamespace(is_set=lambda:False, wait=lambda _:False),
+        process_monitor=SimpleNamespace(active_monitored_processes={}),
+        data_manager=SimpleNamespace(managed_processes=[]),
+        _hoyolab_reconcile=SimpleNamespace(handle_process_stopped=lambda e:calls.append(("hoyo",e.session_id))),
+        _nikke_resource_reconcile=SimpleNamespace(handle_process_stopped=lambda e:calls.append(("nikke",e.session_id))),
+        _record_status_event=lambda *args:None, update_process_statuses_only=lambda:None,
+    )
+    result = MainWindow._persist_lifecycle_command(window, command)
+    assert result.succeeded and not result.last_played_saved
+    assert calls.count("end") == 1
+    assert calls.count("last_played") == 6
+    MainWindow._apply_lifecycle_persistence_result(window, result)
+    assert calls.count(("hoyo",77)) == calls.count(("nikke",77)) == 1

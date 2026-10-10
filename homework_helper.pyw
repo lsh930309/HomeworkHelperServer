@@ -1,5 +1,11 @@
 # 표준 라이브러리 import
 import sys
+if __name__ == "__main__" and "--prepare-database-restore" in sys.argv:
+    from PySide6.QtCore import QCoreApplication
+    from src.core.instance_manager import InstanceCommand, send_instance_command
+    ipc_application = QCoreApplication(sys.argv)
+    sys.exit(int(send_instance_command(InstanceCommand.PREPARE_DATABASE_RESTORE, ack_timeout_ms=5000)))
+
 import datetime
 import json
 import os
@@ -789,46 +795,8 @@ def run_server_main(shutdown_event=None):
         remaining_deadline_seconds,
     )
 
-    database_faulted_at_startup = database_coordinator.snapshot().mode == "faulted"
-    if database_faulted_at_startup:
-        logger.error(
-            "DB fault sentinel이 유지되어 startup migration/checkpoint/probe를 건너뜁니다. "
-            "ping, health, backup restore 및 진단 경로만 사용하십시오."
-        )
-    else:
-        # DB 백업 (마이그레이션 전, 이전 세션의 최종 상태 보존)
-        backup_database()
-
-        # 자동 마이그레이션 실행 (새 컬럼 추가)
-        auto_migrate_database()
-
-        # 테이블 생성 (새 DB인 경우)
-        models.Base.metadata.create_all(bind=engine)
-
-        # 데이터베이스 무결성 확인 및 복구
-        logger.info("데이터베이스 무결성 확인 중...")
-        try:
-            with engine.connect() as conn:
-                # WAL 복구 체크포인트
-                conn.execute(text("PRAGMA wal_checkpoint(RECOVER)"))
-                conn.commit()
-
-                # 무결성 검사
-                result = conn.execute(text("PRAGMA integrity_check"))
-                integrity_result = result.scalar()
-                if integrity_result != "ok":
-                    logger.warning(f"데이터베이스 무결성 검사 실패: {integrity_result}")
-                else:
-                    logger.info("데이터베이스 무결성 확인 완료.")
-        except Exception as e:
-            logger.error(f"데이터베이스 복구 중 오류: {e}", exc_info=True)
-
-        # 데이터베이스 테이블 생성
-        # 기존 데이터 호환을 위해 필요한 컬럼이 없으면 추가
-        try:
-            ensure_process_table_schema()
-        except Exception as e:
-            logger.error(f"테이블 스키마 보정 실패: {e}", exc_info=True)
+    from src.data.database import prepare_database_startup
+    prepare_database_startup(database_coordinator, ensure_process_table_schema)
 
     def resolve_api_bind_host() -> str:
         if database_coordinator.snapshot().mode == "faulted":

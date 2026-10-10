@@ -845,3 +845,51 @@ def test_faulted_restore_sentinel_clear_failure_keeps_new_database_blocked(
     with pytest.raises(DatabaseAccessUnavailable):
         coordinator.acquire_request("after-sentinel-clear-failure")
     assert DatabaseMaintenanceCoordinator(fault_state_path=state_path).snapshot().mode == "faulted"
+
+
+def test_restore_preparation_failure_never_replaces_live_database(monkeypatch, tmp_path):
+    client, routes, coordinator, current_db = _restore_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(routes, "_prepare_restore_runtime", lambda: False)
+    before = _sha256(current_db)
+    response = client.post("/api/beholder/backups/restore", json={"slot": 1})
+    assert response.status_code == 409
+    assert response.json()["code"] == "database_restore_runtime_not_ready"
+    assert _sha256(current_db) == before
+    assert coordinator.snapshot().mode == "normal"
+
+
+def test_corrupt_startup_keeps_backup_slots_and_recovery_protection(monkeypatch, tmp_path):
+    import src.data.database as database
+    from src.data.database_coordination import DatabaseMaintenanceCoordinator
+    current = tmp_path / "app_data.db"
+    current.write_bytes(b"broken database header")
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    for slot in range(1, 4):
+        _write_marker_database(backups / f"app_data.backup.{slot}.db", f"healthy-{slot}")
+    before = {p.name: _sha256(p) for p in backups.iterdir()}
+    monkeypatch.setattr(database, "db_path", str(current))
+    monkeypatch.setattr(database, "base_dir", str(tmp_path))
+    monkeypatch.setattr(database, "auto_migrate_database", lambda **kw: pytest.fail("migration on damaged DB"))
+    coordinator = DatabaseMaintenanceCoordinator(fault_state_path=tmp_path / "fault.json")
+    assert not database.prepare_database_startup(coordinator)
+    assert coordinator.snapshot().mode == "faulted"
+    for _ in range(3):
+        assert not database.backup_database()
+        assert not database.prepare_database_startup(coordinator)
+    assert {p.name: _sha256(p) for p in backups.iterdir()} == before
+    assert current.read_bytes() == b"broken database header"
+
+
+def test_validated_new_backup_precedes_rotation(monkeypatch, tmp_path):
+    import src.data.database as database
+    current = tmp_path / "app_data.db"
+    _write_marker_database(current, "current")
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    _write_marker_database(backups / "app_data.backup.1.db", "old")
+    monkeypatch.setattr(database, "db_path", str(current))
+    monkeypatch.setattr(database, "base_dir", str(tmp_path))
+    assert database.backup_database()
+    assert _read_marker_database(backups / "app_data.backup.1.db") == "current"
+    assert _read_marker_database(backups / "app_data.backup.2.db") == "old"

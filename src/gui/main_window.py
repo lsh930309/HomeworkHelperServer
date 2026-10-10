@@ -98,6 +98,7 @@ class _LifecyclePersistenceResult:
     error: str | None = None
     blocked: bool = False
     beholder_incident: Mapping[str, Any] | None = None
+    last_played_saved: bool = True
 
 
 _GUI_CLEANUP_DEADLINE_SECONDS = 2.0
@@ -528,13 +529,13 @@ class MainWindow(QMainWindow):
             error.message,
             delay,
         )
-        if error.key == "remote_readiness":
-            self._set_remote_readiness_indicator("beholder", "red", f"상태 확인 실패: {error.message}")
+        # A dependency failure is not evidence of database corruption.
 
     def _persist_lifecycle_command(self, command: _LifecycleCommand) -> _LifecyclePersistenceResult:
         retry_delays = (1.0, 2.0, 5.0, 10.0, 30.0)
         last_error: str | None = None
         session_id = command.event.session_id
+        session_saved = False
         if not str(command.event.process_id or "").strip() or not str(command.runtime_token or "").strip():
             logger.error(
                 "불완전한 lifecycle 명령 거부: kind=%s process_id=%r runtime_token=%r",
@@ -545,7 +546,7 @@ class MainWindow(QMainWindow):
             return _LifecyclePersistenceResult(command, session_id, False, 0, "invalid lifecycle identity")
         for attempt in range(1, len(retry_delays) + 2):
             if self._lifecycle_shutdown_event.is_set():
-                return _LifecyclePersistenceResult(command, session_id, False, attempt - 1, "shutdown")
+                return _LifecyclePersistenceResult(command, session_id, session_saved, attempt - 1, "shutdown", last_played_saved=False)
             try:
                 if command.kind == "start":
                     payload = self._background_transport.start_session(
@@ -572,13 +573,17 @@ class MainWindow(QMainWindow):
                         session_id = int(active.payload["id"])
                 if session_id is None:
                     raise RuntimeError("active lifecycle session not found")
-                self._background_transport.end_session(
-                    session_id=session_id,
-                    end_timestamp=command.event.timestamp,
-                    stamina_at_end=command.event.stamina_at_end,
-                    resource_percent_at_end=command.event.resource_percent_at_end,
-                    timeout=10.0,
-                )
+                if not session_saved:
+                    self._background_transport.end_session(
+                        session_id=session_id,
+                        end_timestamp=command.event.timestamp,
+                        stamina_at_end=command.event.stamina_at_end,
+                        resource_percent_at_end=command.event.resource_percent_at_end,
+                        timeout=10.0,
+                    )
+                    session_saved = True
+                    with self._lifecycle_session_lock:
+                        self._lifecycle_session_ids.pop(command.runtime_token, None)
                 self._background_transport.patch_json(
                     f"/processes/{command.event.process_id}/runtime-state",
                     {"last_played_timestamp": command.event.timestamp},
@@ -595,11 +600,12 @@ class MainWindow(QMainWindow):
                 return _LifecyclePersistenceResult(
                     command,
                     session_id,
-                    False,
+                    session_saved,
                     attempt,
                     "beholder_blocked",
                     True,
                     exc.incident,
+                    not session_saved,
                 )
             except DatabaseFaultedResponse as exc:
                 last_error = str(exc)
@@ -609,7 +615,7 @@ class MainWindow(QMainWindow):
                 if attempt > len(retry_delays):
                     break
                 if self._lifecycle_shutdown_event.wait(retry_delays[attempt - 1]):
-                    return _LifecyclePersistenceResult(command, session_id, False, attempt, "shutdown")
+                    return _LifecyclePersistenceResult(command, session_id, session_saved, attempt, "shutdown", last_played_saved=False)
 
         try:
             self._background_transport.post_json(
@@ -626,7 +632,7 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             logger.warning("lifecycle failure incident 기록 실패", exc_info=True)
-        return _LifecyclePersistenceResult(command, session_id, False, attempt, last_error)
+        return _LifecyclePersistenceResult(command, session_id, session_saved, attempt, last_error, last_played_saved=False)
 
     @Slot(object)
     def _apply_lifecycle_persistence_result(self, value: object) -> None:
@@ -643,7 +649,8 @@ class MainWindow(QMainWindow):
             )
             if value.beholder_incident:
                 self._apply_beholder_incidents((dict(value.beholder_incident),))
-            return
+            if not value.succeeded:
+                return
         if not value.succeeded:
             logger.warning(
                 "lifecycle persistence exhausted: kind=%s process_id=%s attempts=%s error=%s",
@@ -654,6 +661,9 @@ class MainWindow(QMainWindow):
             )
             self._poll_beholder_incidents()
             return
+        if value.error and value.succeeded:
+            logger.warning("종료 기록은 저장됐으나 부가 저장 실패: %s", value.error)
+            self._record_status_event("종료 기록은 저장됐으나 최근 이용 시각 갱신에 실패했습니다.", 5000)
         event = replace(command.event, session_id=value.session_id)
         if command.kind == "start":
             entry = active.get(event.process_id)
@@ -663,7 +673,7 @@ class MainWindow(QMainWindow):
             self._nikke_resource_reconcile.handle_process_started(event)
         else:
             process = next((item for item in self.data_manager.managed_processes if item.id == event.process_id), None)
-            if process is not None:
+            if process is not None and value.last_played_saved:
                 process.last_played_timestamp = event.timestamp
             self._hoyolab_reconcile.handle_process_stopped(event)
             self._nikke_resource_reconcile.handle_process_stopped(event)
@@ -859,7 +869,6 @@ class MainWindow(QMainWindow):
     def _handle_beholder_restore_request(self) -> bool:
         dialog = BeholderBackupRestoreDialog(
             self._api_base_url(), self,
-            before_restore=self._suspend_runtime_after_beholder_restore,
         )
         if dialog.exec() and dialog.restored:
             QMessageBox.information(self, "Beholder 백업 복구", "복구가 완료되었습니다. 앱을 재시작해 주세요.")
@@ -871,7 +880,7 @@ class MainWindow(QMainWindow):
             )
         return False
 
-    def _suspend_runtime_after_beholder_restore(self) -> bool:
+    def prepare_database_restore(self) -> bool:
         """복구 POST 전에 writer를 중지·배수하고 실패 뒤에도 재시작까지 중지한다."""
         if not self._beholder_restore_runtime_suspended:
             self._beholder_restore_runtime_suspended = True

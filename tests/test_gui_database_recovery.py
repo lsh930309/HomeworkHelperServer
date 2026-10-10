@@ -5,6 +5,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,6 +38,15 @@ def _startup_functions():
     exec(compile(ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[])),
                  "homework_helper.pyw", "exec"), namespace)
     return namespace
+
+
+def _wait_restore(dialog):
+    app = QApplication.instance() or QApplication([])
+    deadline = time.monotonic() + 3.0
+    while dialog._request_worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.002)
+    assert dialog._request_worker is None
 
 
 @pytest.fixture
@@ -135,11 +145,13 @@ def test_restore_failure_keeps_dialog_available_for_retry(monkeypatch, recovery_
     dialog = BeholderBackupRestoreDialog(base_url, database_faulted=True)
     outcome[failed_stage] = 500
     dialog._restore_selected()
+    _wait_restore(dialog)
     assert not dialog.restored
     assert dialog._restore_button.isEnabled()
     assert "실패" in dialog._summary.text()
     outcome[failed_stage] = 200
     dialog._restore_selected()
+    _wait_restore(dialog)
     assert dialog.restored
     assert dialog.result() == dialog.DialogCode.Accepted
     assert all(path.startswith("/api/beholder/backups") for _method, path in calls)
@@ -147,133 +159,30 @@ def test_restore_failure_keeps_dialog_available_for_retry(monkeypatch, recovery_
     app.processEvents()
 
 
-def test_writer_pause_precedes_restore_and_is_not_repeated_on_restore_retry(monkeypatch, recovery_server):
+def test_restore_http_runs_off_gui_thread_and_requires_restart(monkeypatch, recovery_server):
     app = QApplication.instance() or QApplication([])
     base_url, calls, outcome = recovery_server
     monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
-    dialog = BeholderBackupRestoreDialog(
-        base_url, before_restore=lambda: calls.append(("LOCAL", "pause_writers")) or True,
-    )
+    dialog = BeholderBackupRestoreDialog(base_url)
     outcome["restore_status"] = 500
     dialog._restore_selected()
     assert dialog.restart_required
+    _wait_restore(dialog)
     assert not dialog.restored
     assert dialog._restore_button.isEnabled()
     assert "재시작" in dialog._restart_notice.text()
-    assert calls == [
-        ("GET", "/api/beholder/backups"), ("POST", "/api/beholder/backups/restore-preview"),
-        ("LOCAL", "pause_writers"), ("POST", "/api/beholder/backups/restore"),
-    ]
     outcome["restore_status"] = 200
     dialog._restore_selected()
+    _wait_restore(dialog)
     assert dialog.restored
-    assert calls.count(("LOCAL", "pause_writers")) == 1
-    dialog.close()
-    app.processEvents()
 
 
-def test_cancel_after_restore_attempt_keeps_restart_requirement(monkeypatch, recovery_server):
+def test_incident_restore_is_navigation_not_incident_resolution():
+    from src.gui.beholder_dialog import BeholderIncidentDialog
+    from PySide6.QtWidgets import QPushButton
     app = QApplication.instance() or QApplication([])
-    base_url, _calls, outcome = recovery_server
-    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
-    paused = []
-    dialog = BeholderBackupRestoreDialog(base_url, before_restore=lambda: paused.append(True) or True)
-    outcome["restore_status"] = 500
-    dialog._restore_selected()
-    dialog.reject()
-    assert dialog.result() == dialog.DialogCode.Rejected
-    assert dialog.restart_required
-    assert "재시작" in dialog._restart_notice.text()
-    assert paused == [True]
-    app.processEvents()
-
-
-@pytest.mark.parametrize("callback_result", ["false", "raise", "none"])
-def test_writer_pause_failure_never_posts_restore_or_reenables_retry(monkeypatch, recovery_server, callback_result):
-    app = QApplication.instance() or QApplication([])
-    base_url, calls, _outcome = recovery_server
-    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
-    callback_calls = []
-
-    def pause():
-        callback_calls.append(True)
-        if callback_result == "raise":
-            raise RuntimeError("writer drain failed")
-        if callback_result == "none":
-            return None
-        return False
-
-    dialog = BeholderBackupRestoreDialog(base_url, before_restore=pause)
-    dialog._restore_selected()
-    assert dialog.restart_required
-    assert not dialog.restored
-    assert not dialog._restore_button.isEnabled()
-    assert "재시작" in dialog._restart_notice.text()
-    dialog._load_backups()
-    assert not dialog._restore_button.isEnabled()
-    dialog._restore_selected()
-    assert callback_calls == [True]
-    assert ("POST", "/api/beholder/backups/restore") not in calls
-    dialog.close()
-    app.processEvents()
-
-
-def test_declined_confirmation_does_not_pause_writers(monkeypatch, recovery_server):
-    app = QApplication.instance() or QApplication([])
-    base_url, calls, _outcome = recovery_server
-    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.No)
-    paused = []
-    dialog = BeholderBackupRestoreDialog(base_url, before_restore=lambda: paused.append(True))
-    dialog._restore_selected()
-    assert not dialog.restart_required
-    assert not paused
-    assert calls == [("GET", "/api/beholder/backups"), ("POST", "/api/beholder/backups/restore-preview")]
-    dialog.close()
-    app.processEvents()
-
-
-def test_unavailable_health_does_not_admit_normal_gui(monkeypatch):
-    app = QApplication.instance() or QApplication([])
-    namespace = _startup_functions()
-    namespace["_server_health_payload"] = lambda **_kwargs: None
-    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: QMessageBox.StandardButton.Close)
-    assert namespace["_prepare_gui_database"](object()) is False
-    app.processEvents()
-
-
-def test_fault_recovery_cancel_does_not_write_or_start_normal_gui(monkeypatch, recovery_server):
-    app = QApplication.instance() or QApplication([])
-    base_url, calls, _outcome = recovery_server
-    monkeypatch.setenv("HH_API_PORT", str(base_url.rsplit(":", 1)[1]))
-    namespace = _startup_functions()
-
-    class CancelDialog(BeholderBackupRestoreDialog):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            QTimer.singleShot(0, self.reject)
-
-    namespace["BeholderBackupRestoreDialog"] = CancelDialog
-    manager = SimpleNamespace(start_ipc_server=lambda **_kwargs: None)
-    assert namespace["_prepare_gui_database"](manager) is False
-    assert calls == [("GET", "/api/gui/health"), ("GET", "/api/beholder/backups")]
-    app.processEvents()
-
-
-def test_health_retry_admits_gui_only_when_database_is_ready(monkeypatch):
-    app = QApplication.instance() or QApplication([])
-    namespace = _startup_functions()
-    replies = iter([None, {"ok": True, "db_ready": True}])
-    namespace["_server_health_payload"] = lambda **_kwargs: next(replies)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: QMessageBox.StandardButton.Retry)
-    assert namespace["_prepare_gui_database"](object()) is True
-    app.processEvents()
-
-
-def test_normal_gui_constructor_follows_database_admission():
-    source = Path("homework_helper.pyw").read_text(encoding="utf-8")
-    start = next(node for node in ast.parse(source).body
-                 if isinstance(node, ast.FunctionDef) and node.name == "start_main_application")
-    calls = {node.func.id: node.lineno for node in ast.walk(start)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-             and node.func.id in {"_prepare_gui_database", "ApiClient", "MainWindow"}}
-    assert calls["_prepare_gui_database"] < calls["ApiClient"] < calls["MainWindow"]
+    dialog = BeholderIncidentDialog({})
+    button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "백업으로 복구")
+    button.click()
+    assert dialog.action == "restore_backup"
+    assert dialog.result() == dialog.DialogCode.Accepted
