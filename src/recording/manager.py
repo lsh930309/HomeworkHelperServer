@@ -1,4 +1,3 @@
-import subprocess
 import threading
 import time
 import logging
@@ -21,6 +20,7 @@ class RecordingManager:
         self._on_state_changed: Optional[Callable[[RecordingState], None]] = None
         self._lock = threading.Lock()
         self._settings: dict = {}
+        self._launch_error = ""
         self._connect_thread: Optional[threading.Thread] = None
         self._client.set_on_record_state_changed(self._on_record_state_changed_from_obs)
 
@@ -33,9 +33,6 @@ class RecordingManager:
             "host": getattr(settings, "obs_host", "localhost"),
             "port": getattr(settings, "obs_port", 4455),
             "password": getattr(settings, "obs_password", ""),
-            "exe_path": getattr(settings, "obs_exe_path", ""),
-            "auto_launch": getattr(settings, "obs_auto_launch", False),
-            "launch_hidden": getattr(settings, "obs_launch_hidden", True),
         }
         if self._settings["enabled"]:
             self._try_connect_async()
@@ -50,8 +47,8 @@ class RecordingManager:
         elif state == "idle":
             self.start_recording()
         elif state == "obs_offline":
-            # auto_launch 시도 후 녹화 시작
-            self._try_connect_async(then_record=True)
+            # 명시적 요청에서 권한 서비스로 실행한 뒤 녹화 시작
+            self._try_connect_async(then_record=True, launch_requested=True)
 
     def start_recording(self) -> None:
         if not self._client.is_connected():
@@ -78,10 +75,10 @@ class RecordingManager:
 
     def reconnect(self) -> None:
         """사이드바 재연결 버튼 전용 — 연결만 시도하고 녹화는 시작하지 않는다."""
-        self._try_connect_async(then_record=False)
+        self._try_connect_async(then_record=False, launch_requested=True)
 
     def get_last_error(self) -> str:
-        return self._client.get_last_error()
+        return self._launch_error or self._client.get_last_error()
 
     def shutdown(self) -> None:
         self._client.disconnect()
@@ -108,23 +105,31 @@ class RecordingManager:
     def _on_record_state_changed_from_obs(self, active: bool) -> None:
         self._set_state("recording" if active else "idle")
 
-    def _try_connect_async(self, then_record: bool = False) -> None:
+    def _try_connect_async(self, then_record: bool = False, launch_requested: bool = False) -> None:
         if self._connect_thread and self._connect_thread.is_alive():
             return
         self._set_state("connecting")
         self._connect_thread = threading.Thread(
             target=self._connect_worker,
-            args=(then_record,),
+            args=(then_record, launch_requested),
             daemon=True,
         )
         self._connect_thread.start()
 
-    def _connect_worker(self, then_record: bool) -> None:
+    def _connect_worker(self, then_record: bool, launch_requested: bool) -> None:
         s = self._settings
-        # auto_launch: OBS 프로세스 실행
-        if s.get("auto_launch") and s.get("exe_path"):
-            self._launch_obs(s["exe_path"], s.get("launch_hidden", True))
-            time.sleep(5)  # OBS WebSocket 기동 대기 (3→5초)
+        self._launch_error = ""
+        if launch_requested:
+            from src.host_service.client import HostPrivilegeClient, PrivilegeServiceError
+            try:
+                result = HostPrivilegeClient().launch_obs()
+                if not result.get("already_running"):
+                    time.sleep(5)
+            except PrivilegeServiceError as error:
+                self._launch_error = str(error)
+                logger.warning("OBS 관리자 실행 실패: %s", error)
+                self._set_state("obs_offline")
+                return
 
         # 연결 시도 (최대 2회: 첫 시도 실패 시 3초 후 재시도)
         host = s.get("host", "localhost")
@@ -145,21 +150,3 @@ class RecordingManager:
         else:
             logger.warning("OBS WebSocket 연결 최종 실패 (host=%s, port=%s)", host, port)
             self._set_state("obs_offline")
-
-    @staticmethod
-    def _launch_obs(exe_path: str, hidden: bool) -> None:
-        try:
-            import os
-            import psutil
-            exe_name = os.path.basename(exe_path).lower()
-            if any(p.name().lower() == exe_name for p in psutil.process_iter(["name"])):
-                logger.debug("OBS already running, skipping launch")
-                return
-            args = [exe_path]
-            if hidden:
-                args.append("--startminimized")
-            # OBS는 자신의 설치 디렉토리를 cwd로 실행해야 locale 파일을 찾을 수 있음
-            obs_dir = os.path.dirname(exe_path)
-            subprocess.Popen(args, cwd=obs_dir)
-        except Exception as e:
-            logger.warning("Failed to launch OBS: %s", e)

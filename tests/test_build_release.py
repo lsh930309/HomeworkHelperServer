@@ -319,12 +319,15 @@ def test_gui_version_selector_is_shared_by_windows_and_macos_targets(monkeypatch
     ]
 
 
-def test_installer_shutdown_policy_uses_legacy_force_kill_flow():
+def test_installer_shutdown_policy_requests_normal_quit_after_prerequisites():
     installer = Path("installer.iss").read_text(encoding="utf-8").lower()
 
     assert "obs" not in installer
-    assert "taskkill', '/f /im homework_helper.exe'" in installer
-    assert installer.count("killallappprocesses();") >= 2
+    assert "taskkill" not in installer
+    assert "--quit-application" in installer
+    prepare = installer[installer.index("function preparetoinstall"):]
+    assert prepare.index("trybootstraptailscaleprerequisite") < prepare.index("closerunningapp") < prepare.index("serviceexe :=")
+    assert installer.count("closeappnormally();") >= 2
     assert "trycloseappprocessesgracefully" not in installer
     assert "forcekillappprocesses" not in installer
     assert "waitforappexit" not in installer
@@ -490,3 +493,16 @@ def test_macos_packager_rejects_adhoc_codesign_identity(monkeypatch):
 
     with pytest.raises(RuntimeError, match="ad-hoc/cdhash-only"):
         package_macos_remote_app._codesign_app(Path("dist/macos/HomeworkHelperRemote.app"), "Local Identity")
+
+
+def test_signer_resolution_requires_one_exact_valid_identity(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(build.platform, "system", lambda:"Darwin")
+    monkeypatch.setattr(build.shutil, "which", lambda _:"/usr/bin/security")
+    fingerprint = "A"*40
+    monkeypatch.setattr(build.subprocess, "run", lambda *a,**kw:SimpleNamespace(returncode=0, stdout=f'1) {fingerprint} "Local Identity"\n'))
+    assert build.resolve_macos_codesign_identity("Local Identity") == fingerprint
+    assert build.resolve_macos_codesign_identity(fingerprint) == fingerprint
+    assert not build.macos_codesign_identity_available("Identity")
+    monkeypatch.setattr(build.subprocess, "run", lambda *a,**kw:SimpleNamespace(returncode=0, stdout=f'1) {fingerprint} "Local Identity"\n2) {"B"*40} "Local Identity"\n'))
+    assert not build.macos_codesign_identity_available("Local Identity")

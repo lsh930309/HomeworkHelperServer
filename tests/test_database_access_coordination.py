@@ -893,3 +893,21 @@ def test_validated_new_backup_precedes_rotation(monkeypatch, tmp_path):
     assert database.backup_database()
     assert _read_marker_database(backups / "app_data.backup.1.db") == "current"
     assert _read_marker_database(backups / "app_data.backup.2.db") == "old"
+
+
+def test_fresh_and_existing_valid_database_startup_use_real_migrations(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    import src.data.database as database
+    from src.data.database_coordination import DatabaseMaintenanceCoordinator
+    current = tmp_path / "app_data.db"
+    test_engine = create_engine(f"sqlite:///{current}")
+    monkeypatch.setattr(database, "db_path", str(current))
+    monkeypatch.setattr(database, "base_dir", str(tmp_path))
+    monkeypatch.setattr(database, "engine", test_engine)
+    coordinator = DatabaseMaintenanceCoordinator(fault_state_path=tmp_path / "fault.json")
+    try:
+        assert database.prepare_database_startup(coordinator)
+        assert coordinator.snapshot().mode == "normal"
+        assert database.prepare_database_startup(coordinator)
+        assert (tmp_path / "backups/app_data.backup.1.db").exists()
+    finally: test_engine.dispose()

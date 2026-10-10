@@ -91,6 +91,7 @@ Type: filesandordirs; Name: "{app}\_internal"
 [Code]
 var
   PostInstallSucceeded: Boolean;
+  ServiceWasRunning, ServiceStoppedForUpdate, InstallationStarted: Boolean;
 
 // ============================================================
 // 권한 서비스 설치/해제. 운영 호스트 적용은 사용자 설치 실행 시에만 수행합니다.
@@ -255,9 +256,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then InstallationStarted := True;
   if CurStep = ssPostInstall then
   begin
     InstallPrivilegeService();
+    ServiceStoppedForUpdate := False;
     DeleteScheduledTasks();
     RemoveLegacyStartupShortcut();
     PostInstallSucceeded := True;
@@ -302,19 +305,20 @@ begin
   Result := (ResultCode = 0);
 end;
 
-// 모든 HomeworkHelper 관련 프로세스 종료
-procedure KillAllAppProcesses();
+// 설치 이미지의 정상 종료 요청. 시간 초과 후 강제 종료하지 않습니다.
+procedure CloseAppNormally();
 var
-  ResultCode: Integer;
+  ResultCode, Attempt: Integer;
 begin
-  // 메인 GUI 프로세스 종료
-  Exec('taskkill', '/F /IM homework_helper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  // 잠시 대기 (프로세스 종료 완료 대기)
-  Sleep(500);
-
-  // 혹시 남아있을 수 있는 Python 서버 프로세스 종료 (같은 경로에서 실행된 경우)
-  // 참고: API 서버는 homework_helper.exe의 자식 프로세스로 실행되므로 부모 종료 시 함께 종료됨
+  if not Exec(ExpandConstant('{app}\homework_helper.exe'), '--quit-application',
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Exit;
+  if ResultCode <> 0 then Exit;
+  for Attempt := 1 to 15 do
+  begin
+    if not IsProcessRunning('homework_helper.exe') then Exit;
+    Sleep(1000);
+  end;
 end;
 
 // HomeworkHelper 관련 프로세스가 실행 중인지 확인
@@ -324,7 +328,7 @@ begin
 end;
 
 // 설치 전 실행 중인 프로세스 종료
-function InitializeSetup(): Boolean;
+function CloseRunningApp(): Boolean;
 begin
   Result := True;
 
@@ -338,7 +342,7 @@ begin
     if WizardSilent then
     begin
       // 자동 업데이트에서는 사용자 입력을 기다리지 않고 같은 종료 경로를 사용합니다.
-      KillAllAppProcesses();
+      CloseAppNormally();
       Sleep(1000);
 
       if IsAppRunning() then
@@ -354,7 +358,7 @@ begin
               mbConfirmation, MB_YESNO) = IDYES then
     begin
       // 프로세스 종료
-      KillAllAppProcesses();
+      CloseAppNormally();
 
       // 종료 확인을 위해 잠시 대기
       Sleep(1000);
@@ -393,7 +397,20 @@ begin
   Result := '';
   NeedsRestart := False;
 
+  if WizardIsTaskSelected('tailscalebootstrap') then
+  begin
+    TryBootstrapTailscalePrerequisite();
+  end;
+
+  if not CloseRunningApp() then
+  begin
+    Result := 'HomeworkHelper를 정상 종료한 뒤 설치를 다시 시도해주세요.';
+    Exit;
+  end;
   ServiceExe := ExpandConstant('{app}\homework_helper_service.exe');
+  Exec('cmd.exe', '/c sc query HomeworkHelperPrivilege | find "RUNNING" >NUL',
+    '', SW_HIDE, ewWaitUntilTerminated, ServiceResult);
+  ServiceWasRunning := ServiceResult = 0;
   if FileExists(ServiceExe) then
   begin
     if not Exec(ServiceExe, 'stop', ExpandConstant('{app}'), SW_HIDE,
@@ -407,23 +424,27 @@ begin
       Result := '권한 서비스 정지 실패. 종료 코드: ' + IntToStr(ServiceResult);
       Exit;
     end;
+    ServiceStoppedForUpdate := True;
   end;
 
-  if WizardIsTaskSelected('tailscalebootstrap') then
+
+end;
+
+procedure DeinitializeSetup();
+var
+  RestoreResult: Integer;
+begin
+  if ServiceStoppedForUpdate and ServiceWasRunning and not PostInstallSucceeded then
   begin
-    TryBootstrapTailscalePrerequisite();
-  end;
-  
-  // 마지막으로 프로세스가 종료되었는지 확인
-  if IsAppRunning() then
-  begin
-    // 한 번 더 종료 시도
-    KillAllAppProcesses();
-    Sleep(1000);
-    
-    if IsAppRunning() then
+    if not InstallationStarted then
     begin
-      Result := 'HomeworkHelper가 아직 실행 중입니다. 프로그램을 종료한 후 다시 시도해주세요.';
-    end;
+      if not Exec(ExpandConstant('{app}\homework_helper_service.exe'), 'start',
+        ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, RestoreResult) then
+        Log('취소 후 기존 서비스 재시작 실행 실패')
+      else if RestoreResult <> 0 then
+        Log('취소 후 기존 서비스 재시작 실패: ' + IntToStr(RestoreResult));
+    end
+    else
+      Log('설치 실패: 파일 교체 후 서비스 복구는 확인되지 않았습니다. 설치를 다시 실행하세요.');
   end;
 end;

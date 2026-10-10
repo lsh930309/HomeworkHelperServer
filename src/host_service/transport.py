@@ -73,23 +73,26 @@ def _overlapped_io(handle, *, data=None, timeout_ms=IPC_TIMEOUT_MS):
 
 def pipe_request(request: dict, *, before_ack=None) -> dict:
     _types, win32api, win32con, _event, win32file, win32pipe, _security = _windows()
-    win32pipe.WaitNamedPipe(PIPE_NAME, IPC_TIMEOUT_MS)
-    handle = win32file.CreateFile(
-        PIPE_NAME, 0x12019b, 0, None,  # Read/write without FILE_CREATE_PIPE_INSTANCE
-        win32con.OPEN_EXISTING,
-        win32con.FILE_FLAG_OVERLAPPED | 0x00100000 | 0x00010000,  # SQOS_PRESENT | IDENTIFICATION
-        None,
-    )
     try:
-        win32pipe.SetNamedPipeHandleState(handle, win32pipe.PIPE_READMODE_MESSAGE, None, None)
-        _overlapped_io(handle, data=encode_message(request))
-        response = decode_message(_overlapped_io(handle, timeout_ms=15000))
-        if before_ack is not None:
-            before_ack(response)
-        _overlapped_io(handle, data=encode_message({"received":True}))
-        return response
-    finally:
-        win32api.CloseHandle(handle)
+        win32pipe.WaitNamedPipe(PIPE_NAME, IPC_TIMEOUT_MS)
+        handle = win32file.CreateFile(
+            PIPE_NAME, 0x12019b, 0, None,  # Read/write without FILE_CREATE_PIPE_INSTANCE
+            win32con.OPEN_EXISTING,
+            win32con.FILE_FLAG_OVERLAPPED | 0x00100000 | 0x00010000,  # SQOS_PRESENT | IDENTIFICATION
+            None,
+        )
+        try:
+            win32pipe.SetNamedPipeHandleState(handle, win32pipe.PIPE_READMODE_MESSAGE, None, None)
+            _overlapped_io(handle, data=encode_message(request))
+            response = decode_message(_overlapped_io(handle, timeout_ms=15000))
+            if before_ack is not None:
+                before_ack(response)
+            _overlapped_io(handle, data=encode_message({"received":True}))
+            return response
+        finally:
+            win32api.CloseHandle(handle)
+    except _types.error as error:
+        raise OSError(error.winerror, str(error)) from error
 
 
 class NamedPipeServer:
@@ -116,17 +119,27 @@ class NamedPipeServer:
             overlap = types.OVERLAPPED()
             overlap.hEvent = event.CreateEvent(None, True, False, None)
             reply = None
+            connect_pending = False
             try:
                 try:
-                    pipe.ConnectNamedPipe(handle, overlap)
-                except OSError as error:
+                    connected = pipe.ConnectNamedPipe(handle, overlap)
+                    if connected in (None, 0, 535):
+                        event.SetEvent(overlap.hEvent)
+                    elif connected == 997:
+                        connect_pending = True
+                    else:
+                        raise OSError(connected, "ConnectNamedPipe failed")
+                except (OSError, types.error) as error:
                     if getattr(error, "winerror", error.args[0]) == 535:  # already connected
                         event.SetEvent(overlap.hEvent)
-                    elif getattr(error, "winerror", error.args[0]) != 997:
+                    elif getattr(error, "winerror", error.args[0]) == 997:
+                        connect_pending = True
+                    else:
                         raise
                 waited = event.WaitForMultipleObjects((self.stop_event, overlap.hEvent), False, event.INFINITE)
                 if waited == event.WAIT_OBJECT_0:
-                    _cancel_owned_io(handle, overlap)
+                    if connect_pending:
+                        _cancel_owned_io(handle, overlap)
                     return
                 request = decode_message(_overlapped_io(handle))
                 caller = self.controller.backend.authenticate(handle)

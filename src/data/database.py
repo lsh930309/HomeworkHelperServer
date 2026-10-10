@@ -147,7 +147,6 @@ def auto_migrate_database(*, strict: bool = False):
         ("global_settings", "obs_port", "INTEGER", "4455"),
         ("global_settings", "obs_password", "TEXT", "''"),
         ("global_settings", "obs_exe_path", "TEXT", "''"),
-        ("global_settings", "obs_auto_launch", "INTEGER", "0"),
         ("global_settings", "obs_launch_hidden", "INTEGER", "1"),
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
         ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
@@ -429,8 +428,8 @@ def prepare_database_startup(coordinator, prepare_schema=None) -> bool:
         if os.path.exists(db_path):
             validate_database_integrity(db_path)
             backup_database()
-        auto_migrate_database(strict=True)
         Base.metadata.create_all(bind=engine)
+        auto_migrate_database(strict=True)
         if prepare_schema is not None:
             prepare_schema()
         validate_database_integrity(db_path)

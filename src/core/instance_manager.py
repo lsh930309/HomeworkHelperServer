@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-from PySide6.QtCore import QSharedMemory, QObject
+from PySide6.QtCore import QSharedMemory, QObject, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QMessageBox
 
@@ -49,6 +49,7 @@ def instance_identity(
 
 class InstanceCommand(str, Enum):
     SHOW_WINDOW = "show_window"
+    QUIT_APPLICATION = "quit_application"
     PREPARE_DATABASE_RESTORE = "prepare_database_restore"
 
 
@@ -266,6 +267,13 @@ class SingleInstanceApplication(QObject):
             else:
                 callback()
                 self._write_ipc_response(socket, f"ack:{self._identity.digest}:show_window")
+        elif command == InstanceCommand.QUIT_APPLICATION:
+            callback = getattr(self._main_window_ref, "initiate_quit_sequence", None)
+            if callable(callback):
+                self._write_ipc_response(socket, f"ack:{self._identity.digest}:{command.value}")
+                QTimer.singleShot(0, callback)
+            else:
+                self._write_ipc_response(socket, "error:unsafe_target")
         elif command == InstanceCommand.PREPARE_DATABASE_RESTORE:
             callback = getattr(self._main_window_ref, "prepare_database_restore", None)
             if callable(callback) and callback() is True:

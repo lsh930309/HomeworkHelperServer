@@ -1,10 +1,12 @@
 # 표준 라이브러리 import
 import sys
-if __name__ == "__main__" and "--prepare-database-restore" in sys.argv:
+if __name__ == "__main__" and any(arg in sys.argv for arg in ("--prepare-database-restore", "--quit-application")):
     from PySide6.QtCore import QCoreApplication
     from src.core.instance_manager import InstanceCommand, send_instance_command
     ipc_application = QCoreApplication(sys.argv)
-    sys.exit(int(send_instance_command(InstanceCommand.PREPARE_DATABASE_RESTORE, ack_timeout_ms=5000)))
+    command = (InstanceCommand.PREPARE_DATABASE_RESTORE if "--prepare-database-restore" in sys.argv
+               else InstanceCommand.QUIT_APPLICATION)
+    sys.exit(int(send_instance_command(command, ack_timeout_ms=5000)))
 
 import datetime
 import json

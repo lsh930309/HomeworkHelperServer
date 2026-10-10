@@ -106,7 +106,7 @@ final class RemoteHostObservationTests: XCTestCase {
     }
 
     func testSSHRequiresTheServiceCapabilityAndMatchingPowerAcceptance() throws {
-        let ready = LocalSSHPowerManager.serviceResponse(from: #"{"accepted":true,"status":"ready","capabilities":["status","power"]}"#)
+        let ready = LocalSSHPowerManager.serviceResponse(from: #"{"accepted":true,"status":"ready","user_session_ready":true,"capabilities":["status","power"]}"#)
         XCTAssertTrue(ready?.readyForPower == true)
         XCTAssertFalse(LocalSSHPowerManager.serviceResponse(from: #"{"accepted":true,"status":"ready","capabilities":["status"]}"#)?.readyForPower == true)
         let accepted = LocalSSHPowerManager.serviceResponse(from: #"{"accepted":true,"status":"accepted","action":"sleep"}"#)

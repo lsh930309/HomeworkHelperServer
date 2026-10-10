@@ -132,7 +132,6 @@ class GlobalSettingsSchema(BaseModel):
     obs_port: int = 4455
     obs_password: str = ""
     obs_exe_path: str = ""
-    obs_auto_launch: bool = False
     obs_launch_hidden: bool = True
     obs_watch_output_dir: bool = True
     obs_recording_output_dir: str = ""

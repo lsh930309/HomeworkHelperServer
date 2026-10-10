@@ -58,6 +58,9 @@ class _StartupAttempt:
     session: Session | None = None
     outcome: str = "pending"
     previous_logon: tuple[str, int, str | None] | None = None
+    app_complete: bool = False
+    obs_complete: bool = False
+    has_error: bool = False
 
 
 def windows_path(value: str | Path) -> str:
@@ -67,7 +70,7 @@ def windows_path(value: str | Path) -> str:
 class PrivilegeController:
     """No caller controls paths, tokens or power flags. All targets come from one DB."""
 
-    capabilities = ("status", "power", "launch_managed", "inspect_managed", "stop_managed")
+    capabilities = ("status", "power", "launch_obs", "launch_managed", "inspect_managed", "stop_managed")
 
     def __init__(self, owner_sid: str, install_dir: Path, backend, repository,
                  *, resolver=None, argument_resolver=None, admin_required=None, preset_inputs=None,
@@ -131,16 +134,32 @@ class PrivilegeController:
             return self._reply("ready", "권한 서비스가 준비되었습니다.", service=SERVICE_NAME,
                                capabilities=list(self.capabilities), owner_sid=self.owner_sid,
                                user_sessions=[{"owner_sid":s.owner_sid, "session_id":s.session_id}
-                                              for s in sessions], user_session_ready=bool(sessions))
+                                              for s in sessions], user_session_ready=self.backend.current_session(self.owner_sid) is not None)
         if operation == "power":
             action = request.get("action")
             if set(request) != {"operation", "action"} or action not in {"shutdown", "restart", "sleep"}:
                 raise RequestDenied("지원하지 않는 전원 요청입니다.")
+            session = self.backend.current_session(self.owner_sid)
+            if session is None:
+                raise RequestDenied("전원 제어는 지정 사용자 로그온 후 사용할 수 있습니다.")
             self.backend.prepare_power(action)
             # The transport sends and closes this reply before the native action.
             reply = self._reply("accepted", "전원 요청을 수락했습니다.", action=action)
-            reply.after_send = lambda: self.backend.power(action)
+            def perform_power():
+                self._still_current(session)
+                self.backend.power(action)
+            reply.after_send = perform_power
             return reply
+        if operation == "launch_obs":
+            if set(request) != {"operation"}:
+                raise RequestDenied("OBS 요청에 경로 또는 인자를 지정할 수 없습니다.")
+            session = self._session(caller)
+            with self.backend.read_as_user(session):
+                settings = self.repository.read(session, settings_only=True).settings
+            self._still_current(session)
+            result = self.backend.launch_obs(session, settings.obs_exe_path, settings.obs_launch_hidden)
+            return self._reply("launched", "관리자 권한 OBS 실행을 확인했습니다.",
+                               **{k:v for k,v in result.items() if k != "accepted"})
         allowed = {
             "launch_managed": {"operation", "process_id", "mode"},
             "inspect_managed": {"operation", "process_ids"},
@@ -305,13 +324,34 @@ class PrivilegeController:
         if not self._startup_is_current(session_id, attempt, stop_event):
             return False
         self._still_current(session)
-        if snapshot.settings.run_on_startup:
-            result = self.backend.startup(session)
-            if (not isinstance(result, dict) or result.get("accepted") is not True
-                    or type(result.get("pid")) is not int or result["pid"] <= 0):
-                raise RuntimeError("앱 자동 시작의 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
-        attempt.outcome = "completed"
-        return True
+        for component in ("obs", "app"):
+            if not self._startup_is_current(session_id, attempt, stop_event):
+                return False
+            if getattr(attempt, component + "_complete"):
+                continue
+            try:
+                self._still_current(session)
+                if component == "obs":
+                    result = self.backend.launch_obs(session, snapshot.settings.obs_exe_path,
+                                                     snapshot.settings.obs_launch_hidden)
+                elif snapshot.settings.run_on_startup:
+                    result = self.backend.startup(session)
+                else:
+                    attempt.app_complete = True
+                    continue
+                if (not isinstance(result, dict) or result.get("accepted") is not True
+                        or type(result.get("pid")) is not int or result["pid"] <= 0):
+                    raise RuntimeError(f"{component} 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
+                setattr(attempt, component + "_complete", True)
+            except Exception as error:
+                if not self._temporary_startup_error(error):
+                    setattr(attempt, component + "_complete", True)
+                    attempt.has_error = True
+                    self._log_error(f"로그인 {component} 자동 시작 실패: session={session_id}: {error}")
+        if attempt.app_complete and attempt.obs_complete:
+            attempt.outcome = "failed" if attempt.has_error else "completed"
+            return True
+        return False
 
     def process_session_events(self, stop_event=None) -> None:
         """One worker tick. Tests advance its clock without sleeping or native effects."""

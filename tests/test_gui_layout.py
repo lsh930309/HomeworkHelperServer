@@ -412,7 +412,7 @@ def test_remote_server_mode_is_owned_by_remote_settings_dialog_only():
 def _stop_window(window, app):
     window._shutting_down = True
     window._timer_registry.shutdown()
-    assert window._suspend_runtime_after_beholder_restore()
+    assert window.prepare_database_restore()
     # DeferredDelete is not dispatched by processEvents alone without an outer
     # event loop. Deliver it now so hidden windows cannot leak into the next test.
     if type(window).INSTANCE is window:
@@ -1742,7 +1742,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
         _daily_checkin=types.SimpleNamespace(shutdown=lambda *_args: resource_shutdown_calls.append("checkin") or True),
     )
 
-    assert main_window.MainWindow._suspend_runtime_after_beholder_restore(window) is True
+    assert main_window.MainWindow.prepare_database_restore(window) is True
     main_window.MainWindow._ensure_timers_running(window)
 
     assert window._beholder_restore_runtime_suspended is True

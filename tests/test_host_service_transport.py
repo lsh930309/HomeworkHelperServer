@@ -67,7 +67,7 @@ def io(monkeypatch):
     )
     pipe = SimpleNamespace(
         CreateNamedPipe=lambda *_args: harness.handle,
-        ConnectNamedPipe=lambda handle, overlap: record("connect", handle, overlap),
+        ConnectNamedPipe=lambda handle, overlap: record("connect", handle, overlap) or 997,
         DisconnectNamedPipe=disconnect,
         PIPE_ACCESS_DUPLEX=3, PIPE_TYPE_MESSAGE=4, PIPE_READMODE_MESSAGE=2, PIPE_WAIT=0,
     )
@@ -195,3 +195,29 @@ def test_actual_windows_can_cancel_its_own_isolated_listening_pipe():
             win32api.CloseHandle(handle)
         finally:
             win32api.CloseHandle(overlap.hEvent)
+
+
+@pytest.mark.skipif(__import__('os').name != 'nt', reason='Requires native Windows named pipes')
+def test_native_windows_already_connected_return_and_error_normalization(monkeypatch):
+    import uuid
+    import pywintypes, win32api, win32con, win32event, win32file, win32pipe
+    from src.host_service.client import HostPrivilegeClient, PrivilegeServiceUnavailable
+    name = r'\\.\pipe\HHIsolated-' + uuid.uuid4().hex
+    server = win32pipe.CreateNamedPipe(name, win32pipe.PIPE_ACCESS_DUPLEX | win32con.FILE_FLAG_OVERLAPPED,
+        win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT | 8,
+        1,4096,4096,1000,None)
+    client = event = None
+    try:
+        client = win32file.CreateFile(name,win32con.GENERIC_READ | win32con.GENERIC_WRITE,0,None,
+                                    win32con.OPEN_EXISTING,win32con.FILE_FLAG_OVERLAPPED,None)
+        overlap = pywintypes.OVERLAPPED()
+        event = overlap.hEvent = win32event.CreateEvent(None,True,False,None)
+        try: result = win32pipe.ConnectNamedPipe(server,overlap)
+        except pywintypes.error as error: result = error.winerror
+        assert result == 535
+    finally:
+        if client is not None: win32api.CloseHandle(client)
+        if event is not None: win32api.CloseHandle(event)
+        win32api.CloseHandle(server)
+    monkeypatch.setattr(transport,'PIPE_NAME',name+'-absent')
+    with pytest.raises(PrivilegeServiceUnavailable): HostPrivilegeClient().status()

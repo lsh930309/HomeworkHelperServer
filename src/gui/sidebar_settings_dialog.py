@@ -258,16 +258,11 @@ class SidebarSettingsDialog(QDialog):
         obs_exe_row.addWidget(obs_exe_browse_btn)
         rec_form.addRow("OBS 실행 파일", obs_exe_row)
 
-        self._obs_auto_launch_cb = QCheckBox()
-        self._obs_auto_launch_cb.setChecked(getattr(self._settings, 'obs_auto_launch', False))
-        self._obs_auto_launch_cb.setToolTip("녹화 시 OBS가 실행 중이 아니면 자동으로 실행합니다.")
-        rec_form.addRow("OBS 자동 실행", self._obs_auto_launch_cb)
 
+        rec_form.addRow("OBS 자동 실행", QLabel("로그온 시 관리자 권한으로 자동 실행"))
         self._obs_launch_hidden_cb = QCheckBox()
         self._obs_launch_hidden_cb.setChecked(getattr(self._settings, 'obs_launch_hidden', True))
         self._obs_launch_hidden_cb.setToolTip("OBS를 최소화 상태로 실행합니다.")
-        self._obs_auto_launch_cb.toggled.connect(self._obs_launch_hidden_cb.setEnabled)
-        self._obs_launch_hidden_cb.setEnabled(self._obs_auto_launch_cb.isChecked())
         rec_form.addRow("  최소화 상태로 실행", self._obs_launch_hidden_cb)
 
         # 녹화 출력 폴더
@@ -419,7 +414,6 @@ class SidebarSettingsDialog(QDialog):
         gs.obs_port = self._obs_port_spin.value()
         gs.obs_password = self._obs_password_edit.text()
         gs.obs_exe_path = self._obs_exe_edit.text().strip()
-        gs.obs_auto_launch = self._obs_auto_launch_cb.isChecked()
         gs.obs_launch_hidden = self._obs_launch_hidden_cb.isChecked()
         gs.obs_recording_output_dir = self._rec_output_dir_edit.text().strip()
         gs.obs_watch_output_dir = self._obs_watch_output_cb.isChecked()

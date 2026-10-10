@@ -64,7 +64,6 @@ SIDEBAR_SETTINGS_FIELDS = {
     "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
     "screenshot_gamepad_trigger", "screenshot_disable_gamebar", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
-    "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
     "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
     "recording_hold_threshold_ms",
 }
@@ -80,7 +79,6 @@ PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
-    "obs_host", "obs_port", "obs_password", "obs_exe_path", "obs_auto_launch",
     "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
     "recording_hold_threshold_ms",
 }
@@ -139,7 +137,6 @@ FIELD_LABELS: dict[str, str] = {
     "obs_host": "OBS 호스트",
     "obs_password": "OBS 비밀번호",
     "obs_exe_path": "OBS 실행 파일",
-    "obs_auto_launch": "OBS 자동 실행",
     "obs_launch_hidden": "OBS 숨김 실행",
     "obs_watch_output_dir": "OBS 출력 폴더 감시",
     "obs_recording_output_dir": "OBS 녹화 저장 폴더",

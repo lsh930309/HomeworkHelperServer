@@ -635,7 +635,7 @@ def test_shell_thumbnail_balances_com_on_early_return(monkeypatch) -> None:
 
 def test_saved_stop_survives_last_played_failure_and_starts_followup_once():
     from src.gui.main_window import MainWindow, _LifecycleCommand
-    event = ProcessLifecycleEvent(process_id="game-a", process_name="Game", session_id=77, timestamp=200.0)
+    event = ProcessLifecycleEvent(process_id="game-a", process_name="Game", session_id=77, timestamp=200.0, stamina_tracking_enabled=False, hoyolab_game_id=None)
     command = _LifecycleCommand("stop", event, 321, 100.0, "runtime-game-a")
     calls = []
     class Transport:

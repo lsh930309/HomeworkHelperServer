@@ -267,7 +267,7 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 }
                 guard LocalSSHPowerManager.statusCommand().contains("--control status"),
                       LocalSSHPowerManager.serviceResponse(from:
-                        #"{"accepted":true,"status":"ready","capabilities":["power"]}"#)?.readyForPower == true,
+                        #"{"accepted":true,"status":"ready","user_session_ready":true,"capabilities":["power"]}"#)?.readyForPower == true,
                       LocalSSHPowerManager.serviceResponse(from:
                         #"{"accepted":true,"status":"ready","capabilities":[]}"#)?.readyForPower == false else {
                     fatalError("SSH health should require the service's explicit power capability")

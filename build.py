@@ -1711,23 +1711,30 @@ def macos_codesign_identity(env: dict[str, str] | None = None) -> str:
     return (env.get(MACOS_CODESIGN_IDENTITY_ENV) or MACOS_DEFAULT_CODESIGN_IDENTITY).strip()
 
 
-def macos_codesign_identity_available(identity: str) -> bool:
+def resolve_macos_codesign_identity(identity: str) -> str:
+    """Resolve one valid identity to its exact fingerprint, never a name substring."""
     if not identity or platform.system() != "Darwin" or not shutil.which("security"):
-        return False
+        raise RuntimeError("macOS code-signing identity를 확인할 수 없습니다.")
+    result = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning"], cwd=PROJECT_ROOT,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    matches = []
+    for fingerprint, name in re.findall(r'([A-Fa-f0-9]{40})\s+"([^"\n]+)"', result.stdout or ""):
+        if identity == name or identity.upper() == fingerprint.upper():
+            matches.append(fingerprint.upper())
+    matches = list(dict.fromkeys(matches))
+    if result.returncode != 0 or len(matches) != 1:
+        raise RuntimeError(f"서명 identity 선택이 없거나 모호합니다: {identity} (유효 일치 {len(matches)}개)")
+    return matches[0]
+
+
+def macos_codesign_identity_available(identity: str) -> bool:
     try:
-        result = subprocess.run(
-            ["security", "find-identity", "-v", "-p", "codesigning"],
-            cwd=PROJECT_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    except Exception:
+        resolve_macos_codesign_identity(identity)
+        return True
+    except (OSError, RuntimeError):
         return False
-    if result.returncode != 0:
-        return False
-    return any(identity in line for line in (result.stdout or "").splitlines())
 
 
 def create_macos_app_bundle_command(version_info: dict, output_dir: Path, codesign_identity: str) -> list[str]:
@@ -1766,18 +1773,10 @@ def build_macos_remote_app(gui, version_info):
         return False
 
     output_dir = DIST_DIR / "macos"
-    codesign_identity = macos_codesign_identity()
-    if not macos_codesign_identity_available(codesign_identity):
-        gui.log(f"✗ macOS code-signing identity 없음: {codesign_identity}", 'error')
-        gui.log(
-            "  준비 명령: "
-            f"{sys.executable} {MACOS_CODESIGN_HELPER} --identity {codesign_identity}",
-            'warning',
-        )
-        gui.log(
-            f"  다른 로컬 identity를 쓰려면 {MACOS_CODESIGN_IDENTITY_ENV}=<identity> 환경변수를 지정하세요.",
-            'warning',
-        )
+    try:
+        codesign_identity = resolve_macos_codesign_identity(macos_codesign_identity())
+    except (OSError, RuntimeError) as error:
+        gui.log(f"✗ {error}", 'error')
         return False
     gui.log(f"  macOS code-signing identity: {codesign_identity}")
     cmd = create_macos_app_bundle_command(version_info, output_dir, codesign_identity)

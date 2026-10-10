@@ -73,6 +73,7 @@ def _win32():
         raise RuntimeError("Windows native service operations require Windows.")
     import psutil
     import pywintypes
+    import win32timezone  # TokenStatistics conversion must load under SYSTEM, before impersonation.
     import win32api
     import win32con
     import win32event
@@ -473,7 +474,7 @@ class WindowsBackend:
 
     def _create_user_process(
         self, session: Session, executable: Path, arguments: list[str], *, elevated: bool,
-        wait_for_worker: bool = False,
+        wait_for_worker: bool = False, working_directory: Path | None = None,
     ) -> dict:
         api = _win32()
         with self._user_token(session, elevated) as token:
@@ -492,7 +493,7 @@ class WindowsBackend:
                     token, str(executable), subprocess.list2cmdline([str(executable), *arguments]),
                     None, None, False,
                     api.con.CREATE_UNICODE_ENVIRONMENT | api.con.CREATE_NO_WINDOW,
-                    environment, str(self.install_dir), startup,
+                    environment, str(working_directory or self.install_dir), startup,
                 )
                 if wait_for_worker:
                     waited = api.event.WaitForSingleObject(process, 10_000)
@@ -521,6 +522,30 @@ class WindowsBackend:
             finally:
                 _close(thread)
                 _close(process)
+
+    def launch_obs(self, session: Session, executable: str, hidden: bool) -> dict:
+        path = Path(executable)
+        with self.read_as_user(session):
+            if not executable or not path.is_absolute() or not path.is_file():
+                raise FileNotFoundError("OBS 실행 경로를 설정에서 확인해 주세요.")
+        for identity in self.processes(session):
+            if (identity.sid == session.owner_sid and identity.session_id == session.session_id
+                    and ntpath.normcase(identity.path) == ntpath.normcase(str(path))):
+                api = _win32()
+                handle = api.api.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, identity.pid)
+                token = None
+                try:
+                    if _process_identity(handle, identity.pid) != identity:
+                        continue
+                    token = api.security.OpenProcessToken(handle, _TOKEN_QUERY)
+                    if not api.security.GetTokenInformation(token, api.security.TokenElevation):
+                        raise PermissionError("일반 권한 OBS를 정상 종료한 뒤 다시 연결하세요.")
+                    return {"accepted": True, "pid": identity.pid, "already_running": True}
+                finally:
+                    _close(token)
+                    _close(handle)
+        return self._create_user_process(session, path, ["--minimize-to-tray"] if hidden else [],
+                                         elevated=True, working_directory=path.parent)
 
     def launch(self, session: Session, target: str, args: str | None, elevated: bool) -> dict:
         payload = base64.urlsafe_b64encode(

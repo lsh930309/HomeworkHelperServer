@@ -257,7 +257,6 @@ class GlobalSettings:
                  obs_port: int = 4455,
                  obs_password: str = "",
                  obs_exe_path: str = "",
-                 obs_auto_launch: bool = False,
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
                  obs_recording_output_dir: str = "",
@@ -313,7 +312,6 @@ class GlobalSettings:
         self.obs_port = obs_port
         self.obs_password = obs_password
         self.obs_exe_path = obs_exe_path
-        self.obs_auto_launch = obs_auto_launch
         self.obs_launch_hidden = obs_launch_hidden
         self.obs_watch_output_dir = obs_watch_output_dir
         self.obs_recording_output_dir = obs_recording_output_dir
@@ -406,7 +404,6 @@ class GlobalSettings:
         data['obs_port'] = int(data.get('obs_port', 4455))
         data['obs_password'] = str(data.get('obs_password', ''))
         data['obs_exe_path'] = str(data.get('obs_exe_path', ''))
-        data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
         data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
         data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))

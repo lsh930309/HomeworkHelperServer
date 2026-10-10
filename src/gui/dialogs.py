@@ -1778,7 +1778,7 @@ class GlobalSettingsDialog(QDialog):
     def get_updated_settings(self) -> GlobalSettings:
         # Start from the latest full settings object so fields managed by other
         # dialogs (sidebar, screenshots, OBS) are preserved when the primary
-        # PyQt settings dialog saves only its visible fields.
+        # PySide6 settings dialog saves only its visible fields.
         updated = GlobalSettings.from_dict(self.current_settings.to_dict())
         updated.sleep_start_time_str = self.sleep_start_edit.time().toString("HH:mm")
         updated.sleep_end_time_str = self.sleep_end_edit.time().toString("HH:mm")

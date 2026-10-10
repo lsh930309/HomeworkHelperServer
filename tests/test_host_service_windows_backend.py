@@ -543,3 +543,17 @@ def test_shutdown_and_restart_preflight_do_not_require_s3(backend, monkeypatch, 
     monkeypatch.setattr(native, "_enable_privileges", lambda *names: enabled.extend(names))
     service.prepare_power(action)
     assert enabled == ["SeShutdownPrivilege"]
+
+
+def test_obs_launch_uses_elevated_owner_and_obs_working_directory(tmp_path):
+    from contextlib import nullcontext
+    executable = tmp_path / "obs64.exe"
+    executable.write_bytes(b"isolated placeholder")
+    backend = object.__new__(native.WindowsBackend)
+    backend.read_as_user = lambda session:nullcontext()
+    backend.processes = lambda session:[]
+    calls=[]
+    backend._create_user_process = lambda *args,**kw:calls.append((args,kw)) or {"accepted":True,"pid":101}
+    session = Session("owner",7,tmp_path,"logon-42")
+    assert backend.launch_obs(session,str(executable),True)["pid"] == 101
+    assert calls == [((session,executable,["--minimize-to-tray"]),{"elevated":True,"working_directory":tmp_path})]

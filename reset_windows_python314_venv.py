@@ -83,36 +83,33 @@ def main() -> int:
             "Deactivate it and run: py -3.13 reset_windows_python314_venv.py"
         )
 
-    winget = shutil.which("winget")
-    if not winget:
-        fail("winget was not found. Install or update Microsoft App Installer and retry.")
-
-    print("[1/3] Installing or updating system Python 3.14.")
-    run(
-        [
-            winget,
-            "install",
-            "--id",
-            PYTHON_PACKAGE_ID,
-            "--exact",
-            "--source",
-            "winget",
-            "--scope",
-            "machine",
-            "--silent",
-            "--accept-package-agreements",
-            "--accept-source-agreements",
-            "--disable-interactivity",
-        ]
-    )
-
-    launcher = find_python_launcher()
-    installed_version = captured(
-        [launcher, PYTHON_SELECTOR, "-c", "import platform; print(platform.python_version())"]
-    )
-    if not installed_version.startswith("3.14."):
-        fail(f"Python 3.14 verification failed. Detected version: {installed_version}")
-    print(f"      Detected Python version: {installed_version}")
+    launcher = shutil.which("py")
+    version = None
+    if launcher:
+        probe = subprocess.run([launcher, PYTHON_SELECTOR, "-c", "import platform; print(platform.python_version())"],
+                               capture_output=True, text=True, check=False)
+        if probe.returncode == 0 and probe.stdout.strip().startswith("3.14."):
+            version = probe.stdout.strip()
+    if version is None:
+        winget = shutil.which("winget")
+        if not winget:
+            fail("Python 3.14가 없고 winget을 찾을 수 없습니다.")
+        print("[1/3] Installing system Python 3.14.")
+        installed = subprocess.run([
+            winget, "install", "--id", PYTHON_PACKAGE_ID, "--exact", "--source", "winget",
+            "--scope", "machine", "--silent", "--accept-package-agreements",
+            "--accept-source-agreements", "--disable-interactivity",
+        ], check=False)
+        # winget's no-update exit is acceptable only if the requested runtime is real.
+        launcher = find_python_launcher()
+        version = captured([launcher, PYTHON_SELECTOR, "-c", "import platform; print(platform.python_version())"])
+        if not version.startswith("3.14."):
+            fail(f"Python 3.14 verification failed; winget exit={installed.returncode}; version={version}")
+        if installed.returncode not in (0, -1978335189, 2316632107):
+            fail(f"Python installation failed: winget exit={installed.returncode}")
+    else:
+        print("[1/3] Existing Python 3.14 verified; skipping winget.")
+    print(f"      Detected Python version: {version}")
 
     if venv_path.exists():
         if not venv_path.is_dir():

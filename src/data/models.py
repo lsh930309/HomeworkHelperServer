@@ -113,7 +113,6 @@ class GlobalSettings(Base):
     obs_port = Column(Integer, default=4455)
     obs_password = Column(String, default="")
     obs_exe_path = Column(String, default="")
-    obs_auto_launch = Column(Boolean, default=False)
     obs_launch_hidden = Column(Boolean, default=True)
     obs_watch_output_dir = Column(Boolean, default=True)
     obs_recording_output_dir = Column(String, default="")

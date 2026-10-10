@@ -45,6 +45,9 @@ class HostPrivilegeClient:
     def status(self) -> dict:
         return self._request("status")
 
+    def launch_obs(self) -> dict:
+        return self._request("launch_obs")
+
     def launch_managed(self, process_id: str, mode: str = "auto") -> dict:
         return self._request("launch_managed", process_id=process_id, mode=mode)
 

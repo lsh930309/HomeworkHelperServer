@@ -9,9 +9,10 @@ enum LocalSSHPowerManager {
         let action: String?
         let capabilities: [String]?
         let message: String?
+        let user_session_ready: Bool?
 
         var readyForPower: Bool {
-            accepted && status == "ready" && capabilities?.contains("power") == true
+            accepted && status == "ready" && capabilities?.contains("power") == true && user_session_ready == true
         }
 
         func acceptsPower(action requestedAction: String) -> Bool {
@@ -137,6 +138,9 @@ enum LocalSSHPowerManager {
             let response = serviceResponse(from: result.stdout)
             if result.status == 0 && response?.readyForPower == true {
                 return HealthResult(host: host, outcome: .reachable, message: "SSH 인증과 권한 서비스의 전원 제어 준비를 확인했습니다.", executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: true, stdout: result.stdout, stderr: result.stderr)
+            }
+            if result.status == 0 && response?.user_session_ready == false {
+                return HealthResult(host: host, outcome: .reachable, message: "로그온 후 사용", executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
             }
             if result.status == 0 || response != nil {
                 return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 권한 서비스의 전원 제어 준비를 확인하지 못했습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)

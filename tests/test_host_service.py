@@ -52,6 +52,9 @@ class Backend:
         self.effects.append(("startup", session))
         return {"accepted":True, "pid":100}
 
+    def launch_obs(self, session, executable, hidden):
+        return {"accepted":True, "pid":101}
+
     def power(self, action):
         self.effects.append(("power", action))
 
@@ -92,11 +95,8 @@ def test_login_precedes_all_data_reads_but_status_and_power_work_without_login(s
     caller = replace(caller, session_id=0)
     status = controller.handle({"operation":"status"}, caller).payload
     assert status["accepted"] and not status["user_session_ready"]
-    reply = controller.handle({"operation":"power", "action":"sleep"}, caller)
-    assert reply.payload["status"] == "accepted"
-    assert backend.effects == []  # An acceptance response must precede the power effect.
-    reply.after_send()
-    assert backend.effects == [("power", "sleep")]
+    with pytest.raises(RequestDenied, match="로그온"):
+        controller.handle({"operation":"power", "action":"sleep"}, caller)
     with pytest.raises(RequestDenied, match="로그인"):
         controller.handle({"operation":"launch_managed", "process_id":"game", "mode":"direct"}, caller)
     assert repository.reads == 0
@@ -514,8 +514,8 @@ def _create_db(appdata, *, wal=False):
     connection = sqlite3.connect(database)
     if wal:
         connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("CREATE TABLE global_settings (id, run_as_admin, run_on_startup)")
-    connection.execute("INSERT INTO global_settings VALUES (1, 1, 0)")
+    connection.execute("CREATE TABLE global_settings (id, run_as_admin, run_on_startup, obs_exe_path DEFAULT '', obs_launch_hidden DEFAULT 1)")
+    connection.execute("INSERT INTO global_settings (id,run_as_admin,run_on_startup) VALUES (1, 1, 0)")
     connection.execute("CREATE TABLE managed_processes (id, name, monitoring_path, launch_path, "
                        "original_launch_path, preferred_launch_type, launch_args_enabled, launch_args, user_preset_id)")
     connection.execute("INSERT INTO managed_processes VALUES ('game', 'Game', 'game.exe', 'launcher.exe', "
@@ -553,8 +553,8 @@ def test_login_startup_reads_settings_without_requiring_game_schema(tmp_path):
     (appdata / "homework_helper_data").mkdir(parents=True)
     database = appdata / "homework_helper_data" / "app_data.db"
     connection = sqlite3.connect(database)
-    connection.execute("CREATE TABLE global_settings (id,run_as_admin,run_on_startup)")
-    connection.execute("INSERT INTO global_settings VALUES (1,0,1)")
+    connection.execute("CREATE TABLE global_settings (id,run_as_admin,run_on_startup, obs_exe_path DEFAULT '', obs_launch_hidden DEFAULT 1)")
+    connection.execute("INSERT INTO global_settings (id,run_as_admin,run_on_startup) VALUES (1,0,1)")
     connection.commit()
     connection.close()
     snapshot = ReadOnlyUserRepository().read(Session(OWNER,4,appdata), settings_only=True)
@@ -695,3 +695,49 @@ def test_control_json_preserves_unicode_over_a_windows_code_page(monkeypatch, mo
     received = json.loads(raw.getvalue().decode("utf-8"))
     assert received["message"] == message
     assert received["accepted"] is (mode != "error")
+
+
+def test_obs_logon_launch_is_independent_of_disabled_gui_and_is_not_reopened(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, r"C:\OBS\obs64.exe", True))
+    launches = []
+    backend.launch_obs = lambda *args: launches.append(args) or {"accepted":True,"pid":101}
+    controller.on_session_change("logon",4)
+    controller.process_session_events()
+    controller.on_session_change("logon",4)
+    controller.process_session_events()
+    controller.seed_logged_on_sessions()
+    controller.process_session_events()
+    assert len(launches) == 1 and backend.effects == [] and not errors
+
+
+def test_obs_failure_does_not_block_gui_startup(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    def fail(*args): raise PermissionError("no elevated token")
+    backend.launch_obs = fail
+    controller.on_session_change("logon",4)
+    controller.process_session_events()
+    assert len(backend.effects) == 1 and len(errors) == 1
+
+
+def test_power_rechecks_logon_before_native_effect(system):
+    controller, backend, repository, caller = system
+    reply = controller.handle({"operation":"power","action":"restart"}, replace(caller, session_id=0))
+    backend.session = None
+    with pytest.raises(RequestDenied): reply.after_send()
+    assert backend.effects == []
+
+
+def test_app_token_retry_does_not_relaunch_successful_obs(startup_system):
+    controller, backend, repository, clock, errors = startup_system
+    obs=[]; app=[]
+    backend.launch_obs = lambda *args:obs.append(args) or {"accepted":True,"pid":101}
+    def start(session):
+        app.append(session)
+        if len(app) == 1:
+            error = OSError("token preparing"); error.winerror=1008; raise error
+        return {"accepted":True,"pid":100}
+    backend.startup=start
+    controller.on_session_change("logon",4); controller.process_session_events()
+    clock[0]=1; controller.process_session_events()
+    assert len(obs)==1 and len(app)==2 and not errors

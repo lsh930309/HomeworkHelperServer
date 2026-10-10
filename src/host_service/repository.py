@@ -13,6 +13,8 @@ from types import SimpleNamespace
 class SettingsSnapshot:
     run_as_admin: bool
     run_on_startup: bool
+    obs_exe_path: str = ""
+    obs_launch_hidden: bool = True
 
 
 @dataclass(frozen=True)
@@ -39,13 +41,14 @@ class ReadOnlyUserRepository:
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
             settings = connection.execute(
-                "SELECT run_as_admin, run_on_startup FROM global_settings WHERE id = 1"
+                "SELECT run_as_admin, run_on_startup, obs_exe_path, obs_launch_hidden FROM global_settings WHERE id = 1"
             ).fetchone()
             if settings is None:
                 raise LookupError("기존 사용자 설정을 찾을 수 없습니다.")
             if settings_only:
                 return UserSnapshot(SettingsSnapshot(bool(settings["run_as_admin"]),
-                                                     bool(settings["run_on_startup"])), ())
+                                                     bool(settings["run_on_startup"]), settings["obs_exe_path"] or "",
+                                                     bool(settings["obs_launch_hidden"])), ())
             # Do not read cookie, pairing, incident or session tables in the service.
             rows = connection.execute(
                 "SELECT id, name, monitoring_path, launch_path, original_launch_path, "
@@ -54,7 +57,8 @@ class ReadOnlyUserRepository:
             ).fetchall()
             processes = tuple(SimpleNamespace(**dict(row)) for row in rows)
             return UserSnapshot(
-                SettingsSnapshot(bool(settings["run_as_admin"]), bool(settings["run_on_startup"])),
+                SettingsSnapshot(bool(settings["run_as_admin"]), bool(settings["run_on_startup"]), settings["obs_exe_path"] or "",
+                                                     bool(settings["obs_launch_hidden"])),
                 processes,
             )
         finally:
