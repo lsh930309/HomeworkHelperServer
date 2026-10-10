@@ -438,8 +438,8 @@ begin
   begin
     if not InstallationStarted then
     begin
-      if not Exec(ExpandConstant('{app}\homework_helper_service.exe'), 'start',
-        ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, RestoreResult) then
+      if not Exec('sc.exe', 'start HomeworkHelperPrivilege',
+        '', SW_HIDE, ewWaitUntilTerminated, RestoreResult) then
         Log('취소 후 기존 서비스 재시작 실행 실패')
       else if RestoreResult <> 0 then
         Log('취소 후 기존 서비스 재시작 실패: ' + IntToStr(RestoreResult));
