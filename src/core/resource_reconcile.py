@@ -1,17 +1,22 @@
-"""External resource 종료 후 재동기화 코디네이터."""
+"""종료 세션별 follow-up과 NIKKE 자원 조회·저장을 직렬로 실행한다."""
 from __future__ import annotations
 
 import logging
+import math
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
 
-from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
+from src.api.client import BackgroundApiTransport
 from src.core import credential_health
+from src.core.process_monitor import ProcessLifecycleEvent, ProcessMonitor
+from src.core.provider_activity import provider_activity
 from src.core.provider_health_persist import ProviderHealthPersistTask
 from src.data.data_models import ManagedProcess
+from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
     NIKKE_OUTPOST_LABEL,
@@ -23,507 +28,382 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class _ResourceReconcileJob:
+class _FollowupJob:
+    """세션 ID가 없으면 1회 조회, 있으면 해당 종료 세션의 독립 follow-up이다."""
+
     process_id: str
     process_name: str
     session_id: Optional[int]
-    provider: str
-    resource_key: str
+    target: tuple[str, ...]
+    service: object
     exit_timestamp: float
-    lifecycle_token: int
-    allow_session_correction: bool = True
-    finish_on_success: bool = False
+    registered_at: float
+    callback: Optional[Callable[[dict], None]] = None
+    next_slot: int = 0
     timer: Optional[QTimer] = None
     in_flight: bool = False
-    request_seq: int = 0
-    attempts_started: int = 0
-    baseline_signature: Optional[tuple[float]] = None
-    observed_signature: Optional[tuple[float]] = None
-    saw_non_baseline_signature: bool = False
-    stable_hits: int = 0
-    applied_session_percent: Optional[float] = None
+    cancelled: threading.Event = field(default_factory=threading.Event)
+
+    @property
+    def key(self) -> tuple[str, Optional[int]]:
+        return self.process_id, self.session_id
 
 
-class _ResourceFetchSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+class _ObservationSignals(QObject):
+    finished = Signal(object, object)
 
 
-class _ResourcePersistSignals(QObject):
-    finished = pyqtSignal(str, int, int, object)
+class _ObservationTask(QRunnable):
+    """외부 조회와 두 저장을 하나의 제공자 큐 작업 안에서 완료한다."""
 
-
-class _ResourceFetchTask(QRunnable):
-    def __init__(
-        self,
-        process_id: str,
-        lifecycle_token: int,
-        request_seq: int,
-        provider: str,
-        resource_key: str,
-        signals: _ResourceFetchSignals,
-    ):
+    def __init__(self, job, deadline, fetch, persist, is_current, signals):
         super().__init__()
-        self._process_id = process_id
-        self._lifecycle_token = lifecycle_token
-        self._request_seq = request_seq
-        self._provider = provider
-        self._resource_key = resource_key
+        self._job = job
+        self._deadline = deadline
+        self._fetch = fetch
+        self._persist = persist
+        self._is_current = is_current
         self._signals = signals
 
     def run(self) -> None:
-        payload = {"snapshot": None, "fetched_at": time.time()}
+        result = {"process_id": self._job.process_id}
         try:
-            if is_nikke_outpost_resource(self._provider, self._resource_key):
-                from src.services.nikke import get_nikke_service
-
-                snapshot = get_nikke_service().get_outpost_storage()
-                payload["snapshot"] = snapshot
-                payload["fetched_at"] = snapshot.updated_at.timestamp()
+            if not self._is_current(self._job):
+                result["cancelled"] = True
+            elif time.monotonic() >= self._deadline:
+                # GUI에서 예약했어도 큐 대기가 끝난 실제 요청 시작 시각을 확인한다.
+                result["expired"] = True
             else:
-                payload["error"] = "unsupported resource"
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:
-            payload["error"] = str(exc)
-            logger.warning(
-                "[Resource] 재동기화 fetch 실패: process_id=%s, error=%s",
-                self._process_id,
-                exc,
-            )
-
-        self._signals.finished.emit(
-            self._process_id,
-            self._lifecycle_token,
-            self._request_seq,
-            payload,
-        )
-
-
-class _ResourcePersistTask(QRunnable):
-    def __init__(
-        self,
-        process_id: str,
-        process_name: str,
-        session_id: Optional[int],
-        lifecycle_token: int,
-        request_seq: int,
-        fetched_percent: float,
-        fetched_label: str,
-        fetched_status: str,
-        fetched_at: float,
-        exit_timestamp: float,
-        allow_session_correction: bool,
-        applied_session_percent: Optional[float],
-        data_manager,
-        should_abort: Callable[[], bool],
-        signals: _ResourcePersistSignals,
-    ):
-        super().__init__()
-        self._process_id = process_id
-        self._process_name = process_name
-        self._session_id = session_id
-        self._lifecycle_token = lifecycle_token
-        self._request_seq = request_seq
-        self._fetched_percent = fetched_percent
-        self._fetched_label = fetched_label
-        self._fetched_status = fetched_status
-        self._fetched_at = fetched_at
-        self._exit_timestamp = exit_timestamp
-        self._allow_session_correction = allow_session_correction
-        self._applied_session_percent = applied_session_percent
-        self._data_manager = data_manager
-        self._should_abort = should_abort
-        self._signals = signals
-
-    def run(self) -> None:
-        signature = (round(float(self._fetched_percent), 1),)
-        result = {
-            "signature": signature,
-            "fetched_at": self._fetched_at,
-            "corrected_exit_percent": self._applied_session_percent,
-            "aborted": False,
-            "persist_succeeded": False,
-        }
-        try:
-            if self._should_abort():
-                result["aborted"] = True
-                return
-
-            live_process = self._data_manager.get_process_by_id(self._process_id)
-            if live_process is None:
-                result["error"] = "process missing during persistence"
-                return
-
-            updated_process = ManagedProcess.from_dict(live_process.to_dict())
-            process_changed = (
-                updated_process.resource_percent != self._fetched_percent
-                or updated_process.resource_updated_at != self._fetched_at
-                or updated_process.resource_status != self._fetched_status
-                or updated_process.resource_label != self._fetched_label
-            )
-            updated_process.resource_percent = self._fetched_percent
-            updated_process.resource_updated_at = self._fetched_at
-            updated_process.resource_status = self._fetched_status
-            updated_process.resource_label = self._fetched_label
-            process_persist_succeeded = True
-
-            if process_changed:
-                if self._should_abort():
-                    result["aborted"] = True
-                    return
-                if hasattr(self._data_manager, "update_process_resource"):
-                    process_persist_succeeded = self._data_manager.update_process_resource(
-                        self._process_id,
-                        self._fetched_percent,
-                        self._fetched_at,
-                        self._fetched_status,
-                        self._fetched_label,
-                    )
-                else:
-                    process_persist_succeeded = self._data_manager.update_process_runtime_state(updated_process)
-                if process_persist_succeeded:
-                    logger.info(
-                        "[Resource] 재동기화 반영: '%s' %s %.1f%%",
-                        self._process_name,
-                        self._fetched_label,
-                        self._fetched_percent,
-                    )
-                else:
-                    logger.warning(
-                        "[Resource] 재동기화 저장 실패: '%s' %.1f%%",
-                        self._process_name,
-                        self._fetched_percent,
-                    )
-                    result["error"] = "process persistence failed"
-
-            session_persist_succeeded = True
-            if self._allow_session_correction and self._session_id is not None:
-                recovered = (
-                    max(0.0, self._fetched_at - self._exit_timestamp)
-                    * 100.0
-                    / NIKKE_OUTPOST_FULL_CHARGE_SECONDS
-                )
-                corrected_exit_percent = clamp_percent(self._fetched_percent - recovered)
-                result["corrected_exit_percent"] = corrected_exit_percent
-
-                if corrected_exit_percent is not None and corrected_exit_percent != self._applied_session_percent:
-                    if self._should_abort():
-                        result["aborted"] = True
-                        return
-                    if hasattr(self._data_manager, "update_session_resource"):
-                        session_persist_succeeded = self._data_manager.update_session_resource(
-                            self._session_id,
-                            corrected_exit_percent,
-                        )
-                    else:
-                        session_persist_succeeded = False
-                    if session_persist_succeeded:
-                        logger.info(
-                            "[Resource] 세션 보정 반영: '%s' session=%s percent=%.1f%%",
-                            self._process_name,
-                            self._session_id,
-                            corrected_exit_percent,
-                        )
-                    else:
-                        logger.warning(
-                            "[Resource] 세션 보정 저장 실패: '%s' session=%s percent=%s",
-                            self._process_name,
-                            self._session_id,
-                            corrected_exit_percent,
-                        )
-                        result["error"] = "session persistence failed"
-
-            result["persist_succeeded"] = process_persist_succeeded and session_persist_succeeded
+                result.update(self._fetch(self._job))
+                if not self._is_current(self._job):
+                    result["cancelled"] = True
+                elif result.get("observation_succeeded"):
+                    # 이 요청은 기간 안에 시작했으므로 기간 뒤에 끝나도 저장한다.
+                    result.update(self._persist(self._job, result, self._is_current))
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
             result["error"] = str(exc)
-            logger.warning(
-                "[Resource] 재동기화 persistence 실패: process_id=%s, error=%s",
-                self._process_id,
-                exc,
-            )
+            logger.warning("자원 관측 실패: process_id=%s error=%s", self._job.process_id, exc)
         finally:
-            self._signals.finished.emit(
-                self._process_id,
-                self._lifecycle_token,
-                self._request_seq,
-                result,
-            )
+            self._signals.finished.emit(self._job, result)
 
 
-class NikkeResourceReconcileCoordinator(QObject):
-    """NIKKE 전초기지 방어 보상을 종료 후 짧은 시간 동안 재동기화합니다."""
+class _ResourceFollowupCoordinator(QObject):
+    """게임 실행 여부와 무관하게 종료별 조회 슬롯을 같은 제공자 큐에 배치한다."""
 
     RECONCILE_WINDOW_SEC = 180
     RECONCILE_INTERVAL_MS = 60_000
-    REQUIRED_STABLE_HITS = 2
+    resource_updated = Signal(str)
 
-    def __init__(self, data_manager, process_monitor: ProcessMonitor, notifier=None, parent: Optional[QObject] = None):
+    def __init__(self, data_manager, process_monitor, notifier=None, parent=None):
         super().__init__(parent)
         self._data_manager = data_manager
+        self._transport = BackgroundApiTransport(getattr(data_manager, "base_url", None))
         self._process_monitor = process_monitor
         self._notifier = notifier
-        self._lifecycle_tokens: dict[str, int] = {}
-        self._jobs: dict[str, _ResourceReconcileJob] = {}
+        self._jobs: dict[tuple[str, Optional[int]], _FollowupJob] = {}
         self._shutting_down = False
-
-        self._pool = QThreadPool(self)
+        self._pool = QThreadPool()
         self._pool.setMaxThreadCount(1)
-        self._health_pool = QThreadPool(self)
+        self._health_pool = QThreadPool()
         self._health_pool.setMaxThreadCount(1)
-        self._signals = _ResourceFetchSignals(self)
-        self._signals.finished.connect(self._on_fetch_finished)
-        self._persist_signals = _ResourcePersistSignals(self)
-        self._persist_signals.finished.connect(self._on_persist_finished)
+        self._signals = _ObservationSignals()
+        self._signals.finished.connect(self._on_observation_finished)
+
+    def _get_service(self):
+        raise NotImplementedError
+
+    def _target(self, process: ManagedProcess) -> Optional[tuple[str, ...]]:
+        raise NotImplementedError
+
+    def _event_target(self, event: ProcessLifecycleEvent) -> Optional[tuple[str, ...]]:
+        raise NotImplementedError
+
+    def _fetch_observation(self, job: _FollowupJob) -> dict:
+        raise NotImplementedError
+
+    def _persist_observation(self, job: _FollowupJob, payload: dict, is_current) -> dict:
+        raise NotImplementedError
+
+    def _apply_process_row(self, process: ManagedProcess, row: dict) -> None:
+        raise NotImplementedError
+
+    def _record_observation_health(self, process: ManagedProcess, payload: dict) -> None:
+        raise NotImplementedError
 
     def handle_process_started(self, event: ProcessLifecycleEvent) -> None:
-        self._advance_lifecycle_token(event.process_id)
-        self._finish_job(event.process_id, "process restarted")
+        """새 시작 조회는 1회 수행하며 앞선 종료 작업을 취소하지 않는다."""
+        self.request_refresh(event.process_id)
 
     def handle_process_stopped(self, event: ProcessLifecycleEvent) -> None:
-        self._advance_lifecycle_token(event.process_id)
-        self._finish_job(event.process_id, "new stop event")
-
-        if not event.is_nikke_outpost_resource_game():
+        """종료 저장에 성공해 ID를 받은 세션만 follow-up 대상으로 등록한다."""
+        if self._shutting_down or event.session_id is None:
             return
-
-        token = self._current_lifecycle_token(event.process_id)
         process = self._data_manager.get_process_by_id(event.process_id)
-        baseline_percent = event.resource_percent_at_end
-        if baseline_percent is None and process is not None:
-            baseline_percent = getattr(process, "resource_percent", None)
-
-        baseline_signature = None
-        if baseline_percent is not None:
-            normalized = clamp_percent(baseline_percent)
-            if normalized is not None:
-                baseline_signature = (round(normalized, 1),)
-
-        job = _ResourceReconcileJob(
+        target = self._target(process) if process is not None else None
+        if target is None or target != self._event_target(event) or (event.process_id, event.session_id) in self._jobs:
+            return
+        job = _FollowupJob(
             process_id=event.process_id,
             process_name=event.process_name,
             session_id=event.session_id,
-            provider=event.resource_provider or "",
-            resource_key=event.resource_key or "",
+            target=target,
+            service=self._get_service(),
             exit_timestamp=event.timestamp,
-            lifecycle_token=token,
-            baseline_signature=baseline_signature,
-            observed_signature=baseline_signature,
-            applied_session_percent=event.resource_percent_at_end,
+            registered_at=time.monotonic(),
         )
-        self._jobs[event.process_id] = job
+        self._jobs[job.key] = job
+        self._schedule_next(job)
 
-        initial_delay_ms = 0 if event.resource_percent_at_end is None else self.RECONCILE_INTERVAL_MS
-        self._schedule_attempt(event.process_id, initial_delay_ms)
+    def request_refresh(self, process_id: str, callback: Optional[Callable[[dict], None]] = None) -> bool:
+        """수동·시작 조회를 follow-up과 같은 큐에 1회 등록한다. 중복이면 False다."""
+        if self._shutting_down or (process_id, None) in self._jobs:
+            return False
+        process = self._data_manager.get_process_by_id(process_id)
+        target = self._target(process) if process is not None else None
+        if target is None:
+            return False
+        job = _FollowupJob(
+            process_id=process_id,
+            process_name=process.name,
+            session_id=None,
+            target=target,
+            service=self._get_service(),
+            exit_timestamp=time.time(),
+            registered_at=time.monotonic(),
+            callback=callback,
+        )
+        self._jobs[job.key] = job
+        self._schedule_next(job)
+        return True
 
     def schedule_startup_refreshes(self) -> None:
-        if self._shutting_down:
-            return
-
-        now = time.time()
+        """앱 시작 시 실행 중이지 않은 등록 대상도 같은 직렬 조회 경계를 사용한다."""
         for process in self._data_manager.managed_processes:
-            if not getattr(process, "resource_tracking_enabled", False) or not is_nikke_outpost_resource(
-                getattr(process, "resource_provider", None),
-                getattr(process, "resource_key", None),
-            ):
-                continue
-            if process.id in self._process_monitor.active_monitored_processes:
-                continue
+            if process.id not in self._process_monitor.active_monitored_processes:
+                self.request_refresh(process.id)
 
-            self._advance_lifecycle_token(process.id)
-            self._finish_job(process.id, "startup refresh rescheduled")
-
-            job = _ResourceReconcileJob(
-                process_id=process.id,
-                process_name=process.name,
-                session_id=None,
-                provider=process.resource_provider or "",
-                resource_key=process.resource_key or "",
-                exit_timestamp=now,
-                lifecycle_token=self._current_lifecycle_token(process.id),
-                allow_session_correction=False,
-                finish_on_success=True,
-            )
-            self._jobs[process.id] = job
-            self._schedule_attempt(process.id, 0)
-
-    def shutdown(self) -> None:
-        self._shutting_down = True
-        for process_id in list(self._jobs):
-            self._finish_job(process_id, "shutdown")
-        self._pool.waitForDone()
-        self._health_pool.waitForDone()
-
-    def _advance_lifecycle_token(self, process_id: str) -> int:
-        next_token = self._lifecycle_tokens.get(process_id, 0) + 1
-        self._lifecycle_tokens[process_id] = next_token
-        return next_token
-
-    def _current_lifecycle_token(self, process_id: str) -> int:
-        return self._lifecycle_tokens.get(process_id, 0)
-
-    def _reconcile_window_elapsed(self, exit_timestamp: float) -> bool:
-        return time.time() - exit_timestamp >= self.RECONCILE_WINDOW_SEC
-
-    def _schedule_attempt(self, process_id: str, delay_ms: int) -> None:
-        job = self._jobs.get(process_id)
-        if job is None or self._shutting_down:
-            return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed before scheduling")
-            return
-
-        if job.timer is not None:
-            job.timer.stop()
-            job.timer.deleteLater()
-
-        remaining_ms = max(
-            0,
-            int((self.RECONCILE_WINDOW_SEC - max(0.0, time.time() - job.exit_timestamp)) * 1000),
+    def _job_is_current(self, job: _FollowupJob) -> bool:
+        if self._shutting_down or job.cancelled.is_set() or self._jobs.get(job.key) is not job:
+            return False
+        process = self._data_manager.get_process_by_id(job.process_id)
+        return (
+            process is not None
+            and self._target(process) == job.target
+            # 설정 변경의 기존 reset_*_service 경계를 사용한다. 자동 쿠키 갱신은
+            # 서비스 객체를 교체하지 않으므로 정상 follow-up을 취소하지 않는다.
+            and self._get_service() is job.service
         )
-        effective_delay_ms = max(0, min(delay_ms, remaining_ms))
 
+    def cancel_changed_targets(self) -> None:
+        """등록 삭제·추적 대상·계정 설정 변경만 중단하며 감시 경로는 비교하지 않는다."""
+        for job in list(self._jobs.values()):
+            if not self._job_is_current(job):
+                self._finish_job(job, "tracking target or account changed")
+
+    def _schedule_next(self, job: _FollowupJob) -> None:
+        if not self._job_is_current(job):
+            self._finish_job(job, "tracking target or account changed")
+            return
+        now = time.monotonic()
+        if job.session_id is None:
+            due = now
+        else:
+            interval = self.RECONCILE_INTERVAL_MS / 1000.0
+            # 완료 시각에 60초를 더하지 않고 등록 시점의 0/60/120초를 기준으로 한다.
+            # 큐 대기 중 지나간 슬롯을 모아서 실행하지 않는다.
+            while job.next_slot and job.registered_at + job.next_slot * interval < now:
+                job.next_slot += 1
+            deadline = job.registered_at + self.RECONCILE_WINDOW_SEC
+            if now >= deadline:
+                self._finish_job(job, "follow-up window complete")
+                return
+            # 마지막 조회가 일찍 끝나도 종료 작업의 기간은 180초까지 유지한다.
+            due = min(job.registered_at + job.next_slot * interval, deadline)
         timer = QTimer(self)
         timer.setSingleShot(True)
-        timer.timeout.connect(lambda pid=process_id, token=job.lifecycle_token: self._start_attempt(pid, token))
-        timer.start(effective_delay_ms)
+        timer.setTimerType(Qt.TimerType.PreciseTimer)
+        timer.timeout.connect(lambda current_job=job: self._start_attempt(current_job))
+        timer.start(max(0, math.ceil((due - now) * 1000)))
         job.timer = timer
 
-    def _start_attempt(self, process_id: str, lifecycle_token: int) -> None:
-        job = self._jobs.get(process_id)
-        if (
-            job is None
-            or self._shutting_down
-            or lifecycle_token != job.lifecycle_token
-            or job.in_flight
-        ):
+    def _start_attempt(self, job: _FollowupJob) -> None:
+        if not self._job_is_current(job):
+            self._finish_job(job, "tracking target or account changed")
             return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed before fetch")
+        if job.in_flight:
             return
-
-        job.in_flight = True
-        job.request_seq += 1
-        job.attempts_started += 1
         if job.timer is not None:
+            job.timer.stop()
+            job.timer.timeout.disconnect()
             job.timer.deleteLater()
             job.timer = None
-
-        self._pool.start(
-            _ResourceFetchTask(
-                process_id=job.process_id,
-                lifecycle_token=job.lifecycle_token,
-                request_seq=job.request_seq,
-                provider=job.provider,
-                resource_key=job.resource_key,
-                signals=self._signals,
-            )
+        deadline = (
+            job.registered_at + self.RECONCILE_WINDOW_SEC
+            if job.session_id is not None else float("inf")
         )
-
-    @pyqtSlot(str, int, int, object)
-    def _on_fetch_finished(self, process_id: str, lifecycle_token: int, request_seq: int, payload: object) -> None:
-        job = self._jobs.get(process_id)
-        if (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-        ):
+        now = time.monotonic()
+        if now >= deadline:
+            self._finish_job(job, "follow-up window complete")
             return
-
-        if process_id in self._process_monitor.active_monitored_processes:
-            self._finish_job(process_id, "process running again")
-            return
-
-        data = payload if isinstance(payload, dict) else {}
-        snapshot = data.get("snapshot")
-        fetched_at_value = data.get("fetched_at")
-        if not isinstance(fetched_at_value, (int, float)):
-            fetched_at_value = time.time()
-        fetched_at = float(fetched_at_value)
-        process = self._data_manager.get_process_by_id(process_id)
-        if (
-            process is None
-            or not getattr(process, "resource_tracking_enabled", False)
-            or not is_nikke_outpost_resource(getattr(process, "resource_provider", None), getattr(process, "resource_key", None))
-        ):
-            self._finish_job(process_id, "process metadata changed")
-            return
-
-        percent = getattr(snapshot, "percent", None)
-        status = getattr(snapshot, "status", None)
-        if snapshot is not None and status == "ok" and percent is not None:
-            self._record_provider_health_from_snapshot(process, snapshot, fetched_at)
-            normalized_percent = clamp_percent(percent)
-            if normalized_percent is not None:
-                self._pool.start(
-                    _ResourcePersistTask(
-                        process_id=job.process_id,
-                        process_name=job.process_name,
-                        session_id=job.session_id,
-                        lifecycle_token=job.lifecycle_token,
-                        request_seq=job.request_seq,
-                        fetched_percent=normalized_percent,
-                        fetched_label=getattr(snapshot, "label", None) or NIKKE_OUTPOST_LABEL,
-                        fetched_status=status,
-                        fetched_at=fetched_at,
-                        exit_timestamp=job.exit_timestamp,
-                        allow_session_correction=job.allow_session_correction,
-                        applied_session_percent=job.applied_session_percent,
-                        data_manager=self._data_manager,
-                        should_abort=lambda pid=job.process_id, token=job.lifecycle_token, seq=job.request_seq: self._should_abort_persistence(
-                            pid,
-                            token,
-                            seq,
-                        ),
-                        signals=self._persist_signals,
-                    )
-                )
+        if job.session_id is not None:
+            due = job.registered_at + job.next_slot * self.RECONCILE_INTERVAL_MS / 1000.0
+            if now < due or due >= deadline:
+                # 타이머가 예상보다 이르게 전달돼도 슬롯 앞당김·추가 조회를 하지 않는다.
+                self._schedule_next(job)
                 return
+        job.in_flight = True
+        job.next_slot += 1
+        self._pool.start(_ObservationTask(
+            job, deadline, self._fetch_observation, self._persist_observation,
+            self._job_is_current, self._signals,
+        ))
 
-        if snapshot is not None and status:
-            self._record_provider_health_from_snapshot(process, snapshot, fetched_at)
-            if status in {"auth_required", "auth_expired", "role_not_found"}:
-                self._finish_job(process_id, f"provider health {status}")
-                return
-
+    @Slot(object, object)
+    def _on_observation_finished(self, job: _FollowupJob, payload: dict) -> None:
+        if self._jobs.get(job.key) is not job or self._shutting_down:
+            return
         job.in_flight = False
-        if job.finish_on_success:
-            self._finish_job(process_id, "startup refresh failed")
+        if not self._job_is_current(job) or payload.get("cancelled"):
+            self._finish_job(job, "tracking target or account changed")
             return
+        process = self._data_manager.get_process_by_id(job.process_id)
+        if payload.get("fetched_at") is not None:
+            self._record_observation_health(process, payload)
+        row = payload.get("process_row")
+        if isinstance(row, dict):
+            self._apply_process_row(process, row)
+            self.resource_updated.emit(job.process_id)
+        for error_key in ("error", "process_error", "session_error"):
+            if payload.get(error_key):
+                logger.warning("자원 조회·저장 결과: process_id=%s session_id=%s %s=%s", job.process_id, job.session_id, error_key, payload[error_key])
+        if job.session_id is None:
+            callback = job.callback
+            job.callback = None
+            self._finish_job(job, "one-shot refresh complete")
+            if callback is not None:
+                callback(payload)
+        elif payload.get("expired"):
+            self._finish_job(job, "queued request expired before fetch")
+        else:
+            self._schedule_next(job)
 
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed")
+    def _finish_job(self, job: _FollowupJob, reason: str) -> None:
+        if self._jobs.get(job.key) is not job:
             return
+        self._jobs.pop(job.key)
+        job.cancelled.set()
+        if job.timer is not None:
+            job.timer.stop()
+            job.timer.timeout.disconnect()
+            job.timer.deleteLater()
+            job.timer = None
+        callback = job.callback
+        job.callback = None
+        if callback is not None and not self._shutting_down:
+            callback({"process_id": job.process_id, "cancelled": True, "error": reason})
+        logger.debug("follow-up 종료: process_id=%s session_id=%s reason=%s", job.process_id, job.session_id, reason)
 
-        self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
+    def shutdown(self, deadline_ms: int = 2000) -> bool:
+        if not self._shutting_down:
+            self._shutting_down = True
+            for job in list(self._jobs.values()):
+                self._finish_job(job, "shutdown")
+            self._pool.clear()
+            self._health_pool.clear()
+            try:
+                self._signals.finished.disconnect(self._on_observation_finished)
+            except (TypeError, RuntimeError):
+                pass
+        deadline = time.monotonic() + max(0, int(deadline_ms)) / 1000.0
+        primary = self._pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+        health = self._health_pool.waitForDone(max(0, int((deadline - time.monotonic()) * 1000)))
+        if not primary:
+            retain_detached_qthreadpool(self._pool)
+        if not health:
+            retain_detached_qthreadpool(self._health_pool)
+        return primary and health
+
+
+def _persist_resource_observation(job, payload, transport, is_current) -> dict:
+    """현재 자원 저장과 자기 종료 세션 보정은 각각의 결과를 기록한다."""
+    snapshot = payload["snapshot"]
+    fetched_at = payload["fetched_at"]
+    percent = clamp_percent(snapshot.percent)
+    result = {"process_row": None, "session_succeeded": False}
+    try:
+        result["process_row"] = transport.update_process_resource(
+            job.process_id, percent, fetched_at, snapshot.status,
+            snapshot.label or NIKKE_OUTPOST_LABEL,
+        )
+    except Exception as exc:
+        result["process_error"] = str(exc)
+    if job.session_id is not None and is_current(job):
+        recovered = max(0.0, fetched_at - job.exit_timestamp) * 100.0 / NIKKE_OUTPOST_FULL_CHARGE_SECONDS
+        corrected = clamp_percent(percent - recovered)
+        try:
+            transport.update_session_resource(job.session_id, corrected)
+            result["corrected_exit_percent"] = corrected
+            result["session_succeeded"] = True
+        except Exception as exc:
+            result["session_error"] = str(exc)
+    return result
+
+
+class NikkeResourceReconcileCoordinator(_ResourceFollowupCoordinator):
+    """NIKKE 전초기지 관측은 종료별 세션 보정과 현재 자원 저장을 분리한다."""
+
+    def _get_service(self):
+        from src.services.nikke import get_nikke_service
+        return get_nikke_service()
+
+    def _target(self, process):
+        if getattr(process, "resource_tracking_enabled", False) and is_nikke_outpost_resource(
+            getattr(process, "resource_provider", None), getattr(process, "resource_key", None)
+        ):
+            return process.resource_provider, process.resource_key
+        return None
+
+    def _event_target(self, event):
+        if event.is_nikke_outpost_resource_game():
+            return event.resource_provider, event.resource_key
+        return None
+
+    def _fetch_observation(self, job):
+        with provider_activity(job.target[0], job.target[1]):
+            snapshot = job.service.get_outpost_storage()
+        return {
+            "snapshot": snapshot,
+            "fetched_at": snapshot.updated_at.timestamp(),
+            "provider_status": snapshot.status,
+            "error": snapshot.message if snapshot.status != "ok" else None,
+            "observation_succeeded": snapshot.status == "ok" and snapshot.percent is not None,
+        }
+
+    def _persist_observation(self, job, payload, is_current):
+        return _persist_resource_observation(job, payload, self._transport, is_current)
+
+    def _apply_process_row(self, process, row):
+        for key in ("resource_percent", "resource_updated_at", "resource_status", "resource_label"):
+            setattr(process, key, row[key])
+
+    def _record_observation_health(self, process, payload):
+        snapshot = payload.get("snapshot")
+        if snapshot is not None:
+            self._record_provider_health_from_snapshot(process, snapshot, payload["fetched_at"])
 
     def _record_provider_health_from_snapshot(self, process: ManagedProcess, snapshot, fetched_at: float) -> None:
         status = str(getattr(snapshot, "status", "") or "")
         message = str(getattr(snapshot, "message", "") or status)
         payload = credential_health.update_payload_for_reason(
             credential_health.PROVIDER_NIKKE_BLABLALINK,
-            status,
-            message=message,
-            source="resource_tracking",
-            process_id=process.id,
-            game_id=getattr(process, "user_preset_id", None) or "nikke",
-            detected_at=fetched_at,
+            status, message=message, source="resource_tracking", process_id=process.id,
+            game_id=getattr(process, "user_preset_id", None) or "nikke", detected_at=fetched_at,
         )
         if payload is None:
             return
-
-        self._health_pool.start(
-            ProviderHealthPersistTask(
-                self._data_manager,
-                payload,
-                context="NIKKE resource_tracking",
-            )
-        )
-
+        self._health_pool.start(ProviderHealthPersistTask(self._transport, payload, context="NIKKE resource_tracking"))
         if credential_health.is_alertable_health(payload["status"], payload["reason"]):
             self._send_provider_health_notification(process, payload)
 
@@ -534,115 +414,7 @@ class NikkeResourceReconcileCoordinator(QObject):
             self._notifier.send_notification(
                 title=f"{process.name} 계정/토큰 확인 필요",
                 message=str(payload.get("message") or payload.get("reason") or ""),
-                task_id_to_highlight=process.id,
-                button_text="확인",
-                button_action="show",
+                task_id_to_highlight=process.id, button_text="확인", button_action="show",
             )
         except Exception as exc:
             logger.debug("[Resource] provider health 알림 전송 실패: %s", exc, exc_info=True)
-
-    @pyqtSlot(str, int, int, object)
-    def _on_persist_finished(self, process_id: str, lifecycle_token: int, request_seq: int, payload: object) -> None:
-        job = self._jobs.get(process_id)
-        if (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-        ):
-            return
-
-        job.in_flight = False
-
-        if process_id in self._process_monitor.active_monitored_processes:
-            self._finish_job(process_id, "process running again")
-            return
-
-        data = payload if isinstance(payload, dict) else {}
-        process = self._data_manager.get_process_by_id(process_id)
-        if (
-            process is None
-            or not getattr(process, "resource_tracking_enabled", False)
-            or not is_nikke_outpost_resource(getattr(process, "resource_provider", None), getattr(process, "resource_key", None))
-        ):
-            self._finish_job(process_id, "process metadata changed")
-            return
-
-        if data.get("error"):
-            logger.warning(
-                "[Resource] 재동기화 저장 후처리 실패: process_id=%s, error=%s",
-                process_id,
-                data["error"],
-            )
-            if job.finish_on_success:
-                self._finish_job(process_id, "startup refresh failed")
-                return
-
-        if not data.get("persist_succeeded", False):
-            if job.finish_on_success:
-                self._finish_job(process_id, "startup refresh failed")
-                return
-            if self._reconcile_window_elapsed(job.exit_timestamp):
-                self._finish_job(process_id, "reconcile window elapsed")
-                return
-            self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-            return
-
-        corrected_exit_percent = data.get("corrected_exit_percent")
-        if corrected_exit_percent is not None:
-            job.applied_session_percent = corrected_exit_percent
-
-        if job.finish_on_success:
-            self._finish_job(process_id, "startup refresh completed")
-            return
-
-        signature = data.get("signature")
-        if isinstance(signature, tuple) and len(signature) == 1:
-            if job.observed_signature == signature:
-                job.stable_hits += 1
-            else:
-                job.observed_signature = signature
-                job.stable_hits = 1
-
-            if job.baseline_signature is not None and not job.saw_non_baseline_signature:
-                if signature != job.baseline_signature:
-                    job.saw_non_baseline_signature = True
-                else:
-                    job.stable_hits = 0
-
-            allow_stabilized_finish = job.baseline_signature is None or job.saw_non_baseline_signature
-            if allow_stabilized_finish and job.stable_hits >= self.REQUIRED_STABLE_HITS:
-                self._finish_job(process_id, "resource stabilized")
-                return
-
-        if self._reconcile_window_elapsed(job.exit_timestamp):
-            self._finish_job(process_id, "reconcile window elapsed")
-            return
-
-        self._schedule_attempt(process_id, self.RECONCILE_INTERVAL_MS)
-
-    def _should_abort_persistence(self, process_id: str, lifecycle_token: int, request_seq: int) -> bool:
-        job = self._jobs.get(process_id)
-        return (
-            self._shutting_down
-            or job is None
-            or job.lifecycle_token != lifecycle_token
-            or job.request_seq != request_seq
-            or process_id in self._process_monitor.active_monitored_processes
-        )
-
-    def _finish_job(self, process_id: str, reason: str) -> None:
-        job = self._jobs.pop(process_id, None)
-        if job is None:
-            return
-
-        if job.timer is not None:
-            job.timer.stop()
-            job.timer.deleteLater()
-
-        logger.debug(
-            "[Resource] reconcile 종료: process_id=%s, reason=%s, attempts=%s",
-            process_id,
-            reason,
-            job.attempts_started,
-        )

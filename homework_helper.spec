@@ -6,6 +6,18 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks.qt import pyside6_library_info
+
+# The Windows wheel's platforminputcontexts contains only Qt Virtual Keyboard.
+# QtGui's default hook collects it even for Widgets, pulling Quick/QML back into
+# the binary dependency graph. Keep native platform, style, SVG and network
+# plugins; exclude this unused QML input frontend at the collection boundary.
+qt_gui_info = pyside6_library_info.python_modules['QtGui']
+qt_gui_info.plugins = [
+    plugin_type for plugin_type in qt_gui_info.plugins
+    if plugin_type != 'platforminputcontexts'
+]
+
 
 def collect_tree(src, dest, excludes=()):
     src_path = Path(src)
@@ -40,7 +52,8 @@ a = Analysis(
         'uvicorn', 'fastapi', 'sqlalchemy', 'starlette',
         
         # GUI
-        'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui',
+        'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
+        'PySide6.QtNetwork',
         
         # Windows
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
@@ -67,12 +80,36 @@ a = Analysis(
         # 영상/이미지 처리 (LSH로 이동)
         'cv2', 'av', 'skimage', 'scipy', 'matplotlib',
         'numpy', 'imageio',
+        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuick3D',
+        'PySide6.QtQuickControls2', 'PySide6.QtQuickTest', 'PySide6.QtQuickWidgets',
+        'PySide6.QtWebEngineQuick',
     ],
     noarchive=False,
     optimize=0,
 )
 
 pyz = PYZ(a.pure)
+
+# The service has its own import graph. It never imports the desktop entrypoint
+# or database writer, and shares only immutable runtime binaries in onedir.
+service_analysis = Analysis(
+    ['homework_helper_service.py'],
+    pathex=[], binaries=[], datas=[],
+    hiddenimports=[
+        'win32api', 'win32security', 'win32process', 'win32con', 'win32ts',
+        'win32service', 'win32serviceutil', 'servicemanager',
+        # pywintypes imports this dynamically when native token times are materialized.
+        'win32pipe', 'win32file', 'win32event', 'win32timezone', 'pywintypes', 'psutil',
+    ],
+    excludes=['PySide6', 'fastapi', 'uvicorn', 'sqlalchemy', 'tkinter'],
+    noarchive=False, optimize=0,
+)
+service_exe = EXE(
+    PYZ(service_analysis.pure), service_analysis.scripts, [],
+    exclude_binaries=True, name='homework_helper_service',
+    debug=False, strip=False, upx=False, console=True,
+    icon=['assets/icons/app/app_icon.ico'],
+)
 
 exe = EXE(
     pyz,
@@ -95,8 +132,11 @@ exe = EXE(
 
 coll = COLLECT(
     exe,
+    service_exe,
     a.binaries,
+    service_analysis.binaries,
     a.datas,
+    service_analysis.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

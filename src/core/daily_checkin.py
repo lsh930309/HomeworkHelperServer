@@ -275,13 +275,25 @@ def raw_debug_json(value: Any) -> str:
         return json.dumps({"debug_repr": str(value)}, ensure_ascii=False, sort_keys=True)
 
 
-def execute_daily_checkin(descriptor: DailyCheckInDescriptor) -> DailyCheckInAttemptResult:
+def execute_daily_checkin(
+    descriptor: DailyCheckInDescriptor,
+    *,
+    timeout_seconds: float = 30.0,
+) -> DailyCheckInAttemptResult:
     """Run the provider POST flow for a single game and normalize the result."""
     attempted_at = time.time()
     if descriptor.provider == PROVIDER_HOYOLAB:
-        return _execute_hoyolab_daily_checkin(descriptor, attempted_at=attempted_at)
+        return _execute_hoyolab_daily_checkin(
+            descriptor,
+            attempted_at=attempted_at,
+            timeout_seconds=timeout_seconds,
+        )
     if descriptor.provider == PROVIDER_NIKKE_BLABLALINK:
-        return _execute_nikke_daily_checkin(descriptor, attempted_at=attempted_at)
+        return _execute_nikke_daily_checkin(
+            descriptor,
+            attempted_at=attempted_at,
+            timeout_seconds=timeout_seconds,
+        )
     return DailyCheckInAttemptResult(
         provider=descriptor.provider,
         game_id=descriptor.game_id,
@@ -294,13 +306,25 @@ def execute_daily_checkin(descriptor: DailyCheckInDescriptor) -> DailyCheckInAtt
     )
 
 
-def probe_daily_checkin_status(descriptor: DailyCheckInDescriptor) -> DailyCheckInAttemptResult:
+def probe_daily_checkin_status(
+    descriptor: DailyCheckInDescriptor,
+    *,
+    timeout_seconds: float = 30.0,
+) -> DailyCheckInAttemptResult:
     """Read the provider's current daily check-in status without claiming."""
     attempted_at = time.time()
     if descriptor.provider == PROVIDER_HOYOLAB:
-        return _probe_hoyolab_daily_checkin(descriptor, attempted_at=attempted_at)
+        return _probe_hoyolab_daily_checkin(
+            descriptor,
+            attempted_at=attempted_at,
+            timeout_seconds=timeout_seconds,
+        )
     if descriptor.provider == PROVIDER_NIKKE_BLABLALINK:
-        return _probe_nikke_daily_checkin(descriptor, attempted_at=attempted_at)
+        return _probe_nikke_daily_checkin(
+            descriptor,
+            attempted_at=attempted_at,
+            timeout_seconds=timeout_seconds,
+        )
     return DailyCheckInAttemptResult(
         provider=descriptor.provider,
         game_id=descriptor.game_id,
@@ -317,11 +341,15 @@ def _execute_hoyolab_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
     attempted_at: float,
+    timeout_seconds: float,
 ) -> DailyCheckInAttemptResult:
     try:
         from src.services.hoyolab import get_hoyolab_service
 
-        results = get_hoyolab_service().claim_daily_rewards([descriptor.game_id])
+        results = get_hoyolab_service().claim_daily_rewards(
+            [descriptor.game_id],
+            timeout_seconds=timeout_seconds,
+        )
         result = results[0] if results else None
         if result is None:
             return DailyCheckInAttemptResult(
@@ -371,11 +399,15 @@ def _probe_hoyolab_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
     attempted_at: float,
+    timeout_seconds: float,
 ) -> DailyCheckInAttemptResult:
     try:
         from src.services.hoyolab import get_hoyolab_service
 
-        results = get_hoyolab_service().get_daily_reward_status([descriptor.game_id])
+        results = get_hoyolab_service().get_daily_reward_status(
+            [descriptor.game_id],
+            timeout_seconds=timeout_seconds,
+        )
         result = results[0] if results else None
         if result is None:
             return DailyCheckInAttemptResult(
@@ -420,11 +452,12 @@ def _execute_nikke_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
     attempted_at: float,
+    timeout_seconds: float,
 ) -> DailyCheckInAttemptResult:
     try:
         from src.services.nikke import get_nikke_service
 
-        status = get_nikke_service().claim_daily_checkin()
+        status = get_nikke_service().claim_daily_checkin(timeout_seconds=timeout_seconds)
         raw_debug = getattr(status, "raw_debug", {}) or {}
         return DailyCheckInAttemptResult(
             provider=descriptor.provider,
@@ -458,11 +491,12 @@ def _probe_nikke_daily_checkin(
     descriptor: DailyCheckInDescriptor,
     *,
     attempted_at: float,
+    timeout_seconds: float,
 ) -> DailyCheckInAttemptResult:
     try:
         from src.services.nikke import get_nikke_service
 
-        status = get_nikke_service().get_daily_checkin_status()
+        status = get_nikke_service().get_daily_checkin_status(timeout_seconds=timeout_seconds)
         raw_debug = getattr(status, "raw_debug", {}) or {}
         return DailyCheckInAttemptResult(
             provider=descriptor.provider,

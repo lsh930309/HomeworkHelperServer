@@ -1,7 +1,7 @@
 ﻿# HomeworkHelper 의존성
 
 # === GUI ===
-PyQt6
+PySide6==6.11.1
 
 # === Windows ===
 pywin32; platform_system == "Windows"
@@ -37,4 +37,5 @@ pycryptodome>=3.20.0
 # === Build/Dev ===
 pyinstaller
 pytest
+httpx2
 tqdm

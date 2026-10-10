@@ -1,6 +1,6 @@
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSlot
+from PySide6.QtCore import QObject, Slot
 
 
 class GuiNotificationHandler(QObject):
@@ -10,7 +10,7 @@ class GuiNotificationHandler(QObject):
         super().__init__(main_window)
         self.main_window = main_window
 
-    @pyqtSlot(str, str)
+    @Slot(str, str)
     def process_system_notification_activation(self, task_id_obj: Optional[str], source: Optional[str] = None):
         """
         토스트 알림 클릭 처리.

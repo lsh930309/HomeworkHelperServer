@@ -132,3 +132,8 @@ Stateful client smoke isolation contract:
 - Smoke fixtures may not write to production cache paths such as `~/Library/Application Support/HomeworkHelperRemote/cache/processes.json`.
 - Tests that intentionally verify cache behavior must assert the production cache signature is unchanged.
 - `tools/smoke_macos_connection_supervisor.py` validates the macOS supervisor state reducer.
+# 로그인 전 연결과 권한 서비스
+
+로그인 전 PC·Apollo 연결과 로그인 후 HomeworkHelper 기능은 별도로 준비됩니다.
+설치와 상태 표시, SSH 전원 제어의 소유 계약은
+[Windows 호스트 수명주기 계약](../development/windows-host-lifecycle.md)을 참고하세요.

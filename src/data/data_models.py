@@ -8,6 +8,7 @@ from src.utils.resource_tracking import (
     clamp_percent,
     is_nikke_outpost_resource,
     predict_nikke_outpost_percent,
+    predict_stamina_value,
 )
 
 SIDEBAR_MODE_ALWAYS = "always"
@@ -42,6 +43,8 @@ class ManagedProcess:
                  original_launch_path: Optional[str] = None, # 원본 실행 경로 보존
                  # 실행 방식 선택: "auto" (기본), "shortcut" (바로가기 우선), "direct" (직접 실행 우선)
                  preferred_launch_type: str = "shortcut",
+                 launch_args_enabled: bool = False,
+                 launch_args: str = "",
                  # 사용자 설정 프리셋 ID
                  user_preset_id: Optional[str] = None,  # 사용자 설정 프리셋 ID (예: "zenless_zone_zero")
                  # HoYoLab 스태미나 연동 필드
@@ -77,6 +80,8 @@ class ManagedProcess:
         
         # 실행 방식 선택 (auto, shortcut, direct)
         self.preferred_launch_type = preferred_launch_type
+        self.launch_args_enabled = bool(launch_args_enabled)
+        self.launch_args = str(launch_args or "").strip()
 
         # 사용자 설정 프리셋 ID
         self.user_preset_id = user_preset_id
@@ -118,6 +123,10 @@ class ManagedProcess:
         # 실행 방식 선택 하위 호환성
         if 'preferred_launch_type' not in data:
             data['preferred_launch_type'] = 'shortcut'
+        if 'launch_args_enabled' not in data:
+            data['launch_args_enabled'] = False
+        if 'launch_args' not in data:
+            data['launch_args'] = ''
         # 사용자 프리셋 ID 하위 호환성 (game_schema_id → user_preset_id 마이그레이션)
         if 'user_preset_id' not in data:
             data['user_preset_id'] = data.get('game_schema_id')  # 기존 game_schema_id 값 복사
@@ -162,17 +171,17 @@ class ManagedProcess:
         """범용 외부 리소스 추적이 활성화되어 있는지 확인"""
         return bool(self.resource_tracking_enabled and self.resource_provider and self.resource_key)
 
-    def get_resource_percentage(self) -> Optional[float]:
+    def get_resource_percentage(self, *, now: float | None = None) -> Optional[float]:
         """범용 리소스 백분율 반환 (0.0 ~ 100.0)."""
         if not self.is_external_resource_game():
             return None
         if self.resource_percent is None or self.resource_status not in (None, "ok"):
             return None
         if is_nikke_outpost_resource(self.resource_provider, self.resource_key):
-            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at)
+            return predict_nikke_outpost_percent(self.resource_percent, self.resource_updated_at, now=now)
         return clamp_percent(self.resource_percent)
     
-    def get_predicted_stamina(self) -> Optional[Tuple[int, int]]:
+    def get_predicted_stamina(self, *, now: float | None = None) -> Optional[Tuple[int, int]]:
         """현재 시점의 예측 스태미나와 최대치를 반환.
         
         6분에 1씩 회복되는 것을 기준으로 로컬 연산합니다.
@@ -180,17 +189,14 @@ class ManagedProcess:
         Returns:
             (predicted_current, max_stamina) 또는 스태미나 정보가 없으면 None
         """
-        if self.stamina_current is None or self.stamina_max is None:
+        predicted = predict_stamina_value(
+            self.stamina_current,
+            self.stamina_max,
+            self.stamina_updated_at,
+            now=time.time() if now is None else now,
+        )
+        if predicted is None:
             return None
-        
-        if self.stamina_updated_at is None:
-            return (self.stamina_current, self.stamina_max)
-        
-        # 6분에 1씩 회복
-        elapsed_seconds = time.time() - self.stamina_updated_at
-        recovered = int(elapsed_seconds / 360)  # 360초 = 6분
-        predicted = min(self.stamina_current + recovered, self.stamina_max)
-        
         return (predicted, self.stamina_max)
     
     def get_stamina_percentage(self) -> Optional[float]:
@@ -251,7 +257,6 @@ class GlobalSettings:
                  obs_port: int = 4455,
                  obs_password: str = "",
                  obs_exe_path: str = "",
-                 obs_auto_launch: bool = False,
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
                  obs_recording_output_dir: str = "",
@@ -307,7 +312,6 @@ class GlobalSettings:
         self.obs_port = obs_port
         self.obs_password = obs_password
         self.obs_exe_path = obs_exe_path
-        self.obs_auto_launch = obs_auto_launch
         self.obs_launch_hidden = obs_launch_hidden
         self.obs_watch_output_dir = obs_watch_output_dir
         self.obs_recording_output_dir = obs_recording_output_dir
@@ -400,7 +404,6 @@ class GlobalSettings:
         data['obs_port'] = int(data.get('obs_port', 4455))
         data['obs_password'] = str(data.get('obs_password', ''))
         data['obs_exe_path'] = str(data.get('obs_exe_path', ''))
-        data['obs_auto_launch'] = bool(data.get('obs_auto_launch', False))
         data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
         data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))

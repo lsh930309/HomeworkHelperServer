@@ -34,6 +34,7 @@ class OBSClient:
         self._pending: dict[str, threading.Event] = {}
         self._pending_results: dict[str, dict] = {}
         self._on_record_state_changed: Optional[Callable[[bool], None]] = None
+        self._on_connection_closed: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._last_error: str = ""
 
@@ -110,8 +111,11 @@ class OBSClient:
             return {"outputActive": False, "outputDuration": 0}
         return resp.get("responseData", {})
 
-    def set_on_record_state_changed(self, fn: Callable[[bool], None]) -> None:
+    def set_on_record_state_changed(self, fn: Optional[Callable[[bool], None]]) -> None:
         self._on_record_state_changed = fn
+
+    def set_on_connection_closed(self, fn: Optional[Callable[[], None]]) -> None:
+        self._on_connection_closed = fn
 
     # ---------- internal ----------
 
@@ -220,3 +224,6 @@ class OBSClient:
             )
         if hasattr(self, "_ready_event") and not self._ready_event.is_set():
             self._ready_event.set()
+        callback = self._on_connection_closed
+        if callback:
+            callback()

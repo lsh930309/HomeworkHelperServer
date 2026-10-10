@@ -3,6 +3,7 @@ import sqlite3
 import time
 import datetime as dt
 import inspect
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,7 +29,175 @@ from src.services.hoyolab import HoYoLabService
 from src.services.nikke import NikkeService
 from src.utils.browser_cookie_extractor import BrowserCookieExtractor
 from src.data import crud, models
+from src.data import schemas
 import src.services.hoyolab as hoyolab_module
+
+
+@pytest.fixture
+def resource_db(monkeypatch, tmp_path):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    models.Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(crud, "base_dir", str(tmp_path))
+    db = sessionmaker(bind=engine)()
+    anchor = dt.datetime(2026, 10, 8, 10, 0).timestamp()
+    db.add_all([
+        models.Process(id="hoyo", name="HoYo", monitoring_path="/hoyo.exe", launch_path="/hoyo.exe",
+                       stamina_tracking_enabled=True, hoyolab_game_id="starrail",
+                       stamina_current=100, stamina_max=240, stamina_updated_at=anchor),
+        models.Process(id="nikke", name="NIKKE", monitoring_path="/nikke.exe", launch_path="/nikke.exe",
+                       resource_tracking_enabled=True, resource_provider="nikke_blablalink",
+                       resource_key="nikke_outpost_storage", resource_percent=10.0,
+                       resource_updated_at=anchor, resource_status="ok", resource_label="old label"),
+    ])
+    db.commit()
+    try:
+        yield db, anchor
+    finally:
+        db.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("elapsed,observed,stored,anchor_elapsed", [
+    (300, 100, 100, 0),
+    (420, 101, 100, 0),
+    (420, 100, 100, 420),
+    (300, 90, 90, 300),
+])
+def test_stamina_observation_compares_to_observation_time_projection(resource_db, elapsed, observed, stored, anchor_elapsed):
+    db, anchor = resource_db
+    saved = crud.update_process_stamina(db, "hoyo", stamina_current=observed, stamina_max=240,
+                                        stamina_updated_at=anchor + elapsed)
+    db.expire_all()
+    saved = crud.get_process_by_id(db, "hoyo")
+    assert saved.stamina_current == stored
+    assert saved.stamina_updated_at == anchor + anchor_elapsed
+
+    # The saved API representation and GUI model use the same retained anchor.
+    model = ManagedProcess.from_dict(schemas.ProcessSchema.model_validate(saved).model_dump())
+    at = anchor + elapsed
+    gui_count, _ = model.get_predicted_stamina(now=at)
+    progress = calculate_process_progress(model, current_dt=dt.datetime.fromtimestamp(at))
+    assert gui_count == observed == progress["stamina_current"]
+    assert progress["projection"]["base_timestamp"] == anchor + anchor_elapsed
+    assert progress["ready_at"] == anchor + anchor_elapsed + (240 - stored) * 360
+
+
+def test_stamina_maximum_change_keeps_unchanged_observation_anchor(resource_db):
+    db, anchor = resource_db
+    saved = crud.update_process_stamina(db, "hoyo", stamina_current=101, stamina_max=300,
+                                        stamina_updated_at=anchor + 420)
+    assert (saved.stamina_current, saved.stamina_max, saved.stamina_updated_at) == (100, 300, anchor)
+
+
+def test_stamina_maximum_increase_compares_with_new_maximum_projection(resource_db):
+    db, anchor = resource_db
+    process = crud.get_process_by_id(db, "hoyo")
+    process.stamina_max = 100
+    db.commit()
+    saved = crud.update_process_stamina(db, "hoyo", stamina_current=100, stamina_max=200,
+                                        stamina_updated_at=anchor + 3600)
+    assert (saved.stamina_current, saved.stamina_max, saved.stamina_updated_at) == (100, 200, anchor + 3600)
+
+
+def test_stamina_maximum_decrease_keeps_canonical_base_in_range(resource_db):
+    db, anchor = resource_db
+    saved = crud.update_process_stamina(db, "hoyo", stamina_current=90, stamina_max=90,
+                                        stamina_updated_at=anchor + 300)
+    assert (saved.stamina_current, saved.stamina_max, saved.stamina_updated_at) == (90, 90, anchor + 300)
+
+
+def test_first_stamina_observation_establishes_anchor_even_with_equal_count(resource_db):
+    db, anchor = resource_db
+    process = crud.get_process_by_id(db, "hoyo")
+    process.stamina_updated_at = None
+    db.commit()
+    saved = crud.update_process_stamina(db, "hoyo", stamina_current=100, stamina_max=240,
+                                        stamina_updated_at=anchor + 300)
+    assert saved.stamina_updated_at == anchor + 300
+
+
+def test_unchanged_stamina_does_not_hide_invalid_observation_time(resource_db):
+    from src.data.beholder import BeholderBlocked
+    db, anchor = resource_db
+    with pytest.raises(BeholderBlocked):
+        crud.update_process_stamina(db, "hoyo", stamina_current=100, stamina_max=240, stamina_updated_at=-1.0)
+    assert crud.get_process_by_id(db, "hoyo").stamina_updated_at == anchor
+
+
+@pytest.mark.parametrize("invalid_percent", [-0.04, 100.04])
+def test_nikke_precision_does_not_round_invalid_values_into_range(resource_db, invalid_percent):
+    from src.data.beholder import BeholderBlocked
+    db, anchor = resource_db
+    with pytest.raises(BeholderBlocked):
+        crud.update_process_resource(db, "nikke", resource_percent=invalid_percent,
+                                     resource_updated_at=anchor + 60, resource_status="ok")
+    saved = crud.get_process_by_id(db, "nikke")
+    assert (saved.resource_percent, saved.resource_updated_at) == (10.0, anchor)
+
+
+@pytest.mark.parametrize("elapsed,observed,stored,anchor_elapsed", [
+    (60, 10.1, 10.0, 0),
+    (60, 10.0, 10.0, 60),
+    (60, 8.0, 8.0, 60),
+])
+def test_nikke_observation_uses_api_tenth_percent_precision(resource_db, elapsed, observed, stored, anchor_elapsed):
+    db, anchor = resource_db
+    saved = crud.update_process_resource(db, "nikke", resource_percent=observed,
+                                         resource_updated_at=anchor + elapsed, resource_status="ok", resource_label="new label")
+    assert saved.resource_percent == stored
+    assert saved.resource_updated_at == anchor + anchor_elapsed
+    assert saved.resource_label == "new label"
+    model = ManagedProcess.from_dict(schemas.ProcessSchema.model_validate(saved).model_dump())
+    at = anchor + elapsed
+    progress = calculate_process_progress(model, current_dt=dt.datetime.fromtimestamp(at))
+    assert round(model.get_resource_percentage(now=at), 1) == observed
+    assert round(progress["percentage"], 1) == observed
+    assert progress["updated_at"] == anchor + anchor_elapsed
+
+
+def test_resource_failure_updates_metadata_without_moving_recovery_anchor(resource_db):
+    db, anchor = resource_db
+    saved = crud.update_process_resource(db, "nikke", resource_percent=None,
+                                         resource_updated_at=anchor + 120, resource_status="auth_required", resource_label="new label")
+    assert (saved.resource_percent, saved.resource_updated_at) == (10.0, anchor)
+    assert saved.resource_status == "auth_required"
+    assert saved.resource_label == "new label"
+    saved = crud.update_process_resource(db, "nikke", resource_percent=10.1,
+                                         resource_updated_at=anchor + 120, resource_status="ok", resource_label="new label")
+    assert (saved.resource_percent, saved.resource_updated_at, saved.resource_status) == (10.0, anchor, "ok")
+
+
+def test_runtime_patch_reuses_canonical_resource_observation_rules(resource_db):
+    db, anchor = resource_db
+    saved = crud.update_process_runtime_state(db, "hoyo", stamina_current=101, stamina_max=240,
+                                              stamina_updated_at=anchor + 420)
+    assert (saved.stamina_current, saved.stamina_updated_at) == (100, anchor)
+    saved = crud.update_process_runtime_state(db, "nikke", resource_percent=10.1,
+                                              resource_updated_at=anchor + 60, resource_status="ok")
+    assert (saved.resource_percent, saved.resource_updated_at) == (10.0, anchor)
+
+
+def test_metadata_edit_preserves_latest_canonical_resource_values(resource_db):
+    db, anchor = resource_db
+    crud.update_process_resource(db, "nikke", resource_percent=20.0,
+                                  resource_updated_at=anchor + 120, resource_status="ok", resource_label="new label")
+    saved = crud.update_process(db, "nikke", schemas.ProcessCreateSchema(
+        name="renamed", monitoring_path="/new-nikke.exe", launch_path="/new-nikke.exe",
+        resource_percent=10.0, resource_updated_at=anchor, resource_status="auth_required", resource_label="old label"))
+    assert saved.name == "renamed"
+    assert (saved.resource_percent, saved.resource_updated_at, saved.resource_status) == (20.0, anchor + 120, "ok")
+    # The existing editor policy owns the configured label, not the runtime value/anchor.
+    assert saved.resource_label == "old label"
+
+
+def test_background_resource_transport_returns_canonical_api_row(monkeypatch):
+    from src.api.client import BackgroundApiTransport, BackgroundHttpResult
+    transport = BackgroundApiTransport("http://127.0.0.1:8000")
+    row = {"id": "hoyo", "stamina_current": 100, "stamina_max": 240, "stamina_updated_at": 1000.0}
+    monkeypatch.setattr(transport, "patch_json", lambda *_args, **_kwargs: BackgroundHttpResult(200, row, 0.1))
+    assert transport.update_process_stamina("hoyo", 101, 240, 1420.0) == row
+    row = {"id": "nikke", "resource_percent": 10.0, "resource_updated_at": 1000.0, "resource_status": "ok"}
+    assert transport.update_process_resource("nikke", 10.1, 1060.0, "ok") == row
 
 
 def _create_firefox_cookie_db(path: Path, rows):
@@ -370,15 +539,6 @@ def test_game_preset_schema_migrates_legacy_nikke_to_resource_mode(monkeypatch, 
     assert nikke["icon_type"] == "system"
 
 
-def test_resource_label_is_part_of_runtime_persistence_stream():
-    crud_source = Path("src/data/crud.py").read_text(encoding="utf-8")
-    api_client_source = Path("src/api/client.py").read_text(encoding="utf-8")
-    entrypoint_source = Path("homework_helper.pyw").read_text(encoding="utf-8")
-
-    assert '"resource_label": resource_label' in crud_source
-    assert '{"resource_percent", "resource_updated_at", "resource_status", "resource_label"}' in crud_source
-    assert '"resource_label": getattr(updated_process, "resource_label", None)' in api_client_source
-    assert "resource_label: str | None = None" in entrypoint_source
 
 
 class _FakeNikkeConfig:
@@ -1063,75 +1223,17 @@ def test_tracked_resource_without_snapshot_does_not_fall_back_to_cycle():
     assert "remaining_seconds" not in progress
 
 
-def test_nikke_resource_persist_task_updates_process_and_session_percent():
-    from src.core.resource_reconcile import _ResourcePersistTask
 
-    process = ManagedProcess(
-        id="nikke",
-        name="NIKKE",
-        monitoring_path="/nikke.exe",
-        launch_path="/nikke.exe",
-        resource_tracking_enabled=True,
-        resource_provider="nikke_blablalink",
-        resource_key="nikke_outpost_storage",
-        resource_label="전초기지 방어 보상",
-        resource_percent=10.0,
-        resource_updated_at=1000.0,
-        resource_status="ok",
-    )
 
-    class FakeDataManager:
-        process_updates = []
-        session_updates = []
 
-        def get_process_by_id(self, process_id):
-            assert process_id == "nikke"
-            return process
 
-        def update_process_resource(self, process_id, percent, updated_at, status, label):
-            self.process_updates.append((process_id, percent, updated_at, status, label))
-            return True
+def test_provider_health_persist_reports_unsupported_transport(caplog):
+    from src.core.provider_health_persist import ProviderHealthPersistTask
 
-        def update_session_resource(self, session_id, resource_percent_at_end):
-            self.session_updates.append((session_id, resource_percent_at_end))
-            return True
+    with caplog.at_level(logging.WARNING):
+        ProviderHealthPersistTask(object(), {"provider": "test"}, context="test").run()
 
-    class Finished:
-        def __init__(self):
-            self.payloads = []
-
-        def emit(self, *args):
-            self.payloads.append(args)
-
-    class Signals:
-        def __init__(self):
-            self.finished = Finished()
-
-    data_manager = FakeDataManager()
-    signals = Signals()
-    task = _ResourcePersistTask(
-        process_id="nikke",
-        process_name="NIKKE",
-        session_id=7,
-        lifecycle_token=1,
-        request_seq=1,
-        fetched_percent=20.0,
-        fetched_label="전초기지 방어 보상",
-        fetched_status="ok",
-        fetched_at=3600.0,
-        exit_timestamp=0.0,
-        allow_session_correction=True,
-        applied_session_percent=10.0,
-        data_manager=data_manager,
-        should_abort=lambda: False,
-        signals=signals,
-    )
-
-    task.run()
-
-    assert data_manager.process_updates == [("nikke", 20.0, 3600.0, "ok", "전초기지 방어 보상")]
-    assert data_manager.session_updates == [(7, pytest.approx(15.8333333333))]
-    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
+    assert "provider health 저장 실패" in caplog.text
 
 
 def test_reconcile_provider_health_writes_are_queued_off_main_path():
@@ -1163,6 +1265,7 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
     hoyolab_pool = FakePool()
     hoyolab = HoYoStaminaReconcileCoordinator.__new__(HoYoStaminaReconcileCoordinator)
     hoyolab._data_manager = FailIfCalledDataManager()
+    hoyolab._transport = object()
     hoyolab._health_pool = hoyolab_pool
     hoyolab._notifier = None
 
@@ -1192,6 +1295,7 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
     nikke_pool = FakePool()
     nikke = NikkeResourceReconcileCoordinator.__new__(NikkeResourceReconcileCoordinator)
     nikke._data_manager = FailIfCalledDataManager()
+    nikke._transport = object()
     nikke._health_pool = nikke_pool
     nikke._notifier = None
 
@@ -1204,62 +1308,3 @@ def test_reconcile_provider_health_writes_are_queued_off_main_path():
     assert len(nikke_pool.tasks) == 1
     assert nikke_pool.tasks[0].payload["provider"] == credential_health.PROVIDER_NIKKE_BLABLALINK
     assert nikke_pool.tasks[0].payload["detected_at"] == 5678.0
-
-
-def test_process_monitor_calibrates_nikke_resource_session_on_start(monkeypatch):
-    from src.core.process_monitor import ProcessMonitor
-    import src.services.nikke as nikke_module
-
-    now = time.time()
-    process = ManagedProcess(
-        id="nikke",
-        name="NIKKE",
-        monitoring_path="/nikke.exe",
-        launch_path="/nikke.exe",
-        resource_tracking_enabled=True,
-        resource_provider="nikke_blablalink",
-        resource_key="nikke_outpost_storage",
-        resource_label="전초기지 방어 보상",
-        resource_percent=10.0,
-        resource_updated_at=now,
-        resource_status="ok",
-    )
-
-    class LastSession:
-        id = 7
-        resource_percent_at_end = 10.0
-
-    class FakeDataManager:
-        resource_updates = []
-        session_updates = []
-
-        def get_last_session(self, process_id):
-            assert process_id == "nikke"
-            return LastSession()
-
-        def update_session_resource(self, session_id, resource_percent_at_end):
-            self.session_updates.append((session_id, resource_percent_at_end))
-            return True
-
-        def update_process_resource(self, process_id, percent, updated_at, status, label):
-            self.resource_updates.append((process_id, percent, updated_at, status, label))
-            return True
-
-    class FakeService:
-        def get_outpost_storage(self):
-            return nikke_module.GameResourceSnapshot(
-                provider="nikke_blablalink",
-                resource_key="nikke_outpost_storage",
-                label="전초기지 방어 보상",
-                percent=20.0,
-                status="ok",
-                updated_at=dt.datetime.fromtimestamp(now + 1),
-            )
-
-    monkeypatch.setattr(nikke_module, "get_nikke_service", lambda: FakeService())
-
-    data_manager = FakeDataManager()
-    ProcessMonitor(data_manager)._calibrate_external_resource_on_game_start(process)
-
-    assert data_manager.session_updates == [(7, pytest.approx(20.0, abs=0.01))]
-    assert data_manager.resource_updates == [("nikke", 20.0, pytest.approx(now + 1), "ok", "전초기지 방어 보상")]

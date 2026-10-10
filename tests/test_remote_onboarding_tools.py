@@ -109,6 +109,26 @@ def test_windows_subprocess_kwargs_hide_console(monkeypatch):
     assert kwargs['startupinfo'].wShowWindow == 0
 
 
+def test_tailscale_cli_output_is_decoded_as_utf8():
+    import src.core.tailscale as tailscale
+
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    def runner(_args, **kwargs):
+        captured.update(kwargs)
+        return Result()
+
+    tailscale._run_subprocess(['tailscale', 'status', '--json'], timeout_seconds=1, runner=runner)
+
+    assert captured['encoding'] == 'utf-8'
+    assert captured['errors'] == 'replace'
+
+
 def test_windows_tailscale_executable_uses_installed_programfiles_path(monkeypatch):
     import src.core.tailscale as tailscale
 

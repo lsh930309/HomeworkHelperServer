@@ -24,6 +24,8 @@ class Process(Base):
     last_played_timestamp = Column(Float, nullable=True)
     original_launch_path = Column(String, nullable=True)
     preferred_launch_type = Column(String, default="shortcut")  # 실행 방식 선호도
+    launch_args_enabled = Column(Boolean, nullable=False, default=False)  # 직접 실행 인자 사용 여부
+    launch_args = Column(String, nullable=False, default="")  # 직접 실행 시 전달할 추가 인자
     user_preset_id = Column(String, nullable=True)  # 사용자 설정 프리셋 ID
 
     # HoYoLab 스태미나 연동 필드
@@ -31,7 +33,7 @@ class Process(Base):
     hoyolab_game_id = Column(String, nullable=True)      # 추적할 호요버스 게임 ID
     stamina_current = Column(Integer, nullable=True)      # 현재 스태미나
     stamina_max = Column(Integer, nullable=True)          # 최대 스태미나 (API에서 가져옴)
-    stamina_updated_at = Column(Float, nullable=True)     # 마지막 스태미나 조회 시각 (timestamp)
+    stamina_updated_at = Column(Float, nullable=True)     # 자연 회복 계산의 기준 시각 (timestamp)
 
     # 범용 외부 리소스 연동 필드 (예: NIKKE ShiftyPad 전초기지 방어 보상)
     resource_tracking_enabled = Column(Boolean, default=False)
@@ -111,7 +113,6 @@ class GlobalSettings(Base):
     obs_port = Column(Integer, default=4455)
     obs_password = Column(String, default="")
     obs_exe_path = Column(String, default="")
-    obs_auto_launch = Column(Boolean, default=False)
     obs_launch_hidden = Column(Boolean, default=True)
     obs_watch_output_dir = Column(Boolean, default=True)
     obs_recording_output_dir = Column(String, default="")

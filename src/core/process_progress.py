@@ -5,15 +5,16 @@ from typing import Any
 
 from src.utils.resource_tracking import (
     NIKKE_OUTPOST_FULL_CHARGE_SECONDS,
+    STAMINA_RECOVERY_SECONDS_PER_UNIT,
     clamp_percent,
     is_nikke_outpost_resource,
     predict_nikke_outpost_percent,
+    predict_stamina_value,
 )
 
 PROGRESS_SCHEMA_VERSION = 2
 SERVER_TRACKED_SOURCE = "server_tracked"
 TIMESTAMP_DERIVED_SOURCE = "timestamp_derived"
-STAMINA_RECOVERY_SECONDS_PER_UNIT = 360
 
 
 def _clamped_percentage(value: float, maximum: float) -> float:
@@ -155,11 +156,11 @@ def calculate_process_progress(process: Any, current_dt: datetime.datetime | Non
                 base_timestamp_value = float(base_timestamp) if base_timestamp is not None else current_timestamp
             except (TypeError, ValueError):
                 base_timestamp_value = current_timestamp
-            elapsed_seconds = max(0.0, current_timestamp - base_timestamp_value)
-            recovered = int(elapsed_seconds / STAMINA_RECOVERY_SECONDS_PER_UNIT)
-            predicted = min(int(maximum), max(0, int(current) + recovered))
-            remaining_seconds = max(0, (int(maximum) - predicted) * STAMINA_RECOVERY_SECONDS_PER_UNIT)
-            ready_at = current_timestamp + remaining_seconds
+            predicted = predict_stamina_value(
+                current, maximum, base_timestamp_value, now=current_timestamp,
+            )
+            ready_at = base_timestamp_value + max(0, int(maximum) - int(current)) * STAMINA_RECOVERY_SECONDS_PER_UNIT
+            remaining_seconds = max(0, int(ready_at - current_timestamp))
             percentage = _clamped_percentage(float(predicted), float(maximum))
             return _progress_base(
                 source=SERVER_TRACKED_SOURCE,

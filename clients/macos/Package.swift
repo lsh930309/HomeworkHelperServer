@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "HomeworkHelperRemote",
             path: "Sources"
+        ),
+        .testTarget(
+            name: "HomeworkHelperRemoteTests",
+            dependencies: ["HomeworkHelperRemote"],
+            path: "Tests"
         )
     ]
 )

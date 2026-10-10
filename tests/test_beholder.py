@@ -83,6 +83,89 @@ def test_beholder_blocks_extreme_legacy_session_close_and_keeps_session_open(mon
     assert db.query(models.BeholderIncident).count() == 1
 
 
+def test_equivalent_pending_and_denied_incidents_are_reused(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(
+        kind="runtime_stop",
+        actor="process_monitor",
+        evidence={
+            "changed_fields": ["end_timestamp"],
+            "context": {"session_id": 1, "process_id": "game-a"},
+            "proposed_values": {"end_timestamp": 200.0},
+        },
+    )
+    values = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "current_state_summary": "현재 상태=closed",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, **values)
+    pending_duplicate = beholder.create_incident(db, **values)
+
+    assert pending_duplicate.id == first.id
+    assert db.query(models.BeholderIncident).count() == 1
+
+    beholder.mark_incident(db, first.id, beholder.STATUS_DENIED)
+    denied_duplicate = beholder.create_incident(db, **values)
+
+    assert denied_duplicate.id == first.id
+    assert denied_duplicate.status == beholder.STATUS_DENIED
+    assert db.query(models.BeholderIncident).count() == 1
+
+
+def test_changed_incident_context_creates_a_new_incident(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    operation = beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor")
+    common = {
+        "severity": beholder.SEVERITY_CRITICAL,
+        "operation": operation,
+        "target_summary": "session_id=1, process_id=game-a",
+        "suspected_cause": "이미 종료된 기록입니다.",
+        "proposed_change_summary": "동일 종료 요청",
+        "risk_score": 90,
+        "risk_factors": ["invalid_current_status:closed"],
+        "safe_recommendation": "차단을 유지하세요.",
+    }
+
+    first = beholder.create_incident(db, current_state_summary="현재 상태=closed", **common)
+    second = beholder.create_incident(db, current_state_summary="현재 상태=quarantined", **common)
+
+    assert second.id != first.id
+    assert db.query(models.BeholderIncident).count() == 2
+
+
+def test_fallback_user_summary_does_not_expose_internal_identity(monkeypatch):
+    SessionLocal = _session_factory(monkeypatch)
+    db = SessionLocal()
+    incident = beholder.create_incident(
+        db,
+        severity=beholder.SEVERITY_WARNING,
+        operation=beholder.BeholderOperation(kind="runtime_stop", actor="process_monitor"),
+        target_summary="session_id=1, process_id=secret-uuid",
+        suspected_cause="internal cause",
+        current_state_summary="owner=internal",
+        proposed_change_summary="end_timestamp=123",
+        risk_score=50,
+        risk_factors=["internal_factor"],
+        safe_recommendation="차단을 유지하세요.",
+    )
+
+    summary = beholder.incident_to_dict(incident)["user_summary"]
+
+    assert "session_id" not in summary
+    assert "secret-uuid" not in summary
+    assert "process_monitor" not in summary
+
+
 def test_beholder_allows_long_session_with_override_token(monkeypatch):
     SessionLocal = _session_factory(monkeypatch)
     db = SessionLocal()
@@ -402,7 +485,7 @@ def test_open_session_recovery_closes_at_last_app_heartbeat(monkeypatch):
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -439,7 +522,7 @@ def test_open_session_recovery_decide_later_keeps_incident_pending(monkeypatch):
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -523,7 +606,7 @@ def test_settings_guard_blocks_columns_outside_actor_scope(monkeypatch, tmp_path
     assert settings.sidebar_height_ratio == 1.0
 
 
-def test_sidebar_settings_actor_is_labeled_as_pyqt_sidebar_dialog(monkeypatch, tmp_path):
+def test_sidebar_settings_actor_has_binding_independent_identity(monkeypatch, tmp_path):
     SessionLocal = _session_factory(monkeypatch)
     import src.data.crud as crud_mod
     monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
@@ -821,7 +904,7 @@ def test_close_at_heartbeat_resolution_aborts_when_session_snapshot_fails(monkey
     crud.upsert_app_runtime_heartbeat(
         db,
         app_instance_id="app-a",
-        runtime_kind="pyqt",
+        runtime_kind="pyside6",
         timestamp=heartbeat,
         boot_id="boot-a",
     )
@@ -1203,7 +1286,7 @@ def test_runtime_heartbeat_keeps_unused_override_token(monkeypatch):
     assert client._pending_beholder_overrides[("runtime_start", "process_monitor")] == "token"
 
 
-def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
+def test_runtime_state_client_only_writes_last_played_timestamp(monkeypatch):
     from src.api.client import ApiClient
     from src.data.data_models import ManagedProcess
 
@@ -1245,10 +1328,7 @@ def test_runtime_state_client_splits_last_played_from_stamina(monkeypatch):
 
     assert client.update_process_runtime_state(process) is True
 
-    assert payloads == [
-        {"last_played_timestamp": 123.0},
-        {"stamina_current": 120, "stamina_max": 100, "stamina_updated_at": 124.0},
-    ]
+    assert payloads == [{"last_played_timestamp": 123.0}]
     assert client.managed_processes == ["fresh"]
 
 
@@ -1330,81 +1410,6 @@ def test_resource_session_refresh_client_uses_resource_specific_patch(monkeypatc
         "X-HH-Beholder-Operation": "resource_session_percent_rewrite",
     }
 
-
-def test_hoyolab_reconcile_persists_only_final_stamina_fields():
-    from src.core.hoyolab_reconcile import _StaminaPersistTask
-    from src.data.data_models import ManagedProcess
-
-    process = ManagedProcess(
-        id="game-a",
-        name="Game A",
-        monitoring_path="/games/a.exe",
-        launch_path="/games/a.exe",
-        last_played_timestamp=123.0,
-        stamina_tracking_enabled=True,
-        hoyolab_game_id="genshin",
-        stamina_current=100,
-        stamina_max=240,
-        stamina_updated_at=1000.0,
-    )
-
-    class FakeDataManager:
-        runtime_updates = []
-        stamina_updates = []
-        session_updates = []
-
-        def get_process_by_id(self, process_id):
-            assert process_id == "game-a"
-            return process
-
-        def update_process_runtime_state(self, updated_process):
-            self.runtime_updates.append(updated_process)
-            return True
-
-        def update_process_stamina(self, process_id, stamina_current, stamina_max, stamina_updated_at):
-            self.stamina_updates.append((process_id, stamina_current, stamina_max, stamina_updated_at))
-            return True
-
-        def update_session_stamina(self, session_id, stamina_at_end):
-            self.session_updates.append((session_id, stamina_at_end))
-            return True
-
-    class Finished:
-        def __init__(self):
-            self.payloads = []
-
-        def emit(self, *args):
-            self.payloads.append(args)
-
-    class Signals:
-        def __init__(self):
-            self.finished = Finished()
-
-    data_manager = FakeDataManager()
-    signals = Signals()
-    task = _StaminaPersistTask(
-        process_id="game-a",
-        process_name="Game A",
-        session_id=7,
-        lifecycle_token=1,
-        request_seq=1,
-        fetched_current=90,
-        fetched_max=240,
-        fetched_at=1778497000.0,
-        exit_timestamp=1778497000.0,
-        allow_session_correction=True,
-        applied_session_stamina=100,
-        data_manager=data_manager,
-        should_abort=lambda: False,
-        signals=signals,
-    )
-
-    task.run()
-
-    assert data_manager.stamina_updates == [("game-a", 90, 240, 1778497000.0)]
-    assert data_manager.runtime_updates == []
-    assert data_manager.session_updates == [(7, 90)]
-    assert signals.finished.payloads[0][3]["persist_succeeded"] is True
 
 
 def test_negative_session_stamina_is_blocked_without_mutating_session(monkeypatch, tmp_path):
@@ -1502,6 +1507,85 @@ def test_process_editor_cannot_mutate_runtime_fields(monkeypatch, tmp_path):
     unchanged = db.query(models.Process).filter_by(id=process.id).one()
     assert unchanged.name == "Runtime Game Renamed"
     assert unchanged.last_played_timestamp == dt.datetime(2026, 5, 8, 12, 0).timestamp()
+
+
+def test_process_editor_persists_trimmed_direct_launch_args(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="zzz",
+        name="Zenless Zone Zero",
+        monitoring_path="C:/Games/ZZZ.exe",
+        launch_path="C:/Games/ZZZ.url",
+        preferred_launch_type="direct",
+        launch_args_enabled=True,
+        launch_args="  -use-d3d12  ",
+    ))
+
+    assert process.launch_args_enabled is True
+    assert process.launch_args == "-use-d3d12"
+
+    updated = crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+        name="Zenless Zone Zero",
+        monitoring_path="C:/Games/ZZZ.exe",
+        launch_path="C:/Games/ZZZ.url",
+        preferred_launch_type="direct",
+        launch_args_enabled=False,
+        launch_args="   ",
+    ))
+
+    assert updated.launch_args_enabled is False
+    assert updated.launch_args == ""
+
+
+def test_managed_process_from_dict_backfills_launch_args_defaults():
+    from src.data.data_models import ManagedProcess
+
+    process = ManagedProcess.from_dict({
+        "id": "legacy",
+        "name": "Legacy Game",
+        "monitoring_path": "C:/Games/Legacy.exe",
+        "launch_path": "C:/Games/Legacy.url",
+    })
+
+    assert process.preferred_launch_type == "shortcut"
+    assert process.launch_args_enabled is False
+    assert process.launch_args == ""
+
+
+def test_process_editor_blocks_unsafe_direct_launch_args(monkeypatch, tmp_path):
+    SessionLocal = _session_factory(monkeypatch)
+    import src.data.crud as crud_mod
+    monkeypatch.setattr(crud_mod, "base_dir", str(tmp_path))
+    db = SessionLocal()
+    process = crud.create_process(db, schemas.ProcessCreateSchema(
+        id="args-guard",
+        name="Args Guard",
+        monitoring_path="C:/Games/ArgsGuard.exe",
+        launch_path="C:/Games/ArgsGuard.url",
+    ))
+
+    invalid_values = [
+        "-use-d3d12\n--bad",
+        "-use-d3d12\r--bad",
+        "-use-d3d12\x00--bad",
+        "x" * (beholder.MAX_LAUNCH_ARGS_LENGTH + 1),
+    ]
+
+    for value in invalid_values:
+        with pytest.raises(beholder.BeholderBlocked) as blocked:
+            crud.update_process(db, process.id, schemas.ProcessCreateSchema(
+                name="Args Guard",
+                monitoring_path="C:/Games/ArgsGuard.exe",
+                launch_path="C:/Games/ArgsGuard.url",
+                launch_args_enabled=True,
+                launch_args=value,
+            ))
+
+        assert "invalid_process_value" in blocked.value.incident.risk_factors
 
 
 def test_web_shortcut_editor_preserves_and_cannot_mutate_runtime_reset_timestamp(monkeypatch, tmp_path):
@@ -2086,7 +2170,7 @@ def test_process_monitor_rejects_reused_pid_for_late_resolution(monkeypatch):
     ) is False
 
 
-def test_process_monitor_pending_stop_skips_hoyolab_exit_refresh(monkeypatch):
+def test_process_monitor_pending_stop_preserves_runtime_timestamp(monkeypatch):
     from src.core.process_monitor import ProcessMonitor
     from src.data.data_models import ManagedProcess
     import src.core.process_monitor as process_monitor_module
@@ -2105,11 +2189,6 @@ def test_process_monitor_pending_stop_skips_hoyolab_exit_refresh(monkeypatch):
         managed_processes = [process]
 
     monkeypatch.setattr(process_monitor_module.psutil, "process_iter", lambda _attrs: [])
-    monkeypatch.setattr(
-        ProcessMonitor,
-        "_update_stamina_on_game_exit",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pending stop should skip stamina refresh")),
-    )
 
     monitor = ProcessMonitor(FakeDataManager())
     monitor.active_monitored_processes["game-a"] = {

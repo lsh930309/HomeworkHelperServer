@@ -2,14 +2,15 @@
 import logging
 from typing import Optional
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QFrame, QSizePolicy, QApplication,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
-from PyQt6.QtGui import QIcon
+from PySide6.QtCore import Qt, QTimer, QPoint, QRunnable, QThreadPool
+from PySide6.QtGui import QIcon
 
 from src.data.data_models import ManagedProcess
+from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 def _tint_icon_white(icon) -> QIcon:
     """아이콘 픽셀을 흰색으로 틴팅합니다. DPR 보존으로 HiDPI 대응."""
-    from PyQt6.QtGui import QPainter, QColor, QPixmap
-    from PyQt6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QPainter, QColor, QPixmap
+    from PySide6.QtCore import Qt as _Qt
     pixmap = icon.pixmap(16, 16)
     if pixmap.isNull():
         return icon
@@ -73,6 +74,15 @@ QPushButton:hover:!checked {
     background: rgba(255,255,255,22);
     color: white;
 }
+QPushButton:pressed:!checked {
+    background: rgba(255,255,255,38);
+    color: white;
+}
+QPushButton:checked:pressed {
+    background: rgba(65,105,190,220);
+    border-color: rgba(130,180,255,220);
+    color: white;
+}
 QPushButton:disabled {
     color: rgba(255,255,255,60);
     border-color: rgba(255,255,255,15);
@@ -123,7 +133,7 @@ class VolumePopoverPanel(QWidget):
         self._data_manager = data_manager
         self._volume_save_timers: dict = {}
         # 볼륨 저장 전용 직렬 스레드풀 (순서 보장, 동시 접근 방지)
-        self._save_pool = QThreadPool(self)
+        self._save_pool = QThreadPool()
         self._save_pool.setMaxThreadCount(1)
         self._setup_ui()
 
@@ -212,7 +222,7 @@ class VolumePopoverPanel(QWidget):
         mute_btn.setCheckable(True)
         mute_btn.setStyleSheet(_MUTE_BTN_STYLE)
 
-        from PyQt6.QtWidgets import QStyle
+        from PySide6.QtWidgets import QStyle
         icon_on = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolume))
         icon_off = _tint_icon_white(_system_icon(QStyle.StandardPixmap.SP_MediaVolumeMuted))
         if not icon_on.isNull():
@@ -331,14 +341,17 @@ class VolumePopoverPanel(QWidget):
         """프로세스의 볼륨 설정을 워커 스레드에서 DB에 저장."""
         self._save_pool.start(_VolumeSaveRunnable(self._data_manager, process))
 
-    def cleanup(self) -> None:
+    def cleanup(self, deadline_ms: int = 2000) -> bool:
         """앱 종료 시 대기 중인 볼륨 저장 타이머를 즉시 발화하고 스레드풀 완료를 기다립니다."""
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
                 timer.timeout.emit()
         self._volume_save_timers.clear()
-        self._save_pool.waitForDone(2000)
+        drained = self._save_pool.waitForDone(max(0, int(deadline_ms)))
+        if not drained:
+            retain_detached_qthreadpool(self._save_pool)
+        return drained
 
     def hideEvent(self, event):
         """패널이 숨겨질 때 (외부 클릭 포함) 콜백을 호출합니다."""

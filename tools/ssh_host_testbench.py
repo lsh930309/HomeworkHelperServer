@@ -125,6 +125,13 @@ def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> su
     fd, script_path = tempfile.mkstemp(prefix="hh-host-testbench-", suffix=".ps1")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(
+                "$utf8 = New-Object System.Text.UTF8Encoding($false)\n"
+                "[Console]::OutputEncoding = $utf8\n"
+                "$OutputEncoding = $utf8\n"
+                "$env:PYTHONUTF8 = '1'\n"
+                "$env:PYTHONIOENCODING = 'utf-8'\n"
+            )
             handle.write(script)
             if not script.endswith("\n\n"):
                 handle.write("\n")
@@ -133,6 +140,8 @@ def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> su
             shell_command,
             shell=True,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             capture_output=True,
             timeout=timeout,
             check=False,

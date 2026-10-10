@@ -1,58 +1,146 @@
-"""Beholder incident API shared by the PyQt GUI and internal runtime checks."""
+"""Beholder incident API shared by the PySide6 GUI and internal runtime checks."""
 
 from __future__ import annotations
 
+import logging
+import multiprocessing
 import os
+import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.data import beholder, crud, models
+from src.data import beholder, crud, models, schemas
 from src.data.database import Base, SessionLocal, auto_migrate_database, base_dir, data_dir, db_path, engine
+from src.data.database_coordination import (
+    DatabaseAccessUnavailable,
+    DatabaseDrainTimeout,
+    DatabaseFaultStatePersistenceError,
+    create_database_coordinator,
+    database_access_error_response,
+    database_drain_timeout_response,
+)
 
 router = APIRouter(prefix="/api/beholder", tags=["beholder"])
+logger = logging.getLogger(__name__)
+_lifecycle_failure_lock = threading.Lock()
 
 
-_RESTORE_LOCK = threading.RLock()
+database_coordinator = create_database_coordinator(data_dir)
 
 
-def database_access_gate():
-    """Serialize normal DB access with destructive backup restore swaps."""
-    return _RESTORE_LOCK
+def database_access_gate(route_name: str = "legacy_database_request"):
+    """Compatibility entry point returning a concurrent ownerless DB lease."""
+
+    return database_coordinator.acquire_request(route_name)
 
 
 def _require_valid_sqlite_backup(path: str | Path) -> None:
+    conn = None
     try:
-        with sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True) as conn:
-            result = conn.execute("PRAGMA integrity_check").fetchone()
-            if not result or str(result[0]).lower() != "ok":
-                raise HTTPException(status_code=422, detail="선택한 백업 DB integrity check가 실패했습니다.")
-            conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
+        conn = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        if not result or str(result[0]).lower() != "ok":
+            raise HTTPException(status_code=422, detail="선택한 백업 DB integrity check가 실패했습니다.")
     except HTTPException:
         raise
     except sqlite3.Error as exc:
         raise HTTPException(status_code=422, detail=f"백업 DB를 안전하게 열 수 없습니다: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _copy_sqlite_database(source: str | Path, target: str | Path) -> None:
-    with sqlite3.connect(f"file:{Path(source)}?mode=ro", uri=True) as src, sqlite3.connect(target) as dst:
+    src = sqlite3.connect(f"file:{Path(source)}?mode=ro", uri=True)
+    dst = sqlite3.connect(target)
+    try:
         src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+
+def _copy_raw_database(source: str | Path, target: str | Path) -> None:
+    """Preserve faulted DB bytes and existing sidecars without opening SQLite."""
+
+    for suffix in ("", "-wal", "-shm"):
+        source_file = Path(str(source) + suffix)
+        if not source_file.exists():
+            continue
+        with source_file.open("rb") as original, Path(str(target) + suffix).open("wb") as snapshot:
+            shutil.copyfileobj(original, snapshot)
+            snapshot.flush()
+            os.fsync(snapshot.fileno())
+
+
+def _replace_raw_database(source: str | Path, target: str | Path) -> None:
+    """Restore a preserved faulted original; it does not imply DB validity."""
+
+    _remove_database_sidecars(target)
+    os.replace(source, target)
+    for suffix in ("-wal", "-shm"):
+        source_file = str(source) + suffix
+        if os.path.exists(source_file):
+            os.replace(source_file, str(target) + suffix)
 
 
 def _checkpoint_live_database(path: str | Path) -> None:
     if not os.path.exists(path):
         return
+    conn = None
     try:
-        with sqlite3.connect(path) as conn:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+        conn = sqlite3.connect(path, timeout=0.25)
+        conn.execute("PRAGMA busy_timeout=250")
+        result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if result is None or len(result) < 3:
+            raise HTTPException(
+                status_code=500,
+                detail="현재 DB WAL checkpoint 결과를 확인할 수 없어 복구를 중단했습니다.",
+            )
+        busy, _wal_pages, _checkpointed_pages = result
+        if int(busy) != 0:
+            raise HTTPException(
+                status_code=500,
+                detail="현재 DB를 읽는 미조정 연결이 남아 있어 복구를 중단했습니다.",
+            )
+    except HTTPException:
+        raise
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"현재 DB WAL 정리에 실패해 복구를 중단했습니다: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _remove_database_sidecars(path: str | Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        sidecar = str(path) + suffix
+        if os.path.exists(sidecar):
+            os.remove(sidecar)
+
+
+def _cleanup_temporary_database(path: str | Path) -> None:
+    for candidate in (str(path), str(path) + "-wal", str(path) + "-shm"):
+        if os.path.exists(candidate):
+            os.remove(candidate)
+
+
+def _strict_prepare_live_database() -> None:
+    engine.dispose()
+    Base.metadata.create_all(bind=engine)
+    auto_migrate_database(strict=True)
+    _require_valid_sqlite_backup(db_path)
 
 
 BACKUP_SUMMARY_TABLES = {
@@ -65,12 +153,17 @@ BACKUP_SUMMARY_TABLES = {
 
 
 def get_db():
-    with database_access_gate():
+    lease = database_coordinator.acquire_request("beholder")
+    db = None
+    try:
         db = SessionLocal()
+        yield db
+    finally:
         try:
-            yield db
+            if db is not None:
+                db.close()
         finally:
-            db.close()
+            lease.release()
 
 
 class ResolveRequest(BaseModel):
@@ -79,8 +172,17 @@ class ResolveRequest(BaseModel):
 
 class RuntimeHeartbeatRequest(BaseModel):
     app_instance_id: str
-    runtime_kind: str = "pyqt"
+    runtime_kind: str = "pyside6"
     shutdown: bool = False
+
+
+class LifecycleFailureRequest(BaseModel):
+    kind: str
+    process_id: str
+    process_name: str
+    runtime_token: str
+    attempts: int
+    error_type: str
 
 
 class OpenSessionReconcileRequest(BaseModel):
@@ -129,6 +231,89 @@ def update_runtime_heartbeat(payload: RuntimeHeartbeatRequest, db: Session = Dep
         "last_heartbeat_at": row.last_heartbeat_at,
         "last_shutdown_at": row.last_shutdown_at,
     }
+
+
+def _record_lifecycle_failure_incident(
+    db: Session,
+    *,
+    kind: str,
+    process_id: str,
+    process_name: str,
+    runtime_token: str,
+    attempts: int,
+    error_type: str,
+) -> models.BeholderIncident:
+    """Return the one incident associated with a stable lifecycle event."""
+
+    target = f"process_id={process_id};kind={kind};token={runtime_token}"
+    existing = (
+        db.query(models.BeholderIncident)
+        .filter(
+            models.BeholderIncident.operation_kind == "runtime_lifecycle_persistence_failure",
+            models.BeholderIncident.target_summary == target,
+        )
+        .order_by(models.BeholderIncident.id.desc())
+        .first()
+    )
+    if existing is None:
+        operation = beholder.BeholderOperation(
+            kind="runtime_lifecycle_persistence_failure",
+            actor="process_monitor",
+            evidence={"process_id": process_id, "kind": kind},
+        )
+        existing = beholder.create_incident(
+            db,
+            severity=beholder.SEVERITY_WARNING,
+            operation=operation,
+            target_summary=target,
+            suspected_cause=(
+                f"게임 {kind} 기록을 {max(0, attempts)}회 시도했으나 "
+                f"완료를 확인하지 못했습니다 ({error_type[:80]})."
+            ),
+            current_state_summary="OS 실행 상태 표시는 즉시 반영됐지만 DB lifecycle 확정은 보류됐습니다.",
+            proposed_change_summary="다음 앱 시작 시 open-session reconcile로 실제 실행 상태를 다시 확인합니다.",
+            risk_score=55,
+            risk_factors=["runtime_state_ambiguous"],
+            safe_recommendation="앱과 API 연결을 확인한 뒤 재시작하여 lifecycle reconcile을 수행하세요.",
+            user_title=f"{process_name} 실행 기록을 확정하지 못했습니다",
+            user_summary="게임 실행 표시는 유지되지만 플레이 기록 저장 여부를 다시 확인해야 합니다.",
+            user_impact="동일 token의 실패 사건은 한 건만 표시하며 별도 재생 상태는 저장하지 않습니다.",
+            recommended_action="quarantine",
+            available_actions=[
+                {
+                    "id": "quarantine",
+                    "label": "재시작 후 재확인",
+                    "description": "현재 상태를 보존하고 다음 startup reconcile에서 확인합니다.",
+                    "recommended": True,
+                },
+                {
+                    "id": "deny",
+                    "label": "확인 완료",
+                    "description": "진단만 확인하고 사건을 닫습니다.",
+                },
+            ],
+        )
+    return existing
+
+
+@router.post("/runtime/lifecycle-failure")
+def record_lifecycle_failure(
+    payload: LifecycleFailureRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Persist an exhausted GUI lifecycle retry as a user-visible incident."""
+
+    with _lifecycle_failure_lock:
+        existing = _record_lifecycle_failure_incident(
+            db,
+            kind=payload.kind,
+            process_id=payload.process_id,
+            process_name=payload.process_name,
+            runtime_token=payload.runtime_token,
+            attempts=payload.attempts,
+            error_type=payload.error_type,
+        )
+    return {"ok": True, "incident": beholder.incident_to_dict(existing)}
 
 
 @router.post("/open-sessions/reconcile")
@@ -204,9 +389,31 @@ def _backup_files() -> list[dict[str, Any]]:
     return files
 
 
+def _acquire_backup_read_lease(route_name: str):
+    """Coordinate live-DB summaries with normal restore and fault recovery.
+
+    Faulted mode exposes only this explicit recovery read admission.  Both
+    lease types share the same active counter, so a restore cannot enter its
+    replace section until every summary connection has closed.
+    """
+
+    if database_coordinator.snapshot().mode == "faulted":
+        return database_coordinator.acquire_fault_recovery_read(route_name)
+    return database_coordinator.acquire_request(route_name)
+
+
 @router.get("/backups")
-def list_backups() -> dict[str, Any]:
-    return {"backups": _backup_files(), "current_db_path": db_path, "current": _db_summary(db_path)}
+def list_backups() -> Any:
+    try:
+        lease = _acquire_backup_read_lease("GET /api/beholder/backups")
+    except DatabaseAccessUnavailable as exc:
+        return database_access_error_response(exc)
+    with lease:
+        return {
+            "backups": _backup_files(),
+            "current_db_path": db_path,
+            "current": _db_summary(db_path),
+        }
 
 
 class RestoreRequest(BaseModel):
@@ -214,59 +421,200 @@ class RestoreRequest(BaseModel):
 
 
 @router.post("/backups/restore-preview")
-def restore_preview(payload: RestoreRequest) -> dict[str, Any]:
-    files = {item["slot"]: item for item in _backup_files()}
-    if payload.slot not in files:
-        raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
-    current = _db_summary(db_path)
-    backup = files[payload.slot]
-    return {
-        "backup": backup,
-        "current": current,
-        "impact": {
-            "will_replace_current_db": True,
-            "previous_snapshot_will_be_created": os.path.exists(db_path),
-            "summary": (
-                f"현재 DB를 backup.{payload.slot}의 내용으로 교체합니다. "
-                "복구 직전 현재 DB는 별도 snapshot으로 보존됩니다."
-            ),
-        },
-    }
+def restore_preview(payload: RestoreRequest) -> Any:
+    try:
+        lease = _acquire_backup_read_lease("POST /api/beholder/backups/restore-preview")
+    except DatabaseAccessUnavailable as exc:
+        return database_access_error_response(exc)
+    with lease:
+        files = {item["slot"]: item for item in _backup_files()}
+        if payload.slot not in files:
+            raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
+        current = _db_summary(db_path)
+        backup = files[payload.slot]
+        return {
+            "backup": backup,
+            "current": current,
+            "impact": {
+                "will_replace_current_db": True,
+                "previous_snapshot_will_be_created": os.path.exists(db_path),
+                "summary": (
+                    f"현재 DB를 backup.{payload.slot}의 내용으로 교체합니다. "
+                    "복구 직전 현재 DB는 별도 snapshot으로 보존됩니다."
+                ),
+            },
+        }
+
+
+def _prepare_restore_runtime() -> bool:
+    """Require the owning GUI's completed drain; server-only has no GUI writers."""
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return True
+    import json
+    import psutil
+    try:
+        metadata = json.loads(Path(data_dir, "db_server_meta.json").read_text(encoding="utf-8"))
+        process = psutil.Process(parent.pid)
+        if (metadata.get("parent_pid") != parent.pid or
+                abs(process.create_time() - float(metadata["parent_create_time"])) > 0.001):
+            return False
+        command = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            command.append(str(Path(__file__).resolve().parents[2] / "homework_helper.pyw"))
+        command.append("--prepare-database-restore")
+        result = subprocess.run(command, timeout=7.0, check=False, capture_output=True)
+        return result.returncode == 0
+    except (OSError, ValueError, KeyError, psutil.Error, subprocess.TimeoutExpired):
+        logger.exception("GUI restore preparation did not complete")
+        return False
 
 
 @router.post("/backups/restore")
-def restore_backup(payload: RestoreRequest) -> dict[str, Any]:
+def restore_backup(payload: RestoreRequest) -> Any:
     files = {item["slot"]: item for item in _backup_files()}
     if payload.slot not in files:
         raise HTTPException(status_code=404, detail="선택한 백업을 찾을 수 없습니다.")
     source = files[payload.slot]["path"]
     _require_valid_sqlite_backup(source)
+    if not _prepare_restore_runtime():
+        return JSONResponse(status_code=409, content={
+            "code": "database_restore_runtime_not_ready",
+            "detail": "데이터 기록 작업의 중지 완료를 확인하지 못해 DB를 교체하지 않았습니다. 앱을 재시작하세요.",
+        })
+    timestamp = int(time.time() * 1000)
+    operation_id = f"{timestamp}.{uuid.uuid4().hex}"
+    before_path = os.path.join(data_dir, f"app_data.before_beholder_restore.{operation_id}.db")
+    restore_tmp = os.path.join(data_dir, f"app_data.restore_tmp.{operation_id}.db")
+    rollback_tmp = os.path.join(data_dir, f"app_data.rollback_tmp.{operation_id}.db")
 
-    with _RESTORE_LOCK:
-        before_path = os.path.join(data_dir, f"app_data.before_beholder_restore.{int(time.time())}.db")
-        restore_tmp = os.path.join(data_dir, f"app_data.restore_tmp.{int(time.time() * 1000)}.db")
-        if os.path.exists(db_path):
-            _copy_sqlite_database(db_path, before_path)
-        try:
-            _copy_sqlite_database(source, restore_tmp)
-            _require_valid_sqlite_backup(restore_tmp)
+    # Copy and validate the selected backup before rejecting normal DB traffic.
+    try:
+        _copy_sqlite_database(source, restore_tmp)
+        _require_valid_sqlite_backup(restore_tmp)
+    except Exception:
+        _cleanup_temporary_database(restore_tmp)
+        raise
 
-            # Close pooled SQLite handles before replacing the live DB; otherwise
-            # Windows file locks or stale pooled connections can make restore
-            # appear successful while the app continues to serve the old database.
-            engine.dispose()
-            _checkpoint_live_database(db_path)
-            for suffix in ("-wal", "-shm"):
-                sidecar = db_path + suffix
-                if os.path.exists(sidecar):
-                    os.remove(sidecar)
-            os.replace(restore_tmp, db_path)
-            engine.dispose()
-            Base.metadata.create_all(bind=engine)
-            auto_migrate_database()
-        finally:
-            for path in (restore_tmp, restore_tmp + "-wal", restore_tmp + "-shm"):
-                if os.path.exists(path):
-                    os.remove(path)
+    snapshot = database_coordinator.snapshot()
+    try:
+        if snapshot.mode == "faulted":
+            maintenance = database_coordinator.begin_fault_recovery("beholder_backup_restore")
+        else:
+            maintenance = database_coordinator.begin_maintenance("beholder_backup_restore")
+    except DatabaseDrainTimeout as exc:
+        _cleanup_temporary_database(restore_tmp)
+        return database_drain_timeout_response(exc)
+    except DatabaseAccessUnavailable as exc:
+        _cleanup_temporary_database(restore_tmp)
+        return database_access_error_response(exc)
+    except DatabaseFaultStatePersistenceError as exc:
+        _cleanup_temporary_database(restore_tmp)
+        logger.exception("DB restore durable guard 생성 실패")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "database restore failed before live database replacement",
+                "code": "database_restore_failed",
+                "restore_error": str(exc),
+            },
+        )
+
+    live_replaced = False
+    recovering_fault = snapshot.mode == "faulted"
+    try:
+        with maintenance:
+            try:
+                engine.dispose()
+                if recovering_fault:
+                    _copy_raw_database(db_path, before_path)
+                elif os.path.exists(db_path):
+                    _copy_sqlite_database(db_path, before_path)
+                    _require_valid_sqlite_backup(before_path)
+                if not recovering_fault:
+                    _checkpoint_live_database(db_path)
+                os.replace(restore_tmp, db_path)
+                live_replaced = True
+                _remove_database_sidecars(db_path)
+                _strict_prepare_live_database()
+            except Exception as restore_exc:
+                engine.dispose()
+                if live_replaced:
+                    if os.path.exists(before_path):
+                        try:
+                            if recovering_fault:
+                                _copy_raw_database(before_path, rollback_tmp)
+                                _replace_raw_database(rollback_tmp, db_path)
+                            else:
+                                _copy_sqlite_database(before_path, rollback_tmp)
+                                _require_valid_sqlite_backup(rollback_tmp)
+                                _remove_database_sidecars(db_path)
+                                os.replace(rollback_tmp, db_path)
+                                _strict_prepare_live_database()
+                        except Exception as rollback_exc:
+                            try:
+                                maintenance.mark_faulted("database_restore_rollback_failed")
+                            except DatabaseFaultStatePersistenceError:
+                                logger.exception(
+                                    "DB restore rollback 실패 sentinel 저장 실패; durable guard를 유지합니다."
+                                )
+                            return JSONResponse(
+                                status_code=500,
+                                content={
+                                    "detail": "database restore and rollback failed",
+                                    "code": "database_restore_rollback_failed",
+                                    "restore_error": str(restore_exc),
+                                    "rollback_error": str(rollback_exc),
+                                },
+                            )
+                        return JSONResponse(
+                            status_code=500,
+                            content={
+                                "detail": "database restore failed and previous database was restored",
+                                "code": "database_restore_rolled_back",
+                                "restore_error": str(restore_exc),
+                            },
+                        )
+                    try:
+                        maintenance.mark_faulted("database_restore_rollback_unavailable")
+                    except DatabaseFaultStatePersistenceError:
+                        logger.exception(
+                            "DB restore rollback 부재 sentinel 저장 실패; durable guard를 유지합니다."
+                        )
+                    return JSONResponse(
+                        status_code=500,
+                        content={
+                            "detail": "database restore failed and no rollback snapshot was available",
+                            "code": "database_restore_rollback_unavailable",
+                            "restore_error": str(restore_exc),
+                        },
+                    )
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "detail": "database restore failed before live database replacement",
+                        "code": "database_restore_failed",
+                        "restore_error": str(restore_exc),
+                    },
+                )
+            maintenance.release()
+    except DatabaseFaultStatePersistenceError as exc:
+        logger.exception("DB restore 성공 후 fault sentinel 정리 실패")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "database restored but safety state could not be cleared",
+                "code": "database_restore_sentinel_clear_failed",
+                "database_restored": bool(live_replaced),
+                "sentinel_clear_error": str(exc),
+                "follow_up": "복원된 DB는 유지됩니다. fault sentinel을 확인한 뒤 복구를 다시 실행하세요.",
+                "restored_from": source,
+                "previous_snapshot": before_path,
+            },
+        )
+    finally:
+        engine.dispose()
+        for temporary in (restore_tmp, rollback_tmp):
+            _cleanup_temporary_database(temporary)
 
     return {"ok": True, "restored_from": source, "previous_snapshot": before_path}

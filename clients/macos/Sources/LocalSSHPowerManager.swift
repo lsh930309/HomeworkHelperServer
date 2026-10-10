@@ -1,9 +1,24 @@
 import Foundation
 
 enum LocalSSHPowerManager {
-    static let acceptedMarker = "__HH_REMOTE_POWER_ACCEPTED__"
-    static let healthMarker = "__HH_SSH_HEALTH_OK__"
     private static let connectionClosingActions: Set<String> = ["sleep", "restart", "shutdown"]
+
+    struct ServiceResponse: Decodable, Equatable {
+        let accepted: Bool
+        let status: String?
+        let action: String?
+        let capabilities: [String]?
+        let message: String?
+        let user_session_ready: Bool?
+
+        var readyForPower: Bool {
+            accepted && status == "ready" && capabilities?.contains("power") == true && user_session_ready == true
+        }
+
+        func acceptsPower(action requestedAction: String) -> Bool {
+            accepted && status == "accepted" && action == requestedAction
+        }
+    }
 
     private struct ProcessResult {
         let status: Int32
@@ -42,15 +57,25 @@ enum LocalSSHPowerManager {
 
     static func command(for action: String) throws -> String {
         switch action {
-        case "shutdown":
-            return "cmd /C shutdown /s /t 1 && echo \(acceptedMarker)"
-        case "restart":
-            return "cmd /C shutdown /r /t 1 && echo \(acceptedMarker)"
-        case "sleep":
-            return "cmd /C echo \(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0"
+        case "shutdown", "restart", "sleep":
+            return serviceCommand(arguments: ["power", action])
         default:
             throw NSError(domain: "LocalSSHPowerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "지원하지 않는 SSH 전원 명령입니다: \(action)"])
         }
+    }
+
+    static func statusCommand() -> String {
+        serviceCommand(arguments: ["status"])
+    }
+
+    private static func serviceCommand(arguments: [String]) -> String {
+        let executable = #"C:\Program Files\HomeworkHelper\homework_helper_service.exe"#
+        return "powershell -NoProfile -NonInteractive -Command \"& '\(executable)' --control \(arguments.joined(separator: " "))\""
+    }
+
+    static func serviceResponse(from output: String) -> ServiceResponse? {
+        guard let data = output.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ServiceResponse.self, from: data)
     }
 
     static func run(action: String, config: RemotePowerConfigPayload) async throws -> String {
@@ -63,7 +88,7 @@ enum LocalSSHPowerManager {
         let host = config.sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = config.sshUser.trimmingCharacters(in: .whitespacesAndNewlines)
         let keyPath = NSString(string: config.normalizedLocalSSHKeyPath()).expandingTildeInPath
-        guard !host.isEmpty, !user.isEmpty, !keyPath.isEmpty else {
+        guard !host.isEmpty, !user.isEmpty, !keyPath.isEmpty, config.sshPort > 0 else {
             throw NSError(domain: "LocalSSHPowerManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mac에 저장된 SSH host/user/key path가 없어 SSH 전원 명령을 보낼 수 없습니다."])
         }
 
@@ -73,19 +98,18 @@ enum LocalSSHPowerManager {
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=yes",
         ]
         args.append(contentsOf: extraArgs)
         args.append("\(user)@\(host)")
         args.append(command)
 
         let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args, timeoutSeconds: 20)
-        let combined = [result.stdout, result.stderr].joined(separator: "\n")
-        guard combined.contains(Self.acceptedMarker) else {
+        guard serviceResponse(from: result.stdout)?.acceptsPower(action: action) == true else {
             let detail = result.stderr.isEmpty ? result.stdout : result.stderr
             throw NSError(domain: "LocalSSHPowerManager", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "SSH 전원 명령 수락 신호를 확인하지 못했습니다." : detail])
         }
-        return "Mac에서 OpenSSH로 \(action) 명령 수락 신호를 확인했습니다."
+        return "Mac에서 OpenSSH로 권한 서비스의 \(action) 명령 수락을 확인했습니다."
     }
 
     static func health(config: RemotePowerConfigPayload, timeoutSeconds: Int = 3) async -> HealthResult {
@@ -102,19 +126,26 @@ enum LocalSSHPowerManager {
             "-o", "ConnectTimeout=\(max(1, timeoutSeconds))",
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=yes",
             "\(user)@\(host)",
-            "echo \(healthMarker)",
+            statusCommand(),
         ]
 
         do {
             let result = try await runForResult(executable: "/usr/bin/ssh", arguments: args, timeoutSeconds: max(5, timeoutSeconds + 5))
             let combined = [result.stdout, result.stderr].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             let lowered = combined.lowercased()
-            if result.status == 0 && combined.contains(healthMarker) {
-                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH health 성공" : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: true, stdout: result.stdout, stderr: result.stderr)
+            let response = serviceResponse(from: result.stdout)
+            if result.status == 0 && response?.readyForPower == true {
+                return HealthResult(host: host, outcome: .reachable, message: "SSH 인증과 권한 서비스의 전원 제어 준비를 확인했습니다.", executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: true, stdout: result.stdout, stderr: result.stderr)
             }
-            if lowered.contains("connection refused") || lowered.contains("permission denied") {
+            if result.status == 0 && response?.user_session_ready == false {
+                return HealthResult(host: host, outcome: .reachable, message: "로그온 후 사용", executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
+            }
+            if result.status == 0 || response != nil {
+                return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 권한 서비스의 전원 제어 준비를 확인하지 못했습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
+            }
+            if lowered.contains("connection refused") || lowered.contains("permission denied") || lowered.contains("host key verification failed") {
                 return HealthResult(host: host, outcome: .reachable, message: combined.isEmpty ? "SSH host는 응답했지만 인증/서비스가 거부되었습니다." : combined, executablePath: "/usr/bin/ssh", exitStatus: result.status, authenticated: false, stdout: result.stdout, stderr: result.stderr)
             }
             if lowered.contains("timed out")
@@ -148,7 +179,7 @@ enum LocalSSHPowerManager {
             "-o", "ConnectTimeout=\(max(1, timeoutSeconds))",
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=no",
+            "-o", "StrictHostKeyChecking=yes",
             "\(user)@\(host)",
             remoteCommand
         ]

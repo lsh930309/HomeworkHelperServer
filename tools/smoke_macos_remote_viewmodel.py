@@ -35,6 +35,7 @@ LOCAL_SSH_POWER_MANAGER = MACOS_SOURCE_DIR / "LocalSSHPowerManager.swift"
 LOCAL_MOONLIGHT_MANAGER = MACOS_SOURCE_DIR / "LocalMoonlightManager.swift"
 TAILSCALE_DISCOVERY = MACOS_SOURCE_DIR / "TailscaleDiscovery.swift"
 REMOTE_CLIENT_CACHE = MACOS_SOURCE_DIR / "RemoteClientCache.swift"
+REMOTE_HOST_OBSERVATION = MACOS_SOURCE_DIR / "RemoteHostObservation.swift"
 REMOTE_CONNECTION_SUPERVISOR = MACOS_SOURCE_DIR / "RemoteConnectionSupervisor.swift"
 REMOTE_SMART_POLL_CONTROLLER = MACOS_SOURCE_DIR / "RemoteSmartPollController.swift"
 REMOTE_LOGIN_ITEM_MANAGER = MACOS_SOURCE_DIR / "RemoteLoginItemManager.swift"
@@ -55,13 +56,18 @@ def _file_signature(path: Path) -> tuple[bool, int, int, str]:
     return (True, stat.st_size, stat.st_mtime_ns, hashlib.sha256(data).hexdigest())
 
 
-def _assert_production_cache_unchanged(before: tuple[bool, int, int, str]) -> None:
-    path = _production_process_cache_path()
-    after = _file_signature(path)
+def _production_process_cache_signatures() -> dict[str, tuple[bool, int, int, str]]:
+    legacy = _production_process_cache_path()
+    paths = {legacy, *legacy.parent.glob("processes-*.json")}
+    return {path.name: _file_signature(path) for path in paths}
+
+
+def _assert_production_cache_unchanged(before: dict[str, tuple[bool, int, int, str]]) -> None:
+    after = _production_process_cache_signatures()
     if after != before:
         raise RuntimeError(
-            "macOS ViewModel smoke mutated the production process cache. "
-            f"Tests must use HH_REMOTE_CACHE_DIR, not {path}"
+            "macOS ViewModel smoke mutated a production process cache. "
+            f"Tests must use HH_REMOTE_CACHE_DIR, not {_production_process_cache_path().parent}"
         )
 
 
@@ -130,19 +136,58 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
             fflush(stderr)
         }
 
+        @MainActor
+        func waitForAppReady(_ viewModel: RemoteDashboardViewModel) async {
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if viewModel.hostObservations.appReady { return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            fatalError("host-change observation did not settle: \(viewModel.hostStatusLabel)")
+        }
+
+        @MainActor
+        func waitForClosedLoopback(_ viewModel: RemoteDashboardViewModel) async {
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if viewModel.hostObservations.pc == .unknown,
+                   viewModel.hostObservations.app == .waiting { return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            fatalError("closed-port observation did not settle: \(viewModel.hostStatusLabel)")
+        }
+
         @main
         struct MacOSRemoteViewModelSmoke {
             @MainActor
             static func main() async {
                 smokeStep("init")
+                let ready = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready)
+                let waiting = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .waiting)
+                guard ready.label() == "페어링됨",
+                      ready.label(isSyncing: true) == "동기화 중",
+                      ready.label(isPaired: false) == "페어링 해제됨",
+                      waiting.label() == "호스트 대기",
+                      waiting.label(availability: .restarting) == "재시동 대기 중",
+                      RemoteHostObservationSnapshot(pc: .reachable, app: .authRejected).label() == "인증 확인 필요",
+                      RemoteHostObservationSnapshot(pc: .reachable, apollo: .unavailable).label() == "스트리밍 대기",
+                      RemoteHostObservationSnapshot(pc: .unavailable).label() == "Tailscale 오류",
+                      RemoteHostObservationSnapshot(pc: .unreachable).label() == "호스트 응답 없음",
+                      RemoteHostObservationSnapshot().label(availability: .offlineExpected) == "상태 확인 중" else {
+                    fatalError("existing statuses and prelogin observations must keep distinct, concise labels")
+                }
                 if let suite = ProcessInfo.processInfo.environment["HH_REMOTE_PREFS_SUITE"],
                    let defaults = UserDefaults(suiteName: suite) {
                     defaults.removePersistentDomain(forName: suite)
                     defaults.set("sparkles", forKey: "remote.menuBarIconSymbol")
                 }
+                defer {
+                    if let suite = ProcessInfo.processInfo.environment["HH_REMOTE_PREFS_SUITE"] {
+                        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+                    }
+                }
                 let store = SmokeInMemoryTokenStore()
                 let viewModel = RemoteDashboardViewModel(tokenStore: store)
-                viewModel.selectedMoonlightHostUUID = "smoke-moonlight-host"
                 guard viewModel.menuBarIdleIconSymbol == "sparkles",
                       viewModel.menuBarRunningIconSymbol == "play.circle.fill",
                       viewModel.menuBarOfflineIconSymbol == "power.circle.fill" else {
@@ -207,21 +252,30 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 viewModel.pairingCode = "__PAIRING_CODE__"
 
                 smokeStep("ssh power acceptance command")
-                let sleepCommand = try! LocalSSHPowerManager.command(for: "sleep")
-                guard sleepCommand.contains(LocalSSHPowerManager.acceptedMarker),
-                      sleepCommand.contains("rundll32.exe powrprof.dll,SetSuspendState 0,0,0"),
-                      sleepCommand.contains("start") == false else {
-                    fatalError("sleep command should emit the acceptance marker before the direct rundll32 invocation that works over Windows OpenSSH")
+                for action in ["sleep", "shutdown", "restart"] {
+                    let command = try! LocalSSHPowerManager.command(for: action)
+                    guard command.contains("homework_helper_service.exe"),
+                          command.contains("--control power \(action)") else {
+                        fatalError("SSH power should use the privilege service control contract")
+                    }
+                    let accepted = LocalSSHPowerManager.serviceResponse(from:
+                        "{\"accepted\":true,\"status\":\"accepted\",\"action\":\"\(action)\"}")
+                    guard accepted?.acceptsPower(action: action) == true,
+                          accepted?.acceptsPower(action: "wake") == false else {
+                        fatalError("power acceptance should match the requested action")
+                    }
                 }
-                let shutdownCommand = try! LocalSSHPowerManager.command(for: "shutdown")
-                guard shutdownCommand.contains(LocalSSHPowerManager.acceptedMarker),
-                      shutdownCommand.contains("shutdown /s /t 1") else {
-                    fatalError("shutdown command should require command success before the acceptance marker")
+                guard LocalSSHPowerManager.statusCommand().contains("--control status"),
+                      LocalSSHPowerManager.serviceResponse(from:
+                        #"{"accepted":true,"status":"ready","user_session_ready":true,"capabilities":["power"]}"#)?.readyForPower == true,
+                      LocalSSHPowerManager.serviceResponse(from:
+                        #"{"accepted":true,"status":"ready","capabilities":[]}"#)?.readyForPower == false else {
+                    fatalError("SSH health should require the service's explicit power capability")
                 }
-                let restartCommand = try! LocalSSHPowerManager.command(for: "restart")
-                guard restartCommand.contains(LocalSSHPowerManager.acceptedMarker),
-                      restartCommand.contains("shutdown /r /t 1") else {
-                    fatalError("restart command should leave time for the acceptance marker after scheduling reboot")
+                guard LocalSSHPowerManager.serviceResponse(from:
+                        #"{"accepted":false,"status":"accepted","action":"sleep"}"#)?.acceptsPower(action: "sleep") == false,
+                      LocalSSHPowerManager.serviceResponse(from: "connection closed") == nil else {
+                    fatalError("SSH disconnects and rejected service responses must not imply power acceptance")
                 }
 
                 smokeStep("confirmPairing")
@@ -238,11 +292,15 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard let launchProcess = viewModel.processes.first(where: { $0.id == "smoke-game" }) else {
                     fatalError("seeded process missing before launch")
                 }
-                viewModel.hostAvailabilityState = .offlineExpected
+                smokeStep("unavailable app blocks game launch")
+                viewModel.baseURLText = "__OFFLINE_BASE_URL__"
+                await viewModel.refresh()
                 guard !viewModel.isLaunchEnabled(launchProcess) else {
-                    fatalError("offline launch should stay disabled while Moonlight ON owns its wake-and-stream path")
+                    fatalError("game launch should require the current host's app observation")
                 }
-                viewModel.hostAvailabilityState = .online
+                viewModel.baseURLText = "__BASE_URL__"
+                await viewModel.refresh()
+                await waitForAppReady(viewModel)
                 let hostLabelBeforeLaunch = viewModel.hostStatusLabel
                 smokeStep("launch command scoped mirror")
                 await viewModel.launch(launchProcess)
@@ -351,8 +409,9 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.isStopEnabled(viewModel.processes[0]) else {
                     fatalError("online running game should expose the remote stop action")
                 }
-                guard RemoteClientCache.loadProcesses().contains(where: { $0.id == "smoke-game" }) else {
-                    fatalError("refresh did not write process snapshot cache")
+                guard RemoteClientCache.loadProcesses(baseURL: URL(string: "__BASE_URL__")).contains(where: { $0.id == "smoke-game" }),
+                      RemoteClientCache.loadProcesses(baseURL: URL(string: "__OFFLINE_BASE_URL__")).isEmpty else {
+                    fatalError("process snapshots should be stored only for their own host and port")
                 }
                 guard viewModel.powerSetup != nil else {
                     fatalError("refresh did not populate power setup: \(viewModel.message)")
@@ -360,23 +419,27 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.powerConfig.smartthingsDeviceID == "145ad447-9969-4ee7-bda0-1760430d9be1" else {
                     fatalError("SmartThings PC 켜기 device was not auto-selected: \(viewModel.powerConfig.smartthingsDeviceID) message=\(viewModel.message)")
                 }
-                smokeStep("offline local wake")
-                viewModel.hostConnectionState = "offline"
+                smokeStep("isolated local wake")
                 viewModel.powerConfig.smartthingsDeviceID = "smoke-device"
-                await viewModel.power("wake")
-                guard viewModel.message.contains("wake 신호") else {
-                    fatalError("offline local wake did not use SmartThings fallback: \(viewModel.message)")
+                guard await viewModel.localWake(), viewModel.message.contains("wake 신호") else {
+                    fatalError("local wake did not use the isolated SmartThings executable: \(viewModel.message)")
                 }
-                smokeStep("offline moonlight wake")
-                viewModel.hostAvailabilityState = .offlineExpected
-                viewModel.hostConnectionState = "offline"
+                smokeStep("unobserved PC must not wake")
+                viewModel.baseURLText = "__OFFLINE_BASE_URL__"
+                await viewModel.power("wake")
+                guard [.unknown, .unavailable].contains(viewModel.hostObservations.pc),
+                      viewModel.message.contains("Wake를 중복 전송하지 않습니다") else {
+                    fatalError("loopback without PC evidence must not automatically send Wake: \(viewModel.message)")
+                }
                 viewModel.moonlightBindingEnabled = false
                 await viewModel.toggleMoonlightDesktopSession()
                 guard viewModel.moonlightBindingEnabled,
-                      viewModel.moonlightFooterButtonDisabled,
-                      viewModel.message.contains("Wake 명령을 전달했습니다") else {
-                    fatalError("offline Moonlight ON should queue wake-and-stream instead of failing: \(viewModel.message)")
+                      viewModel.message.contains("PC 응답 여부를 확인한 뒤") else {
+                    fatalError("Moonlight auto-wake should require current PC evidence: \(viewModel.message)")
                 }
+                viewModel.baseURLText = "__BASE_URL__"
+                await viewModel.refresh()
+                await waitForAppReady(viewModel)
 
                 smokeStep("createGameLink")
                 viewModel.gameLinkProcessID = "smoke-game"
@@ -413,6 +476,9 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
 
                 smokeStep("closed port connection loss")
                 viewModel.baseURLText = "__OFFLINE_BASE_URL__"
+                guard viewModel.processes.isEmpty else {
+                    fatalError("switching host ports must not reuse another host's process cards")
+                }
                 viewModel.processes = [
                     RemoteProcess(
                         processID: "offline-yesterday",
@@ -455,12 +521,19 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                         statusText: "오늘 실행"
                     )
                 ]
+                RemoteClientCache.saveProcesses(viewModel.processes, baseURL: URL(string: "__OFFLINE_BASE_URL__")!)
                 await viewModel.refresh()
+                await waitForClosedLoopback(viewModel)
                 guard viewModel.hostAvailabilityState != .online else {
                     fatalError("closed port refresh should not leave host online")
                 }
                 guard !viewModel.processes.isEmpty else {
                     fatalError("closed port refresh should preserve cached standalone process cards")
+                }
+                guard viewModel.hostObservations.pc == .unknown,
+                      !viewModel.hostObservations.appReady,
+                      viewModel.hostStatusLabel == "서버 응답 없음" else {
+                    fatalError("an unavailable loopback app must not claim the PC is powered off")
                 }
                 guard viewModel.menuBarPresentationState() == .offline,
                       viewModel.menuBarIconSymbol(for: .offline) == "power.circle.fill" else {
@@ -500,6 +573,7 @@ def _compile_and_run_swift_smoke(base_url: str, offline_base_url: str, pairing_c
         str(LOCAL_MOONLIGHT_MANAGER),
         str(TAILSCALE_DISCOVERY),
         str(REMOTE_CLIENT_CACHE),
+        str(REMOTE_HOST_OBSERVATION),
         str(REMOTE_CONNECTION_SUPERVISOR),
         str(REMOTE_SMART_POLL_CONTROLLER),
         str(REMOTE_LOGIN_ITEM_MANAGER),
@@ -534,21 +608,20 @@ def main(argv: list[str] | None = None) -> int:
 
     port = args.port or _free_loopback_port()
     base_url = f"http://{args.host}:{port}"
-    production_cache_signature = _file_signature(_production_process_cache_path())
+    production_cache_signature = _production_process_cache_signatures()
 
     with tempfile.TemporaryDirectory(prefix="hh-macos-viewmodel-smoke-") as temp_root:
         temp_dir = Path(temp_root)
-        home = temp_dir / "home"
-        home.mkdir()
         env = os.environ.copy()
         env.update(
             {
-                "HOME": str(home),
+                "HH_TEST_APPDATA_DIR": str(temp_dir / "host-appdata"),
                 "HH_API_HOST": args.host,
                 "HH_API_PORT": str(port),
                 "HH_REMOTE_REQUIRE_AUTH": "0",
                 "HH_REMOTE_CACHE_DIR": str(temp_dir / "remote-client-cache"),
                 "HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}",
+                "HH_REMOTE_NO_EXTERNAL_STATE": "1",
                 "PYTHONPATH": str(PROJECT_ROOT),
             }
         )
@@ -616,7 +689,9 @@ exit 0
   <key>hosts.1.hostname</key>
   <string>smoke-host</string>
   <key>hosts.1.localaddress</key>
-  <string>100.64.1.2</string>
+  <string>127.0.0.1</string>
+  <key>hosts.1.localport</key>
+  <integer>__SMOKE_PORT__</integer>
   <key>hosts.1.apps.size</key>
   <integer>1</integer>
   <key>hosts.1.apps.1.name</key>
@@ -627,7 +702,7 @@ exit 0
   <false/>
 </dict>
 </plist>
-""",
+""".replace("__SMOKE_PORT__", str(port)),
                 encoding="utf-8",
             )
             smoke_ssh_key = temp_dir / "smoke_ssh" / "homeworkhelper_remote_ed25519"

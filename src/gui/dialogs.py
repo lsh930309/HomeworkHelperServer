@@ -2,11 +2,12 @@ import os
 import datetime
 import logging
 import time
+import weakref
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QTableWidgetItem, QDialog, QVBoxLayout, QLabel, QTableWidget,
     QDialogButtonBox, QHeaderView, QWidget, QFormLayout, QPushButton,
     QLineEdit, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox,
@@ -14,8 +15,8 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QTextEdit, QGridLayout, QTabWidget,
     QAbstractItemView, QMenu,
 )
-from PyQt6.QtCore import Qt, QTime, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
+from PySide6.QtCore import Qt, QTime, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon # QIcon might be needed if dialogs use icons directly
 
 # Local imports
 from src.data.data_models import ManagedProcess, GlobalSettings
@@ -23,6 +24,7 @@ from src.core import credential_health
 from src.utils.process import get_all_running_processes_info # Used by RunningProcessSelectionDialog
 from src.utils.common import copy_shortcut_file # 바로가기 파일 복사 기능
 from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL
+from src.gui.qt_runtime import is_qobject_valid
 import requests
 from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 
@@ -30,8 +32,8 @@ from src.api.runtime_config import resolve_api_port, resolve_local_api_base_url
 class _RemoteSettingsWorker(QThread):
     """Run a remote-settings HTTP/probe task without blocking dialog creation."""
 
-    succeeded = pyqtSignal(str, object)
-    failed = pyqtSignal(str, object)
+    succeeded = Signal(str, object)
+    failed = Signal(str, object)
 
     def __init__(self, task_name: str, task, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -646,9 +648,14 @@ class RunningProcessSelectionDialog(QDialog):
 
 class ProcessDialog(QDialog):
     """ Dialog for adding a new process or editing an existing one. """
+    MAX_LAUNCH_ARGS_LENGTH = 512
+
     def __init__(self, parent: Optional[QWidget] = None, existing_process: Optional[ManagedProcess] = None):
         super().__init__(parent)
         self.existing_process = existing_process
+        self._resource_query_pending = False
+        self._resource_dialog_closed = False
+        self.finished.connect(self._on_resource_dialog_finished)
 
         if self.existing_process:
             self.setWindowTitle("프로세스 편집")
@@ -693,6 +700,7 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택 섹션
         self._setup_launch_type_section()
+        self._setup_launch_args_section()
 
         # 스태미나 추적 섹션 (호요버스 게임 전용)
         self._setup_stamina_section()
@@ -791,7 +799,7 @@ class ProcessDialog(QDialog):
 
     def _on_save_as_preset_clicked(self):
         """현재 설정을 신규 프리셋으로 바로 저장 (간단한 입력 다이얼로그)"""
-        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
         from src.utils.game_preset_manager import GamePresetManager
         import re
         import os
@@ -1053,6 +1061,27 @@ class ProcessDialog(QDialog):
         # 시그널 연결은 모든 위젯 초기화 후에 한 번만 하도록 __init__ 마지막에서 처리
         self._update_launch_type_enabled()
 
+    def _setup_launch_args_section(self):
+        """직접 실행 시 전달할 추가 인자 opt-in 섹션 설정"""
+        launch_args_layout = QHBoxLayout()
+        self.launch_args_enabled_checkbox = QCheckBox("직접 실행 인자 사용")
+        self.launch_args_enabled_checkbox.setToolTip(
+            "프로세스 선호/직접 실행에만 적용됩니다.\n"
+            "바로가기(.lnk), .url, 런처 실행에는 적용되지 않습니다."
+        )
+        self.launch_args_edit = QLineEdit()
+        self.launch_args_edit.setPlaceholderText("-use-d3d12")
+        self.launch_args_edit.setToolTip(
+            "직접 실행 파일에 전달할 추가 실행 인자를 입력합니다.\n"
+            "예: -use-d3d12"
+        )
+        self.launch_args_edit.setEnabled(False)
+        self.launch_args_enabled_checkbox.toggled.connect(self.launch_args_edit.setEnabled)
+
+        launch_args_layout.addWidget(self.launch_args_enabled_checkbox)
+        launch_args_layout.addWidget(self.launch_args_edit, 1)
+        self.form_layout.addRow(launch_args_layout)
+
     def _update_launch_type_enabled(self, _=None):
         """모니터링 경로와 실행 경로가 다를 때만 실행 방식 선택 활성화"""
         # 콤보박스가 아직 생성되지 않은 경우 무시
@@ -1115,230 +1144,167 @@ class ProcessDialog(QDialog):
             self.hoyolab_game_combo.setCurrentIndex(0)  # '(없음)' 선택
             self.hoyolab_game_combo.setEnabled(False)
 
+    def _on_resource_dialog_finished(self, result):
+        self._resource_dialog_closed = True
+
+    def _registered_tracking_process(self, target):
+        """미저장 폼 선택이 현재 등록 대상과 같은 경우에만 저장형 조회를 허용한다."""
+        if self.existing_process is None:
+            return None
+        parent_window = self.parent()
+        manager = getattr(parent_window, "data_manager", None)
+        if manager is None:
+            return None
+        process = manager.get_process_by_id(self.existing_process.id)
+        if process is None:
+            return None
+        if target == "nikke_outpost_storage":
+            matches = (
+                process.resource_tracking_enabled
+                and process.resource_provider == "nikke_blablalink"
+                and process.resource_key == target
+            )
+        else:
+            matches = process.stamina_tracking_enabled and process.hoyolab_game_id == target
+        return process if matches else None
+
     def _test_stamina_connection(self):
-        """스태미나 조회 테스트"""
-        # 호요랩 게임 콤보박스에서 선택된 게임 사용
-        game_id = self.hoyolab_game_combo.currentData()
-        if not game_id:
+        """등록 대상은 제공자 큐에서 조회·저장하고 미저장 선택은 읽기만 수행한다."""
+        target = self.hoyolab_game_combo.currentData()
+        if not target:
             QMessageBox.warning(self, "오류", "추적 대상을 선택해주세요.")
             return
-
-        if game_id == "nikke_outpost_storage":
-            self._test_nikke_resource_connection()
+        if self._resource_query_pending:
+            QMessageBox.information(self, "조회 진행 중", "이전 자원 조회가 진행 중입니다. 완료 후 다시 시도해주세요.")
             return
-
+        parent_window = self.parent()
+        if getattr(parent_window, "_beholder_restore_runtime_suspended", False):
+            QMessageBox.warning(self, "재시작 필요", "DB 복구 시도로 자원 조회를 중지했습니다. 앱을 재시작한 뒤 다시 시도해주세요.")
+            return
+        is_nikke = target == "nikke_outpost_storage"
         try:
-            from src.services.hoyolab import get_hoyolab_service
-
-            service = get_hoyolab_service()
-
-            # 라이브러리 확인
-            if not service.is_available():
-                QMessageBox.warning(
-                    self,
-                    "라이브러리 없음",
-                    "HoYoLab API 연동을 위한 genshin.py 라이브러리가 설치되지 않았습니다.\n\n"
-                    "설치 방법: pip install genshin"
-                )
+            if is_nikke:
+                from src.services.nikke import get_nikke_service
+                get_service = get_nikke_service
+            else:
+                from src.services.hoyolab import get_hoyolab_service
+                get_service = get_hoyolab_service
+            service = get_service()
+            if not is_nikke and not service.is_available():
+                QMessageBox.warning(self, "라이브러리 없음", "HoYoLab API 연동을 위한 genshin.py 라이브러리가 설치되지 않았습니다.")
                 return
-
-            # 인증 정보 확인
             if not service.is_configured():
+                provider_name = "BlablaLink/NIKKE" if is_nikke else "HoYoLab"
                 reply = QMessageBox.question(
-                    self,
-                    "인증 정보 없음",
-                    "HoYoLab 인증 정보가 설정되지 않았습니다.\n"
-                    "지금 설정하시겠습니까?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    from src.gui.dialogs import HoYoLabSettingsDialog
-                    dialog = HoYoLabSettingsDialog(self)
-                    dialog.exec()
-                    # 설정 후 다시 확인
-                    if not service.is_configured():
-                        return
-                else:
-                    return
-
-            # 스태미나 조회
-            game_names = {
-                "honkai_starrail": "붕괴: 스타레일",
-                "zenless_zone_zero": "젠레스 존 제로"
-            }
-            game_name = game_names.get(game_id, game_id)
-
-            # 커서를 대기 커서로 변경
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            QApplication.processEvents()  # UI 업데이트
-
-            try:
-                stamina_info = service.get_stamina(game_id)
-
-                if stamina_info:
-                    full_time_str = ""
-                    if stamina_info.full_time:
-                        full_time_str = f"\n완전 회복 예상: {stamina_info.full_time.strftime('%Y-%m-%d %H:%M:%S')}"
-
-                    stamina_name = "개척력" if game_id == "honkai_starrail" else "배터리"
-
-                    # 편집 모드인 경우 프로세스에 스태미나 정보 즉시 저장
-                    save_result = ""
-                    if self.existing_process:
-                        try:
-                            # 로컬 객체 업데이트
-                            self.existing_process.stamina_current = stamina_info.current
-                            self.existing_process.stamina_max = stamina_info.max
-                            self.existing_process.stamina_updated_at = stamina_info.updated_at.timestamp()
-
-                            # API를 통해 스태미나 런타임 필드만 업데이트
-                            parent_window = self.parent()
-                            if parent_window and hasattr(parent_window, 'data_manager'):
-                                updater = getattr(parent_window.data_manager, 'update_process_stamina', None)
-                                result = bool(updater and updater(
-                                    self.existing_process.id,
-                                    stamina_info.current,
-                                    stamina_info.max,
-                                    stamina_info.updated_at.timestamp(),
-                                ))
-                                if result:
-                                    save_result = "\n\n💾 스태미나 정보가 저장되었습니다."
-                                    # GUI 새로고침
-                                    if hasattr(parent_window, 'populate_process_list'):
-                                        parent_window.populate_process_list()
-                                else:
-                                    save_result = "\n\n⚠️ 스태미나 정보 저장 실패"
-                            else:
-                                save_result = "\n\n💾 스태미나 정보가 임시 저장되었습니다."
-                        except Exception as e:
-                            logger.error(f"스태미나 저장 오류: {e}", exc_info=True)
-                            save_result = f"\n\n⚠️ 저장 오류: {e}"
-                    else:
-                        save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
-
-                    QMessageBox.information(
-                        self,
-                        "스태미나 조회 성공",
-                        f"✅ {game_name} 스태미나 조회 성공!\n\n"
-                        f"{stamina_name}: {stamina_info.current} / {stamina_info.max}\n"
-                        f"회복까지: {stamina_info.recover_time // 60}분{full_time_str}\n"
-                        f"조회 시각: {stamina_info.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
-                        f"{save_result}"
-                    )
-                else:
-                    QMessageBox.warning(
-                        self,
-                        "조회 실패",
-                        f"❌ {game_name} 스태미나 조회에 실패했습니다.\n\n"
-                        "가능한 원인:\n"
-                        "• HoYoLab 쿠키가 만료되었습니다.\n"
-                        "• 해당 게임을 플레이하지 않았습니다.\n"
-                        "• API 서버에 문제가 있습니다.\n\n"
-                        "자원 추적 설정에서 쿠키를 다시 설정해보세요."
-                    )
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "오류",
-                    f"스태미나 조회 중 오류가 발생했습니다:\n{str(e)}"
-                )
-            finally:
-                # 커서를 원래대로 복원
-                QApplication.restoreOverrideCursor()
-
-        except ImportError:
-            QMessageBox.warning(
-                self,
-                "모듈 없음",
-                "HoYoLab 서비스 모듈을 찾을 수 없습니다."
-            )
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "오류",
-                f"스태미나 테스트 중 오류가 발생했습니다:\n{str(e)}"
-            )
-
-    def _test_nikke_resource_connection(self):
-        """NIKKE ShiftyPad 전초기지 방어 보상 조회 테스트."""
-        try:
-            from src.services.nikke import get_nikke_service, NIKKE_OUTPOST_LABEL
-
-            service = get_nikke_service()
-            if not service.is_configured():
-                reply = QMessageBox.question(
-                    self,
-                    "인증 정보 없음",
-                    "BlablaLink/NIKKE 인증 정보가 설정되지 않았습니다.\n"
-                    "자원 추적 설정을 여시겠습니까?",
+                    self, "인증 정보 없음", f"{provider_name} 인증 정보가 설정되지 않았습니다.\n지금 설정하시겠습니까?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
-                if reply == QMessageBox.StandardButton.Yes:
-                    from src.gui.dialogs import HoYoLabSettingsDialog
-
-                    dialog = HoYoLabSettingsDialog(self)
-                    dialog.exec()
-                    if not service.is_configured():
-                        return
-                else:
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+                dialog = HoYoLabSettingsDialog(self)
+                dialog.exec()
+                parent_window = self.parent()
+                if parent_window is not None:
+                    for name in ("_hoyolab_reconcile", "_nikke_resource_reconcile"):
+                        coordinator = getattr(parent_window, name, None)
+                        if coordinator is not None:
+                            coordinator.cancel_changed_targets()
+                # 설정 저장에서 기존 서비스가 교체되므로 새 계정 경계에서 다시 읽는다.
+                service = get_service()
+                if not service.is_configured():
                     return
 
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            QApplication.processEvents()
-            try:
-                snapshot = service.get_outpost_storage()
-                if snapshot.status == "ok" and snapshot.percent is not None:
-                    save_result = ""
-                    if self.existing_process:
-                        self.existing_process.resource_tracking_enabled = True
-                        self.existing_process.resource_provider = snapshot.provider
-                        self.existing_process.resource_key = snapshot.resource_key
-                        self.existing_process.resource_label = snapshot.label
-                        self.existing_process.resource_percent = snapshot.percent
-                        self.existing_process.resource_updated_at = snapshot.updated_at.timestamp()
-                        self.existing_process.resource_status = snapshot.status
-                        parent_window = self.parent()
-                        if parent_window and hasattr(parent_window, "data_manager"):
-                            updater = getattr(parent_window.data_manager, "update_process_resource", None)
-                            if updater and updater(
-                                self.existing_process.id,
-                                snapshot.percent,
-                                snapshot.updated_at.timestamp(),
-                                snapshot.status,
-                                snapshot.label,
-                            ):
-                                save_result = "\n\n💾 리소스 정보가 저장되었습니다."
-                                if hasattr(parent_window, "populate_process_list"):
-                                    parent_window.populate_process_list()
-                            else:
-                                save_result = "\n\n⚠️ 리소스 정보 저장 실패"
-                        else:
-                            save_result = "\n\n💾 리소스 정보가 임시 저장되었습니다."
-                    else:
-                        save_result = "\n\nℹ️ 프로세스 저장 시 함께 저장됩니다."
+            process = self._registered_tracking_process(target)
+            if process is not None:
+                parent_window = self.parent()
+                name = "_nikke_resource_reconcile" if is_nikke else "_hoyolab_reconcile"
+                coordinator = getattr(parent_window, name)
+                dialog_ref = weakref.ref(self)
+                process_id = process.id
 
-                    QMessageBox.information(
-                        self,
-                        "NIKKE 리소스 조회 성공",
-                        f"✅ {NIKKE_OUTPOST_LABEL} 조회 성공!\n\n"
-                        f"{NIKKE_OUTPOST_LABEL}: {snapshot.percent:.1f}%\n"
-                        f"조회 시각: {snapshot.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
-                        f"{save_result}",
-                    )
+                def completed(payload):
+                    dialog = dialog_ref()
+                    if dialog is None or not is_qobject_valid(dialog) or dialog._resource_dialog_closed:
+                        return
+                    dialog._resource_query_pending = False
+                    dialog.stamina_test_button.setEnabled(True)
+                    dialog.stamina_test_button.setText("조회 테스트")
+                    current = dialog._registered_tracking_process(target)
+                    if (
+                        dialog.hoyolab_game_combo.currentData() != target
+                        or current is None
+                        or current.id != process_id
+                        or payload.get("process_id") != process_id
+                    ):
+                        return
+                    dialog._show_resource_test_result(target, payload, stored=True)
+
+                self._resource_query_pending = True
+                self.stamina_test_button.setEnabled(False)
+                self.stamina_test_button.setText("조회 중...")
+                if not coordinator.request_refresh(process_id, completed):
+                    self._resource_query_pending = False
+                    self.stamina_test_button.setEnabled(True)
+                    self.stamina_test_button.setText("조회 테스트")
+                    QMessageBox.information(self, "조회 진행 중", "이 게임의 자원 조회가 이미 진행 중입니다. 완료 후 다시 시도해주세요.")
+                return
+
+            # 신규 등록과 미저장 제공자 선택의 연결 테스트는 기존 DB와 공유 모델을 쓰지 않는다.
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                if is_nikke:
+                    snapshot = service.get_outpost_storage()
+                    payload = {"snapshot": snapshot, "fetched_at": snapshot.updated_at.timestamp()}
                 else:
-                    QMessageBox.warning(
-                        self,
-                        "조회 실패",
-                        "❌ NIKKE 전초기지 방어 보상 조회에 실패했습니다.\n\n"
-                        f"상태: {snapshot.status}\n"
-                        f"메시지: {snapshot.message or 'BlablaLink 세션/대표 계정 상태를 확인하세요.'}",
-                    )
+                    stamina = service.get_stamina(target)
+                    payload = {"stamina": stamina}
+                self._show_resource_test_result(target, payload, stored=False)
             finally:
                 QApplication.restoreOverrideCursor()
-        except Exception as e:
-            QMessageBox.warning(self, "오류", f"NIKKE 리소스 테스트 중 오류가 발생했습니다:\n{str(e)}")
+        except Exception as exc:
+            self._resource_query_pending = False
+            self.stamina_test_button.setEnabled(True)
+            self.stamina_test_button.setText("조회 테스트")
+            QMessageBox.warning(self, "오류", f"자원 조회 중 오류가 발생했습니다:\n{exc}")
+
+    def _show_resource_test_result(self, target, payload, *, stored):
+        """원본 조회 결과와 별도로 실제 DB 저장 결과를 표시한다."""
+        is_nikke = target == "nikke_outpost_storage"
+        observation = payload.get("snapshot" if is_nikke else "stamina")
+        success = observation is not None and (
+            not is_nikke or (observation.status == "ok" and observation.percent is not None)
+        )
+        if not success or payload.get("cancelled"):
+            detail = payload.get("error") or getattr(observation, "message", "") or "인증 정보와 API 연결 상태를 확인해주세요."
+            status = getattr(observation, "status", "")
+            QMessageBox.warning(self, "조회 실패", f"자원 조회에 실패했습니다.\n{status}\n{detail}")
+            return
+        if stored:
+            if isinstance(payload.get("process_row"), dict):
+                save_result = "\n\n💾 조회 결과가 저장되었습니다. 기존 회복 타이머가 유지될 수 있습니다."
+            else:
+                save_result = f"\n\n⚠️ 저장 실패: {payload.get('process_error') or '저장 결과 없음'}"
+        else:
+            save_result = "\n\nℹ️ 미저장 설정의 조회 결과입니다. 등록된 자원 값은 변경하지 않았습니다."
+        if is_nikke:
+            QMessageBox.information(
+                self, "NIKKE 리소스 조회 성공",
+                f"✅ {NIKKE_OUTPOST_LABEL} 조회 성공!\n\n"
+                f"{NIKKE_OUTPOST_LABEL}: {observation.percent:.1f}%\n"
+                f"조회 시각: {observation.updated_at.strftime('%Y-%m-%d %H:%M:%S')}{save_result}",
+            )
+        else:
+            names = {"honkai_starrail": ("붕괴: 스타레일", "개척력"), "zenless_zone_zero": ("젠레스 존 제로", "배터리")}
+            game_name, stamina_name = names.get(target, (target, "스태미나"))
+            full_time = f"\n완전 회복 예상: {observation.full_time.strftime('%Y-%m-%d %H:%M:%S')}" if observation.full_time else ""
+            QMessageBox.information(
+                self, "스태미나 조회 성공",
+                f"✅ {game_name} 스태미나 조회 성공!\n\n"
+                f"{stamina_name}: {observation.current} / {observation.max}\n"
+                f"회복까지: {observation.recover_time // 60}분{full_time}\n"
+                f"조회 시각: {observation.updated_at.strftime('%Y-%m-%d %H:%M:%S')}{save_result}",
+            )
 
     def populate_fields_from_existing_process(self):
         if not self.existing_process:
@@ -1353,6 +1319,10 @@ class ProcessDialog(QDialog):
         if self.existing_process.mandatory_times_str:
             self.mandatory_times_edit.setText(",".join(self.existing_process.mandatory_times_str))
         self.is_mandatory_time_enabled_checkbox.setChecked(self.existing_process.is_mandatory_time_enabled)
+        launch_args_enabled = bool(getattr(self.existing_process, 'launch_args_enabled', False))
+        self.launch_args_enabled_checkbox.setChecked(launch_args_enabled)
+        self.launch_args_edit.setText(str(getattr(self.existing_process, 'launch_args', '') or ''))
+        self.launch_args_edit.setEnabled(launch_args_enabled)
 
         # 실행 방식 선택 로드
         if hasattr(self.existing_process, 'preferred_launch_type'):
@@ -1507,6 +1477,13 @@ class ProcessDialog(QDialog):
                 if t_str and not self.validate_time_format(t_str):
                     QMessageBox.warning(self, "입력 오류", f"특정 접속 시각 형식이 잘못되었습니다 (HH:MM): {t_str}")
                     return
+        launch_args = self.launch_args_edit.text().strip()
+        if "\n" in launch_args or "\r" in launch_args or "\x00" in launch_args:
+            QMessageBox.warning(self, "입력 오류", "직접 실행 인자에는 줄바꿈 또는 NULL 문자를 사용할 수 없습니다.")
+            return
+        if len(launch_args) > self.MAX_LAUNCH_ARGS_LENGTH:
+            QMessageBox.warning(self, "입력 오류", f"직접 실행 인자는 {self.MAX_LAUNCH_ARGS_LENGTH}자 이하로 입력해야 합니다.")
+            return
         self.accept()
 
     def get_data(self) -> Optional[Dict[str, Any]]:
@@ -1536,6 +1513,7 @@ class ProcessDialog(QDialog):
 
         # 실행 방식 선택
         preferred_launch_type = self.launch_type_combo.currentData() or "shortcut"
+        launch_args = self.launch_args_edit.text().strip()
 
         # 프리셋 ID 추출
         preset_data = self.preset_combo.currentData()
@@ -1569,6 +1547,8 @@ class ProcessDialog(QDialog):
             "mandatory_times_str": mandatory_times_list if mandatory_times_list else None,
             "is_mandatory_time_enabled": is_mandatory_enabled,
             "preferred_launch_type": preferred_launch_type,
+            "launch_args_enabled": self.launch_args_enabled_checkbox.isChecked(),
+            "launch_args": launch_args,
             "user_preset_id": user_preset_id,
             "stamina_tracking_enabled": stamina_tracking_enabled,
             "hoyolab_game_id": hoyolab_game_id,
@@ -1617,8 +1597,8 @@ class GlobalSettingsDialog(QDialog):
         self.cycle_advance_hours_spinbox.setRange(0.0, 12.0)
         self.cycle_advance_hours_spinbox.setSingleStep(0.25)
         self.cycle_advance_hours_spinbox.setSuffix(" 시간 전")
-        self.run_on_startup_checkbox = QCheckBox("Windows 시작 시 자동 실행")
-        self.run_as_admin_checkbox = QCheckBox("관리자 권한으로 실행 (UAC 프롬프트 없이)")
+        self.run_on_startup_checkbox = QCheckBox("Windows 로그인 시 자동 실행")
+        self.run_as_admin_checkbox = QCheckBox("관리자 기능 사용 (권한 서비스 필요)")
 
         # 테마 선택 (라디오 버튼)
         self.theme_system_rb = QRadioButton("시스템")
@@ -1798,7 +1778,7 @@ class GlobalSettingsDialog(QDialog):
     def get_updated_settings(self) -> GlobalSettings:
         # Start from the latest full settings object so fields managed by other
         # dialogs (sidebar, screenshots, OBS) are preserved when the primary
-        # PyQt settings dialog saves only its visible fields.
+        # PySide6 settings dialog saves only its visible fields.
         updated = GlobalSettings.from_dict(self.current_settings.to_dict())
         updated.sleep_start_time_str = self.sleep_start_edit.time().toString("HH:mm")
         updated.sleep_end_time_str = self.sleep_end_edit.time().toString("HH:mm")
