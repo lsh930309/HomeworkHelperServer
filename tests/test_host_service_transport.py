@@ -80,7 +80,7 @@ def io(monkeypatch):
     harness.types = types
     harness.file = file
     monkeypatch.setattr(transport, "_windows", lambda: (
-        types, api, SimpleNamespace(FILE_FLAG_OVERLAPPED=0x40000000), event, file, pipe, security,
+        types, api, SimpleNamespace(FILE_FLAG_OVERLAPPED=0x40000000, OPEN_EXISTING=3), event, file, pipe, security,
     ))
     return harness
 
@@ -128,7 +128,7 @@ def test_service_stop_cancels_listening_pipe_without_error_log_or_request(io):
     assert errors == []
     assert [call[0] for call in io.calls] == ["connect", "cancel", "completion", "disconnect"]
     assert all(call[1] == get_ident() for call in io.calls)
-    assert io.closed[0] is io.handle and len(io.closed) == 2
+    assert io.closed[-1] is io.handle and len(io.closed) == 2
 
 
 def test_service_stop_logs_unexpected_cancellation_error(io):
@@ -150,7 +150,86 @@ def test_service_cleanup_propagates_other_disconnect_errors_and_closes_handles(i
     with pytest.raises(type(error)) as caught:
         transport.NamedPipeServer(SimpleNamespace(owner_sid="owner"), io.stop).run()
     assert caught.value is error
-    assert io.closed[0] is io.handle and len(io.closed) == 2
+    assert io.closed[-1] is io.handle and len(io.closed) == 2
+
+
+@pytest.mark.parametrize("code", [2, 231])
+def test_connection_retries_only_transient_acquisition_failures(io, monkeypatch, code):
+    _types, _api, con, _event, file, pipe, _security = transport._windows()
+    con.OPEN_EXISTING = 3
+    calls = []
+
+    def open_pipe(*_args):
+        calls.append("open")
+        if len(calls) == 1:
+            raise io.error(code, "CreateFile", "not available yet")
+        return io.handle
+
+    file.CreateFile = open_pipe
+    pipe.WaitNamedPipe = lambda *_args: calls.append("wait")
+    monkeypatch.setattr(transport.time, "sleep", lambda _seconds: None)
+    assert transport._connect_pipe() is io.handle
+    assert calls == (["open", "open"] if code == 2 else ["open", "wait", "open"])
+
+
+def test_connection_absence_obeys_one_total_deadline(io, monkeypatch):
+    _types, _api, con, _event, file, _pipe, _security = transport._windows()
+    con.OPEN_EXISTING = 3
+    clock = SimpleNamespace(now=0.0)
+    calls = []
+
+    def open_pipe(*_args):
+        calls.append(clock.now)
+        raise io.error(2, "CreateFile", "absent")
+
+    file.CreateFile = open_pipe
+    monkeypatch.setattr(transport, "IPC_TIMEOUT_MS", 50)
+    monkeypatch.setattr(transport, "time", SimpleNamespace(
+        monotonic=lambda: clock.now, sleep=lambda seconds: setattr(clock, "now", clock.now + seconds)))
+    with pytest.raises(io.error) as caught:
+        transport._connect_pipe()
+    assert caught.value.winerror == 2
+    assert clock.now == pytest.approx(0.05)
+    assert len(calls) == 3
+
+
+def test_access_denied_is_not_retried_and_native_details_are_reported(io):
+    from src.host_service.client import HostPrivilegeClient, PrivilegeServiceUnavailable
+    _types, _api, con, _event, file, _pipe, _security = transport._windows()
+    con.OPEN_EXISTING = 3
+    calls = []
+
+    def open_pipe(*_args):
+        calls.append("open")
+        raise io.error(5, "CreateFile", "access denied")
+
+    file.CreateFile = open_pipe
+    with pytest.raises(PrivilegeServiceUnavailable, match="CreateFile") as caught:
+        HostPrivilegeClient().status()
+    assert "5" in str(caught.value)
+    assert calls == ["open"]
+
+
+@pytest.mark.parametrize("failure_at", ["write", "read", "ack"])
+def test_unknown_command_outcome_is_never_replayed(io, monkeypatch, failure_at):
+    _types, _api, _con, _event, _file, pipe, _security = transport._windows()
+    pipe.SetNamedPipeHandleState = lambda *_args: None
+    opens, exchanges = [], []
+    monkeypatch.setattr(transport, "_connect_pipe", lambda: opens.append(1) or io.handle)
+
+    def exchange(_handle, *, data=None, **_kwargs):
+        stage = "read" if data is None else "ack" if b"received" in data else "write"
+        exchanges.append(stage)
+        if stage == failure_at:
+            raise io.error(109, stage, "broken pipe")
+        return b'{"accepted":true}' if data is None else len(data)
+
+    monkeypatch.setattr(transport, "_overlapped_io", exchange)
+    with pytest.raises(OSError):
+        transport.pipe_request({"operation": "power", "action": "shutdown"})
+    assert opens == [1]
+    assert exchanges == ["write", "read", "ack"][:exchanges.index(failure_at) + 1]
+    assert io.closed == [io.handle]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Requires actual Windows overlapped named pipe API")
@@ -220,4 +299,91 @@ def test_native_windows_already_connected_return_and_error_normalization(monkeyp
         if event is not None: win32api.CloseHandle(event)
         win32api.CloseHandle(server)
     monkeypatch.setattr(transport,'PIPE_NAME',name+'-absent')
+    monkeypatch.setattr(transport,'IPC_TIMEOUT_MS',50)
     with pytest.raises(PrivilegeServiceUnavailable): HostPrivilegeClient().status()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires actual concurrent Windows pipe clients")
+def test_windows_competing_clients_both_complete_without_replaying_requests(monkeypatch):
+    import threading
+    import pywintypes, win32api, win32event, win32file, win32pipe, win32security
+    from src.host_service.controller import Reply
+
+    name = rf"\\.\pipe\HH-monitor-race-{uuid.uuid4()}"
+    monkeypatch.setattr(transport, "PIPE_NAME", name)
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), 8)
+    try:
+        sid = win32security.ConvertSidToStringSid(win32security.GetTokenInformation(token, 1)[0])
+    finally:
+        token.Close()
+    ready = threading.Event()
+    busy = threading.Event()
+    barrier = threading.Barrier(2)
+    seen = threading.local()
+    real_create_pipe = win32pipe.CreateNamedPipe
+    real_wait = win32pipe.WaitNamedPipe
+    real_open = win32file.CreateFile
+    creations, requests, results, failures, errors = [], [], [], [], []
+
+    def create_pipe(*args):
+        handle = real_create_pipe(*args)
+        creations.append(handle)
+        ready.set()
+        return handle
+
+    def wait_pipe(*args):
+        return real_wait(*args)
+
+    def open_pipe(*args):
+        if not getattr(seen, "opened", False):
+            seen.opened = True
+            barrier.wait(2.0)  # Both clients try to acquire the same available instance.
+        try:
+            return real_open(*args)
+        except pywintypes.error as error:
+            if error.winerror == 231:
+                busy.set()
+            raise
+
+    def handle(request, _caller):
+        requests.append(request["id"])
+        assert busy.wait(2.0), "The competing client must encounter real ERROR_PIPE_BUSY"
+        return Reply({"accepted": True, "id": request["id"]})
+
+    monkeypatch.setattr(win32pipe, "CreateNamedPipe", create_pipe)
+    monkeypatch.setattr(win32pipe, "WaitNamedPipe", wait_pipe)
+    monkeypatch.setattr(win32file, "CreateFile", open_pipe)
+    stop = win32event.CreateEvent(None, True, False, None)
+    controller = SimpleNamespace(owner_sid=sid, backend=SimpleNamespace(authenticate=lambda _h: None), handle=handle)
+    server = threading.Thread(target=transport.NamedPipeServer(controller, stop, log_error=errors.append).run)
+
+    def client(identity):
+        try:
+            results.append(transport.pipe_request({"operation": "status", "id": identity}))
+        except Exception as error:
+            failures.append(error)
+
+    clients = [threading.Thread(target=client, args=(identity,)) for identity in (1, 2)]
+    server.start()
+    try:
+        assert ready.wait(2.0)
+        for thread in clients:
+            thread.start()
+        for thread in clients:
+            thread.join(8.0)
+        assert not any(thread.is_alive() for thread in clients)
+        assert busy.is_set()
+        assert failures == [], [(type(error).__name__, str(error)) for error in failures]
+        assert sorted(item["id"] for item in results) == [1, 2]
+        assert sorted(requests) == [1, 2]  # No command replay after request transmission.
+        assert len(creations) == 1  # No absent-pipe interval between clients.
+        assert errors == []
+    finally:
+        busy.set()
+        win32event.SetEvent(stop)
+        for thread in clients:
+            if thread.ident is not None:
+                thread.join(8.0)
+        server.join(8.0)
+        assert not server.is_alive()
+        win32api.CloseHandle(stop)

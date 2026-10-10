@@ -188,6 +188,10 @@ class GuiWorkCoordinator(QObject):
         with self._lock:
             if not self._accepting:
                 return None
+            latest = self._telemetry_pending.get(key) or self._telemetry_running.get(key)
+            if (latest is not None and latest.generation == self._telemetry_generation[key]
+                    and latest.function == function and latest.args == args and latest.kwargs == kwargs):
+                return latest.generation
             self._telemetry_generation[key] += 1
             generation = self._telemetry_generation[key]
             spec = _WorkSpec("telemetry", key, generation, function, args, kwargs)

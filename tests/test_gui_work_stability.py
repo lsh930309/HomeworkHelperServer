@@ -69,6 +69,64 @@ def test_telemetry_keeps_one_running_and_only_the_latest_pending_result() -> Non
     assert coordinator.shutdown(deadline_seconds=0.2)
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_repeated_identical_polls_deliver_the_slow_result_or_error(fail):
+    _qapp()
+    coordinator = GuiWorkCoordinator(max_threads=1)
+    started, release = threading.Event(), threading.Event()
+    results, errors, calls = [], [], []
+
+    def scan(targets, *, elevated):
+        calls.append((targets, elevated))
+        started.set()
+        release.wait(2.0)
+        if fail:
+            raise RuntimeError("service unavailable")
+        return "valid snapshot"
+
+    coordinator.result_ready.connect(results.append)
+    coordinator.error_ready.connect(errors.append)
+    try:
+        generation = coordinator.submit_telemetry("process_scan", scan, ("game",), elevated=True)
+        assert started.wait(1.0)
+        for _ in range(10):
+            assert coordinator.submit_telemetry("process_scan", scan, ("game",), elevated=True) == generation
+        assert coordinator.snapshot().pending_telemetry == ()
+        release.set()
+        _pump_until(lambda: len(results) + len(errors) == 1)
+        assert calls == [(("game",), True)]
+        assert bool(errors) is fail
+    finally:
+        release.set()
+        assert coordinator.shutdown(deadline_seconds=0.5)
+
+
+def test_invalidated_identical_input_still_creates_a_new_observation():
+    _qapp()
+    coordinator = GuiWorkCoordinator(max_threads=1)
+    started, release = threading.Event(), threading.Event()
+    results, calls = [], []
+
+    def scan():
+        calls.append(len(calls) + 1)
+        started.set()
+        release.wait(2.0)
+        return calls[-1]
+
+    coordinator.result_ready.connect(lambda item: results.append(item.value))
+    try:
+        first = coordinator.submit_telemetry("scan", scan)
+        assert started.wait(1.0)
+        coordinator.invalidate_telemetry("scan")
+        assert coordinator.submit_telemetry("scan", scan) > first
+        release.set()
+        _pump_until(lambda: results == [2])
+        assert calls == [1, 2]
+    finally:
+        release.set()
+        assert coordinator.shutdown(deadline_seconds=0.5)
+
+
 def test_lifecycle_is_fifo_per_process_and_parallel_between_processes() -> None:
     _qapp()
     coordinator = GuiWorkCoordinator(max_threads=4)

@@ -117,6 +117,17 @@ class DesiredTimerRegistry:
             entry.suspension_owners.add(owner)
             entry.timer.stop()
 
+    def is_enabled(self, name: str) -> bool:
+        return self._entries[name].enabled and not self._shutdown
+
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        entry = self._entries[name]
+        entry.enabled = bool(enabled)
+        if entry.enabled and not entry.suspension_owners and not self._shutdown:
+            entry.timer.start(entry.interval_ms)
+        else:
+            entry.timer.stop()
+
     def restart_desired(self) -> None:
         for entry in self._entries.values():
             if entry.enabled and not entry.suspension_owners and not self._shutdown:

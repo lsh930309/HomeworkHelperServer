@@ -426,6 +426,66 @@ def _stop_window(window, app):
     QCoreApplication.sendPostedEvents(window, QEvent.Type.DeferredDelete)
 
 
+@pytest.mark.parametrize("failure", ["scan", "api"])
+def test_startup_retries_before_monitoring_and_preserves_previous_heartbeat(monkeypatch, tmp_path, failure):
+    import time
+    from src.api.client import BackgroundApiTransport, BackgroundHttpResult
+    from src.core.process_monitor import ProcessScanSnapshot
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    observations, requests = [], []
+
+    def detect(_targets, **_kwargs):
+        observations.append("startup")
+        if failure == "scan" and len(observations) == 1:
+            raise OSError("isolated pipe unavailable")
+        return set()
+
+    def post(_self, path, _payload, **_kwargs):
+        requests.append(path)
+        if failure == "api" and requests.count("/api/beholder/open-sessions/reconcile") == 1:
+            raise OSError("isolated API unavailable")
+        return BackgroundHttpResult(status_code=200, elapsed_seconds=0, payload={"incidents": []})
+
+    def scan(_targets, **_kwargs):
+        observations.append("monitor")
+        return ProcessScanSnapshot((), time.time())
+
+    monkeypatch.setattr(main_window, "detect_running_process_ids", detect)
+    monkeypatch.setattr(main_window, "scan_running_processes", scan)
+    monkeypatch.setattr(BackgroundApiTransport, "post_json", post)
+    window = main_window.MainWindow(_FakeApiClient([]))
+
+    def pump(predicate):
+        deadline = time.monotonic() + 2.0
+        while not predicate() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.002)
+        assert predicate()
+
+    try:
+        window._reconcile_open_sessions_after_startup()
+        pump(lambda: window._api_backoff_failures.get("startup_reconcile") == 1)
+        window._send_runtime_heartbeat()
+        window.run_process_monitor_check()  # Also covers a wake callback during startup.
+        assert "monitor" not in observations
+        assert "/api/beholder/runtime/heartbeat" not in requests
+        assert window.startup_reconcile_timer.isActive()
+        assert not window.monitor_timer.isActive()
+        window._api_backoff_until["startup_reconcile"] = 0
+        window.startup_reconcile_timer.timeout.emit()
+        pump(lambda: window.monitor_timer.isActive() and "monitor" in observations
+             and "/api/beholder/runtime/heartbeat" in requests)
+        assert not window.startup_reconcile_timer.isActive()
+        previous = requests.count("/api/beholder/open-sessions/reconcile")
+        window._timer_registry.restart_desired()
+        window._reconcile_open_sessions_after_startup()
+        assert not window.startup_reconcile_timer.isActive()
+        assert requests.count("/api/beholder/open-sessions/reconcile") == previous
+    finally:
+        _stop_window(window, app)
+
+
 def test_main_window_launch_args_apply_only_to_direct_targets():
     import src.gui.main_window as main_window
 
@@ -1723,6 +1783,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     process_monitor = types.SimpleNamespace(active_monitored_processes={"game-a": {"session_id": 1}})
     resource_shutdown_calls = []
     timer_registry = main_window.DesiredTimerRegistry()
+    timer_registry.register("startup_reconcile", FakeTimer(), interval_ms=1000)
     timer_registry.register("monitor", monitor_timer, interval_ms=1000)
     timer_registry.register("scheduler", scheduler_timer, interval_ms=1000)
     timer_registry.register("heartbeat", heartbeat_timer, interval_ms=30000)

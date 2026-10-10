@@ -32,7 +32,7 @@ class HostPrivilegeClient:
         except PrivilegeServiceError:
             raise
         except (OSError, TimeoutError, RuntimeError) as error:
-            raise PrivilegeServiceUnavailable("권한 서비스에 연결할 수 없습니다. 설치 상태를 확인해 주세요.") from error
+            raise PrivilegeServiceUnavailable(f"권한 서비스 통신 실패: {error}") from error
         except (ValueError, TypeError) as error:
             raise PrivilegeServiceError("권한 서비스 응답 형식이 올바르지 않습니다.") from error
         if not isinstance(response, dict) or type(response.get("accepted")) is not bool:

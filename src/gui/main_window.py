@@ -411,7 +411,9 @@ class MainWindow(QMainWindow):
         self._ui_refresh_tick_count = 0
         self.monitor_timer = QTimer(self)
         self.monitor_timer.timeout.connect(self._on_monitor_timer_tick)
-        self.monitor_timer.start(1000) # 프로세스 모니터 타이머 (1초)
+        self.startup_reconcile_timer = QTimer(self)
+        self.startup_reconcile_timer.timeout.connect(self._reconcile_open_sessions_after_startup)
+        self.startup_reconcile_timer.start(1000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.timeout.connect(self.run_scheduler_check)
         self.scheduler_timer.start(1000) # 스케줄러 타이머 (1초)
@@ -426,11 +428,11 @@ class MainWindow(QMainWindow):
         self.beholder_timer.start(1500)
         self.runtime_heartbeat_timer = QTimer(self)
         self.runtime_heartbeat_timer.timeout.connect(self._send_runtime_heartbeat)
-        self.runtime_heartbeat_timer.start(30000)
         self.remote_readiness_timer = QTimer(self)
         self.remote_readiness_timer.timeout.connect(self._refresh_remote_readiness_indicators)
         self.remote_readiness_timer.start(5000)
         for timer_name, timer, interval in (
+            ("startup_reconcile", self.startup_reconcile_timer, 1000),
             ("monitor", self.monitor_timer, 1000),
             ("scheduler", self.scheduler_timer, 1000),
             ("ui_refresh", self.ui_refresh_timer, self._UI_REFRESH_INTERVAL_MS),
@@ -438,11 +440,11 @@ class MainWindow(QMainWindow):
             ("heartbeat", self.runtime_heartbeat_timer, 30000),
             ("readiness", self.remote_readiness_timer, 5000),
         ):
-            self._timer_registry.register(timer_name, timer, interval_ms=interval)
+            self._timer_registry.register(timer_name, timer, interval_ms=interval,
+                                          enabled=timer_name not in {"monitor", "heartbeat"})
         # Reconcile stale open sessions before the first fresh heartbeat so
         # crash-recovery decisions can use the pre-crash heartbeat.
         QTimer.singleShot(300, self._reconcile_open_sessions_after_startup)
-        QTimer.singleShot(1200, self._send_runtime_heartbeat)
         QTimer.singleShot(500, self._poll_beholder_incidents)
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
         QTimer.singleShot(1500, self._hoyolab_reconcile.schedule_startup_refreshes)
@@ -511,6 +513,13 @@ class MainWindow(QMainWindow):
                 if isinstance(state, tuple) and len(state) == 2:
                     self._set_remote_readiness_indicator(str(key), str(state[0]), str(state[1]))
         elif result.key in {"beholder_incidents", "startup_reconcile"}:
+            if result.key == "startup_reconcile":
+                self._timer_registry.set_enabled("startup_reconcile", False)
+                self._timer_registry.set_enabled("monitor", True)
+                self._timer_registry.set_enabled("heartbeat", True)
+                logger.info("Startup process reconciliation completed; monitoring and heartbeat enabled")
+                self._send_runtime_heartbeat()
+                self.run_process_monitor_check()
             incidents = tuple(item for item in value if isinstance(item, Mapping)) if isinstance(value, tuple) else ()
             if incidents:
                 self._apply_beholder_incidents(incidents)
@@ -839,7 +848,8 @@ class MainWindow(QMainWindow):
             controller.apply_settings(self.data_manager.global_settings)
 
     def _send_runtime_heartbeat(self):
-        self._submit_telemetry("runtime_heartbeat", self._collect_runtime_heartbeat, False)
+        if self._timer_registry.is_enabled("heartbeat"):
+            self._submit_telemetry("runtime_heartbeat", self._collect_runtime_heartbeat, False)
 
     def _collect_runtime_heartbeat(self, shutdown: bool) -> object:
         return self._background_transport.post_json(
@@ -853,8 +863,11 @@ class MainWindow(QMainWindow):
         ).payload
 
     def _reconcile_open_sessions_after_startup(self):
+        if not self._timer_registry.is_enabled("startup_reconcile"):
+            return
         targets = self.process_monitor.process_scan_targets()
-        self._submit_telemetry("startup_reconcile", functools.partial(self._collect_startup_reconcile, run_as_admin=bool(self.data_manager.global_settings.run_as_admin)), targets)
+        self._submit_telemetry("startup_reconcile", self._collect_startup_reconcile, targets,
+                               run_as_admin=bool(self.data_manager.global_settings.run_as_admin))
 
     def _collect_startup_reconcile(self, targets: tuple[object, ...], *, run_as_admin: bool = False) -> tuple[dict[str, Any], ...]:
         running_ids = sorted(detect_running_process_ids(targets, run_as_admin=run_as_admin))
@@ -885,7 +898,7 @@ class MainWindow(QMainWindow):
         if not self._beholder_restore_runtime_suspended:
             self._beholder_restore_runtime_suspended = True
             self.process_monitor.active_monitored_processes.clear()
-            self._timer_registry.suspend("database_restore", ("monitor", "scheduler", "heartbeat"))
+            self._timer_registry.suspend("database_restore", ("startup_reconcile", "monitor", "scheduler", "heartbeat"))
             self._work_coordinator.invalidate_telemetry()
         self._lifecycle_shutdown_event.set()
         deadline = time.monotonic() + _GUI_CLEANUP_DEADLINE_SECONDS
@@ -1404,10 +1417,13 @@ class MainWindow(QMainWindow):
     def run_process_monitor_check(self):
         """GUI 소유 입력을 확정하고 느린 psutil 스캔을 coalesce합니다."""
         self._check_and_toggle_game_mode()
+        if not self._timer_registry.is_enabled("monitor"):
+            return
         self._submit_telemetry(
             "process_scan",
-            functools.partial(scan_running_processes, run_as_admin=bool(self.data_manager.global_settings.run_as_admin)),
+            scan_running_processes,
             self.process_monitor.process_scan_targets(),
+            run_as_admin=bool(self.data_manager.global_settings.run_as_admin),
         )
 
     def _apply_process_scan_snapshot(self, snapshot: ProcessScanSnapshot) -> None:
@@ -2204,6 +2220,7 @@ class MainWindow(QMainWindow):
         def remaining_ms() -> int:
             return max(0, int((deadline - time.monotonic()) * 1000))
 
+        heartbeat_prepared = self._timer_registry.is_enabled("heartbeat") and not self._beholder_restore_runtime_suspended
         self._timer_registry.shutdown()
         self._lifecycle_shutdown_event.set()
         app_instance = QApplication.instance()
@@ -2213,15 +2230,16 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
         try:
-            self._background_transport.post_json(
-                "/api/beholder/runtime/heartbeat",
-                {
-                    "app_instance_id": self._app_instance_id,
-                    "runtime_kind": "pyside6",
-                    "shutdown": True,
-                },
-                timeout=max(0.05, min(1.0, remaining_ms() / 1000.0)),
-            )
+            if heartbeat_prepared:
+                self._background_transport.post_json(
+                    "/api/beholder/runtime/heartbeat",
+                    {
+                        "app_instance_id": self._app_instance_id,
+                        "runtime_kind": "pyside6",
+                        "shutdown": True,
+                    },
+                    timeout=max(0.05, min(1.0, remaining_ms() / 1000.0)),
+                )
         except Exception:
             logger.debug("종료 heartbeat 전송 실패", exc_info=True)
 

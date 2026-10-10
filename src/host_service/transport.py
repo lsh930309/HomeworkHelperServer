@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from .constants import IPC_TIMEOUT_MS, MAX_MESSAGE_BYTES, PIPE_NAME
 from .controller import RequestDenied
@@ -71,16 +72,38 @@ def _overlapped_io(handle, *, data=None, timeout_ms=IPC_TIMEOUT_MS):
         win32api.CloseHandle(overlap.hEvent)
 
 
+def _connect_pipe():
+    """Acquire a connection within one deadline, before transmitting any command."""
+    types, _api, con, _event, file, pipe, _security = _windows()
+    deadline = time.monotonic() + IPC_TIMEOUT_MS / 1000.0
+    while True:
+        try:
+            return file.CreateFile(
+                PIPE_NAME, 0x12019b, 0, None,
+                con.OPEN_EXISTING,
+                con.FILE_FLAG_OVERLAPPED | 0x00100000 | 0x00010000,
+                None,
+            )
+        except types.error as error:
+            if error.winerror not in (2, 231):  # absent during startup, or another client acquired it
+                raise
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise
+            if error.winerror == 2:
+                time.sleep(min(0.025, remaining_ms / 1000.0))
+                continue
+        try:
+            pipe.WaitNamedPipe(PIPE_NAME, remaining_ms)
+        except types.error as error:
+            if error.winerror != 2:  # A restarted service may briefly have no instance.
+                raise
+
+
 def pipe_request(request: dict, *, before_ack=None) -> dict:
     _types, win32api, win32con, _event, win32file, win32pipe, _security = _windows()
     try:
-        win32pipe.WaitNamedPipe(PIPE_NAME, IPC_TIMEOUT_MS)
-        handle = win32file.CreateFile(
-            PIPE_NAME, 0x12019b, 0, None,  # Read/write without FILE_CREATE_PIPE_INSTANCE
-            win32con.OPEN_EXISTING,
-            win32con.FILE_FLAG_OVERLAPPED | 0x00100000 | 0x00010000,  # SQOS_PRESENT | IDENTIFICATION
-            None,
-        )
+        handle = _connect_pipe()
         try:
             win32pipe.SetNamedPipeHandleState(handle, win32pipe.PIPE_READMODE_MESSAGE, None, None)
             _overlapped_io(handle, data=encode_message(request))
@@ -110,73 +133,73 @@ class NamedPipeServer:
         )
         attributes = types.SECURITY_ATTRIBUTES()
         attributes.SECURITY_DESCRIPTOR = sd
-        while event.WaitForSingleObject(self.stop_event, 0) != event.WAIT_OBJECT_0:
-            handle = pipe.CreateNamedPipe(
-                PIPE_NAME, pipe.PIPE_ACCESS_DUPLEX | con.FILE_FLAG_OVERLAPPED | 0x00080000,
-                pipe.PIPE_TYPE_MESSAGE | pipe.PIPE_READMODE_MESSAGE | pipe.PIPE_WAIT | 0x00000008,
-                1, MAX_MESSAGE_BYTES, MAX_MESSAGE_BYTES, IPC_TIMEOUT_MS, attributes,
-            )
-            overlap = types.OVERLAPPED()
-            overlap.hEvent = event.CreateEvent(None, True, False, None)
-            reply = None
-            connect_pending = False
-            try:
+        handle = pipe.CreateNamedPipe(
+            PIPE_NAME, pipe.PIPE_ACCESS_DUPLEX | con.FILE_FLAG_OVERLAPPED | 0x00080000,
+            pipe.PIPE_TYPE_MESSAGE | pipe.PIPE_READMODE_MESSAGE | pipe.PIPE_WAIT | 0x00000008,
+            1, MAX_MESSAGE_BYTES, MAX_MESSAGE_BYTES, IPC_TIMEOUT_MS, attributes,
+        )
+        try:
+            while event.WaitForSingleObject(self.stop_event, 0) != event.WAIT_OBJECT_0:
+                overlap = types.OVERLAPPED()
+                overlap.hEvent = event.CreateEvent(None, True, False, None)
+                reply = None
+                connect_pending = False
                 try:
-                    connected = pipe.ConnectNamedPipe(handle, overlap)
-                    if connected in (None, 0, 535):
-                        event.SetEvent(overlap.hEvent)
-                    elif connected == 997:
-                        connect_pending = True
-                    else:
-                        raise OSError(connected, "ConnectNamedPipe failed")
-                except (OSError, types.error) as error:
-                    if getattr(error, "winerror", error.args[0]) == 535:  # already connected
-                        event.SetEvent(overlap.hEvent)
-                    elif getattr(error, "winerror", error.args[0]) == 997:
-                        connect_pending = True
-                    else:
-                        raise
-                waited = event.WaitForMultipleObjects((self.stop_event, overlap.hEvent), False, event.INFINITE)
-                if waited == event.WAIT_OBJECT_0:
-                    if connect_pending:
-                        _cancel_owned_io(handle, overlap)
-                    return
-                request = decode_message(_overlapped_io(handle))
-                caller = self.controller.backend.authenticate(handle)
-                try:
-                    reply = self.controller.handle(request, caller)
-                    payload = reply.payload
-                except (RequestDenied, LookupError) as error:
-                    payload = {"accepted":False, "status":"denied", "message":str(error)}
-                except NotImplementedError as error:
-                    payload = {"accepted":False, "status":"unsupported", "message":str(error)}
-                except TimeoutError as error:
-                    payload = {"accepted":False, "status":"unknown", "message":str(error)}
-                except PermissionError as error:
-                    payload = {"accepted":False, "status":"denied", "message":str(error)}
+                    try:
+                        connected = pipe.ConnectNamedPipe(handle, overlap)
+                        if connected in (None, 0, 535):
+                            event.SetEvent(overlap.hEvent)
+                        elif connected == 997:
+                            connect_pending = True
+                        else:
+                            raise OSError(connected, "ConnectNamedPipe failed")
+                    except (OSError, types.error) as error:
+                        if getattr(error, "winerror", error.args[0]) == 535:  # already connected
+                            event.SetEvent(overlap.hEvent)
+                        elif getattr(error, "winerror", error.args[0]) == 997:
+                            connect_pending = True
+                        else:
+                            raise
+                    waited = event.WaitForMultipleObjects((self.stop_event, overlap.hEvent), False, event.INFINITE)
+                    if waited == event.WAIT_OBJECT_0:
+                        if connect_pending:
+                            _cancel_owned_io(handle, overlap)
+                        return
+                    request = decode_message(_overlapped_io(handle))
+                    caller = self.controller.backend.authenticate(handle)
+                    try:
+                        reply = self.controller.handle(request, caller)
+                        payload = reply.payload
+                    except (RequestDenied, LookupError) as error:
+                        payload = {"accepted":False, "status":"denied", "message":str(error)}
+                    except NotImplementedError as error:
+                        payload = {"accepted":False, "status":"unsupported", "message":str(error)}
+                    except TimeoutError as error:
+                        payload = {"accepted":False, "status":"unknown", "message":str(error)}
+                    except PermissionError as error:
+                        payload = {"accepted":False, "status":"denied", "message":str(error)}
+                    except Exception as error:
+                        self.log_error(str(error))
+                        payload = {"accepted":False, "status":"error", "message":"권한 작업을 수행하지 못했습니다."}
+                    _overlapped_io(handle, data=encode_message(payload))
+                    if decode_message(_overlapped_io(handle)) != {"received":True}:
+                        raise ValueError("권한 서비스 응답 수신 확인이 올바르지 않습니다.")
                 except Exception as error:
                     self.log_error(str(error))
-                    payload = {"accepted":False, "status":"error", "message":"권한 작업을 수행하지 못했습니다."}
-                _overlapped_io(handle, data=encode_message(payload))
-                if decode_message(_overlapped_io(handle)) != {"received":True}:
-                    raise ValueError("권한 서비스 응답 수신 확인이 올바르지 않습니다.")
-            except Exception as error:
-                self.log_error(str(error))
-                reply = None
-            finally:
-                try:
-                    try:
-                        pipe.DisconnectNamedPipe(handle)
-                    except types.error as error:
-                        if error.winerror != 233:  # ERROR_PIPE_NOT_CONNECTED after cancelled connect.
-                            raise
+                    reply = None
                 finally:
                     try:
-                        win32api.CloseHandle(handle)
+                        try:
+                            pipe.DisconnectNamedPipe(handle)
+                        except types.error as error:
+                            if error.winerror != 233:  # ERROR_PIPE_NOT_CONNECTED after cancelled connect.
+                                raise
                     finally:
                         win32api.CloseHandle(overlap.hEvent)
-            if reply is not None and reply.after_send is not None:
-                try:
-                    reply.after_send()
-                except Exception as error:
-                    self.log_error(f"Accepted action failed: {error}")
+                if reply is not None and reply.after_send is not None:
+                    try:
+                        reply.after_send()
+                    except Exception as error:
+                        self.log_error(f"Accepted action failed: {error}")
+        finally:
+            win32api.CloseHandle(handle)
