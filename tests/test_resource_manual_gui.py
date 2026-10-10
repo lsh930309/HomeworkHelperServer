@@ -261,13 +261,13 @@ def test_restore_admission_requires_all_writer_owners_drained(failed_owner, monk
         _daily_checkin=Owner("checkin"),
     )
     window._work_coordinator.invalidate_telemetry = lambda: calls.append(("invalidate",))
-    allowed = main_window.MainWindow._suspend_runtime_after_beholder_restore(window)
+    allowed = main_window.MainWindow.prepare_database_restore(window)
     assert allowed is (failed_owner is None)
     assert window._beholder_restore_runtime_suspended
     assert window._lifecycle_shutdown_event.is_set()
     assert window.process_monitor.active_monitored_processes == {}
     assert [item[0] for item in calls] == ["timers", "invalidate", "hoyo", "nikke", "checkin", "work"]
-    main_window.MainWindow._suspend_runtime_after_beholder_restore(window)
+    main_window.MainWindow.prepare_database_restore(window)
     assert len([item for item in calls if item[0] == "timers"]) == 1
 
 
@@ -370,13 +370,13 @@ def test_delayed_resource_lifecycle_and_checkin_finish_before_restore_is_admitte
     assert lifecycle_started.wait(2)
     work.submit_lifecycle("game", lambda: main_window.MainWindow._persist_lifecycle_command(window, stop))
 
-    assert main_window.MainWindow._suspend_runtime_after_beholder_restore(window) is False
+    assert main_window.MainWindow.prepare_database_restore(window) is False
     assert window._beholder_restore_runtime_suspended
     release.set()
     assert resource.shutdown(2000)
     assert checkin.shutdown(2000)
     assert work.shutdown(deadline_seconds=2)
-    assert main_window.MainWindow._suspend_runtime_after_beholder_restore(window) is True
+    assert main_window.MainWindow.prepare_database_restore(window) is True
     writes.append("restore")
     state.dialog._resource_dialog_closed = True
     for _ in range(3):
