@@ -24,9 +24,11 @@ def _production_callbacks() -> str:
     # Copy both callbacks intact; only the operations they call are inert stubs.
     callbacks = source[start:end]
     assert "function GetCustomSetupExitCode(" in callbacks
-    declaration = re.search(r"^\s*PostInstallSucceeded\s*:\s*Boolean\s*;", source, re.MULTILINE)
-    assert declaration is not None, "Use the installer's actual completion flag declaration"
-    return "var\n" + declaration.group(0).strip() + "\n\n" + callbacks
+    globals_source = source[source.index("[Code]"):source.index("procedure InstallPrivilegeService")]
+    declarations = re.findall(r"^\s*[A-Za-z_][A-Za-z_0-9, ]*:\s*Boolean\s*;", globals_source, re.MULTILINE)
+    assert declarations, "Use the installer's actual completion declarations"
+    return "var\n" + "\n".join(item.strip() for item in declarations) + "\n\n" + callbacks
+
 
 
 @pytest.fixture(scope="module")

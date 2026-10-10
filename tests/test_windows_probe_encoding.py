@@ -84,3 +84,20 @@ def test_real_owned_powershell_script_preserves_korean_output():
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "한글 출력 검증"
+
+
+def test_ssh_collector_negotiates_utf8_before_native_output(monkeypatch):
+    import shlex
+    from pathlib import Path
+    from tools import ssh_host_testbench as ssh
+    seen=[]
+    def run(command, **kwargs):
+        script=Path(shlex.split(command)[-1]).read_text(encoding='utf-8')
+        assert script.index('[Console]::OutputEncoding') < script.index("Write-Output '한글'")
+        assert "$env:PYTHONIOENCODING = 'utf-8'" in script
+        assert kwargs['encoding']=='utf-8' and kwargs['errors']=='strict'
+        seen.append(script)
+        return SimpleNamespace(returncode=0,stdout='한글\n',stderr='')
+    monkeypatch.setattr(ssh.subprocess,'run',run)
+    result=ssh.run_remote_powershell(ssh.SSHConfig('isolated.invalid',None,22,None), "Write-Output '한글'\n", timeout=1)
+    assert result.stdout=='한글\n' and len(seen)==1
