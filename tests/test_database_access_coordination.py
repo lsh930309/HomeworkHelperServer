@@ -911,3 +911,21 @@ def test_fresh_and_existing_valid_database_startup_use_real_migrations(monkeypat
         assert database.prepare_database_startup(coordinator)
         assert (tmp_path / "backups/app_data.backup.1.db").exists()
     finally: test_engine.dispose()
+
+
+def test_page_damage_that_passes_select_one_still_blocks_startup(monkeypatch, tmp_path):
+    import src.data.database as database
+    from src.data.database_coordination import DatabaseMaintenanceCoordinator
+    current=tmp_path/'app_data.db'
+    _write_marker_database(current,'healthy before page damage')
+    raw=bytearray(current.read_bytes())
+    page_size=int.from_bytes(raw[16:18],'big')
+    raw[page_size]=255  # Invalid second-page btree type; the database header is intact.
+    current.write_bytes(raw)
+    with closing(sqlite3.connect(current)) as conn:
+        assert conn.execute('SELECT 1').fetchone()==(1,)
+    monkeypatch.setattr(database,'db_path',str(current))
+    coordinator=DatabaseMaintenanceCoordinator(fault_state_path=tmp_path/'fault.json')
+    assert not database.prepare_database_startup(coordinator)
+    assert coordinator.snapshot().mode=='faulted'
+    assert current.read_bytes()==raw

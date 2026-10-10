@@ -171,3 +171,20 @@ def test_cleanup_marks_connections_inactive_before_abort():
     assert manager._cleanup_done is True
     assert socket._hh_received_command is True
     assert window.shown == 0
+
+
+def test_restore_ack_requires_completed_writer_drain():
+    for ready in (False,True):
+        window=_Window()
+        calls=[]
+        window.prepare_database_restore=lambda:calls.append('drained') or ready
+        manager=_manager(window)
+        socket=_FakeSocket(instance_manager.encode_instance_command(
+            instance_manager.InstanceCommand.PREPARE_DATABASE_RESTORE,manager._identity))
+        manager._active_client_sockets.add(socket)
+        manager._read_ipc_message(socket)
+        assert calls==['drained']
+        expected=(f'ack:{manager._identity.digest}:prepare_database_restore\n'.encode()
+                  if ready else b'error:restore_not_ready\n')
+        assert socket.responses==[expected]
+        manager.cleanup()
