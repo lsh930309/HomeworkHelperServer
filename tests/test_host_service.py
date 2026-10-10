@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 import json
 from pathlib import Path
+from queue import SimpleQueue
 import sqlite3
 import sys
 from threading import Event, Thread
@@ -741,3 +742,141 @@ def test_app_token_retry_does_not_relaunch_successful_obs(startup_system):
     controller.on_session_change("logon",4); controller.process_session_events()
     clock[0]=1; controller.process_session_events()
     assert len(obs)==1 and len(app)==2 and not errors
+
+
+class _ObservedOBSQueue(SimpleQueue):
+    def __init__(self):
+        super().__init__()
+        self.queued = Event()
+
+    def put(self, request):
+        super().put(request)
+        self.queued.set()
+
+
+def _queued_obs_call(controller, caller):
+    """Observe IPC enqueue without doing Windows effects or starting the worker."""
+    if not isinstance(controller._obs_requests, _ObservedOBSQueue):
+        controller._obs_requests = _ObservedOBSQueue()
+    queued = controller._obs_requests.queued
+    queued.clear()
+    replies, errors = [], []
+    def request():
+        try:
+            replies.append(controller.handle({"operation":"launch_obs"}, caller).payload)
+        except Exception as error:
+            errors.append(error)
+    thread = Thread(target=request, daemon=True)
+    thread.start()
+    assert queued.wait(1), "The caller must enqueue without performing a launch"
+    return thread, replies, errors
+
+
+def test_logon_and_app_requests_have_one_native_obs_owner(system):
+    from threading import get_ident
+    controller, backend, repository, caller = system
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, r"C:\OBS\obs64.exe", True))
+    created = []
+    alive = [False]
+    def launch(*_args):
+        existing = alive[0]
+        if not existing:
+            created.append(get_ident())
+            alive[0] = True
+        return {"accepted":True, "pid":101, "already_running":existing}
+    backend.launch_obs = launch
+    controller.on_session_change("logon", 4)
+    thread, replies, errors = _queued_obs_call(controller, caller)
+    controller.process_session_events()
+    thread.join(1)
+    assert not thread.is_alive() and not errors and replies[0]["pid"] == 101
+    assert created == [get_ident()] and backend.effects == []
+    # OBS closed: observations, duplicate logon and service recovery cannot reopen it.
+    alive[0] = False
+    controller.handle({"operation":"status"}, caller)
+    controller.on_session_change("logon", 4)
+    controller.process_session_events()
+    controller.seed_logged_on_sessions()
+    controller.process_session_events()
+    assert len(created) == 1
+    # A new app-start/manual request is an allowed new trigger.
+    thread, replies, errors = _queued_obs_call(controller, caller)
+    controller.process_session_events()
+    thread.join(1)
+    assert not errors and replies[0]["pid"] == 101 and len(created) == 2
+
+
+@pytest.mark.parametrize("cancel_reason", ["session", "logoff", "read_logoff", "stop", "read_stop", "deadline", "read_deadline"])
+def test_obs_request_cancellation_prevents_late_native_launch(startup_system, cancel_reason):
+    controller, backend, repository, clock, _errors = startup_system
+    caller = Caller(10, OWNER, 4, str(INSTALL / "homework_helper.exe"), "logon-a")
+    created = []
+    backend.launch_obs = lambda *args: created.append(args) or {"accepted":True,"pid":101}
+    thread, replies, errors = _queued_obs_call(controller, caller)
+    stop = Event()
+    if cancel_reason == "session":
+        backend.session = replace(backend.session, logon_id="logon-b")
+    elif cancel_reason == "stop":
+        stop.set()
+    elif cancel_reason == "deadline":
+        clock[0] = 4
+    elif cancel_reason == "logoff":
+        controller.on_session_change("logoff", 4)  # Native token enumeration can lag this event.
+    else:
+        original_read = repository.read
+        def delayed_read(*args, **kwargs):
+            if cancel_reason == "read_logoff":
+                controller.on_session_change("logoff", 4)
+            elif cancel_reason == "read_stop":
+                stop.set()
+            else:
+                clock[0] = 4
+            return original_read(*args, **kwargs)
+        repository.read = delayed_read
+    controller.process_session_events(stop)
+    thread.join(1)
+    controller.process_session_events(stop)
+    assert not thread.is_alive() and errors and not replies and not created
+
+
+def test_obs_ipc_times_out_within_existing_pipe_limit_and_is_not_executed_later(system):
+    import time
+    controller, backend, repository, caller = system
+    created = []
+    backend.launch_obs = lambda *args:created.append(args) or {"accepted":True,"pid":101}
+    started = time.monotonic()
+    thread, replies, errors = _queued_obs_call(controller, caller)
+    thread.join(4.8)
+    assert not thread.is_alive() and isinstance(errors[0], TimeoutError) and not replies
+    assert time.monotonic() - started < 5
+    controller.process_session_events()
+    assert not created and repository.reads == 0
+
+
+def test_unknown_started_obs_result_is_not_retried_and_next_request_reuses_process(system):
+    controller, backend, _repository, caller = system
+    entered, release = Event(), Event()
+    created = []
+    def launch(*_args):
+        if not created:
+            created.append(101)
+            entered.set()
+            assert release.wait(6)
+            return {"accepted":True,"pid":101}
+        return {"accepted":True,"pid":101,"already_running":True}
+    backend.launch_obs = launch
+    caller_thread, replies, errors = _queued_obs_call(controller, caller)
+    worker = Thread(target=controller.process_session_events, daemon=True)
+    worker.start()
+    assert entered.wait(1)
+    try:
+        caller_thread.join(4.8)
+        assert not caller_thread.is_alive() and isinstance(errors[0], TimeoutError) and not replies
+    finally:
+        release.set()
+        worker.join(1)
+    assert not worker.is_alive() and created == [101]
+    next_thread, replies, errors = _queued_obs_call(controller, caller)
+    controller.process_session_events()
+    next_thread.join(1)
+    assert not errors and replies[0]["already_running"] and created == [101]

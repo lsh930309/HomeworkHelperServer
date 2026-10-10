@@ -82,6 +82,7 @@ def _qapp():
 
 def _patch_main_window_deps(monkeypatch, tmp_path):
     import src.gui.main_window as main_window
+    from src.recording.manager import RecordingManager
     from src.api.client import BackgroundApiTransport, BackgroundHttpResult
 
     class LayoutTimer(QTimer):
@@ -107,6 +108,9 @@ def _patch_main_window_deps(monkeypatch, tmp_path):
         ready=False, installed=False, self_ips=(), message="테스트 Tailscale 미설정",
     ))
     monkeypatch.setattr(main_window, "privilege_service_status", lambda: (False, "테스트 권한 서비스 미설정"))
+    # Layout fixtures never contact the installed service or launch a real OBS.
+    monkeypatch.setattr(RecordingManager, "prepare_for_startup",
+                        lambda self, settings: self._set_settings(settings))
 
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setattr(main_window.IconDownloader, "start", lambda self: None)

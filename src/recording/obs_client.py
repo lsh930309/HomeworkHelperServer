@@ -34,6 +34,7 @@ class OBSClient:
         self._pending: dict[str, threading.Event] = {}
         self._pending_results: dict[str, dict] = {}
         self._on_record_state_changed: Optional[Callable[[bool], None]] = None
+        self._on_connection_closed: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._last_error: str = ""
 
@@ -110,8 +111,11 @@ class OBSClient:
             return {"outputActive": False, "outputDuration": 0}
         return resp.get("responseData", {})
 
-    def set_on_record_state_changed(self, fn: Callable[[bool], None]) -> None:
+    def set_on_record_state_changed(self, fn: Optional[Callable[[bool], None]]) -> None:
         self._on_record_state_changed = fn
+
+    def set_on_connection_closed(self, fn: Optional[Callable[[], None]]) -> None:
+        self._on_connection_closed = fn
 
     # ---------- internal ----------
 
@@ -209,6 +213,8 @@ class OBSClient:
             return
         self._identified = False
         self._connected = False
+        if self._on_connection_closed:
+            self._on_connection_closed()
         if close_status_code:
             if close_status_code == 4009:
                 self._last_error = f"인증 실패 (code {close_status_code}) — 사이드바 설정에서 OBS 비밀번호를 확인하세요."

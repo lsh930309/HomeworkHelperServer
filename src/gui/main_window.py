@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
             get_elapsed_sec=self._recording_manager.get_elapsed_sec,
             get_output_dir=self._get_recording_output_dir,
         )
-        self._apply_recording_settings()
+        self._recording_manager.prepare_for_startup(gs)
 
         # 앱 시작 즉시 게임패드 훅 활성화 (게임 실행 전에도 전역 동작)
         self._start_screenshot_manager()

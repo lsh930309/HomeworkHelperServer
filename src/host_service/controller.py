@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ntpath
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from queue import Empty, SimpleQueue
 import sqlite3
 import time
@@ -63,6 +64,13 @@ class _StartupAttempt:
     has_error: bool = False
 
 
+@dataclass(frozen=True)
+class _OBSRequest:
+    session: Session
+    deadline: float
+    completion: Future
+
+
 def windows_path(value: str | Path) -> str:
     return ntpath.normcase(ntpath.normpath(str(value)))
 
@@ -92,6 +100,7 @@ class PrivilegeController:
         self._clock = clock
         self._log_error = log_error or (lambda message: None)
         self._startup_attempts: dict[int, _StartupAttempt] = {}
+        self._obs_requests: SimpleQueue[_OBSRequest] = SimpleQueue()
 
     def authorize(self, caller: Caller) -> None:
         if caller.sid not in {self.owner_sid, SYSTEM_SID}:
@@ -154,10 +163,16 @@ class PrivilegeController:
             if set(request) != {"operation"}:
                 raise RequestDenied("OBS 요청에 경로 또는 인자를 지정할 수 없습니다.")
             session = self._session(caller)
-            with self.backend.read_as_user(session):
-                settings = self.repository.read(session, settings_only=True).settings
-            self._still_current(session)
-            result = self.backend.launch_obs(session, settings.obs_exe_path, settings.obs_launch_hidden)
+            completion = Future()
+            request = _OBSRequest(session, self._clock() + 4, completion)
+            self._obs_requests.put(request)
+            try:
+                result = completion.result(timeout=max(0, request.deadline - self._clock()))
+            except FutureTimeout:
+                if completion.done():
+                    raise
+                completion.cancel()  # A queued request must never execute after its caller timed out.
+                raise TimeoutError("OBS 준비 결과를 제한 시간 안에 확인하지 못했습니다. 자동 재시도하지 않습니다.") from None
             return self._reply("launched", "관리자 권한 OBS 실행을 확인했습니다.",
                                **{k:v for k,v in result.items() if k != "accepted"})
         allowed = {
@@ -289,6 +304,22 @@ class PrivilegeController:
                         deadline=observed_at + 120, next_attempt=observed_at,
                         previous_logon=previous_logon,
                     )
+            if event in {"logoff", "disconnect"}:
+                self._cancel_obs_session_requests(session_id)
+
+    def _cancel_obs_session_requests(self, session_id):
+        retained = []
+        while True:
+            try:
+                request = self._obs_requests.get_nowait()
+            except Empty:
+                break
+            if request.session.session_id != session_id:
+                retained.append(request)
+            elif request.completion.set_running_or_notify_cancel():
+                request.completion.set_exception(RequestDenied("Windows 세션 종료로 OBS 준비를 취소했습니다."))
+        for request in retained:
+            self._obs_requests.put(request)
 
     @staticmethod
     def _temporary_startup_error(error: Exception) -> bool:
@@ -304,6 +335,44 @@ class PrivilegeController:
         return (not (stop_event is not None and stop_event.is_set())
                 and self._startup_attempts.get(session_id) is attempt
                 and attempt.outcome == "pending" and self._clock() < attempt.deadline)
+
+    def _launch_obs(self, session, settings, before_launch=lambda: None) -> dict:
+        """Only the existing service worker calls the native OBS launch boundary."""
+        self._still_current(session)
+        before_launch()
+        result = self.backend.launch_obs(session, settings.obs_exe_path, settings.obs_launch_hidden)
+        if (not isinstance(result, dict) or result.get("accepted") is not True
+                or type(result.get("pid")) is not int or result["pid"] <= 0):
+            raise RuntimeError("OBS 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
+        return result
+
+    def _process_obs_requests(self, stop_event) -> None:
+        while True:
+            try:
+                request = self._obs_requests.get_nowait()
+            except Empty:
+                return
+            if not request.completion.set_running_or_notify_cancel():
+                continue
+            try:
+                def before_launch():
+                    events = self._take_session_events()
+                    self._apply_session_events(events)
+                    if any(event in {"logoff", "disconnect"} and sid == request.session.session_id
+                           for event, sid, _at in events):
+                        raise RequestDenied("Windows 세션 종료로 OBS 준비를 취소했습니다.")
+                    if stop_event is not None and stop_event.is_set():
+                        raise RequestDenied("권한 서비스가 중지되어 OBS 준비를 취소했습니다.")
+                    if self._clock() >= request.deadline:
+                        raise TimeoutError("OBS 준비 대기 시간이 초과되어 실행하지 않았습니다.")
+                before_launch()
+                self._still_current(request.session)
+                with self.backend.read_as_user(request.session):
+                    settings = self.repository.read(request.session, settings_only=True).settings
+                result = self._launch_obs(request.session, settings, before_launch)
+                request.completion.set_result(result)
+            except Exception as error:
+                request.completion.set_exception(error)
 
     def _try_startup(self, session_id, attempt, stop_event) -> bool:
         session = self.backend.current_session(self.owner_sid)
@@ -332,16 +401,15 @@ class PrivilegeController:
             try:
                 self._still_current(session)
                 if component == "obs":
-                    result = self.backend.launch_obs(session, snapshot.settings.obs_exe_path,
-                                                     snapshot.settings.obs_launch_hidden)
+                    self._launch_obs(session, snapshot.settings)
                 elif snapshot.settings.run_on_startup:
                     result = self.backend.startup(session)
+                    if (not isinstance(result, dict) or result.get("accepted") is not True
+                            or type(result.get("pid")) is not int or result["pid"] <= 0):
+                        raise RuntimeError("app 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
                 else:
                     attempt.app_complete = True
                     continue
-                if (not isinstance(result, dict) or result.get("accepted") is not True
-                        or type(result.get("pid")) is not int or result["pid"] <= 0):
-                    raise RuntimeError(f"{component} 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")
                 setattr(attempt, component + "_complete", True)
             except Exception as error:
                 if not self._temporary_startup_error(error):
@@ -356,6 +424,7 @@ class PrivilegeController:
     def process_session_events(self, stop_event=None) -> None:
         """One worker tick. Tests advance its clock without sleeping or native effects."""
         self._apply_session_events(self._take_session_events())
+        self._process_obs_requests(stop_event)
         for session_id, attempt in list(self._startup_attempts.items()):
             if stop_event is not None and stop_event.is_set():
                 self._startup_attempts.clear()
@@ -389,3 +458,4 @@ class PrivilegeController:
             self.process_session_events(stop_event)
             stop_event.wait(1)
         self._startup_attempts.clear()
+        self._process_obs_requests(stop_event)
