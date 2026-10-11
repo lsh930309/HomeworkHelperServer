@@ -381,3 +381,16 @@ def test_connect_closes_the_previous_socket_before_creating_another(monkeypatch)
     assert client.connect(host="isolated.example",port=1234,password="fixture")
     assert client.connection_matches(host="isolated.example",port=1234,password="fixture")
     client.disconnect(); assert closed==["old","new"]
+
+
+def test_setting_saved_from_completion_is_connected_by_the_same_worker(isolated_obs):
+    manager, launches = isolated_obs
+    states=[]
+    def changed(state):
+        states.append(state)
+        if states==["connecting","idle"]:
+            latest=settings(True); latest.obs_port=4456; manager.apply_settings(latest)
+    manager.set_on_state_changed(changed)
+    manager.prepare_for_startup(settings(True)); finish(manager)
+    assert states==["connecting","idle","connecting","idle"]
+    assert manager._client.connection_settings["port"]==4456 and len(launches)==1

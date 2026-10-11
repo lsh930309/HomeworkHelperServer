@@ -200,6 +200,7 @@ class RecordingManager:
                     self._client.disconnect()
                     self._set_state("obs_offline")
                 else:
+                    self._set_state("connecting")
                     logger.info("OBS WebSocket 연결 시도: ws://%s:%s", s["host"], s["port"])
                     ok = False
                     for attempt in range(2):
