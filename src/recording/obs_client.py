@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 import logging
+import math
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,8 @@ class OBSClient:
         self._identified = False
         self._lock = threading.Lock()
         self._pending: dict[str, threading.Event] = {}
-        self._pending_results: dict[str, dict] = {}
-        self._on_record_state_changed: Optional[Callable[[bool], None]] = None
+        self._pending_results: dict[str, Optional[dict]] = {}
+        self._on_record_state_changed: Optional[Callable[..., None]] = None
         self._on_connection_closed: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._last_error: str = ""
@@ -46,6 +47,7 @@ class OBSClient:
             self._last_error = "websocket-client 라이브러리가 설치되지 않았습니다."
             logger.warning("websocket-client not installed")
             return False
+        self.disconnect()
         self._host = host
         self._port = port
         self._password = password
@@ -86,14 +88,26 @@ class OBSClient:
 
     def disconnect(self) -> None:
         self._stop_event.set()
-        if self._ws:
+        with self._lock:
+            ws = self._ws
+            self._ws = None
+            self._identified = self._connected = False
+            pending = list(self._pending.values())
+            self._pending.clear()
+            self._pending_results.clear()
+        for event in pending:
+            event.set()
+        if ws:
             try:
-                self._ws.close()
+                ws.close()
             except Exception:
                 logger.exception("OBS WebSocket 종료 중 예외")
 
     def is_connected(self) -> bool:
         return self._identified
+
+    def connection_matches(self, host: str, port: int, password: str) -> bool:
+        return self._identified and (self._host, self._port, self._password) == (host, port, password)
 
     def get_last_error(self) -> str:
         return self._last_error
@@ -104,14 +118,15 @@ class OBSClient:
     def stop_record(self) -> bool:
         return self._request("StopRecord") is not None
 
-    def get_record_status(self) -> dict:
+    def get_record_status(self) -> Optional[dict]:
         """{'outputActive': bool, 'outputDuration': int}"""
         resp = self._request("GetRecordStatus")
         if resp is None:
-            return {"outputActive": False, "outputDuration": 0}
+            self._last_error = self._last_error or "OBS 녹화 상태를 확인하지 못했습니다."
+            return None
         return resp.get("responseData", {})
 
-    def set_on_record_state_changed(self, fn: Optional[Callable[[bool], None]]) -> None:
+    def set_on_record_state_changed(self, fn: Optional[Callable[..., None]]) -> None:
         self._on_record_state_changed = fn
 
     def set_on_connection_closed(self, fn: Optional[Callable[[], None]]) -> None:
@@ -189,10 +204,25 @@ class OBSClient:
         elif op == 7:  # RequestResponse
             req_id = d.get("requestId")
             if req_id:
+                request_status = d.get("requestStatus") or {}
+                valid = request_status.get("result") is True
+                status = d.get("responseData", {})
+                if valid and d.get("requestType") == "GetRecordStatus":
+                    duration = status.get("outputDuration") if isinstance(status, dict) else None
+                    valid = (isinstance(status, dict) and type(status.get("outputActive")) is bool and
+                             type(duration) in (int, float) and math.isfinite(duration) and duration >= 0)
                 with self._lock:
                     ev = self._pending.pop(req_id, None)
                     if ev is not None:
-                        self._pending_results[req_id] = d
+                        self._pending_results[req_id] = d if valid else None
+                if ev is not None:
+                    try:
+                        if not valid:
+                            self._last_error = "OBS 요청 또는 응답 오류: " + str(request_status.get("comment") or d.get("requestType"))
+                        elif ws is self._ws and d.get("requestType") == "GetRecordStatus" and self._on_record_state_changed:
+                            self._on_record_state_changed(status["outputActive"],
+                                                          elapsed_seconds=status["outputDuration"] / 1000.0)
+                    finally:
                         ev.set()
 
         elif op == 5:  # Event

@@ -29,21 +29,20 @@ def read_obs_config() -> dict:
             logger.warning("OBS WebSocket 설정 읽기 실패: %s", e)
 
     # 2. 현재 프로필 → 출력 경로
-    global_ini = os.path.join(obs_dir, "global.ini")
-    if os.path.isfile(global_ini):
+    user_ini = os.path.join(obs_dir, "user.ini")
+    if os.path.isfile(user_ini):
         try:
             cfg = configparser.RawConfigParser()
-            cfg.read(global_ini, encoding="utf-8")
-            profile = cfg.get("General", "CurrentProfile", fallback="")
+            cfg.read(user_ini, encoding="utf-8-sig")
+            profile = cfg.get("Basic", "ProfileDir", fallback="")
             if profile:
                 basic_ini = os.path.join(obs_dir, "basic", "profiles", profile, "basic.ini")
                 if os.path.isfile(basic_ini):
                     pcfg = configparser.RawConfigParser()
-                    pcfg.read(basic_ini, encoding="utf-8")
-                    path = (
-                        pcfg.get("SimpleOutput", "FilePath", fallback="")
-                        or pcfg.get("AdvOut", "RecFilePath", fallback="")
-                    )
+                    pcfg.read(basic_ini, encoding="utf-8-sig")
+                    mode = pcfg.get("Output", "Mode", fallback="Simple")
+                    path = (pcfg.get("AdvOut", "RecFilePath", fallback="") if mode == "Advanced"
+                            else pcfg.get("SimpleOutput", "FilePath", fallback=""))
                     result["output_dir"] = path
         except (OSError, configparser.Error) as e:
             logger.warning("OBS 프로필 설정 읽기 실패: %s", e)
