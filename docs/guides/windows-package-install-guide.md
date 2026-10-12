@@ -114,7 +114,9 @@ if ($installer.ExitCode -ne 0) {
    SSH 셸에서 단순 `Start-Process`로 GUI를 실행하면 다른 세션이나 상승 권한이 될 수 있다.
 3. 에이전트 직접 실행 시 Windows 작업 스케줄러의 일회성 `InteractiveToken` 작업을 사용할 수 있다.
    사용자 SID는 서비스의 지정 SID, `LogonType=3`, 앱 실행의 `RunLevel=0`으로 지정한다.
-   실행파일과 작업 디렉터리는 기본 설치 위치다. 트리거를 등록하지 않고 한 번 `Run`한 뒤 등록을 제거한다.
+   실행파일과 작업 디렉터리는 기본 설치 위치다. 앱 실행 작업의 `ExecutionTimeLimit`는
+   `PT0S`, `AllowHardTerminate=false`로 설정해 작업 스케줄러의 기본 72시간 제한으로 앱이
+   종료되지 않게 한다. 트리거를 등록하지 않고 한 번 `Run`한 뒤 등록을 제거한다.
    작업 등록 제거와 실행 중인 앱 강제 종료는 다른 동작이다. 기존 로그온/OBS 자동 시작 작업은 만들지 않는다.
 4. 새 GUI·API의 사용자/SID·세션과 `elevated=false`, OBS의 지정 사용자·같은 세션·`elevated=true`를
    실제 토큰으로 확인한다. 프로세스 이름이나 부모 PID만으로 권한을 판정하지 않는다.
