@@ -846,10 +846,9 @@ class SidebarWidget(QWidget):
         message = str(result.get("message") or "게임 종료 요청에 실패했습니다.")
         self._process_stop_status.setText(f"{process_name}: {message}")
         self._process_stop_status.show()
-        if result.get("accepted"):
-            self.slide_out()
-        else:
-            self._reset_auto_hide()
+        # A successful termination call still allows delayed OS cleanup. The
+        # existing process monitor removes the game when it actually disappears.
+        self._reset_auto_hide()
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 플레이타임

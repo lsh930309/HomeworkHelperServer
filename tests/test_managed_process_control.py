@@ -139,6 +139,7 @@ def test_stop_ordinary_matching_process_works_without_service(monkeypatch, game)
     result = terminate_managed_process(game, pid=42, create_time=123.0, privilege_client=client)
 
     assert result["accepted"] is True
+    assert result["status"] == "accepted"
     assert runtime.terminated is True
     assert result["stopped"][0]["process_id"] == game.id
     assert result["stopped"][0]["create_time"] == 123.0
@@ -199,3 +200,52 @@ def test_admin_stop_unavailable_never_falls_back_to_direct_termination(monkeypat
     with pytest.raises(RuntimeError, match="service unavailable"):
         terminate_managed_process(game, run_as_admin=True, pid=42, create_time=123.0,
                                   privilege_client=SimpleNamespace(stop_managed=unavailable))
+
+
+@pytest.mark.parametrize("status", ["unknown", "denied", "error"])
+def test_service_stop_failure_status_is_shared_by_sidebar_and_remote_api(monkeypatch, game, status):
+    from src.host_service.client import PrivilegeServiceError
+    from src.api.remote_routes import _terminate_matching_managed_processes
+    monkeypatch.setattr(monitor_module, "_is_windows", lambda: True)
+    def failed(*_args, **_kwargs):
+        raise PrivilegeServiceError("native stop outcome", status=status)
+    client = SimpleNamespace(stop_managed=failed)
+    monkeypatch.setattr(monitor_module, "_privilege_client", lambda _client: client)
+    result = terminate_managed_process(game, run_as_admin=True)
+    assert result == {"accepted":False,"status":status,"message":"native stop outcome","stopped":[]}
+    remote = _terminate_matching_managed_processes(game, run_as_admin=True)
+    assert not remote.accepted and remote.status == status and remote.message == result["message"]
+
+
+@pytest.mark.parametrize("run_as_admin", [False, True])
+def test_accepted_stop_keeps_session_open_until_os_observation_disappears(monkeypatch, game, run_as_admin):
+    runtime = RuntimeProcess()
+    install_processes(monkeypatch, runtime)
+    ended = []
+    data = SimpleNamespace(
+        managed_processes=[game], global_settings=SimpleNamespace(run_as_admin=run_as_admin),
+        end_session=lambda session_id, timestamp: ended.append((session_id, timestamp)) or SimpleNamespace(session_duration=60.0),
+        update_process_runtime_state=lambda _process: True,
+    )
+    monitor = ProcessMonitor(data)
+    monitor.active_monitored_processes[game.id] = {
+        "pid": runtime.pid, "exe": runtime.path, "start_time_approx": runtime.created, "session_id": 7,
+    }
+    client = SimpleNamespace(stop_managed=lambda *_args, **_kwargs: {"accepted": True, "status": "accepted"})
+    result = terminate_managed_process(game, run_as_admin=run_as_admin, privilege_client=client)
+    assert result["accepted"]
+    # The same OS process remains during driver/I/O cleanup after termination.
+    from src.core.process_monitor import DetectedRuntimeProcess, ProcessScanSnapshot
+    observations = [
+        ProcessScanSnapshot((DetectedRuntimeProcess(game.id, runtime.pid, monitor._normalize_path(runtime.path), runtime.created),), 180.0),
+        ProcessScanSnapshot((), 240.0),
+    ]
+    monkeypatch.setattr(monitor, "scan_running_processes", lambda _targets: observations.pop(0))
+    first = monitor.check_and_update_statuses()
+    assert first.stopped == [] and ended == []
+    assert monitor.active_monitored_processes[game.id]["session_id"] == 7
+    assert game.last_played_timestamp is None
+    second = monitor.check_and_update_statuses()
+    assert [event.session_id for event in second.stopped] == [7]
+    assert len(ended) == 1 and game.id not in monitor.active_monitored_processes
+    assert game.last_played_timestamp == ended[0][1]

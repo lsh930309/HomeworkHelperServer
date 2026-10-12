@@ -20,7 +20,10 @@ from sqlalchemy.orm import Session
 
 from src.api.runtime_config import resolve_api_port
 from src.core.launcher import Launcher
-from src.core.launch_target import launcher_candidates, resolve_launch_target, resolve_launch_args
+from src.core.launch_target import (
+    launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
+    resolve_launch_target, resolve_launch_args,
+)
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
@@ -264,10 +267,13 @@ def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
 
 
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
+    mode = resolve_launch_mode(process, requested_mode)
+    if mode != "launcher":
+        return resolve_launch_target(process, mode)
     preset = _read_preset_by_id(getattr(process, "user_preset_id", None))
-    patterns = preset.get("launcher_patterns", ()) if preset else ()
+    patterns = preset_launcher_patterns(preset)
     existing = tuple(item for item in launcher_candidates(process, patterns) if os.path.exists(item))
-    return resolve_launch_target(process, requested_mode, launcher_patterns=patterns, existing_paths=existing)
+    return resolve_launch_target(process, mode, launcher_patterns=patterns, existing_paths=existing)
 
 
 def _resolve_launch_args(process: Any, mode: str, target: str | None) -> str | None:

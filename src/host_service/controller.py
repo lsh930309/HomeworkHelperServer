@@ -200,8 +200,12 @@ class PrivilegeController:
                 inputs = preset_launch_inputs
             else:
                 resolver, arguments, inputs = self.resolver, self.argument_resolver, self.preset_inputs
-            with self.backend.read_as_user(session):
-                patterns, existing = inputs(process, session) if inputs else ((), frozenset())
+            from src.core.launch_target import resolve_launch_mode
+            mode = resolve_launch_mode(process, mode)
+            patterns, existing = (), frozenset()
+            if mode == "launcher" and inputs:
+                with self.backend.read_as_user(session):
+                    patterns, existing = inputs(process, session)
             target, effective_mode = resolver(process, mode, launcher_patterns=patterns, existing_paths=existing)
             if not target:
                 raise RequestDenied("등록된 실행 경로가 비어 있습니다.")
@@ -239,11 +243,12 @@ class PrivilegeController:
             if not matches:
                 raise RequestDenied("프로세스 identity가 변경되었거나 등록 대상과 다릅니다.")
         stopped = []
-        for key, identity in matches:
+        if matches:
             self._still_current(session)
-            self.backend.terminate(identity)
+            self.backend.terminate(session, [identity for _key, identity in matches])
+        for key, identity in matches:
             stopped.append(self._identity_dict(key, identity))
-        return self._reply("stopped", "등록된 프로세스 종료를 요청했습니다.", stopped=stopped)
+        return self._reply("accepted", "종료 요청을 전달했습니다. 프로세스 정리 완료는 감시에서 확인합니다.", stopped=stopped)
 
     def _matching(self, session, processes):
         paths = {}

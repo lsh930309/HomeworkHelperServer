@@ -162,6 +162,14 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
             @MainActor
             static func main() async {
                 smokeStep("init")
+                let stopDelays = RemoteSmartPollController.stopChaseDelaysNanoseconds(refreshAfterMilliseconds: 1200)
+                guard RemoteSmartPollController.stopConfirmationTimeoutSeconds == 60,
+                      RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: nil) == [0, 750_000_000, 1_500_000_000, 3_000_000_000],
+                      Array(stopDelays.prefix(4)) == [0, 1_200_000_000, 1_500_000_000, 3_000_000_000],
+                      stopDelays.dropFirst(4).allSatisfy({ $0 == 5_000_000_000 }),
+                      stopDelays.reduce(0, +) >= 60_000_000_000 else {
+                    fatalError("stop confirmation must cover a minute without extending launch confirmation")
+                }
                 let ready = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready)
                 let waiting = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .waiting)
                 guard ready.label() == "페어링됨",

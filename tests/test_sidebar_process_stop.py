@@ -77,6 +77,18 @@ def test_sidebar_surfaces_privilege_service_failure(monkeypatch, sidebar_state):
     assert calls == []
 
 
+def test_sidebar_keeps_request_acknowledgment_without_claiming_process_disappearance(monkeypatch, sidebar_state):
+    _app, sidebar, _process, _settings = sidebar_state
+    calls = []
+    monkeypatch.setattr(sidebar, "slide_out", lambda: calls.append("hidden"))
+    monkeypatch.setattr(sidebar, "_reset_auto_hide", lambda: calls.append("normal_auto_hide"))
+    sidebar._on_process_stop_completed("Game", {
+        "accepted": True, "status": "accepted", "message": "종료 요청을 전달했습니다. 정리 완료는 감시에서 확인합니다.",
+    })
+    assert calls == ["normal_auto_hide"]
+    assert "종료 요청" in sidebar._process_stop_status.text()
+
+
 def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_process(tmp_path):
     # Fresh Qt ownership is required: this is a worker/GUI lifetime test, not a
     # request to pump unrelated windows left by another test module.

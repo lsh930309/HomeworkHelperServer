@@ -69,7 +69,7 @@ def preset_launch_inputs(process, session) -> tuple[tuple[str, ...], frozenset[s
     if not getattr(process, "user_preset_id", None):
         return (), frozenset()
     import sys
-    from src.core.launch_target import launcher_candidates
+    from src.core.launch_target import launcher_candidates, preset_launcher_patterns
 
     user_file = Path(session.appdata_dir) / "game_presets_user.json"
     bundle = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
@@ -81,7 +81,7 @@ def preset_launch_inputs(process, session) -> tuple[tuple[str, ...], frozenset[s
         preset = next((item for item in presets.get("presets", [])
                        if item.get("id") == process.user_preset_id), None)
         if preset:
-            patterns = tuple(preset.get("launcher_patterns", ()))
+            patterns = preset_launcher_patterns(preset)
             existing = frozenset(candidate for candidate in launcher_candidates(process, patterns) if Path(candidate).is_file())
             return patterns, existing
     return (), frozenset()

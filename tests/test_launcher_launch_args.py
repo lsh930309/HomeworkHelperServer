@@ -1,4 +1,7 @@
 from types import SimpleNamespace
+import json
+from pathlib import Path
+import pytest
 
 from src.core import launcher as launcher_module
 
@@ -101,6 +104,42 @@ def test_saved_launch_selection_is_shared_for_gui_api_and_broker():
     assert launcher == r"C:/Games\launcher.exe"
     assert resolve_launch_args(process, mode, launcher) is None
     assert process.preferred_launch_type == "direct"
+
+
+@pytest.mark.parametrize("preset", [None, {}, {"launcher_patterns":None}, {"launcher_patterns":[]}])
+def test_launcher_search_without_candidates_preserves_registered_launch_path(preset):
+    from src.core.launch_target import preset_launcher_patterns, launcher_candidates, resolve_launch_target
+    process = SimpleNamespace(launch_path="C:/Games/Launcher.exe", monitoring_path="C:/Games/Game.exe")
+    patterns = preset_launcher_patterns(preset)
+    assert patterns == () and launcher_candidates(process, patterns) == ()
+    assert resolve_launch_target(process, "launcher", launcher_patterns=patterns) == (process.launch_path, "launcher")
+
+
+def test_all_packaged_presets_support_saved_paths_and_optional_launcher_search():
+    from src.core.launch_target import preset_launcher_patterns, resolve_launch_target
+    presets = json.loads((Path(__file__).parents[1]/"src/data/game_presets.json").read_text())["presets"]
+    for preset in presets:
+        process = SimpleNamespace(launch_path="C:/Games/Launcher.exe", monitoring_path="C:/Games/Game.exe",
+                                  preferred_launch_type=preset["preferred_launch_type"])
+        assert resolve_launch_target(process, "direct") == (process.monitoring_path, "direct")
+        assert resolve_launch_target(process, "shortcut") == (process.launch_path, "shortcut")
+        assert resolve_launch_target(process, "launcher", launcher_patterns=preset_launcher_patterns(preset)) == (process.launch_path, "launcher")
+
+
+@pytest.mark.parametrize("mode", [None, "direct", "shortcut", "auto"])
+def test_gui_and_remote_saved_path_resolution_do_not_read_presets(mode, monkeypatch):
+    from src.api import remote_routes
+    from src.gui.main_window import MainWindow
+    process = SimpleNamespace(launch_path="C:/Games/Launcher.exe", monitoring_path="C:/Games/Game.exe",
+                              preferred_launch_type="direct", user_preset_id="generic")
+    def unread(*_args):
+        pytest.fail("Saved-path launch must not read a preset or search files")
+    monkeypatch.setattr(remote_routes, "_read_preset_by_id", unread)
+    fake_window = SimpleNamespace(preset_manager=SimpleNamespace(get_preset_by_id=unread))
+    expected = (process.launch_path, "auto") if mode == "auto" else (
+        (process.launch_path, "shortcut") if mode == "shortcut" else (process.monitoring_path, "direct"))
+    assert remote_routes._resolve_launch_target(process, mode) == expected
+    assert MainWindow._resolve_process_launch_target(fake_window, process, mode) == expected
 
 
 def test_privileged_managed_launch_sends_registered_identity_only(monkeypatch):

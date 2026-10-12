@@ -21,6 +21,15 @@ def launch_target_accepts_args(target: str | None) -> bool:
     return not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", value) or bool(re.match(r"^[a-zA-Z]:", value))
 
 
+def resolve_launch_mode(process: Any, mode: str | None = None) -> str:
+    return mode or _value(process, "preferred_launch_type") or "shortcut"
+
+
+def preset_launcher_patterns(preset: Mapping | None) -> tuple[str, ...]:
+    """An absent/null search list in existing presets means no search candidates."""
+    return tuple((preset or {}).get("launcher_patterns") or ())
+
+
 def launcher_candidates(process: Any, launcher_patterns: Iterable[str]) -> tuple[str, ...]:
     """The caller observes file existence and passes that snapshot to resolution."""
     candidates = []
@@ -38,7 +47,7 @@ def launcher_candidates(process: Any, launcher_patterns: Iterable[str]) -> tuple
 
 
 def resolve_launch_target(process: Any, mode: str | None = None, *, launcher_patterns: Iterable[str] = (), existing_paths: Iterable[str] = ()) -> tuple[str | None, str]:
-    mode = mode or _value(process, "preferred_launch_type") or "shortcut"
+    mode = resolve_launch_mode(process, mode)
     launch = _value(process, "launch_path")
     monitor = _value(process, "monitoring_path")
     if mode == "direct":

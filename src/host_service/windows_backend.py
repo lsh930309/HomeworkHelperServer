@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import base64
 from contextlib import contextmanager
+from dataclasses import asdict
 import ctypes
 from ctypes import wintypes
 from functools import lru_cache
 import json
+import math
 import ntpath
 import os
 from pathlib import Path
@@ -354,6 +356,64 @@ def remove_owner_sid() -> None:
         pass
 
 
+def terminate_user_processes(identities: list[ProcessIdentity], logon_id: str) -> None:
+    """Validate all handles, then submit termination; OS cleanup stays with monitoring."""
+    if not identities or not isinstance(logon_id, str) or not logon_id:
+        raise ValueError("종료 대상과 로그온 식별이 필요합니다.")
+    owner, session_id = identities[0].sid, identities[0].session_id
+    for identity in identities:
+        if (type(identity.pid) is not int or identity.pid <= 0
+                or type(identity.create_time) not in (int, float)
+                or not math.isfinite(identity.create_time) or identity.create_time <= 0
+                or not isinstance(identity.path, str) or not identity.path
+                or identity.sid != owner or identity.session_id != session_id):
+            raise ValueError("종료 대상의 프로세스 식별 정보가 올바르지 않습니다.")
+    api = _win32()
+    _enable_privileges("SeDebugPrivilege")
+    token = linked = None
+    handles = []
+    try:
+        token = api.security.OpenProcessToken(api.api.GetCurrentProcess(), _TOKEN_QUERY)
+        if (owner == SYSTEM_SID or _token_sid(token) != owner or _token_session(token) != session_id
+                or not api.security.GetTokenInformation(token, api.security.TokenElevation)
+                or api.ts.WTSGetActiveConsoleSessionId() != session_id):
+            raise PermissionError("지정 사용자의 현재 관리자 세션에서만 게임을 종료할 수 있습니다.")
+        # A split admin token can have a different authentication ID from its limited sibling.
+        if _token_logon_id(token) != logon_id:
+            linked = api.security.GetTokenInformation(token, api.security.TokenLinkedToken)
+            if (_token_sid(linked), _token_session(linked), _token_logon_id(linked)) != (
+                owner, session_id, logon_id,
+            ):
+                raise PermissionError("게임 종료 요청의 Windows 로그온이 변경되었습니다.")
+        for identity in identities:
+            handle = api.api.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_TERMINATE | 0x00100000,
+                False, identity.pid,  # SYNCHRONIZE keeps exit confirmation on the same handle.
+            )
+            handles.append(handle)
+            actual = _process_identity(handle, identity.pid)
+            if (actual.create_time != identity.create_time or actual.sid != identity.sid
+                    or actual.session_id != identity.session_id
+                    or ntpath.normcase(ntpath.normpath(actual.path)) != ntpath.normcase(ntpath.normpath(identity.path))):
+                raise PermissionError("The selected process identity has changed.")
+        for handle in handles:
+            if api.event.WaitForSingleObject(handle, 0) == api.event.WAIT_OBJECT_0:
+                continue
+            try:
+                api.process.TerminateProcess(handle, 1)
+            except (OSError, api.error):
+                # Windows also returns access denied if this very process has already exited.
+                if api.event.WaitForSingleObject(handle, 0) != api.event.WAIT_OBJECT_0:
+                    raise
+        # TerminateProcess is asynchronous. Its success acknowledges the native request,
+        # not the end of driver/I/O cleanup. Never hold the shared service pipe for that wait.
+    finally:
+        for handle in handles:
+            _close(handle)
+        _close(linked)
+        _close(token)
+
+
 class WindowsBackend:
     def __init__(
         self, install_dir: Path, service_exe: Path | None = None,
@@ -475,6 +535,8 @@ class WindowsBackend:
     def _create_user_process(
         self, session: Session, executable: Path, arguments: list[str], *, elevated: bool,
         wait_for_worker: bool = False, working_directory: Path | None = None,
+        worker_timeout_ms: int = 10_000,
+        cleanup_timeout_ms: int = 2_000,
     ) -> dict:
         api = _win32()
         with self._user_token(session, elevated) as token:
@@ -496,28 +558,26 @@ class WindowsBackend:
                     environment, str(working_directory or self.install_dir), startup,
                 )
                 if wait_for_worker:
-                    waited = api.event.WaitForSingleObject(process, 10_000)
+                    waited = api.event.WaitForSingleObject(process, worker_timeout_ms)
                     if waited == api.event.WAIT_TIMEOUT:
                         # Clean up only this short-lived helper. A game might have
                         # started already; never terminate or automatically retry it.
                         try:
                             api.process.TerminateProcess(process, 1)
-                            cleanup = api.event.WaitForSingleObject(process, 2_000)
+                            cleanup = api.event.WaitForSingleObject(process, cleanup_timeout_ms)
                             if cleanup != api.event.WAIT_OBJECT_0:
-                                raise OSError("The launch worker did not stop after its cleanup request.")
+                                raise OSError("The user worker did not stop after its cleanup request.")
                         except Exception as error:
                             raise TimeoutError(
-                                "The launch result is unknown; worker cleanup failed. Do not retry automatically."
+                                "The user operation result is unknown; worker cleanup failed. Do not retry automatically."
                             ) from error
                         raise TimeoutError(
-                            "The launch result is unknown; the timed-out worker was stopped. Do not retry automatically."
+                            "The user operation result is unknown; the timed-out worker was stopped. Do not retry automatically."
                         )
                     if waited != api.event.WAIT_OBJECT_0:
-                        raise OSError("Unable to observe the user launch worker result.")
+                        raise OSError("Unable to observe the user worker result.")
                     exit_code = api.process.GetExitCodeProcess(process)
-                    if exit_code != 0:
-                        raise RuntimeError(f"The user launch worker failed (exit code {exit_code}).")
-                    return {"worker_pid": int(pid)}
+                    return {"worker_pid": int(pid), "worker_exit_code": int(exit_code)}
                 return {"accepted": True, "pid": int(pid)}
             finally:
                 _close(thread)
@@ -550,10 +610,14 @@ class WindowsBackend:
         payload = base64.urlsafe_b64encode(
             json.dumps({"target": target, "args": args}, ensure_ascii=False).encode("utf-8")
         ).decode("ascii")
-        return self._create_user_process(
+        result = self._create_user_process(
             session, self.service_exe, ["--user-launch", payload], elevated=elevated,
             wait_for_worker=True,
         )
+        exit_code = result.pop("worker_exit_code")
+        if exit_code != 0:
+            raise RuntimeError(f"The user launch worker failed (exit code {exit_code}).")
+        return result
 
     def startup(self, session: Session) -> dict:
         app_path = ntpath.normcase(str(self.app_exe))
@@ -580,26 +644,22 @@ class WindowsBackend:
                 _close(handle)
         return processes
 
-    def terminate(self, identity: ProcessIdentity) -> dict:
-        api = _win32()
-        _enable_privileges("SeDebugPrivilege")
-        handle = api.api.OpenProcess(
-            _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_TERMINATE, False, identity.pid,
+    def terminate(self, session: Session, identities: list[ProcessIdentity]) -> dict:
+        if not identities or any((i.sid, i.session_id) != (session.owner_sid, session.session_id)
+                                 for i in identities):
+            raise PermissionError("등록 대상의 사용자 세션이 올바르지 않습니다.")
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "identities": [asdict(identity) for identity in identities], "logon_id": session.logon_id,
+        }, ensure_ascii=False).encode("utf-8")).decode("ascii")
+        result = self._create_user_process(
+            session, self.service_exe, ["--user-stop", payload], elevated=True,
+            wait_for_worker=True, worker_timeout_ms=4_000, cleanup_timeout_ms=250,
         )
-        try:
-            actual = _process_identity(handle, identity.pid)
-            if (
-                actual.create_time != identity.create_time
-                or actual.sid != identity.sid
-                or actual.session_id != identity.session_id
-                or ntpath.normcase(str(actual.path)) != ntpath.normcase(str(identity.path))
-            ):
-                raise PermissionError("The selected process identity has changed.")
-            # The verified handle stays open through termination. Never reopen by PID.
-            api.process.TerminateProcess(handle, 1)
-            return {"accepted": True, "pid": identity.pid}
-        finally:
-            _close(handle)
+        if result["worker_exit_code"] == 1460:
+            raise TimeoutError("종료 명령 전달 결과를 제한 시간 안에 확인하지 못했습니다. 자동 재시도하지 않습니다.")
+        if result["worker_exit_code"] != 0:
+            raise ctypes.WinError(result["worker_exit_code"])
+        return {"accepted": True, "pids": [identity.pid for identity in identities]}
 
     def prepare_power(self, action: str) -> None:
         """Check the requested capability before acknowledging a power command."""

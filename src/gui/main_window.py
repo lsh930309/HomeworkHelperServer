@@ -51,7 +51,10 @@ from src.utils.windows import (
     snap_windows_window_to_work_area,
 )
 from src.core.launcher import Launcher
-from src.core.launch_target import launcher_candidates, resolve_launch_target, resolve_launch_args
+from src.core.launch_target import (
+    launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
+    resolve_launch_target, resolve_launch_args,
+)
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -1820,8 +1823,11 @@ class MainWindow(QMainWindow):
         return resolve_launch_args(process, launch_mode, launch_target)
 
     def _resolve_process_launch_target(self, process: ManagedProcess, mode: str | None = None):
+        mode = resolve_launch_mode(process, mode)
+        if mode != "launcher":
+            return resolve_launch_target(process, mode)
         preset = self.preset_manager.get_preset_by_id(process.user_preset_id) if process.user_preset_id else None
-        patterns = preset.get("launcher_patterns", ()) if preset else ()
+        patterns = preset_launcher_patterns(preset)
         existing = tuple(item for item in launcher_candidates(process, patterns) if os.path.exists(item))
         return resolve_launch_target(process, mode, launcher_patterns=patterns, existing_paths=existing)
 

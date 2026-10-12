@@ -1394,7 +1394,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
-        guard !pendingLaunchProcessIDs.contains(process.id), !process.isRunning else { return false }
+        guard !pendingLaunchProcessIDs.contains(process.id),
+              !pendingStopProcessIDs.contains(process.id), !process.isRunning else { return false }
         return hostAllowsRemoteCommands
     }
 
@@ -3178,21 +3179,28 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func startStopChase(processID: String, refreshAfterMilliseconds: Int?) {
         stopChaseTasks[processID]?.cancel()
-        let delays = RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
+        let delays = RemoteSmartPollController.stopChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
         stopChaseTasks[processID] = Task { [weak self] in
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(RemoteSmartPollController.stopConfirmationTimeoutSeconds))
             var resolved = false
             for delay in delays {
+                guard clock.now < deadline else { break }
                 if delay > 0 {
-                    try? await Task.sleep(nanoseconds: delay)
+                    let next = min(clock.now.advanced(by: .nanoseconds(Int64(delay))), deadline)
+                    try? await clock.sleep(until: next)
                 }
                 guard !Task.isCancelled else { return }
-                await self?.runMirrorRemoteState(trigger: "stop.chase", syncScope: .forceProcesses)
-                guard !Task.isCancelled else { return }
+                guard clock.now < deadline else { break }
                 if self?.isStopChaseResolved(processID: processID) == true {
                     resolved = true
                     break
                 }
+                // Existing mirroring owns HTTP work. A slow response must not
+                // extend this confirmation deadline or trigger another stop.
+                self?.requestImmediateMirror(trigger: "stop.chase", syncScope: .forceProcesses)
             }
+            resolved = resolved || self?.isStopChaseResolved(processID: processID) == true
             self?.finishStopChase(processID: processID, resolved: resolved)
         }
     }
@@ -3208,7 +3216,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if resolved, hostAvailabilityState == .online {
             message = "게임 종료 상태를 확인했습니다."
         } else if hostAvailabilityState == .online {
-            message = "게임 종료 명령을 전달했습니다. 종료 상태는 다음 동기화에서 계속 확인합니다."
+            message = "종료 요청은 전달됐지만 60초 안에 정리 완료를 확인하지 못했습니다. 감시는 계속합니다."
         }
     }
 
