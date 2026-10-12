@@ -556,6 +556,16 @@ def test_obs_dialog_saves_only_app_choices_and_preserves_retired_db_values(tmp_p
     assert fresh.get_updated_settings().recording_hold_threshold_ms==500
     assert fresh._ss_save_dir_edit.text()=="C:/Fixture/Captures"
     assert fresh._obs_directory_label.text()=="C:/OBS/Recordings"
+    # Ordinary user choices must also be reversible back to their initial values.
+    fresh._rec_enabled_cb.setChecked(False)
+    fresh._obs_launch_hidden_cb.setChecked(True)
+    fresh._obs_watch_output_cb.setChecked(True)
+    fresh._rec_hold_spin.setValue(800)
+    assert client.save_global_settings(fresh.get_updated_settings(),actor="sidebar_settings_dialog")
+    with sessions() as db:
+        saved=crud.get_settings(db)
+        assert (saved.recording_enabled,saved.obs_launch_hidden,saved.obs_watch_output_dir,
+                saved.recording_hold_threshold_ms)==(False,True,True,800)
     dialog.close(); fresh.close(); engine.dispose()
 
 

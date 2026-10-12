@@ -9,6 +9,10 @@
 3. **actor 기반 허용 범위**: 설정 저장은 `X-HH-Beholder-Actor` 또는 CRUD actor로 출처를 남기고, 해당 화면에서 수정 가능한 필드만 허용한다.
 4. **커밋 전 백업**: `global_settings`, `managed_processes`, `web_shortcuts`, `process_sessions` 변경 전에는 JSON snapshot을 남긴다.
 5. **비홀더 선차단**: 대량 기본값 회귀, 허용 범위 밖 컬럼 변경, 중복 open session, 열린 세션이 있는 게임 삭제, 비정상 기록값 등은 commit 전에 incident로 차단한다.
+   OBS 연동의 녹화 사용·최소화 실행·녹화 파일 표시·홀드 시간은 되돌릴 수 있는 앱 동작
+   선택이다. 이 네 항목을 개별 기본값 회귀로 차단하지 않는다. actor/허용 필드, 값 범위,
+   저장 전 스냅샷과 대량 기본값 회귀 검사는 그대로 적용한다. OBS 권위 값과 앱 선택의
+   구분은 [Windows 호스트 계약](development/windows-host-lifecycle.md)을 따른다.
 6. **사용자 결정 우선**: 비홀더는 안전한 권장안을 제시하되, 세션 병합/닫고 새로 시작/기록 닫고 삭제 같은 스마트 조치는 사용자가 선택해야 실행한다.
 7. **라우터 직접 커밋 금지**: FastAPI/PySide6 경로는 `db.commit()`을 직접 호출하지 말고 CRUD/Beholder 함수로 위임한다. Beholder 내부 incident 처리와 CRUD 내부 커밋만 예외다.
 

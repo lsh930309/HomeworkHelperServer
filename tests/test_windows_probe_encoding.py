@@ -87,13 +87,14 @@ def test_real_owned_powershell_script_preserves_korean_output():
 
 
 def test_ssh_collector_negotiates_utf8_before_native_output(monkeypatch):
-    import shlex
-    from pathlib import Path
+    import base64
     from tools import ssh_host_testbench as ssh
     seen=[]
     def run(command, **kwargs):
-        script=Path(shlex.split(command)[-1]).read_text(encoding='utf-8')
-        assert script.index('[Console]::OutputEncoding') < script.index("Write-Output '한글'")
+        assert command[-2]=='-EncodedCommand'
+        script=base64.b64decode(command[-1]).decode('utf-16-le')
+        assert script.index('[Console]::OutputEncoding') < script.index('[Console]::In.ReadToEnd()')
+        assert kwargs['input']=="Write-Output '한글'\n"
         assert "$env:PYTHONIOENCODING = 'utf-8'" in script
         assert kwargs['encoding']=='utf-8' and kwargs['errors']=='strict'
         seen.append(script)

@@ -77,8 +77,7 @@ PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
     "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
-    "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
-    "obs_launch_hidden", "obs_watch_output_dir", "recording_hold_threshold_ms",
+    "screenshot_gamepad_button_index", "screenshot_trigger_vk",
 }
 
 SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
