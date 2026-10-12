@@ -227,6 +227,8 @@ macOS UI 잘림(R14)은 사용자 결정에 따라 해결로 처리하고 재발
 
 ## 사용자 설치 순서
 
+lsh-desktop 패키지 배포 작업은 [Windows 패키지 설치 가이드](../guides/windows-package-install-guide.md)를 따른다.
+
 1. 사용 중인 호스트 작업을 마친 뒤 Windows Setup EXE를 실행한다. 최초 설치·업데이트의
    관리자 승인으로 서비스 등록, 기존 Startup·예약 작업 정리, Tailscale 무인 실행
    설정을 적용한다. 기본 호스트 사용자는 `lsh93`이며 변경 시 `/HostUser=<계정>`을 지정한다.

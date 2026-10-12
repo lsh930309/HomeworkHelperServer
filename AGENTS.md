@@ -6,6 +6,8 @@
 
 - 호스트 또는 클라이언트의 빌드·패키지 배포 작업을 시작하기 전에
   [빌드 가이드](docs/guides/build-guide.md)를 반드시 읽는다.
+- lsh-desktop의 Windows 패키지 설치·배포 전에는
+  [Windows 패키지 설치 가이드](docs/guides/windows-package-install-guide.md)도 반드시 읽는다.
 - 각 대상 환경에서 `python build.py`를 실행하는 것이 기본 절차다. 스크립트가 소유하는
   빌드·서명·패키징·버전 저장·이전 산출물 보관·중간 파일 정리 흐름을 따로 재구성하지 않는다.
 - 기본 산출물을 별도 후보 폴더에 복제하거나 다른 환경으로 모으고, 임의 ZIP으로 다시

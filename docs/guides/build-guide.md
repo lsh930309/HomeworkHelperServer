@@ -26,6 +26,7 @@ Windows에서는 Windows 저장소 환경에서, macOS에서는 macOS 저장소 
 
 최종 배포 파일은 Windows의 Setup EXE·Portable ZIP과 macOS의 PKG다.
 macOS `.app`은 PKG 생성에 사용하는 중간 산출물이다.
+Windows Setup의 lsh-desktop 적용 절차는 [패키지 설치 가이드](windows-package-install-guide.md)를 따른다.
 
 ## 로컬 버전 상태
 
