@@ -15,6 +15,10 @@ from src.utils.resource_tracking import NIKKE_OUTPOST_LABEL, NIKKE_OUTPOST_RESOU
 logger = logging.getLogger(__name__)
 
 
+class _NikkeDeadlineExceeded(TimeoutError):
+    """Raised before another HTTP request starts after the shared deadline."""
+
+
 @dataclass
 class GameResourceSnapshot:
     provider: str
@@ -73,10 +77,15 @@ class NikkeService:
     DAILY_CHECKIN_TASK_TYPE = 1
     DAILY_CHECKIN_TASK_ID = "15"
     WEB_REFERER = "https://www.blablalink.com/nikke/"
+    MAX_HTTP_TIMEOUT_SECONDS = 10.0
+    MAX_DAILY_CHECKIN_TIMEOUT_SECONDS = 30.0
 
     def __init__(self, config: Optional[NikkeConfig] = None, timeout: float = 10.0):
         self._config = config or NikkeConfig()
-        self._timeout = timeout
+        self._timeout = min(
+            max(float(timeout), 0.001),
+            self.MAX_HTTP_TIMEOUT_SECONDS,
+        )
 
     def is_configured(self) -> bool:
         return self._config.is_configured()
@@ -165,16 +174,28 @@ class NikkeService:
         except ValueError as exc:
             raise RuntimeError("BlablaLink API가 JSON이 아닌 응답을 반환했습니다.") from exc
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
         session_payload, cookies = self._request_session()
         if not cookies:
             return {"code": "auth_required", "msg": "BlablaLink 세션이 없습니다."}
+        timeout = self._request_timeout_seconds(
+            timeout_seconds=timeout_seconds,
+            deadline=deadline,
+        )
         http_session = requests.Session()
         try:
             http_session.cookies.update(self._cookie_mapping(cookies))
             request_kwargs = {
                 "headers": self._request_headers(),
-                "timeout": self._timeout,
+                "timeout": timeout,
             }
             if method.upper() == "GET":
                 response = http_session.get(self.API_BASE + path, params=payload or {}, **request_kwargs)
@@ -187,11 +208,61 @@ class NikkeService:
             if callable(closer):
                 closer()
 
-    def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._request("POST", path, payload)
+    def _request_timeout_seconds(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        deadline: float | None = None,
+    ) -> float:
+        """Return one HTTP timeout while preserving the shared operation deadline."""
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._request("GET", path, params)
+        timeout = self._timeout
+        if timeout_seconds is not None:
+            timeout = min(timeout, max(float(timeout_seconds), 0.001))
+        if deadline is not None:
+            remaining = float(deadline) - time.monotonic()
+            if remaining <= 0.0:
+                raise _NikkeDeadlineExceeded("NIKKE 요청 deadline이 만료되었습니다.")
+            timeout = min(timeout, remaining)
+        return min(timeout, self.MAX_HTTP_TIMEOUT_SECONDS)
+
+    def _daily_checkin_deadline(self, timeout_seconds: float | None) -> float:
+        budget = self.MAX_DAILY_CHECKIN_TIMEOUT_SECONDS
+        if timeout_seconds is not None:
+            budget = min(budget, max(float(timeout_seconds), 0.0))
+        return time.monotonic() + budget
+
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            path,
+            payload,
+            timeout_seconds=timeout_seconds,
+            deadline=deadline,
+        )
+
+    def _get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            path,
+            params,
+            timeout_seconds=timeout_seconds,
+            deadline=deadline,
+        )
 
     def _call_endpoint(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         method = method.upper()
@@ -247,13 +318,19 @@ class NikkeService:
         code = self._response_code(body)
         return (code in (0, "0", None)), str(body.get("msg") or body.get("message") or "ok")
 
-    def get_daily_checkin_status(self) -> NikkeDailyCheckInStatus:
+    def get_daily_checkin_status(self, *, timeout_seconds: float | None = None) -> NikkeDailyCheckInStatus:
         """BlablaLink NIKKE 일일 출석 체크 상태를 읽기 전용으로 조회합니다.
 
         실제 출석 처리 endpoint인 ``DailyCheckIn`` POST는 호출하지 않습니다.
         ShiftyPad 웹앱이 출석 버튼 노출에 사용하는 task status endpoint만
         조회하여 오늘 출석 가능/완료/인증 필요 상태를 판별합니다.
         """
+        deadline = self._daily_checkin_deadline(timeout_seconds)
+        return self._get_daily_checkin_status(deadline)
+
+    def _get_daily_checkin_status(self, deadline: float) -> NikkeDailyCheckInStatus:
+        """Run both status fallbacks against one absolute monotonic deadline."""
+
         now = datetime.now()
         if not self.is_configured():
             return NikkeDailyCheckInStatus(
@@ -267,6 +344,7 @@ class NikkeService:
                 body = self._get(
                     self.DAILY_CHECKIN_STATUS_PATH,
                     {"get_top": get_top, "intl_game_id": "nikke"},
+                    deadline=deadline,
                 )
             except Exception as exc:
                 logger.error("NIKKE 출석 상태 조회 실패: %s", exc)
@@ -278,7 +356,7 @@ class NikkeService:
 
         return NikkeDailyCheckInStatus("route_error", now, message="BlablaLink 출석 task를 찾지 못했습니다.")
 
-    def claim_daily_checkin(self) -> NikkeDailyCheckInStatus:
+    def claim_daily_checkin(self, *, timeout_seconds: float | None = None) -> NikkeDailyCheckInStatus:
         """BlablaLink NIKKE 일일 출석 체크를 실제 POST로 실행합니다.
 
         안전한 task id 확인을 위해 먼저 읽기 전용 status endpoint를 호출합니다.
@@ -286,14 +364,19 @@ class NikkeService:
         완료되었거나 인증/route 문제가 있는 경우에는 POST를 생략하고 해당
         상태를 그대로 반환합니다.
         """
-        status = self.get_daily_checkin_status()
+        deadline = self._daily_checkin_deadline(timeout_seconds)
+        status = self._get_daily_checkin_status(deadline)
         if status.status != "ready":
             status.raw_debug = {**status.raw_debug, "post_called": False}
             return status
 
         task_id = status.task_id or self.DAILY_CHECKIN_TASK_ID
         try:
-            body = self._post(self.DAILY_CHECKIN_POST_PATH, {"task_id": task_id})
+            body = self._post(
+                self.DAILY_CHECKIN_POST_PATH,
+                {"task_id": task_id},
+                deadline=deadline,
+            )
         except Exception as exc:
             logger.error("NIKKE 출석 체크 POST 실패: %s", exc)
             return NikkeDailyCheckInStatus(
@@ -305,7 +388,10 @@ class NikkeService:
                 completed_times=status.completed_times,
                 need_completed_times=status.need_completed_times,
                 message=str(exc),
-                raw_debug={"task_id": task_id, "post_called": True},
+                raw_debug={
+                    "task_id": task_id,
+                    "post_called": not isinstance(exc, _NikkeDeadlineExceeded),
+                },
             )
 
         return self._parse_daily_checkin_post_result(body, status, task_id=task_id)

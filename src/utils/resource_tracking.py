@@ -9,7 +9,22 @@ NIKKE_PROVIDER = "nikke_blablalink"
 NIKKE_OUTPOST_RESOURCE_KEY = "nikke_outpost_storage"
 NIKKE_OUTPOST_LABEL = "전초기지 방어 보상"
 NIKKE_OUTPOST_FULL_CHARGE_SECONDS = 24 * 60 * 60
-NIKKE_OUTPOST_CORRECTION_THRESHOLD_PERCENT = 0.5
+STAMINA_RECOVERY_SECONDS_PER_UNIT = 360
+
+
+def predict_stamina_value(
+    stored_current: int | None,
+    maximum: int | None,
+    updated_at: float | None,
+    *,
+    now: float,
+) -> int | None:
+    """Return the recovered count at an explicit observation/display time."""
+    if stored_current is None or maximum is None:
+        return None
+    elapsed = max(0.0, float(now) - float(updated_at)) if updated_at is not None else 0.0
+    recovered = int(elapsed / STAMINA_RECOVERY_SECONDS_PER_UNIT)
+    return min(int(maximum), max(0, int(stored_current) + recovered))
 
 
 def is_nikke_outpost_resource(provider: Any, resource_key: Any) -> bool:

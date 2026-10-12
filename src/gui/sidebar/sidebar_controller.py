@@ -7,8 +7,8 @@ EdgeTriggerWindow 와 SidebarWidget 의 생명주기를 조율합니다.
 import logging
 from typing import Callable, Optional
 
-from PyQt6.QtWidgets import QApplication, QWidget
-from PyQt6.QtGui import QScreen
+from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QScreen
 
 from src.data.data_models import (
     ManagedProcess,
@@ -146,8 +146,9 @@ class SidebarController:
 
         logger.debug("SidebarController 비활성화")
 
-    def cleanup(self) -> None:
+    def cleanup(self, deadline_ms: int = 2000) -> bool:
         """앱 종료 시 모든 리소스를 정리합니다."""
+        drained = True
         if self._trigger is not None:
             self._trigger.stop()
             try:
@@ -157,7 +158,7 @@ class SidebarController:
             self._trigger = None
 
         if self._sidebar is not None:
-            self._sidebar.cleanup()
+            drained = self._sidebar.cleanup(deadline_ms)
             try:
                 self._sidebar.close()
             except RuntimeError:
@@ -165,6 +166,7 @@ class SidebarController:
             self._sidebar = None
 
         logger.debug("SidebarController cleanup 완료")
+        return drained
 
     def set_recording_callbacks(
         self,
@@ -197,6 +199,10 @@ class SidebarController:
             self._sidebar.set_recording_elapsed_provider(self._get_recording_elapsed_sec)
             if self._get_recording_output_dir:
                 self._sidebar.set_recording_output_dir(self._get_recording_output_dir())
+
+    def refresh_recording_directory(self) -> None:
+        if self._sidebar is not None and self._get_recording_output_dir:
+            self._sidebar.set_recording_output_dir(self._get_recording_output_dir())
 
     def dispatch_recording_state(self, state: str) -> None:
         """사이드바에 녹화 상태를 전달합니다."""

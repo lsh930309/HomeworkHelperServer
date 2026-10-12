@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt6.QtGui import QImage, QColor
+from PySide6.QtGui import QImage, QColor
 
 from src.utils.clipboard import build_file_clipboard_mime_data, _build_hdrop_payload
 

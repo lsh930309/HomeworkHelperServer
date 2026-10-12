@@ -23,8 +23,12 @@ struct RemoteClientCache {
         return directory
     }
 
-    private static var processSnapshotURL: URL {
-        cacheDirectory.appendingPathComponent("processes.json")
+    private static func processSnapshotURL(baseURL: URL?) -> URL? {
+        guard let baseURL, let host = baseURL.host?.lowercased(), !host.isEmpty else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        guard let component = host.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        let port = baseURL.port ?? (baseURL.scheme == "https" ? 443 : 80)
+        return cacheDirectory.appendingPathComponent("processes-\(component)-\(port).json")
     }
 
     private static var iconDirectory: URL {
@@ -37,8 +41,9 @@ struct RemoteClientCache {
         cacheDirectory.appendingPathComponent("icon-diagnostics.log")
     }
 
-    static func loadProcesses() -> [RemoteProcess] {
-        guard let data = try? Data(contentsOf: processSnapshotURL) else { return [] }
+    static func loadProcesses(baseURL: URL?) -> [RemoteProcess] {
+        guard let snapshotURL = processSnapshotURL(baseURL: baseURL),
+              let data = try? Data(contentsOf: snapshotURL) else { return [] }
         let processes = (try? JSONDecoder().decode([RemoteProcess].self, from: data)) ?? []
         if cacheDirectoryOverride == nil, isSmokeOnlySnapshot(processes) {
             return []
@@ -46,9 +51,10 @@ struct RemoteClientCache {
         return processes
     }
 
-    static func saveProcesses(_ processes: [RemoteProcess]) {
-        guard let data = try? JSONEncoder().encode(processes) else { return }
-        try? data.write(to: processSnapshotURL, options: [.atomic])
+    static func saveProcesses(_ processes: [RemoteProcess], baseURL: URL) {
+        guard let snapshotURL = processSnapshotURL(baseURL: baseURL),
+              let data = try? JSONEncoder().encode(processes) else { return }
+        try? data.write(to: snapshotURL, options: [.atomic])
     }
 
     private static func isSmokeOnlySnapshot(_ processes: [RemoteProcess]) -> Bool {

@@ -4,7 +4,7 @@ HomeworkHelper는 Windows 호스트 앱과 macOS 메뉴바 원격 클라이언�
 
 ## 현재 지원 범위
 
-- **Windows host app**: PyQt 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
+- **Windows host app**: PySide6 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
 - **Remote Agent**: 호스트 앱의 FastAPI 서버를 통해 상태 조회, 프로세스 실행/종료, 대시보드 요약, pairing/token 기반 보호 endpoint를 제공합니다.
 - **macOS remote client**: 메뉴바 popover 중심의 네이티브 Swift 클라이언트입니다. pairing, host 상태 확인, Moonlight 실행 상태 반영, 원격 quick action을 담당합니다.
 - **Dashboard frontend**: `src/api/dashboard/frontend`의 Vite/React 앱을 빌드 시 `build/dashboard-static`으로 생성해 PyInstaller 패키지에 포함합니다.
@@ -22,6 +22,9 @@ pip install -r requirements.txt
 python homework_helper.pyw
 ```
 
+Windows GUI는 PySide6 + Qt Widgets를 사용하며 실행·검증 계약은
+[`docs/development/windows-gui-modernization.md`](docs/development/windows-gui-modernization.md)에 정리되어 있습니다.
+
 서버만 확인할 때는 GUI 단일 인스턴스 경로를 우회합니다.
 
 ```bash
@@ -34,16 +37,17 @@ python homework_helper.pyw --server
 swift build --package-path clients/macos
 ```
 
-앱 번들 패키징은 Python helper 또는 통합 빌드 스크립트를 사용합니다.
+앱 번들·설치 패키지는 해당 macOS 환경에서 통합 빌드 스크립트로 생성합니다.
 
 ```bash
-./.venv/bin/python tools/package_macos_remote_app.py
 python build.py --target macos-client
 ```
 
 ## 빌드
 
-단일 진입점은 `build.py`입니다. 현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
+빌드·패키지 배포 작업을 시작하기 전에 [`빌드 가이드`](docs/guides/build-guide.md)를 반드시 읽습니다.
+각 대상 환경에서 `build.py`를 실행하면 스크립트가 빌드·서명·패키징·버전 관리·산출물 보관과 정리를 처리합니다.
+현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
 
 ```bash
 # 현재 OS 기준 target 자동 선택 + GUI version selector

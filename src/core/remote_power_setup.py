@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
 import os
 import platform
 import re
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from src.core.tailscale import _hidden_subprocess_kwargs
+
+logger = logging.getLogger(__name__)
 
 _PUBLIC_KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))\s+[A-Za-z0-9+/=]+(?:\s+.*)?$")
 
@@ -48,20 +51,43 @@ def _runner_kwargs(runner) -> dict[str, Any]:
 
 def _run_probe(command: list[str], *, runner=None, timeout: int = 5):
     runner = runner or subprocess.run
-    return runner(command, capture_output=True, text=True, timeout=timeout, check=False, **_runner_kwargs(runner))
+    # Native Windows diagnostics remain bytes: an icacls filename can contain
+    # characters that the console codepage cannot represent. Owned PowerShell
+    # scripts instead define a UTF-8 producer/consumer contract.
+    text_kwargs: dict[str, Any] = {"text": False}
+    command = list(command)
+    if _is_windows() and command[0].lower() in {"powershell", "powershell.exe"}:
+        script_index = command.index("-Command") + 1
+        command[script_index] = (
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+            + command[script_index]
+        )
+        text_kwargs = {"text": True, "encoding": "utf-8", "errors": "strict"}
+    return runner(
+        command, capture_output=True, **text_kwargs,
+        timeout=timeout, check=False, **_runner_kwargs(runner),
+    )
 
 
-def _current_user_is_windows_admin(runner=None) -> tuple[bool, str]:
+def _current_user_is_windows_admin() -> tuple[bool, str]:
     if not _is_windows():
         return (False, "not_windows")
     try:
-        result = _run_probe(["whoami", "/groups"], runner=runner, timeout=5)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        import win32api
+        import win32con
+        import win32security
+
+        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            groups = win32security.GetTokenInformation(token, win32security.TokenGroups)
+            admin_sid = win32security.CreateWellKnownSid(win32security.WinBuiltinAdministratorsSid, None)
+            # A normal token belonging to an administrator can mark this group
+            # deny-only. SSH's administrators Match still uses group identity.
+            is_admin = any(sid == admin_sid for sid, _attributes in groups)
+        finally:
+            token.Close()
+    except Exception as exc:
         return (False, f"admin group 확인 실패: {exc}")
-    output = ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
-    if result.returncode != 0:
-        return (False, output.strip() or "admin group 확인 실패")
-    is_admin = "s-1-5-32-544" in output or "builtin\\administrators" in output or "administrators" in output
     return (is_admin, "Administrators group" if is_admin else "not Administrators group")
 
 
@@ -90,7 +116,7 @@ def _sshd_config_admin_match_enabled(config_path: Path | None = None) -> bool:
 def _effective_authorized_keys_target(*, runner=None) -> dict[str, Any]:
     user_path = _default_user_authorized_keys_path()
     admin_path = _default_admin_authorized_keys_path()
-    admin_user, admin_message = _current_user_is_windows_admin(runner=runner)
+    admin_user, admin_message = _current_user_is_windows_admin()
     admin_match = _sshd_config_admin_match_enabled()
     admin_active = bool(_is_windows() and admin_user and admin_match)
     path = admin_path if admin_active else user_path
@@ -125,11 +151,11 @@ def _repair_admin_authorized_keys_acl(path: Path, *, runner=None) -> dict[str, A
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"attempted": True, "ok": False, "message": f"administrators_authorized_keys ACL 보정 실패: {exc}"}
-    output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    logger.debug("icacls result=%s stdout=%r stderr=%r", result.returncode, result.stdout, result.stderr)
     return {
         "attempted": True,
         "ok": result.returncode == 0,
-        "message": output or ("ACL 보정 완료" if result.returncode == 0 else "ACL 보정 실패"),
+        "message": "ACL 보정 완료" if result.returncode == 0 else f"ACL 보정 실패 (종료 코드 {result.returncode})",
     }
 
 

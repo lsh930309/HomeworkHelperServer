@@ -165,6 +165,46 @@ def create_local_identity(identity: str, *, keychain: Path = DEFAULT_KEYCHAIN, d
     print(f"✓ code-signing identity 준비 완료: {identity}")
 
 
+def label_existing_certificates(identity: str, *, keychain: Path = DEFAULT_KEYCHAIN) -> None:
+    """Change certificate labels only; preserve DER, key ACL and trust."""
+    source = r'''
+import Foundation
+import Security
+import CryptoKit
+let identity = CommandLine.arguments[1]
+let path = CommandLine.arguments[2]
+var keychain: SecKeychain?
+guard SecKeychainOpen(path, &keychain) == errSecSuccess, let keychain else { fatalError("Keychain open failed") }
+let query: [CFString: Any] = [kSecClass: kSecClassCertificate, kSecMatchSearchList: [keychain],
+                            kSecReturnRef: true, kSecMatchLimit: kSecMatchLimitAll]
+var result: CFTypeRef?
+let status = SecItemCopyMatching(query as CFDictionary, &result)
+guard status == errSecSuccess, let certificates = result as? [SecCertificate] else { fatalError("Certificate lookup failed") }
+var count = 0
+for certificate in certificates {
+    var name: CFString?
+    guard SecCertificateCopyCommonName(certificate, &name) == errSecSuccess,
+          name as String? == identity else { continue }
+    let original = SecCertificateCopyData(certificate) as Data
+    let fingerprint = Insecure.SHA1.hash(data: original).map { String(format: "%02X", $0) }.joined()
+    let label = "HomeworkHelperRemote macOS Code Signing " + String(fingerprint.prefix(8))
+    let selection: [CFString: Any] = [kSecClass: kSecClassCertificate, kSecMatchSearchList: [keychain], kSecValueRef: certificate]
+    let updated = SecItemUpdate(selection as CFDictionary, [kSecAttrLabel: label] as CFDictionary)
+    guard updated == errSecSuccess else { fatalError("Certificate label update failed: \(updated)") }
+    guard SecCertificateCopyData(certificate) as Data == original else { fatalError("Certificate bytes changed") }
+    print("Updated certificate label: \(label) [\(fingerprint)]")
+    count += 1
+}
+guard count > 0 else { fatalError("No matching certificate; no certificate was created") }
+'''
+    with tempfile.TemporaryDirectory(prefix="hh-certificate-label-") as temp:
+        program = Path(temp) / "label.swift"
+        program.write_text(source, encoding="utf-8")
+        result = _run(["swift", str(program), identity, str(keychain.expanduser())])
+        print(result.stdout.strip())
+    print("Existing certificate labels updated; signing keys and trust preserved.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Create a local-only self-signed code-signing identity for HomeworkHelperRemote."
@@ -172,10 +212,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--identity", default=DEFAULT_IDENTITY)
     parser.add_argument("--keychain", type=Path, default=DEFAULT_KEYCHAIN)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
+    parser.add_argument("--label-existing", action="store_true", help="Update labels without issuing a certificate")
     args = parser.parse_args(argv)
 
     try:
-        create_local_identity(args.identity, keychain=args.keychain, days=args.days)
+        if args.label_existing:
+            label_existing_certificates(args.identity, keychain=args.keychain)
+        else:
+            create_local_identity(args.identity, keychain=args.keychain, days=args.days)
     except Exception as exc:
         print(f"macOS local code-signing identity 준비 실패: {exc}", file=sys.stderr)
         return 1

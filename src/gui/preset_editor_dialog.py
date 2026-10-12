@@ -1,14 +1,14 @@
 import logging
 from typing import Optional, Dict, Any
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QWidget, QFormLayout, QLineEdit, QTextEdit, QPushButton, QCheckBox,
     QMessageBox, QSplitter, QGroupBox, QSpinBox, QTimeEdit, QComboBox,
     QFileDialog
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QBrush, QPixmap
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QColor, QBrush, QPixmap
 
 from src.utils.game_preset_manager import GamePresetManager
 
@@ -18,7 +18,7 @@ class PresetEditorDialog(QDialog):
     """게임 프리셋 관리/편집 다이얼로그"""
 
     # 프리셋 변경 시그널 (저장/삭제 시 발생)
-    presets_changed = pyqtSignal()
+    presets_changed = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -237,7 +237,7 @@ class PresetEditorDialog(QDialog):
         # Reset Time
         reset_time = preset.get("server_reset_time")
         if reset_time:
-            from PyQt6.QtCore import QTime
+            from PySide6.QtCore import QTime
             t = QTime.fromString(reset_time, "HH:mm")
             if t.isValid():
                 self.reset_time_edit.setTime(t)

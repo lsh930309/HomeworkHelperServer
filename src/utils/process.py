@@ -5,9 +5,9 @@ import os
 import sys
 import hashlib
 import configparser
-from PyQt6.QtWidgets import QFileIconProvider # 아이콘 제공자
-from PyQt6.QtCore import QFileInfo          # 파일 정보 객체
-from PyQt6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import QFileIconProvider # 아이콘 제공자
+from PySide6.QtCore import QFileInfo          # 파일 정보 객체
+from PySide6.QtGui import QIcon, QPixmap
 
 # QFileIconProvider는 애플리케이션 컨텍스트에서 생성되는 것이 좋을 수 있으나,
 # 여기서 간단히 사용하기 위해 전역 또는 함수 내 지역 변수로 생성합니다.
@@ -61,7 +61,7 @@ def get_qicon_for_file(
         QIcon 객체 또는 None
     """
     try:
-        from PyQt6.QtCore import Qt
+        from PySide6.QtCore import Qt
         # 고해상도 아이콘 추출 시도 (대시보드 로직 활용)
         from src.api.dashboard.icons import extract_icon_from_exe, get_icon_for_size, safe_icon_cache_key
 

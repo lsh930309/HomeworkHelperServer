@@ -4,6 +4,7 @@ from src.data import models
 from src.data import schemas
 from src.data import beholder
 from src.data.data_models import normalize_sidebar_mode, SIDEBAR_MODE_DISABLED, SIDEBAR_MODE_VALUES
+from src.utils.resource_tracking import is_nikke_outpost_resource, predict_nikke_outpost_percent, predict_stamina_value
 from typing import Any, Optional
 from pathlib import Path
 import re
@@ -11,12 +12,15 @@ import json
 import uuid
 import time
 import logging
+import math
 import os
 import psutil
+import threading
 
 from src.data.database import base_dir
 
 logger = logging.getLogger(__name__)
+_session_idempotency_lock = threading.Lock()
 
 
 def _require_snapshot(path: str | None, message: str) -> str:
@@ -80,6 +84,7 @@ def create_process(
     override_token: str | None = None,
 ):
     process_data = _dump_schema(process)
+    _normalize_process_launch_args(process_data)
     provided_id = process_data.pop('id', None)
     process_id = provided_id if provided_id else str(uuid.uuid4())
     guard_columns = {key for key, value in process_data.items() if key in beholder.PROCESS_EDITOR_FIELDS or value is not None} | {"id"}
@@ -144,6 +149,7 @@ def update_process(
     db_process = get_process_by_id(db, process_id)
     if db_process:
         update_data = _dump_schema(process, exclude_unset=True)
+        _normalize_process_launch_args(update_data)
         update_data.pop("id", None)
         if actor == "process_editor":
             for runtime_field in beholder.PROCESS_RUNTIME_FIELDS:
@@ -170,6 +176,62 @@ def update_process(
         db.refresh(db_process)
     return db_process
 
+def _stamina_observation_values(
+    process: models.Process,
+    current: int | None,
+    maximum: int | None,
+    observed_at: float | None,
+) -> dict[str, Any]:
+    """Keep the recovery anchor when the observed count matches its projection."""
+    values = {"stamina_current": current, "stamina_max": maximum, "stamina_updated_at": observed_at}
+    values = {key: value for key, value in values.items() if value is not None}
+    if (
+        current is not None and observed_at is not None
+        and math.isfinite(observed_at) and observed_at >= 0
+        and process.stamina_updated_at is not None
+    ):
+        prediction_maximum = maximum if maximum is not None else process.stamina_max
+        predicted = predict_stamina_value(
+            process.stamina_current, prediction_maximum, process.stamina_updated_at, now=observed_at,
+        )
+        # A reduced maximum cannot keep a stored base outside the new valid range.
+        if predicted == current and process.stamina_current <= prediction_maximum:
+            values.pop("stamina_current", None)
+            values.pop("stamina_updated_at", None)
+    return values
+
+
+def _resource_observation_values(
+    process: models.Process,
+    percent: float | None,
+    observed_at: float | None,
+    status: str | None,
+    label: str | None,
+) -> dict[str, Any]:
+    """Store metadata independently from the successful value's recovery anchor."""
+    values = {"resource_status": status, "resource_label": label}
+    values = {key: value for key, value in values.items() if value is not None}
+    if percent is None or status not in (None, "ok"):
+        return values
+    is_nikke = is_nikke_outpost_resource(process.resource_provider, process.resource_key)
+    # Preserve invalid input for the existing Beholder guard rather than rounding it into range.
+    observed_percent = round(float(percent), 1) if is_nikke and 0 <= float(percent) <= 100 else percent
+    if (
+        observed_at is not None and math.isfinite(observed_at) and observed_at >= 0
+        and process.resource_updated_at is not None
+    ):
+        predicted = (
+            predict_nikke_outpost_percent(process.resource_percent, process.resource_updated_at, now=observed_at)
+            if is_nikke else process.resource_percent
+        )
+        if predicted is not None and (round(predicted, 1) if is_nikke else predicted) == observed_percent:
+            return values
+    values["resource_percent"] = observed_percent
+    if observed_at is not None:
+        values["resource_updated_at"] = observed_at
+    return values
+
+
 @db_retry_on_lock
 def update_process_stamina(
     db: Session,
@@ -184,11 +246,7 @@ def update_process_stamina(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "stamina_current": stamina_current,
-            "stamina_max": stamina_max,
-            "stamina_updated_at": stamina_updated_at,
-        }
+        update_data = _stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at)
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
@@ -227,13 +285,9 @@ def update_process_resource(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "resource_percent": resource_percent,
-            "resource_updated_at": resource_updated_at,
-            "resource_status": resource_status,
-            "resource_label": resource_label,
-        }
-        update_data = {key: value for key, value in update_data.items() if value is not None}
+        update_data = _resource_observation_values(
+            db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+        )
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
@@ -276,17 +330,12 @@ def update_process_runtime_state(
 ):
     db_process = get_process_by_id(db, process_id)
     if db_process:
-        update_data = {
-            "last_played_timestamp": last_played_timestamp,
-            "stamina_current": stamina_current,
-            "stamina_max": stamina_max,
-            "stamina_updated_at": stamina_updated_at,
-            "resource_percent": resource_percent,
-            "resource_updated_at": resource_updated_at,
-            "resource_status": resource_status,
-            "resource_label": resource_label,
-        }
+        update_data = {"last_played_timestamp": last_played_timestamp}
         update_data = {key: value for key, value in update_data.items() if value is not None}
+        update_data.update(_stamina_observation_values(db_process, stamina_current, stamina_max, stamina_updated_at))
+        update_data.update(_resource_observation_values(
+            db_process, resource_percent, resource_updated_at, resource_status, resource_label,
+        ))
         changed = {key for key, value in update_data.items() if getattr(db_process, key) != value}
         operation = beholder.BeholderOperation(
             kind=operation_kind,
@@ -432,6 +481,13 @@ def _dump_schema(model: Any, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)
     return model.dict(**kwargs)
+
+
+def _normalize_process_launch_args(data: dict[str, Any]) -> None:
+    if "launch_args" in data:
+        data["launch_args"] = str(data.get("launch_args") or "").strip()
+    if "launch_args_enabled" in data:
+        data["launch_args_enabled"] = bool(data.get("launch_args_enabled"))
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:
@@ -979,6 +1035,38 @@ def create_session(
     override_token: str | None = None,
 ):
     """새로운 프로세스 세션 시작 기록"""
+    lease_token = getattr(session, "lease_token", None)
+    if lease_token:
+        with _session_idempotency_lock:
+            existing = db.query(models.ProcessSession).filter(
+                models.ProcessSession.lease_token == lease_token
+            ).first()
+            if existing is not None:
+                return existing
+            return _create_session_once(
+                db,
+                session,
+                operation_kind=operation_kind,
+                actor=actor,
+                override_token=override_token,
+            )
+    return _create_session_once(
+        db,
+        session,
+        operation_kind=operation_kind,
+        actor=actor,
+        override_token=override_token,
+    )
+
+
+def _create_session_once(
+    db: Session,
+    session: schemas.ProcessSessionCreate,
+    *,
+    operation_kind: str,
+    actor: str,
+    override_token: str | None,
+):
     runtime_evidence = getattr(session, "runtime_evidence", None) or {}
     context = {
         **runtime_evidence,
@@ -1035,6 +1123,15 @@ def end_session(
     """프로세스 세션 종료 기록"""
     db_session = db.query(models.ProcessSession).filter(models.ProcessSession.id == session_id).first()
     if db_session:
+        if db_session.end_timestamp is not None:
+            same_end = abs(float(db_session.end_timestamp) - float(end_timestamp)) <= 0.001
+            same_stamina = stamina_at_end is None or db_session.stamina_at_end == stamina_at_end
+            same_resource = (
+                resource_percent_at_end is None
+                or db_session.resource_percent_at_end == resource_percent_at_end
+            )
+            if same_end and same_stamina and same_resource:
+                return db_session
         changed_fields = ["end_timestamp", "session_duration", "session_status", "close_reason", "heartbeat_timestamp"]
         proposed_values = {
             "end_timestamp": end_timestamp,

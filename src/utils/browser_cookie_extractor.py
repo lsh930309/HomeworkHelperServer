@@ -404,11 +404,14 @@ class BrowserCookieExtractor:
     @staticmethod
     def cookie_header(cookies: dict[str, Any]) -> str:
         """requests 헤더에 넣을 수 있는 Cookie 문자열을 생성합니다."""
+        cookie_safe_chars = "!#$%&'()*+-./:<=>?@[]^_`{|}~"
         parts = []
         for name, value in sorted(cookies.items()):
             if value is None:
                 continue
-            parts.append(f"{quote(str(name), safe='')}={quote(str(value), safe='!#$%&\'()*+-./:<=>?@[]^_`{|}~')}")
+            encoded_name = quote(str(name), safe="")
+            encoded_value = quote(str(value), safe=cookie_safe_chars)
+            parts.append(f"{encoded_name}={encoded_value}")
         return "; ".join(parts)
 
     def _get_local_state_path(self, browser: str) -> Optional[Path]:

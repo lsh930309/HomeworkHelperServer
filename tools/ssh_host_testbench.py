@@ -13,13 +13,10 @@ import argparse
 import base64
 import datetime as dt
 import json
-import os
 import random
 import re
-import shlex
 import subprocess
 import sys
-import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,40 +106,33 @@ def _ssh_args(config: SSHConfig) -> list[str]:
 
 def run_remote_powershell(config: SSHConfig, script: str, *, timeout: int) -> subprocess.CompletedProcess[str]:
     """Run a PowerShell script over SSH without writing a production-host file."""
+    # Stdin command mode evaluates statements independently. Read the whole input
+    # as one program; keep the command line short even for a large testbench.
+    program = (
+        "$ProgressPreference = 'SilentlyContinue'\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        "$utf8 = [System.Text.UTF8Encoding]::new($false)\n"
+        "[Console]::OutputEncoding = $utf8\n"
+        "$OutputEncoding = $utf8\n"
+        "[Console]::InputEncoding = $utf8\n"
+        "$env:PYTHONUTF8 = '1'\n"
+        "$env:PYTHONIOENCODING = 'utf-8'\n"
+        "try {\n& ([scriptblock]::Create([Console]::In.ReadToEnd()))\n} catch {\n"
+        "[Console]::Error.WriteLine($_.Exception.ToString())\n"
+        "exit 1\n}\n"
+    )
     command = _ssh_args(config) + [
         "powershell",
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "-",
+        "-EncodedCommand",
+        base64.b64encode(program.encode("utf-16-le")).decode("ascii"),
     ]
-    # macOS OpenSSH -> Windows PowerShell can silently execute only the first
-    # stdin line when Python's subprocess.communicate(input=...) is used with
-    # ``powershell -Command -``.  A real shell redirection from a temporary local
-    # script file consistently delivers the whole script while still avoiding any
-    # remote file residue.
-    fd, script_path = tempfile.mkstemp(prefix="hh-host-testbench-", suffix=".ps1")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(script)
-            if not script.endswith("\n\n"):
-                handle.write("\n")
-        shell_command = " ".join(shlex.quote(part) for part in command) + " < " + shlex.quote(script_path)
-        return subprocess.run(  # noqa: S602,S603 - explicit support-tool command, every dynamic segment is shell-quoted.
-            shell_command,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-            executable="/bin/zsh",
-        )
-    finally:
-        try:
-            os.remove(script_path)
-        except FileNotFoundError:
-            pass
+    return subprocess.run(
+        command, input=script, text=True, encoding="utf-8", errors="strict",
+        capture_output=True, timeout=timeout, check=False,
+    )
 
 
 def _json_b64(payload: dict[str, Any]) -> str:

@@ -14,19 +14,20 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 from urllib.parse import quote
 
-import psutil
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.api.runtime_config import resolve_api_port
 from src.core.launcher import Launcher
+from src.core.launch_target import launcher_candidates, resolve_launch_target, resolve_launch_args
 from src.core.remote_audit import RemoteAuditLogger
 from src.core.remote_pairing import RemoteDeviceRegistry
 from src.core.remote_debug_log import load_config as load_remote_log_config, save_config as save_remote_log_config, write_event as write_remote_log
 from src.core.remote_power import ConfigurablePowerController
 from src.core.remote_power_setup import power_setup_status, register_public_key
 from src.core.process_progress import calculate_process_progress
+from src.core.process_monitor import terminate_managed_process
 from src.core.tailscale import ensure_tailscale_ready, set_tailscale_network_enabled, suggest_remote_base_urls, tailscale_status
 from src.data.database import data_dir
 from src.core.remote_local_store import remote_store
@@ -248,7 +249,7 @@ def _mobile_session_metrics(
 def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
     if not preset_id:
         return None
-    candidates = [GamePresetManager.SYSTEM_PRESET_FILE, GamePresetManager.USER_PRESET_FILE]
+    candidates = [GamePresetManager.USER_PRESET_FILE, GamePresetManager.SYSTEM_PRESET_FILE]
     for path in candidates:
         try:
             if not path.exists():
@@ -262,123 +263,28 @@ def _read_preset_by_id(preset_id: str | None) -> dict[str, Any] | None:
     return None
 
 
-def _resolve_launcher_path(process: Any) -> str | None:
-    """Mirror the PyQt launcher's preset-based launcher preference."""
-    preset = _read_preset_by_id(getattr(process, "user_preset_id", None))
-    patterns = preset.get("launcher_patterns") if preset else None
-    if not patterns:
-        return None
-
-    base_candidates = [
-        getattr(process, "launch_path", None),
-        getattr(process, "monitoring_path", None),
-    ]
-    seen_dirs: set[str] = set()
-    for candidate in base_candidates:
-        if not candidate:
-            continue
-        base_dir = os.path.dirname(str(candidate))
-        if not base_dir or base_dir in seen_dirs:
-            continue
-        seen_dirs.add(base_dir)
-        for pattern in patterns:
-            launcher_path = os.path.join(base_dir, str(pattern))
-            if os.path.exists(launcher_path):
-                return launcher_path
-    return None
-
-
 def _resolve_launch_target(process: Any, requested_mode: str | None = None) -> tuple[str | None, str]:
-    """Resolve the same launch preference used by the PyQt main window.
-
-    The remote API deliberately returns the chosen target for auditability, but
-    leaves actual execution to ``Launcher`` so existing .url/.lnk/protocol logic
-    remains centralized.
-    """
-
-    mode = requested_mode or getattr(process, "preferred_launch_type", None) or "shortcut"
-    if mode == "direct":
-        return (getattr(process, "monitoring_path", None) or getattr(process, "launch_path", None), mode)
-    if mode == "shortcut":
-        return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
-    if mode == "launcher":
-        return (_resolve_launcher_path(process) or getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), mode)
-    return (getattr(process, "launch_path", None) or getattr(process, "monitoring_path", None), "auto")
+    preset = _read_preset_by_id(getattr(process, "user_preset_id", None))
+    patterns = preset.get("launcher_patterns", ()) if preset else ()
+    existing = tuple(item for item in launcher_candidates(process, patterns) if os.path.exists(item))
+    return resolve_launch_target(process, requested_mode, launcher_patterns=patterns, existing_paths=existing)
 
 
-def _normalize_executable_path(value: str | None) -> str | None:
-    if not value:
-        return None
+def _resolve_launch_args(process: Any, mode: str, target: str | None) -> str | None:
+    return resolve_launch_args(process, mode, target)
+
+
+def _terminate_matching_managed_processes(process: Any, *, run_as_admin: bool = False) -> RemoteProcessTerminationResult:
     try:
-        return os.path.normcase(os.path.abspath(str(value)))
-    except (TypeError, ValueError):
-        return None
-
-
-def _terminate_matching_managed_processes(process: Any) -> RemoteProcessTerminationResult:
-    """Terminate running OS processes that match a managed process monitor path.
-
-    The GUI sidebar already performs a direct ``psutil.Process(pid).terminate()``
-    for the active PID.  The Remote API runs in the packaged API process, so it
-    cannot safely read the GUI process monitor cache; instead it narrows the
-    target to the managed process' monitoring executable path and lets the
-    normal host process monitor close DB sessions after the process exits.
-    """
-
-    target = getattr(process, "monitoring_path", None)
-    normalized_target = _normalize_executable_path(target)
-    if not normalized_target:
-        return RemoteProcessTerminationResult(
-            accepted=False,
-            status="missing_target",
-            message="종료할 모니터링 경로가 없습니다.",
-            target=target,
-        )
-
-    matches: list[psutil.Process] = []
-    for candidate in psutil.process_iter(["pid", "exe"]):
-        try:
-            if _normalize_executable_path(candidate.info.get("exe")) == normalized_target:
-                matches.append(candidate)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, FileNotFoundError):
-            continue
-
-    if not matches:
-        return RemoteProcessTerminationResult(
-            accepted=False,
-            status="not_running",
-            message="실행 중인 게임 프로세스를 찾을 수 없습니다.",
-            target=target,
-        )
-
-    terminated: list[int] = []
-    errors: list[str] = []
-    for candidate in matches:
-        try:
-            candidate.terminate()
-            terminated.append(int(candidate.pid))
-        except psutil.NoSuchProcess:
-            continue
-        except psutil.AccessDenied:
-            errors.append(f"PID {candidate.pid}: 권한 거부")
-        except Exception as exc:
-            errors.append(f"PID {candidate.pid}: {exc}")
-
-    if terminated:
-        suffix = f" 일부 실패: {'; '.join(errors)}" if errors else ""
-        return RemoteProcessTerminationResult(
-            accepted=True,
-            status="accepted",
-            message=f"게임 종료 명령을 전달했습니다.{suffix}",
-            target=target,
-            pids=tuple(terminated),
-        )
-
+        result = terminate_managed_process(process, run_as_admin=run_as_admin)
+    except Exception as exc:
+        return RemoteProcessTerminationResult(False, "failed", str(exc), target=getattr(process, "monitoring_path", None))
     return RemoteProcessTerminationResult(
-        accepted=False,
-        status="failed",
-        message="게임 종료 명령 전달에 실패했습니다." if not errors else "; ".join(errors),
-        target=target,
+        accepted=bool(result.get("accepted")),
+        status=str(result.get("status", "failed")),
+        message=str(result.get("message", "게임 종료 명령 전달 실패")),
+        target=getattr(process, "monitoring_path", None),
+        pids=tuple(int(item["pid"]) for item in result.get("stopped", ())),
     )
 
 
@@ -405,7 +311,6 @@ def create_remote_router(
 
     router = APIRouter(prefix="/remote", tags=["remote"])
     launcher_factory = launcher_factory or (lambda run_as_admin: Launcher(run_as_admin=run_as_admin))
-    process_terminator = process_terminator or _terminate_matching_managed_processes
     shortcut_opener = shortcut_opener or webbrowser.open
     power_controller = power_controller or ConfigurablePowerController()
     auditor = auditor or RemoteAuditLogger()
@@ -855,6 +760,8 @@ def create_remote_router(
                     "monitoring_path": getattr(process, "monitoring_path", None),
                     "launch_path": getattr(process, "launch_path", None),
                     "preferred_launch_type": getattr(process, "preferred_launch_type", None),
+                    "launch_args_enabled": getattr(process, "launch_args_enabled", None),
+                    "launch_args": getattr(process, "launch_args", None),
                     "last_played_timestamp": last_played,
                     "user_cycle_hours": getattr(process, "user_cycle_hours", None),
                     "user_preset_id": getattr(process, "user_preset_id", None),
@@ -1419,7 +1326,8 @@ def create_remote_router(
 
         settings = crud.get_settings(db)
         launcher = launcher_factory(bool(getattr(settings, "run_as_admin", False)))
-        ok = bool(launcher.launch_process(target))
+        launch_args = _resolve_launch_args(process, mode, target)
+        ok = bool(launcher.launch_process(target, args=launch_args, managed_process_id=process_id, launch_mode=mode))
         command = f"process.launch.{mode}"
         result_status = "accepted" if ok else "failed"
         auditor.record(
@@ -1429,7 +1337,7 @@ def create_remote_router(
             target_id=getattr(process, "id", process_id),
             target_name=getattr(process, "name", None),
             target=target,
-            metadata={"mode": mode},
+            metadata={"mode": mode, "launch_args_applied": bool(launch_args)},
         )
         return RemoteCommandResult(
             accepted=ok,
@@ -1438,7 +1346,7 @@ def create_remote_router(
             target_name=getattr(process, "name", None),
             target=target,
             status=result_status,
-            message="게임 실행 명령을 전달했습니다." if ok else "게임 실행 명령 전달에 실패했습니다.",
+            message="게임 실행 명령을 전달했습니다." if ok else (getattr(launcher, "last_error", None) or "게임 실행 명령 전달에 실패했습니다."),
             command_id=f"{command}:{uuid.uuid4().hex}",
             accepted_at=now() if ok else None,
             refresh_after_ms=750 if ok else None,
@@ -1450,7 +1358,11 @@ def create_remote_router(
         if process is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="프로세스를 찾을 수 없습니다.")
 
-        result = process_terminator(process)
+        if process_terminator is not None:
+            result = process_terminator(process)
+        else:
+            settings = crud.get_settings(db)
+            result = _terminate_matching_managed_processes(process, run_as_admin=bool(getattr(settings, "run_as_admin", False)))
         command = "process.stop.terminate"
         auditor.record(
             command=command,

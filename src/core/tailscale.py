@@ -312,6 +312,8 @@ def _hidden_subprocess_kwargs() -> dict[str, Any]:
 def _run_subprocess(args: Sequence[str], *, timeout_seconds: float, runner=None):
     kwargs = {
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "timeout": timeout_seconds,

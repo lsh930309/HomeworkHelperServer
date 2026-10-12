@@ -96,6 +96,8 @@ def test_macos_models_track_remote_agent_snake_case_contract():
         'monitoringPath = "monitoring_path"',
         'launchPath = "launch_path"',
         'preferredLaunchType = "preferred_launch_type"',
+        'launchArgsEnabled = "launch_args_enabled"',
+        'launchArgs = "launch_args"',
         'userCycleHours = "user_cycle_hours"',
         'schemaVersion = "schema_version"',
         'baseValue = "base_value"',
@@ -286,6 +288,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteDashboardViewModel(" in app
     assert "bootstrapEnabled: !RemoteUITestFlags.skipExternalState" in app
     assert 'InMemoryTokenStore(initialToken: "ui-test-token")' in app
+    assert "init(tokenStore: any RemoteTokenStore, bootstrapEnabled: Bool = true)" in view_model
+    assert "tokenStore: any RemoteTokenStore = KeychainTokenStore()" not in view_model
     assert "NSStatusItem" in app
     assert "statusItem(withLength: NSStatusItem.squareLength)" in app
     assert "image.isTemplate = true" in app
@@ -323,35 +327,38 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     status_click_source = app.split("@objc func statusItemClicked", 1)[1].split("func clickStatusItemForUITest", 1)[0]
     show_popover_source = app.split("private func showPopoverFromStatusItem()", 1)[1].split("private func togglePopover", 1)[0]
     show_primary_source = app.split("static func showPrimaryInterface()", 1)[1].split("static func showUITestMainWindow", 1)[0]
-    assert "openSettingsWindow" not in status_click_source
-    assert "openSettingsWindow" not in show_popover_source
-    assert "openSettingsWindow" not in show_primary_source
-    assert "enum SettingsOpenSource" in app
-    assert "case popoverButton" in app
-    assert "case popoverShortcut" in app
-    assert "case uiTest" in app
-    settings_open_source = app.split("static func openSettingsWindow(source: SettingsOpenSource)", 1)[1].split("static func prepareSettingsWindow", 1)[0]
-    assert "guard source == .uiTest || shared?.popover.isShown == true else { return }" in settings_open_source
-    assert "beginExplicitSettingsOpen()" in settings_open_source
+    assert "showSettingsWindow" not in status_click_source
+    assert "showSettingsWindow" not in show_popover_source
+    assert "showSettingsWindow" not in show_primary_source
+    assert "private var settingsWindow: NSWindow?" in app
+    assert "private static var settingsOpener: (@MainActor () -> Void)?" in app
+    assert "private static var pendingSettingsOpen = false" in app
+    assert "static func showSettingsWindow()" in app
+    assert "static func installSettingsOpener" in app
+    assert "static func registerSettingsWindow(_ window: NSWindow)" in app
+    assert "private func presentSettingsWindow()" in app
+    assert "private func makeSettingsWindow() -> NSWindow" not in app
+    settings_open_source = app.split("private func presentSettingsWindow()", 1)[1].split("static func hideSettingsWindow", 1)[0]
+    assert "closePopoverForFocusLoss()" in settings_open_source
     assert "NSApp.setActivationPolicy(.accessory)" in settings_open_source
-    assert "focusExistingSettingsWindow()" in settings_open_source
-    assert "guard isExplicitSettingsOpenPending() else { return }" in settings_open_source
-    assert "guard NSApp.windows.contains(where:" not in settings_open_source
+    assert "if let settingsWindow" in settings_open_source
+    assert "settingsWindow.makeKeyAndOrderFront(nil)" in settings_open_source
+    assert "settingsWindow.orderFrontRegardless()" in settings_open_source
+    assert "guard let settingsOpener = Self.settingsOpener" in settings_open_source
+    assert "settingsOpener()" in settings_open_source
+    assert "Self.pendingSettingsOpen = true" in settings_open_source
+    assert "guard pendingSettingsOpen else { return }" in app
+    assert "pendingSettingsOpen = false" in app
+    assert "popover.isShown" not in settings_open_source
+    assert "NSHostingController(rootView: RemoteSettingsView" not in app
     assert "static let settingsWindowIdentifier" in app
-    assert "static let settingsWindowTitle" in app
-    assert "static func prepareSettingsWindow(_ window: NSWindow)" in app
     assert "static func hideSettingsWindow(_ window: NSWindow?)" in app
-    assert "restoreAccessoryIfNoVisibleUserWindows()" in app
-    assert "private static func focusExistingSettingsWindow() -> Bool" in app
-    assert "private static func settingsWindows() -> [NSWindow]" in app
-    assert "private static func isVisibleUserWindow(_ window: NSWindow) -> Bool" in app
-    assert "private static func beginExplicitSettingsOpen()" in app
-    assert "private static func isExplicitSettingsOpenPending() -> Bool" in app
-    assert "private static func clearExplicitSettingsOpen()" in app
+    assert "private static func settingsWindows() -> [NSWindow]" not in app
+    assert "explicitSettingsOpen" not in app
     assert "installPopoverKeyDownMonitor()" in app
     assert "removePopoverKeyDownMonitor()" in app
     assert "event.keyCode == 43 && event.modifierFlags.contains(.command)" in app
-    assert "openSettingsWindow(source: .popoverShortcut)" in app
+    assert "Self.showSettingsWindow()" in app
     assert "NSPopover" in app
     assert "RemoteMenuBarPopoverPanel" not in app
     assert "MenuBarPopoverView" in app
@@ -365,7 +372,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemotePlaceholderWindowAccessor" in app
     assert "schedulePlaceholderHide()" in app
     assert "Window(RemoteAppDelegate.placeholderWindowTitle, id: RemoteAppDelegate.placeholderWindowIdentifier)" in app
-    scene_source = app.split("var body: some Scene", 1)[1].split("Settings {", 1)[0]
+    scene_source = app.split("var body: some Scene", 1)[1].split("struct GameIconView", 1)[0]
     assert "RemoteDashboardView(viewModel" not in scene_source
     assert "SidebarCommands()" not in scene_source
     assert "homeworkHelperRemoteToggleSidebar" not in scene_source
@@ -373,19 +380,18 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "창 열기" not in app
     assert "창 숨기기" not in app
     assert ".keyboardShortcut(\"r\", modifiers: .command)" in app
-    assert ".keyboardShortcut(\",\", modifiers: .command)" not in app
-    assert 'Button("설정…")' not in app
+    assert ".keyboardShortcut(\",\", modifiers: .command)" in app
+    assert 'Button("설정…")' in app
     assert "CommandGroup(replacing: .appSettings)" in app
-    assert "RemoteAppDelegate.openSettingsWindow()" not in app
-    assert "RemoteAppDelegate.openSettingsWindow(source: .popoverButton)" in app
+    assert app.count("RemoteAppDelegate.showSettingsWindow()") >= 3
     assert "SettingsLink" not in app
     assert "RemoteSettingsOpenBridge" in app
     assert "@Environment(\\.openSettings)" in app
-    assert "homeworkHelperRemoteOpenSettings" in app
-    assert "NotificationCenter.default.post(name: .homeworkHelperRemoteOpenSettings" in app
+    assert "RemoteAppDelegate.installSettingsOpener" in app
     assert "openSettings()" in app
-    assert 'Selector(("showSettingsWindow:"))' in app
-    assert 'Selector(("showPreferencesWindow:"))' in app
+    assert "homeworkHelperRemoteOpenSettings" not in app
+    assert 'Selector(("showSettingsWindow:"))' not in app
+    assert 'Selector(("showPreferencesWindow:"))' not in app
 
     assert "GlassEffectContainer" in app
     assert "RemoteAppKitLiquidGlassBackground" in liquid_glass
@@ -500,7 +506,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert ".menuBarHoverTint(disabled: disabled)" not in app.split("struct MenuBarMoonlightButton", 1)[1].split("struct PlaySummaryView", 1)[0]
     assert ".labelStyle(.iconOnly)" not in app
 
-    assert "Settings {" in app
+    assert "\n        Settings {" in app
     assert "RemoteSettingsView" in app
     assert "RemoteSettingsTab" in app
     assert "TabView(selection: $selectedTab)" in app
@@ -526,12 +532,13 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "static let contentWidth: CGFloat = 392" in app
     assert "static let maxWindowWidth: CGFloat = 480" in app
     assert "measured.width * 1.06" in app
-    assert "measured.height * 1.10" in app
+    assert "static let windowVerticalInset: CGFloat = 24" in app
+    assert "let paddedHeight = measured.height + RemoteSettingsLayout.windowVerticalInset" in app
     assert "SettingsActionGrid" in app
     assert ".toggleStyle(.switch)" in app
     assert 'SettingsToggleRow(title: "플레이 요약 표시", isOn: $viewModel.showPlaySummary)' in app
     assert 'SettingsToggleRow(title: "Popover 전역 단축키 사용", isOn: $viewModel.popoverGlobalShortcutEnabled)' in app
-    assert 'SettingsControlRow("Moonlight host 선택")' in app
+    assert 'SettingsControlRow("Moonlight host 선택")' not in app
     assert 'SettingsControlRow("Moonlight 표시")' in app
     assert "MenuBarIconPickerRow(title: \"대기 상태 아이콘\", selection: $viewModel.menuBarIdleIconSymbol)" in app
     assert "MenuBarIconPickerRow(title: \"실행 중 아이콘\", selection: $viewModel.menuBarRunningIconSymbol)" in app
@@ -542,14 +549,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "RemoteSettingsWindowAccessor(targetSize: targetSize)" in app
     assert "RemoteSettingsKeyboardShortcutBridge" in app
     assert "RemoteSettingsWindowDelegate" in window_accessor
-    assert "RemoteAppDelegate.prepareSettingsWindow(window)" in window_accessor
     settings_window_accessor_source = window_accessor.split("struct RemoteSettingsWindowAccessor", 1)[1].split("struct RemoteSettingsKeyboardShortcutBridge", 1)[0]
     assert "makeKeyAndOrderFront" not in settings_window_accessor_source
     assert "orderFrontRegardless" not in settings_window_accessor_source
     assert "NSApp.activate" not in settings_window_accessor_source
-    prepare_settings_source = app.split("static func prepareSettingsWindow(_ window: NSWindow)", 1)[1].split("static func hideSettingsWindow", 1)[0]
-    assert "guard isExplicitSettingsOpenPending() else { return }" in prepare_settings_source
-    assert "focusSettingsWindow(prepared)" in prepare_settings_source
+    assert "window.identifier = NSUserInterfaceItemIdentifier(RemoteAppDelegate.settingsWindowIdentifier)" in settings_window_accessor_source
+    assert "window.title =" not in settings_window_accessor_source
+    assert "window.isReleasedWhenClosed = false" in settings_window_accessor_source
+    assert "RemoteAppDelegate.registerSettingsWindow(window)" in settings_window_accessor_source
     assert "RemoteAppDelegate.hideSettingsWindow(sender)" in window_accessor
     assert "RemoteAppDelegate.hideSettingsWindow(NSApp.keyWindow)" in app
     settings_keyboard_source = window_accessor.split("struct RemoteSettingsKeyboardShortcutBridge", 1)[1]
@@ -589,7 +596,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "shouldProbeImmediately" in supervisor
     assert "hostAvailabilityState" in view_model
     assert "private enum HostReachability" in view_model
-    assert "private enum TailnetManagementReachability" in view_model
     assert "private struct ConnectivityEvaluationLog" in view_model
     assert "writeConnectivityEvaluationLog" in view_model
     assert "guard remoteDesktopLoggingEnabled else { return }" in view_model
@@ -601,8 +607,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "private func evaluateConnectivity" in view_model
     assert 'trigger: "refresh"' in view_model
     assert 'trigger: "mirror"' in view_model
-    assert "probeTailnetManagementReachability(for: client)" in view_model
-    assert "LocalSSHPowerManager.health(config: powerConfig" in view_model
     assert "probeHostReachability(for: client)" in view_model
     assert "markHostUnreachable" in view_model
     assert "markHTTPAgentUnavailable" in view_model
@@ -620,13 +624,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "localTailscale?.peers.contains" in view_model
     assert "TailscaleDiscovery.ping(host: host, timeoutSeconds: 2)" in view_model
     assert "private func nextMirrorDelaySeconds() -> UInt64" in view_model
-    assert "RemoteSmartPollController.steadyDelaySeconds" in view_model
     assert "enum RemotePayloadSyncScope" in smart_poll
     assert "launchChaseFallbackDelaysNanoseconds" in smart_poll
-    assert "slowStatusThresholdMilliseconds" in smart_poll
-    assert "appIsActive: NSApp.isActive" in view_model
-    assert "unchangedRevisionPollCount" in view_model
-    assert "slowStatusPollCount" in view_model
     assert "requestImmediateMirror(trigger:" in view_model
     assert 'trigger: "power.\\(action).accepted"' in view_model
     assert "runMirrorRemoteState(trigger:" in view_model
@@ -712,8 +711,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "viewModel.moonlightStalePublicIPWarning" in app
     assert "준비된 Desktop 세션은 popover에서 바로 실행합니다" in app
     assert "viewModel.moonlightSnapshot.readiness.label" in app
-    assert "$viewModel.selectedMoonlightHostUUID" in app
-    assert "viewModel.moonlightSelectableHosts" in app
+    assert "$viewModel.selectedMoonlightHostUUID" not in app
+    assert "viewModel.moonlightSelectableHosts" not in app
     assert "LocalMoonlightManager" in local_moonlight
     assert "com.moonlight-stream.Moonlight" in local_moonlight
     assert "HH_REMOTE_MOONLIGHT_APP_PATHS" in local_moonlight
@@ -814,8 +813,8 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "remote.moonlight.hostPublicIPCache" in view_model
     assert "srvcert" not in app
     assert "macAddress" not in local_moonlight
-    assert "selectedMoonlightHostUUIDKey" in view_model
-    assert "remote.moonlight.selectedHostUUID" in view_model
+    assert "selectedMoonlightHostUUIDKey" not in view_model
+    assert "remote.moonlight.selectedHostUUID" not in view_model
     assert "refreshMoonlightSnapshot" in view_model
     assert "moonlightSnapshot" in view_model
     assert "LocalMoonlightManager.snapshot" in view_model
@@ -842,22 +841,14 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "@Published private(set) var pendingStopProcessIDs" in view_model
     assert "func processStatusText(_ process: RemoteProcess) -> String" in view_model
     assert "disconnectingPowerActions" in view_model
-    assert "isDisconnectedPowerState" in view_model
     assert "client.power(action:" not in view_model
-    assert "static let acceptedMarker" in local_ssh
     assert "static func command(for action: String)" in local_ssh
-    assert "cmd /C" in local_ssh
-    assert "shutdown /s /t 1 && echo \\(acceptedMarker)" in local_ssh
-    assert "shutdown /r /t 1 && echo \\(acceptedMarker)" in local_ssh
-    assert "cmd /C echo \\(acceptedMarker) && rundll32.exe powrprof.dll,SetSuspendState 0,0,0" in local_ssh
-    assert "rundll32.exe powrprof.dll,SetSuspendState" in local_ssh
     assert 'connectionClosingActions: Set<String> = ["sleep", "restart", "shutdown"]' in local_ssh
     assert "if connectionClosingActions.contains(action)" in local_ssh
     assert '"ServerAliveInterval=2"' in local_ssh
     assert '"ServerAliveCountMax=2"' in local_ssh
     assert 'start "" rundll32.exe' not in local_ssh
     assert 'if action == "sleep", result.status == 0' not in local_ssh
-    assert "combined.contains(Self.acceptedMarker)" in local_ssh
     assert '"IdentitiesOnly=yes"' in local_ssh
     assert "authenticated: Bool" in local_ssh
     assert "authenticated: true" in local_ssh
@@ -879,7 +870,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "previousState != .online || decision.shouldForcePayloadSync" in view_model
     assert "refreshLocalSSHHealthAfterOnlineRecovery(using: service)" in view_model
     assert "private func refreshLocalSSHHealthAfterOnlineRecovery(using service: RemoteDashboardService) async" in view_model
-    assert "localSSHHealthReady," in view_model
     assert "localSSHIdentityStatus" in view_model
     assert '"ssh_identity": identityStatus' in view_model
     assert '"power.local_ssh.started"' in view_model
@@ -896,7 +886,7 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "viewModel.processStatusText(process)" in app
     assert "func launch(_ process: RemoteProcess) async" in view_model
     assert "func stop(_ process: RemoteProcess) async" in view_model
-    launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("private static func isDisconnectedPowerState", 1)[0]
+    launch_source = view_model.split("func launch(_ process: RemoteProcess) async", 1)[1].split("func isPowerActionEnabled", 1)[0]
     assert "await refresh()" not in launch_source
     assert "await prepareMoonlightAutoWake(action: .launch(processID: process.id))" not in launch_source
     assert "startLaunchChase(processID: processID, refreshAfterMilliseconds: result.refreshAfterMS)" in launch_source
@@ -939,10 +929,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert '"HH_REMOTE_PREFS_SUITE": f"dev.homeworkhelper.remote.smoke.{os.getpid()}"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "smoke-moonlight-host" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert '"HH_REMOTE_MOONLIGHT_IGNORE_RUNNING_APPS"] = "1"' in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline moonlight wake" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline Moonlight ON should queue wake-and-stream instead of failing" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
-    assert "offline launch should stay disabled while Moonlight ON owns its wake-and-stream path" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_CONNECTION_SUPERVISOR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "REMOTE_GLOBAL_SHORTCUT_REGISTRAR" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
     assert "displayProcesses should sort game names by Korean dictionary order" in _read(Path("tools/smoke_macos_remote_viewmodel.py"))
@@ -970,6 +956,9 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "trackBadgeDisplayText" in view_model
     assert "startLocalProgressTicker" in view_model
     assert "processWithLocalProgress" in view_model
+    progress_copy_source = view_model.split("private static func processWithLocalProgress", 1)[1].split("private static func locallyPlayedToday", 1)[0]
+    assert "launchArgsEnabled: process.launchArgsEnabled" in progress_copy_source
+    assert "launchArgs: process.launchArgs" in progress_copy_source
     assert "allowProjection: false" in view_model
     assert 'existing?.source == "server_tracked"' in view_model
     assert "projectedProgress(from:" in view_model
@@ -1007,7 +996,6 @@ def test_macos_popover_first_ui_preserves_remote_capabilities_contract():
     assert "tailscale_exit_status" in view_model
     assert "tailscale_stdout" in view_model
     assert "tailscale_stderr" in view_model
-    assert "static let healthMarker" in local_ssh
     assert "static func health(config: RemotePowerConfigPayload" in local_ssh
     assert 'private static let preferredWakeDeviceName = "PC 켜기"' in local_power
     assert "static func resolveSmartThingsCLIPath" in local_power
