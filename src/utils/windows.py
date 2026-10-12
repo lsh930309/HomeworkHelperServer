@@ -96,10 +96,12 @@ def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd:
 
         # Windows의 Qt는 모니터 크기만 DPI에 맞춰 축소하고 원점은 유지한다.
         # QScreen.name()은 제품명일 수 있어 Win32 장치명과 비교하지 않는다.
-        monitor = next((rect for _handle, _dc, rect in win32api.EnumDisplayMonitors()
-                        if rect[:2] == monitor_origin), None)
-        if monitor is None:
+        handle = next((handle for handle, _dc, rect in win32api.EnumDisplayMonitors()
+                       if rect[:2] == monitor_origin), None)
+        if handle is None:
             return None
+        info = win32api.GetMonitorInfo(handle)
+        monitor = info["Monitor"]
         left, top, right, bottom = monitor
         work = [left, top, right, bottom]
         taskbars = []
@@ -145,6 +147,10 @@ def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd:
             ]
             if not any(surface_at(point) == hwnd for point in points):
                 continue
+            if info["Work"] != monitor:
+                # 표시 여부와 제외할 두께를 분리한다. Shell_TrayWnd의 외곽에는
+                # 투명한 그림자 여백도 포함되므로 예약된 작업 영역이 정확하다.
+                return monitor, info["Work"]
             if horizontal and y1 == top:
                 work[1] = max(work[1], y2)
             elif horizontal and y2 == bottom:

@@ -1966,23 +1966,25 @@ def test_sidebar_existing_cursor_poll_updates_height_but_not_running_slide(sideb
     view._anim.stop()
 
 
-@pytest.mark.parametrize("taskbar, surface, expected", [
-    ((0, 1040, 1920, 1080), 1, (0, 0, 1920, 1040)),
-    ((0, 1040, 1920, 1080), 3, (0, 0, 1920, 1080)),  # fullscreen covers taskbar
-    ((0, 1078, 1920, 1120), 1, (0, 0, 1920, 1080)),  # hidden edge strip
-    ((0, 0, 1920, 40), 1, (0, 40, 1920, 1080)),
-    ((0, 0, 40, 1080), 1, (40, 0, 1920, 1080)),
-    ((1880, 0, 1920, 1080), 1, (0, 0, 1880, 1080)),
-    ((1880, 0, 1920, 1080), 2, (0, 0, 1880, 1080)),  # own overlay must not hide bar
+@pytest.mark.parametrize("taskbar, surface, reserved, expected", [
+    ((0, 1040, 1920, 1080), 1, (0, 0, 1920, 1040), (0, 0, 1920, 1040)),
+    ((0, 1040, 1920, 1080), 3, (0, 0, 1920, 1040), (0, 0, 1920, 1080)),  # covered
+    ((0, 1078, 1920, 1120), 1, (0, 0, 1920, 1080), (0, 0, 1920, 1080)),  # hidden edge
+    ((0, 0, 1920, 40), 1, (0, 40, 1920, 1080), (0, 40, 1920, 1080)),
+    ((0, 0, 40, 1080), 1, (40, 0, 1920, 1080), (40, 0, 1920, 1080)),
+    ((1880, 0, 1920, 1080), 1, (0, 0, 1880, 1080), (0, 0, 1880, 1080)),
+    ((1880, 0, 1920, 1080), 2, (0, 0, 1880, 1080), (0, 0, 1880, 1080)),  # own overlay
+    ((0, 1020, 1920, 1080), 1, (0, 0, 1920, 1040), (0, 0, 1920, 1040)),  # transparent margin
+    ((0, 1040, 1920, 1080), 1, (0, 0, 1920, 1080), (0, 0, 1920, 1040)),  # revealed auto-hide
 ])
-def test_native_taskbar_visibility_not_reserved_area(monkeypatch, taskbar, surface, expected):
+def test_native_taskbar_visibility_not_reserved_area(monkeypatch, taskbar, surface, reserved, expected):
     import sys
     import src.utils.windows as windows
     monitor = (0, 0, 1920, 1080)
     monkeypatch.setattr(windows, "is_windows", lambda: True)
     monkeypatch.setitem(sys.modules, "win32api", SimpleNamespace(
         EnumDisplayMonitors=lambda: [(10, None, monitor)],
-        GetMonitorInfo=lambda _handle: {"Device": "DISPLAY", "Monitor": monitor, "Work": (0, 0, 1920, 1040)},
+        GetMonitorInfo=lambda _handle: {"Device": "DISPLAY", "Monitor": monitor, "Work": reserved},
     ))
     monkeypatch.setitem(sys.modules, "win32con", SimpleNamespace(GW_HWNDNEXT=2, GWL_EXSTYLE=-20, WS_EX_TRANSPARENT=32))
     monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
