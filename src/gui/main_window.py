@@ -297,7 +297,6 @@ class MainWindow(QMainWindow):
             on_stop=self._recording_manager.stop_recording,
             on_reconnect=self._recording_manager.reconnect,
             on_start=self._show_countdown_then_record,
-            get_last_error=self._recording_manager.get_last_error,
             get_elapsed_sec=self._recording_manager.get_elapsed_sec,
             get_output_dir=self._get_recording_output_dir,
         )

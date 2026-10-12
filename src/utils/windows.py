@@ -80,6 +80,86 @@ def _get_window_frame_rects(user32, hwnd):
     return outer, visible
 
 
+def get_visible_taskbar_work_area(screen_name: str, ignored_hwnd: int = 0):
+    """대상 모니터의 물리 RECT와 실제 보이는 작업 표시줄을 뺀 RECT를 반환합니다.
+
+    rcWork는 전체 화면에서도 예약 영역을 유지하므로 표면의 실제 창을 확인합니다.
+    호출한 사이드바 자체는 가림 판정에서 제외해 높이 계산의 자기 의존을 없앱니다.
+    OS 조회 실패는 None이며 호출자는 Qt 작업 영역을 사용합니다.
+    """
+    if not is_windows():
+        return None
+    try:
+        import win32api
+        import win32con
+        import win32gui
+
+        monitor = next(
+            (info["Monitor"] for handle, _dc, _rect in win32api.EnumDisplayMonitors()
+             if (info := win32api.GetMonitorInfo(handle))["Device"].casefold() == screen_name.casefold()),
+            None,
+        )
+        if monitor is None:
+            return None
+        left, top, right, bottom = monitor
+        work = [left, top, right, bottom]
+        taskbars = []
+
+        def collect(hwnd, _context):
+            if win32gui.GetClassName(hwnd) in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+                taskbars.append(hwnd)
+
+        win32gui.EnumWindows(collect, None)
+
+        def contains(rect, point):
+            return rect[0] <= point[0] < rect[2] and rect[1] <= point[1] < rect[3]
+
+        def surface_at(point):
+            hwnd = win32gui.WindowFromPoint(point)
+            root = win32gui.GetAncestor(hwnd, 2) if hwnd else 0  # GA_ROOT
+            if root != ignored_hwnd:
+                return root
+            # 사이드바를 움직이지 않고 그 아래 실제 가시 창을 확인한다.
+            hwnd = win32gui.GetWindow(root, win32con.GW_HWNDNEXT)
+            while hwnd:
+                if (win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd)
+                        and not win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & win32con.WS_EX_TRANSPARENT
+                        and contains(win32gui.GetWindowRect(hwnd), point)):
+                    return hwnd
+                hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
+            return 0
+
+        for hwnd in taskbars:
+            if not win32gui.IsWindowVisible(hwnd):
+                continue
+            rect = win32gui.GetWindowRect(hwnd)
+            x1, y1 = max(left, rect[0]), max(top, rect[1])
+            x2, y2 = min(right, rect[2]), min(bottom, rect[3])
+            width, height = x2 - x1, y2 - y1
+            if min(width, height) <= 2:  # 자동 숨김의 가장자리 감지 띠
+                continue
+            horizontal = width >= height
+            points = [
+                (x1 + int(width * fraction), (y1 + y2) // 2) if horizontal
+                else ((x1 + x2) // 2, y1 + int(height * fraction))
+                for fraction in (0.25, 0.5, 0.75)
+            ]
+            if not any(surface_at(point) == hwnd for point in points):
+                continue
+            if horizontal and y1 == top:
+                work[1] = max(work[1], y2)
+            elif horizontal and y2 == bottom:
+                work[3] = min(work[3], y1)
+            elif not horizontal and x1 == left:
+                work[0] = max(work[0], x2)
+            elif not horizontal and x2 == right:
+                work[2] = min(work[2], x1)
+        return monitor, tuple(work)
+    except Exception as exc:
+        logger.debug("Windows 작업 표시줄 가시 영역 조회 실패: %s", exc)
+        return None
+
+
 def snap_rect_to_work_area(
     rect: tuple[int, int, int, int],
     work_area: tuple[int, int, int, int],
