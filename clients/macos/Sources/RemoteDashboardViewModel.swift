@@ -661,6 +661,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var pendingLaunchProcessIDs: Set<String> = []
     @Published private(set) var pendingStopProcessIDs: Set<String> = []
     @Published var message = "Remote Agent에 연결하세요."
+    static let stopConfirmationExpiredMessage = "종료 요청은 전달됐지만 60초 안에 정리 완료를 확인하지 못했습니다. 감시는 계속합니다."
 
 
     var setupChecklist: [(String, String, Bool)] {
@@ -2943,14 +2944,23 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    func applyRemoteProcessSnapshot(_ remoteProcesses: [RemoteProcess], client: RemoteAPIClient) async {
+        RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
+        processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
+        if message == Self.stopConfirmationExpiredMessage {
+            // The live game rows own runtime state. This old request notice must
+            // not remain as a current failure after a fresh server observation.
+            message = "게임 실행 상태를 갱신했습니다."
+        }
+        await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+    }
+
     private func syncRemoteProcesses(using service: RemoteDashboardService, client: RemoteAPIClient) async {
         let identity = currentHostIdentity
         do {
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
         } catch {
             guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
@@ -2975,9 +2985,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = receivedIncidents
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
         } catch {
             guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
@@ -3036,9 +3044,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
             if includeDevices {
                 let receivedDevices = try await service.devices()
                 guard currentHostIdentity == identity else { return }
@@ -3216,7 +3222,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if resolved, hostAvailabilityState == .online {
             message = "게임 종료 상태를 확인했습니다."
         } else if hostAvailabilityState == .online {
-            message = "종료 요청은 전달됐지만 60초 안에 정리 완료를 확인하지 못했습니다. 감시는 계속합니다."
+            message = Self.stopConfirmationExpiredMessage
         }
     }
 
