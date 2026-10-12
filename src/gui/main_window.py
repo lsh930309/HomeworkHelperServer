@@ -135,6 +135,7 @@ class IconDownloader(QThread):
 class MainWindow(QMainWindow):
     INSTANCE = None # 다른 모듈에서 메인 윈도우 인스턴스에 접근하기 위함
     request_table_refresh_signal = Signal() # 기존 백그라운드 호출부가 사용하는 목록 새로고침 시그널
+    _recording_info_sig = Signal()
     _recording_state_sig = Signal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
     _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
 
@@ -284,6 +285,8 @@ class MainWindow(QMainWindow):
         from src.recording import RecordingManager
         self._recording_manager = RecordingManager()
         self._recording_manager.set_on_state_changed(self._on_recording_state_changed)
+        self._recording_manager.set_on_info_changed(self._recording_info_sig.emit)
+        self._recording_info_sig.connect(self._refresh_recording_info)
         self._screenshot_manager.set_on_long_press(self._on_gamepad_long_press)
         self._recording_state_sig.connect(self._dispatch_recording_state_to_sidebar)
         self._gamepad_countdown_sig.connect(self._show_countdown_then_record)
@@ -1269,18 +1272,27 @@ class MainWindow(QMainWindow):
 
     def open_sidebar_settings_dialog(self) -> None:
         from src.gui.sidebar_settings_dialog import SidebarSettingsDialog
-        gs = self.data_manager.global_settings
-        dlg = SidebarSettingsDialog(gs, self)
-        if dlg.exec():
-            updated = dlg.get_updated_settings()
-            if not self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog"):
-                QMessageBox.warning(self, "사이드바 설정", "설정을 저장하지 못해 실행 중 설정도 변경하지 않았습니다.")
-                self._poll_beholder_incidents()
-                return
-            if hasattr(self, '_sidebar_controller'):
-                self._sidebar_controller.apply_settings(updated)
-            self._apply_screenshot_settings()
-            self._apply_recording_settings()
+        self._recording_manager.refresh_info()
+        dlg = SidebarSettingsDialog(self.data_manager.global_settings, self,
+                                    obs_info_provider=self._recording_manager.get_obs_info,
+                                    obs_reconnect=self._recording_manager.reconnect)
+        self._recording_info_sig.connect(dlg.refresh_obs_info)
+        self._recording_state_sig.connect(dlg.refresh_obs_info)
+        try:
+            if dlg.exec():
+                updated = dlg.get_updated_settings()
+                if not self.data_manager.save_global_settings(updated, actor="sidebar_settings_dialog"):
+                    QMessageBox.warning(self, "사이드바 설정", "설정을 저장하지 못해 실행 중 설정도 변경하지 않았습니다.")
+                    self._poll_beholder_incidents()
+                    return
+                if hasattr(self, '_sidebar_controller'):
+                    self._sidebar_controller.apply_settings(updated)
+                self._apply_screenshot_settings()
+                self._apply_recording_settings()
+        finally:
+            self._recording_info_sig.disconnect(dlg.refresh_obs_info)
+            self._recording_state_sig.disconnect(dlg.refresh_obs_info)
+            dlg.deleteLater()
 
     def _load_always_on_top_setting(self):
         """전역 설정에서 항상 위 설정을 로드합니다."""
@@ -2614,26 +2626,15 @@ class MainWindow(QMainWindow):
         )
         self._countdown_overlay.start()
 
+    def _refresh_recording_info(self) -> None:
+        if hasattr(self, '_sidebar_controller'):
+            self._sidebar_controller.refresh_recording_directory()
+
     def _get_recording_output_dir(self) -> str:
-        """OBS 녹화 출력 폴더 경로를 반환합니다."""
         gs = getattr(self.data_manager, 'global_settings', None)
         if gs is None or not getattr(gs, 'obs_watch_output_dir', True):
             return ""
-        # 수동 지정 경로 우선
-        manual = getattr(gs, 'obs_recording_output_dir', '').strip()
-        if manual:
-            return manual
-        # 없으면 OBS INI에서 자동 읽기
-        try:
-            from src.recording.obs_config_reader import read_obs_config
-            output_dir = read_obs_config().get("output_dir", "")
-        except Exception:
-            output_dir = ""
-        # OBS가 기본 출력 경로를 사용 중이면 INI에 기록되지 않으므로 fallback
-        if not output_dir:
-            import os
-            output_dir = os.path.join(os.path.expanduser("~"), "Videos")
-        return output_dir
+        return self._recording_manager.get_output_directory()
 
     def _start_screenshot_manager(self) -> None:
         """현재 설정 기준으로 스크린샷 매니저 상태를 동기화합니다."""

@@ -1312,19 +1312,19 @@ class SidebarWidget(QWidget):
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "idle":
-            self._rec_status_label.setText("OBS 대기 중")
+            self._rec_status_label.setText("연결됨")
             status_style = "success"
             self._rec_stop_btn.hide()
             self._rec_start_btn.show()
             self._rec_connect_btn.hide()
         elif state == "connecting":
-            self._rec_status_label.setText("OBS 연결 중...")
+            self._rec_status_label.setText("연결 중")
             status_style = "warning"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         else:  # obs_offline
-            self._rec_status_label.setText("OBS 오프라인")
+            self._rec_status_label.setText("연결 안 됨")
             status_style = "default"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()

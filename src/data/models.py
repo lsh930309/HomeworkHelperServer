@@ -109,13 +109,8 @@ class GlobalSettings(Base):
     screenshot_trigger_vk = Column(Integer, default=0xB2)
     # Recording (OBS)
     recording_enabled = Column(Boolean, default=False)
-    obs_host = Column(String, default="localhost")
-    obs_port = Column(Integer, default=4455)
-    obs_password = Column(String, default="")
-    obs_exe_path = Column(String, default="")
     obs_launch_hidden = Column(Boolean, default=True)
     obs_watch_output_dir = Column(Boolean, default=True)
-    obs_recording_output_dir = Column(String, default="")
     recording_hold_threshold_ms = Column(Integer, default=800)
     # Remote server mode
     remote_server_mode_enabled = Column(Boolean, default=False)

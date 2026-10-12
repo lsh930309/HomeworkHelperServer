@@ -64,8 +64,7 @@ SIDEBAR_SETTINGS_FIELDS = {
     "sidebar_volume_section_enabled", "screenshot_enabled", "screenshot_save_dir",
     "screenshot_gamepad_trigger", "screenshot_disable_gamebar", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
-    "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
-    "recording_hold_threshold_ms",
+    "obs_launch_hidden", "obs_watch_output_dir", "recording_hold_threshold_ms",
 }
 GLOBAL_DIALOG_FIELDS = {
     "sleep_start_time_str", "sleep_end_time_str", "sleep_correction_advance_notify_hours",
@@ -79,8 +78,7 @@ PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk", "recording_enabled",
-    "obs_launch_hidden", "obs_watch_output_dir", "obs_recording_output_dir",
-    "recording_hold_threshold_ms",
+    "obs_launch_hidden", "obs_watch_output_dir", "recording_hold_threshold_ms",
 }
 
 SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
@@ -95,8 +93,7 @@ SETTINGS_RANGE_RULES: dict[str, tuple[float, float, str]] = {
     "sidebar_opacity": (0.1, 1.0, "사이드바 투명도"),
     "screenshot_gamepad_button_index": (-1, 32, "게임패드 버튼 번호"),
     "screenshot_trigger_vk": (0, 255, "스크린샷 트리거 키"),
-    "obs_port": (1, 65535, "OBS 포트"),
-    "recording_hold_threshold_ms": (100, 2000, "녹화 홀드 시간"),
+    "recording_hold_threshold_ms": (500, 2000, "녹화 홀드 시간"),
 }
 SETTINGS_ENUM_RULES: dict[str, tuple[set[str], str]] = {
     "theme": ({"system", "light", "dark"}, "테마"),
@@ -134,12 +131,8 @@ FIELD_LABELS: dict[str, str] = {
     "screenshot_disable_gamebar": "Xbox Game Bar 비활성화",
     "recording_enabled": "녹화 사용",
     "remote_server_mode_enabled": "리모트 서버 모드",
-    "obs_host": "OBS 호스트",
-    "obs_password": "OBS 비밀번호",
-    "obs_exe_path": "OBS 실행 파일",
     "obs_launch_hidden": "OBS 숨김 실행",
     "obs_watch_output_dir": "OBS 출력 폴더 감시",
-    "obs_recording_output_dir": "OBS 녹화 저장 폴더",
     "preferred_launch_type": "실행 방식",
     "launch_args_enabled": "직접 실행 인자 사용",
     "launch_args": "직접 실행 인자",

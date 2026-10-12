@@ -143,13 +143,8 @@ def auto_migrate_database(*, strict: bool = False):
         ("global_settings", "screenshot_trigger_vk", "INTEGER", "178"),
         # Recording (OBS)
         ("global_settings", "recording_enabled", "INTEGER", "0"),
-        ("global_settings", "obs_host", "TEXT", "'localhost'"),
-        ("global_settings", "obs_port", "INTEGER", "4455"),
-        ("global_settings", "obs_password", "TEXT", "''"),
-        ("global_settings", "obs_exe_path", "TEXT", "''"),
         ("global_settings", "obs_launch_hidden", "INTEGER", "1"),
         ("global_settings", "obs_watch_output_dir", "INTEGER", "1"),
-        ("global_settings", "obs_recording_output_dir", "TEXT", "''"),
         ("global_settings", "recording_hold_threshold_ms", "INTEGER", "800"),
         # Remote server mode
         ("global_settings", "remote_server_mode_enabled", "INTEGER", "0"),

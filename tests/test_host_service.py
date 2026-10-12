@@ -53,7 +53,7 @@ class Backend:
         self.effects.append(("startup", session))
         return {"accepted":True, "pid":100}
 
-    def launch_obs(self, session, executable, hidden):
+    def launch_obs(self, session, hidden):
         return {"accepted":True, "pid":101}
 
     def power(self, action):
@@ -515,7 +515,7 @@ def _create_db(appdata, *, wal=False):
     connection = sqlite3.connect(database)
     if wal:
         connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("CREATE TABLE global_settings (id, run_as_admin, run_on_startup, obs_exe_path DEFAULT '', obs_launch_hidden DEFAULT 1)")
+    connection.execute("CREATE TABLE global_settings (id, run_as_admin, run_on_startup, obs_launch_hidden DEFAULT 1)")
     connection.execute("INSERT INTO global_settings (id,run_as_admin,run_on_startup) VALUES (1, 1, 0)")
     connection.execute("CREATE TABLE managed_processes (id, name, monitoring_path, launch_path, "
                        "original_launch_path, preferred_launch_type, launch_args_enabled, launch_args, user_preset_id)")
@@ -554,7 +554,7 @@ def test_login_startup_reads_settings_without_requiring_game_schema(tmp_path):
     (appdata / "homework_helper_data").mkdir(parents=True)
     database = appdata / "homework_helper_data" / "app_data.db"
     connection = sqlite3.connect(database)
-    connection.execute("CREATE TABLE global_settings (id,run_as_admin,run_on_startup, obs_exe_path DEFAULT '', obs_launch_hidden DEFAULT 1)")
+    connection.execute("CREATE TABLE global_settings (id,run_as_admin,run_on_startup, obs_launch_hidden DEFAULT 1)")
     connection.execute("INSERT INTO global_settings (id,run_as_admin,run_on_startup) VALUES (1,0,1)")
     connection.commit()
     connection.close()
@@ -700,7 +700,7 @@ def test_control_json_preserves_unicode_over_a_windows_code_page(monkeypatch, mo
 
 def test_obs_logon_launch_is_independent_of_disabled_gui_and_is_not_reopened(startup_system):
     controller, backend, repository, clock, errors = startup_system
-    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, r"C:\OBS\obs64.exe", True))
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, True))
     launches = []
     backend.launch_obs = lambda *args: launches.append(args) or {"accepted":True,"pid":101}
     controller.on_session_change("logon",4)
@@ -775,7 +775,7 @@ def _queued_obs_call(controller, caller):
 def test_logon_and_app_requests_have_one_native_obs_owner(system):
     from threading import get_ident
     controller, backend, repository, caller = system
-    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, r"C:\OBS\obs64.exe", True))
+    repository.snapshot = replace(repository.snapshot, settings=SettingsSnapshot(False, False, True))
     created = []
     alive = [False]
     def launch(*_args):

@@ -253,13 +253,8 @@ class GlobalSettings:
                  screenshot_trigger_vk: int = 0xB2,
                  # Recording (OBS)
                  recording_enabled: bool = False,
-                 obs_host: str = "localhost",
-                 obs_port: int = 4455,
-                 obs_password: str = "",
-                 obs_exe_path: str = "",
                  obs_launch_hidden: bool = True,
                  obs_watch_output_dir: bool = True,
-                 obs_recording_output_dir: str = "",
                  recording_hold_threshold_ms: int = 800,
                  # Remote server mode
                  remote_server_mode_enabled: bool = False):
@@ -308,13 +303,8 @@ class GlobalSettings:
         self.screenshot_trigger_vk = screenshot_trigger_vk
         # Recording (OBS)
         self.recording_enabled = recording_enabled
-        self.obs_host = obs_host
-        self.obs_port = obs_port
-        self.obs_password = obs_password
-        self.obs_exe_path = obs_exe_path
         self.obs_launch_hidden = obs_launch_hidden
         self.obs_watch_output_dir = obs_watch_output_dir
-        self.obs_recording_output_dir = obs_recording_output_dir
         self.recording_hold_threshold_ms = recording_hold_threshold_ms
         # Remote server mode
         self.remote_server_mode_enabled = remote_server_mode_enabled
@@ -400,13 +390,8 @@ class GlobalSettings:
         data['screenshot_trigger_vk'] = int(data.get('screenshot_trigger_vk', 0xB2))
         # Recording (OBS) 하위 호환성
         data['recording_enabled'] = bool(data.get('recording_enabled', False))
-        data['obs_host'] = str(data.get('obs_host', 'localhost'))
-        data['obs_port'] = int(data.get('obs_port', 4455))
-        data['obs_password'] = str(data.get('obs_password', ''))
-        data['obs_exe_path'] = str(data.get('obs_exe_path', ''))
         data['obs_launch_hidden'] = bool(data.get('obs_launch_hidden', True))
         data['obs_watch_output_dir'] = bool(data.get('obs_watch_output_dir', True))
-        data['obs_recording_output_dir'] = str(data.get('obs_recording_output_dir', ''))
         data['recording_hold_threshold_ms'] = int(data.get('recording_hold_threshold_ms', 800))
         # Remote server mode 하위 호환성
         data['remote_server_mode_enabled'] = bool(data.get('remote_server_mode_enabled', False))

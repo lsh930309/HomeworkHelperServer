@@ -523,11 +523,10 @@ class WindowsBackend:
                 _close(thread)
                 _close(process)
 
-    def launch_obs(self, session: Session, executable: str, hidden: bool) -> dict:
-        path = Path(executable)
+    def launch_obs(self, session: Session, hidden: bool) -> dict:
+        from src.recording.obs_config_reader import find_obs_executable
         with self.read_as_user(session):
-            if not executable or not path.is_absolute() or not path.is_file():
-                raise FileNotFoundError("OBS 실행 경로를 설정에서 확인해 주세요.")
+            path = Path(find_obs_executable())
         for identity in self.processes(session):
             if (identity.sid == session.owner_sid and identity.session_id == session.session_id
                     and ntpath.normcase(identity.path) == ntpath.normcase(str(path))):

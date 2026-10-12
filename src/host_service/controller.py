@@ -340,7 +340,7 @@ class PrivilegeController:
         """Only the existing service worker calls the native OBS launch boundary."""
         self._still_current(session)
         before_launch()
-        result = self.backend.launch_obs(session, settings.obs_exe_path, settings.obs_launch_hidden)
+        result = self.backend.launch_obs(session, settings.obs_launch_hidden)
         if (not isinstance(result, dict) or result.get("accepted") is not True
                 or type(result.get("pid")) is not int or result["pid"] <= 0):
             raise RuntimeError("OBS 실행 완료를 확인하지 못했습니다. 자동 재시도하지 않습니다.")

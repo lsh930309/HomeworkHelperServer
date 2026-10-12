@@ -19,11 +19,13 @@ from src.data.data_models import (
 class SidebarSettingsDialog(QDialog):
     """사이드바 동작·표시·스크린샷 설정 대화 상자."""
 
-    def __init__(self, settings: GlobalSettings, parent=None):
+    def __init__(self, settings: GlobalSettings, parent=None, *, obs_info_provider=None, obs_reconnect=None):
         super().__init__(parent)
         self.setWindowTitle("사이드바 설정")
         self.setMinimumWidth(860)
         self._settings = settings
+        self._obs_info_provider = obs_info_provider
+        self._obs_reconnect = obs_reconnect
         self._ss_trigger_vk: int = getattr(settings, 'screenshot_trigger_vk', 0xB2)
         self._build_ui()
 
@@ -225,75 +227,49 @@ class SidebarSettingsDialog(QDialog):
         right_col.addWidget(ss_group)
 
         # ── 녹화 (OBS) 설정 ──
-        rec_group = QGroupBox("녹화 (OBS)")
+        rec_group = QGroupBox("OBS 연동")
         rec_form = QFormLayout(rec_group)
 
         self._rec_enabled_cb = QCheckBox()
         self._rec_enabled_cb.setChecked(getattr(self._settings, 'recording_enabled', False))
         rec_form.addRow("녹화 기능 사용", self._rec_enabled_cb)
 
-        # 연결 설정
-        self._obs_host_edit = QLineEdit(getattr(self._settings, 'obs_host', 'localhost'))
-        self._obs_host_edit.setPlaceholderText("localhost")
-        rec_form.addRow("OBS 호스트", self._obs_host_edit)
-
-        self._obs_port_spin = QSpinBox()
-        self._obs_port_spin.setRange(1, 65535)
-        self._obs_port_spin.setValue(getattr(self._settings, 'obs_port', 4455))
-        rec_form.addRow("OBS 포트", self._obs_port_spin)
-
-        self._obs_password_edit = QLineEdit(getattr(self._settings, 'obs_password', ''))
-        self._obs_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._obs_password_edit.setPlaceholderText("비밀번호 없으면 비워두세요")
-        rec_form.addRow("OBS 비밀번호", self._obs_password_edit)
-
-        # OBS 자동 실행
-        obs_exe_row = QHBoxLayout()
-        self._obs_exe_edit = QLineEdit(getattr(self._settings, 'obs_exe_path', ''))
-        self._obs_exe_edit.setPlaceholderText("obs64.exe 경로")
-        obs_exe_browse_btn = QPushButton("찾기...")
-        obs_exe_browse_btn.setFixedWidth(60)
-        obs_exe_browse_btn.clicked.connect(self._browse_obs_exe)
-        obs_exe_row.addWidget(self._obs_exe_edit)
-        obs_exe_row.addWidget(obs_exe_browse_btn)
-        rec_form.addRow("OBS 실행 파일", obs_exe_row)
-
-
-        rec_form.addRow("OBS 자동 실행", QLabel("로그온 시 관리자 권한으로 자동 실행"))
+        self._obs_status_label = QLabel()
+        self._obs_exe_label = QLabel()
+        self._obs_directory_label = QLabel()
+        for label in (self._obs_exe_label, self._obs_directory_label):
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        rec_form.addRow("OBS 상태", self._obs_status_label)
+        rec_form.addRow("OBS 실행 파일", self._obs_exe_label)
+        rec_form.addRow("녹화 저장 폴더 — OBS 설정", self._obs_directory_label)
+        rec_form.addRow("OBS 자동 실행", QLabel("로그온 · 호스트 앱 시작 시 관리자 실행"))
         self._obs_launch_hidden_cb = QCheckBox()
         self._obs_launch_hidden_cb.setChecked(getattr(self._settings, 'obs_launch_hidden', True))
         self._obs_launch_hidden_cb.setToolTip("OBS를 최소화 상태로 실행합니다.")
         rec_form.addRow("  최소화 상태로 실행", self._obs_launch_hidden_cb)
 
-        # 녹화 출력 폴더
-        rec_out_row = QHBoxLayout()
-        self._rec_output_dir_edit = QLineEdit(getattr(self._settings, 'obs_recording_output_dir', ''))
-        self._rec_output_dir_edit.setPlaceholderText("비워두면 OBS 설정 자동 감지 (~/Videos 폴백)")
-        rec_browse_btn = QPushButton("찾기...")
-        rec_browse_btn.setFixedWidth(60)
-        rec_browse_btn.clicked.connect(self._browse_recording_dir)
-        rec_out_row.addWidget(self._rec_output_dir_edit)
-        rec_out_row.addWidget(rec_browse_btn)
-        rec_form.addRow("녹화 출력 폴더", rec_out_row)
-
         # 기타
         self._obs_watch_output_cb = QCheckBox()
         self._obs_watch_output_cb.setChecked(getattr(self._settings, 'obs_watch_output_dir', True))
-        rec_form.addRow("출력 폴더 감시", self._obs_watch_output_cb)
+        rec_form.addRow("사이드바에 녹화 파일 표시", self._obs_watch_output_cb)
 
         self._rec_hold_spin = QSpinBox()
-        self._rec_hold_spin.setRange(100, 2000)
+        self._rec_hold_spin.setRange(500, 2000)
         self._rec_hold_spin.setSingleStep(100)
         self._rec_hold_spin.setSuffix(" ms")
         self._rec_hold_spin.setValue(getattr(self._settings, 'recording_hold_threshold_ms', 800))
         self._rec_hold_spin.setToolTip("게임패드 버튼을 이 시간 이상 홀드하면 녹화 토글")
         rec_form.addRow("홀드 임계값", self._rec_hold_spin)
 
-        # OBS에서 불러오기 버튼
-        obs_import_btn = QPushButton("OBS에서 불러오기")
-        obs_import_btn.setToolTip("로컬 OBS 설정에서 포트/비밀번호/실행 경로를 자동으로 읽어옵니다.")
-        obs_import_btn.clicked.connect(self._import_obs_config)
-        rec_form.addRow(obs_import_btn)
+        self._obs_reconnect_btn = QPushButton("다시 연결")
+        self._obs_reconnect_btn.setEnabled(self._obs_reconnect is not None)
+        self._obs_reconnect_btn.clicked.connect(self._reconnect_obs)
+        rec_form.addRow(self._obs_reconnect_btn)
+        self._obs_info_note = QLabel()
+        self._obs_info_note.setWordWrap(True)
+        rec_form.addRow(self._obs_info_note)
+        self.refresh_obs_info()
 
         right_col.addWidget(rec_group)
         right_col.addStretch()
@@ -320,35 +296,22 @@ class SidebarSettingsDialog(QDialog):
         if chosen:
             self._ss_save_dir_edit.setText(chosen)
 
-    def _browse_recording_dir(self) -> None:
-        current = self._rec_output_dir_edit.text().strip()
-        start = current if current and os.path.isdir(current) else str(
-            __import__('pathlib').Path.home() / "Videos"
-        )
-        chosen = QFileDialog.getExistingDirectory(self, "녹화 출력 폴더 선택", start)
-        if chosen:
-            self._rec_output_dir_edit.setText(chosen)
+    @Slot()
+    def refresh_obs_info(self, *_args) -> None:
+        """Display the manager's observation only; viewing does not launch or connect."""
+        info = self._obs_info_provider() if self._obs_info_provider else {}
+        state = info.get("state", "obs_offline")
+        self._obs_status_label.setText({"idle": "연결됨", "recording": "녹화 중",
+                                        "connecting": "연결 중"}.get(state, "연결 안 됨"))
+        self._obs_exe_label.setText(info.get("exe_path") or "미확인")
+        self._obs_directory_label.setText(info.get("output_dir") or "미확인")
+        self._obs_reconnect_btn.setEnabled(self._obs_reconnect is not None and state != "connecting")
+        self._obs_info_note.setText(info.get("error") or "녹화 품질과 저장 폴더는 OBS에서 설정합니다.")
 
-    def _browse_obs_exe(self) -> None:
-        current = self._obs_exe_edit.text().strip()
-        start_dir = os.path.dirname(current) if current and os.path.isfile(current) else "C:\\Program Files"
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "OBS 실행 파일 선택", start_dir, "실행 파일 (*.exe)"
-        )
-        if chosen:
-            self._obs_exe_edit.setText(chosen)
-
-    def _import_obs_config(self) -> None:
-        try:
-            from src.recording.obs_config_reader import read_obs_config
-            cfg = read_obs_config()
-            self._obs_port_spin.setValue(cfg["port"])
-            self._obs_password_edit.setText(cfg["password"])
-            if cfg["exe_path"]:
-                self._obs_exe_edit.setText(cfg["exe_path"])
-        except Exception as e:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "OBS 설정 불러오기", f"OBS 설정을 읽지 못했습니다:\n{e}")
+    def _reconnect_obs(self) -> None:
+        if self._obs_reconnect:
+            self._obs_reconnect()
+        self.refresh_obs_info()
 
     def _capture_trigger_key(self) -> None:
         """'설정...' 버튼 클릭 시 다음 키 입력을 트리거로 등록합니다."""
@@ -410,12 +373,7 @@ class SidebarSettingsDialog(QDialog):
         gs.screenshot_trigger_vk = self._ss_trigger_vk
         # Recording (OBS)
         gs.recording_enabled = self._rec_enabled_cb.isChecked()
-        gs.obs_host = self._obs_host_edit.text().strip() or "localhost"
-        gs.obs_port = self._obs_port_spin.value()
-        gs.obs_password = self._obs_password_edit.text()
-        gs.obs_exe_path = self._obs_exe_edit.text().strip()
         gs.obs_launch_hidden = self._obs_launch_hidden_cb.isChecked()
-        gs.obs_recording_output_dir = self._rec_output_dir_edit.text().strip()
         gs.obs_watch_output_dir = self._obs_watch_output_cb.isChecked()
         gs.recording_hold_threshold_ms = self._rec_hold_spin.value()
         return gs

@@ -118,6 +118,14 @@ class OBSClient:
     def stop_record(self) -> bool:
         return self._request("StopRecord") is not None
 
+    def get_record_directory(self) -> Optional[str]:
+        response = self._request("GetRecordDirectory")
+        directory = response.get("responseData", {}).get("recordDirectory") if response else None
+        if not isinstance(directory, str) or not directory.strip():
+            self._last_error = self._last_error or "OBS 녹화 저장 폴더를 확인하지 못했습니다."
+            return None
+        return directory
+
     def get_record_status(self) -> Optional[dict]:
         """{'outputActive': bool, 'outputDuration': int}"""
         resp = self._request("GetRecordStatus")
@@ -245,7 +253,7 @@ class OBSClient:
         self._connected = False
         if close_status_code:
             if close_status_code == 4009:
-                self._last_error = f"인증 실패 (code {close_status_code}) — 사이드바 설정에서 OBS 비밀번호를 확인하세요."
+                self._last_error = f"인증 실패 (code {close_status_code}) — OBS의 WebSocket 설정을 확인한 뒤 다시 연결하세요."
             else:
                 self._last_error = f"연결 종료 (code {close_status_code}): {close_msg or ''}"
             logger.warning(
