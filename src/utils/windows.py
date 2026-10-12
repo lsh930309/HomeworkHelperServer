@@ -80,7 +80,7 @@ def _get_window_frame_rects(user32, hwnd):
     return outer, visible
 
 
-def get_visible_taskbar_work_area(screen_name: str, ignored_hwnd: int = 0):
+def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd: int = 0):
     """대상 모니터의 물리 RECT와 실제 보이는 작업 표시줄을 뺀 RECT를 반환합니다.
 
     rcWork는 전체 화면에서도 예약 영역을 유지하므로 표면의 실제 창을 확인합니다.
@@ -94,11 +94,10 @@ def get_visible_taskbar_work_area(screen_name: str, ignored_hwnd: int = 0):
         import win32con
         import win32gui
 
-        monitor = next(
-            (info["Monitor"] for handle, _dc, _rect in win32api.EnumDisplayMonitors()
-             if (info := win32api.GetMonitorInfo(handle))["Device"].casefold() == screen_name.casefold()),
-            None,
-        )
+        # Windows의 Qt는 모니터 크기만 DPI에 맞춰 축소하고 원점은 유지한다.
+        # QScreen.name()은 제품명일 수 있어 Win32 장치명과 비교하지 않는다.
+        monitor = next((rect for _handle, _dc, rect in win32api.EnumDisplayMonitors()
+                        if rect[:2] == monitor_origin), None)
         if monitor is None:
             return None
         left, top, right, bottom = monitor

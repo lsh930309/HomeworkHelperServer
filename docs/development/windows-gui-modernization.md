@@ -48,6 +48,8 @@ late callback을 직접 관련 자동 검증과 실제 Windows로 확인한다.
 커서 확인 타이머에서 영역을 다시 계산하며 별도 전체 화면 상태나 타이머를 저장하지 않는다.
 기존 높이 비율은 이 영역에 적용한다. Windows 물리 좌표는 해당 모니터의 Qt 논리 좌표로
 변환하고, OS 조회 실패 시 Qt가 제공하는 작업 영역을 사용한다.
+모니터는 표시 이름이 아닌 원점으로 연결한다. Windows에서는 Qt가 모니터 크기를 DPI에
+맞춰 변환하되 원점은 유지한다([Qt 좌표 계약](https://doc.qt.io/qt-6/highdpi.html#device-independent-screen-geometry)).
 
 | 검증 조건 | 기대 결과 |
 |---|---|

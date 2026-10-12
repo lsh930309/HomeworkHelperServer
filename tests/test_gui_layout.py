@@ -1934,13 +1934,13 @@ def test_sidebar_maps_native_taskbar_area_to_monitor_logical_coordinates(sidebar
 
 def test_sidebar_secondary_monitor_negative_origin_and_height_ratio(sidebar_layout, monkeypatch):
     _app, view, module = sidebar_layout
-    view._screen = SimpleNamespace(name=lambda: "SECONDARY", geometry=lambda: QRect(-1280, 100, 1280, 720),
-                                   availableGeometry=lambda: QRect(-1280, 100, 1280, 680))
+    view._screen = SimpleNamespace(name=lambda: "SECONDARY", geometry=lambda: QRect(-2560, 200, 1280, 720),
+                                   availableGeometry=lambda: QRect(-2560, 200, 1280, 680))
     view._data_manager.global_settings.sidebar_height_ratio = 0.5
     monkeypatch.setattr(module, "get_visible_taskbar_work_area", lambda *_args: ((-2560, 200, 0, 1640), (-2560, 200, 0, 1560)))
-    assert view._compute_geometry() == QRect(-280, 270, 280, 340)
+    assert view._compute_geometry() == QRect(-1560, 370, 280, 340)
     monkeypatch.setattr(module, "get_visible_taskbar_work_area", lambda *_args: None)
-    assert view._compute_geometry() == QRect(-280, 270, 280, 340)
+    assert view._compute_geometry() == QRect(-1560, 370, 280, 340)
 
 
 def test_sidebar_existing_cursor_poll_updates_height_but_not_running_slide(sidebar_layout, monkeypatch):
@@ -1995,8 +1995,8 @@ def test_native_taskbar_visibility_not_reserved_area(monkeypatch, taskbar, surfa
         GetWindow=lambda hwnd, _flag: 1 if hwnd == 2 else 0,
         GetWindowLong=lambda _hwnd, _index: 0,
     ))
-    assert windows.get_visible_taskbar_work_area("display", ignored_hwnd=2) == (monitor, expected)
-    assert windows.get_visible_taskbar_work_area("OTHER", ignored_hwnd=2) is None
+    assert windows.get_visible_taskbar_work_area((0, 0), ignored_hwnd=2) == (monitor, expected)
+    assert windows.get_visible_taskbar_work_area((1920, 0), ignored_hwnd=2) is None
 
 
 def test_native_taskbar_api_failure_returns_unavailable(monkeypatch):
@@ -2006,4 +2006,4 @@ def test_native_taskbar_api_failure_returns_unavailable(monkeypatch):
     monkeypatch.setitem(sys.modules, "win32api", SimpleNamespace(EnumDisplayMonitors=lambda: (_ for _ in ()).throw(OSError("unavailable"))))
     monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "win32con", SimpleNamespace())
-    assert windows.get_visible_taskbar_work_area("DISPLAY") is None
+    assert windows.get_visible_taskbar_work_area((0, 0)) is None

@@ -1116,10 +1116,10 @@ class SidebarWidget(QWidget):
         if screen is None:
             return QRect(0, 0, _SIDEBAR_WIDTH, 600)
         geo = screen.availableGeometry()
-        native = get_visible_taskbar_work_area(screen.name(), int(self.winId()))
+        logical = screen.geometry()
+        native = get_visible_taskbar_work_area((logical.left(), logical.top()), int(self.winId()))
         if native is not None:
             monitor, work = native
-            logical = screen.geometry()
             scale_x = logical.width() / (monitor[2] - monitor[0])
             scale_y = logical.height() / (monitor[3] - monitor[1])
             x1 = logical.left() + round((work[0] - monitor[0]) * scale_x)
