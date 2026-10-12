@@ -413,13 +413,104 @@ def test_real_directory_is_refreshed_before_each_record_request(isolated_obs):
     assert manager._client.calls[-1]==("record",)
 
 
-def test_directory_failure_prevents_recording_and_reports_error(isolated_obs):
+def test_directory_failure_does_not_interrupt_recording_control(isolated_obs):
     manager, launches = isolated_obs
     manager.prepare_for_startup(settings(True)); finish(manager)
     manager._client.directory=None
     manager.start_recording(); finish(manager)
-    assert not any(call[0]=="record" for call in manager._client.calls)
+    assert manager._client.calls[-1]==("record",)
+    assert manager.get_state()=="recording" and manager._client.is_connected()
+    assert manager.get_output_directory()=="" and manager.get_obs_info()["error"]
+
+
+@pytest.mark.parametrize("failure", ["launch", "config", "connect", "status"])
+def test_startup_control_failure_keeps_existing_file_directory(isolated_obs,monkeypatch,failure):
+    manager,launches=isolated_obs
+    if failure=="launch":
+        def fail(_self): raise PrivilegeServiceError("no elevated token")
+        monkeypatch.setattr(HostPrivilegeClient,"launch_obs",fail)
+    elif failure=="config":
+        def fail(): raise ValueError("WebSocket disabled")
+        monkeypatch.setattr(recording,"read_obs_connection",fail)
+    elif failure=="connect":
+        manager._client.connect_succeeds=False
+    else:
+        monkeypatch.setattr(manager._client,"get_record_status",lambda:None)
+    manager.prepare_for_startup(settings(True)); finish(manager)
     assert manager.get_state()=="obs_offline" and manager.get_last_error()
+    assert manager.get_output_directory()=="C:/Fixture/OBS"
+    assert not any(call[0]=="record" for call in manager._client.calls)
+
+
+def test_startup_file_lookup_failure_does_not_block_connection(isolated_obs,monkeypatch):
+    manager,launches=isolated_obs
+    def fail(): raise OSError("profile unreadable")
+    monkeypatch.setattr(recording,"read_obs_output_directory",fail)
+    manager.prepare_for_startup(settings(True)); finish(manager)
+    assert manager.get_state()=="idle" and len(launches)==1
+    assert manager.get_output_directory()=="C:/Fixture/OBS" and not manager.get_obs_info()["error"]
+
+
+def test_disabled_recording_still_reads_files_without_reconnect(isolated_obs):
+    manager,launches=isolated_obs
+    manager.prepare_for_startup(settings(False)); finish(manager)
+    assert manager.get_output_directory()=="C:/Fixture/OBS" and len(launches)==1
+    manager.reconnect(); finish(manager)
+    assert len(launches)==1 and manager.get_state()=="obs_offline"
+    assert not any(call[0]=="connect" for call in manager._client.calls)
+
+
+def test_successful_file_requery_clears_only_file_error(isolated_obs,monkeypatch):
+    import json
+    manager,_=isolated_obs
+    client=OBSClient(); replies={"valid":False}
+    def send(message):
+        request=json.loads(message)["d"]
+        client._on_message(ws,json.dumps({"op":7,"d":{
+            "requestId":request["requestId"],"requestType":request["requestType"],
+            "requestStatus":{"result":replies["valid"],"comment":"temporary folder failure"},
+            "responseData":{"recordDirectory":"C:/Fixture/OBS"}}}))
+    ws=SimpleNamespace(send=send,close=lambda:None)
+    client._ws=ws; client._identified=True
+    manager._client=client; manager._set_settings(settings(True)); manager._set_state("idle")
+    manager.refresh_info(); finish(manager)
+    assert "temporary folder failure" in manager.get_obs_info()["error"]
+    replies["valid"]=True
+    manager.refresh_info(); finish(manager)
+    assert manager.get_obs_info()["output_dir"]=="C:/Fixture/OBS"
+    assert manager.get_state()=="idle" and not manager.get_obs_info()["error"]
+    # A file read cannot dismiss an unresolved privileged launch failure.
+    manager._launch_error="no elevated token"
+    manager.refresh_info(); finish(manager)
+    assert manager.get_obs_info()["error"]=="no elevated token"
+    manager.apply_settings(settings(False)); finish(manager)
+    manager.refresh_info(); finish(manager)
+    assert manager.get_state()=="obs_offline" and not manager.get_obs_info()["error"]
+    manager.shutdown()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Verify host Widgets on real Windows")
+@pytest.mark.parametrize("control,files", [(False,False),(False,True),(True,False),(True,True)])
+def test_sidebar_file_visibility_is_independent_of_recording_control(control,files):
+    from PySide6.QtWidgets import QApplication
+    from src.gui.sidebar.sidebar_widget import SidebarWidget
+    app=QApplication.instance() or QApplication([])
+    choices=SimpleNamespace(recording_enabled=control,obs_watch_output_dir=files)
+    view=SimpleNamespace(_data_manager=SimpleNamespace(global_settings=choices),
+        _rec_state="obs_offline",_get_recording_error=lambda:"",_get_recording_elapsed=None,
+        _on_rec_start_clicked=lambda:None,_on_rec_stop_clicked=lambda:None,_on_rec_connect_clicked=lambda:None)
+    view._recording_section=SidebarWidget._build_recording_section(view)
+    view._update_rec_ui=lambda:SidebarWidget._update_rec_ui(view)
+    SidebarWidget._refresh_recording_section(view)
+    assert view._recording_section.isHidden() is not (control or files)
+    assert view._rec_thumb_grid_container.isHidden() is not files
+    assert view._rec_status_label.isHidden() is not control
+    assert view._rec_connect_btn.isHidden() is not control
+    view._rec_state="idle"; view._update_rec_ui()
+    assert view._rec_start_btn.isHidden() is not control
+    assert view._rec_connect_btn.isHidden()
+    view._recording_section.deleteLater()
+    app.processEvents()
 
 
 def test_viewing_settings_only_reads_and_does_not_reopen_obs(isolated_obs):
@@ -520,12 +611,24 @@ def test_obs_dialog_saves_only_app_choices_and_preserves_retired_db_values(tmp_p
         db.execute(text("ALTER TABLE global_settings ADD COLUMN obs_port INTEGER DEFAULT 3999"))
     values=GlobalSettings(recording_enabled=True,obs_launch_hidden=False,obs_watch_output_dir=False,
                           recording_hold_threshold_ms=900,screenshot_save_dir="C:/Fixture/Captures")
-    info={"state":"idle","exe_path":"C:/Installed/obs64.exe","output_dir":"C:/OBS/Recordings"}
+    info={"state":"idle","enabled":True,"exe_path":"C:/Installed/obs64.exe","output_dir":"C:/OBS/Recordings"}
     reconnects=[]
     dialog=SidebarSettingsDialog(values,obs_info_provider=lambda:info,obs_reconnect=lambda:reconnects.append(True))
     assert not reconnects
     assert dialog._obs_directory_label.text()=="C:/OBS/Recordings"
     assert dialog._obs_status_label.text()=="연결됨"
+    assert dialog._obs_reconnect_btn.isEnabled()
+    dialog._rec_enabled_cb.setChecked(False)
+    assert not dialog._obs_reconnect_btn.isEnabled()
+    dialog._reconnect_obs()
+    assert not reconnects and "저장" in dialog._obs_reconnect_btn.toolTip()
+    dialog._rec_enabled_cb.setChecked(True)
+    info["enabled"]=False
+    dialog.refresh_obs_info()
+    assert not dialog._obs_reconnect_btn.isEnabled()  # Unsaved enabling is not runtime enabling.
+    info["enabled"]=True
+    dialog.refresh_obs_info()
+    assert dialog._obs_reconnect_btn.isEnabled()
     assert not hasattr(dialog,"_obs_port_spin") and not hasattr(dialog,"_rec_output_dir_edit")
     updated=dialog.get_updated_settings()
     client=object.__new__(ApiClient); client.base_url="http://injected.invalid"

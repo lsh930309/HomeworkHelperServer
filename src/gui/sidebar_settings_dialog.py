@@ -269,6 +269,7 @@ class SidebarSettingsDialog(QDialog):
         self._obs_info_note = QLabel()
         self._obs_info_note.setWordWrap(True)
         rec_form.addRow(self._obs_info_note)
+        self._rec_enabled_cb.toggled.connect(self.refresh_obs_info)
         self.refresh_obs_info()
 
         right_col.addWidget(rec_group)
@@ -305,11 +306,17 @@ class SidebarSettingsDialog(QDialog):
                                         "connecting": "연결 중"}.get(state, "연결 안 됨"))
         self._obs_exe_label.setText(info.get("exe_path") or "미확인")
         self._obs_directory_label.setText(info.get("output_dir") or "미확인")
-        self._obs_reconnect_btn.setEnabled(self._obs_reconnect is not None and state != "connecting")
+        saved_enabled = info.get("enabled", False)
+        selected_enabled = self._rec_enabled_cb.isChecked()
+        self._obs_reconnect_btn.setEnabled(self._obs_reconnect is not None and saved_enabled
+                                          and selected_enabled and state != "connecting")
+        self._obs_reconnect_btn.setToolTip(
+            "녹화 기능 사용을 저장한 뒤 다시 연결하세요." if not (saved_enabled and selected_enabled) else ""
+        )
         self._obs_info_note.setText(info.get("error") or "녹화 품질과 저장 폴더는 OBS에서 설정합니다.")
 
     def _reconnect_obs(self) -> None:
-        if self._obs_reconnect:
+        if self._obs_reconnect and self._obs_reconnect_btn.isEnabled():
             self._obs_reconnect()
         self.refresh_obs_info()
 

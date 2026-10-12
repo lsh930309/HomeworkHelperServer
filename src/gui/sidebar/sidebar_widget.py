@@ -1300,6 +1300,9 @@ class SidebarWidget(QWidget):
     def _update_rec_ui(self) -> None:
         state = getattr(self, '_rec_state', 'obs_offline')
         elapsed = getattr(self, '_rec_elapsed_sec', 0)
+        gs = getattr(self._data_manager, 'global_settings', None)
+        control_enabled = bool(getattr(gs, 'recording_enabled', False))
+        self._rec_status_label.setVisible(control_enabled)
         if state == "recording":
             if self._get_recording_elapsed:
                 elapsed = max(0, int(self._get_recording_elapsed()))
@@ -1308,14 +1311,14 @@ class SidebarWidget(QWidget):
             hrs, mins = divmod(mins, 60)
             self._rec_status_label.setText(f"REC  {hrs:02d}:{mins:02d}:{secs:02d}")
             status_style = "error"
-            self._rec_stop_btn.show()
+            self._rec_stop_btn.setVisible(control_enabled)
             self._rec_start_btn.hide()
             self._rec_connect_btn.hide()
         elif state == "idle":
             self._rec_status_label.setText("연결됨")
             status_style = "success"
             self._rec_stop_btn.hide()
-            self._rec_start_btn.show()
+            self._rec_start_btn.setVisible(control_enabled)
             self._rec_connect_btn.hide()
         elif state == "connecting":
             self._rec_status_label.setText("연결 중")
@@ -1328,7 +1331,7 @@ class SidebarWidget(QWidget):
             status_style = "default"
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
-            self._rec_connect_btn.show()
+            self._rec_connect_btn.setVisible(control_enabled)
             # 마지막 연결 실패 이유를 툴팁으로 표시
             err = self._get_recording_error() if self._get_recording_error else ""
             self._rec_status_label.setToolTip(err if err else "")
@@ -1357,10 +1360,12 @@ class SidebarWidget(QWidget):
             self._start_recording_callback()
 
     def _refresh_recording_section(self) -> None:
-        """recording_enabled 설정에 따라 섹션 show/hide."""
+        """Recording controls and the existing-file gallery have separate switches."""
         gs = getattr(self._data_manager, 'global_settings', None)
         enabled = getattr(gs, 'recording_enabled', False) if gs else False
-        self._recording_section.setVisible(enabled)
+        files_enabled = getattr(gs, 'obs_watch_output_dir', True) if gs else False
+        self._recording_section.setVisible(enabled or files_enabled)
+        self._rec_thumb_grid_container.setVisible(files_enabled)
         self._update_rec_ui()
 
     def _refresh_screenshot_section(self) -> None:

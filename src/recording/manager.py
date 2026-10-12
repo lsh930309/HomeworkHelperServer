@@ -92,6 +92,9 @@ class RecordingManager:
 
     def reconnect(self) -> None:
         """사이드바 재연결 버튼 전용 — 연결만 시도하고 녹화는 시작하지 않는다."""
+        with self._lock:
+            if not self._settings.get("enabled"):
+                return
         self._try_connect_async(then_record=False, launch_requested=True)
 
     def refresh_info(self) -> None:
@@ -105,7 +108,10 @@ class RecordingManager:
         with self._lock:
             info = dict(self._info)
             info["state"] = self._state
-        info["error"] = info.get("error") or self.get_last_error()
+            info["enabled"] = self._settings.get("enabled", False)
+        # A completed file lookup owns its own error. An old request error on a
+        # healthy connection must not turn a successful lookup back into failure.
+        info["error"] = info.get("error") or self._launch_error
         return info
 
     def get_output_directory(self) -> str:
@@ -169,6 +175,7 @@ class RecordingManager:
         self._set_state("recording" if active else "idle", elapsed_seconds=elapsed_seconds, from_obs=True)
 
     def _on_connection_closed(self) -> None:
+        self._launch_error = self._client.get_last_error()
         self._set_state("obs_offline")
 
     def _try_connect_async(self, then_record: bool = False, launch_requested: bool = False,
@@ -197,19 +204,36 @@ class RecordingManager:
         with self._lock:
             return dict(self._settings) if self._connect_thread is threading.current_thread() else None
 
+    def _read_info(self) -> None:
+        """Observe file information independently of OBS process/control readiness."""
+        executable, directory, errors = "", "", []
+        try:
+            executable = find_obs_executable()
+        except (OSError, ValueError) as error:
+            errors.append(str(error))
+        try:
+            directory = (self._client.get_record_directory() if self._client.is_connected()
+                         else read_obs_output_directory())
+            if directory is None:
+                raise OSError(self._client.get_last_error())
+        except (OSError, ValueError) as error:
+            directory = ""
+            errors.append(str(error))
+        if errors:
+            logger.warning("OBS 정보 조회 실패: %s", "; ".join(errors))
+        self._publish_info(exe_path=executable, output_dir=directory, error="; ".join(errors))
+
     def _connect_worker(self, then_record: bool, launch_requested: bool,
                         connect_requested: Optional[bool], s: dict, read_only: bool) -> None:
         try:
             if not read_only:
                 self._launch_error = ""
-            if read_only:
-                executable = find_obs_executable()
-                directory = (self._client.get_record_directory() if self._client.is_connected()
-                             else read_obs_output_directory())
-                if directory is None:
-                    raise OSError(self._client.get_last_error())
-                self._publish_info(exe_path=executable, output_dir=directory)
-                return
+            if read_only or not self._client.is_connected():
+                self._read_info()
+                if read_only:
+                    return
+                if self._work_settings() is None:
+                    return
             if launch_requested:
                 from src.host_service.client import HostPrivilegeClient, PrivilegeServiceError
                 try:
@@ -248,7 +272,6 @@ class RecordingManager:
                     self._set_state("connecting")
                     logger.info("OBS WebSocket 자동 연결 준비")
                     connection = read_obs_connection()
-                    executable = find_obs_executable()
                     ok = False
                     for attempt in range(2):
                         if self._work_settings() != s:
@@ -261,12 +284,12 @@ class RecordingManager:
                             time.sleep(3)
                     if self._work_settings() != s:
                         continue
-                    # Read OBS's real folder before status publication or a new record command.
+                    # Files are observed before a record request, but their lookup
+                    # outcome cannot stop an otherwise healthy control connection.
                     if ok:
-                        directory = self._client.get_record_directory()
-                        ok = directory is not None
-                        if ok:
-                            self._publish_info(exe_path=executable, output_dir=directory)
+                        self._read_info()
+                    if self._work_settings() != s:
+                        continue
                     # The WebSocket thread applies this response before subsequent record events.
                     if ok:
                         status = self._client.get_record_status()
@@ -280,7 +303,7 @@ class RecordingManager:
                                 raise OSError(self._client.get_last_error())
                     else:
                         logger.warning("OBS 연결 또는 녹화 상태 확인 실패")
-                        self._publish_info(exe_path=executable, output_dir="")
+                        self._launch_error = self._client.get_last_error()
                         self._client.disconnect()
                         self._set_state("obs_offline")
                 # A settings callback delivered while publishing the result is consumed by this worker.
@@ -292,7 +315,6 @@ class RecordingManager:
         except (OSError, ValueError) as error:
             if self._work_settings() is not None:
                 logger.warning("OBS 연동 준비 실패: %s", error)
-                self._publish_info(exe_path="", output_dir="", error=str(error))
                 if not read_only:
                     self._launch_error = str(error)
                     self._client.disconnect()
