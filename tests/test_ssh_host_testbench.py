@@ -1,7 +1,44 @@
+import base64
 import json
+import subprocess
 from pathlib import Path
 
 from tools import ssh_host_testbench as tb
+
+
+def test_remote_runner_sends_one_program_with_strict_utf8(monkeypatch):
+    captured = {}
+
+    def run(command, **kwargs):
+        captured.update(command=command, kwargs=kwargs)
+        return subprocess.CompletedProcess(command, 1, '', 'blocked')
+    monkeypatch.setattr(tb.subprocess, 'run', run)
+    result = tb.run_remote_powershell(
+        tb.SSHConfig('100.64.0.1', 'tester', 22, None),
+        "throw '준비 실패'\nWrite-Output 'must not continue'", timeout=10,
+    )
+    assert result.returncode == 1
+    program = base64.b64decode(captured['command'][-1]).decode('utf-16-le')
+    assert captured['command'][-2] == '-EncodedCommand'
+    assert '[scriptblock]::Create([Console]::In.ReadToEnd())' in program
+    assert captured['kwargs']['input'] == "throw '준비 실패'\nWrite-Output 'must not continue'"
+    assert '$ErrorActionPreference = \'Stop\'' in program
+    assert 'exit 1' in program
+    assert captured['kwargs']['encoding'] == 'utf-8'
+    assert captured['kwargs']['errors'] == 'strict'
+    assert 'shell' not in captured['kwargs']
+
+
+def test_large_remote_program_stays_in_stdin(monkeypatch):
+    captured = {}
+    def run(command, **kwargs):
+        captured.update(command=command, kwargs=kwargs)
+        return subprocess.CompletedProcess(command, 0, '', '')
+    monkeypatch.setattr(tb.subprocess, 'run', run)
+    script = "Write-Output '한글'\n" * 2000
+    tb.run_remote_powershell(tb.SSHConfig('100.64.0.1', 'tester', 22, None), script, timeout=10)
+    assert captured['kwargs']['input'] == script
+    assert len(captured['command'][-1]) < 4096
 
 
 def test_dry_run_writes_agent_report_and_manual_exclusions(tmp_path, capsys):
