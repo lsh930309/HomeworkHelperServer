@@ -61,17 +61,26 @@ Git 추적 파일이 디스크에 없더라도 감사 대상에 포함하며, �
 
 ## 공통 입력과 결과
 
-`host_operations.py --help`로 실제 옵션을 확인한다. `--host`, `--repo`는 필수이며 `--user`,
+`host_operations.py --help`로 실제 옵션을 확인한다. `--host`는 필수이며 `--user`,
 `--identity`, `--ssh-port`로 기존 SSH 인증을 사용한다. Windows 빌드 checkout에는 기존 `.venv`가
 필요하다. `--computer`와 `--owner` 기본값은 `LSH_DESKTOP`, `lsh93`이고 실제 컴퓨터·SID와 대조한다.
 설치 위치는 권장 기본 `C:\Program Files\HomeworkHelper`만 지원한다.
 
-아래 `<Windows 작업 checkout>`에는 실제 빌드용 절대 경로를 넣는다. 설치 폴더를 지정하지 않는다.
-날짜별 소스 사본을 새로 만들지 않고 확인된 작업 checkout을 재사용한다.
+### lsh-desktop의 고정 작업 저장소
+
+제품 소스 준비·빌드·설치는 기존 `C:\VSCode\Projects\HomeworkHelperServer` 한 곳을 사용한다.
+`host_operations.py`의 `WINDOWS_REPO`가 실행 경로를 소유하며 `--repo` 선택 옵션은 제공하지 않는다.
+다른 checkout·Temp 저장소를 만들거나 대체 경로로 자동 전환하지 않는다. 기존 저장소 또는 `.venv`가
+없으면 중단하여 원인을 확인한다. 설치 폴더 `C:\Program Files\HomeworkHelper`와 구분한다.
+
+`build.py`는 이 저장소에서 실행하며 로컬 `build.version.json`, 최종 `release/`와
+`release/archives/`를 계속 사용한다. 작업 저장소를 이전할 때는 기존 변경·로컬 Git 이력·버전·패키지·
+사용자 설정·서명을 먼저 확인하고 보존한다. 같은 상대 경로의 파일은 내용이 같을 때만 합치며 다른
+내용을 조용히 덮어쓰지 않는다. 이전 자료의 검증 완료 후에만 폐기 저장소를 제거한다.
 
 ```bash
 ./.venv/bin/python tools/host_operations.py inspect \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>'
+  --host lsh-desktop --user lsh93
 ```
 
 각 실행은 `artifacts/host-operations/<UTC 시각-실행 ID>/`에 `result.json`, `stdout.log`, `stderr.log`를
@@ -98,7 +107,7 @@ API가 꺼져 있거나 DB가 손상되면 각각의 관측 결과로 반환한�
 
 ```bash
 ./.venv/bin/python tools/host_operations.py logs \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>' --log-lines 80 --contains 'process_scan'
+  --host lsh-desktop --user lsh93 --log-lines 80 --contains 'process_scan'
 ```
 
 inspect 결과에는 로컬 HEAD·실제 공개 브랜치 HEAD와 Windows source를 구분한다. 서비스 실행
@@ -114,15 +123,16 @@ service.log가 있다고 추측하지 않는다.
 
 ```bash
 ./.venv/bin/python tools/host_operations.py prepare-source \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>'
+  --host lsh-desktop --user lsh93
 ./.venv/bin/python tools/host_operations.py build \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>'
+  --host lsh-desktop --user lsh93
 ./.venv/bin/python tools/host_operations.py install \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>'
+  --host lsh-desktop --user lsh93
 ```
 
 로컬의 깨끗한 브랜치 HEAD와 실제 `origin` 브랜치의 공개 HEAD가 같아야 한다. `prepare-source`는
-Windows에서 같은 브랜치를 fetch하고 정확한 커밋으로 이동한다. 기존 변경을 덮어쓰지 않는다.
+고정 Windows 저장소에서 같은 브랜치를 fetch하고 `FETCH_HEAD`가 대상 커밋과 같은지 확인한 뒤
+`checkout --detach <커밋>`으로 이동한다. 단순 pull·merge로 바꾸지 않고 기존 변경을 덮어쓰지 않는다.
 자동 push나 Git bundle 예외는 선택하지 않는다. build/install도 공개 소스·Windows HEAD 일치를 확인한다.
 `--commit`은 현재 HEAD를 명시할 때 사용하며 다른 커밋을 조용히 배포하지 않는다.
 install의 release ID는 Windows의 `build.py` 버전 계산을 그대로 사용한다. 운영 도구가 파일명이나
@@ -167,10 +177,11 @@ TokenStore 주입을 확인한 뒤 실행한다. 운영 Keychain은 fixture로 �
 
 ```bash
 ./.venv/bin/python tools/host_operations.py verify \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>'
+  --host lsh-desktop --user lsh93
 ```
 
-고정 도구·관련 테스트만 Windows 임시 폴더에 전달한다. AppData를 격리하고 실제 Windows PowerShell에서
+고정 도구·관련 테스트만 Windows 임시 폴더에 전달한다. 이 폴더는 제품 빌드·배포 저장소가 아닌
+격리 테스트 fixture이며 제품 패키지를 만들거나 설치하지 않는다. AppData를 격리하고 실제 Windows PowerShell에서
 OS 조작을 모의한 설치 흐름을 검사한다. 운영 앱·DB·서비스·작업·OBS는 변경하지 않는다. 테스트 폴더는 제거한다.
 실제 설치/UAC/다음 로그온/녹화 성공을 증명하는 검사가 아니다. 설치 패키지의 API 시험은 기존
 ssh_host_testbench.py를 사용하며 자세한 격리는 SSH 진단 문서가 소유한다.
@@ -184,7 +195,7 @@ Moonlight 연결은 요청받았을 때 제품의 Moonlight ON을 사용한다.
 
 ```bash
 ./.venv/bin/python tools/host_operations.py desktop \
-  --host lsh-desktop --user lsh93 --repo '<Windows 작업 checkout>' --duration 30
+  --host lsh-desktop --user lsh93 --duration 30
 ```
 
 로그인 사용자 세션·GUI 의존성이 필요하다. 실패 시 SSH의 빈 창 목록을 실제 창 부재로 해석하지 않는다.

@@ -139,6 +139,7 @@ switch ($Command) {
             [IO.File]::WriteAllText($Destination,$File.Value,[Text.UTF8Encoding]::new($false))
         }
         $Log = Join-Path $Repo 'artifacts/host-operations-tests.log'
+        $null = New-Item (Split-Path $Log) -ItemType Directory -Force
         $Variables = @('APPDATA','LOCALAPPDATA','HH_TEST_APPDATA_DIR')
         $Previous = @{}
         foreach ($Name in $Variables) { $Previous[$Name]=[Environment]::GetEnvironmentVariable($Name); [Environment]::SetEnvironmentVariable($Name,(Join-Path $Root 'isolated-appdata')) }

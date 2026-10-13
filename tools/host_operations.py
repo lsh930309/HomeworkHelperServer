@@ -13,6 +13,7 @@ import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+WINDOWS_REPO = r"C:\VSCode\Projects\HomeworkHelperServer"
 sys.path.insert(0, str(ROOT))
 from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
 
@@ -56,7 +57,7 @@ def source_state() -> dict:
 def remote_script(args, commit: str = "", branch: str = "") -> str:
     script = (ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
     values = {
-        "Command": args.command, "Repo": args.repo, "Owner": args.owner,
+        "Command": args.command, "Repo": WINDOWS_REPO, "Owner": args.owner,
         "ExpectedComputer": args.computer, "Commit": commit, "Branch": branch,
         "Bump": args.bump,
         "LogLines": str(args.log_lines), "Contains": args.contains,
@@ -74,13 +75,12 @@ def remote_script(args, commit: str = "", branch: str = "") -> str:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "install", "desktop", "verify"))
     p.add_argument("--host", required=True)
     p.add_argument("--user")
     p.add_argument("--ssh-port", type=int, default=22)
     p.add_argument("--identity")
-    p.add_argument("--repo", required=True, help="Windows build checkout (absolute path)")
     p.add_argument("--owner", default="lsh93")
     p.add_argument("--computer", default="LSH_DESKTOP")
     p.add_argument("--commit", help="Published local HEAD (defaults to current HEAD)")

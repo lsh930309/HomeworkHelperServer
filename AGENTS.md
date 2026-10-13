@@ -47,6 +47,8 @@
   [빌드 가이드](docs/guides/build-guide.md)를 반드시 읽는다.
 - lsh-desktop의 Windows 패키지 설치·배포 전에는
   [Windows 패키지 설치 가이드](docs/guides/windows-package-install-guide.md)도 반드시 읽는다.
+- lsh-desktop의 제품 소스 준비·빌드·설치는 [고정 작업 저장소 계약](docs/guides/operations-guide.md#lsh-desktop의-고정-작업-저장소)을 따른다.
+  임시 checkout·별도 후보 저장소로 우회하지 않는다. 데이터와 자격 증명을 격리한 테스트 fixture는 제품 배포 경로와 구분한다.
 - 각 대상 환경에서 `python build.py`를 실행하는 것이 기본 절차다. 스크립트가 소유하는
   빌드·서명·패키징·버전 저장·이전 산출물 보관·중간 파일 정리 흐름을 따로 재구성하지 않는다.
 - 기본 산출물을 별도 후보 폴더에 복제하거나 다른 환경으로 모으고, 임의 ZIP으로 다시

@@ -32,6 +32,7 @@ Windows Setup의 lsh-desktop 적용 절차는 [패키지 설치 가이드](windo
 
 배포가 승인된 작업은 관련 검증·커밋·작업 브랜치 푸시를 완료한다. 공개 커밋과 Windows 빌드
 checkout을 맞추는 명령은 [공용 운영 도구](operations-guide.md#소스-준비빌드설치)를 사용한다.
+lsh-desktop의 고정 저장소·버전·산출물 위치는 [운영 도구의 작업 저장소 계약](operations-guide.md#lsh-desktop의-고정-작업-저장소)을 따른다.
 기존 작업 트리의 변경을 덮어쓰거나, 원격보다 앞선 소스를 임의 Git bundle로 전달하지 않는다.
 사용자가 명시한 로컬 배포 예외만 별도로 기록한다.
 

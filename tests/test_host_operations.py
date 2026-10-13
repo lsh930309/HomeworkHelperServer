@@ -63,10 +63,10 @@ def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_pat
     monkeypatch.setattr(ops, "run_remote_powershell", remote)
     monkeypatch.setattr(ops, "published_commit", lambda _: pytest.fail("inspect must not publish"))
     monkeypatch.setattr(ops, "source_state", lambda: {"published_head": None})
-    assert ops.main(["inspect", "--host", "test.invalid", "--repo", r"C:\test's repo",
+    assert ops.main(["inspect", "--host", "test.invalid",
                      "--report-root", str(tmp_path)]) == 0
     assert "-Command 'inspect'" in captured["script"]
-    assert "-Repo 'C:\\test''s repo'" in captured["script"]
+    assert "-Repo 'C:\\VSCode\\Projects\\HomeworkHelperServer'" in captured["script"]
     assert json.loads(capsys.readouterr().out)["result"]["api"]["health"]["error"] == "URLError"
 
 
@@ -77,7 +77,7 @@ def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp
         return subprocess.CompletedProcess([], 1, "", "준비 실패")
     monkeypatch.setattr(ops, "run_remote_powershell", remote)
     monkeypatch.setattr(ops, "source_state", lambda: {})
-    assert ops.main(["inspect", "--host", "test.invalid", "--repo", r"C:\test",
+    assert ops.main(["inspect", "--host", "test.invalid",
                      "--report-root", str(tmp_path)]) == 1
     assert len(calls) == 1
     assert "준비 실패" in capsys.readouterr().err
@@ -95,7 +95,7 @@ def test_transport_timeout_has_a_failure_report_and_is_not_retried(monkeypatch, 
         calls.append(args)
         raise subprocess.TimeoutExpired(["ssh"], 20, output=stdout, stderr=stderr)
     monkeypatch.setattr(ops, "run_remote_powershell", remote)
-    assert ops.main(["logs", "--host", "test.invalid", "--repo", r"C:\test",
+    assert ops.main(["logs", "--host", "test.invalid",
                      "--report-root", str(tmp_path)]) == 1
     report = next(tmp_path.glob("*/result.json"))
     assert json.loads(report.read_text())["error"] == "SSH 작업 응답 시간 초과"
@@ -103,6 +103,16 @@ def test_transport_timeout_has_a_failure_report_and_is_not_retried(monkeypatch, 
         expected = captured.encode("utf-8") if isinstance(captured, str) else captured or b""
         assert (report.parent / name).read_bytes() == expected
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("command", ["prepare-source", "build", "install"])
+def test_update_cannot_select_a_temporary_or_alternative_checkout(command, monkeypatch, tmp_path):
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *a, **kw: pytest.fail("must reject before SSH"))
+    with pytest.raises(SystemExit) as error:
+        ops.main([command, "--host", "test.invalid", "--repo", r"C:\Temp\candidate",
+                  "--report-root", str(tmp_path)])
+    assert error.value.code == 2
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("abbreviation", [4, 7, 12])

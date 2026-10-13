@@ -18,7 +18,8 @@ DB 복구는 [데이터 안전](../data-safety-policy.md)을 따른다.
 ## 1. 기존 설치본을 중지하기 전 준비
 
 공용 prepare-source/build/install 명령은 운영 도구 가이드의 사용법을 따른다. 임시 설치 스크립트를
-날짜·커밋별로 복제하지 않는다. 공개 커밋과 깨끗한 Windows checkout을 확인하고 build.py의 release를
+날짜·커밋별로 복제하지 않는다. [고정 작업 저장소](operations-guide.md#lsh-desktop의-고정-작업-저장소)의
+공개 커밋과 깨끗한 Windows checkout을 확인하고 build.py의 release를
 그대로 사용한다. 소스가 GitHub에 공개되지 않았거나 대상 커밋이 다르면 적용하지 않는다.
 
 Setup 서명, Portable CRC와 고유 제품 payload를 확인한다. 운영 DB/API 정상 준비, 열린 게임 세션,
