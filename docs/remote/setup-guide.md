@@ -80,9 +80,11 @@ Source: `clients/macos`
 
 ```bash
 swift build --package-path clients/macos
-./.venv/bin/python tools/package_macos_remote_app.py
-open dist/macos/HomeworkHelperRemote.app
 ```
+
+Release packages are built on that Mac through `python build.py`. Read the
+[build guide](../guides/build-guide.md) first; do not call the internal packaging
+helper or manually assemble a deployment bundle.
 
 Primary UX contract:
 
