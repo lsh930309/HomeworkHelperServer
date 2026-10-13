@@ -83,14 +83,52 @@ def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp
     assert "준비 실패" in capsys.readouterr().err
 
 
-def test_transport_timeout_has_a_failure_report_and_is_not_retried(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("stdout,stderr", [
+    (None, None),
+    ("한글 출력", "진단 오류"),
+    ("한글 출력".encode("utf-8"), "진단 오류".encode("utf-8")),
+    (b"partial UTF-8: \xed\x95", b"error: \xec"),
+])
+def test_transport_timeout_has_a_failure_report_and_is_not_retried(monkeypatch, tmp_path, capsys, stdout, stderr):
+    calls = []
     def remote(*args, **kwargs):
-        raise subprocess.TimeoutExpired(["ssh"], 20)
+        calls.append(args)
+        raise subprocess.TimeoutExpired(["ssh"], 20, output=stdout, stderr=stderr)
     monkeypatch.setattr(ops, "run_remote_powershell", remote)
     assert ops.main(["logs", "--host", "test.invalid", "--repo", r"C:\test",
                      "--report-root", str(tmp_path)]) == 1
     report = next(tmp_path.glob("*/result.json"))
     assert json.loads(report.read_text())["error"] == "SSH 작업 응답 시간 초과"
+    for name, captured in (("stdout.log", stdout), ("stderr.log", stderr)):
+        expected = captured.encode("utf-8") if isinstance(captured, str) else captured or b""
+        assert (report.parent / name).read_bytes() == expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("abbreviation", [4, 7, 12])
+def test_install_release_selection_matches_builder_despite_git_abbreviation(published_repository, monkeypatch, capsys, abbreviation):
+    import build
+    repo, command = published_repository
+    command("config", "core.abbrev", str(abbreviation))
+    version = repo / "build.version.json"
+    version.write_text('{"schema":1,"targets":{"windows-host":{"version":"1.4.0","build":3}}}')
+    (repo / ".gitignore").write_text("release/\n")
+    command("add", "build.version.json", ".gitignore")
+    command("commit", "-qm", "version fixture")
+    monkeypatch.setattr(build, "PROJECT_ROOT", repo)
+    monkeypatch.setenv("APPDATA", str(repo / "isolated-appdata"))
+    expected = "v1.4.0_b3_g" + command("rev-parse", "--short=7", "HEAD")
+    package = repo / "release" / ("HomeworkHelper_" + expected + "_Setup.exe")
+    package.parent.mkdir()
+    package.write_bytes(b"inert package fixture")
+
+    assert probe.main(["release", "--repo", str(repo), "--appdata", str(repo / "isolated-appdata"),
+                       "--install", str(repo / "installed")]) == 0
+    selected = json.loads(capsys.readouterr().out)["release_id"]
+    assert (repo / "release" / ("HomeworkHelper_" + selected + "_Setup.exe")) == package
+    source = (Path(__file__).parents[1] / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
+    assert "$Release = (Invoke-Probe 'release').release_id" in source
+    assert "Git-Checked @('rev-parse','--short'" not in source
 
 
 def test_missing_db_is_not_created(tmp_path):
@@ -184,13 +222,13 @@ def test_build_invokes_single_authoritative_builder(monkeypatch, tmp_path, capsy
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows PowerShell required")
 @pytest.mark.parametrize("failure,expected", [
-    ("dirty", []), ("source", []), ("signature", []),
-    ("payload", ["payload"]), ("preflight", ["payload", "preflight"]),
-    ("backup", ["payload", "preflight", "backup"]),
-    ("quit", ["payload", "preflight", "backup", "preflight", "quit"]),
-    ("setup", ["payload", "preflight", "backup", "preflight", "quit", "setup"]),
-    ("service-account", ["payload", "preflight", "backup", "preflight", "quit", "setup"]),
-    ("none", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
+    ("dirty", []), ("source", []), ("release", ["release"]), ("signature", ["release"]),
+    ("payload", ["release", "payload"]), ("preflight", ["release", "payload", "preflight"]),
+    ("backup", ["release", "payload", "preflight", "backup"]),
+    ("quit", ["release", "payload", "preflight", "backup", "preflight", "quit"]),
+    ("setup", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
+    ("service-account", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
+    ("none", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
 ])
 def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, failure, expected):
     # Full PowerShell workflow, OS calls mocked in this disposable process only.
@@ -205,7 +243,6 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     stubs = r'''
 function Git-Checked($Arguments) {
  if ($Arguments[0] -eq 'status') {if ($global:Failure -eq 'dirty') {return 'M changed'}; return ''}
- if ($Arguments[1] -eq '--short') {return 'abc1234'}
  if ($global:Failure -eq 'source') {return 'other'}; return 'commit'
 }
 function Require-InstallTime {}
@@ -213,6 +250,7 @@ function Get-AuthenticodeSignature {if ($global:Failure -eq 'signature') {return
 function Invoke-Probe($Kind,$Portable) {
  $global:Events.Add($Kind)
  if ($Kind -eq $global:Failure) {throw ('expected '+$Kind+' failure')}
+ if ($Kind -eq 'release') {return @{release_id='v1.0.0_b1_gabc1234'}}
  if ($Kind -eq 'payload') {return @{'homework_helper.exe'='expected';'homework_helper_service.exe'='expected'}}
  if ($Kind -eq 'backup') {return @{backup='fixture'}}
  $Processes=@()

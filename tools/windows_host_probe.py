@@ -175,7 +175,7 @@ def snapshot(repo: Path, appdata: Path, install: Path) -> dict:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("inspect", "logs", "preflight", "payload", "backup", "build"))
+    p.add_argument("command", choices=("inspect", "logs", "preflight", "release", "payload", "backup", "build"))
     p.add_argument("--repo", type=Path, required=True)
     p.add_argument("--appdata", type=Path, required=True)
     p.add_argument("--install", type=Path, required=True)
@@ -187,6 +187,12 @@ def main(argv=None) -> int:
     os.environ["APPDATA"] = str(args.appdata)
     if args.command == "logs":
         result = gui_log(args.repo, args.appdata, args.log_lines, args.contains)
+    elif args.command == "release":
+        # Package identity has the same owner as package creation; do not rebuild its naming rules here.
+        sys.path.insert(0, str(args.repo))
+        from build import load_version_config, make_version_info
+        version = make_version_info("windows-host", load_version_config(args.repo / "build.version.json"))
+        result = {"release_id": version["string"]}
     elif args.command == "build":
         import subprocess
         log = args.repo / "artifacts/host-operations-build.log"

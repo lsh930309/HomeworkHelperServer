@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
 
-VERIFY_FILES = ("tools/host_operations.py", "tools/ssh_host_testbench.py", "tools/windows_host_probe.py",
+VERIFY_FILES = ("build.py", "tools/host_operations.py", "tools/ssh_host_testbench.py", "tools/windows_host_probe.py",
                 "tools/windows_session_probe.py", "tools/windows_host_operations.ps1", "tests/test_host_operations.py",
                 "src/__init__.py", "src/gui/__init__.py", "src/gui/runtime_logging.py")
 
@@ -123,6 +123,13 @@ def main(argv=None) -> int:
         message = ("SSH 작업 응답 시간 초과" if isinstance(error, subprocess.TimeoutExpired) else str(error))
         failure = {"ok": False, "command": args.command, "report": str(report), "error": message}
         if report.is_dir():
+            if isinstance(error, subprocess.TimeoutExpired):
+                # TimeoutExpired may contain bytes even when subprocess uses text mode.
+                # Keep incomplete UTF-8 bytes as received instead of replacing or losing them.
+                for filename, captured in (("stdout.log", error.stdout), ("stderr.log", error.stderr)):
+                    (report / filename).write_bytes(
+                        captured.encode("utf-8") if isinstance(captured, str) else captured or b""
+                    )
             (report / "result.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(failure, ensure_ascii=False), file=sys.stderr)
         return 1

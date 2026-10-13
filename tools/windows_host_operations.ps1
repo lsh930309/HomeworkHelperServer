@@ -191,8 +191,7 @@ switch ($Command) {
         Require-Source
         Require-ProductionEnvironment
         Require-InstallTime
-        $Version = (Get-Content 'build.version.json' -Raw | ConvertFrom-Json).targets.'windows-host'
-        $Release = 'v'+$Version.version+'_b'+$Version.build+'_g'+(Git-Checked @('rev-parse','--short','HEAD'))
+        $Release = (Invoke-Probe 'release').release_id
         $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
         $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
         if ((Get-AuthenticodeSignature $Setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }

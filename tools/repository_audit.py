@@ -119,9 +119,10 @@ def source_structure(path: Path, data: bytes) -> dict:
 def audit(root: Path, output: Path) -> dict:
     root, output = root.absolute(), output.absolute()
     # Freeze the inventory before creating this run's evidence. Never recursively audit its own log.
-    paths = inventory(root, output)
     git = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
-    tracked = set(git.stdout.decode("utf-8").split("\0"))
+    tracked = set(filter(None, git.stdout.decode("utf-8").split("\0")))
+    paths = sorted(set(inventory(root, output)) | {root / name for name in tracked},
+                   key=lambda path: str(path.relative_to(root)))
     output.mkdir(parents=True, exist_ok=False)
     rows, structures = [], {}
     began = now()
@@ -154,11 +155,23 @@ def audit(root: Path, output: Path) -> dict:
     return summary
 
 
+def summarize_dispositions(table: Path) -> dict[str, int]:
+    """Read the current decisions; never persist a second copy of their counts."""
+    with table.open(encoding="utf-8-sig", newline="") as stream:
+        return dict(Counter(row["disposition"] for row in csv.DictReader(stream)))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
-    parser.add_argument("--output", type=Path, required=True, help="New directory for this run's CSV/JSONL evidence")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--output", type=Path, help="New directory for this run's CSV/JSON evidence")
+    action.add_argument("--summarize-dispositions", type=Path,
+                        help="Print counts from the current file decision CSV without writing a summary")
     args = parser.parse_args(argv)
+    if args.summarize_dispositions is not None:
+        print(json.dumps(summarize_dispositions(args.summarize_dispositions), ensure_ascii=False, indent=2))
+        return 0
     summary = audit(args.root, args.output)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 1 if summary["read_errors"] else 0
