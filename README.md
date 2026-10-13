@@ -56,6 +56,41 @@ flowchart LR
 스크린샷은 호스트 앱이 촬영하고, 녹화는 OBS와 연동합니다. 녹화 품질·저장 위치는 OBS에서 설정합니다.
 지원하는 게임의 자원은 종료 후에도 조회하며, 예상 회복값과 같으면 기존 타이머를 유지합니다.
 
+## 실행 환경과 의존성
+
+| 구성 | 지원 환경 | 주요 기술 · 의존성 선언 |
+|---|---|---|
+| Windows 호스트 | Windows 10 이상 · x64 설치본 | PySide6 + Qt Widgets · FastAPI · SQLite/SQLAlchemy · [requirements.txt](requirements.txt) |
+| Mac 원격 클라이언트 | macOS 26 이상 | SwiftUI · AppKit · [Package.swift](clients/macos/Package.swift) |
+| 이용 기록 대시보드 | 웹브라우저 | React · TypeScript · Vite · ECharts · [package.json](src/api/dashboard/frontend/package.json) · [package-lock.json](src/api/dashboard/frontend/package-lock.json) |
+
+호스트의 주요 Python 의존성은 다음과 같습니다. 정확한 버전과 전체 목록은 `requirements.txt`를 따릅니다.
+
+- **GUI·Windows 제어:** PySide6 6.11.1, pywin32, psutil, pycaw, winshell.
+- **API·데이터:** FastAPI, uvicorn, SQLAlchemy, pydantic, requests, jsonschema.
+- **촬영·OBS·게임 연동:** mss, Pillow, websocket-client, genshin, pycryptodome.
+
+### 기능별 외부 프로그램
+
+| 프로그램 | 필요한 기능 · 설정 |
+|---|---|
+| Tailscale — 호스트와 Mac | 원격 PC 연결. 로그인 전 연결에는 호스트의 unattended 설정이 필요합니다. |
+| Apollo — 호스트 · Moonlight — Mac | 원격 화면과 로그인 화면 접근. Apollo 서비스와 Moonlight 페어링을 사용합니다. |
+| OpenSSH Server — 호스트 | 로그인 후 원격 절전·재시작·종료. 기존 SSH 키 인증을 사용합니다. |
+| SmartThings CLI — Mac · 등록된 전원 장치 | 기존 원격 부팅/Wake 경로를 사용할 때 필요합니다. |
+| OBS Studio — 호스트 | 녹화 연동을 사용할 때 필요합니다. 녹화 제어에는 OBS WebSocket 서버 설정이 필요하며, 스크린샷 촬영에는 OBS가 필요하지 않습니다. |
+
+### 개발·빌드 도구
+
+| 대상 | 준비할 도구 |
+|---|---|
+| Windows 호스트 | Python **3.14**, PyInstaller, Node.js **20.19.x 이상인 20.x 또는 22.12 이상**과 npm, Inno Setup **6**. 배포 서명에는 Windows SDK의 `signtool`과 서명 인증서가 필요합니다. |
+| Mac 클라이언트 | Python 3, Swift 개발 도구와 **macOS 26 SDK**, 코드 서명 identity. Swift 패키지의 tools-version은 **5.9**입니다. |
+
+설치 패키지에는 앱 실행에 필요한 런타임과 빌드된 대시보드가 포함됩니다. 일반 사용에 Python·Node.js를
+별도로 설치할 필요는 없습니다. 환경 준비·개발 실행은 [종합 작업 가이드](docs/WORK_GUIDE.md#실행-환경과-개발-시작),
+패키지 생성은 [빌드 가이드](docs/guides/build-guide.md)를 따릅니다.
+
 ## 시작하기
 
 | 안내 | 문서 |
