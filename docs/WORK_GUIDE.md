@@ -11,6 +11,7 @@ README는 앱 소개다. 이 문서는 개발·진단·검증·배포를 시작�
 | 작업 | 필수 소유 문서 |
 |---|---|
 | 모든 관련 작업 | 이 가이드, [작업 규칙](../AGENTS.md) |
+| 제품 소개·사용자 기능·지원 환경·릴리스 표기 | [README](../README.md), [README 유지관리 규칙](../AGENTS.md#readme-제품-소개-유지관리), 변경한 기능의 소유 문서 |
 | 문제 진단·반복 검증·공용 도구 변경 | [운영 도구](guides/operations-guide.md), [SSH 진단](remote/host-ssh-diagnostics-runbook.md) |
 | 호스트·클라이언트 소스 준비·빌드·서명·패키지 배포 | [빌드](guides/build-guide.md), [운영 도구](guides/operations-guide.md) |
 | lsh-desktop 패키지 설치 | 위 빌드 문서와 [Windows 설치](guides/windows-package-install-guide.md) |
