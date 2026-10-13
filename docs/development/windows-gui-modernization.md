@@ -25,7 +25,7 @@ QAbstractNativeEventFilter는 PySide6의 QByteArray/bytes 실제 값으로 이�
 API·감시·출석 후속 갱신에 연결한다. 별도 복귀 상태는 저장하지 않는다.
 
 합성 메시지는 실제 Windows QPA/MSG 경계를 검증한다. 물리 절전·복귀는 운영 GUI 로그와
-OS 이벤트를 함께 확인하고 [호스트 계약](windows-host-lifecycle.md#마지막-전원-진단)의
+OS 이벤트를 함께 확인하고 [호스트 계약](windows-host-lifecycle.md#과거-전원-진단-계약)의
 마지막 단계에서 수행한다. offscreen·합성 메시지·사용자 데스크톱 검수는 구분한다.
 Widgets 시작, tray 숨김·복원, IPC/알림, sidebar·volume·screenshot·recording·종료 중
 late callback을 직접 관련 자동 검증과 실제 Windows로 확인한다.

@@ -50,6 +50,8 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
 
 def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_workspace():
     forbidden_paths = [
+        Path("current_plans.md"),
+        Path("reset_windows_python314_venv.py"),
         Path("PROJECT_WORK_PRIORITIES.md"),
         Path("remote_clients"),
         Path("remote_clients/android"),

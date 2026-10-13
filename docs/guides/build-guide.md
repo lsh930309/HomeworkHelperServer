@@ -39,6 +39,13 @@ Windows 제품은 Windows에서, macOS 제품은 Mac에서 빌드한다. `build.
 커밋·dirty 여부와 해당 환경의 로컬 버전을 확인한다. 빌드 버전·산출물과 설치 결과는 서로 다른 증거다.
 소스 공개, 빌드/서명 성공, 설치, 로그/API 확인, 사용자 검수 범위를 각각 보고한다.
 
+## Windows 개발 환경 준비
+
+Python 3.14와 Python Launcher를 먼저 설치한다. `python build.py`는 프로젝트 `.venv`가 없으면
+Python 3.14로 생성하고, 해당 환경에서 `requirements.txt`를 설치·갱신한 뒤 빌드를 이어간다.
+가상환경 삭제·재생성을 정상 빌드의 선행 단계로 실행하지 않는다. 기존 환경의 Python 버전이
+다르거나 손상됐으면 실제 오류를 먼저 확인하고 수동 환경 정비와 정상 빌드를 구분한다.
+
 ## 로컬 버전 상태
 
 `build.version.json`은 Git에 커밋하지 않는 로컬 mutable state다. 각 워크스페이스에서 현재 배포하려는 target별 version/build를 보관한다.
