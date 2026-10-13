@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-06-05
+개발·진단·검증·배포 시작 경로는 [종합 작업 가이드](../WORK_GUIDE.md)를 따른다.
 
 HomeworkHelper exposes a local **Remote Agent** from the Windows host app and controls it from the macOS menu-bar client. The current contract is host-owned data + token-protected remote endpoints + client-local power/Moonlight orchestration. Do not treat old roadmap, migration, spike, or preview-GUI notes as active remote requirements.
 
