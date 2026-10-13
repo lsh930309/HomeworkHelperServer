@@ -277,11 +277,7 @@ class SidebarController:
         return self._sidebar_mode() != SIDEBAR_MODE_DISABLED
 
     def _get_screen(self) -> Optional[QScreen]:
-        """메인 윈도우 또는 기본 스크린을 반환합니다."""
-        if self._main_window is not None:
-            screen = self._main_window.screen()
-            if screen is not None:
-                return screen
+        """Apollo 전환을 포함해 현재 주 모니터를 사용합니다."""
         return QApplication.primaryScreen()
 
     def _get_settings(self):
