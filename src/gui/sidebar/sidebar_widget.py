@@ -12,12 +12,12 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (
     Qt, QObject, QPropertyAnimation, QEasingCurve,
-    QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
+    QEvent, QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
 )
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget,
+    QLayout, QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QTabBar, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
@@ -37,15 +37,13 @@ _ANIM_DURATION_MS = 220
 # 자동 숨김 타이머 기본값 (ms) — SidebarController 가 override 함
 _DEFAULT_AUTO_HIDE_MS = 3000
 
-# 스크린샷/녹화 썸네일 크기 (px)
-_THUMB_W = 76
-_THUMB_H = 57
+# 갤러리 셀은 가용 너비에서 계산한다. 디코딩 해상도는 배치 치수와 독립이다.
 _THUMB_COLS = 3
-_THUMB_MAX_CELLS = _THUMB_COLS * 3  # 최대 9셀 (마지막 1셀은 폴더 버튼)
+_THUMB_MAX_ROWS = 3
 
 # 고화질 썸네일 로드 크기 (hover 확대 시 선명도 확보)
-_THUMB_HIRES_W = _THUMB_W * 2   # 152px
-_THUMB_HIRES_H = _THUMB_H * 2   # 114px
+_THUMB_HIRES_W = 152
+_THUMB_HIRES_H = 114
 
 
 class _ThumbnailLoadSignals(QObject):
@@ -573,7 +571,26 @@ class SidebarWidget(QWidget):
         # 녹화 섹션
         self._recording_section = self._build_recording_section()
         self._scroll_layout.addWidget(self._recording_section)
-        self._scroll_layout.addStretch(1)
+
+        # 파일 종류만 전환한다. 촬영·녹화 조작부는 선택과 독립이다.
+        self._gallery_tabs = QTabBar()
+        self._gallery_tabs.setExpanding(True)
+        self._gallery_tabs.setUsesScrollButtons(False)
+        self._gallery_tabs.setDrawBase(False)
+        self._gallery_tabs.currentChanged.connect(self._refresh_gallery)
+        self._scroll_layout.addWidget(self._gallery_tabs)
+
+        self._gallery = QWidget()
+        self._gallery.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._gallery_layout = QGridLayout(self._gallery)
+        self._gallery_layout.setContentsMargins(0, 0, 0, 0)
+        self._gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 현재 3행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
+        self._gallery_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self._gallery.setMinimumHeight(round((self.width() * 0.9 / _THUMB_COLS) * 0.75))
+        self._gallery.installEventFilter(self)
+        self._scroll_layout.addWidget(self._gallery, 1)
+        self._sync_gallery_sources()
 
         self._main_scroll.setWidget(self._scroll_content)
         layout.addWidget(self._main_scroll, 1)
@@ -607,9 +624,8 @@ class SidebarWidget(QWidget):
         self._refresh_active_sections()
         self._refresh_volumes_list()
         self._refresh_screenshot_section()
-        self._refresh_screenshot_thumbnails()
         self._refresh_recording_section()
-        self._refresh_recording_thumbnails()
+        self._refresh_gallery()
 
     def slide_in(self) -> None:
         """사이드바를 화면 우측에서 슬라이드인합니다."""
@@ -668,6 +684,7 @@ class SidebarWidget(QWidget):
 
     def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
+        self._gallery.removeEventFilter(self)
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
@@ -704,6 +721,11 @@ class SidebarWidget(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._frame.setGeometry(0, 0, self.width(), self.height())
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is getattr(self, "_gallery", None) and event.type() == QEvent.Type.Resize:
+            self._refresh_gallery()
+        return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -1211,14 +1233,6 @@ class SidebarWidget(QWidget):
         header.addWidget(self._capture_now_btn)
         layout.addLayout(header)
 
-        # 썸네일 그리드
-        self._thumb_grid_container = QWidget()
-        self._thumb_grid_container.setStyleSheet("background: transparent;")
-        self._thumb_grid_layout = QGridLayout(self._thumb_grid_container)
-        self._thumb_grid_layout.setSpacing(3)
-        self._thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._thumb_grid_container)
-
         return section
 
     def _build_recording_section(self) -> QWidget:
@@ -1260,14 +1274,6 @@ class SidebarWidget(QWidget):
         self._rec_connect_btn = QPushButton("OBS 재연결")
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
         layout.addWidget(self._rec_connect_btn)
-
-        # 녹화 썸네일 그리드
-        self._rec_thumb_grid_container = QWidget()
-        self._rec_thumb_grid_container.setStyleSheet("background: transparent;")
-        self._rec_thumb_grid_layout = QGridLayout(self._rec_thumb_grid_container)
-        self._rec_thumb_grid_layout.setSpacing(3)
-        self._rec_thumb_grid_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._rec_thumb_grid_container)
 
         return section
 
@@ -1363,8 +1369,8 @@ class SidebarWidget(QWidget):
         enabled = getattr(gs, 'recording_enabled', False) if gs else False
         files_enabled = getattr(gs, 'obs_watch_output_dir', True) if gs else False
         self._recording_section.setVisible(enabled or files_enabled)
-        self._rec_thumb_grid_container.setVisible(files_enabled)
         self._update_rec_ui()
+        self._sync_gallery_sources()
 
     def _refresh_screenshot_section(self) -> None:
         """스크린샷 섹션 표시 여부를 설정에 따라 갱신합니다."""
@@ -1373,77 +1379,118 @@ class SidebarWidget(QWidget):
         self._screenshot_section.setVisible(enabled)
         # 캡처 버튼 활성화 여부 (ScreenshotManager 참조는 MainWindow에 있으므로 항상 활성)
         self._capture_now_btn.setEnabled(True)
+        self._sync_gallery_sources()
+
+    def _sync_gallery_sources(self) -> None:
+        """설정에서 허용한 파일 종류만 표시하고 가능한 기존 선택을 유지한다."""
+        gs = getattr(self._data_manager, "global_settings", None)
+        choices = []
+        if getattr(gs, "screenshot_enabled", True):
+            choices.append(("screenshot", "스크린샷"))
+        if gs and getattr(gs, "obs_watch_output_dir", True):
+            choices.append(("recording", "녹화"))
+        tabs = self._gallery_tabs
+        current = tabs.tabData(tabs.currentIndex())
+        if [tabs.tabData(index) for index in range(tabs.count())] != [key for key, _ in choices]:
+            tabs.blockSignals(True)
+            while tabs.count():
+                tabs.removeTab(0)
+            for key, label in choices:
+                tabs.setTabData(tabs.addTab(label), key)
+            selected = next((index for index, (key, _) in enumerate(choices) if key == current), 0)
+            tabs.setCurrentIndex(selected)
+            tabs.blockSignals(False)
+            self._refresh_gallery()
+        tabs.setVisible(bool(choices))
+        self._gallery.setVisible(bool(choices))
+
+    def _gallery_cell_size(self) -> tuple[int, int, int]:
+        """3열·4:3 셀과 간격을 현재 공용 영역 너비로 계산한다."""
+        width = self._gallery.width()
+        gap = max(1, round(width / 80))
+        cell_width = max(1, (width - gap * (_THUMB_COLS - 1)) // _THUMB_COLS)
+        return cell_width, max(1, round(cell_width * 0.75)), gap
+
+    def _refresh_gallery(self, _index: int = -1) -> None:
+        """남는 높이에 들어가는 최신 미리보기와 폴더 버튼만 배치한다."""
+        if not hasattr(self, "_thumb_pool"):
+            return  # UI 구성 중에는 디코딩 작업을 등록하지 않는다.
+        self._thumb_request_id += 1
+        self._rec_thumb_request_id += 1
+        self._thumb_buttons.clear()
+        self._rec_thumb_buttons.clear()
+        while self._gallery_layout.count():
+            item = self._gallery_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+
+        kind = self._gallery_tabs.tabData(self._gallery_tabs.currentIndex())
+        if kind is None:
+            return
+        cell_width, cell_height, gap = self._gallery_cell_size()
+        self._gallery.setMinimumHeight(cell_height)
+        self._gallery_layout.setSpacing(gap)
+        rows = min(_THUMB_MAX_ROWS, max(1, (self._gallery.height() + gap) // (cell_height + gap)))
+
+        if kind == "screenshot":
+            gs = getattr(self._data_manager, "global_settings", None)
+            output_dir = getattr(gs, "screenshot_save_dir", "")
+            if not output_dir:
+                from src.screenshot.capture import _DEFAULT_SAVE_DIR
+                output_dir = str(_DEFAULT_SAVE_DIR)
+            extensions = (".png", ".jpg", ".jpeg", ".bmp")
+            make_cell = self._make_thumb_cell
+            request_id = self._thumb_request_id
+            cache = self._thumb_cache
+            folder_tip = "스크린샷 폴더 열기"
+        else:
+            output_dir = self._recording_output_dir
+            extensions = (".mp4",)
+            make_cell = self._make_rec_thumb_cell
+            request_id = self._rec_thumb_request_id
+            cache = self._rec_thumb_cache
+            folder_tip = "녹화 폴더 열기"
+        if not output_dir:
+            return
+        folder = Path(output_dir)
+        try:
+            if not folder.is_dir():
+                return
+            files = sorted((path for path in folder.iterdir() if path.suffix.lower() in extensions and path.is_file()),
+                           key=lambda path: path.stat().st_mtime, reverse=True)
+        except OSError:
+            logger.exception("갤러리 파일 조회 실패: %s", output_dir)
+            return
+
+        shown = files[:rows * _THUMB_COLS - 1]
+        for index, path in enumerate(shown):
+            self._gallery_layout.addWidget(make_cell(path, request_id), *divmod(index, _THUMB_COLS))
+        remaining = len(files) - len(shown)
+        folder_btn = QPushButton(f"+{remaining}" if remaining else "")
+        folder_btn.setFixedSize(cell_width, cell_height)
+        folder_btn.setToolTip(folder_tip)
+        folder_btn.setProperty("hhRole", "folderAction")
+        if not remaining:
+            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+
+        def open_folder() -> None:
+            if folder.is_dir():
+                os.startfile(str(folder))
+            else:
+                logger.warning("갤러리 폴더가 존재하지 않습니다: %s", folder)
+
+        folder_btn.clicked.connect(open_folder)
+        self._gallery_layout.addWidget(folder_btn, *divmod(len(shown), _THUMB_COLS))
+        shown_paths = {str(path) for path in shown}
+        for path in list(cache):
+            if path not in shown_paths:
+                del cache[path]
 
     @Slot()
     def _refresh_screenshot_thumbnails(self) -> None:
-        """스크린샷 썸네일 그리드를 최신 파일로 갱신합니다."""
-        self._thumb_request_id += 1
-        request_id = self._thumb_request_id
-        self._thumb_buttons = {}
-
-        # 그리드 초기화
-        while self._thumb_grid_layout.count():
-            item = self._thumb_grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        gs = getattr(self._data_manager, 'global_settings', None)
-        enabled = getattr(gs, 'screenshot_enabled', True) if gs else True
-        if not enabled:
-            return
-
-        save_dir_str = getattr(gs, 'screenshot_save_dir', '') if gs else ''
-        if not save_dir_str:
-            from src.screenshot.capture import _DEFAULT_SAVE_DIR
-            save_dir_str = str(_DEFAULT_SAVE_DIR)
-
-        from pathlib import Path
-        save_path = Path(save_dir_str)
-        if not save_path.exists():
-            return
-
-        # 최신 파일 목록 (png + jpg + bmp)
-        files = sorted(
-            [f for f in save_path.iterdir()
-             if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp') and f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-
-        max_shown = _THUMB_MAX_CELLS - 1  # 마지막 셀 = 폴더 버튼
-        shown = files[:max_shown]
-        remaining = max(0, len(files) - max_shown)
-
-        # 썸네일 셀 추가
-        for idx, fp in enumerate(shown):
-            row, col = divmod(idx, _THUMB_COLS)
-            cell = self._make_thumb_cell(fp, request_id)
-            self._thumb_grid_layout.addWidget(cell, row, col)
-
-        # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else ""
-        folder_btn = QPushButton(folder_label)
-        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
-        folder_btn.setToolTip("스크린샷 폴더 열기")
-        folder_btn.setProperty("hhRole", "folderAction")
-        if remaining == 0:
-            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
-        _dir = save_dir_str
-
-        def _open_folder(d: str = _dir) -> None:
-            if Path(d).exists():
-                os.startfile(d)
-                return
-            logger.warning("스크린샷 폴더가 존재하지 않습니다: %s", d)
-
-        folder_btn.clicked.connect(lambda _checked=False: _open_folder())
-        next_idx = len(shown)
-        row, col = divmod(next_idx, _THUMB_COLS)
-        self._thumb_grid_layout.addWidget(folder_btn, row, col)
-
-        # 현재 표시 목록에 없는 캐시 항목 제거
-        shown_paths = {str(fp) for fp in shown}
-        self._thumb_cache = {k: v for k, v in self._thumb_cache.items() if k in shown_paths}
+        if self._gallery_tabs.tabData(self._gallery_tabs.currentIndex()) == "screenshot":
+            self._refresh_gallery()
 
     def _make_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """썸네일 셀 _HoverThumbCell을 반환합니다."""
@@ -1485,7 +1532,7 @@ class SidebarWidget(QWidget):
             )
 
         cell = _HoverThumbCell(
-            _THUMB_W, _THUMB_H,
+            *self._gallery_cell_size()[:2],
             popup_parent=self._frame,
             on_click=_open,
             on_right_click=_show_context_menu,
@@ -1585,64 +1632,8 @@ class SidebarWidget(QWidget):
 
     @Slot()
     def _refresh_recording_thumbnails(self) -> None:
-        """녹화 썸네일 그리드를 최신 MP4 파일로 갱신합니다."""
-        self._rec_thumb_request_id += 1
-        request_id = self._rec_thumb_request_id
-        self._rec_thumb_buttons = {}
-
-        # 그리드 초기화
-        while self._rec_thumb_grid_layout.count():
-            item = self._rec_thumb_grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        output_dir = self._recording_output_dir
-        if not output_dir:
-            return
-
-        rec_path = Path(output_dir)
-        if not rec_path.exists():
-            return
-
-        # 최신 MP4 파일 목록
-        files = sorted(
-            [f for f in rec_path.iterdir() if f.suffix.lower() == '.mp4' and f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-
-        max_shown = _THUMB_MAX_CELLS - 1
-        shown = files[:max_shown]
-        remaining = max(0, len(files) - max_shown)
-
-        # 썸네일 셀 추가
-        for idx, fp in enumerate(shown):
-            row, col = divmod(idx, _THUMB_COLS)
-            cell = self._make_rec_thumb_cell(fp, request_id)
-            self._rec_thumb_grid_layout.addWidget(cell, row, col)
-
-        # 폴더 버튼 (마지막 셀)
-        folder_label = f"+{remaining}" if remaining > 0 else ""
-        folder_btn = QPushButton(folder_label)
-        folder_btn.setFixedSize(_THUMB_W, _THUMB_H)
-        folder_btn.setToolTip("녹화 폴더 열기")
-        folder_btn.setProperty("hhRole", "folderAction")
-        if remaining == 0:
-            folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
-        _dir = output_dir
-
-        def _open_rec_folder(d: str = _dir) -> None:
-            if Path(d).exists():
-                os.startfile(d)
-
-        folder_btn.clicked.connect(lambda _checked=False: _open_rec_folder())
-        next_idx = len(shown)
-        row, col = divmod(next_idx, _THUMB_COLS)
-        self._rec_thumb_grid_layout.addWidget(folder_btn, row, col)
-
-        # 현재 표시 목록에 없는 캐시 항목 제거
-        rec_shown_paths = {str(fp) for fp in shown}
-        self._rec_thumb_cache = {k: v for k, v in self._rec_thumb_cache.items() if k in rec_shown_paths}
+        if self._gallery_tabs.tabData(self._gallery_tabs.currentIndex()) == "recording":
+            self._refresh_gallery()
 
     def _make_rec_thumb_cell(self, filepath, request_id: int) -> _HoverThumbCell:
         """녹화 썸네일 셀 _HoverThumbCell을 반환합니다."""
@@ -1675,7 +1666,7 @@ class SidebarWidget(QWidget):
                 )
 
         cell = _HoverThumbCell(
-            _THUMB_W, _THUMB_H,
+            *self._gallery_cell_size()[:2],
             popup_parent=self._frame,
             on_click=_open,
             on_right_click=_show_context_menu,

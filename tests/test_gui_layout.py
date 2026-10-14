@@ -1937,6 +1937,9 @@ def sidebar_layout(monkeypatch):
     ])
     view = module.SidebarWidget(data)
     monkeypatch.setattr(view, "_load_icon_async", lambda *_args: None)
+    data.global_settings.obs_watch_output_dir = False
+    view._refresh_screenshot_section()
+    view._refresh_recording_section()
     view._refresh_volumes_list()
     try:
         yield app, view, module
@@ -2017,6 +2020,235 @@ def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_lay
     for button in view._scroll_content.findChildren(QPushButton):
         if button.isVisible():
             assert button.mapTo(view._scroll_content, QPoint(button.width(), 0)).x() <= viewport.width()
+
+
+@pytest.fixture
+def sidebar_gallery(sidebar_layout, tmp_path, monkeypatch):
+    app, view, module = sidebar_layout
+    screenshots = tmp_path / "screenshots"
+    recordings = tmp_path / "recordings"
+    screenshots.mkdir()
+    recordings.mkdir()
+    for index in range(12):
+        path = screenshots / f"image-{index:02}.png"
+        image = QImage(40, 30, QImage.Format.Format_RGB32)
+        image.fill(QColor("blue"))
+        assert image.save(str(path))
+        video = recordings / f"video-{index:02}.mp4"
+        video.write_bytes(b"synthetic video fixture; never decoded")
+        os.utime(path, (1000 + index, 1000 + index))
+        os.utime(video, (1000 + index, 1000 + index))
+    gs = view._data_manager.global_settings
+    gs.screenshot_enabled = True
+    gs.screenshot_save_dir = str(screenshots)
+    gs.recording_enabled = True
+    gs.obs_watch_output_dir = True
+    view._recording_output_dir = str(recordings)
+    # Synthetic files only; prevent Windows Shell decoding or external operations.
+    tasks = []
+    monkeypatch.setattr(view._thumb_pool, "start", tasks.append)
+    monkeypatch.setattr(view._rec_thumb_pool, "start", tasks.append)
+    view.refresh_content()
+    view.resize(280, 1100)
+    view.show()
+    for _ in range(3):
+        app.processEvents()
+    yield app, view, module, screenshots, recordings, tasks
+
+
+def _gallery_widgets(view):
+    return [view._gallery_layout.itemAt(index).widget() for index in range(view._gallery_layout.count())]
+
+
+def test_sidebar_shared_gallery_height_reduces_previews_before_scrolling(sidebar_gallery):
+    app, view, _module, screenshots, _recordings, _tasks = sidebar_gallery
+    # Derive the fixed controls' actual height; no font/OS-specific test dimensions.
+    fixed_height = view.height() - view._gallery.height()
+    cell_width, cell_height, gap = view._gallery_cell_size()
+    for rows in [3, 2, 1, 3]:
+        view.resize(view.width(), fixed_height + rows * cell_height + (rows - 1) * gap)
+        for _ in range(3):
+            app.processEvents()
+        widgets = _gallery_widgets(view)
+        assert len(widgets) == rows * 3
+        assert widgets[-1].text() == f"+{12 - (rows * 3 - 1)}"
+        assert list(view._thumb_buttons) == [str(screenshots / f"image-{index:02}.png")
+                                           for index in range(11, 11 - (rows * 3 - 1), -1)]
+        assert view._main_scroll.verticalScrollBar().maximum() == 0
+        assert not view._main_scroll.verticalScrollBar().isVisible()
+        assert view._main_scroll.viewport().width() == view._main_scroll.contentsRect().width()
+        assert all(widget.width() == cell_width and widget.height() == cell_height for widget in widgets)
+        assert max(widget.geometry().bottom() for widget in widgets) < view._gallery.height()
+        assert view._capture_now_btn.isVisible() and view._rec_connect_btn.isVisible()
+    # When mandatory controls cannot fit either, wheel access stays available.
+    view.resize(280, 250)
+    for _ in range(3):
+        app.processEvents()
+    assert view._main_scroll.verticalScrollBar().maximum() > 0
+    assert not view._main_scroll.verticalScrollBar().isVisible()
+    assert len(_gallery_widgets(view)) == 3
+    assert next(button for button in view.findChildren(QPushButton) if button.text() == "닫기").isVisible()
+
+
+def test_sidebar_shared_gallery_switch_keeps_actions_and_rejects_late_results(sidebar_gallery, monkeypatch):
+    app, view, module, screenshots, recordings, _tasks = sidebar_gallery
+    old_request = view._thumb_request_id
+    image = module._ThumbnailLoadTask._build_thumbnail(str(screenshots / "image-11.png"))
+    assert image is not None
+    called = []
+    view.set_on_start_recording(lambda: called.append("start"))
+    view.set_on_stop_recording(lambda: called.append("stop"))
+    view.set_on_reconnect_recording(lambda: called.append("reconnect"))
+    view._gallery_tabs.setCurrentIndex(1)
+    app.processEvents()
+    assert not view._thumb_buttons and len(view._rec_thumb_buttons) == 8
+    assert all(str(recordings) in path for path in view._rec_thumb_buttons)
+    view._apply_thumbnail_result(old_request, str(screenshots / "image-11.png"), image)
+    assert not view._thumb_cache
+    old_video_request = view._rec_thumb_request_id
+    view._rec_connect_btn.click()
+    view.on_recording_state_changed("idle")
+    view._rec_start_btn.click()
+    view.on_recording_state_changed("recording")
+    view._rec_stop_btn.click()
+    assert called == ["reconnect", "start", "stop"]
+    view._gallery_tabs.setCurrentIndex(0)
+    app.processEvents()
+    view._apply_rec_thumbnail_result(old_video_request, str(recordings / "video-11.mp4"), image)
+    assert not view._rec_thumb_cache and not view._rec_thumb_buttons
+    view._apply_thumbnail_result(view._thumb_request_id, str(screenshots / "image-11.png"), image)
+    assert view._thumb_buttons[str(screenshots / "image-11.png")].pixmap() is not None
+    assert str(screenshots / "image-11.png") in view._thumb_cache
+    opened = []
+    monkeypatch.setattr(module.os, "startfile", opened.append, raising=False)
+    _gallery_widgets(view)[-1].click()
+    assert opened == [str(screenshots)]
+
+
+def test_sidebar_shared_gallery_refresh_follows_selected_source_and_path(sidebar_gallery):
+    app, view, _module, screenshots, recordings, tasks = sidebar_gallery
+    new_image = screenshots / "new.png"
+    new_image.write_bytes((screenshots / "image-11.png").read_bytes())
+    request = view._thumb_request_id
+    view.on_screenshot_captured(str(new_image))
+    for _ in range(3):
+        app.processEvents()
+    assert view._thumb_request_id > request
+    assert next(iter(view._thumb_buttons)) == str(new_image)
+    assert _gallery_widgets(view)[-1].text() == "+5"
+    view._gallery_tabs.setCurrentIndex(1)
+    app.processEvents()
+    request = view._rec_thumb_request_id
+    # An event for the hidden source does not rebuild the visible source.
+    task_count = len(tasks)
+    view._refresh_screenshot_thumbnails()
+    assert view._rec_thumb_request_id == request and len(tasks) == task_count
+    empty = recordings.parent / "empty"
+    empty.mkdir()
+    view.set_recording_output_dir(str(empty))
+    assert not view._rec_thumb_buttons
+    assert len(_gallery_widgets(view)) == 1 and not _gallery_widgets(view)[0].text()
+    view._apply_rec_thumbnail_result(request, str(recordings / "video-11.mp4"), QImage(4, 3, QImage.Format.Format_RGB32))
+    assert not view._rec_thumb_cache
+    view.set_recording_output_dir(str(empty / "missing"))
+    assert not _gallery_widgets(view)
+    view.set_recording_output_dir(str(recordings))
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "recording"
+    assert len(view._rec_thumb_buttons) == 8
+
+
+def test_sidebar_shared_gallery_resize_rejects_old_results_and_reuses_valid_cache(sidebar_gallery):
+    app, view, module, screenshots, _recordings, tasks = sidebar_gallery
+    path = str(screenshots / "image-11.png")
+    image = module._ThumbnailLoadTask._build_thumbnail(path)
+    view._apply_thumbnail_result(view._thumb_request_id, path, image)
+    old_request = view._thumb_request_id
+    fixed_height = view.height() - view._gallery.height()
+    width, height, _gap = view._gallery_cell_size()
+    tasks.clear()
+    view.resize(280, fixed_height + height)
+    for _ in range(3):
+        app.processEvents()
+    assert len(view._thumb_buttons) == 2
+    assert view._thumb_request_id > old_request
+    assert view._thumb_buttons[path].pixmap().size() == QSize(width, height)
+    assert not any(task._path == path for task in tasks)
+    omitted_path = str(screenshots / "image-04.png")
+    view._apply_thumbnail_result(old_request, omitted_path, image)
+    assert omitted_path not in view._thumb_cache
+    # A same-name file updated on disk must be decoded again.
+    os.utime(path, (9000, 9000))
+    tasks.clear()
+    view._refresh_screenshot_thumbnails()
+    assert any(task._path == path for task in tasks)
+
+
+@pytest.mark.parametrize("kind", ["screenshot", "recording"])
+def test_sidebar_shared_gallery_delete_updates_folder_count_without_changing_source(sidebar_gallery, monkeypatch, kind):
+    import sys
+    from PySide6.QtWidgets import QMessageBox
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view._gallery_tabs.setCurrentIndex(0 if kind == "screenshot" else 1)
+    app.processEvents()
+    buttons = view._thumb_buttons if kind == "screenshot" else view._rec_thumb_buttons
+    cache = view._thumb_cache if kind == "screenshot" else view._rec_thumb_cache
+    refresh = view._refresh_screenshot_thumbnails if kind == "screenshot" else view._refresh_recording_thumbnails
+    path = next(iter(buttons))
+    assert _gallery_widgets(view)[-1].text() == "+4"
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    monkeypatch.setitem(sys.modules, "winshell", SimpleNamespace(delete_file=lambda path, **_kwargs: Path(path).unlink()))
+    view._delete_gallery_file(path, cache=cache, refresh=refresh)
+    app.processEvents()
+    assert path not in buttons and not Path(path).exists()
+    assert _gallery_widgets(view)[-1].text() == "+3"
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == kind
+
+
+def test_sidebar_shared_gallery_removed_choice_falls_back_only_when_needed(sidebar_gallery):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    gs = view._data_manager.global_settings
+    view._gallery_tabs.setCurrentIndex(1)
+    gs.screenshot_enabled = False
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "recording"
+    gs.screenshot_enabled = True
+    gs.obs_watch_output_dir = False
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "screenshot"
+    assert not view._rec_thumb_buttons
+    gs.obs_watch_output_dir = True
+    view.refresh_content()
+    app.processEvents()
+    assert view._gallery_tabs.tabData(view._gallery_tabs.currentIndex()) == "screenshot"
+
+
+@pytest.mark.parametrize("screenshots, control, files", [
+    (False, False, False), (False, False, True), (False, True, False), (False, True, True),
+    (True, False, False), (True, False, True), (True, True, False), (True, True, True),
+])
+def test_sidebar_shared_gallery_settings_keep_file_and_control_boundaries(sidebar_gallery, screenshots, control, files):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    gs = view._data_manager.global_settings
+    gs.screenshot_enabled = screenshots
+    gs.recording_enabled = control
+    gs.obs_watch_output_dir = files
+    view.refresh_content()
+    app.processEvents()
+    sources = [view._gallery_tabs.tabData(index) for index in range(view._gallery_tabs.count())]
+    assert sources == (["screenshot"] if screenshots else []) + (["recording"] if files else [])
+    assert view._gallery.isHidden() is not (screenshots or files)
+    assert view._capture_now_btn.isVisible() is screenshots
+    assert view._rec_status_label.isVisible() is control
+    assert view._rec_connect_btn.isVisible() is control
+    assert view._recording_section.isHidden() is not (control or files)
+    if not screenshots:
+        assert not view._thumb_buttons
+    if not files:
+        assert not view._rec_thumb_buttons
 
 
 @pytest.mark.parametrize("work, expected", [

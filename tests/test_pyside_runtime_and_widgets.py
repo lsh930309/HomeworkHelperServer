@@ -257,7 +257,7 @@ def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
         default_muted=True,
     )
     data_manager = SimpleNamespace(
-        global_settings=SimpleNamespace(sidebar_volume_section_enabled=True),
+        global_settings=SimpleNamespace(sidebar_volume_section_enabled=True, screenshot_enabled=False, obs_watch_output_dir=False),
         managed_processes=[process],
     )
     sidebar = SidebarWidget(data_manager)
@@ -274,6 +274,7 @@ def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
     assert mute_button.isChecked()
     assert checked.blue() > checked.red()
     assert checked.blue() > checked.green()
+    assert sidebar.cleanup(deadline_ms=200)
     sidebar.close()
 
 

@@ -266,6 +266,10 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="muteToggle"]:checked:pressed {{
             background: {t['mute_pressed']}; border-color: {t['focus']};
         }}
+        QTabBar::tab {{ color: {t['muted']}; background: {t['surface_raised']};
+            border: none; padding: 0.5em; }}
+        QTabBar::tab:selected {{ color: {t['text']}; background: {t['accent']}; }}
+        QTabBar::tab:hover {{ color: {t['text']}; background: {t['surface_hover']}; }}
         QLabel[hhState="error"] {{ color: {t['danger']}; }}
         QLabel[hhState="success"] {{ color: {t['success']}; }}
         QLabel[hhState="warning"] {{ color: {t['warning']}; }}

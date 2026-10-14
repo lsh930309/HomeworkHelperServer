@@ -495,22 +495,21 @@ def test_sidebar_file_visibility_is_independent_of_recording_control(control,fil
     from PySide6.QtWidgets import QApplication
     from src.gui.sidebar.sidebar_widget import SidebarWidget
     app=QApplication.instance() or QApplication([])
-    choices=SimpleNamespace(recording_enabled=control,obs_watch_output_dir=files)
-    view=SimpleNamespace(_data_manager=SimpleNamespace(global_settings=choices),
-        _rec_state="obs_offline",_get_recording_elapsed=None,
-        _on_rec_start_clicked=lambda:None,_on_rec_stop_clicked=lambda:None,_on_rec_connect_clicked=lambda:None)
-    view._recording_section=SidebarWidget._build_recording_section(view)
-    view._update_rec_ui=lambda:SidebarWidget._update_rec_ui(view)
-    SidebarWidget._refresh_recording_section(view)
-    assert view._recording_section.isHidden() is not (control or files)
-    assert view._rec_thumb_grid_container.isHidden() is not files
-    assert view._rec_status_label.isHidden() is not control
-    assert view._rec_connect_btn.isHidden() is not control
-    view._rec_state="idle"; view._update_rec_ui()
-    assert view._rec_start_btn.isHidden() is not control
-    assert view._rec_connect_btn.isHidden()
-    view._recording_section.deleteLater()
-    app.processEvents()
+    choices=SimpleNamespace(screenshot_enabled=False,recording_enabled=control,obs_watch_output_dir=files)
+    view=SidebarWidget(SimpleNamespace(global_settings=choices))
+    try:
+        view._refresh_recording_section()
+        assert view._recording_section.isHidden() is not (control or files)
+        assert ("recording" in [view._gallery_tabs.tabData(index) for index in range(view._gallery_tabs.count())]) is files
+        assert view._rec_status_label.isHidden() is not control
+        assert view._rec_connect_btn.isHidden() is not control
+        view._rec_state="idle"; view._update_rec_ui()
+        assert view._rec_start_btn.isHidden() is not control
+        assert view._rec_connect_btn.isHidden()
+    finally:
+        assert view.cleanup(deadline_ms=200)
+        view.close()
+        app.processEvents()
 
 
 def test_viewing_settings_only_reads_and_does_not_reopen_obs(isolated_obs):
