@@ -448,8 +448,11 @@ class SidebarWidget(QWidget):
             }
         """)
         frame_layout = QVBoxLayout(self._frame)
-        frame_layout.setContentsMargins(12, 16, 12, 12)
-        frame_layout.setSpacing(8)
+        # 부모 창보다 큰 최소 높이를 강제하지 않고 가운데 스크롤이 부족한 공간을 맡는다.
+        frame_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        padding = round(self.width() * 0.043)
+        frame_layout.setContentsMargins(padding, padding, padding, padding)
+        frame_layout.setSpacing(round(self.width() * 0.024))
 
         self._build_ui(frame_layout)
         apply_sidebar_widgets_style(self, dark=True)
@@ -517,6 +520,22 @@ class SidebarWidget(QWidget):
 
     def _build_ui(self, layout: QVBoxLayout) -> None:
         """사이드바 내부 위젯을 구성합니다."""
+        gap = round(self.width() * 0.024)
+        # 시계와 닫기는 휠로 내용이 이동해도 화면 양 끝에 남는다.
+        self._clock_widget = QWidget()
+        clock_layout = QVBoxLayout(self._clock_widget)
+        clock_layout.setContentsMargins(0, round(self.width() * 0.012), 0, gap)
+        clock_layout.setSpacing(round(self.width() * 0.012))
+        self._clock_label = QLabel()
+        self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_label.setProperty("hhRole", "sidebarClock")
+        self._clock_date_label = QLabel()
+        self._clock_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_date_label.setProperty("hhRole", "sidebarSecondary")
+        clock_layout.addWidget(self._clock_label)
+        clock_layout.addWidget(self._clock_date_label)
+        layout.addWidget(self._clock_widget)
+
         # 내용이 넘치면 휠로 이동하되 스크롤바와 예약 공간은 만들지 않는다.
         self._main_scroll = QScrollArea()
         self._main_scroll.setWidgetResizable(True)
@@ -533,48 +552,48 @@ class SidebarWidget(QWidget):
         self._scroll_layout.setContentsMargins(0, 0, 0, 0)
         self._scroll_layout.setSpacing(0)
 
-        # 현재 시간 섹션 (최상단)
-        self._clock_widget = QWidget()
-        self._clock_widget.setStyleSheet("background: transparent;")
-        clock_layout = QVBoxLayout(self._clock_widget)
-        clock_layout.setContentsMargins(0, 0, 0, 8)
-        clock_layout.setSpacing(2)
-        self._clock_label = QLabel()
-        self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clock_label.setStyleSheet("color: rgba(220,230,255,240); font-size: 28px; font-weight: 300; letter-spacing: 2px; background: transparent;")
-        clock_layout.addWidget(self._clock_label)
-        self._scroll_layout.insertWidget(0, self._clock_widget)
+        self._top_section = QWidget()
+        top_layout = QVBoxLayout(self._top_section)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(gap)
 
         # 실행 중 게임 클러스터 영역 (동적으로 채워짐)
         self._active_clusters_layout = QVBoxLayout()
-        self._active_clusters_layout.setSpacing(10)
-        self._scroll_layout.addLayout(self._active_clusters_layout)
+        self._active_clusters_layout.setSpacing(gap)
+        top_layout.addLayout(self._active_clusters_layout)
 
-        # 볼륨 섹션 (항상 하단에 고정)
+        # 음량은 게임 카드 바로 아래에 배치한다.
         self._vol_section = QWidget()
         vol_section_layout = QVBoxLayout(self._vol_section)
-        vol_section_layout.setContentsMargins(0, 10, 0, 0)
-        vol_section_layout.setSpacing(4)
+        vol_section_layout.setContentsMargins(0, 0, 0, 0)
+        vol_section_layout.setSpacing(round(self.width() * 0.015))
 
-        vol_title = QLabel("볼륨")
-        vol_title.setStyleSheet("color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;")
+        vol_title = QLabel("음량")
+        vol_title.setProperty("hhRole", "sidebarSecondary")
         vol_section_layout.addWidget(vol_title)
 
         self._vol_list_container = QWidget()
         self._vol_list_layout = QVBoxLayout(self._vol_list_container)
         self._vol_list_layout.setContentsMargins(0, 0, 0, 0)
-        self._vol_list_layout.setSpacing(4)
+        self._vol_list_layout.setSpacing(round(self.width() * 0.015))
         vol_section_layout.addWidget(self._vol_list_container)
 
-        self._scroll_layout.addWidget(self._vol_section)
+        top_layout.addWidget(self._vol_section)
+        self._scroll_layout.addWidget(self._top_section)
+        self._scroll_layout.addStretch(1)
+
+        self._media_section = QWidget()
+        media_layout = QVBoxLayout(self._media_section)
+        media_layout.setContentsMargins(0, gap, 0, 0)
+        media_layout.setSpacing(gap)
 
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
-        self._scroll_layout.addWidget(self._screenshot_section)
+        media_layout.addWidget(self._screenshot_section)
 
         # 녹화 섹션
         self._recording_section = self._build_recording_section()
-        self._scroll_layout.addWidget(self._recording_section)
+        media_layout.addWidget(self._recording_section)
 
         # 파일 종류만 전환한다. 촬영·녹화 조작부는 선택과 독립이다.
         self._gallery_tabs = QTabBar()
@@ -582,28 +601,30 @@ class SidebarWidget(QWidget):
         self._gallery_tabs.setUsesScrollButtons(False)
         self._gallery_tabs.setDrawBase(False)
         self._gallery_tabs.currentChanged.connect(self._refresh_gallery)
-        self._scroll_layout.addWidget(self._gallery_tabs)
+        media_layout.addWidget(self._gallery_tabs)
 
         self._gallery = QWidget()
-        self._gallery.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._gallery.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._gallery_layout = QGridLayout(self._gallery)
         self._gallery_layout.setContentsMargins(0, 0, 0, 0)
         self._gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 현재 3행의 최소 크기가 다음 높이 감소를 막지 않게 한다.
         self._gallery_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        self._gallery.setMinimumHeight(round((self.width() * 0.9 / _THUMB_COLS) * 0.75))
+        self._gallery.setFixedHeight(0)
         self._gallery.installEventFilter(self)
-        self._scroll_layout.addWidget(self._gallery, 1)
+        media_layout.addWidget(self._gallery)
+        self._scroll_layout.addWidget(self._media_section)
         self._sync_gallery_sources()
 
         self._main_scroll.setWidget(self._scroll_content)
+        self._main_scroll.viewport().installEventFilter(self)
+        self._scroll_content.installEventFilter(self)
         layout.addWidget(self._main_scroll, 1)
 
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
-        close_btn = QPushButton("닫기")
-        close_btn.setFixedHeight(28)
-        close_btn.clicked.connect(self.slide_out)
-        layout.addWidget(close_btn)
+        self._close_btn = QPushButton("닫기")
+        self._close_btn.clicked.connect(self.slide_out)
+        layout.addWidget(self._close_btn)
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -683,6 +704,8 @@ class SidebarWidget(QWidget):
     def cleanup(self, deadline_ms: int = 2000) -> bool:
         """타이머와 애니메이션을 정리합니다."""
         self._gallery.removeEventFilter(self)
+        self._main_scroll.viewport().removeEventFilter(self)
+        self._scroll_content.removeEventFilter(self)
         for timer in self._volume_save_timers.values():
             if timer.isActive():
                 timer.stop()
@@ -723,7 +746,30 @@ class SidebarWidget(QWidget):
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "_gallery", None) and event.type() == QEvent.Type.Resize:
             self._layout_gallery()
+        elif (watched is self._main_scroll.viewport() and event.type() == QEvent.Type.Resize
+              or watched is self._scroll_content and event.type() == QEvent.Type.LayoutRequest):
+            self._fit_gallery_height()
         return super().eventFilter(watched, event)
+
+    def _fit_gallery_height(self) -> None:
+        """필수 내용 뒤의 가용 높이만 사용하며, 여유 공간은 상·하단 사이에 둔다."""
+        height = 0
+        if not self._gallery.isHidden() and self._gallery_layout.count():
+            viewport = self._main_scroll.viewport()
+            width = viewport.width()
+            _, cell_height, gap = self._gallery_cell_size(width)
+            top_layout = self._top_section.layout()
+            top_height = (top_layout.totalHeightForWidth(width) if top_layout.hasHeightForWidth()
+                          else top_layout.totalSizeHint().height())
+            media_controls_height = (self._media_section.sizeHint().height()
+                                     - self._gallery.minimumHeight())
+            available = viewport.height() - top_height - media_controls_height
+            available_rows = max(1, (available + gap) // (cell_height + gap))
+            cell_count = len(self._thumb_buttons) + len(self._rec_thumb_buttons) + 1
+            rows = min(_THUMB_MAX_ROWS, available_rows, (cell_count + _THUMB_COLS - 1) // _THUMB_COLS)
+            height = rows * cell_height + (rows - 1) * gap
+        if self._gallery.minimumHeight() != height:
+            self._gallery.setFixedHeight(height)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -737,6 +783,7 @@ class SidebarWidget(QWidget):
             if item:
                 w = item.widget()
                 if w:
+                    w.hide()
                     w.deleteLater()
 
         active_games = self._get_active_games()
@@ -781,24 +828,24 @@ class SidebarWidget(QWidget):
         cluster = QFrame()
         cluster.setProperty("hhRole", "sidebarGroup")
         layout = QVBoxLayout(cluster)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(7)
+        padding = round(self.width() * 0.035)
+        layout.setContentsMargins(padding, padding, padding, padding)
+        layout.setSpacing(round(self.width() * 0.02))
 
         # ── 헤더: 아이콘 + 이름 ──
         header = QHBoxLayout()
-        header.setSpacing(8)
+        header.setSpacing(round(self.width() * 0.02))
 
         icon_label = QLabel()
-        icon_label.setFixedSize(40, 40)
+        icon_size = round(self.width() * 0.12)
+        icon_label.setFixedSize(icon_size, icon_size)
         icon_label.setStyleSheet("background: rgba(255,255,255,8); border: none; border-radius: 10px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setScaledContents(True)
         header.addWidget(icon_label)
 
         name_label = QLabel(process.name)
-        name_label.setStyleSheet(
-            "color: rgba(235,240,255,240); font-weight: 600; font-size: 13px; background: transparent;"
-        )
+        name_label.setProperty("hhRole", "sidebarGameName")
         name_label.setWordWrap(True)
         name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.addWidget(name_label, 1)
@@ -814,9 +861,7 @@ class SidebarWidget(QWidget):
         playtime_label = QLabel("0분")
         playtime_label.setWordWrap(True)
         playtime_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        playtime_label.setStyleSheet(
-            "color: rgba(160,180,220,200); font-size: 11px; background: transparent;"
-        )
+        playtime_label.setProperty("hhRole", "sidebarSecondary")
         playtime_label.setVisible(playtime_enabled)
         layout.addWidget(playtime_label)
         self._playtime_labels[process.id] = (playtime_label, start_ts, playtime_prefix)
@@ -824,7 +869,6 @@ class SidebarWidget(QWidget):
 
         # ── 게임 종료 버튼 ──
         kill_btn = QPushButton("게임 종료")
-        kill_btn.setFixedHeight(28)
         kill_btn.setProperty("hhRole", "danger")
         kill_btn.setEnabled(pid is not None and start_ts > 0)
         kill_btn.clicked.connect(
@@ -889,7 +933,10 @@ class SidebarWidget(QWidget):
         import datetime
         gs = getattr(self._data_manager, 'global_settings', None)
         fmt = getattr(gs, 'sidebar_clock_format', '%H:%M:%S') if gs else '%H:%M:%S'
-        self._clock_label.setText(datetime.datetime.now().strftime(fmt))
+        now = datetime.datetime.now()
+        self._clock_label.setText(now.strftime(fmt))
+        weekday = ("월", "화", "수", "목", "금", "토", "일")[now.weekday()]
+        self._clock_date_label.setText(f"{now.month}월 {now.day}일 {weekday}요일")
         enabled = getattr(gs, 'sidebar_clock_enabled', True) if gs else True
         self._clock_widget.setVisible(enabled)
 
@@ -943,12 +990,13 @@ class SidebarWidget(QWidget):
         while self._vol_list_layout.count() > 0:
             item = self._vol_list_layout.takeAt(0)
             if item and item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
         processes = sorted(getattr(self._data_manager, 'managed_processes', []), key=ManagedProcess.name_sort_key)
         if not processes:
             empty = QLabel("등록된 게임 없음")
-            empty.setStyleSheet("color: rgba(255,255,255,100); font-size: 11px;")
+            empty.setProperty("hhRole", "sidebarSecondary")
             self._vol_list_layout.addWidget(empty)
             return
 
@@ -972,11 +1020,11 @@ class SidebarWidget(QWidget):
         is_running = pid is not None
         row = QWidget()
         hl = QHBoxLayout(row)
-        hl.setContentsMargins(4, 2, 4, 2)
-        hl.setSpacing(4)
+        hl.setContentsMargins(0, round(self.width() * 0.005), 0, round(self.width() * 0.005))
+        hl.setSpacing(round(self.width() * 0.015))
 
         dot_lbl = QLabel("●")
-        dot_lbl.setFixedWidth(10)
+        dot_lbl.setFixedWidth(round(self.width() * 0.025))
         dot_lbl.setStyleSheet(
             "color: rgba(80,200,120,220); font-size: 7px;" if is_running
             else "color: transparent; font-size: 7px;"
@@ -984,15 +1032,17 @@ class SidebarWidget(QWidget):
         hl.addWidget(dot_lbl)
 
         name_lbl = QLabel(process.name)
-        name_lbl.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
+        name_lbl.setProperty("hhRole", "sidebarSecondary")
         # 이름의 최소 너비가 스크롤 내용 전체를 넓혀 우측 컨트롤을 밀지 않게 한다.
         name_lbl.setWordWrap(True)
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        hl.addWidget(name_lbl, 1)
+        name_lbl.setMinimumWidth(1)
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        hl.addWidget(name_lbl, 56)
 
         mute_btn = QPushButton()
         mute_btn.setCheckable(True)
         mute_btn.setProperty("hhRole", "muteToggle")
+        mute_btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
         style = QApplication.style()
         if style:
@@ -1031,14 +1081,14 @@ class SidebarWidget(QWidget):
         slider.setRange(0, 100)
         slider.setSingleStep(5)
         slider.setPageStep(5)
-        slider.setFixedWidth(80)
+        slider.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         slider.setStyleSheet(_SLIDER_STYLE)
         slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
 
         val_lbl = QLabel()
-        val_lbl.setFixedWidth(28)
+        val_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        val_lbl.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
+        val_lbl.setProperty("hhRole", "sidebarSecondary")
 
         vol = getattr(process, 'default_volume', None)
         if vol is None:
@@ -1079,9 +1129,9 @@ class SidebarWidget(QWidget):
 
         mute_btn.toggled.connect(on_mute_toggled)
         slider.valueChanged.connect(on_changed)
-        hl.addWidget(mute_btn)
-        hl.addWidget(slider)
-        hl.addWidget(val_lbl)
+        hl.addWidget(mute_btn, 9)
+        hl.addWidget(slider, 25)
+        hl.addWidget(val_lbl, 10)
         return row
 
     def _on_vol_list_changed(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
@@ -1217,68 +1267,85 @@ class SidebarWidget(QWidget):
     def _build_screenshot_section(self) -> QWidget:
         """스크린샷 섹션 위젯을 구성합니다."""
         section = QWidget()
-        section.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(4)
-
-        # 헤더 행
-        header = QHBoxLayout()
+        section.setMinimumHeight(round(self.width() * 0.1))
+        header = QHBoxLayout(section)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(round(self.width() * 0.02))
         title = QLabel("스크린샷")
-        title.setStyleSheet(
-            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
-        )
+        title.setProperty("hhRole", "sidebarSectionTitle")
         self._capture_now_btn = QPushButton("지금 촬영")
-        self._capture_now_btn.setFixedHeight(28)
         self._capture_now_btn.clicked.connect(self._on_capture_now_clicked)
+        header.addWidget(self._media_icon("screenshot"))
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self._capture_now_btn)
-        layout.addLayout(header)
-
         return section
 
     def _build_recording_section(self) -> QWidget:
         """녹화 상태 섹션 위젯을 구성합니다."""
         section = QWidget()
-        section.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(4)
-
-        # 헤더 행: 제목 + [지금 녹화] 버튼
-        header = QHBoxLayout()
+        section.setMinimumHeight(round(self.width() * 0.1))
+        header = QHBoxLayout(section)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(round(self.width() * 0.02))
         title = QLabel("녹화")
-        title.setStyleSheet(
-            "color: rgba(150,170,210,160); font-size: 10px; letter-spacing: 1px;"
-        )
-        self._rec_start_btn = QPushButton("지금 녹화")
-        self._rec_start_btn.setFixedHeight(28)
-        self._rec_start_btn.setProperty("hhRole", "danger")
-        self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
-        self._rec_start_btn.hide()
+        title.setProperty("hhRole", "sidebarSectionTitle")
+        header.addWidget(self._media_icon("recording"))
         header.addWidget(title)
         header.addStretch()
-        header.addWidget(self._rec_start_btn)
-        layout.addLayout(header)
 
-        self._rec_status_label = QLabel("OBS 오프라인")
+        self._rec_status_label = QLabel("연결 안 됨")
+        self._rec_status_label.setProperty("hhRole", "sidebarSecondary")
         self._rec_status_label.setProperty("hhState", "default")
-        layout.addWidget(self._rec_status_label)
+        header.addWidget(self._rec_status_label)
+
+        self._rec_start_btn = QPushButton("녹화 시작")
+        self._rec_start_btn.clicked.connect(self._on_rec_start_clicked)
+        self._rec_start_btn.hide()
+        header.addWidget(self._rec_start_btn)
 
         self._rec_stop_btn = QPushButton("녹화 종료")
-        self._rec_stop_btn.setFixedHeight(28)
         self._rec_stop_btn.setProperty("hhRole", "danger")
         self._rec_stop_btn.clicked.connect(self._on_rec_stop_clicked)
         self._rec_stop_btn.hide()
-        layout.addWidget(self._rec_stop_btn)
+        header.addWidget(self._rec_stop_btn)
 
         # OBS 재연결 버튼 (obs_offline 상태에서만 표시)
-        self._rec_connect_btn = QPushButton("OBS 재연결")
+        self._rec_connect_btn = QPushButton("재연결")
         self._rec_connect_btn.clicked.connect(self._on_rec_connect_clicked)
-        layout.addWidget(self._rec_connect_btn)
+        header.addWidget(self._rec_connect_btn)
 
         return section
+
+    def _media_icon(self, kind: str) -> QLabel:
+        """목업의 카메라·비디오 선 아이콘을 Qt로 그린다."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter, QPainterPath, QPen
+        size = round(self.width() * 0.05)
+        pixmap = QPixmap(size * 2, size * 2)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.scale(size / 16, size / 16)
+        painter.setPen(QPen(QColor("#f5f5f6"), 1.2))
+        if kind == "screenshot":
+            painter.drawRoundedRect(QRectF(1, 4, 14, 10), 1.5, 1.5)
+            painter.drawEllipse(QRectF(5, 6, 6, 6))
+            painter.drawRect(QRectF(5, 2, 6, 2))
+        else:
+            painter.drawRoundedRect(QRectF(1, 4, 9, 8), 1.5, 1.5)
+            path = QPainterPath()
+            path.moveTo(10, 6)
+            path.lineTo(15, 3)
+            path.lineTo(15, 13)
+            path.lineTo(10, 10)
+            painter.drawPath(path)
+        painter.end()
+        label = QLabel()
+        label.setFixedSize(size, size)
+        label.setPixmap(pixmap)
+        return label
 
     def set_on_stop_recording(self, fn) -> None:
         """녹화 종료 버튼 클릭 시 호출될 콜백을 등록합니다."""
@@ -1293,7 +1360,7 @@ class SidebarWidget(QWidget):
         self._get_recording_elapsed = fn
 
     def set_on_start_recording(self, fn: Optional[Callable[[], None]]) -> None:
-        """[지금 녹화] 버튼 클릭 시 호출될 콜백을 등록합니다."""
+        """[녹화 시작] 버튼 클릭 시 호출될 콜백을 등록합니다."""
         self._start_recording_callback = fn
 
     def set_recording_output_dir(self, path: str) -> None:
@@ -1320,7 +1387,7 @@ class SidebarWidget(QWidget):
                 self._rec_elapsed_sec = elapsed
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
-            self._rec_status_label.setText(f"REC  {hrs:02d}:{mins:02d}:{secs:02d}")
+            self._rec_status_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
             status_style = "error"
             self._rec_stop_btn.setVisible(control_enabled)
             self._rec_start_btn.hide()
@@ -1362,7 +1429,7 @@ class SidebarWidget(QWidget):
             self._reconnect_recording()
 
     def _on_rec_start_clicked(self) -> None:
-        """[지금 녹화] 버튼 클릭 — 카운트다운 콜백을 호출합니다."""
+        """[녹화 시작] 버튼 클릭 — 카운트다운 콜백을 호출합니다."""
         if self._start_recording_callback:
             self._start_recording_callback()
 
@@ -1407,9 +1474,10 @@ class SidebarWidget(QWidget):
         tabs.setVisible(bool(choices))
         self._gallery.setVisible(bool(choices))
 
-    def _gallery_cell_size(self) -> tuple[int, int, int]:
+    def _gallery_cell_size(self, width: Optional[int] = None) -> tuple[int, int, int]:
         """3열·4:3 셀과 간격을 현재 공용 영역 너비로 계산한다."""
-        width = self._gallery.width()
+        if width is None:
+            width = self._gallery.width()
         gap = max(1, round(width / 80))
         cell_width = max(1, (width - gap * (_THUMB_COLS - 1)) // _THUMB_COLS)
         return cell_width, max(1, round(cell_width * 0.75)), gap
@@ -1430,9 +1498,10 @@ class SidebarWidget(QWidget):
 
         kind = self._gallery_tabs.tabData(self._gallery_tabs.currentIndex())
         if kind is None:
+            self._fit_gallery_height()
             return
         cell_width, cell_height, gap = self._gallery_cell_size()
-        self._gallery.setMinimumHeight(cell_height)
+        self._fit_gallery_height()
         self._gallery_layout.setSpacing(gap)
 
         if kind == "screenshot":
@@ -1484,6 +1553,7 @@ class SidebarWidget(QWidget):
 
         folder_btn.clicked.connect(open_folder)
         self._gallery_layout.addWidget(folder_btn, *divmod(len(shown), _THUMB_COLS))
+        self._fit_gallery_height()
         self._layout_gallery(file_count=len(files))
         shown_paths = {str(path) for path in shown}
         for path in list(cache):
@@ -1500,7 +1570,6 @@ class SidebarWidget(QWidget):
             omitted = int(folder.text()[1:]) if folder.text().startswith("+") else 0
             file_count = omitted + sum(not cell.isHidden() for cell in cells)
         width, height, gap = self._gallery_cell_size()
-        self._gallery.setMinimumHeight(height)
         self._gallery_layout.setSpacing(gap)
         rows = min(_THUMB_MAX_ROWS, max(1, (self._gallery.height() + gap) // (height + gap)))
         shown_count = min(len(cells), rows * _THUMB_COLS - 1)

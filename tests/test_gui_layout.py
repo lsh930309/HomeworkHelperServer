@@ -2047,9 +2047,7 @@ def sidebar_layout(monkeypatch):
     view = module.SidebarWidget(data)
     monkeypatch.setattr(view, "_load_icon_async", lambda *_args: None)
     data.global_settings.obs_watch_output_dir = False
-    view._refresh_screenshot_section()
-    view._refresh_recording_section()
-    view._refresh_volumes_list()
+    view.refresh_content()
     try:
         yield app, view, module
     finally:
@@ -2136,7 +2134,8 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
     app, view, _module = sidebar_layout
     view.resize(280, height)
     view.show()
-    app.processEvents()
+    for _ in range(3):
+        app.processEvents()
     assert view.width() == 280
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
@@ -2151,6 +2150,9 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
                 assert right <= viewport.width(), (name.text(), right, viewport.width())
+    # Native label metrics can post a final nested layout request while measured.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
     assert not view._main_scroll.verticalScrollBar().isVisible()
     assert (view._main_scroll.verticalScrollBar().maximum() > 0) is (height == 250)
     assert viewport.width() == view._main_scroll.contentsRect().width()
@@ -2162,11 +2164,13 @@ def test_sidebar_height_change_preserves_hidden_scroll_and_wheel_access(sidebar_
     app, view, _module = sidebar_layout
     view.resize(280, 1400)
     view.show()
-    app.processEvents()
+    for _ in range(3):
+        app.processEvents()
     scroll = view._main_scroll
     assert scroll.verticalScrollBar().maximum() == 0
     view.resize(280, 250)
-    app.processEvents()
+    for _ in range(3):
+        app.processEvents()
     assert scroll.verticalScrollBar().maximum() > 0
     assert not scroll.verticalScrollBar().isVisible()
     viewport = scroll.viewport()
@@ -2178,7 +2182,8 @@ def test_sidebar_height_change_preserves_hidden_scroll_and_wheel_access(sidebar_
     app.processEvents()
     assert scroll.verticalScrollBar().value() > 0
     view.resize(280, 1400)
-    app.processEvents()
+    for _ in range(3):
+        app.processEvents()
     assert scroll.verticalScrollBar().maximum() == 0
     assert scroll.verticalScrollBar().value() == 0
     assert not scroll.verticalScrollBar().isVisible()
@@ -2242,10 +2247,186 @@ def _gallery_widgets(view):
     return [view._gallery_layout.itemAt(index).widget() for index in range(view._gallery_layout.count())]
 
 
+@pytest.mark.parametrize("height", [700, 1100])
+def test_sidebar_clock_and_bottom_group_stay_at_edges_with_three_row_cap(sidebar_gallery, height):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.resize(280, height)
+    for _ in range(4):
+        app.processEvents()
+    margins = view._frame.layout().contentsMargins()
+    assert view._clock_widget.geometry().top() == margins.top()
+    assert view._close_btn.geometry().bottom() == view.height() - margins.bottom() - 1
+    assert view._clock_widget.parentWidget() is view._frame
+    assert view._close_btn.parentWidget() is view._frame
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    assert view._gallery.geometry().bottom() == view._media_section.height() - 1
+    _width, cell_height, gap = view._gallery_cell_size()
+    assert view._gallery.height() == 3 * cell_height + 2 * gap
+    assert len(_gallery_widgets(view)) == 9
+    assert view._scroll_layout.itemAt(1).spacerItem().geometry().height() > 0
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+
+
+def test_sidebar_extreme_height_scrolls_middle_only_and_recovers_bottom_alignment(sidebar_gallery):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.resize(280, 250)
+    for _ in range(4):
+        app.processEvents()
+    clock = view._clock_widget.geometry()
+    close = view._close_btn.geometry()
+    bar = view._main_scroll.verticalScrollBar()
+    assert bar.maximum() > 0 and not bar.isVisible()
+    assert clock.top() >= 0 and close.bottom() < view.height()
+    bar.setValue(bar.maximum())
+    app.processEvents()
+    assert view._clock_widget.geometry() == clock
+    assert view._close_btn.geometry() == close
+    assert len(_gallery_widgets(view)) == 3
+    view.resize(280, 1100)
+    for _ in range(4):
+        app.processEvents()
+    assert bar.maximum() == 0 and bar.value() == 0
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+    assert len(_gallery_widgets(view)) == 9
+
+
+def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_changes(sidebar_layout, monkeypatch):
+    from src.gui.main_window import MainWindow
+    app, view, module = sidebar_layout
+    active = {"0": {"pid": 123}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    for running_id in ("0", "2"):
+        active.clear()
+        active[running_id] = {"pid": 123}
+        view._data_manager.managed_processes[2].name = "Alpha"
+        view._refresh_volumes_list()
+        view.resize(280, 700)
+        view.show()
+        for _ in range(3):
+            app.processEvents()
+        for index, game in enumerate(sorted(view._data_manager.managed_processes, key=ManagedProcess.name_sort_key)):
+            row = view._vol_list_layout.itemAt(index).widget()
+            dot = row.layout().itemAt(0).widget()
+            name = row.layout().itemAt(1).widget()
+            assert name.text() == game.name
+            assert dot.geometry().right() < name.geometry().left()
+            color = dot.palette().color(dot.foregroundRole())
+            if game.id == running_id:
+                assert color.alpha() > 0 and color.green() > color.red()
+            else:
+                assert color.alpha() == 0
+
+
+def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):
+    import time
+    from src.gui.main_window import MainWindow
+    from PySide6.QtWidgets import QSlider
+    app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
+    names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일", "붕괴: 스타레일(베타)",
+             "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
+    games = [ManagedProcess(id=str(index), name=name, monitoring_path=f"/test/{index}.exe", launch_path=f"/test/{index}.exe")
+             for index, name in enumerate(names)]
+    view._data_manager.managed_processes = games
+    active = {"0": {"pid": 123, "start_time_approx": time.time() - 80 * 60}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    view.on_recording_state_changed("idle")
+    view.refresh_content()
+    view.resize(280, 800)
+    for _ in range(4):
+        app.processEvents()
+    for index in range(len(games)):
+        row = view._vol_list_layout.itemAt(index).widget()
+        name = next(label for label in row.findChildren(QLabel) if label.wordWrap())
+        slider = row.findChild(QSlider)
+        value = row.layout().itemAt(4).widget()
+        assert name.height() >= name.heightForWidth(name.width())
+        assert value.width() >= value.fontMetrics().horizontalAdvance(value.text())
+        assert slider.geometry().right() < value.geometry().left()
+        assert value.geometry().right() < row.width()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+    app.processEvents()
+    assert len(_gallery_widgets(view)) == 9
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
+
+
+def test_sidebar_content_replace_hides_old_rows_before_deferred_delete(sidebar_gallery, monkeypatch):
+    import time
+    from src.gui.main_window import MainWindow
+    app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
+    active = {"0": {"pid": 123, "start_time_approx": time.time()}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    view.refresh_content()
+    app.processEvents()
+    old_card = view._active_clusters_layout.itemAt(0).widget()
+    old_rows = [view._vol_list_layout.itemAt(index).widget() for index in range(view._vol_list_layout.count())]
+    assert old_card.isVisible() and all(row.isVisible() for row in old_rows)
+    view.refresh_content()
+    # No event loop/DeferredDelete between replacement and this assertion.
+    assert old_card.isHidden() and all(row.isHidden() for row in old_rows)
+    assert view._active_clusters_layout.itemAt(0).widget() is not old_card
+    assert all(view._vol_list_layout.itemAt(index).widget() is not row for index, row in enumerate(old_rows))
+
+
+def test_sidebar_clock_date_rollover_preserves_format_and_visibility(sidebar_layout, monkeypatch):
+    import datetime
+    _app, view, _module = sidebar_layout
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls):
+            return cls.current
+    monkeypatch.setattr(datetime, "datetime", Clock)
+    gs = view._data_manager.global_settings
+    gs.sidebar_clock_format = "%H:%M"
+    for now, date_text in [(Clock(2026, 10, 14, 23, 59), "10월 14일 수요일"),
+                           (Clock(2026, 10, 15, 0, 0), "10월 15일 목요일")]:
+        Clock.current = now
+        view._update_clock()
+        assert view._clock_label.text() == now.strftime("%H:%M")
+        assert view._clock_date_label.text() == date_text
+    gs.sidebar_clock_enabled = False
+    view._update_clock()
+    assert view._clock_widget.isHidden()
+
+
+@pytest.mark.parametrize("state, text, action", [
+    ("idle", "연결됨", "_rec_start_btn"),
+    ("recording", "01:01:01", "_rec_stop_btn"),
+    ("connecting", "연결 중", None),
+    ("obs_offline", "연결 안 됨", "_rec_connect_btn"),
+])
+def test_sidebar_recording_status_and_action_share_one_row(sidebar_gallery, state, text, action):
+    app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    view.set_recording_elapsed_provider(lambda: 3661)
+    view.on_recording_state_changed(state)
+    for _ in range(3):
+        app.processEvents()
+    status = view._rec_status_label
+    assert status.text() == text
+    section = view._recording_section
+    assert status.parentWidget() is section
+    for name in ("_rec_start_btn", "_rec_stop_btn", "_rec_connect_btn"):
+        button = getattr(view, name)
+        assert button.isVisible() is (name == action)
+        if button.isVisible():
+            assert button.parentWidget() is section
+            assert abs(button.geometry().center().y() - status.geometry().center().y()) <= 1
+            assert button.geometry().right() < section.width()
+    assert section.height() == view._screenshot_section.height()
+    assert not section.styleSheet()  # Parent transparency must not erase button backgrounds.
+
+
 def test_sidebar_shared_gallery_height_reduces_previews_before_scrolling(sidebar_gallery):
     app, view, _module, screenshots, _recordings, _tasks = sidebar_gallery
-    # Derive the fixed controls' actual height; no font/OS-specific test dimensions.
-    fixed_height = view.height() - view._gallery.height()
+    # Exclude the new flexible gap above the bottom group, as well as the gallery.
+    fixed_height = (view.height() - view._gallery.height()
+                    - view._scroll_layout.itemAt(1).spacerItem().geometry().height())
     cell_width, cell_height, gap = view._gallery_cell_size()
     for rows in [3, 2, 1, 3]:
         view.resize(view.width(), fixed_height + rows * cell_height + (rows - 1) * gap)
@@ -2347,7 +2528,8 @@ def test_sidebar_shared_gallery_resize_reuses_cells_and_same_source_results(side
     image = module._ThumbnailLoadTask._build_thumbnail(path)
     view._apply_thumbnail_result(view._thumb_request_id, path, image)
     old_request = view._thumb_request_id
-    fixed_height = view.height() - view._gallery.height()
+    fixed_height = (view.height() - view._gallery.height()
+                    - view._scroll_layout.itemAt(1).spacerItem().geometry().height())
     width, height, _gap = view._gallery_cell_size()
     tasks.clear()
     view.resize(280, fixed_height + height)

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QByteArray, QEventLoop, QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QTabBar, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
 from src.data.data_models import ManagedProcess
@@ -199,6 +199,44 @@ def test_sidebar_button_roles_render_distinct_pressed_feedback(role):
     root.close()
 
 
+@pytest.mark.parametrize("selected", [0, 1])
+def test_sidebar_gallery_tabs_have_button_like_rounded_corners_and_clear_gap(selected):
+    app = _qapp()
+    root = QWidget()
+    root.setFixedWidth(280)
+    palette = root.palette()
+    palette.setColor(root.backgroundRole(), QColor("#0f0f10"))
+    root.setPalette(palette)
+    root.setAutoFillBackground(True)
+    layout = QVBoxLayout(root)
+    tabs = QTabBar()
+    tabs.setExpanding(True)
+    tabs.setDrawBase(False)
+    tabs.addTab("스크린샷")
+    tabs.addTab("녹화")
+    tabs.setCurrentIndex(selected)
+    layout.addWidget(tabs)
+    apply_sidebar_widgets_style(root, dark=True)
+    root.show()
+    app.processEvents()
+    image = tabs.grab().toImage()
+    ratio = image.devicePixelRatio()
+    def color(x, y):
+        return image.pixelColor(round(x * ratio), round(y * ratio))
+    gap = round(root.width() * 0.012)
+    for index in (0, 1):
+        rect = tabs.tabRect(index)
+        left, right = rect.left(), rect.right() - (gap if index == 0 else 0)
+        inside = color(left + 8, rect.top() + 2)
+        assert all(color(x, y) != inside for x, y in (
+            (left, rect.top()), (right, rect.top()), (left, rect.bottom()), (right, rect.bottom()),
+        ))
+    first = tabs.tabRect(0)
+    assert color(first.right() - 1, first.center().y()) == color(first.left(), first.top())
+    assert tabs.currentIndex() == selected
+    root.close()
+
+
 def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border():
     app = _qapp()
     root = QWidget()
@@ -218,8 +256,9 @@ def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border(
     checked = _button_background(button)
     assert checked.blue() > checked.red()
     assert checked.blue() > checked.green()
-    assert button.size().toTuple() == (22, 22)
-    assert button.size() == button.sizeHint()
+    # The sound layout allocates width by ratio; the style must not force a square.
+    assert button.width() >= button.sizeHint().width()
+    assert button.height() >= button.sizeHint().height()
 
     button.setDown(True)
     button.update()
