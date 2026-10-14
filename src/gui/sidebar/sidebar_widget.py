@@ -294,8 +294,6 @@ class _HoverThumbCell(QLabel):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._base_w = base_w
-        self._base_h = base_h
         self._on_click = on_click
         self._on_right_click = on_right_click
         self._hi_pixmap: Optional[QPixmap] = None
@@ -310,13 +308,18 @@ class _HoverThumbCell(QLabel):
         """고화질 픽셀맵을 저장하고 기본 크기로 표시합니다."""
         self._hi_pixmap = pixmap
         lo = pixmap.scaled(
-            self._base_w, self._base_h,
+            self.width(), self.height(),
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x_off = max(0, (lo.width() - self._base_w) // 2)
-        y_off = max(0, (lo.height() - self._base_h) // 2)
-        self.setPixmap(lo.copy(x_off, y_off, self._base_w, self._base_h))
+        x_off = max(0, (lo.width() - self.width()) // 2)
+        y_off = max(0, (lo.height() - self.height()) // 2)
+        self.setPixmap(lo.copy(x_off, y_off, self.width(), self.height()))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._hi_pixmap is not None:
+            self.set_hi_pixmap(self._hi_pixmap)
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
@@ -455,6 +458,7 @@ class SidebarWidget(QWidget):
         self._anim = QPropertyAnimation(self, b"geometry")
         self._anim.setDuration(_ANIM_DURATION_MS)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._on_slide_finished)
 
         # 자동 숨김 타이머
         self._auto_hide_timer = QTimer(self)
@@ -671,12 +675,6 @@ class SidebarWidget(QWidget):
         end = QRect(geo.x() + _SIDEBAR_WIDTH, geo.y(), geo.width(), geo.height())
         self._anim.setStartValue(geo)
         self._anim.setEndValue(end)
-        # 중복 연결 방지
-        try:
-            self._anim.finished.disconnect(self._on_slide_out_finished)
-        except (RuntimeError, TypeError):
-            pass
-        self._anim.finished.connect(self._on_slide_out_finished)
         self._anim.start()
 
         self._is_shown = False
@@ -724,7 +722,7 @@ class SidebarWidget(QWidget):
 
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "_gallery", None) and event.type() == QEvent.Type.Resize:
-            self._refresh_gallery()
+            self._layout_gallery()
         return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------
@@ -1042,7 +1040,9 @@ class SidebarWidget(QWidget):
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         val_lbl.setStyleSheet("color: rgba(160,180,220,180); font-size: 11px;")
 
-        vol = getattr(process, 'default_volume', None) or 100
+        vol = getattr(process, 'default_volume', None)
+        if vol is None:
+            vol = 100
         if is_running:
             try:
                 actual = audio_control.get_app_volume(pid)
@@ -1173,7 +1173,10 @@ class SidebarWidget(QWidget):
 
     def _poll_cursor(self) -> None:
         from PySide6.QtGui import QCursor
-        if self._is_shown and self._anim.state() != QPropertyAnimation.State.Running:
+        # 열기·닫기 전환의 화면 밖 좌표를 사용자 이탈로 판단하지 않는다.
+        if self._anim.state() == QPropertyAnimation.State.Running:
+            return
+        if self._is_shown:
             geo = self._compute_geometry()
             if self.geometry() != geo:
                 self.setGeometry(geo)
@@ -1412,18 +1415,18 @@ class SidebarWidget(QWidget):
         return cell_width, max(1, round(cell_width * 0.75)), gap
 
     def _refresh_gallery(self, _index: int = -1) -> None:
-        """남는 높이에 들어가는 최신 미리보기와 폴더 버튼만 배치한다."""
+        """콘텐츠 진입점에서만 파일을 읽고 최대 8개 미리보기를 준비한다."""
         if not hasattr(self, "_thumb_pool"):
             return  # UI 구성 중에는 디코딩 작업을 등록하지 않는다.
         self._thumb_request_id += 1
         self._rec_thumb_request_id += 1
+        for cell in self._gallery.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            cell.hide()
+            cell.deleteLater()
         self._thumb_buttons.clear()
         self._rec_thumb_buttons.clear()
         while self._gallery_layout.count():
-            item = self._gallery_layout.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
+            self._gallery_layout.takeAt(0)
 
         kind = self._gallery_tabs.tabData(self._gallery_tabs.currentIndex())
         if kind is None:
@@ -1431,7 +1434,6 @@ class SidebarWidget(QWidget):
         cell_width, cell_height, gap = self._gallery_cell_size()
         self._gallery.setMinimumHeight(cell_height)
         self._gallery_layout.setSpacing(gap)
-        rows = min(_THUMB_MAX_ROWS, max(1, (self._gallery.height() + gap) // (cell_height + gap)))
 
         if kind == "screenshot":
             gs = getattr(self._data_manager, "global_settings", None)
@@ -1463,7 +1465,7 @@ class SidebarWidget(QWidget):
             logger.exception("갤러리 파일 조회 실패: %s", output_dir)
             return
 
-        shown = files[:rows * _THUMB_COLS - 1]
+        shown = files[:_THUMB_MAX_ROWS * _THUMB_COLS - 1]
         for index, path in enumerate(shown):
             self._gallery_layout.addWidget(make_cell(path, request_id), *divmod(index, _THUMB_COLS))
         remaining = len(files) - len(shown)
@@ -1482,10 +1484,38 @@ class SidebarWidget(QWidget):
 
         folder_btn.clicked.connect(open_folder)
         self._gallery_layout.addWidget(folder_btn, *divmod(len(shown), _THUMB_COLS))
+        self._layout_gallery(file_count=len(files))
         shown_paths = {str(path) for path in shown}
         for path in list(cache):
             if path not in shown_paths:
                 del cache[path]
+
+    def _layout_gallery(self, *, file_count: Optional[int] = None) -> None:
+        """크기 변경은 기존 셀만 재배치한다. 파일 조회·디코딩·요청 갱신 없음."""
+        if not self._gallery_layout.count():
+            return
+        cells = list(self._thumb_buttons.values()) + list(self._rec_thumb_buttons.values())
+        folder = self._gallery_layout.itemAt(self._gallery_layout.count() - 1).widget()
+        if file_count is None:
+            omitted = int(folder.text()[1:]) if folder.text().startswith("+") else 0
+            file_count = omitted + sum(not cell.isHidden() for cell in cells)
+        width, height, gap = self._gallery_cell_size()
+        self._gallery.setMinimumHeight(height)
+        self._gallery_layout.setSpacing(gap)
+        rows = min(_THUMB_MAX_ROWS, max(1, (self._gallery.height() + gap) // (height + gap)))
+        shown_count = min(len(cells), rows * _THUMB_COLS - 1)
+        while self._gallery_layout.count():
+            self._gallery_layout.takeAt(0)
+        for index, cell in enumerate(cells):
+            cell.setFixedSize(width, height)
+            cell.setVisible(index < shown_count)
+            if index < shown_count:
+                self._gallery_layout.addWidget(cell, *divmod(index, _THUMB_COLS))
+        folder.setFixedSize(width, height)
+        remaining = file_count - shown_count
+        folder.setText(f"+{remaining}" if remaining else "")
+        folder.setIcon(QIcon() if remaining else self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        self._gallery_layout.addWidget(folder, *divmod(shown_count, _THUMB_COLS))
 
     @Slot()
     def _refresh_screenshot_thumbnails(self) -> None:
@@ -1711,11 +1741,10 @@ class SidebarWidget(QWidget):
         except Exception:
             logger.exception("녹화 썸네일 적용 실패: %s", filepath)
 
-    def _on_slide_out_finished(self) -> None:
-        try:
-            self._anim.finished.disconnect(self._on_slide_out_finished)
-        except (RuntimeError, TypeError):
-            pass
+    def _on_slide_finished(self) -> None:
+        # 같은 애니메이션의 완료는 현재의 열기/닫기 의도만 소비한다.
+        if self._is_shown:
+            return
         self.hide()
         if self._on_hidden is not None:
             try:

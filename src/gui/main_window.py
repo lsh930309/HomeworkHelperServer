@@ -47,7 +47,9 @@ from src.data.data_models import ManagedProcess, GlobalSettings, WebShortcut
 from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
+    is_windows,
     position_windows_window_bottom_right,
+    set_windows_taskbar_visible,
 )
 from src.core.launcher import Launcher
 from src.core.launch_target import (
@@ -824,9 +826,7 @@ class MainWindow(QMainWindow):
             if incident_id is not None:
                 self._beholder_seen_incidents.add(incident_id)
             self._beholder_dialog_active = True
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            self.activate_and_show()
             dialog = BeholderIncidentDialog(item, self)
             try:
                 accepted = bool(dialog.exec())
@@ -1028,6 +1028,8 @@ class MainWindow(QMainWindow):
 
     def activate_and_show(self):
         """IPC 등을 통해 외부에서 창을 활성화하고 표시하도록 요청받았을 때 호출됩니다."""
+        if is_windows() and self.isMinimized():
+            set_windows_taskbar_visible(int(self.winId()), True)
         self.showNormal() # 창을 보통 크기로 표시 (최소화/숨김 상태에서 복원)
         self.activateWindow() # 창 활성화 (포커스 가져오기)
         self.raise_() # 창을 최상단으로 올림
@@ -1317,10 +1319,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "저장 실패", "항상 위 설정 저장이 차단되었거나 실패해 변경을 적용하지 않았습니다.")
             self._poll_beholder_incidents()
             self._load_always_on_top_setting()
-            self.show()
+            self.activate_and_show()
             return
         self._load_always_on_top_setting()
-        self.show()
+        self.activate_and_show()
 
     def _apply_theme(self, theme: str = "system"):
         """테마를 적용합니다. theme: 'system' | 'light' | 'dark'"""
@@ -1399,7 +1401,7 @@ class MainWindow(QMainWindow):
             self._load_always_on_top_setting()
             # 테마 설정 즉시 적용
             self._apply_theme(getattr(upd_gs, 'theme', 'system'))
-            self.show() # 창 플래그 변경을 적용하기 위해 show() 호출
+            self.activate_and_show() # 창 플래그 적용과 공통 복원 경계를 함께 사용
 
             self._record_status_event("전역 설정 저장됨.", 3000)
             self.apply_startup_setting() # 시작 프로그램 설정 적용

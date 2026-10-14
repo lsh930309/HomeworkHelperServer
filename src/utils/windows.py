@@ -178,6 +178,27 @@ def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, i
 def is_windows() -> bool:
     return os.name == 'nt'
 
+
+def set_windows_taskbar_visible(hwnd: int, visible: bool) -> bool:
+    """GUI 스레드에서 Shell 버튼만 조작하고 창의 네이티브 최소화 상태는 유지한다."""
+    if not is_windows():
+        return False
+    try:
+        import pythoncom
+        from win32com.shell import shell
+        taskbar = pythoncom.CoCreateInstance(
+            shell.CLSID_TaskbarList, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_ITaskbarList,
+        )
+        taskbar.HrInit()
+        if visible:
+            taskbar.AddTab(hwnd)
+        else:
+            taskbar.DeleteTab(hwnd)
+        return True
+    except Exception:
+        logger.warning("Windows 작업 표시줄 버튼 변경 실패: 표시=%s", visible, exc_info=True)
+        return False
+
 def _to_colorref(rgb: tuple[int, int, int]) -> int:
     """(R, G, B)를 Windows COLORREF(0x00bbggrr) 정수로 변환합니다."""
     red, green, blue = (max(0, min(255, int(channel))) for channel in rgb)

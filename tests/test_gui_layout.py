@@ -672,6 +672,115 @@ def test_restore_window_state_reapplies_content_fixed_size(monkeypatch, tmp_path
         _stop_window(window, app)
 
 
+@pytest.mark.parametrize("entry", ["tray", "game", "minimize", "close"])
+def test_main_tray_hiding_preserves_native_minimized_window_and_shared_restore(monkeypatch, tmp_path, entry):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from src.gui import tray_manager as tray_module
+    from src.gui.gui_notification_handler import GuiNotificationHandler
+    app = _qapp()
+    module = _patch_main_window_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(tray_module.TrayManager, "_setup_tray_icon_and_menu", lambda self: None)
+    monkeypatch.setattr(tray_module, "is_windows", lambda: True)
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    calls = []
+    def taskbar(hwnd, visible):
+        calls.append(visible)
+        return True
+    monkeypatch.setattr(tray_module, "set_windows_taskbar_visible", taskbar)
+    monkeypatch.setattr(module, "set_windows_taskbar_visible", taskbar)
+    window = module.MainWindow(_FakeApiClient([]))
+    manager = tray_module.TrayManager(window)
+    manager.tray_icon = SimpleNamespace(isVisible=lambda: True, hide=lambda: None)
+    window.tray_manager = manager
+    try:
+        window.show()
+        app.processEvents()
+        if entry == "tray":
+            manager._handle_tray_icon_activation(QSystemTrayIcon.ActivationReason.Trigger)
+        elif entry == "game":
+            window._hide_main_window_to_tray("game_started")
+        elif entry == "minimize":
+            window.showMinimized()
+        else:
+            window.close()
+        app.processEvents()
+        assert window.isMinimized() and window.isVisible() and not window.isHidden()
+        assert calls == [False]
+        assert not app.quitOnLastWindowClosed()
+        if entry == "tray":
+            manager._handle_tray_icon_activation(QSystemTrayIcon.ActivationReason.Trigger)
+        elif entry == "game":
+            GuiNotificationHandler(window).process_system_notification_activation(None)
+        else:
+            window.activate_and_show()
+        app.processEvents()
+        assert window.isVisible() and not window.isMinimized()
+        assert calls == [False, True]
+    finally:
+        _stop_window(window, app)
+
+
+@pytest.mark.parametrize("visible", [True, False])
+def test_native_taskbar_visibility_uses_shell_without_hiding_window(monkeypatch, visible):
+    import sys
+    from src.utils import windows
+    calls = []
+    taskbar = SimpleNamespace(HrInit=lambda: calls.append("init"),
+                              AddTab=lambda hwnd: calls.append(("add", hwnd)),
+                              DeleteTab=lambda hwnd: calls.append(("delete", hwnd)))
+    def create(*args):
+        calls.append(("create", args))
+        return taskbar
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace(CoCreateInstance=create, CLSCTX_INPROC_SERVER=1))
+    shell = SimpleNamespace(CLSID_TaskbarList="TaskbarList", IID_ITaskbarList="ITaskbarList")
+    monkeypatch.setitem(sys.modules, "win32com.shell", SimpleNamespace(shell=shell))
+    assert windows.set_windows_taskbar_visible(123, visible)
+    assert calls == [("create", ("TaskbarList", None, 1, "ITaskbarList")), "init",
+                     ("add" if visible else "delete", 123)]
+
+
+def test_native_taskbar_failure_is_reported_without_window_fallback(monkeypatch, caplog):
+    import sys
+    from src.utils import windows
+    def failed(*_args):
+        raise OSError("synthetic Shell failure")
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "pythoncom", SimpleNamespace(CoCreateInstance=failed, CLSCTX_INPROC_SERVER=1))
+    shell = SimpleNamespace(CLSID_TaskbarList="TaskbarList", IID_ITaskbarList="ITaskbarList")
+    monkeypatch.setitem(sys.modules, "win32com.shell", SimpleNamespace(shell=shell))
+    assert not windows.set_windows_taskbar_visible(123, False)
+    assert "Windows 작업 표시줄 버튼 변경 실패" in caplog.text
+
+
+def test_main_restore_has_no_visible_scrollbar_or_reserved_right_strip(monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QScrollBar
+    app = _qapp()
+    module = _patch_main_window_deps(monkeypatch, tmp_path)
+    names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일", "붕괴: 스타레일(베타)",
+             "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
+    data = _FakeApiClient([ManagedProcess(id=str(i), name=name, monitoring_path=f"/test/{i}.exe",
+                                        launch_path=f"/test/{i}.exe") for i, name in enumerate(names)])
+    data.global_settings.theme = "dark"
+    window = module.MainWindow(data)
+    try:
+        window.show()
+        app.processEvents()
+        window.hide()
+        window.activate_and_show()
+        app.processEvents()
+        table = window.process_table
+        assert all(not bar.isVisible() for bar in window.findChildren(QScrollBar))
+        assert table.viewport().width() == table.contentsRect().width()
+        assert table.viewport().height() == table.contentsRect().height()
+        image = window.grab().toImage()
+        start = window.menuBar().height() + 1
+        assert all(image.pixelColor(image.width() - 1, y).lightness() < 80
+                   for y in range(start, image.height() - 1))
+    finally:
+        _stop_window(window, app)
+
+
 def test_dashboard_button_uses_original_chart_glyph(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
@@ -2145,7 +2254,7 @@ def test_sidebar_shared_gallery_height_reduces_previews_before_scrolling(sidebar
         widgets = _gallery_widgets(view)
         assert len(widgets) == rows * 3
         assert widgets[-1].text() == f"+{12 - (rows * 3 - 1)}"
-        assert list(view._thumb_buttons) == [str(screenshots / f"image-{index:02}.png")
+        assert [path for path, cell in view._thumb_buttons.items() if not cell.isHidden()] == [str(screenshots / f"image-{index:02}.png")
                                            for index in range(11, 11 - (rows * 3 - 1), -1)]
         assert view._main_scroll.verticalScrollBar().maximum() == 0
         assert not view._main_scroll.verticalScrollBar().isVisible()
@@ -2232,7 +2341,7 @@ def test_sidebar_shared_gallery_refresh_follows_selected_source_and_path(sidebar
     assert len(view._rec_thumb_buttons) == 8
 
 
-def test_sidebar_shared_gallery_resize_rejects_old_results_and_reuses_valid_cache(sidebar_gallery):
+def test_sidebar_shared_gallery_resize_reuses_cells_and_same_source_results(sidebar_gallery):
     app, view, module, screenshots, _recordings, tasks = sidebar_gallery
     path = str(screenshots / "image-11.png")
     image = module._ThumbnailLoadTask._build_thumbnail(path)
@@ -2244,18 +2353,78 @@ def test_sidebar_shared_gallery_resize_rejects_old_results_and_reuses_valid_cach
     view.resize(280, fixed_height + height)
     for _ in range(3):
         app.processEvents()
-    assert len(view._thumb_buttons) == 2
-    assert view._thumb_request_id > old_request
+    assert sum(not cell.isHidden() for cell in view._thumb_buttons.values()) == 2
+    assert view._thumb_request_id == old_request
     assert view._thumb_buttons[path].pixmap().size() == QSize(width, height)
     assert not any(task._path == path for task in tasks)
     omitted_path = str(screenshots / "image-04.png")
     view._apply_thumbnail_result(old_request, omitted_path, image)
-    assert omitted_path not in view._thumb_cache
+    assert view._thumb_buttons[omitted_path].isHidden()
     # A same-name file updated on disk must be decoded again.
     os.utime(path, (9000, 9000))
     tasks.clear()
     view._refresh_screenshot_thumbnails()
     assert any(task._path == path for task in tasks)
+
+
+def test_sidebar_resize_never_reads_files_or_restarts_thumbnail_work(sidebar_gallery, monkeypatch):
+    app, view, _module, _screenshots, _recordings, tasks = sidebar_gallery
+    cells = dict(view._thumb_buttons)
+    request = view._thumb_request_id
+    tasks.clear()
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("resize must not inspect files or recreate gallery content")
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "stat", forbidden)
+    for height in (1050, 950, 850, 750, 650, 950, 1100):
+        view.resize(280, height)
+        app.processEvents()
+    assert view._thumb_buttons == cells
+    assert view._thumb_request_id == request and not tasks
+    assert _gallery_widgets(view)[-1].text() == "+4"
+
+
+def test_sidebar_opening_ignores_outside_cursor_until_animation_finishes(sidebar_gallery, monkeypatch):
+    from PySide6.QtGui import QCursor
+    _app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    monkeypatch.setattr(view, "_compute_geometry", lambda: QRect(0, 0, 280, 1100))
+    monkeypatch.setattr(QCursor, "pos", lambda: QPoint(290, 500))
+    view._auto_hide_ms = 0
+    view.slide_in()
+    view._poll_cursor()
+    assert view._is_shown and view.isVisible()
+    view._anim.setCurrentTime(view._anim.duration())
+    view._poll_cursor()
+    assert not view._is_shown
+
+
+def test_sidebar_close_interrupted_by_reopen_cannot_hide_new_open(sidebar_gallery, monkeypatch):
+    _app, view, _module, _screenshots, _recordings, _tasks = sidebar_gallery
+    monkeypatch.setattr(view, "_compute_geometry", lambda: QRect(0, 0, 280, 1100))
+    hidden = []
+    view._on_hidden = lambda: hidden.append(True)
+    view.slide_in()
+    view._anim.setCurrentTime(view._anim.duration())
+    view.slide_out()
+    view._anim.setCurrentTime(50)
+    view.slide_in()
+    view._anim.setCurrentTime(view._anim.duration())
+    assert view._is_shown and view.isVisible() and not hidden
+    view.slide_out()
+    view._anim.setCurrentTime(view._anim.duration())
+    assert not view._is_shown and not view.isVisible() and hidden == [True]
+
+
+@pytest.mark.parametrize("saved, expected", [(0, 0), (35, 35), (None, 100)])
+def test_sidebar_saved_volume_zero_is_preserved(sidebar_layout, saved, expected):
+    from PySide6.QtWidgets import QSlider
+    _app, view, _module = sidebar_layout
+    view._data_manager.managed_processes = [ManagedProcess(
+        id="zero", name="Muted Game", monitoring_path="/test/zero.exe", launch_path="/test/zero.exe", default_volume=saved,
+    )]
+    view._refresh_volumes_list()
+    row = view._vol_list_layout.itemAt(0).widget()
+    assert row.findChild(QSlider).value() == expected
 
 
 @pytest.mark.parametrize("kind", ["screenshot", "recording"])

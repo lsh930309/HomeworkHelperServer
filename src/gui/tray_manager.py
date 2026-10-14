@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QStyle
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import QObject, Qt # QObject는 많은 Qt 클래스의 기본 클래스입니다
+from src.utils.windows import is_windows, set_windows_taskbar_visible
 
 # 타입 힌팅 및 순환 참조 관련 주석:
 # main_window 인자의 타입 힌트는 좋은 관행이지만, MainWindow가 TrayManager를 임포트하는 경우
@@ -69,9 +70,18 @@ class TrayManager(QObject): # 내부적으로 시그널/슬롯을 사용한다�
         self.main_window.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
 
     def hide_window_to_tray(self, reason: str = "manual"):
-        """메인 창만 숨기고 앱 프로세스와 트레이 아이콘은 유지합니다."""
+        """Windows 최소화 전환을 유지하고 Shell 버튼만 트레이에서 제외한다."""
         self._ensure_background_survival()
-        self.main_window.hide()
+        if is_windows():
+            if not self.main_window.isMinimized():
+                # WindowStateChange가 같은 함수로 돌아와 버튼 제거를 소유한다.
+                self.main_window.showMinimized()
+                return
+            else:
+                if not set_windows_taskbar_visible(int(self.main_window.winId()), False):
+                    return
+        else:
+            self.main_window.hide()
         print(f"TrayManager: 창 숨김 처리 완료. reason={reason}")
 
     def toggle_window_visibility(self):
@@ -99,14 +109,6 @@ class TrayManager(QObject): # 내부적으로 시그널/슬롯을 사용한다�
             event.ignore()
         self.hide_window_to_tray("window_close")
         print("TrayManager: 창 닫기 이벤트 가로채서 숨김 처리.")
-
-    def handle_minimize_event(self):
-        """
-        메인 윈도우의 changeEvent (최소화 시)에서 호출되어 창을 숨깁니다.
-        """
-        print("TrayManager: 최소화 이벤트 수신, 창 숨김 처리.")
-        self.hide_window_to_tray("minimize")
-        # 트레이 아이콘은 이미 표시 중이어야 합니다.
 
     def hide_tray_icon(self):
         """트레이 아이콘을 숨깁니다. 애플리케이션 종료 전에 호출되어야 합니다."""

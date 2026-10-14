@@ -57,6 +57,7 @@ a = Analysis(
         
         # Windows
         'win32api', 'win32security', 'win32process', 'win32con', 'win32com.client',
+        'win32com.shell.shell', 'pythoncom',
         'winshell', 'psutil',
         
         # Network
