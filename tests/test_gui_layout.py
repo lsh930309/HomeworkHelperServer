@@ -1966,7 +1966,37 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
             if widget.isVisible():
                 right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
                 assert right <= viewport.width(), (name.text(), right, viewport.width())
-    assert view._main_scroll.verticalScrollBar().isVisible() is (height == 250)
+    assert not view._main_scroll.verticalScrollBar().isVisible()
+    assert (view._main_scroll.verticalScrollBar().maximum() > 0) is (height == 250)
+    assert viewport.width() == view._main_scroll.contentsRect().width()
+
+
+def test_sidebar_height_change_preserves_hidden_scroll_and_wheel_access(sidebar_layout):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QWheelEvent
+    app, view, _module = sidebar_layout
+    view.resize(280, 1400)
+    view.show()
+    app.processEvents()
+    scroll = view._main_scroll
+    assert scroll.verticalScrollBar().maximum() == 0
+    view.resize(280, 250)
+    app.processEvents()
+    assert scroll.verticalScrollBar().maximum() > 0
+    assert not scroll.verticalScrollBar().isVisible()
+    viewport = scroll.viewport()
+    assert viewport.width() == scroll.contentsRect().width()
+    position = viewport.rect().center()
+    event = QWheelEvent(QPointF(position), QPointF(viewport.mapToGlobal(position)), QPoint(), QPoint(0, -120),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    app.sendEvent(viewport, event)
+    app.processEvents()
+    assert scroll.verticalScrollBar().value() > 0
+    view.resize(280, 1400)
+    app.processEvents()
+    assert scroll.verticalScrollBar().maximum() == 0
+    assert scroll.verticalScrollBar().value() == 0
+    assert not scroll.verticalScrollBar().isVisible()
 
 
 def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_layout):

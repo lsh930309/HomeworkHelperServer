@@ -515,20 +515,14 @@ class SidebarWidget(QWidget):
 
     def _build_ui(self, layout: QVBoxLayout) -> None:
         """사이드바 내부 위젯을 구성합니다."""
-        # 메인 스크롤 영역 (세로 스크롤 허용, 가로 스크롤 없음)
+        # 내용이 넘치면 휠로 이동하되 스크롤바와 예약 공간은 만들지 않는다.
         self._main_scroll = QScrollArea()
         self._main_scroll.setWidgetResizable(True)
         self._main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._main_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._main_scroll.setStyleSheet("""
             QScrollArea { border: none; background: transparent; }
             QWidget#scroll_content { background: transparent; }
-            QScrollBar:vertical {
-                width: 4px; background: transparent; border-radius: 2px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(255,255,255,60); border-radius: 2px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
 
         self._scroll_content = QWidget()
