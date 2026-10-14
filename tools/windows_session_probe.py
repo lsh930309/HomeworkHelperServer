@@ -37,7 +37,12 @@ def desktop(repo: Path, duration: int) -> dict:
         try:
             return {"hwnd": int(hwnd), "pid": win32process.GetWindowThreadProcessId(hwnd)[1],
                     "class": win32gui.GetClassName(hwnd), "visible": bool(win32gui.IsWindowVisible(hwnd)),
-                    "rect": win32gui.GetWindowRect(hwnd)}
+                    "rect": win32gui.GetWindowRect(hwnd),
+                    "enabled": bool(win32gui.IsWindowEnabled(hwnd)),
+                    "minimized": bool(win32gui.IsIconic(hwnd)),
+                    "style": win32gui.GetWindowLong(hwnd, -16),
+                    "extended_style": win32gui.GetWindowLong(hwnd, -20),
+                    "dpi": int(user32.GetDpiForWindow(hwnd))}
         except (OSError, pywintypes.error):
             return {"hwnd": int(hwnd), "gone": True}
 
@@ -67,10 +72,14 @@ def desktop(repo: Path, duration: int) -> dict:
                 if not hwnd:
                     break
                 bars.append(window(hwnd))
+        cursor = win32gui.GetCursorPos()
         samples.append({"ms": round((time.monotonic() - start) * 1000, 2), "screens": screens,
+                        "cursor": cursor, "cursor_window": window(win32gui.WindowFromPoint(cursor)),
                         "foreground": window(win32gui.GetForegroundWindow()), "windows": windows, "taskbars": bars})
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+    user32.GetDpiForWindow.restype = ctypes.c_uint
     callback_type = ctypes.WINFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
                                       ctypes.c_long, ctypes.c_long, ctypes.c_uint32, ctypes.c_uint32)
     def event(_hook, kind, hwnd, obj, child, _thread, timestamp):
@@ -86,7 +95,7 @@ def desktop(repo: Path, duration: int) -> dict:
     user32.UnhookWinEvent.argtypes = [ctypes.c_void_p]
     try:
         if duration:
-            for low, high in ((3, 3), (0x8000, 0x800B)):
+            for low, high in ((3, 3), (0x16, 0x17), (0x8000, 0x800B)):
                 handle = user32.SetWinEventHook(low, high, None, callback, 0, 0, 2)
                 if not handle:
                     raise ctypes.WinError(ctypes.get_last_error())
