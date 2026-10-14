@@ -72,6 +72,31 @@ def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_pat
     assert json.loads(capsys.readouterr().out)["result"]["api"]["health"]["error"] == "URLError"
 
 
+def test_archived_install_selects_original_package_without_source_publication(monkeypatch, tmp_path, capsys):
+    calls = []
+    monkeypatch.setattr(ops, "published_commit", lambda _: pytest.fail("archived package must not require current source"))
+    def remote(config, script, *, timeout):
+        calls.append(script)
+        return subprocess.CompletedProcess([], 0, '{"ok":true,"release":"v1.4.0_b4_gfb92714"}', '')
+    monkeypatch.setattr(ops, "run_remote_powershell", remote)
+    assert ops.main(["install", "--host", "test.invalid", "--archived-release", "v1.4.0_b4_gfb92714",
+                     "--report-root", str(tmp_path)]) == 0
+    assert "-ArchivedRelease 'v1.4.0_b4_gfb92714'" in calls[0]
+    result = json.loads(capsys.readouterr().out)
+    assert result["commit"] is None and result["result"]["release"] == "v1.4.0_b4_gfb92714"
+
+
+@pytest.mark.parametrize("arguments", [
+    ["inspect", "--archived-release", "v1.4.0_b4_gfb92714"],
+    ["install", "--archived-release", "v1.4.0_b4_gfb92714", "--commit", "fb92714"],
+])
+def test_archived_selection_rejects_conflicting_operation_before_ssh(monkeypatch, tmp_path, arguments):
+    monkeypatch.setattr(ops, "run_remote_powershell", lambda *a, **kw: pytest.fail("must reject before SSH"))
+    with pytest.raises(SystemExit) as error:
+        ops.main(arguments + ["--host", "test.invalid", "--report-root", str(tmp_path)])
+    assert error.value.code == 2 and not list(tmp_path.iterdir())
+
+
 def test_named_inspect_uses_shared_peer_address_without_a_failed_first_ssh(monkeypatch, tmp_path, capsys):
     peer = TailscalePeer("LSH_Desktop", "lsh-desktop.example.ts.net.", ("100.64.0.42",), True, "windows")
     snapshot = TailscaleSnapshot(True, True, "Running", ("100.64.0.1",), "Mac", (peer,), "ready")
@@ -268,6 +293,8 @@ def test_build_invokes_single_authoritative_builder(monkeypatch, tmp_path, capsy
     ("setup", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
     ("service-account", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup"]),
     ("none", ["release", "payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
+    ("archive-missing", []), ("archive-duplicate", []), ("archive-invalid", []),
+    ("archive-ok", ["payload", "preflight", "backup", "preflight", "quit", "setup", "start", "inspect"]),
 ])
 def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, failure, expected):
     # Full PowerShell workflow, OS calls mocked in this disposable process only.
@@ -278,10 +305,19 @@ def test_windows_install_stops_before_mutation_on_preparation_failure(tmp_path, 
     python.parent.mkdir(parents=True)
     python.touch()
     (repo / "build.version.json").write_text('{"targets":{"windows-host":{"version":"1.0.0","build":1}}}')
+    archived_release = "v1.0.0_b1_gabc1234"
+    if failure in {"archive-ok", "archive-duplicate"}:
+        for folder in (["one", "two"] if failure == "archive-duplicate" else ["one"]):
+            archive = repo / "release/archives/windows-host" / folder
+            archive.mkdir(parents=True)
+            for suffix in ("Setup.exe", "Portable.zip"):
+                (archive / f"HomeworkHelper_{archived_release}_{suffix}").write_bytes(b"inert fixture")
+    elif failure.startswith("archive-"):
+        (repo / "release/archives/windows-host").mkdir(parents=True)
     source = (ops.ROOT / "tools/windows_host_operations.ps1").read_text(encoding="utf-8")
     stubs = r'''
 function Git-Checked($Arguments) {
- if ($Arguments[0] -eq 'status') {if ($global:Failure -eq 'dirty') {return 'M changed'}; return ''}
+ if ($Arguments[0] -eq 'status') {if ($global:Failure -in @('dirty','archive-ok')) {return 'M changed'}; return ''}
  if ($global:Failure -eq 'source') {return 'other'}; return 'commit'
 }
 function Require-InstallTime {}
@@ -312,6 +348,9 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
 '''
     source = source.replace("switch ($Command) {", stubs + "\nswitch ($Command) {")
     text = "$global:Events=[Collections.Generic.List[string]]::new()\n$global:Failed=$false\n$global:Failure=" + ops.ps_literal(failure) + "\ntry {\n& {\n" + source + "\n} -Command install -Repo " + ops.ps_literal(str(repo)) + " -Owner " + ops.ps_literal(getpass.getuser()) + " -ExpectedComputer $env:COMPUTERNAME -Commit commit\n} catch { $global:Failed=$true }\n@{events=@($global:Events.ToArray());failed=$global:Failed} | ConvertTo-Json -Compress"
+    if failure.startswith("archive-"):
+        selected = "../invalid" if failure == "archive-invalid" else archived_release
+        text = text.replace(" -Commit commit\n}", " -Commit commit -ArchivedRelease " + ops.ps_literal(selected) + "\n}")
     bootstrap = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("HH_")}
     result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(bootstrap.encode("utf-16-le")).decode()],
@@ -321,4 +360,4 @@ function Invoke-RestMethod {return @{ok=$true;db_ready=$true;database_access=@{m
     tail = result.stdout.strip().splitlines()[-1]
     trace = json.loads(tail)
     assert trace["events"] == expected, result.stdout + result.stderr
-    assert trace["failed"] == (failure != "none"), result.stdout + result.stderr
+    assert trace["failed"] == (failure not in {"none", "archive-ok"}), result.stdout + result.stderr

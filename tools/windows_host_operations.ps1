@@ -1,7 +1,7 @@
 param(
     [ValidateSet('inspect','logs','prepare-source','build','install','desktop','verify')][string]$Command,
     [string]$Repo, [string]$Owner, [string]$ExpectedComputer,
-    [string]$Commit, [string]$Branch, [string]$Bump,
+    [string]$Commit, [string]$Branch, [string]$Bump, [string]$ArchivedRelease,
     [string]$ProbeSource, [string]$SessionSource, [string]$VerifySource,
     [int]$LogLines = 80, [string]$Contains = '',
     [int]$Duration = 0, [switch]$AllowProtectedTime
@@ -189,12 +189,23 @@ switch ($Command) {
         $Result | ConvertTo-Json -Depth 14
     }
     'install' {
-        Require-Source
+        if (!$ArchivedRelease) { Require-Source }
         Require-ProductionEnvironment
         Require-InstallTime
-        $Release = (Invoke-Probe 'release').release_id
-        $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
-        $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
+        if ($ArchivedRelease) {
+            if ($ArchivedRelease -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+_b[1-9][0-9]*_g[0-9a-f]{4,40}$') { throw '보관 릴리스 ID 형식 오류' }
+            $Release = $ArchivedRelease
+            $Archive = Join-Path $Repo 'release\archives\windows-host'
+            $Setups = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Setup.exe'))
+            $Portables = @(Get-ChildItem $Archive -File -Recurse -Filter ('HomeworkHelper_'+$Release+'_Portable.zip'))
+            if ($Setups.Count -ne 1 -or $Portables.Count -ne 1) { throw '보관 패키지가 없거나 중복됨: '+$Release }
+            $Setup = $Setups[0].FullName
+            $Portable = $Portables[0].FullName
+        } else {
+            $Release = (Invoke-Probe 'release').release_id
+            $Setup = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Setup.exe')
+            $Portable = Join-Path $Repo ('release\HomeworkHelper_'+$Release+'_Portable.zip')
+        }
         if ((Get-AuthenticodeSignature $Setup).Status -ne 'Valid') { throw 'Setup 서명 오류' }
         $Expected = Invoke-Probe 'payload' $Portable
         $Before = Invoke-Probe 'preflight'

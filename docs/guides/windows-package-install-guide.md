@@ -26,6 +26,10 @@ Setup 서명, Portable CRC와 고유 제품 payload를 확인한다. 운영 DB/A
 OBS 녹화·방송·가상 카메라와 활성 리플레이 버퍼, 프로세스 identity, 로그인 사용자 세션을 확인한다.
 미확인·오류·사용 중 상태면 설치 전에 중단한다. 준비 실패로 기존 앱·서비스를 중지하지 않는다.
 
+사용자가 이전 버전 복귀를 요청한 경우 보관 패키지 선택은
+[공용 운영 도구의 archived-release 절차](operations-guide.md#소스-준비빌드설치)를 따른다.
+이미 빌드된 원본을 설치하며 이후의 정상 백업·종료·Setup·검증 절차는 동일하다.
+
 공용 backup 단계는 기존 `src.data.database.backup_database` writer를 사용하며 읽은 DB 경로가
 지정 사용자의 실제 `AppData/Roaming/HomeworkHelper/homework_helper_data/app_data.db`인지 확인한다.
 무결성 검사·새 스냅샷 검증·정상 백업이 실패하면 적용하지 않는다. 백업 위치는 지정 사용자의

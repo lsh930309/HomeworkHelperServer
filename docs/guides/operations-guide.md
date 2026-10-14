@@ -161,6 +161,14 @@ service.log가 있다고 추측하지 않는다.
 install의 release ID는 Windows의 `build.py` 버전 계산을 그대로 사용한다. 운영 도구가 파일명이나
 Git 축약 길이를 따로 계산하지 않으므로 `core.abbrev` 설정이 달라도 같은 패키지를 선택한다.
 
+사용자가 이전 설치본으로 복귀를 요청하면 `install --archived-release <정확한 릴리스 ID>`를 사용한다.
+고정 저장소의 `release/archives/windows-host/`에서 같은 ID의 Setup·Portable이 각각 하나여야 하며,
+기존 서명·CRC/payload·사용 상태·정상 백업·정상 종료·설치 후 검증을 그대로 수행한다. 이 경로는 이미
+생성된 보관 패키지를 설치하므로 현재 소스 HEAD 공개·checkout 변경·재빌드를 요구하지 않는다.
+`--commit`과 함께 지정하지 않는다. DB·사용자 설정을 과거 백업으로 복원하거나 로컬 빌드 버전을
+낮추지 않으며, 설치 버전은 선택한 Portable의 payload와 실제 설치 파일을 대조해 판정한다.
+보호 시간 예외 승인과 게임·녹화 중단 조건은 일반 설치와 같다.
+
 build는 Windows의 `build.py --no-gui --no-prune-archives`를 호출한다. `--bump`는 기존 옵션을 전달한다.
 기존 설치본의 유효한 서명 인증서·개인키를 사용하며 재발급·개인키 복사·수동 서명은 하지 않는다.
 Windows checkout의 `artifacts/host-operations-build.log`에 전체 출력을 남긴다.

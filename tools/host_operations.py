@@ -61,6 +61,7 @@ def remote_script(args, commit: str = "", branch: str = "") -> str:
         "Command": args.command, "Repo": WINDOWS_REPO, "Owner": args.owner,
         "ExpectedComputer": args.computer, "Commit": commit, "Branch": branch,
         "Bump": args.bump,
+        "ArchivedRelease": args.archived_release or "",
         "LogLines": str(args.log_lines), "Contains": args.contains,
         "ProbeSource": base64.b64encode(gzip.compress((ROOT / "tools/windows_host_probe.py").read_bytes())).decode(),
         "SessionSource": base64.b64encode(gzip.compress((ROOT / "tools/windows_session_probe.py").read_bytes())).decode(),
@@ -85,6 +86,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--owner", default="lsh93")
     p.add_argument("--computer", default="LSH_DESKTOP")
     p.add_argument("--commit", help="Published local HEAD (defaults to current HEAD)")
+    p.add_argument("--archived-release", help="install only: reinstall this exact release from build.py archives")
     p.add_argument("--bump", choices=("build", "patch", "minor", "major", "none"), default="build")
     p.add_argument("--duration", type=int, choices=range(0, 121), default=0,
                    metavar="0..120", help="desktop observation duration; 0 takes one snapshot")
@@ -97,12 +99,15 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = parser().parse_args(argv)
+    argument_parser = parser()
+    args = argument_parser.parse_args(argv)
+    if args.archived_release and (args.command != "install" or args.commit):
+        argument_parser.error("--archived-release는 install에서만 사용하며 --commit과 함께 지정하지 않습니다.")
     report = args.report_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
     try:
         report.mkdir(parents=True)
         commit, branch = (published_commit(args.commit) if args.command in
-                          {"prepare-source", "build", "install"} else ("", ""))
+                          {"prepare-source", "build", "install"} and not args.archived_release else ("", ""))
         script = remote_script(args, commit, branch)
         timeout = {"build": 1800, "install": 360, "prepare-source": 120, "verify": 180,
                    "desktop": args.duration + 90, "inspect": 45, "logs": 20}[args.command]
