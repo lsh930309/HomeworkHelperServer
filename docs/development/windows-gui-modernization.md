@@ -17,6 +17,10 @@ QML·Quick은 패키지에서 고정 제외한다. 새 프레임워크는 도입
 - 신규 heartbeat·API 기본값·진단은 pyside6와 widgets로 통일한다. 기존 기록은 재작성하지 않는다.
 - 후보 빌드 옵션·테스트·활성 PyQt 표기는 제거하고 Qt Network의 단일 인스턴스 IPC는 유지한다.
 - GUI 종료는 MainWindow에서 native filter·timer·tray·sidebar·녹화·follow-up·worker를 정리한다.
+- 명시적인 앱 종료는 정리 완료 후 GUI 스레드에서 `QApplication.exit(0)`으로 실행 루프를
+  반환시킨 뒤 기존 API child 종료 절차로 이어진다. 창 닫기의 트레이 숨김 정책이 이 종료를
+  취소하지 않으며, IPC ACK는 요청 수락이고 GUI/API 프로세스의 종료 완료는 별도로 확인한다.
+  표시·네이티브 최소화·숨김 상태와 트레이·IPC 진입을 실제 Qt 실행 루프와 격리 child로 검증한다.
 
 ## 네이티브 복귀와 실기기 검증
 

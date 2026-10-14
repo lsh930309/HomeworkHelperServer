@@ -2581,8 +2581,12 @@ def start_main_application(instance_manager: SingleInstanceApplication):
     instance_manager.start_ipc_server(main_window_to_activate=main_window)
     main_window.show()
     exit_code = app.exec() # 애플리케이션 이벤트 루프 시작
+    logging.getLogger(__name__).info("GUI event loop returned: code=%s; stopping owned API child", exit_code)
     if not stop_api_server():
+        logging.getLogger(__name__).error("Owned API child shutdown failed")
         print("API 서버 종료에 실패했습니다.")
+    else:
+        logging.getLogger(__name__).info("Owned API child stopped")
     sys.exit(exit_code) # 종료 코드로 시스템 종료
 
 if __name__ == "__main__":

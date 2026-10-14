@@ -2279,10 +2279,13 @@ class MainWindow(QMainWindow):
         # 3-3. Game Bar 설정 복원
         self._restore_gamebar_setting()
 
-        # 4. QApplication 종료
+        # 정리가 끝난 명시적 앱 종료는 창 닫기의 트레이 숨김 정책이
+        # 거부할 수 있는 quit 요청과 구분한다. GUI 루프가 반환되어야
+        # entrypoint의 기존 API child 종료 절차가 실행된다.
         app_instance = QApplication.instance()
         if app_instance:
-            app_instance.quit()
+            logger.info("GUI cleanup completed; exiting application event loop")
+            app_instance.exit(0)
 
     def _cell_content_width(self, row: int, column: int) -> int:
         if column == self.COL_ICON:

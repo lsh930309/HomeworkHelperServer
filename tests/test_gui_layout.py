@@ -1,4 +1,8 @@
 import os
+import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -670,6 +674,112 @@ def test_restore_window_state_reapplies_content_fixed_size(monkeypatch, tmp_path
         assert window.maximumSize() == window.size()
     finally:
         _stop_window(window, app)
+
+
+@pytest.mark.parametrize("state", ["visible", "minimized", "hidden"])
+@pytest.mark.parametrize("entry", ["tray", "ipc"])
+def test_explicit_quit_returns_gui_loop_and_stops_owned_child(tmp_path, state, entry):
+    # QApplication.exit must run inside exec(), in a separate process so it
+    # cannot quit pytest's shared QApplication. The real entrypoint is compiled
+    # without importing its production DB/server initialization.
+    code = textwrap.dedent('''
+        import ast, atexit, json, multiprocessing, os, signal, sys
+        from pathlib import Path
+        from types import SimpleNamespace
+        import pytest
+        from PySide6.QtCore import QSettings, QTimer
+        from PySide6.QtGui import QAction, QFont, QFontDatabase
+        from PySide6.QtNetwork import QLocalSocket
+        from PySide6.QtWidgets import QApplication
+        from test_gui_layout import _FakeApiClient, _patch_main_window_deps
+        from test_api_runtime_stability import _load_stop_api_server_contract
+        from src.core.instance_manager import SingleInstanceApplication, InstanceCommand, encode_instance_command
+        from src.gui import tray_manager as tray
+
+        root, state, entry = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(root / 'qt-settings'))
+        mp = pytest.MonkeyPatch()
+        module = _patch_main_window_deps(mp, root)
+        mp.setattr(module.MainWindow, '_set_gamebar_capture', lambda self, enabled: None)
+        mp.setattr(module.MainWindow, '_restore_gamebar_setting', lambda self: None)
+        mp.setattr(tray.TrayManager, '_setup_tray_icon_and_menu', lambda self: None)
+        mp.setattr(tray, 'is_windows', lambda: True)
+        mp.setattr(module, 'is_windows', lambda: True)
+        mp.setattr(tray, 'set_windows_taskbar_visible', lambda *_: True)
+        mp.setattr(module, 'set_windows_taskbar_visible', lambda *_: True)
+        context = multiprocessing.get_context('spawn')
+        shutdown = context.Event()
+        child = context.Process(target=shutdown.wait, args=(10,), daemon=False)
+        child.start()
+        child.terminate = child.kill = lambda: (_ for _ in ()).throw(AssertionError('forced child termination'))
+        manager = SingleInstanceApplication('Isolated Quit', executable_path=root / 'isolated-host.exe')
+        namespace = _load_stop_api_server_contract()
+        namespace.update(os=os, api_server_process=child, api_server_shutdown_event=shutdown,
+                         _server_pid_file_path=lambda: str(root / 'server.pid'),
+                         _server_metadata_file_path=lambda: str(root / 'server.json'))
+        stop_owned_child = namespace['stop_api_server']
+        observed = []
+        clients = []
+        def stop_api():
+            observed.append('api_stop_after_gui_loop')
+            return stop_owned_child(timeout=3.0)
+        def create_window(client, instance_manager):
+            window = module.MainWindow(client, instance_manager=instance_manager)
+            window.tray_manager = tray.TrayManager(window)
+            window.tray_manager.tray_icon = SimpleNamespace(hide=lambda: None, isVisible=lambda: True)
+            action = QAction('종료', window)
+            action.triggered.connect(window.initiate_quit_sequence)
+            def request_quit():
+                if state == 'minimized':
+                    window.tray_manager.hide_window_to_tray('test')
+                elif state == 'hidden':
+                    window.hide()
+                if entry == 'tray':
+                    action.trigger()
+                else:
+                    socket = QLocalSocket()
+                    clients.append(socket)
+                    socket.connectToServer(manager._identity.server_name)
+                    assert socket.waitForConnected(500)
+                    socket.write(encode_instance_command(InstanceCommand.QUIT_APPLICATION, manager._identity))
+                    socket.flush()
+            QTimer.singleShot(0, request_quit)
+            QTimer.singleShot(1000, lambda: QApplication.instance().exit(77))
+            return window
+        namespace.update(__name__='isolated_gui_entrypoint', sys=sys, atexit=atexit, signal=signal,
+                         QApplication=QApplication, QFont=QFont, QFontDatabase=QFontDatabase,
+                         SingleInstanceApplication=SingleInstanceApplication, is_admin=lambda: False,
+                         get_bundle_resource_path=lambda _: str(root / 'absent-font'),
+                         binding_diagnostics=lambda: {}, _prepare_gui_database=lambda _: True,
+                         ApiClient=lambda: _FakeApiClient([]), MainWindow=create_window, stop_api_server=stop_api)
+        tree = ast.parse(Path('homework_helper.pyw').read_text(encoding='utf-8'))
+        node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'start_main_application')
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), 'homework_helper.pyw', 'exec'), namespace)
+        try:
+            namespace['start_main_application'](manager)
+        except SystemExit as result:
+            print('QUIT_RESULT ' + json.dumps({'loop_exit': result.code, 'api_stopped': not child.is_alive(),
+                                              'shutdown_signalled': shutdown.is_set(), 'observed': observed}))
+        finally:
+            shutdown.set()
+            child.join(3.0)
+    ''')
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", APPDATA=str(tmp_path),
+               LOCALAPPDATA=str(tmp_path), HH_TEST_APPDATA_DIR=str(tmp_path),
+               PYTHONPATH=os.pathsep.join((str(Path("tests").resolve()), str(Path.cwd()))))
+    if os.name != "nt":
+        # macOS's pytest temp path plus the socket name exceeds AF_UNIX's
+        # path limit. QLocalServer already uses a unique executable digest.
+        env["TMPDIR"] = "/tmp"
+    result = subprocess.run([sys.executable, "-c", code, str(tmp_path), state, entry],
+                            env=env, text=True, encoding="utf-8", capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = next(line.removeprefix("QUIT_RESULT ") for line in result.stdout.splitlines()
+                   if line.startswith("QUIT_RESULT "))
+    assert json.loads(payload) == {
+        "loop_exit": 0, "api_stopped": True, "shutdown_signalled": True,
+        "observed": ["api_stop_after_gui_loop"],
+    }
 
 
 @pytest.mark.parametrize("entry", ["tray", "game", "minimize", "close"])
