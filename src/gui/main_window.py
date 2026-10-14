@@ -10,7 +10,7 @@ import logging
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
     is_windows,
-    position_windows_window_bottom_right,
+    place_window_rect_in_work_area,
+    position_windows_window_in_work_area,
     set_windows_taskbar_visible,
 )
 from src.core.launcher import Launcher
@@ -464,7 +465,7 @@ class MainWindow(QMainWindow):
 
         app_instance = QApplication.instance()
         if app_instance is not None:
-            app_instance.primaryScreenChanged.connect(self._position_window_bottom_right)
+            app_instance.primaryScreenChanged.connect(self._position_window_in_work_area)
         self._apply_widgets_presentation()
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
@@ -953,9 +954,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
     def moveEvent(self, event):
-        """이동이 끝난 뒤 같은 모니터의 작업 영역 우하단에 맞춥니다."""
+        """사용자 이동을 유지하며 가까운 작업 영역 경계에만 붙입니다."""
         super().moveEvent(event)
-        QTimer.singleShot(0, self._position_window_bottom_right)
+        self._position_window_in_work_area(placement="snap")
 
     def _on_monitor_timer_tick(self):
         """타이머 지연을 기록하고 다음 process snapshot을 요청합니다."""
@@ -1004,7 +1005,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_status_columns()
         self._refresh_progress_bars()
-        self._position_window_bottom_right()
+        self._position_window_in_work_area()
 
         if self._ui_refresh_tick_count % self._WEB_BUTTON_REFRESH_INTERVAL_TICKS == 0:
             self._refresh_web_button_states()
@@ -2173,10 +2174,12 @@ class MainWindow(QMainWindow):
     def _position_on_cursor_screen_bottom_right(self) -> None:
         """창을 열 때 커서가 있는 모니터를 선택합니다."""
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
-        self._position_window_bottom_right(screen)
+        self._position_window_in_work_area(screen, placement="bottom_right")
 
-    def _position_window_bottom_right(self, screen=None) -> None:
-        """표시 중인 창의 가시 프레임 우하단을 같은 작업 영역에 맞춥니다."""
+    def _position_window_in_work_area(
+        self, screen=None, *, placement: Literal["bottom_right", "snap", "contain"] = "contain",
+    ) -> None:
+        """표시는 우하단, 이동은 근접 스냅, 갱신은 영역 밖 부분만 보정합니다."""
         if not self.isVisible() or self.isMinimized():
             return
         try:
@@ -2184,17 +2187,21 @@ class MainWindow(QMainWindow):
             if screen is None:
                 return
             origin = screen.geometry().topLeft()
-            if position_windows_window_bottom_right(int(self.winId()), (origin.x(), origin.y())):
+            if position_windows_window_in_work_area(int(self.winId()), (origin.x(), origin.y()), placement=placement):
                 return
             available = screen.availableGeometry()
             frame = self.frameGeometry()
-            target = QPoint(available.right() - frame.width() + 1,
-                            available.bottom() - frame.height() + 1)
+            placed = place_window_rect_in_work_area(
+                (frame.left(), frame.top(), frame.right() + 1, frame.bottom() + 1),
+                (available.left(), available.top(), available.right() + 1, available.bottom() + 1),
+                placement=placement,
+            )
+            target = QPoint(placed[0], placed[1])
             if frame.topLeft() != target:
                 # QWidget.move의 창 좌표는 프레임을 포함한다.
                 self.move(target)
         except Exception:
-            logger.debug("메인 창 우하단 배치 실패", exc_info=True)
+            logger.debug("메인 창 작업 영역 배치 실패: 의도=%s", placement, exc_info=True)
 
     def closeEvent(self, event: QEvent):
         """창 닫기 이벤트를 처리합니다. 트레이 관리자가 있으면 트레이로 숨깁니다."""
@@ -2366,7 +2373,7 @@ class MainWindow(QMainWindow):
             self._pending_bottom_right_placement = False
             QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
         else:
-            QTimer.singleShot(0, self._position_window_bottom_right)
+            QTimer.singleShot(0, self._position_window_in_work_area)
 
     # ───────── 볼륨 패널 ─────────
 

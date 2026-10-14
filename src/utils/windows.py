@@ -3,6 +3,7 @@ import os
 import logging
 import ctypes
 import ctypes.wintypes
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,7 @@ _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
 _SWP_FRAME_MOVE_FLAGS = 0x0001 | 0x0004 | 0x0010
+_WINDOW_SNAP_DISTANCE_LOGICAL = 15
 
 
 def _configure_window_geometry_api(user32) -> None:
@@ -147,8 +149,37 @@ def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd:
         return None
 
 
-def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, int]) -> bool:
-    """대상 모니터의 가시 작업 영역 우하단에 DWM 프레임을 맞춥니다."""
+def place_window_rect_in_work_area(
+    rect: tuple[int, int, int, int],
+    work_area: tuple[int, int, int, int],
+    *, placement: Literal["bottom_right", "snap", "contain"], threshold: int = _WINDOW_SNAP_DISTANCE_LOGICAL,
+) -> tuple[int, int, int, int]:
+    """표시·드래그·영역 보정의 서로 다른 의도를 현재 사각형만으로 계산한다."""
+    left, top, right, bottom = rect
+    work_left, work_top, work_right, work_bottom = work_area
+    width, height = right - left, bottom - top
+    if placement == "bottom_right":
+        left, top = work_right - width, work_bottom - height
+    elif placement == "contain":
+        left = max(work_left, min(left, work_right - width))
+        top = max(work_top, min(top, work_bottom - height))
+    else:  # snap: 기존 15 논리 픽셀 자석. 멀리 있는 경계로는 이동하지 않는다.
+        if abs(left - work_left) <= threshold:
+            left = work_left
+        elif abs(right - work_right) <= threshold:
+            left = work_right - width
+        if abs(top - work_top) <= threshold:
+            top = work_top
+        elif abs(bottom - work_bottom) <= threshold:
+            top = work_bottom - height
+    return left, top, left + width, top + height
+
+
+def position_windows_window_in_work_area(
+    hwnd: int, monitor_origin: tuple[int, int],
+    *, placement: Literal["bottom_right", "snap", "contain"],
+) -> bool:
+    """가시 작업 영역과 DWM 프레임을 공유하고 의도에 필요한 이동만 적용한다."""
     if not is_windows() or not hwnd:
         return False
     try:
@@ -162,8 +193,17 @@ def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, i
         if frame_rects is None:
             return False
         outer, visible = frame_rects
-        dx = work_area[2] - visible.right
-        dy = work_area[3] - visible.bottom
+        threshold = _WINDOW_SNAP_DISTANCE_LOGICAL
+        if placement == "snap":
+            user32.GetDpiForWindow.argtypes = [ctypes.wintypes.HWND]
+            user32.GetDpiForWindow.restype = ctypes.wintypes.UINT
+            dpi = int(user32.GetDpiForWindow(ctypes.wintypes.HWND(hwnd)))
+            if not dpi:
+                return False
+            threshold = round(threshold * dpi / 96)
+        original = (visible.left, visible.top, visible.right, visible.bottom)
+        target = place_window_rect_in_work_area(original, work_area, placement=placement, threshold=threshold)
+        dx, dy = target[0] - visible.left, target[1] - visible.top
         if dx == 0 and dy == 0:
             return True
         return bool(user32.SetWindowPos(
@@ -171,7 +211,7 @@ def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, i
             outer.left + dx, outer.top + dy, 0, 0, _SWP_FRAME_MOVE_FLAGS,
         ))
     except Exception as exc:
-        logger.debug("Windows 창 우하단 배치 실패: %s", exc)
+        logger.debug("Windows 창 작업 영역 배치 실패: 의도=%s 오류=%s", placement, exc)
         return False
 
 
