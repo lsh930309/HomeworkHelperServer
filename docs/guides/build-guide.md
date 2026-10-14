@@ -5,7 +5,7 @@
 ## 필수 기본 절차
 
 호스트·클라이언트 빌드와 패키지 배포 작업은 먼저 저장소의
-[AGENTS.md](../../AGENTS.md)와 이 문서를 읽고 시작한다.
+[종합 가이드](../WORK_GUIDE.md)의 해당 문서와 이 문서를 읽고 시작한다.
 Windows에서는 Windows 저장소 환경에서, macOS에서는 macOS 저장소 환경에서
 `python build.py`를 실행한다. 별도 옵션이 필요한 경우에만 아래의 지원 옵션을 사용한다.
 
@@ -27,6 +27,25 @@ Windows에서는 Windows 저장소 환경에서, macOS에서는 macOS 저장소 
 최종 배포 파일은 Windows의 Setup EXE·Portable ZIP과 macOS의 PKG다.
 macOS `.app`은 PKG 생성에 사용하는 중간 산출물이다.
 Windows Setup의 lsh-desktop 적용 절차는 [패키지 설치 가이드](windows-package-install-guide.md)를 따른다.
+
+## 공개 소스와 대상 환경 준비
+
+배포가 승인된 작업은 관련 검증·커밋·작업 브랜치 푸시를 완료한다. 공개 커밋과 Windows 빌드
+checkout을 맞추는 명령은 [공용 운영 도구](operations-guide.md#소스-준비빌드설치)를 사용한다.
+lsh-desktop의 고정 저장소·버전·산출물 위치는 [운영 도구의 작업 저장소 계약](operations-guide.md#lsh-desktop의-고정-작업-저장소)을 따른다.
+기존 작업 트리의 변경을 덮어쓰거나, 원격보다 앞선 소스를 임의 Git bundle로 전달하지 않는다.
+사용자가 명시한 로컬 배포 예외만 별도로 기록한다.
+
+Windows 제품은 Windows에서, macOS 제품은 Mac에서 빌드한다. `build.py` 실행 전 실제 OS·checkout·
+커밋·dirty 여부와 해당 환경의 로컬 버전을 확인한다. 빌드 버전·산출물과 설치 결과는 서로 다른 증거다.
+소스 공개, 빌드/서명 성공, 설치, 로그/API 확인, 사용자 검수 범위를 각각 보고한다.
+
+## Windows 개발 환경 준비
+
+Python 3.14와 Python Launcher를 먼저 설치한다. `python build.py`는 프로젝트 `.venv`가 없으면
+Python 3.14로 생성하고, 해당 환경에서 `requirements.txt`를 설치·갱신한 뒤 빌드를 이어간다.
+가상환경 삭제·재생성을 정상 빌드의 선행 단계로 실행하지 않는다. 기존 환경의 Python 버전이
+다르거나 손상됐으면 실제 오류를 먼저 확인하고 수동 환경 정비와 정상 빌드를 구분한다.
 
 ## 로컬 버전 상태
 
@@ -106,7 +125,7 @@ python build.py --archive-keep 20 --archive-days 180
 python build.py --no-prune-archives
 ```
 
-dev-alwayson 잔여 보완 동안 기준 산출물은 위의 지원 옵션으로 보존한다. 추가 후보 사본을
+기준 산출물 보존이 필요한 작업은 위의 지원 옵션을 사용한다. 추가 후보 사본을
 만들지 않는다. 과거 아카이브 부재의 원인은 삭제 기록 없이 추정하지 않는다.
 
 ## Windows 배포용 서명 준비

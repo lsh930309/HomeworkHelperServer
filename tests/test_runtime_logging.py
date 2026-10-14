@@ -63,6 +63,6 @@ def test_gui_logging_starts_only_after_server_only_branch():
 
     server_branch = source.index("if _wants_server_only_mode():")
     logging_setup = source.index("gui_log_path = configure_gui_logging()")
-    schema_migration = source.index("# === 스키마 자동 마이그레이션 ===")
+    gui_start = source.index("def start_primary_application(instance_manager:")
 
-    assert server_branch < logging_setup < schema_migration
+    assert server_branch < logging_setup < gui_start

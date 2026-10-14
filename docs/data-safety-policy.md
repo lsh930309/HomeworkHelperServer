@@ -2,6 +2,10 @@
 
 이 앱의 사용자 데이터 변경은 반드시 API/CRUD 계층을 통과해야 한다. 직접 DB 커밋, UI별 부분 객체 저장, 기본값 기반 전체 덮어쓰기는 설정 증발의 재발 원인이므로 금지한다.
 
+현재 앱의 데이터 접근은 `ApiClient → API → CRUD/Beholder` 경계를 따른다. 별도 JSON 저장용
+DataManager나 GUI-side SchemaMigrator를 병렬로 유지하지 않는다. DB 생성·검증·마이그레이션은
+기존 DB 초기화 경로가 소유하며, 과거 로컬 JSON 파일을 정리 목적으로 임의 삭제하지 않는다.
+
 ## 필수 원칙
 
 1. **저장 계약 동기화**: 다이얼로그/런타임 모델에 있는 설정은 `GlobalSettings` DB 모델, API schema, 자동 마이그레이션에 모두 존재해야 한다.

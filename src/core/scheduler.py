@@ -2,9 +2,10 @@
 import datetime
 import time
 import logging
-from typing import Optional, Dict, Set, Tuple
+from typing import Optional, Dict, Set, Tuple, TYPE_CHECKING
 
-from src.data.manager import DataManager
+if TYPE_CHECKING:
+    from src.api.client import ApiClient
 
 logger = logging.getLogger(__name__)
 from src.data.data_models import ManagedProcess, GlobalSettings
@@ -17,7 +18,7 @@ PROC_STATE_COMPLETED = "완료됨"
 PROC_STATE_RUNNING = "실행중"
 
 class Scheduler:
-    def __init__(self, data_manager: DataManager, notifier: Notifier, process_monitor: ProcessMonitor):
+    def __init__(self, data_manager: "ApiClient", notifier: Notifier, process_monitor: ProcessMonitor):
         """알림 중복 방지 상태와 시각 상태 스냅샷 캐시를 초기화합니다."""
         self.data_manager = data_manager
         self.notifier = notifier

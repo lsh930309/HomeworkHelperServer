@@ -2,9 +2,10 @@ import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
-os.environ["HOME"] = "/tmp/homeworkhelper-tests"
-Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
+if "HH_TEST_APPDATA_DIR" not in os.environ:
+    os.environ["HH_TEST_APPDATA_DIR"] = tempfile.mkdtemp(prefix="hh-remote-route-state-")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -187,6 +188,20 @@ def test_remote_status_does_not_block_on_tailscale_probe():
     body = response.json()
     assert body["readiness"]["server_mode_readiness"]["color"] == "green"
     assert body["readiness"]["tailscale_readiness"]["message"] == "상세 Tailscale 점검은 /remote/readiness에서 확인하세요."
+
+
+@pytest.mark.parametrize("preset_id", ["nikke", "wuwa", "endfield", "zenless_zone_zero"])
+@pytest.mark.parametrize("mode", ["direct", "shortcut", "launcher"])
+def test_remote_launch_reaches_launcher_with_and_without_search_patterns(preset_id, mode):
+    client, launcher, _urls, _auditor, _registry = _client_with_seed(processes=[models.Process(
+        id="generic-game", name="Registered Game", monitoring_path="C:/Games/Game.exe",
+        launch_path="C:/Games/Launcher.exe", user_preset_id=preset_id, preferred_launch_type=mode,
+    )])
+    response = client.post("/remote/processes/generic-game/launch", json={})
+    assert response.status_code == 200 and response.json()["accepted"]
+    expected = "C:/Games/Game.exe" if mode == "direct" else "C:/Games/Launcher.exe"
+    assert launcher.targets == [expected]
+    assert launcher.managed_launches == [("generic-game", mode)]
 
 
 def test_remote_launch_uses_shortcut_preference_and_existing_launcher_logic_boundary():

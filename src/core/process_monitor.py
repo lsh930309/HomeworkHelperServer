@@ -236,9 +236,14 @@ def terminate_managed_process(
     ):
         return {"accepted": False, "status": "identity_required", "message": "프로세스 생성 시각이 필요합니다.", "stopped": []}
     if _is_windows() and run_as_admin:
-        return _privilege_client(privilege_client).stop_managed(
-            process.id, pid=pid, create_time=create_time
-        )
+        from src.host_service.client import PrivilegeServiceError
+        try:
+            return _privilege_client(privilege_client).stop_managed(
+                process.id, pid=pid, create_time=create_time
+            )
+        except PrivilegeServiceError as error:
+            logger.warning("등록 게임 종료 요청 실패: %s", error)
+            return {"accepted": False, "status": error.status, "message": str(error), "stopped": []}
 
     expected_executable = _normalize_process_path(process.monitoring_path)
     if not expected_executable:
@@ -279,7 +284,7 @@ def terminate_managed_process(
         return {"accepted": False, "status": "access_denied", "message": "프로세스 종료 권한이 없거나 종료 요청이 실패했습니다.", "stopped": stopped}
     return {
         "accepted": bool(stopped),
-        "status": "stopped" if stopped else "not_running",
+        "status": "accepted" if stopped else "not_running",
         "message": "게임 종료를 요청했습니다." if stopped else "관측한 게임 프로세스가 이미 종료되었거나 식별 정보가 변경되었습니다.",
         "stopped": stopped,
     }

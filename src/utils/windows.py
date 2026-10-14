@@ -10,22 +10,10 @@ _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
-_MONITOR_DEFAULTTONEAREST = 2
 _SWP_FRAME_MOVE_FLAGS = 0x0001 | 0x0004 | 0x0010
 
 
-class _MonitorInfo(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", ctypes.wintypes.DWORD),
-        ("rcMonitor", ctypes.wintypes.RECT),
-        ("rcWork", ctypes.wintypes.RECT),
-        ("dwFlags", ctypes.wintypes.DWORD),
-    ]
-
-
 def _configure_window_geometry_api(user32) -> None:
-    user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HMONITOR, ctypes.POINTER(_MonitorInfo)]
-    user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
     user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
     user32.GetWindowRect.restype = ctypes.wintypes.BOOL
     user32.SetWindowPos.argtypes = [
@@ -38,15 +26,6 @@ def _configure_window_geometry_api(user32) -> None:
         ctypes.wintypes.UINT,
     ]
     user32.SetWindowPos.restype = ctypes.wintypes.BOOL
-
-
-def _get_monitor_work_area(user32, monitor):
-    monitor_info = _MonitorInfo()
-    monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
-    if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
-        return None
-    work = monitor_info.rcWork
-    return work.left, work.top, work.right, work.bottom
 
 
 def _get_window_frame_rects(user32, hwnd):
@@ -80,112 +59,121 @@ def _get_window_frame_rects(user32, hwnd):
     return outer, visible
 
 
-def snap_rect_to_work_area(
-    rect: tuple[int, int, int, int],
-    work_area: tuple[int, int, int, int],
-    threshold: int,
-) -> tuple[int, int, int, int]:
-    """창 크기를 유지한 채 가까운 작업 영역 경계에 사각형을 붙입니다."""
-    left, top, right, bottom = rect
-    work_left, work_top, work_right, work_bottom = work_area
-    width = right - left
-    height = bottom - top
-    distance = max(0, int(threshold))
+def get_visible_taskbar_work_area(monitor_origin: tuple[int, int], ignored_hwnd: int = 0):
+    """대상 모니터의 물리 RECT와 실제 보이는 작업 표시줄을 뺀 RECT를 반환합니다.
 
-    if abs(left - work_left) <= distance:
-        left, right = work_left, work_left + width
-    elif abs(right - work_right) <= distance:
-        left, right = work_right - width, work_right
-
-    if abs(top - work_top) <= distance:
-        top, bottom = work_top, work_top + height
-    elif abs(bottom - work_bottom) <= distance:
-        top, bottom = work_bottom - height, work_bottom
-
-    return left, top, right, bottom
-
-
-def snap_windows_window_to_work_area(hwnd: int, *, threshold_logical: int = 15) -> bool:
-    """현재 창의 보이는 DWM 프레임을 가까운 모니터 작업 영역 경계에 붙입니다."""
-    if not is_windows() or not hwnd:
-        return False
-
+    rcWork는 전체 화면에서도 예약 영역을 유지하므로 표면의 실제 창을 확인합니다.
+    호출한 사이드바 자체는 가림 판정에서 제외해 높이 계산의 자기 의존을 없앱니다.
+    OS 조회 실패는 None이며 호출자는 Qt 작업 영역을 사용합니다.
+    """
+    if not is_windows():
+        return None
     try:
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        _configure_window_geometry_api(user32)
-        user32.MonitorFromWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.DWORD]
-        user32.MonitorFromWindow.restype = ctypes.wintypes.HMONITOR
-        native_hwnd = ctypes.wintypes.HWND(hwnd)
-        monitor = user32.MonitorFromWindow(native_hwnd, _MONITOR_DEFAULTTONEAREST)
-        if not monitor:
-            return False
-        work_area = _get_monitor_work_area(user32, monitor)
-        frame_rects = _get_window_frame_rects(user32, hwnd)
-        if work_area is None or frame_rects is None:
-            return False
-        outer, visible = frame_rects
+        import win32api
+        import win32con
+        import win32gui
 
-        dpi = 96
-        get_dpi_for_window = getattr(user32, "GetDpiForWindow", None)
-        if get_dpi_for_window is not None:
-            get_dpi_for_window.argtypes = [ctypes.wintypes.HWND]
-            get_dpi_for_window.restype = ctypes.wintypes.UINT
-            reported_dpi = int(get_dpi_for_window(ctypes.wintypes.HWND(hwnd)))
-            if reported_dpi > 0:
-                dpi = reported_dpi
-        threshold = max(1, round(threshold_logical * dpi / 96))
-        original = (visible.left, visible.top, visible.right, visible.bottom)
-        snapped = snap_rect_to_work_area(
-            original,
-            work_area,
-            threshold,
-        )
-        if snapped == original:
-            return False
-        left = outer.left + snapped[0] - visible.left
-        top = outer.top + snapped[1] - visible.top
-        return bool(user32.SetWindowPos(native_hwnd, None, left, top, 0, 0, _SWP_FRAME_MOVE_FLAGS))
+        # Windows의 Qt는 모니터 크기만 DPI에 맞춰 축소하고 원점은 유지한다.
+        # QScreen.name()은 제품명일 수 있어 Win32 장치명과 비교하지 않는다.
+        handle = next((handle for handle, _dc, rect in win32api.EnumDisplayMonitors()
+                       if rect[:2] == monitor_origin), None)
+        if handle is None:
+            return None
+        info = win32api.GetMonitorInfo(handle)
+        monitor = info["Monitor"]
+        left, top, right, bottom = monitor
+        work = [left, top, right, bottom]
+        taskbars = []
+        # 시작 메뉴 표시 중 Shell 창은 EnumWindows에서 누락될 수 있다.
+        # 일반 앱 목록과 무관하게 대상 클래스를 직접 찾는다.
+        for class_name in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+            hwnd = 0
+            while True:
+                hwnd = win32gui.FindWindowEx(0, hwnd, class_name, None)
+                if not hwnd:
+                    break
+                taskbars.append(hwnd)
+
+        def contains(rect, point):
+            return rect[0] <= point[0] < rect[2] and rect[1] <= point[1] < rect[3]
+
+        def surface_at(point):
+            hwnd = win32gui.WindowFromPoint(point)
+            root = win32gui.GetAncestor(hwnd, 2) if hwnd else 0  # GA_ROOT
+            if root != ignored_hwnd:
+                return root
+            # 사이드바를 움직이지 않고 그 아래 실제 가시 창을 확인한다.
+            hwnd = win32gui.GetWindow(root, win32con.GW_HWNDNEXT)
+            while hwnd:
+                if (win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd)
+                        and not win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & win32con.WS_EX_TRANSPARENT
+                        and contains(win32gui.GetWindowRect(hwnd), point)):
+                    return hwnd
+                hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
+            return 0
+
+        for hwnd in taskbars:
+            if not win32gui.IsWindowVisible(hwnd):
+                continue
+            rect = win32gui.GetWindowRect(hwnd)
+            x1, y1 = max(left, rect[0]), max(top, rect[1])
+            x2, y2 = min(right, rect[2]), min(bottom, rect[3])
+            width, height = x2 - x1, y2 - y1
+            if min(width, height) <= 2:  # 자동 숨김의 가장자리 감지 띠
+                continue
+            horizontal = width >= height
+            points = [
+                (x1 + int(width * fraction), (y1 + y2) // 2) if horizontal
+                else ((x1 + x2) // 2, y1 + int(height * fraction))
+                for fraction in (0.25, 0.5, 0.75)
+            ]
+            if not any(surface_at(point) == hwnd for point in points):
+                continue
+            if info["Work"] != monitor:
+                # 표시 여부와 제외할 두께를 분리한다. Shell_TrayWnd의 외곽에는
+                # 투명한 그림자 여백도 포함되므로 예약된 작업 영역이 정확하다.
+                return monitor, info["Work"]
+            if horizontal and y1 == top:
+                work[1] = max(work[1], y2)
+            elif horizontal and y2 == bottom:
+                work[3] = min(work[3], y1)
+            elif not horizontal and x1 == left:
+                work[0] = max(work[0], x2)
+            elif not horizontal and x2 == right:
+                work[2] = min(work[2], x1)
+        return monitor, tuple(work)
     except Exception as exc:
-        logger.debug("Windows 창 가시 프레임 자석 적용 실패: %s", exc)
-        return False
+        logger.debug("Windows 작업 표시줄 가시 영역 조회 실패: %s", exc)
+        return None
 
 
-def position_windows_window_bottom_right(hwnd: int, cursor_x: int, cursor_y: int) -> bool:
-    """커서 모니터의 작업 영역 우하단에 보이는 DWM 프레임을 맞춥니다."""
+def position_windows_window_bottom_right(hwnd: int, monitor_origin: tuple[int, int]) -> bool:
+    """대상 모니터의 가시 작업 영역 우하단에 DWM 프레임을 맞춥니다."""
     if not is_windows() or not hwnd:
         return False
-
     try:
+        native = get_visible_taskbar_work_area(monitor_origin, ignored_hwnd=hwnd)
+        if native is None:
+            return False
+        _monitor, work_area = native
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         _configure_window_geometry_api(user32)
-        user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
-        user32.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
-
-        monitor = user32.MonitorFromPoint(
-            ctypes.wintypes.POINT(int(cursor_x), int(cursor_y)),
-            _MONITOR_DEFAULTTONEAREST,
-        )
-        if not monitor:
-            return False
-        work_area = _get_monitor_work_area(user32, monitor)
         frame_rects = _get_window_frame_rects(user32, hwnd)
-        if work_area is None or frame_rects is None:
+        if frame_rects is None:
             return False
         outer, visible = frame_rects
-        left = outer.left + work_area[2] - visible.right
-        top = outer.top + work_area[3] - visible.bottom
+        dx = work_area[2] - visible.right
+        dy = work_area[3] - visible.bottom
+        if dx == 0 and dy == 0:
+            return True
         return bool(user32.SetWindowPos(
-            ctypes.wintypes.HWND(hwnd),
-            None,
-            left,
-            top,
-            0,
-            0,
-            _SWP_FRAME_MOVE_FLAGS,
+            ctypes.wintypes.HWND(hwnd), None,
+            outer.left + dx, outer.top + dy, 0, 0, _SWP_FRAME_MOVE_FLAGS,
         ))
     except Exception as exc:
         logger.debug("Windows 창 우하단 배치 실패: %s", exc)
         return False
+
 
 def is_windows() -> bool:
     return os.name == 'nt'

@@ -661,6 +661,7 @@ final class RemoteDashboardViewModel: ObservableObject {
     @Published private(set) var pendingLaunchProcessIDs: Set<String> = []
     @Published private(set) var pendingStopProcessIDs: Set<String> = []
     @Published var message = "Remote Agent에 연결하세요."
+    static let stopConfirmationExpiredMessage = "종료 요청은 전달됐지만 60초 안에 정리 완료를 확인하지 못했습니다. 감시는 계속합니다."
 
 
     var setupChecklist: [(String, String, Bool)] {
@@ -1394,7 +1395,8 @@ final class RemoteDashboardViewModel: ObservableObject {
     }
 
     func isLaunchEnabled(_ process: RemoteProcess) -> Bool {
-        guard !pendingLaunchProcessIDs.contains(process.id), !process.isRunning else { return false }
+        guard !pendingLaunchProcessIDs.contains(process.id),
+              !pendingStopProcessIDs.contains(process.id), !process.isRunning else { return false }
         return hostAllowsRemoteCommands
     }
 
@@ -2942,14 +2944,23 @@ final class RemoteDashboardViewModel: ObservableObject {
         }
     }
 
+    func applyRemoteProcessSnapshot(_ remoteProcesses: [RemoteProcess], client: RemoteAPIClient) async {
+        RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
+        processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
+        if message == Self.stopConfirmationExpiredMessage {
+            // The live game rows own runtime state. This old request notice must
+            // not remain as a current failure after a fresh server observation.
+            message = "게임 실행 상태를 갱신했습니다."
+        }
+        await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+    }
+
     private func syncRemoteProcesses(using service: RemoteDashboardService, client: RemoteAPIClient) async {
         let identity = currentHostIdentity
         do {
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
         } catch {
             guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
@@ -2974,9 +2985,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             beholderIncidents = receivedIncidents
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
         } catch {
             guard currentHostIdentity == identity else { return }
             if processes.isEmpty {
@@ -3035,9 +3044,7 @@ final class RemoteDashboardViewModel: ObservableObject {
             _ = await verifyLocalSSHHealth(updateMessage: false)
             let remoteProcesses = try await service.processes()
             guard currentHostIdentity == identity else { return }
-            RemoteClientCache.saveProcesses(remoteProcesses, baseURL: client.baseURL)
-            processes = remoteProcesses.map { Self.processWithLocalProgress($0, now: Date(), recomputePlayedToday: false, allowProjection: false) }
-            await RemoteClientCache.cacheIcons(for: remoteProcesses, baseURL: client.baseURL)
+            await applyRemoteProcessSnapshot(remoteProcesses, client: client)
             if includeDevices {
                 let receivedDevices = try await service.devices()
                 guard currentHostIdentity == identity else { return }
@@ -3178,21 +3185,28 @@ final class RemoteDashboardViewModel: ObservableObject {
 
     private func startStopChase(processID: String, refreshAfterMilliseconds: Int?) {
         stopChaseTasks[processID]?.cancel()
-        let delays = RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
+        let delays = RemoteSmartPollController.stopChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
         stopChaseTasks[processID] = Task { [weak self] in
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(RemoteSmartPollController.stopConfirmationTimeoutSeconds))
             var resolved = false
             for delay in delays {
+                guard clock.now < deadline else { break }
                 if delay > 0 {
-                    try? await Task.sleep(nanoseconds: delay)
+                    let next = min(clock.now.advanced(by: .nanoseconds(Int64(delay))), deadline)
+                    try? await clock.sleep(until: next)
                 }
                 guard !Task.isCancelled else { return }
-                await self?.runMirrorRemoteState(trigger: "stop.chase", syncScope: .forceProcesses)
-                guard !Task.isCancelled else { return }
+                guard clock.now < deadline else { break }
                 if self?.isStopChaseResolved(processID: processID) == true {
                     resolved = true
                     break
                 }
+                // Existing mirroring owns HTTP work. A slow response must not
+                // extend this confirmation deadline or trigger another stop.
+                self?.requestImmediateMirror(trigger: "stop.chase", syncScope: .forceProcesses)
             }
+            resolved = resolved || self?.isStopChaseResolved(processID: processID) == true
             self?.finishStopChase(processID: processID, resolved: resolved)
         }
     }
@@ -3208,7 +3222,7 @@ final class RemoteDashboardViewModel: ObservableObject {
         if resolved, hostAvailabilityState == .online {
             message = "게임 종료 상태를 확인했습니다."
         } else if hostAvailabilityState == .online {
-            message = "게임 종료 명령을 전달했습니다. 종료 상태는 다음 동기화에서 계속 확인합니다."
+            message = Self.stopConfirmationExpiredMessage
         }
     }
 

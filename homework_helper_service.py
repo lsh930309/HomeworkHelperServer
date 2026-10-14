@@ -211,6 +211,7 @@ def main(argv=None) -> int:
     parser.add_argument("--control", choices=("status", "power"))
     parser.add_argument("action", nargs="?", choices=("shutdown", "restart", "sleep"))
     parser.add_argument("--user-launch", metavar="PAYLOAD")
+    parser.add_argument("--user-stop", metavar="PAYLOAD")
     # Subparsers followed by a positional would treat `--control power sleep` as a command.
     # Parse fixed control/user-worker forms separately rather than accepting arbitrary commands.
     values = list(sys.argv[1:] if argv is None else argv)
@@ -239,6 +240,16 @@ def main(argv=None) -> int:
                 raise ValueError("사용자 작업 입력 하나가 필요합니다.")
             user_launch(values[1])
             return 0
+        if values[:1] == ["--user-stop"]:
+            if len(values) != 2:
+                raise ValueError("사용자 종료 작업 입력 하나가 필요합니다.")
+            from src.host_service.controller import ProcessIdentity
+            from src.host_service.windows_backend import terminate_user_processes
+            data = json.loads(base64.urlsafe_b64decode(values[1].encode("ascii")).decode("utf-8"))
+            if not isinstance(data, dict) or set(data) != {"identities", "logon_id"} or not isinstance(data["identities"], list):
+                raise ValueError("사용자 종료 작업 입력 형식이 올바르지 않습니다.")
+            terminate_user_processes([ProcessIdentity(**item) for item in data["identities"]], data["logon_id"])
+            return 0
         args = parser.parse_args(values)
         if os.name != "nt":
             raise OSError("이 실행 파일은 Windows에서만 사용할 수 있습니다.")
@@ -263,6 +274,11 @@ def main(argv=None) -> int:
         result = {"accepted":False, "status":status,
                   "message":str(error)}
         print(json.dumps(result, ensure_ascii=True), flush=True)
+        if values[:1] == ["--user-stop"]:
+            # This fixed worker returns native failures to its SYSTEM parent, without a new store/pipe.
+            if isinstance(error, TimeoutError):
+                return 1460  # ERROR_TIMEOUT
+            return getattr(error, "winerror", None) or (5 if isinstance(error, PermissionError) else 1)
         return 1
 
 

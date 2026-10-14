@@ -1,6 +1,6 @@
 # HomeworkHelper Remote Client Setup Guide
 
-Last refreshed: 2026-06-05
+개발·진단·검증·배포 시작 경로는 [종합 작업 가이드](../WORK_GUIDE.md)를 따른다.
 
 HomeworkHelper exposes a local **Remote Agent** from the Windows host app and controls it from the macOS menu-bar client. The current contract is host-owned data + token-protected remote endpoints + client-local power/Moonlight orchestration. Do not treat old roadmap, migration, spike, or preview-GUI notes as active remote requirements.
 
@@ -80,9 +80,11 @@ Source: `clients/macos`
 
 ```bash
 swift build --package-path clients/macos
-./.venv/bin/python tools/package_macos_remote_app.py
-open dist/macos/HomeworkHelperRemote.app
 ```
+
+Release packages are built on that Mac through `python build.py`. Read the
+[build guide](../guides/build-guide.md) first; do not call the internal packaging
+helper or manually assemble a deployment bundle.
 
 Primary UX contract:
 

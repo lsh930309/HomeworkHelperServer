@@ -48,7 +48,7 @@ def test_sidebar_queues_captured_identity_and_setting_before_background_work(mon
     assert calls == [("/games/game.exe", {"run_as_admin": True, "pid": 42, "create_time": 123.0})]
 
 
-def test_sidebar_rejects_button_for_removed_registration(monkeypatch, sidebar_state):
+def test_sidebar_rejects_button_for_removed_registration(monkeypatch, sidebar_state, caplog):
     _app, sidebar, _process, _settings = sidebar_state
     sidebar._data_manager.managed_processes = []
     monkeypatch.setattr(sidebar_module.QThreadPool, "globalInstance",
@@ -56,10 +56,11 @@ def test_sidebar_rejects_button_for_removed_registration(monkeypatch, sidebar_st
 
     sidebar._kill_process("game", "/games/game.exe", 42, 123.0)
 
-    assert "등록 대상" in sidebar._process_stop_status.text()
+    assert "등록 대상 또는 실행 정보 변경" in caplog.text
+    assert not hasattr(sidebar, "_process_stop_status")
 
 
-def test_sidebar_surfaces_privilege_service_failure(monkeypatch, sidebar_state):
+def test_sidebar_logs_privilege_service_failure_without_error_ui(monkeypatch, sidebar_state, caplog):
     _app, sidebar, _process, _settings = sidebar_state
     queued = []
     monkeypatch.setattr(sidebar_module.QThreadPool, "globalInstance", lambda: SimpleNamespace(start=queued.append))
@@ -73,8 +74,20 @@ def test_sidebar_surfaces_privilege_service_failure(monkeypatch, sidebar_state):
     sidebar._kill_process("game", "/games/game.exe", 42, 123.0)
     queued[0].run()
 
-    assert "관리자 서비스" in sidebar._process_stop_status.text()
+    assert "관리자 서비스에 연결할 수 없습니다." in caplog.text
+    assert "등록=game PID=42" in caplog.text
+    assert not hasattr(sidebar, "_process_stop_status")
     assert calls == []
+
+
+def test_sidebar_completion_only_restores_auto_hide_without_claiming_disappearance(monkeypatch, sidebar_state):
+    _app, sidebar, _process, _settings = sidebar_state
+    calls = []
+    monkeypatch.setattr(sidebar, "slide_out", lambda: calls.append("hidden"))
+    monkeypatch.setattr(sidebar, "_reset_auto_hide", lambda: calls.append("normal_auto_hide"))
+    sidebar._on_process_stop_completed()
+    assert calls == ["normal_auto_hide"]
+    assert not hasattr(sidebar, "_process_stop_status")
 
 
 def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_process(tmp_path):
@@ -87,7 +100,10 @@ def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_proc
         from src.data.data_models import ManagedProcess
         from src.gui.main_window import MainWindow
         from src.gui.sidebar import sidebar_widget as module
+        from src.gui.runtime_logging import configure_gui_logging
+        import os
 
+        log_path = configure_gui_logging(os.environ['HH_TEST_APPDATA_DIR'])
         app = QApplication([])
         MainWindow.INSTANCE = None
         process = ManagedProcess(id='game', name='Game', monitoring_path='/game.exe', launch_path='/game.exe')
@@ -98,12 +114,9 @@ def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_proc
             worker_on_gui.append(QThread.currentThread() == app.thread())
             return {'accepted': False, 'status': 'failed', 'message': 'controlled result'}
         module.terminate_managed_process = stop
-        original_set_text = sidebar._process_stop_status.setText
-        def set_text(value):
+        def reset_auto_hide():
             receiver_on_gui.append(QThread.currentThread() == app.thread())
-            original_set_text(value)
-        sidebar._process_stop_status.setText = set_text
-        sidebar._reset_auto_hide = lambda: None
+        sidebar._reset_auto_hide = reset_auto_hide
         loop = QEventLoop()
         sidebar._process_stop_signals.completed.connect(loop.quit)
         pool = QThreadPool()
@@ -114,7 +127,8 @@ def test_actual_stop_worker_delivers_product_slot_on_gui_thread_in_isolated_proc
         loop.exec()
         assert worker_on_gui == [False], worker_on_gui
         assert receiver_on_gui == [True], receiver_on_gui
-        assert 'controlled result' in sidebar._process_stop_status.text()
+        assert 'controlled result' in log_path.read_text(encoding='utf-8')
+        assert not hasattr(sidebar, '_process_stop_status')
         assert pool.waitForDone(1000)
         assert sidebar.cleanup(deadline_ms=200)
         sidebar.close()

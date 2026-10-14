@@ -497,7 +497,7 @@ def test_sidebar_file_visibility_is_independent_of_recording_control(control,fil
     app=QApplication.instance() or QApplication([])
     choices=SimpleNamespace(recording_enabled=control,obs_watch_output_dir=files)
     view=SimpleNamespace(_data_manager=SimpleNamespace(global_settings=choices),
-        _rec_state="obs_offline",_get_recording_error=lambda:"",_get_recording_elapsed=None,
+        _rec_state="obs_offline",_get_recording_elapsed=None,
         _on_rec_start_clicked=lambda:None,_on_rec_stop_clicked=lambda:None,_on_rec_connect_clicked=lambda:None)
     view._recording_section=SidebarWidget._build_recording_section(view)
     view._update_rec_ui=lambda:SidebarWidget._update_rec_ui(view)

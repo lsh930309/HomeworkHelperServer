@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from src.data.data_models import ManagedProcess
 from src.core.process_monitor import terminate_managed_process
 from src.utils import audio_control
+from src.utils.windows import get_visible_taskbar_work_area
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
 from src.gui.widgets_style import apply_sidebar_widgets_style
@@ -52,7 +53,7 @@ class _ThumbnailLoadSignals(QObject):
 
 
 class _ProcessStopSignals(QObject):
-    completed = Signal(str, object)
+    completed = Signal()
 
 
 class _ProcessStopTask(QRunnable):
@@ -76,9 +77,12 @@ class _ProcessStopTask(QRunnable):
                 create_time=self._create_time,
             )
         except Exception as exc:
-            logger.warning("게임 종료 요청 실패: %s", exc)
             result = {"accepted": False, "status": "failed", "message": str(exc)}
-        self._signals.completed.emit(self._process.name, result)
+        log = logger.info if result.get("accepted") else logger.warning
+        log("사이드바 게임 종료 요청: 이름=%s 등록=%s PID=%s 상태=%s 결과=%s",
+            self._process.name, self._process.id, self._pid,
+            result.get("status", "unknown"), result.get("message", ""))
+        self._signals.completed.emit()
 
 
 class _ThumbnailLoadTask(QRunnable):
@@ -395,7 +399,6 @@ class SidebarWidget(QWidget):
         screen: Optional[QScreen] = None,
         stop_recording: Optional[Callable[[], None]] = None,
         reconnect_recording: Optional[Callable[[], None]] = None,
-        get_recording_error: Optional[Callable[[], str]] = None,
         get_recording_elapsed: Optional[Callable[[], int]] = None,
         on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
@@ -411,7 +414,6 @@ class SidebarWidget(QWidget):
         self._is_shown = False
         self._stop_recording_callback = stop_recording
         self._reconnect_recording = reconnect_recording
-        self._get_recording_error = get_recording_error
         self._get_recording_elapsed = get_recording_elapsed
         self._on_hidden = on_hidden
         self._start_recording_callback: Optional[Callable[[], None]] = None
@@ -582,10 +584,6 @@ class SidebarWidget(QWidget):
         self._main_scroll.setWidget(self._scroll_content)
         layout.addWidget(self._main_scroll, 1)
 
-        self._process_stop_status = QLabel()
-        self._process_stop_status.setWordWrap(True)
-        self._process_stop_status.hide()
-        layout.addWidget(self._process_stop_status)
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         close_btn = QPushButton("닫기")
         close_btn.setFixedHeight(28)
@@ -788,6 +786,7 @@ class SidebarWidget(QWidget):
             "color: rgba(235,240,255,240); font-weight: 600; font-size: 13px; background: transparent;"
         )
         name_label.setWordWrap(True)
+        name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.addWidget(name_label, 1)
         layout.addLayout(header)
 
@@ -799,6 +798,8 @@ class SidebarWidget(QWidget):
         playtime_enabled = getattr(gs, 'sidebar_playtime_enabled', True) if gs else True
         playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
         playtime_label = QLabel("0분")
+        playtime_label.setWordWrap(True)
+        playtime_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         playtime_label.setStyleSheet(
             "color: rgba(160,180,220,200); font-size: 11px; background: transparent;"
         )
@@ -826,30 +827,24 @@ class SidebarWidget(QWidget):
         process = next((item for item in self._data_manager.managed_processes
                         if item.id == process_id and item.monitoring_path == monitoring_path), None)
         if process is None or pid is None or create_time <= 0:
-            self._process_stop_status.setText("등록 대상 또는 실행 정보가 변경되었습니다. 새로 확인해 주세요.")
-            self._process_stop_status.show()
+            logger.warning("사이드바 게임 종료 요청 취소: 등록 대상 또는 실행 정보 변경 (등록=%s 경로=%s PID=%s 생성=%s)",
+                           process_id, monitoring_path, pid, create_time)
             return
         snapshot = ManagedProcess(
             id=process.id, name=process.name, monitoring_path=process.monitoring_path,
             launch_path=process.launch_path,
         )
         run_as_admin = bool(getattr(self._data_manager.global_settings, "run_as_admin", False))
-        self._process_stop_status.setText(f"{snapshot.name} 종료 요청 중…")
-        self._process_stop_status.show()
         self._auto_hide_timer.stop()
         QThreadPool.globalInstance().start(_ProcessStopTask(
             snapshot, int(pid), float(create_time), run_as_admin, self._process_stop_signals
         ))
 
-    @Slot(str, object)
-    def _on_process_stop_completed(self, process_name: str, result: dict) -> None:
-        message = str(result.get("message") or "게임 종료 요청에 실패했습니다.")
-        self._process_stop_status.setText(f"{process_name}: {message}")
-        self._process_stop_status.show()
-        if result.get("accepted"):
-            self.slide_out()
-        else:
-            self._reset_auto_hide()
+    @Slot()
+    def _on_process_stop_completed(self) -> None:
+        # A successful termination call still allows delayed OS cleanup. The
+        # existing process monitor removes the game when it actually disappears.
+        self._reset_auto_hide()
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 플레이타임
@@ -976,7 +971,9 @@ class SidebarWidget(QWidget):
 
         name_lbl = QLabel(process.name)
         name_lbl.setStyleSheet("color: rgba(200,210,235,200); font-size: 11px;")
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # 이름의 최소 너비가 스크롤 내용 전체를 넓혀 우측 컨트롤을 밀지 않게 한다.
+        name_lbl.setWordWrap(True)
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         hl.addWidget(name_lbl, 1)
 
         mute_btn = QPushButton()
@@ -1118,7 +1115,18 @@ class SidebarWidget(QWidget):
         screen = self._screen or QApplication.primaryScreen()
         if screen is None:
             return QRect(0, 0, _SIDEBAR_WIDTH, 600)
-        geo = screen.geometry()
+        geo = screen.availableGeometry()
+        logical = screen.geometry()
+        native = get_visible_taskbar_work_area((logical.left(), logical.top()), int(self.winId()))
+        if native is not None:
+            monitor, work = native
+            scale_x = logical.width() / (monitor[2] - monitor[0])
+            scale_y = logical.height() / (monitor[3] - monitor[1])
+            x1 = logical.left() + round((work[0] - monitor[0]) * scale_x)
+            y1 = logical.top() + round((work[1] - monitor[1]) * scale_y)
+            x2 = logical.left() + round((work[2] - monitor[0]) * scale_x)
+            y2 = logical.top() + round((work[3] - monitor[1]) * scale_y)
+            geo = QRect(x1, y1, x2 - x1, y2 - y1)
         gs = getattr(self._data_manager, 'global_settings', None)
         height_ratio = max(0.3, min(1.0, getattr(gs, 'sidebar_height_ratio', 1.0) if gs else 1.0))
         sidebar_height = int(geo.height() * height_ratio)
@@ -1149,6 +1157,10 @@ class SidebarWidget(QWidget):
 
     def _poll_cursor(self) -> None:
         from PySide6.QtGui import QCursor
+        if self._is_shown and self._anim.state() != QPropertyAnimation.State.Running:
+            geo = self._compute_geometry()
+            if self.geometry() != geo:
+                self.setGeometry(geo)
         cursor_pos = QCursor.pos()
         inside = self.rect().contains(self.mapFromGlobal(cursor_pos))
 
@@ -1273,10 +1285,6 @@ class SidebarWidget(QWidget):
         """녹화 재연결 버튼 클릭 시 호출될 콜백을 등록합니다."""
         self._reconnect_recording = fn
 
-    def set_recording_error_provider(self, fn: Optional[Callable[[], str]]) -> None:
-        """최근 녹화 연결 오류 메시지를 제공하는 콜백을 등록합니다."""
-        self._get_recording_error = fn
-
     def set_recording_elapsed_provider(self, fn: Optional[Callable[[], int]]) -> None:
         """현재 녹화 경과 시간을 초 단위로 제공하는 콜백을 등록합니다."""
         self._get_recording_elapsed = fn
@@ -1332,10 +1340,6 @@ class SidebarWidget(QWidget):
             self._rec_stop_btn.hide()
             self._rec_start_btn.hide()
             self._rec_connect_btn.setVisible(control_enabled)
-            # 마지막 연결 실패 이유를 툴팁으로 표시
-            err = self._get_recording_error() if self._get_recording_error else ""
-            self._rec_status_label.setToolTip(err if err else "")
-            self._rec_connect_btn.setToolTip(err if err else "")
         self._rec_status_label.setProperty("hhState", status_style)
         self._rec_status_label.style().unpolish(self._rec_status_label)
         self._rec_status_label.style().polish(self._rec_status_label)

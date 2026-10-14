@@ -749,7 +749,7 @@ def test_main_window_position_is_not_persisted_when_show_always_reanchors():
     assert "position_windows_window_bottom_right(" in source
     assert "_pending_bottom_right_placement" in source
     assert "def moveEvent(self, event):" in source
-    assert "snap_windows_window_to_work_area(" in source
+    assert "self._position_window_bottom_right()" in source
     assert "_WindowsMovingEventFilter" not in source
     assert "QAbstractNativeEventFilter" not in source
     assert "QApplication.screenAt(QCursor.pos())" in source
@@ -926,58 +926,130 @@ def test_volume_button_icon_uses_theme_text_color(monkeypatch, tmp_path):
         _stop_window(window, app)
 
 
-def test_move_event_uses_main_window_handle_and_15px_snap_threshold(monkeypatch, tmp_path):
+def test_main_window_stays_bottom_right_after_move_and_content_resize(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(main_window, "position_windows_window_bottom_right", lambda *_args: False)
+    client = _FakeApiClient([])
+    window = main_window.MainWindow(client)
+    try:
+        window.show()
+        app.processEvents()
+        area = window.screen().availableGeometry()
+        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        window.move(window.pos() + QPoint(-100, -100))
+        app.processEvents()
+        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        initial = window.size()
+        client.web_shortcuts = [WebShortcut(id="wide", name="W" * 40, url="https://example.com")]
+        window._load_and_display_web_buttons()
+        app.processEvents()  # apply the content fit
+        app.processEvents()  # apply its queued native/frame placement
+        assert window.size() != initial
+        assert window.frameGeometry().bottomRight() == area.bottomRight()
+        client.web_shortcuts = []
+        window._load_and_display_web_buttons()
+        app.processEvents()  # apply the content fit
+        app.processEvents()  # apply its queued native/frame placement
+        assert window.size() == initial
+        assert window.frameGeometry().bottomRight() == area.bottomRight()
+    finally:
+        _stop_window(window, app)
+
+
+def test_main_window_refresh_uses_monitor_origin_and_does_not_show_hidden_window(monkeypatch, tmp_path):
     app = _qapp()
     main_window = _patch_main_window_deps(monkeypatch, tmp_path)
     calls = []
-    monkeypatch.setattr(
-        main_window,
-        "snap_windows_window_to_work_area",
-        lambda hwnd, *, threshold_logical: calls.append((hwnd, threshold_logical)) or False,
-    )
+    monkeypatch.setattr(main_window, "position_windows_window_bottom_right",
+                        lambda hwnd, origin: calls.append((hwnd, origin)) or True)
     window = main_window.MainWindow(_FakeApiClient([]))
     try:
         window.show()
         app.processEvents()
         calls.clear()
-        window.move(window.pos() + QPoint(20, 20))
+        window._on_ui_refresh_tick()
+        origin = window.screen().geometry().topLeft()
+        assert calls == [(int(window.winId()), (origin.x(), origin.y()))]
+        changed = SimpleNamespace(geometry=lambda: QRect(-2560, 200, 1280, 720))
+        window._position_window_bottom_right(changed)
+        assert calls[-1] == (int(window.winId()), (-2560, 200))
+        window.hide()
         app.processEvents()
-
-        assert calls
-        assert calls[-1] == (int(window.winId()), 15)
+        calls.clear()
+        window._on_ui_refresh_tick()
+        window._position_window_bottom_right(changed)
+        assert calls == []
+        assert not window.isVisible()
     finally:
         _stop_window(window, app)
 
 
-@pytest.mark.parametrize(
-    ("rect", "expected"),
-    [
-        ((7, 200, 207, 300), (0, 200, 200, 300)),
-        ((1709, 200, 1909, 300), (1720, 200, 1920, 300)),
-        ((200, 8, 400, 108), (200, 0, 400, 100)),
-        ((200, 931, 400, 1031), (200, 940, 400, 1040)),
-        ((5, 935, 205, 1035), (0, 940, 200, 1040)),
-        ((20, 20, 220, 120), (20, 20, 220, 120)),
-    ],
-)
-def test_snap_rect_to_work_area_preserves_size_and_snaps_edges(rect, expected):
-    from src.utils.windows import snap_rect_to_work_area
+def test_main_window_existing_refresh_tracks_taskbar_area_changes(monkeypatch, tmp_path):
+    app = _qapp()
+    main_window = _patch_main_window_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(main_window, "position_windows_window_bottom_right", lambda *_args: False)
+    window = main_window.MainWindow(_FakeApiClient([]))
+    try:
+        window.show()
+        app.processEvents()
+        geometry = window.screen().geometry()
+        work = QRect(geometry)
+        screen = SimpleNamespace(geometry=lambda: geometry, availableGeometry=lambda: work)
+        monkeypatch.setattr(window, "screen", lambda: screen)
+        work.setHeight(geometry.height() - 48)
+        window._on_ui_refresh_tick()
+        assert window.frameGeometry().bottomRight() == work.bottomRight()
+        work.setHeight(geometry.height())
+        window._on_ui_refresh_tick()
+        assert window.frameGeometry().bottomRight() == work.bottomRight()
+        work.setHeight(geometry.height() - 48)
+        window._on_ui_refresh_tick()
+        assert window.frameGeometry().bottomRight() == work.bottomRight()
+    finally:
+        _stop_window(window, app)
 
-    snapped = snap_rect_to_work_area(rect, (0, 0, 1920, 1040), 12)
 
-    assert snapped == expected
-    assert snapped[2] - snapped[0] == rect[2] - rect[0]
-    assert snapped[3] - snapped[1] == rect[3] - rect[1]
+def test_sidebar_all_display_transitions_select_current_primary(monkeypatch):
+    from src.gui.sidebar import sidebar_controller as module
+    primary = SimpleNamespace(name=lambda: "Apollo")
+    stale = SimpleNamespace(name=lambda: "ASUS")
+    monkeypatch.setattr(module.QApplication, "instance", lambda: None)
+    monkeypatch.setattr(module.QApplication, "primaryScreen", lambda: primary)
+    controller = module.SidebarController(SimpleNamespace(), SimpleNamespace(screen=lambda: stale))
+    selected = []
+    controller._trigger = SimpleNamespace(reposition=lambda screen: selected.append(screen))
+    controller._sidebar = SimpleNamespace(update_screen=lambda screen: selected.append(screen))
+    assert controller._get_screen() is primary
+    controller._on_primary_screen_changed(primary)
+    controller._on_screen_config_changed(stale)
+    assert selected == [primary] * 4
 
 
-def test_snap_rect_to_offset_secondary_monitor_work_area():
-    from src.utils.windows import snap_rect_to_work_area
-
-    assert snap_rect_to_work_area(
-        (-1910, 50, -1710, 150),
-        (-1920, 40, 0, 1080),
-        12,
-    ) == (-1920, 40, -1720, 140)
+@pytest.mark.parametrize("work, frame, expected", [
+    ((0, 0, 2560, 1368), (1900, 700, 2510, 1330), (1942, 730)),
+    ((0, 0, 2560, 1440), (1900, 700, 2510, 1330), (1942, 802)),
+    ((-2560, 200, 0, 1568), (-700, 800, -90, 1430), (-618, 930)),
+])
+def test_native_bottom_right_uses_visible_frame_and_shared_work_area(monkeypatch, work, frame, expected):
+    import src.utils.windows as windows
+    calls = []
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setattr(windows, "get_visible_taskbar_work_area",
+                        lambda origin, ignored_hwnd: ((origin[0], origin[1], work[2], work[3]), work))
+    user32 = SimpleNamespace(SetWindowPos=lambda *args: calls.append(args) or True)
+    monkeypatch.setattr(windows.ctypes, "WinDLL", lambda *_args, **_kwargs: user32, raising=False)
+    monkeypatch.setattr(windows, "_configure_window_geometry_api", lambda _api: None)
+    visible = SimpleNamespace(left=frame[0], top=frame[1], right=frame[2], bottom=frame[3])
+    outer = SimpleNamespace(left=frame[0]-8, top=frame[1]-8)
+    monkeypatch.setattr(windows, "_get_window_frame_rects", lambda *_args: (outer, visible))
+    assert windows.position_windows_window_bottom_right(123, work[:2])
+    assert calls[0][2:4] == expected
+    # The target frame already touches the work area's corner: no repeated move.
+    visible.right, visible.bottom = work[2], work[3]
+    calls.clear()
+    assert windows.position_windows_window_bottom_right(123, work[:2])
+    assert calls == []
 
 
 def test_sidebar_activates_when_running_cache_already_exists_without_monitor_change(monkeypatch, tmp_path):
@@ -1850,3 +1922,163 @@ def test_admin_feature_setting_is_saved_without_restart_or_rollback(monkeypatch,
         assert window.isVisible()
     finally:
         _stop_window(window, app)
+
+
+@pytest.fixture
+def sidebar_layout(monkeypatch):
+    from src.gui.main_window import MainWindow
+    from src.gui.sidebar import sidebar_widget as module
+    monkeypatch.setattr(MainWindow, "INSTANCE", None)
+    app = _qapp()
+    names = ["명조: 위더링 웨이브", "붕괴: 스타레일(베타)", "소녀전선2: 망명", "긴 이름의 게임 등록 항목 이름", "W" * 80]
+    data = _FakeApiClient([
+        ManagedProcess(id=str(index), name=name, monitoring_path=f"/test/{index}.exe", launch_path=f"/test/{index}.exe")
+        for index, name in enumerate(names)
+    ])
+    view = module.SidebarWidget(data)
+    monkeypatch.setattr(view, "_load_icon_async", lambda *_args: None)
+    view._refresh_volumes_list()
+    try:
+        yield app, view, module
+    finally:
+        assert view.cleanup(deadline_ms=200)
+        view.close()
+
+
+@pytest.mark.parametrize("height", [250, 1400])
+def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, height):
+    from PySide6.QtWidgets import QSlider
+    app, view, _module = sidebar_layout
+    view.resize(280, height)
+    view.show()
+    app.processEvents()
+    assert view.width() == 280
+    viewport = view._main_scroll.viewport()
+    assert view._scroll_content.width() <= viewport.width()
+    rows = view._vol_list_container.findChildren(QSlider)
+    assert len(rows) == 5
+    for slider in rows:
+        row = slider.parentWidget()
+        name = next(label for label in row.findChildren(QLabel) if label.wordWrap())
+        assert name.width() > 0
+        assert name.height() >= name.heightForWidth(name.width())
+        for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
+            if widget.isVisible():
+                right = widget.mapTo(view._scroll_content, QPoint(widget.width(), 0)).x()
+                assert right <= viewport.width(), (name.text(), right, viewport.width())
+    assert view._main_scroll.verticalScrollBar().isVisible() is (height == 250)
+
+
+def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_layout):
+    app, view, _module = sidebar_layout
+    view._data_manager.global_settings.screenshot_enabled = True
+    view._data_manager.global_settings.recording_enabled = True
+    view._data_manager.global_settings.sidebar_playtime_prefix = "W" * 80
+    process = view._data_manager.managed_processes[-1]
+    cluster = view._make_game_cluster(process, 42, 123.0)
+    view._active_clusters_layout.addWidget(cluster)
+    view._refresh_screenshot_section()
+    view._refresh_recording_section()
+    view.resize(280, 500)
+    view.show()
+    app.processEvents()
+    viewport = view._main_scroll.viewport()
+    assert view._scroll_content.width() <= viewport.width()
+    for button in view._scroll_content.findChildren(QPushButton):
+        if button.isVisible():
+            assert button.mapTo(view._scroll_content, QPoint(button.width(), 0)).x() <= viewport.width()
+
+
+@pytest.mark.parametrize("work, expected", [
+    ((0, 0, 3840, 2080), QRect(1640, 0, 280, 1040)),
+    ((0, 0, 3840, 2160), QRect(1640, 0, 280, 1080)),
+    ((0, 80, 3840, 2160), QRect(1640, 40, 280, 1040)),
+    ((80, 0, 3840, 2160), QRect(1640, 0, 280, 1080)),
+    ((0, 0, 3760, 2160), QRect(1600, 0, 280, 1080)),
+])
+def test_sidebar_maps_native_taskbar_area_to_monitor_logical_coordinates(sidebar_layout, monkeypatch, work, expected):
+    _app, view, module = sidebar_layout
+    view._screen = SimpleNamespace(name=lambda: "DISPLAY", geometry=lambda: QRect(0, 0, 1920, 1080),
+                                   availableGeometry=lambda: QRect(0, 0, 1920, 1040))
+    monkeypatch.setattr(module, "get_visible_taskbar_work_area", lambda *_args: ((0, 0, 3840, 2160), work))
+    assert view._compute_geometry() == expected
+
+
+def test_sidebar_secondary_monitor_negative_origin_and_height_ratio(sidebar_layout, monkeypatch):
+    _app, view, module = sidebar_layout
+    view._screen = SimpleNamespace(name=lambda: "SECONDARY", geometry=lambda: QRect(-2560, 200, 1280, 720),
+                                   availableGeometry=lambda: QRect(-2560, 200, 1280, 680))
+    view._data_manager.global_settings.sidebar_height_ratio = 0.5
+    monkeypatch.setattr(module, "get_visible_taskbar_work_area", lambda *_args: ((-2560, 200, 0, 1640), (-2560, 200, 0, 1560)))
+    assert view._compute_geometry() == QRect(-1560, 370, 280, 340)
+    monkeypatch.setattr(module, "get_visible_taskbar_work_area", lambda *_args: None)
+    assert view._compute_geometry() == QRect(-1560, 370, 280, 340)
+
+
+def test_sidebar_existing_cursor_poll_updates_height_but_not_running_slide(sidebar_layout, monkeypatch):
+    _app, view, _module = sidebar_layout
+    from PySide6.QtGui import QCursor
+    area = QRect(0, 0, 280, 600)
+    view._is_shown = True
+    monkeypatch.setattr(view, "_compute_geometry", lambda: area)
+    monkeypatch.setattr(QCursor, "pos", lambda: QPoint(20, 20))
+    view._poll_cursor()
+    assert view.geometry() == area
+    area = QRect(0, 0, 280, 650)
+    view._poll_cursor()
+    assert view.geometry() == area
+    view._anim.setStartValue(area)
+    view._anim.setEndValue(QRect(-280, 0, 280, 650))
+    view._anim.start()
+    before = view.geometry()
+    area = QRect(0, 0, 280, 700)
+    view._poll_cursor()
+    assert view.geometry() == before
+    assert view._cursor_poll_timer.interval() == 200
+    view._anim.stop()
+
+
+@pytest.mark.parametrize("taskbar, surface, reserved, expected", [
+    ((0, 1040, 1920, 1080), 1, (0, 0, 1920, 1040), (0, 0, 1920, 1040)),
+    ((0, 1040, 1920, 1080), 3, (0, 0, 1920, 1040), (0, 0, 1920, 1080)),  # covered
+    ((0, 1078, 1920, 1120), 1, (0, 0, 1920, 1080), (0, 0, 1920, 1080)),  # hidden edge
+    ((0, 0, 1920, 40), 1, (0, 40, 1920, 1080), (0, 40, 1920, 1080)),
+    ((0, 0, 40, 1080), 1, (40, 0, 1920, 1080), (40, 0, 1920, 1080)),
+    ((1880, 0, 1920, 1080), 1, (0, 0, 1880, 1080), (0, 0, 1880, 1080)),
+    ((1880, 0, 1920, 1080), 2, (0, 0, 1880, 1080), (0, 0, 1880, 1080)),  # own overlay
+    ((0, 1020, 1920, 1080), 1, (0, 0, 1920, 1040), (0, 0, 1920, 1040)),  # transparent margin
+    ((0, 1040, 1920, 1080), 1, (0, 0, 1920, 1080), (0, 0, 1920, 1040)),  # revealed auto-hide
+])
+def test_native_taskbar_visibility_not_reserved_area(monkeypatch, taskbar, surface, reserved, expected):
+    import sys
+    import src.utils.windows as windows
+    monitor = (0, 0, 1920, 1080)
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "win32api", SimpleNamespace(
+        EnumDisplayMonitors=lambda: [(10, None, monitor)],
+        GetMonitorInfo=lambda _handle: {"Device": "DISPLAY", "Monitor": monitor, "Work": reserved},
+    ))
+    monkeypatch.setitem(sys.modules, "win32con", SimpleNamespace(GW_HWNDNEXT=2, GWL_EXSTYLE=-20, WS_EX_TRANSPARENT=32))
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
+        # Reproduce the live omission: generic enumeration sees no taskbar.
+        EnumWindows=lambda *_args: pytest.fail("Taskbar lookup must not enumerate app windows"),
+        FindWindowEx=lambda _parent, previous, cls, _name: 1 if cls == "Shell_SecondaryTrayWnd" and not previous else 0,
+        IsWindowVisible=lambda _hwnd: True, IsIconic=lambda _hwnd: False,
+        GetWindowRect=lambda hwnd: taskbar if hwnd == 1 else monitor,
+        WindowFromPoint=lambda _point: surface,
+        GetAncestor=lambda hwnd, _flag: hwnd,
+        GetWindow=lambda hwnd, _flag: 1 if hwnd == 2 else 0,
+        GetWindowLong=lambda _hwnd, _index: 0,
+    ))
+    assert windows.get_visible_taskbar_work_area((0, 0), ignored_hwnd=2) == (monitor, expected)
+    assert windows.get_visible_taskbar_work_area((1920, 0), ignored_hwnd=2) is None
+
+
+def test_native_taskbar_api_failure_returns_unavailable(monkeypatch):
+    import sys
+    import src.utils.windows as windows
+    monkeypatch.setattr(windows, "is_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "win32api", SimpleNamespace(EnumDisplayMonitors=lambda: (_ for _ in ()).throw(OSError("unavailable"))))
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "win32con", SimpleNamespace())
+    assert windows.get_visible_taskbar_work_area((0, 0)) is None

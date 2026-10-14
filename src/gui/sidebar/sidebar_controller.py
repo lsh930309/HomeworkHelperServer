@@ -59,7 +59,6 @@ class SidebarController:
         self._on_stop_recording: Optional[Callable[[], None]] = None
         self._on_reconnect_recording: Optional[Callable[[], None]] = None
         self._on_start_recording: Optional[Callable[[], None]] = None
-        self._get_recording_error: Optional[Callable[[], str]] = None
         self._get_recording_elapsed_sec: Optional[Callable[[], int]] = None
         self._get_recording_output_dir: Optional[Callable[[], str]] = None
 
@@ -174,7 +173,6 @@ class SidebarController:
         on_stop: Optional[Callable[[], None]] = None,
         on_reconnect: Optional[Callable[[], None]] = None,
         on_start: Optional[Callable[[], None]] = None,
-        get_last_error: Optional[Callable[[], str]] = None,
         get_elapsed_sec: Optional[Callable[[], int]] = None,
         get_output_dir: Optional[Callable[[], str]] = None,
     ) -> None:
@@ -185,8 +183,6 @@ class SidebarController:
             self._on_reconnect_recording = on_reconnect
         if on_start is not None:
             self._on_start_recording = on_start
-        if get_last_error is not None:
-            self._get_recording_error = get_last_error
         if get_elapsed_sec is not None:
             self._get_recording_elapsed_sec = get_elapsed_sec
         if get_output_dir is not None:
@@ -195,7 +191,6 @@ class SidebarController:
             self._sidebar.set_on_stop_recording(self._on_stop_recording)
             self._sidebar.set_on_reconnect_recording(self._on_reconnect_recording)
             self._sidebar.set_on_start_recording(self._on_start_recording)
-            self._sidebar.set_recording_error_provider(self._get_recording_error)
             self._sidebar.set_recording_elapsed_provider(self._get_recording_elapsed_sec)
             if self._get_recording_output_dir:
                 self._sidebar.set_recording_output_dir(self._get_recording_output_dir())
@@ -282,11 +277,7 @@ class SidebarController:
         return self._sidebar_mode() != SIDEBAR_MODE_DISABLED
 
     def _get_screen(self) -> Optional[QScreen]:
-        """메인 윈도우 또는 기본 스크린을 반환합니다."""
-        if self._main_window is not None:
-            screen = self._main_window.screen()
-            if screen is not None:
-                return screen
+        """Apollo 전환을 포함해 현재 주 모니터를 사용합니다."""
         return QApplication.primaryScreen()
 
     def _get_settings(self):
@@ -313,7 +304,6 @@ class SidebarController:
                 screen=screen,
                 stop_recording=self._on_stop_recording,
                 reconnect_recording=self._on_reconnect_recording,
-                get_recording_error=self._get_recording_error,
                 get_recording_elapsed=self._get_recording_elapsed_sec,
                 on_hidden=self._on_sidebar_hidden,
             )

@@ -2597,7 +2597,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Command-only and server-only branches intentionally return before GUI
-    # logging, schema migration, administrator checks, or Qt initialization.
+    # logging, administrator checks, or Qt initialization.
     try:
         import logging
         from src.gui.runtime_logging import configure_gui_logging
@@ -2618,26 +2618,6 @@ if __name__ == "__main__":
         print("\n=== 이전 MEI 임시 폴더 정리 시작 ===")
         cleanup_old_mei_folders()
         print("=== MEI 임시 폴더 정리 완료 ===\n")
-
-    # === 스키마 자동 마이그레이션 ===
-    # 앱 업데이트 시 스키마 구조가 변경된 경우 자동으로 마이그레이션합니다.
-    # 사용자에게는 보이지 않으며, 실패 시에만 경고를 표시합니다.
-    try:
-        from src.api.beholder_routes import database_coordinator
-
-        if database_coordinator.snapshot().mode == "faulted":
-            print("DB fault sentinel이 유지되어 GUI-side schema migration을 건너뜁니다.")
-        else:
-            from src.migration import SchemaMigrator
-            print("\n=== 스키마 버전 체크 ===")
-            migrator = SchemaMigrator()
-            if not migrator.check_and_migrate():
-                print("⚠️ 스키마 마이그레이션 실패 - 일부 기능이 제한될 수 있습니다.")
-            else:
-                print("=== 스키마 체크 완료 ===\n")
-    except Exception as e:
-        print(f"스키마 마이그레이션 체크 중 오류: {e}")
-        # 마이그레이션 실패해도 앱은 계속 실행 (기존 기능은 동작)
 
     # GUI 애플리케이션 실행
 

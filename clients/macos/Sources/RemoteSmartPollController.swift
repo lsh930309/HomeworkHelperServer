@@ -13,6 +13,7 @@ enum RemotePayloadSyncScope: Equatable {
 }
 
 enum RemoteSmartPollController {
+    static let stopConfirmationTimeoutSeconds: Int64 = 60
     static let launchChaseFallbackDelaysNanoseconds: [UInt64] = [
         0,
         750_000_000,
@@ -26,5 +27,10 @@ enum RemoteSmartPollController {
         let clampedMilliseconds = min(5_000, max(250, refreshAfterMilliseconds))
         delays[1] = UInt64(clampedMilliseconds) * 1_000_000
         return delays
+    }
+
+    static func stopChaseDelaysNanoseconds(refreshAfterMilliseconds: Int?) -> [UInt64] {
+        launchChaseDelaysNanoseconds(refreshAfterMilliseconds: refreshAfterMilliseconds)
+            + Array(repeating: 5_000_000_000, count: 12)
     }
 }

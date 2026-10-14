@@ -162,6 +162,14 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
             @MainActor
             static func main() async {
                 smokeStep("init")
+                let stopDelays = RemoteSmartPollController.stopChaseDelaysNanoseconds(refreshAfterMilliseconds: 1200)
+                guard RemoteSmartPollController.stopConfirmationTimeoutSeconds == 60,
+                      RemoteSmartPollController.launchChaseDelaysNanoseconds(refreshAfterMilliseconds: nil) == [0, 750_000_000, 1_500_000_000, 3_000_000_000],
+                      Array(stopDelays.prefix(4)) == [0, 1_200_000_000, 1_500_000_000, 3_000_000_000],
+                      stopDelays.dropFirst(4).allSatisfy({ $0 == 5_000_000_000 }),
+                      stopDelays.reduce(0, +) >= 60_000_000_000 else {
+                    fatalError("stop confirmation must cover a minute without extending launch confirmation")
+                }
                 let ready = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .ready)
                 let waiting = RemoteHostObservationSnapshot(pc: .reachable, apollo: .ready, app: .waiting)
                 guard ready.label() == "페어링됨",
@@ -409,6 +417,27 @@ def _swift_smoke_source(base_url: str, offline_base_url: str, pairing_code: str,
                 guard viewModel.isStopEnabled(viewModel.processes[0]) else {
                     fatalError("online running game should expose the remote stop action")
                 }
+                smokeStep("expired stop notice follows fresh runtime state")
+                let snapshotClient = RemoteAPIClient(baseURL: URL(string: "__BASE_URL__")!)
+                let storedSnapshot = RemoteClientCache.loadProcesses(baseURL: snapshotClient.baseURL)
+                let runningSnapshot = viewModel.processes
+                viewModel.message = RemoteDashboardViewModel.stopConfirmationExpiredMessage
+                await viewModel.applyRemoteProcessSnapshot(runningSnapshot, client: snapshotClient)
+                guard viewModel.message == "게임 실행 상태를 갱신했습니다.",
+                      viewModel.processes[0].isRunning else {
+                    fatalError("fresh running state must retire the old notice without claiming termination")
+                }
+                viewModel.message = RemoteDashboardViewModel.stopConfirmationExpiredMessage
+                await viewModel.applyRemoteProcessSnapshot([], client: snapshotClient)
+                guard viewModel.message == "게임 실행 상태를 갱신했습니다.", viewModel.processes.isEmpty else {
+                    fatalError("late termination must not leave the old timeout notice")
+                }
+                viewModel.message = "새 작업 실패: 확인이 필요합니다."
+                await viewModel.applyRemoteProcessSnapshot(runningSnapshot, client: snapshotClient)
+                guard viewModel.message == "새 작업 실패: 확인이 필요합니다." else {
+                    fatalError("runtime observation must not erase a newer action or error")
+                }
+                await viewModel.applyRemoteProcessSnapshot(storedSnapshot, client: snapshotClient)
                 guard RemoteClientCache.loadProcesses(baseURL: URL(string: "__BASE_URL__")).contains(where: { $0.id == "smoke-game" }),
                       RemoteClientCache.loadProcesses(baseURL: URL(string: "__OFFLINE_BASE_URL__")).isEmpty else {
                     fatalError("process snapshots should be stored only for their own host and port")

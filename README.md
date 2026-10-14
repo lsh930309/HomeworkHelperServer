@@ -1,121 +1,103 @@
 # HomeworkHelper
 
-HomeworkHelper는 Windows 호스트 앱과 macOS 메뉴바 원격 클라이언트로 구성된 개인용 게임/프로세스 보조 도구입니다. 현재 활성 개발 범위는 **Windows host**, **macOS remote client**, **Remote Agent**, **대시보드/데이터 안전성**, **배포 빌드 자동화**입니다.
+**게임 실행부터 이용 기록, 원격 연결까지.**
+Windows 게임 PC와 Mac을 연결하는 개인용 보조 앱입니다.
 
-## 현재 지원 범위
+**호스트 릴리스 [v1.4.0](https://github.com/lsh930309/HomeworkHelperServer/tree/v1.4.0)** · Windows 호스트 · macOS 원격 클라이언트
 
-- **Windows host app**: PySide6 기반 메인 GUI, 프로세스/웹 바로가기 관리, 세션 기록, 알림, 사이드바, 스크린샷/OBS 보조 기능.
-- **Remote Agent**: 호스트 앱의 FastAPI 서버를 통해 상태 조회, 프로세스 실행/종료, 대시보드 요약, pairing/token 기반 보호 endpoint를 제공합니다.
-- **macOS remote client**: 메뉴바 popover 중심의 네이티브 Swift 클라이언트입니다. pairing, host 상태 확인, Moonlight 실행 상태 반영, 원격 quick action을 담당합니다.
-- **Dashboard frontend**: `src/api/dashboard/frontend`의 Vite/React 앱을 빌드 시 `build/dashboard-static`으로 생성해 PyInstaller 패키지에 포함합니다.
+## 한눈에 보기
 
-현재 워크스페이스에는 중단된 실험/완료 문서를 남기지 않습니다. 오래된 roadmap, migration, spike, legacy GUI preview 문서는 활성 계약으로 보지 않습니다.
-
-## 빠른 시작
-
-### Windows host 개발 실행
-
-```bash
-python -m venv .venv
-.venv\\Scripts\\activate
-pip install -r requirements.txt
-python homework_helper.pyw
+```mermaid
+flowchart LR
+    Mac["💻 Mac 클라이언트"] -->|"로그인 후 앱 기능"| Host["🖥️ Windows 호스트"]
+    Host --> Games["🎮 게임 실행·종료"]
+    Host --> Data["📊 이용 기록·게임 자원"]
+    Host --> Sidebar["🎛️ 사이드바"]
+    Sidebar --> Capture["📷 스크린샷·갤러리"]
+    Sidebar --> OBS["🎬 OBS 녹화·파일 보기"]
+    Sidebar --> Audio["🔊 앱별 음량"]
+    classDef client fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef host fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef feature fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class Mac client
+    class Host,Sidebar host
+    class Games,Data,Capture,OBS,Audio feature
 ```
 
-Windows GUI는 PySide6 + Qt Widgets를 사용하며 실행·검증 계약은
-[`docs/development/windows-gui-modernization.md`](docs/development/windows-gui-modernization.md)에 정리되어 있습니다.
+| 원하는 일 | 사용하는 곳 |
+|---|---|
+| 🎮 게임·프로그램 실행과 종료 | Windows 메인 창 · 사이드바 · Mac 클라이언트 |
+| ⏱️ 이용 시간·기록 확인 | 호스트 앱 · 대시보드 |
+| ⚡ 게임 자원·회복 시간 확인 | 호스트 앱 · Mac 클라이언트 |
+| 📷 촬영·갤러리·음량·녹화 | Windows 사이드바 |
+| 🌙 원격 부팅·Moonlight 연결 | Mac 클라이언트 |
 
-서버만 확인할 때는 GUI 단일 인스턴스 경로를 우회합니다.
+## v1.4의 원격 사용 흐름
 
-```bash
-python homework_helper.pyw --server
+```mermaid
+flowchart LR
+    subgraph Before["로그인 전"]
+        Boot["PC 부팅"] --> Link["PC 연결"] --> Moonlight["Moonlight ON"]
+    end
+    subgraph After["로그인 후"]
+        Login["Windows 로그인"] --> Ready["호스트 앱 준비"] --> Use["게임 제어·데이터 확인"]
+    end
+    Moonlight -->|"로그인 화면에 접근"| Login
+    classDef before fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef after fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class Boot,Link,Moonlight before
+    class Login,Ready,Use after
 ```
 
-### macOS remote client 개발 실행
+- **로그인 전**: Tailscale·Apollo가 준비된 PC에 Moonlight로 연결합니다.
+- **로그인 후**: 호스트 앱이 준비되면 게임 제어와 데이터 기능을 사용합니다.
+- **평소 실행**: 앱은 일반 권한으로, 필요한 관리자 작업은 별도 Windows 서비스로 처리합니다.
 
-```bash
-swift build --package-path clients/macos
-```
+스크린샷은 호스트 앱이 촬영하고, 녹화는 OBS와 연동합니다. 녹화 품질·저장 위치는 OBS에서 설정합니다.
+지원하는 게임의 자원은 종료 후에도 조회하며, 예상 회복값과 같으면 기존 타이머를 유지합니다.
 
-앱 번들·설치 패키지는 해당 macOS 환경에서 통합 빌드 스크립트로 생성합니다.
+## 실행 환경과 의존성
 
-```bash
-python build.py --target macos-client
-```
+| 구성 | 지원 환경 | 주요 기술 · 의존성 선언 |
+|---|---|---|
+| Windows 호스트 | Windows 10 이상 · x64 설치본 | PySide6 + Qt Widgets · FastAPI · SQLite/SQLAlchemy · [requirements.txt](requirements.txt) |
+| Mac 원격 클라이언트 | macOS 26 이상 | SwiftUI · AppKit · [Package.swift](clients/macos/Package.swift) |
+| 이용 기록 대시보드 | 웹브라우저 | React · TypeScript · Vite · ECharts · [package.json](src/api/dashboard/frontend/package.json) · [package-lock.json](src/api/dashboard/frontend/package-lock.json) |
 
-## 빌드
+호스트의 주요 Python 의존성은 다음과 같습니다. 정확한 버전과 전체 목록은 `requirements.txt`를 따릅니다.
 
-빌드·패키지 배포 작업을 시작하기 전에 [`빌드 가이드`](docs/guides/build-guide.md)를 반드시 읽습니다.
-각 대상 환경에서 `build.py`를 실행하면 스크립트가 빌드·서명·패키징·버전 관리·산출물 보관과 정리를 처리합니다.
-현재 OS에 맞는 target을 자동 선택하며, GUI 사용 가능 환경에서는 빌드 시작 전에 version/build 후보를 확인하고 조정할 수 있습니다.
+- **GUI·Windows 제어:** PySide6 6.11.1, pywin32, psutil, pycaw, winshell.
+- **API·데이터:** FastAPI, uvicorn, SQLAlchemy, pydantic, requests, jsonschema.
+- **촬영·OBS·게임 연동:** mss, Pillow, websocket-client, genshin, pycryptodome.
 
-```bash
-# 현재 OS 기준 target 자동 선택 + GUI version selector
-python build.py
+### 기능별 외부 프로그램
 
-# 콘솔/CI용
-python build.py --no-gui
+| 프로그램 | 필요한 기능 · 설정 |
+|---|---|
+| Tailscale — 호스트와 Mac | 원격 PC 연결. 로그인 전 연결에는 호스트의 unattended 설정이 필요합니다. |
+| Apollo — 호스트 · Moonlight — Mac | 원격 화면과 로그인 화면 접근. Apollo 서비스와 Moonlight 페어링을 사용합니다. |
+| OpenSSH Server — 호스트 | 로그인 후 원격 절전·재시작·종료. 기존 SSH 키 인증을 사용합니다. |
+| SmartThings CLI — Mac · 등록된 전원 장치 | 기존 원격 부팅/Wake 경로를 사용할 때 필요합니다. |
+| OBS Studio — 호스트 | 녹화 연동을 사용할 때 필요합니다. 녹화 제어에는 OBS WebSocket 서버 설정이 필요하며, 스크린샷 촬영에는 OBS가 필요하지 않습니다. |
 
-# target 강제 지정
-python build.py --target windows-host
-python build.py --target macos-client
-```
+### 개발·빌드 도구
 
-버전 상태는 로컬 `build.version.json`에 저장됩니다. 이 파일은 빌드 성공 후에만 갱신되며, 개인 워크스페이스마다 다를 수 있는 local mutable state입니다.
+| 대상 | 준비할 도구 |
+|---|---|
+| Windows 호스트 | Python **3.14**, PyInstaller, Node.js **20.19.x 이상인 20.x 또는 22.12 이상**과 npm, Inno Setup **6**. 배포 서명에는 Windows SDK의 `signtool`과 서명 인증서가 필요합니다. |
+| Mac 클라이언트 | Python 3, Swift 개발 도구와 **macOS 26 SDK**, 코드 서명 identity. Swift 패키지의 tools-version은 **5.9**입니다. |
 
-자세한 내용은 [`docs/guides/build-guide.md`](docs/guides/build-guide.md)를 확인합니다.
+설치 패키지에는 앱 실행에 필요한 런타임과 빌드된 대시보드가 포함됩니다. 일반 사용에 Python·Node.js를
+별도로 설치할 필요는 없습니다. 환경 준비·개발 실행은 [종합 작업 가이드](docs/WORK_GUIDE.md#실행-환경과-개발-시작),
+패키지 생성은 [빌드 가이드](docs/guides/build-guide.md)를 따릅니다.
 
-## 의존성 기준
+## 시작하기
 
-- Python host/API/build: [`requirements.txt`](requirements.txt)
-- Dashboard frontend: [`src/api/dashboard/frontend/package.json`](src/api/dashboard/frontend/package.json)
-- macOS remote client: [`clients/macos/Package.swift`](clients/macos/Package.swift)
+| 안내 | 문서 |
+|---|---|
+| 🧭 설치·개발·진단·검증·배포의 시작점 | [종합 작업 가이드](docs/WORK_GUIDE.md) |
+| 🔗 원격 연결과 페어링 | [원격 설정 가이드](docs/remote/setup-guide.md) |
+| 📦 패키지 빌드 · Windows 설치 | [빌드 가이드](docs/guides/build-guide.md) · [Windows 설치 가이드](docs/guides/windows-package-install-guide.md) |
 
-패키징 캐시와 산출물은 `.gitignore` 정책을 따릅니다. 실험 후 폐기된 GUI preview 경로나 웹 캐시는 Git에 숨겨 보존하지 않습니다.
-
-## 원격 클라이언트 운영 문서
-
-- [`docs/remote/setup-guide.md`](docs/remote/setup-guide.md): Remote Agent, pairing/token, macOS client, supervisor/power 계약, 검증 절차.
-- [`docs/remote/host-ssh-diagnostics-runbook.md`](docs/remote/host-ssh-diagnostics-runbook.md): 실제 호스트 SSH 진단과 안전한 testbench 절차.
-- [`docs/data-safety-policy.md`](docs/data-safety-policy.md): 설정/DB write 안전 정책.
-- [`docs/development/commit-message-policy.md`](docs/development/commit-message-policy.md): 한국어 계층 목록형 커밋 메시지 정책과 Git hook 고정 방법.
-
-## 개발 정책
-
-- 커밋 메시지는 항상 한국어 제목과 계층 목록형 본문으로 작성합니다.
-- 본문에는 최소한 `변경 사항`과 `검증` 항목을 포함합니다.
-- 이 정책은 repo-local [`AGENTS.md`](AGENTS.md), `.gitmessage`, `.githooks/commit-msg`, `tools/validate_commit_message.py`로 고정합니다.
-
-## 검증 명령
-
-변경 범위에 따라 필요한 검증만 좁혀 실행하되, 원격/빌드 계약을 건드릴 때는 아래 조합을 우선 사용합니다.
-
-```bash
-./.venv/bin/python -m py_compile build.py
-./.venv/bin/python -m pytest tests/test_build_release.py tests/test_remote_verifier_contract.py -q
-./.venv/bin/python -m pytest tests/test_remote_routes.py tests/test_remote_macos_client_static.py -q
-./.venv/bin/python tools/smoke_macos_remote_viewmodel.py
-swift build --package-path clients/macos
-```
-
-## 프로젝트 구조
-
-```text
-homework_helper.pyw                  # Windows host entrypoint
-build.py                             # platform-aware release builder
-requirements.txt                     # Python dependency surface
-src/
-  api/                               # FastAPI server, dashboard, remote routes
-  core/ data/ gui/ recording/ ...    # host app runtime modules
-clients/macos/
-                                     # Swift menu-bar remote client
-tools/                               # packaging, smoke, diagnostic helpers
-tests/                               # static/unit/smoke contract tests
-docs/                               # active operational docs only
-```
-
-## 문서 관리 원칙
-
-- 완료된 작업 기록, 과거 roadmap, migration checklist, spike 문서는 활성 workspace에 두지 않습니다.
-- 에이전트가 현재 구현 계약으로 오해할 수 있는 문서는 삭제하거나 README/운영 문서에 흡수합니다.
-- 새 문서는 “현재도 따라야 하는 운영/검증 계약”일 때만 추가합니다.
+세부 동작은 [호스트 수명주기](docs/development/windows-host-lifecycle.md)와
+[데이터 안전 정책](docs/data-safety-policy.md)이 소유합니다. README 유지관리 규칙은 [AGENTS.md](AGENTS.md)를 따릅니다.

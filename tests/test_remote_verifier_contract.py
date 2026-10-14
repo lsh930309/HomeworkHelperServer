@@ -50,6 +50,10 @@ def test_remote_verifier_runs_all_controller_validation_lanes():
 
 def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_workspace():
     forbidden_paths = [
+        Path("current_plans.md"),
+        Path("reset_windows_python314_venv.py"),
+        Path("src/data/manager.py"),
+        Path("src/migration"),
         Path("PROJECT_WORK_PRIORITIES.md"),
         Path("remote_clients"),
         Path("remote_clients/android"),
@@ -90,6 +94,9 @@ def test_removed_client_and_obsolete_gui_artifacts_stay_removed_from_active_work
     ]
     for path in forbidden_paths:
         assert not path.exists(), f"{path} should not return to the active workspace"
+
+    assert "from src.migration" not in _read(Path("homework_helper.pyw"))
+    assert "from src.data.manager" not in _read(Path("src/core/scheduler.py"))
 
     active_docs = [
         Path("README.md"),

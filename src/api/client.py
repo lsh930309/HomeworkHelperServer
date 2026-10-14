@@ -318,7 +318,7 @@ class BackgroundApiTransport:
 class ApiClient:
     """
     FastAPI 서버와 통신하여 데이터를 CRUD하는 클라이언트.
-    기존 DataManager의 역할을 대체합니다.
+    GUI의 데이터 읽기·쓰기를 호스트 API/CRUD 경계로 전달합니다.
     """
     _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 

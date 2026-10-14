@@ -46,8 +46,8 @@ class Backend:
     def processes(self, _session):
         return self.identities
 
-    def terminate(self, identity):
-        self.effects.append(("terminate", identity))
+    def terminate(self, session, identities):
+        self.effects.append(("terminate", session, identities))
 
     def startup(self, session):
         self.effects.append(("startup", session))
@@ -195,7 +195,25 @@ def test_exact_observed_identity_terminates_only_registered_process(system):
     result = controller.handle({"operation":"stop_managed", "process_id":"game",
                                 "pid":20, "create_time":5.0}, caller).payload
     assert result["stopped"][0]["pid"] == 20
-    assert backend.effects == [("terminate", backend.identities[0])]
+    assert result["accepted"] is True and result["status"] == "accepted"
+    assert backend.effects == [("terminate", backend.session, [backend.identities[0]])]
+
+
+def test_stop_request_uses_one_user_worker_for_all_registered_matches(system):
+    controller, backend, _repository, caller = system
+    backend.identities.append(ProcessIdentity(21, 6.0, r"C:\Games\game.exe", OWNER, 4))
+    reply = controller.handle({"operation":"stop_managed", "process_id":"game"}, caller).payload
+    assert backend.effects == [("terminate", backend.session, backend.identities)]
+    assert [item["pid"] for item in reply["stopped"]] == [20, 21]
+    assert reply["status"] == "accepted"
+
+
+@pytest.mark.parametrize("mode", ["direct", "shortcut", "auto"])
+def test_saved_launch_modes_never_read_extra_launcher_search_inputs(system, mode):
+    controller, backend, _repository, caller = system
+    controller.preset_inputs = lambda *_args: pytest.fail("Saved-path launch must not read presets")
+    result = controller.handle({"operation":"launch_managed", "process_id":"game", "mode":mode}, caller)
+    assert result.payload["accepted"] and len(backend.effects) == 1
 
 
 def test_logon_starts_once_unlock_and_recovery_do_not_reopen_app(system):
@@ -573,6 +591,32 @@ def test_user_preset_is_canonical_and_candidate_presence_is_observed(tmp_path):
     patterns, existing = preset_launch_inputs(process, Session(OWNER, 4, tmp_path))
     assert patterns == ("HYP.exe",) and existing == frozenset({str(folder / "HYP.exe")})
     assert preset_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("entry", [{}, {"launcher_patterns":None}, {"launcher_patterns":[]}])
+def test_readonly_preset_without_search_patterns_returns_no_candidates(tmp_path, entry):
+    preset = tmp_path / "game_presets_user.json"
+    preset.write_text(json.dumps({"presets":[dict(id="generic", **entry)]}))
+    before = preset.read_bytes()
+    process = SimpleNamespace(user_preset_id="generic", launch_path="C:/Games/Launcher.exe", monitoring_path="")
+    assert preset_launch_inputs(process, Session(OWNER,4,tmp_path)) == ((), frozenset())
+    assert preset.read_bytes() == before
+
+
+@pytest.mark.parametrize("error,code", [(PermissionError("denied"),5), (TimeoutError("not exited"),1460)])
+def test_user_stop_cli_preserves_failure_exit_code_without_loading_app(error, code, monkeypatch, capsys):
+    import base64
+    from dataclasses import asdict
+    import homework_helper_service as entry
+    from src.host_service import windows_backend
+    def fail(*_args):
+        raise error
+    monkeypatch.setattr(windows_backend, "terminate_user_processes", fail)
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "identities":[asdict(ProcessIdentity(20,5.0,r"C:\Games\game.exe",OWNER,4))], "logon_id":"logon-a",
+    }).encode()).decode()
+    assert entry.main(["--user-stop",payload]) == code
+    assert json.loads(capsys.readouterr().out)["accepted"] is False
 
 
 def test_client_rejects_failed_or_malformed_response_and_does_not_retry():

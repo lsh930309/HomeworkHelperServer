@@ -130,14 +130,19 @@ class Harness:
         self.user_token = Token()
         self.pipe_token = Token()
         self.handle = ProcessHandle(Token())
+        self.caller = ProcessHandle(Token(elevated=True), pid=999)
         self.security = Security(self)
         self.opened_handles = []
         self.terminated = []
         self.api = SimpleNamespace(
             security=self.security,
-            ts=SimpleNamespace(WTSQueryUserToken=lambda session: self.user_token),
-            api=SimpleNamespace(OpenProcess=self.open_process, GetCurrentThread=lambda: -2),
+            ts=SimpleNamespace(WTSQueryUserToken=lambda session: self.user_token,
+                               WTSGetActiveConsoleSessionId=lambda: 7),
+            api=SimpleNamespace(OpenProcess=self.open_process, GetCurrentThread=lambda: -2,
+                                GetCurrentProcess=lambda: self.caller),
             process=SimpleNamespace(TerminateProcess=self.terminate_process),
+            event=SimpleNamespace(WAIT_OBJECT_0=0, WAIT_TIMEOUT=258,
+                                  WaitForSingleObject=lambda handle, ms: 0 if handle in self.terminated else 258),
             error=OSError,
         )
 
@@ -261,20 +266,117 @@ def test_changed_process_identity_is_not_terminated(backend, changes):
     service, harness = backend
     requested = replace(identity(harness.handle), **changes)
     with pytest.raises(PermissionError):
-        service.terminate(requested)
+        native.terminate_user_processes([requested], "logon-42")
     assert harness.terminated == []
-    assert harness.handle.closed
-    assert len(harness.opened_handles) == 1
+    if "sid" in changes or "session_id" in changes:
+        assert not harness.opened_handles
+    else:
+        assert harness.handle.closed and len(harness.opened_handles) == 1
 
 
 def test_termination_uses_the_same_handle_that_was_verified(backend):
     service, harness = backend
     requested = identity(harness.handle)
-    result = service.terminate(requested)
-    assert result["accepted"] and result["pid"] == requested.pid
+    native.terminate_user_processes([requested], "logon-42")
     assert harness.terminated == [harness.opened_handles[0]]
     assert harness.handle.closed
     assert len(harness.opened_handles) == 1
+
+
+def test_service_delegates_all_stops_to_one_elevated_user_worker(backend, session, monkeypatch):
+    import base64
+    import json
+    from dataclasses import asdict
+    service, harness = backend
+    requested = identity(harness.handle)
+    calls = []
+    def create(selected_session, executable, arguments, **kwargs):
+        calls.append((selected_session, executable, arguments, kwargs))
+        return {"worker_pid": 900, "worker_exit_code": 0}
+    monkeypatch.setattr(service, "_create_user_process", create)
+    result = service.terminate(session, [requested])
+    assert result == {"accepted": True, "pids": [requested.pid]}
+    selected, executable, arguments, options = calls[0]
+    assert selected == session and executable == service.service_exe and arguments[0] == "--user-stop"
+    assert options == {"elevated":True, "wait_for_worker":True, "worker_timeout_ms":4000, "cleanup_timeout_ms":250}
+    assert json.loads(base64.urlsafe_b64decode(arguments[1])) == {
+        "identities":[asdict(requested)], "logon_id":session.logon_id,
+    }
+    assert harness.terminated == [] and harness.opened_handles == []
+
+
+@pytest.mark.parametrize("token", [Token(elevated=False), Token(sid="S-1-5-18", elevated=True),
+                                   Token(sid="other", elevated=True), Token(session_id=8, elevated=True)])
+def test_stop_worker_rejects_non_owner_or_non_admin_context_before_opening_targets(backend, token):
+    _service, harness = backend
+    harness.caller.token = token
+    with pytest.raises(PermissionError):
+        native.terminate_user_processes([identity(harness.handle)], "logon-42")
+    assert not harness.opened_handles and not harness.terminated
+
+
+def test_stop_worker_accepts_full_token_with_the_requested_limited_logon(backend):
+    _service, harness = backend
+    limited = Token(logon_id="logon-42")
+    harness.caller.token = Token(elevated=True, logon_id="elevated-auth", linked=limited)
+    native.terminate_user_processes([identity(harness.handle)], "logon-42")
+    assert harness.terminated == [harness.handle] and limited.closed
+
+
+def test_stop_worker_rejects_another_logon_even_in_the_same_windows_session(backend):
+    _service, harness = backend
+    harness.caller.token = Token(elevated=True, logon_id="elevated-auth", linked=Token(logon_id="new-logon"))
+    with pytest.raises(PermissionError, match="로그온"):
+        native.terminate_user_processes([identity(harness.handle)], "logon-42")
+    assert not harness.opened_handles and not harness.terminated
+
+
+def test_all_stop_handles_are_verified_before_any_process_is_terminated(backend):
+    _service, harness = backend
+    second = ProcessHandle(Token(), pid=124, created=1234567891.0)
+    harness.api.api.OpenProcess = lambda access, inherit, pid: {123:harness.handle, 124:second}[pid]
+    with pytest.raises(PermissionError, match="identity"):
+        native.terminate_user_processes([identity(harness.handle), replace(identity(second), create_time=1.0)], "logon-42")
+    assert harness.terminated == [] and harness.handle.closed and second.closed
+
+
+def test_delayed_os_cleanup_does_not_turn_a_successful_termination_request_into_failure(backend):
+    _service, harness = backend
+    waits = []
+    def still_cleaning(handle, timeout):
+        waits.append(timeout)
+        return 258
+    harness.api.event.WaitForSingleObject = still_cleaning
+    native.terminate_user_processes([identity(harness.handle)], "logon-42")
+    assert harness.terminated == [harness.handle] and harness.handle.closed
+    assert waits == [0]  # Only check whether the target already exited; never wait for cleanup.
+
+
+@pytest.mark.parametrize("code", [5, 1460])
+def test_stop_worker_failure_is_not_returned_as_completed(backend, session, monkeypatch, code):
+    service, harness = backend
+    monkeypatch.setattr(service, "_create_user_process", lambda *_args, **_kwargs: {"worker_pid":900,"worker_exit_code":code})
+    def native_error(value):
+        error = OSError("Windows error " + str(value)); error.winerror = value
+        return error
+    monkeypatch.setattr(native.ctypes, "WinError", native_error, raising=False)
+    with pytest.raises(TimeoutError if code == 1460 else OSError):
+        service.terminate(session,[identity(harness.handle)])
+    assert not harness.terminated
+
+
+def test_partial_native_stop_failure_never_completes_the_batch(backend):
+    _service, harness = backend
+    second = ProcessHandle(Token(),pid=124,created=1234567891.0)
+    harness.api.api.OpenProcess = lambda access, inherit, pid: {123:harness.handle,124:second}[pid]
+    def stop(handle,code):
+        if handle is second: raise OSError("native failure on second process")
+        harness.terminated.append(handle)
+    harness.api.process.TerminateProcess = stop
+    with pytest.raises(OSError,match="second process"):
+        native.terminate_user_processes([identity(harness.handle),identity(second)],"logon-42")
+    assert harness.terminated == [harness.handle]
+    assert harness.handle.closed and second.closed
 
 
 def test_pipe_authentication_identifies_actual_process_and_endpoint_token(backend):

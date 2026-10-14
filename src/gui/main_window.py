@@ -48,10 +48,12 @@ from src.utils.process import get_qicon_for_file
 from src.utils.windows import (
     apply_windows_title_bar_color,
     position_windows_window_bottom_right,
-    snap_windows_window_to_work_area,
 )
 from src.core.launcher import Launcher
-from src.core.launch_target import launcher_candidates, resolve_launch_target, resolve_launch_args
+from src.core.launch_target import (
+    launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
+    resolve_launch_target, resolve_launch_args,
+)
 from src.core.tailscale import tailscale_status
 from src.core.notifier import Notifier
 from src.core.hoyolab_reconcile import HoYoStaminaReconcileCoordinator
@@ -294,7 +296,6 @@ class MainWindow(QMainWindow):
             on_stop=self._recording_manager.stop_recording,
             on_reconnect=self._recording_manager.reconnect,
             on_start=self._show_countdown_then_record,
-            get_last_error=self._recording_manager.get_last_error,
             get_elapsed_sec=self._recording_manager.get_elapsed_sec,
             get_output_dir=self._get_recording_output_dir,
         )
@@ -459,6 +460,9 @@ class MainWindow(QMainWindow):
 
         self._record_status_event("준비 완료.")
 
+        app_instance = QApplication.instance()
+        if app_instance is not None:
+            app_instance.primaryScreenChanged.connect(self._position_window_bottom_right)
         self._apply_widgets_presentation()
 
         self.apply_startup_setting() # 시작 프로그램 설정 적용
@@ -949,15 +953,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_sidebar_startup_mode)
 
     def moveEvent(self, event):
-        """Windows에서 보이는 창 프레임을 가까운 작업 영역 경계에 붙입니다."""
+        """이동이 끝난 뒤 같은 모니터의 작업 영역 우하단에 맞춥니다."""
         super().moveEvent(event)
-        try:
-            snap_windows_window_to_work_area(
-                int(self.winId()),
-                threshold_logical=15,
-            )
-        except Exception:
-            logger.debug("Windows 창 이동 자석 적용 실패", exc_info=True)
+        QTimer.singleShot(0, self._position_window_bottom_right)
 
     def _on_monitor_timer_tick(self):
         """타이머 지연을 기록하고 다음 process snapshot을 요청합니다."""
@@ -1006,6 +1004,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_status_columns()
         self._refresh_progress_bars()
+        self._position_window_bottom_right()
 
         if self._ui_refresh_tick_count % self._WEB_BUTTON_REFRESH_INTERVAL_TICKS == 0:
             self._refresh_web_button_states()
@@ -1820,8 +1819,11 @@ class MainWindow(QMainWindow):
         return resolve_launch_args(process, launch_mode, launch_target)
 
     def _resolve_process_launch_target(self, process: ManagedProcess, mode: str | None = None):
+        mode = resolve_launch_mode(process, mode)
+        if mode != "launcher":
+            return resolve_launch_target(process, mode)
         preset = self.preset_manager.get_preset_by_id(process.user_preset_id) if process.user_preset_id else None
-        patterns = preset.get("launcher_patterns", ()) if preset else ()
+        patterns = preset_launcher_patterns(preset)
         existing = tuple(item for item in launcher_candidates(process, patterns) if os.path.exists(item))
         return resolve_launch_target(process, mode, launcher_patterns=patterns, existing_paths=existing)
 
@@ -2167,52 +2169,30 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "삭제 실패", "웹 바로 가기 삭제에 실패했습니다.")
 
     def _position_on_cursor_screen_bottom_right(self) -> None:
-        """현재 커서가 있는 모니터의 작업 영역 우하단에 프레임을 맞춥니다."""
-        try:
-            cursor = QCursor.pos()
-            if position_windows_window_bottom_right(
-                int(self.winId()),
-                cursor.x(),
-                cursor.y(),
-            ):
-                logger.debug("Win32 외곽 창을 커서 모니터 우하단에 배치")
-                return
-            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
-            if not screen:
-                return
-            frame = self.frameGeometry()
-            available = screen.availableGeometry()
-            frame_left = available.right() - frame.width() + 1
-            frame_top = available.bottom() - frame.height() + 1
-            client_offset = self.geometry().topLeft() - frame.topLeft()
-            self.move(QPoint(frame_left, frame_top) + client_offset)
-            logger.debug(
-                "커서 모니터 우하단에 창 배치: screen=%s frame=(%s, %s)",
-                screen.name(),
-                frame_left,
-                frame_top,
-            )
-        except Exception as e:
-            logger.error(f"창 우하단 배치 실패: {e}", exc_info=True)
+        """창을 열 때 커서가 있는 모니터를 선택합니다."""
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        self._position_window_bottom_right(screen)
 
-    def _clamp_window_to_available_screen(self):
-        """네이티브 프레임 전체를 현재 화면의 유효 영역 안으로 보정합니다."""
+    def _position_window_bottom_right(self, screen=None) -> None:
+        """표시 중인 창의 가시 프레임 우하단을 같은 작업 영역에 맞춥니다."""
+        if not self.isVisible() or self.isMinimized():
+            return
         try:
-            frame = self.frameGeometry()
-            screen = QApplication.screenAt(frame.center())
-            if not screen:
-                screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
-            if not screen:
+            screen = screen or self.screen() or QApplication.primaryScreen()
+            if screen is None:
                 return
-            avail = screen.availableGeometry()
-            new_left = max(avail.left(), min(frame.left(), avail.right() - frame.width() + 1))
-            new_top = max(avail.top(), min(frame.top(), avail.bottom() - frame.height() + 1))
-            if new_left != frame.left() or new_top != frame.top():
-                client_offset = self.geometry().topLeft() - frame.topLeft()
-                self.move(QPoint(new_left, new_top) + client_offset)
-                logger.debug("창 프레임을 화면 영역으로 보정: (%s, %s)", new_left, new_top)
-        except Exception as e:
-            logger.error(f"창 위치 보정 실패: {e}", exc_info=True)
+            origin = screen.geometry().topLeft()
+            if position_windows_window_bottom_right(int(self.winId()), (origin.x(), origin.y())):
+                return
+            available = screen.availableGeometry()
+            frame = self.frameGeometry()
+            target = QPoint(available.right() - frame.width() + 1,
+                            available.bottom() - frame.height() + 1)
+            if frame.topLeft() != target:
+                # QWidget.move의 창 좌표는 프레임을 포함한다.
+                self.move(target)
+        except Exception:
+            logger.debug("메인 창 우하단 배치 실패", exc_info=True)
 
     def closeEvent(self, event: QEvent):
         """창 닫기 이벤트를 처리합니다. 트레이 관리자가 있으면 트레이로 숨깁니다."""
@@ -2384,7 +2364,7 @@ class MainWindow(QMainWindow):
             self._pending_bottom_right_placement = False
             QTimer.singleShot(0, self._position_on_cursor_screen_bottom_right)
         else:
-            QTimer.singleShot(0, self._clamp_window_to_available_screen)
+            QTimer.singleShot(0, self._position_window_bottom_right)
 
     # ───────── 볼륨 패널 ─────────
 
