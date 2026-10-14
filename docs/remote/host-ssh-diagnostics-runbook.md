@@ -26,6 +26,29 @@ DB 보호·백업·복구는 [데이터 안전 정책](../data-safety-policy.md)
 `AppData/Roaming/HomeworkHelper/homework_helper_data/gui.log`다. 로그 수집과 자격 증명 조회를
 구분한다. 토큰·비밀번호·SSH 개인키·쿠키를 출력·문서·커밋에 포함하지 않는다.
 
+## DNS와 Tailscale 주소 조회를 구분한다
+
+SSH에서 `Could not resolve hostname`이 나오면 TCP 접속·SSH 인증 전에 실패한 것이다.
+호스트 꺼짐·로그인 전 장애·앱 미실행으로 확대하지 않는다. 다음 세 관측을 함께 비교한다.
+
+| 관측 | 확인할 사실 |
+|---|---|
+| Mac `scutil --dns`, OS `getaddrinfo` | Tailscale resolver·검색 도메인이 실제로 OS에 적용되어 있는지 |
+| Tailscale `dns status --json` | tailnet의 `MagicDNSEnabled`와 이 Mac의 `TailscaleDNS`가 각각 켜져 있는지 |
+| Tailscale `dns query <장치 이름>`, `status --json` | 내부 이름 조회 성공 여부와 정확히 같은 peer의 현재 주소 |
+
+MagicDNS와 내부 이름 조회는 정상인데 `TailscaleDNS=false`이고 OS에 Tailscale resolver가 없다면,
+현재 Mac이 Tailscale DNS 설정을 받아들이지 않는 것이 OS 조회 실패의 원인이다. 전체 DNS 이름을
+붙이거나 DNS 캐시를 지우는 것만으로 해결됐다고 판단하지 않는다. 누가 언제 이 설정을 끈 것인지는
+변경 기록 없이 추정하지 않는다. 저장소의 DNS 변경 호출 유무와 현재 설정 원인은 별도로 보고한다.
+
+CLI 경로는 기존 `resolve_tailscale_cli`로 확인한다. Mac의 앱 번들 CLI가 PATH에 없을 수 있다.
+`dig`·`nslookup`은 macOS의 시스템 resolver와 다른 경로를 사용할 수 있으므로 그것만으로 OS
+해석 성공을 판정하지 않는다. 일반 업무 DNS를 바꾸는 조치는 이 진단에 포함하지 않는다.
+
+반복 작업은 수동으로 주소를 복사하는 대신 이름을 받는 기존 공용 도구를 사용한다.
+주소 선택·실패·재전송 계약은 [공용 운영 도구](../guides/operations-guide.md#ssh-이름과-실제-연결-주소)가 소유한다.
+
 ## 설치 패키지의 격리 API 테스트
 
 운영 앱 대신 설치 패키지의 shadow copy에서 기존 API 로직을 시험한다.

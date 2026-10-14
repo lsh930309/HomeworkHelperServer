@@ -66,6 +66,29 @@ Git 추적 파일이 디스크에 없더라도 감사 대상에 포함하며, �
 필요하다. `--computer`와 `--owner` 기본값은 `LSH_DESKTOP`, `lsh93`이고 실제 컴퓨터·SID와 대조한다.
 설치 위치는 권장 기본 `C:\Program Files\HomeworkHelper`만 지원한다.
 
+### SSH 이름과 실제 연결 주소
+
+`--host`에는 명시적 IP, Tailscale의 장치 이름·전체 DNS 이름 또는 일반 전체 도메인을 전달한다. Tailscale 이름 입력은
+공용 SSH 실행 경계가 기존 `src/core/tailscale.py`의 최신 peer 목록에서 정확히 한 장치를
+찾고, 그 장치의 현재 IPv4(없으면 IPv6)를 OpenSSH의 `HostName`에 지정한다. OS DNS를 먼저
+시도하지 않으며 개인 IP를 코드·설정에 고정하지 않는다. 원래 SSH 대상·사용자·키·포트와
+host key 검증은 유지한다. host-operations의 모든 명령과 SSH testbench가 같은 경계를 사용한다.
+`--user`를 생략한 기존 `user@host` 입력도 지원한다. `.ts.net` 밖의 일반 전체 도메인 이름은
+기존 SSH의 DNS 경로를 유지한다. 짧은 장치 이름과 MagicDNS 이름은 Tailscale 대상이다.
+
+이름 비교는 장치 이름, 전체 DNS 이름, DNS 이름의 첫 부분에 대한 대소문자 무시 완전 일치다.
+일치 대상 없음·복수 일치·주소 없음·Tailscale 미준비는 SSH 실행 전에 명확히 실패한다.
+온라인인 다른 PC로 전환하지 않고 offline 표시만으로 다른 주소를 선택하거나 Wake하지 않는다.
+명시적 IP는 Tailscale 조회 없이 그대로 사용하며, dry-run은 실제 주소 조회·연결을 하지 않는다.
+실행 실패·인증 실패·시간 초과 뒤 다른 주소로 자동 재전송하지 않는다.
+
+MagicDNS가 tailnet에서 켜져 있어도 Mac의 `Use Tailscale DNS settings`가 꺼져 있으면 OS의
+이름 조회는 일반 네트워크 DNS로 전달되어 짧은 이름과 전체 Tailscale 이름이 모두 실패할 수 있다.
+이는 IP 연결이나 Tailscale 내부 DNS의 실패와 구분한다
+([Tailscale의 장치별 DNS 설정](https://tailscale.com/docs/features/magicdns#disabling-magicdns)).
+공용 도구는 이 OS 설정과 독립적으로 주소를 조회한다. 회사 DNS·Tailscale 설정·`/etc/hosts`를
+자동 변경하지 않는다. DNS와 내부 peer 조회의 구분은 [SSH 진단 가이드](../remote/host-ssh-diagnostics-runbook.md#dns와-tailscale-주소-조회를-구분한다)를 따른다.
+
 ### lsh-desktop의 고정 작업 저장소
 
 제품 소스 준비·빌드·설치는 기존 `C:\VSCode\Projects\HomeworkHelperServer` 한 곳을 사용한다.

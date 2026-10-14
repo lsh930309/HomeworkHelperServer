@@ -19,7 +19,8 @@ from tools.ssh_host_testbench import SSHConfig, run_remote_powershell
 
 VERIFY_FILES = ("build.py", "tools/host_operations.py", "tools/ssh_host_testbench.py", "tools/windows_host_probe.py",
                 "tools/windows_session_probe.py", "tools/windows_host_operations.ps1", "tests/test_host_operations.py",
-                "src/__init__.py", "src/gui/__init__.py", "src/gui/runtime_logging.py")
+                "src/__init__.py", "src/core/__init__.py", "src/core/tailscale.py",
+                "src/gui/__init__.py", "src/gui/runtime_logging.py")
 
 
 def git(*args: str) -> str:
@@ -77,7 +78,7 @@ def remote_script(args, commit: str = "", branch: str = "") -> str:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument("command", choices=("inspect", "logs", "prepare-source", "build", "install", "desktop", "verify"))
-    p.add_argument("--host", required=True)
+    p.add_argument("--host", required=True, help="Tailscale device/MagicDNS name, explicit IP or external FQDN")
     p.add_argument("--user")
     p.add_argument("--ssh-port", type=int, default=22)
     p.add_argument("--identity")

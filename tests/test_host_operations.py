@@ -14,7 +14,9 @@ import zipfile
 import pytest
 
 from tools import host_operations as ops
+from tools import ssh_host_testbench as transport
 from tools import windows_host_probe as probe
+from src.core.tailscale import TailscalePeer, TailscaleSnapshot
 
 
 @pytest.fixture
@@ -68,6 +70,33 @@ def test_inspect_never_requests_publication_or_host_changes(monkeypatch, tmp_pat
     assert "-Command 'inspect'" in captured["script"]
     assert "-Repo 'C:\\VSCode\\Projects\\HomeworkHelperServer'" in captured["script"]
     assert json.loads(capsys.readouterr().out)["result"]["api"]["health"]["error"] == "URLError"
+
+
+def test_named_inspect_uses_shared_peer_address_without_a_failed_first_ssh(monkeypatch, tmp_path, capsys):
+    peer = TailscalePeer("LSH_Desktop", "lsh-desktop.example.ts.net.", ("100.64.0.42",), True, "windows")
+    snapshot = TailscaleSnapshot(True, True, "Running", ("100.64.0.1",), "Mac", (peer,), "ready")
+    monkeypatch.setattr(transport, "tailscale_status", lambda: snapshot)
+    monkeypatch.setattr(ops, "source_state", lambda: {})
+    calls = []
+    def connected(command, **kwargs):
+        calls.append(command)
+        assert "HostName=100.64.0.42" in command
+        assert "tester@lsh-desktop" in command
+        assert "-Command 'inspect'" in kwargs["input"]
+        return subprocess.CompletedProcess(command, 0, '{"computer":"LSH_DESKTOP"}', '')
+    monkeypatch.setattr(transport.subprocess, "run", connected)
+    assert ops.main(["inspect", "--host", "lsh-desktop", "--user", "tester", "--report-root", str(tmp_path)]) == 0
+    assert len(calls) == 1 and json.loads(capsys.readouterr().out)["ok"]
+
+
+def test_missing_named_peer_records_failure_before_ssh(monkeypatch, tmp_path, capsys):
+    snapshot = TailscaleSnapshot(True, True, "Running", ("100.64.0.1",), "Mac", (), "ready")
+    monkeypatch.setattr(transport, "tailscale_status", lambda: snapshot)
+    monkeypatch.setattr(transport.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("No SSH or host changes"))
+    assert ops.main(["inspect", "--host", "lsh-desktop", "--report-root", str(tmp_path)]) == 1
+    result = json.loads(capsys.readouterr().err)
+    assert not result["ok"] and "0개" in result["error"]
+    assert not json.loads(next(tmp_path.glob("*/result.json")).read_text(encoding="utf-8"))["ok"]
 
 
 def test_remote_failure_is_recorded_without_a_followup_mutation(monkeypatch, tmp_path, capsys):
