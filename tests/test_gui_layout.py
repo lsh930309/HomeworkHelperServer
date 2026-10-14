@@ -1948,6 +1948,79 @@ def sidebar_layout(monkeypatch):
         view.close()
 
 
+def test_sidebar_cards_and_sound_follow_main_name_order_and_keep_action_targets(sidebar_layout, monkeypatch):
+    from PySide6.QtWidgets import QSlider
+    from src.gui.main_window import MainWindow
+    _app, view, module = sidebar_layout
+    # Input/launch order intentionally differs from name order, including equal names.
+    games = [
+        ManagedProcess(id="z", name="젠레스 존 제로", monitoring_path="/z.exe", launch_path="/z.exe"),
+        ManagedProcess(id="b", name="Alpha", monitoring_path="/b.exe", launch_path="/b.exe"),
+        ManagedProcess(id="m", name="명조", monitoring_path="/m.exe", launch_path="/m.exe"),
+        ManagedProcess(id="a", name="alpha", monitoring_path="/a.exe", launch_path="/a.exe"),
+        ManagedProcess(id="idle", name="니케", monitoring_path="/idle.exe", launch_path="/idle.exe"),
+    ]
+    view._data_manager.managed_processes = games
+    active = {game.id: {"pid": 100 + index, "start_time_approx": 1000.0 - index}
+              for index, game in enumerate(games) if game.id != "idle"}
+    active["deleted"] = {"pid": 999, "start_time_approx": 1.0}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    volume_calls = []
+    monkeypatch.setattr(view, "_on_vol_list_changed", lambda value, game, pid: volume_calls.append((game.id, pid, value)))
+    stopped = []
+    monkeypatch.setattr(view, "_kill_process", lambda *args: stopped.append(args))
+    original = [game.to_dict() for game in games]
+    active_before = {key: dict(value) for key, value in active.items()}
+    view._refresh_active_sections()
+    view._refresh_volumes_list()
+    active_order = ["a", "b", "m", "z"]
+    assert list(view._playtime_labels) == active_order
+    for index, game_id in enumerate(active_order):
+        cluster = view._active_clusters_layout.itemAt(index).widget()
+        game = next(game for game in games if game.id == game_id)
+        assert next(label.text() for label in cluster.findChildren(QLabel) if label.text() == game.name) == game.name
+        cluster.findChild(QPushButton).click()
+        assert stopped[-1] == (game_id, game.monitoring_path, active[game_id]["pid"], active[game_id]["start_time_approx"])
+        assert view._playtime_labels[game_id][1] == active[game_id]["start_time_approx"]
+    sound_order = ["a", "b", "idle", "m", "z"]
+    for index, game_id in enumerate(sound_order):
+        row = view._vol_list_layout.itemAt(index).widget()
+        game = next(game for game in games if game.id == game_id)
+        assert next(label.text() for label in row.findChildren(QLabel) if label.wordWrap()) == game.name
+        row.findChild(QSlider).setValue(35)
+        assert volume_calls[-1] == (game_id, active.get(game_id, {}).get("pid"), 35)
+    assert [game.to_dict() for game in games] == original
+    assert active == active_before
+
+
+def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reordering_source(sidebar_layout, monkeypatch):
+    from src.gui.main_window import MainWindow
+    _app, view, module = sidebar_layout
+    games = view._data_manager.managed_processes
+    active = {game.id: {"pid": 100 + index, "start_time_approx": 1000.0 + index} for index, game in enumerate(games)}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
+    monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
+    ids = [game.id for game in games]
+    view.refresh_content()
+    assert list(view._playtime_labels) == ["4", "3", "0", "1", "2"]
+    games[2].name = "Alpha"
+    active.pop("4")
+    view.refresh_content()
+    assert list(view._playtime_labels) == ["2", "3", "0", "1"]
+    assert [next(label.text() for label in view._vol_list_layout.itemAt(index).widget().findChildren(QLabel) if label.wordWrap())
+            for index in range(len(games))] == ["Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
+    assert [game.id for game in games] == ids
+    active.clear()
+    view._refresh_active_sections()
+    assert not view._playtime_labels and not view._active_clusters_layout.count()
+    view._data_manager.managed_processes = []
+    view._refresh_volumes_list()
+    assert view._vol_list_layout.itemAt(0).widget().text() == "등록된 게임 없음"
+
+
 @pytest.mark.parametrize("height", [250, 1400])
 def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, height):
     from PySide6.QtWidgets import QSlider

@@ -1691,7 +1691,7 @@ class MainWindow(QMainWindow):
         self.process_table.setSortingEnabled(False)
         processes = sorted(
             self.data_manager.managed_processes,
-            key=lambda process: ((process.name or "").casefold(), process.id or ""),
+            key=ManagedProcess.name_sort_key,
         )
         self.process_table.setRowCount(len(processes))
         now_dt = datetime.datetime.now()

@@ -747,7 +747,7 @@ class SidebarWidget(QWidget):
             self._active_clusters_layout.addWidget(cluster)
 
     def _get_active_games(self) -> list:
-        """실행 중인 게임을 시작 시간 순으로 반환합니다.
+        """실행 중인 게임을 메인 GUI와 같은 게임명 오름차순으로 반환합니다.
 
         Returns:
             list of (ManagedProcess, pid, start_timestamp)
@@ -767,7 +767,7 @@ class SidebarWidget(QWidget):
                 pid = entry.get('pid')
                 start_ts = entry.get('start_time_approx') or 0.0
                 result.append((process, pid, start_ts))
-        result.sort(key=lambda x: x[2])
+        result.sort(key=lambda item: item[0].name_sort_key())
         return result
 
     def _make_game_cluster(
@@ -947,7 +947,7 @@ class SidebarWidget(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
-        processes = getattr(self._data_manager, 'managed_processes', [])
+        processes = sorted(getattr(self._data_manager, 'managed_processes', []), key=ManagedProcess.name_sort_key)
         if not processes:
             empty = QLabel("등록된 게임 없음")
             empty.setStyleSheet("color: rgba(255,255,255,100); font-size: 11px;")

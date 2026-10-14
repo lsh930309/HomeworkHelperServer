@@ -106,6 +106,10 @@ class ManagedProcess:
         self.default_volume = default_volume
         self.default_muted = default_muted
 
+    def name_sort_key(self) -> Tuple[str, str]:
+        """게임명 오름차순 표시 기준. 같은 이름은 등록 ID로 순서를 고정한다."""
+        return ((self.name or "").casefold(), self.id or "")
+
     def __repr__(self):
         """ManagedProcess 객체의 문자열 표현을 반환합니다."""
         return f"<ManagedProcess(id='{self.id}', name='{self.name}', preset='{self.user_preset_id}')>"
