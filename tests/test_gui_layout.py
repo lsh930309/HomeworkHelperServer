@@ -598,7 +598,8 @@ def test_main_game_table_restores_name_sort_and_centered_icons(monkeypatch, tmp_
         assert [request[2] for request in icon_requests] == ["a", "b", "z"]
         assert {request[1] for request in icon_requests} == {window._TABLE_ICON_LOGICAL_SIZE}
         icon_cell = window.process_table.cellWidget(0, window.COL_ICON)
-        assert isinstance(icon_cell, QLabel)
+        from src.gui.widgets_style import GameIconLabel
+        assert isinstance(icon_cell, GameIconLabel)
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignHCenter
         assert icon_cell.alignment() & Qt.AlignmentFlag.AlignVCenter
         assert window.process_table.columnWidth(window.COL_ICON) <= (
@@ -2533,7 +2534,7 @@ def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_
             assert name.text() == game.name
             assert icon.geometry().right() < name.geometry().left()
             assert row.property("hhRunning") is (game.id == running_id)
-            assert ("rgba(118,206,150,255)" in icon.styleSheet()) is (game.id == running_id)
+            assert icon.property("hhRunning") is (game.id == running_id)
 
 
 def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):

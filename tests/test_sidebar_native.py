@@ -98,28 +98,42 @@ def test_focus_missing_game_window_and_windows_denial_do_not_force_or_retry(desk
     assert calls == [("foreground", 20)]
 
 
-@pytest.mark.parametrize("build,expected", [(17762, None), (17763, "accent"),
-                                           (22000, "accent"), (22621, "dwm")])
-def test_acrylic_uses_documented_dwm_build_boundary(monkeypatch, build, expected):
+@pytest.mark.parametrize("build", [17763, 22000, 22621, 26200])
+def test_nonactivating_sidebar_uses_one_accent_path_on_supported_windows(monkeypatch, build):
     calls = []
     monkeypatch.setattr(effects, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(effects, "_WINDOWS_BUILD", build)
-    monkeypatch.setattr(effects, "_apply_dwm_backdrop", lambda *args: calls.append("dwm") or True)
-    monkeypatch.setattr(effects, "_apply_acrylic_win10", lambda *args: calls.append("accent") or True)
-    assert effects.apply_blur_effect(123, "acrylic") is (expected is not None)
-    assert calls == ([expected] if expected else [])
-
-
-def test_dwm_extends_glass_over_client_area_and_requests_acrylic(monkeypatch):
-    calls = []
-    def attribute(hwnd, key, value, _size):
-        calls.append((getattr(key, "value", key), value._obj.value))
-        return 0
-    def extend(hwnd, margins):
-        calls.append(("glass", margins._obj.left, margins._obj.right, margins._obj.top, margins._obj.bottom))
-        return 0
-    dll = SimpleNamespace(DwmSetWindowAttribute=NativeCall(attribute),
-                          DwmExtendFrameIntoClientArea=NativeCall(extend))
+    def apply(hwnd, data):
+        policy = ctypes.cast(data._obj.pData, ctypes.POINTER(effects._ACCENT_POLICY)).contents
+        calls.append((hwnd.value, data._obj.Attribute, policy.AccentState, policy.AccentFlags, policy.GradientColor))
+        return 1
+    dll = SimpleNamespace(SetWindowCompositionAttribute=NativeCall(apply))
     monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: dll, raising=False)
-    assert effects._apply_dwm_backdrop(123, "acrylic")
-    assert calls == [(20, 1), ("glass", -1, -1, -1, -1), (38, 3)]
+    assert effects.apply_blur_effect(123)
+    assert calls == [(123, 19, 4, 0, 0x99130C08)]
+    assert dll.SetWindowCompositionAttribute.restype is ctypes.wintypes.BOOL
+
+
+@pytest.mark.parametrize("platform,build,hwnd", [("darwin",26200,123), ("win32",17762,123), ("win32",26200,0)])
+def test_unavailable_acrylic_does_not_invoke_native_api(monkeypatch, platform, build, hwnd):
+    monkeypatch.setattr(effects, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(effects, "_WINDOWS_BUILD", build)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_k: pytest.fail("unsupported native call"), raising=False)
+    assert not effects.apply_blur_effect(hwnd)
+
+
+@pytest.mark.parametrize("fail", ["return_false", "native_error"])
+def test_acrylic_failure_is_reported_without_another_backend_or_retry(monkeypatch, caplog, fail):
+    monkeypatch.setattr(effects, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(effects, "_WINDOWS_BUILD", 26200)
+    calls = []
+    def apply(*_args):
+        calls.append(True)
+        if fail == "native_error":
+            raise OSError("composition unavailable")
+        return 0
+    dll = SimpleNamespace(SetWindowCompositionAttribute=NativeCall(apply))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_k: dll, raising=False)
+    assert not effects.apply_blur_effect(123)
+    assert calls == [True]
+    assert "Acrylic" in caplog.text

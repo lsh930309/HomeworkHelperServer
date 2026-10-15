@@ -8,6 +8,19 @@ from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
 
+class SidebarDivider(QWidget):
+    """선과 위아래 여백을 같은 비율로 그리는 섹션 경계."""
+
+    def __init__(self, sidebar_width: int, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(round(sidebar_width * 0.05))
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
+        painter.drawLine(QPointF(0, self.height() / 2), QPointF(self.width(), self.height() / 2))
+
+
 class SidebarClockFace(QWidget):
     """숫자의 실제 획 중심에 콜론을 그리는 HH:MM + 작은 SS 시계."""
 

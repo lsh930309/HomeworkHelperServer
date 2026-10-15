@@ -11,6 +11,7 @@ from PySide6.QtGui import QIcon
 
 from src.data.data_models import ManagedProcess
 from src.gui.work_coordinator import retain_detached_qthreadpool
+from src.gui.widgets_style import GameIconLabel
 from src.utils import audio_control
 
 logger = logging.getLogger(__name__)
@@ -194,7 +195,7 @@ class VolumePopoverPanel(QWidget):
 
         # 게임 아이콘
         from src.utils.process import get_qicon_for_file
-        icon_label = QLabel()
+        icon_label = GameIconLabel(20)
         icon_label.setFixedSize(20, 20)
         qi = get_qicon_for_file(process.monitoring_path)
         if qi and not qi.isNull():

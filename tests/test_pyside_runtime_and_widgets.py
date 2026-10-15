@@ -6,7 +6,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QByteArray, QEventLoop, QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QTabBar, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import Shiboken
 
@@ -18,11 +18,35 @@ from src.gui.sidebar.controls import VolumeDial
 from src.gui.volume_panel import _MUTE_BTN_STYLE
 from src.gui.widgets_style import (
     CapsuleProgressBar,
+    GameIconLabel,
     apply_modern_widgets_style,
     apply_sidebar_widgets_style,
     apply_widgets_palette,
     widgets_theme_tokens,
 )
+
+
+@pytest.mark.parametrize("size", [30, 32, 48])
+@pytest.mark.parametrize("source_ratio", [1, 2])
+def test_common_game_icon_slot_clips_source_pixels_and_centers_in_larger_cell(size, source_ratio):
+    app = _qapp()
+    root = QWidget()
+    root.resize(80, 80)
+    root.setStyleSheet("background: #102030;")
+    label = GameIconLabel(size, root)
+    label.setGeometry(0, 0, 80, 80)
+    source = QPixmap(size * 2 * source_ratio, size * 2)
+    source.fill(QColor("#f02030"))
+    label.setPixmap(source)
+    root.show()
+    app.processEvents()
+    image = root.grab().toImage()
+    left = (80 - size) // 2
+    assert image.pixelColor(40, 40) == QColor("#f02030")
+    assert image.pixelColor(left, left) == QColor("#102030")
+    assert image.pixelColor(0, 0) == QColor("#102030")
+    assert label.pixmap().size() == source.size()  # 원본을 잘라 저장하지 않는다.
+    root.close()
 
 
 def _qapp():

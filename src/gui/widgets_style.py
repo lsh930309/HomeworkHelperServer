@@ -6,8 +6,43 @@ Runtime state remains owned by the existing GUI/controllers.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
-from PySide6.QtWidgets import QApplication, QMainWindow, QProgressBar, QWidget
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QWidget
+
+
+class GameIconLabel(QLabel):
+    """원본·캐시는 보존하고 게임 아이콘 표시 영역을 같은 둥근 정사각형으로 자른다."""
+
+    def __init__(self, icon_size: int, parent=None):
+        super().__init__(parent)
+        self._icon_size = icon_size
+        self.setMinimumSize(icon_size, icon_size)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def paintEvent(self, event) -> None:
+        size = min(self._icon_size, self.width(), self.height())
+        rect = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
+        radius = size * 0.2
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, radius, radius)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setClipPath(clip)
+        painter.fillRect(rect, QColor(255, 255, 255, 12))
+        pixmap = self.pixmap()
+        if not pixmap.isNull():
+            side = min(pixmap.width(), pixmap.height())
+            source = QRectF((pixmap.width() - side) / 2, (pixmap.height() - side) / 2, side, side)
+            painter.drawPixmap(rect, pixmap, source)
+        else:
+            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
+        painter.setClipping(False)
+        if self.property("hhRunning"):
+            painter.setPen(QPen(QColor("#76ce96"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
 
 
 def widgets_theme_tokens(dark: bool) -> dict[str, str]:
@@ -242,11 +277,13 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     t = widgets_theme_tokens(dark)
     button_height = round(widget.width() * 0.1) - 2  # border 1px × 2
     button_padding = round(widget.width() * 0.03)
+    action_content = round(widget.width() * 0.114) - 2  # 공통 외곽 크기에서 테두리 양쪽 1px을 제외
     tab_gap = round(widget.width() * 0.012)
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
         QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
+        QLabel[hhRole="sidebarGameName"] {{ color: {t['text']}; font-size: {round(widget.width() * 0.043)}px; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
         QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {round(widget.width() * 0.02)}px; }}
         QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}
@@ -261,7 +298,8 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="danger"]:pressed,
         QPushButton[hhRole="primaryAction"]:pressed,
         QPushButton[hhRole="folderAction"]:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
-        QPushButton[hhRole="sidebarIconAction"] {{ min-width: 0px; min-height: 0px; padding: 0px; }}
+        QPushButton[hhRole="sidebarIconAction"] {{ min-width: {action_content}px; max-width: {action_content}px;
+            min-height: {action_content}px; max-height: {action_content}px; padding: 0px; }}
         QPushButton[hhRole="sidebarIconAction"][hhDanger="true"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
         QTabBar::tab {{ color: {t['muted']}; background: {t['surface_raised']};
             border: none; border-radius: 5px; padding: 0.5em; margin-right: {tab_gap}px; }}

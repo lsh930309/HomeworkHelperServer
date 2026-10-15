@@ -13,7 +13,8 @@ from PySide6.QtGui import QImage, QWheelEvent
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from src.data.data_models import GlobalSettings, ManagedProcess
-from src.gui.sidebar.controls import SidebarClockFace, VolumeDial
+from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
+from src.gui.widgets_style import GameIconLabel
 from src.gui.sidebar import sidebar_widget as module
 
 
@@ -289,3 +290,83 @@ def test_late_icon_for_previous_registration_path_does_not_replace_current_game(
     assert label.pixmap().isNull()
     view._apply_game_icon(game.id, game.monitoring_path, image)
     assert not label.pixmap().isNull()
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_styled_row_keeps_action_and_volume_outer_sizes_square(sidebar, app, monkeypatch, running):
+    from src.gui.main_window import MainWindow
+    view, game, _settings, _writes = sidebar
+    active = {game.id: {"pid":42, "start_time_approx":123.0}} if running else {}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    view.refresh_content()
+    view.resize(280, 900)
+    view.show()
+    app.processEvents()
+    row = current_row(view)
+    controls = row.findChildren(QPushButton) + row.findChildren(VolumeDial)
+    assert controls
+    for control in controls:
+        # 실제 stylesheet polish가 setFixedSize의 최소 크기를 덮어쓸 수 있다.
+        assert control.width() == control.height() == 32
+        assert control.minimumSize().toTuple() == control.maximumSize().toTuple() == (32, 32)
+    icon = row.findChild(GameIconLabel)
+    assert icon.size().toTuple() == (30, 30)
+    assert row.findChild(QLabel, "gameName").font().pixelSize() == 12
+
+
+def test_idle_name_uses_focus_space_without_moving_right_controls(sidebar, app, monkeypatch):
+    from src.gui.main_window import MainWindow
+    view, game, _settings, _writes = sidebar
+    active = {game.id: {"pid":42, "start_time_approx":123.0}}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    view.resize(280, 900)
+    view.show()
+    states = []
+    for running in [True, False]:
+        if not running:
+            active.clear()
+        view.refresh_content()
+        app.processEvents()
+        row = current_row(view)
+        states.append((row.findChild(QLabel,"gameName").width(), row.findChild(QPushButton,"gameAction").x(), row.findChild(VolumeDial).x()))
+    assert states[1][0] > states[0][0]
+    assert states[1][1:] == states[0][1:]
+
+
+def test_native_acrylic_owns_tint_and_failure_keeps_same_fixed_background(sidebar, monkeypatch):
+    from src.gui.sidebar import win32_effects
+    view, _game, settings, _writes = sidebar
+    settings.sidebar_opacity = 0.1
+    settings.sidebar_effect = "none"
+    calls = []
+    monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda hwnd: calls.append(hwnd) or True)
+    view._try_apply_blur()
+    view.apply_visual_settings()
+    assert len(calls) == 1 and view._blur_applied
+    assert "rgba(8,12,19,0)" in view._frame.styleSheet()
+    assert view.windowOpacity() == 1.0
+    monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda _hwnd: False)
+    view._try_apply_blur()
+    assert not view._blur_applied
+    assert "rgba(8,12,19,153)" in view._frame.styleSheet()
+
+
+def test_section_dividers_reserve_equal_space_above_and_below_line(sidebar):
+    view, _game, _settings, _writes = sidebar
+    dividers = view.findChildren(SidebarDivider)
+    assert len(dividers) == 2
+    assert [divider.height() for divider in dividers] == [14,14]
+
+
+def test_qt_empty_surfaces_leave_native_backdrop_visible(sidebar, app, monkeypatch):
+    from src.gui.sidebar import win32_effects
+    view, _game, _settings, _writes = sidebar
+    monkeypatch.setattr(win32_effects, "apply_blur_effect", lambda _hwnd: True)
+    view.resize(280, 900)
+    view.show()
+    view._try_apply_blur()
+    app.processEvents()
+    image = view.grab().toImage()
+    assert image.pixelColor(1, 1).alpha() == 0
+    empty = view._main_scroll.viewport().mapTo(view, view._main_scroll.viewport().rect().center())
+    assert image.pixelColor(empty).alpha() == 0

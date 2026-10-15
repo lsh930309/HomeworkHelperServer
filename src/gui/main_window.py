@@ -77,6 +77,7 @@ from src.gui.sidebar.sidebar_controller import SidebarController
 from src.gui.power_events import DesiredTimerRegistry, PowerResumeEvent, WindowsPowerEventFilter
 from src.gui.work_coordinator import GuiWorkCoordinator, WorkError, WorkResult
 from src.gui.widgets_style import (
+    GameIconLabel,
     CapsuleProgressBar,
     apply_modern_widgets_style,
     apply_widgets_palette,
@@ -1640,7 +1641,7 @@ class MainWindow(QMainWindow):
     def _create_centered_app_icon_cell(self, icon: QIcon) -> QLabel:
         """아이콘 전용 셀 안에 앱 아이콘을 중앙 정렬합니다."""
         icon_size = self._TABLE_ICON_LOGICAL_SIZE
-        label = QLabel()
+        label = GameIconLabel(icon_size)
         label.setObjectName("gameAppIcon")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setContentsMargins(0, 0, 0, 0)

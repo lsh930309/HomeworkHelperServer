@@ -21,10 +21,11 @@ from src.core.launcher import Launcher
 from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
 from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
-from src.gui.sidebar.controls import SidebarClockFace, VolumeDial
+from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
+from src.gui.sidebar.win32_effects import ACRYLIC_TINT
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
-from src.gui.widgets_style import apply_sidebar_widgets_style
+from src.gui.widgets_style import GameIconLabel, apply_sidebar_widgets_style
 
 logger = logging.getLogger(__name__)
 
@@ -457,13 +458,8 @@ class SidebarWidget(QWidget):
         # 내부 프레임 (반투명 배경 + 무테두리 서랍)
         self._frame = QFrame(self)
         self._frame.setObjectName("SidebarFrame")
-        self._frame.setStyleSheet("""
-            QFrame#SidebarFrame {
-                background-color: rgba(8, 12, 19, 199);
-                border: none;
-                border-radius: 0px;
-            }
-        """)
+        self._blur_applied = False
+        self._set_frame_background()
         frame_layout = QVBoxLayout(self._frame)
         # 부모 창보다 큰 최소 높이를 강제하지 않고 가운데 스크롤이 부족한 공간을 맡는다.
         frame_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -531,9 +527,6 @@ class SidebarWidget(QWidget):
 
         # Win32 외부 클릭 감지 상태
         self._lbutton_was_down: bool = False
-
-        # Win32 블러 효과 (최초 show 후 적용)
-        self._blur_applied = False
 
     # ------------------------------------------------------------------
     # UI 구성
@@ -641,11 +634,8 @@ class SidebarWidget(QWidget):
         self._close_btn.clicked.connect(self.slide_out)
         layout.addWidget(self._close_btn)
 
-    def _section_divider(self) -> QFrame:
-        divider = QFrame()
-        divider.setFixedHeight(max(1, round(self.width() * 0.0035)))
-        divider.setStyleSheet("background: rgba(255,255,255,26); border: none;")
-        return divider
+    def _section_divider(self) -> SidebarDivider:
+        return SidebarDivider(self.width())
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -827,15 +817,12 @@ class SidebarWidget(QWidget):
         padding = round(self.width() * 0.015)
         layout.setContentsMargins(padding, padding, padding, padding)
         layout.setSpacing(round(self.width() * 0.015))
-        icon_size = round(self.width() * 0.12)
-        icon = QLabel(process.name[:1] or "?")
+        icon_size = round(self.width() * 0.107)
+        icon = GameIconLabel(icon_size)
+        icon.setText(process.name[:1] or "?")
         icon.setObjectName("gameIcon")
         icon.setFixedSize(icon_size, icon_size)
-        icon.setMargin(max(2, round(self.width() * 0.008)))
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setScaledContents(True)
-        border = "rgba(118,206,150,255)" if runtime is not None else "transparent"
-        icon.setStyleSheet(f"background: rgba(255,255,255,12); border: 2px solid {border}; border-radius: {round(self.width() * 0.022)}px;")
+        icon.setProperty("hhRunning", runtime is not None)
         layout.addWidget(icon)
         self._load_icon_async(process)
 
@@ -843,7 +830,7 @@ class SidebarWidget(QWidget):
         text.setSpacing(round(self.width() * 0.007))
         name = QLabel(process.name)
         name.setObjectName("gameName")
-        name.setProperty("hhRole", "sidebarSecondary")
+        name.setProperty("hhRole", "sidebarGameName")
         name.setWordWrap(True)
         name.setMinimumWidth(1)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -862,7 +849,7 @@ class SidebarWidget(QWidget):
             self._update_playtime_label(elapsed, created, prefix)
         layout.addLayout(text, 1)
 
-        action_size = round(self.width() * 0.09)
+        action_size = round(self.width() * 0.114)
         focus = QPushButton()
         focus.setObjectName("focusGame")
         focus.setProperty("hhRole", "sidebarIconAction")
@@ -877,7 +864,6 @@ class SidebarWidget(QWidget):
             layout.addWidget(focus)
         else:
             focus.hide()
-            layout.addSpacing(action_size)
 
         action = QPushButton()
         action.setObjectName("gameAction")
@@ -1005,7 +991,7 @@ class SidebarWidget(QWidget):
                 return
 
     def _make_volume_dial(self, process: ManagedProcess, pid: Optional[int]) -> VolumeDial:
-        dial = VolumeDial(round(self.width() * 0.145))
+        dial = VolumeDial(round(self.width() * 0.114))
         dial.setAccessibleName(f"{process.name} 음량")
         value = process.default_volume if process.default_volume is not None else 100
         muted = process.default_muted
@@ -1113,6 +1099,15 @@ class SidebarWidget(QWidget):
         if self._is_shown:
             geo = self._compute_geometry()
             self.setGeometry(geo)
+
+    def _set_frame_background(self) -> None:
+        red, green, blue, alpha = ACRYLIC_TINT
+        if self._blur_applied:
+            alpha = 0  # native tint 위에 두 번째 어두운 막을 그리지 않는다.
+        self._frame.setStyleSheet(
+            f"QFrame#SidebarFrame {{ background-color: rgba({red},{green},{blue},{alpha});"
+            " border: none; border-radius: 0px; }"
+        )
 
     def _reset_auto_hide(self) -> None:
         if self._auto_hide_ms > 0:
@@ -1749,6 +1744,9 @@ class SidebarWidget(QWidget):
         try:
             from src.gui.sidebar.win32_effects import apply_blur_effect
             hwnd = int(self.winId())
-            self._blur_applied = apply_blur_effect(hwnd, "acrylic")
+            self._blur_applied = apply_blur_effect(hwnd)
+            self._set_frame_background()
+            if not self._blur_applied:
+                logger.warning("사이드바 Acrylic 적용 실패: 고정 반투명 배경 유지 (hwnd=%s)", hwnd)
         except Exception:
             logger.debug("사이드바 블러 효과 적용 실패", exc_info=True)
