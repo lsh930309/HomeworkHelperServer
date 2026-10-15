@@ -3,7 +3,7 @@ import subprocess
 import shlex
 import os
 import ctypes
-from typing import Optional, Tuple # 타입 힌트를 위해 추가
+from typing import Callable, Optional, Tuple # 타입 힌트를 위해 추가
 import psutil  # 프로세스 관리를 위해 추가
 from src.utils.launcher_utils import should_restart_launcher
 
@@ -165,8 +165,15 @@ class Launcher:
             self.last_error = f"런처 종료 실패: {exc}"
             return False
 
-    def launch_process(self, launch_command: str, args: str | list[str] | tuple[str, ...] | None = None, *, managed_process_id: str | None = None, launch_mode: str = "auto") -> bool:
+    def launch_process(
+        self, launch_command: str, args: str | list[str] | tuple[str, ...] | None = None,
+        *, managed_process_id: str | None = None, launch_mode: str = "auto",
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
         self.last_error = None
+        if cancelled is not None and cancelled():
+            self.last_error = "앱 종료 또는 DB 복구로 실행 요청을 취소했습니다."
+            return False
         if not launch_command:
             self.last_error = "실행할 경로가 없습니다."
             return False
@@ -176,6 +183,9 @@ class Launcher:
                 return False
             # Perform launcher safety decisions before the privileged OS step.
             if not self._confirm_launcher_transition(launch_command):
+                return False
+            if cancelled is not None and cancelled():
+                self.last_error = "앱 종료 또는 DB 복구로 실행 요청을 취소했습니다."
                 return False
             try:
                 from src.host_service.client import HostPrivilegeClient, PrivilegeServiceError, PrivilegeServiceUnavailable
@@ -196,6 +206,9 @@ class Launcher:
                 if not target:
                     self.last_error = "바로가기 URL을 읽을 수 없습니다."
                     return False
+            if cancelled is not None and cancelled():
+                self.last_error = "앱 종료 또는 DB 복구로 실행 요청을 취소했습니다."
+                return False
             if os.name == "nt":
                 if target.lower().endswith((".exe", ".com")):
                     command_line = subprocess.list2cmdline([target])

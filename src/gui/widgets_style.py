@@ -241,17 +241,15 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
     """Apply the same surface/state language to the independent sidebar shell."""
     t = widgets_theme_tokens(dark)
     button_height = round(widget.width() * 0.1) - 2  # border 1px × 2
-    mute_height = round(widget.width() * 0.075) - 2
     button_padding = round(widget.width() * 0.03)
     tab_gap = round(widget.width() * 0.012)
     widget.setStyleSheet(
         f"""
         QWidget {{ color: {t['text']}; }}
-        QLabel[hhRole="sidebarClock"] {{ font-size: 28px; font-weight: 400; }}
         QLabel[hhRole="sidebarSecondary"] {{ color: {t['muted']}; font-size: 11px; }}
-        QLabel[hhRole="sidebarGameName"] {{ font-size: 14px; font-weight: 500; }}
         QLabel[hhRole="sidebarSectionTitle"] {{ font-size: 12px; font-weight: 500; }}
-        QFrame[hhRole="sidebarGroup"] {{ background: {t['surface_raised']}; border: none; border-radius: 6px; }}
+        QFrame[hhRole="sidebarGameRow"] {{ background: transparent; border: none; border-radius: {round(widget.width() * 0.02)}px; }}
+        QFrame[hhRole="sidebarGameRow"][hhRunning="true"] {{ background: rgba(42,101,174,77); }}
         QPushButton {{ min-height: {button_height}px; font-size: 12px; border: 1px solid transparent;
             border-radius: 5px; padding: 0px {button_padding}px; background: {t['surface_raised']}; }}
         QPushButton:hover, QPushButton:focus {{ background: {t['surface_hover']}; border-color: {t['focus']}; }}
@@ -263,18 +261,8 @@ def apply_sidebar_widgets_style(widget: QWidget, *, dark: bool) -> None:
         QPushButton[hhRole="danger"]:pressed,
         QPushButton[hhRole="primaryAction"]:pressed,
         QPushButton[hhRole="folderAction"]:pressed {{ background: {t['surface_pressed']}; border-color: {t['focus']}; }}
-        QPushButton[hhRole="muteToggle"] {{
-            min-width: 0px; min-height: {mute_height}px; max-height: {mute_height}px;
-            padding: 0px; background: {t['surface_raised']};
-        }}
-        QPushButton[hhRole="muteToggle"]:checked {{ background: {t['mute_active']}; color: white; }}
-        QPushButton[hhRole="muteToggle"]:checked:hover,
-        QPushButton[hhRole="muteToggle"]:checked:focus {{
-            background: {t['mute_active']}; border-color: {t['focus']};
-        }}
-        QPushButton[hhRole="muteToggle"]:checked:pressed {{
-            background: {t['mute_pressed']}; border-color: {t['focus']};
-        }}
+        QPushButton[hhRole="sidebarIconAction"] {{ min-width: 0px; min-height: 0px; padding: 0px; }}
+        QPushButton[hhRole="sidebarIconAction"][hhDanger="true"] {{ color: {t['danger']}; background: {t['danger_soft']}; }}
         QTabBar::tab {{ color: {t['muted']}; background: {t['surface_raised']};
             border: none; border-radius: 5px; padding: 0.5em; margin-right: {tab_gap}px; }}
         QTabBar::tab:last {{ margin-right: 0px; }}

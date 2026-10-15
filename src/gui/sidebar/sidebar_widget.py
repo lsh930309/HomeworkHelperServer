@@ -1,9 +1,4 @@
-"""게임 실행 중 우측에서 슬라이드인하는 사이드바 위젯.
-
-QPropertyAnimation 으로 부드러운 슬라이드 효과를 제공하며,
-실행 중인 게임별 클러스터(아이콘/플레이타임/종료버튼)와
-전체 볼륨 조절 섹션을 포함합니다.
-"""
+"""등록 게임·음량과 하단 미디어 갤러리를 하나로 보여주는 Acrylic 사이드바."""
 import logging
 import os
 import time
@@ -11,19 +6,22 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    Qt, QObject, QPropertyAnimation, QEasingCurve,
+    Qt, QObject, QPropertyAnimation, QEasingCurve, QSize,
     QEvent, QRect, QTimer, QRunnable, QThreadPool, Signal, Slot,
 )
 from PySide6.QtGui import QScreen, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLayout, QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QTabBar, QVBoxLayout, QWidget,
+    QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QTabBar, QVBoxLayout, QWidget,
 )
 
 from src.data.data_models import ManagedProcess
 from src.core.process_monitor import terminate_managed_process
+from src.core.launcher import Launcher
+from src.core.launch_target import resolve_launch_args
 from src.utils import audio_control
-from src.utils.windows import get_visible_taskbar_work_area
+from src.utils.windows import get_visible_taskbar_work_area, focus_managed_process_window
+from src.gui.sidebar.controls import SidebarClockFace, VolumeDial
 from src.gui.work_coordinator import retain_detached_qthreadpool
 from src.utils.clipboard import copy_file_to_clipboard
 from src.gui.widgets_style import apply_sidebar_widgets_style
@@ -52,6 +50,74 @@ class _ThumbnailLoadSignals(QObject):
 
 class _ProcessStopSignals(QObject):
     completed = Signal()
+
+
+class _ProcessLaunchTask(QRunnable):
+    """화면에서 확정한 실행 정책을 소비하며 운영 앱 종료 후 대기 실행을 취소한다."""
+
+    def __init__(self, process_id, target, mode, args, run_as_admin, shutdown_event):
+        super().__init__()
+        self._process_id, self._target, self._mode = process_id, target, mode
+        self._args, self._run_as_admin = args, run_as_admin
+        self._shutdown_event = shutdown_event
+
+    def run(self) -> None:
+        launcher = Launcher(run_as_admin=self._run_as_admin)
+        com = None
+        try:
+            if os.name == "nt":
+                import pythoncom
+                pythoncom.CoInitialize()
+                com = pythoncom
+            accepted = launcher.launch_process(
+                self._target, args=self._args, managed_process_id=self._process_id,
+                launch_mode=self._mode, cancelled=self._shutdown_event.is_set,
+            )
+            log = logger.info if accepted else logger.warning
+            log("사이드바 게임 실행 요청: 등록=%s 모드=%s 수락=%s 결과=%s",
+                self._process_id, self._mode, accepted, launcher.last_error or "실행 요청 수락")
+        except Exception:
+            logger.exception("사이드바 게임 실행 요청 실패: 등록=%s", self._process_id)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+
+
+class _IconLoadSignals(QObject):
+    loaded = Signal(str, str, object)
+
+
+class _IconLoadTask(QRunnable):
+    """기존 아이콘 캐시를 공유하고 작업 스레드에는 QImage만 생성한다."""
+
+    def __init__(self, process_id: str, path: str, signals: _IconLoadSignals):
+        super().__init__()
+        self._process_id, self._path, self._signals = process_id, path, signals
+
+    def run(self) -> None:
+        image = None
+        com = None
+        try:
+            if os.name == "nt":
+                import pythoncom
+                pythoncom.CoInitialize()
+                com = pythoncom
+            from src.api.dashboard.icons import get_icon_for_size, extract_icon_from_exe, safe_icon_cache_key
+            key = safe_icon_cache_key(self._process_id)
+            path = get_icon_for_size(key, 48)
+            if path is None and os.path.isfile(self._path):
+                extract_icon_from_exe(self._path, key)
+                path = get_icon_for_size(key, 48)
+            if path is not None:
+                candidate = QImage(str(path))
+                if not candidate.isNull():
+                    image = candidate
+        except Exception:
+            logger.debug("게임 아이콘 로드 실패: %s", self._path, exc_info=True)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+        self._signals.loaded.emit(self._process_id, self._path, image)
 
 
 class _ProcessStopTask(QRunnable):
@@ -337,60 +403,11 @@ class _HoverThumbCell(QLabel):
         super().mousePressEvent(event)
 
 
-def _tint_icon_white(icon) -> "QIcon":
-    """아이콘 픽셀을 흰색으로 틴팅합니다 (다크 배경 전용).
-
-    devicePixelRatio 를 원본에서 그대로 복사해야 HiDPI 환경에서
-    논리 픽셀 크기가 보존됩니다.
-    """
-    from PySide6.QtGui import QPainter, QColor, QPixmap
-    from PySide6.QtCore import Qt as _Qt
-    pixmap = icon.pixmap(16, 16)
-    if pixmap.isNull():
-        return icon
-    result = QPixmap(pixmap.size())
-    result.setDevicePixelRatio(pixmap.devicePixelRatio())
-    result.fill(_Qt.GlobalColor.transparent)
-    painter = QPainter(result)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(result.rect(), QColor("white"))
-    painter.end()
-    from PySide6.QtGui import QIcon
-    return QIcon(result)
-
-
-# 슬라이더 스타일
-_SLIDER_STYLE = """
-QSlider::groove:horizontal {
-    height: 4px;
-    background: rgba(255,255,255,28);
-    border-radius: 2px;
-}
-QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(100,160,255,200), stop:1 rgba(140,190,255,220));
-    border-radius: 2px;
-}
-QSlider::handle:horizontal {
-    background: rgba(220,230,255,240);
-    border: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 6px;
-    margin: -4px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: white;
-}
-"""
-
 class SidebarWidget(QWidget):
     """게임 오버레이 사이드바 위젯.
 
     화면 우측에서 슬라이드인하며, 포커스를 빼앗지 않습니다.
-    실행 중인 게임마다 클러스터(아이콘·이름, 플레이타임, 게임종료)를 표시하고,
-    하단에 전체 등록 게임 볼륨 조절 섹션을 배치합니다.
+    모든 등록 게임에 창 전환·실행/종료·음량을 한 행으로 표시합니다.
     """
 
     def __init__(
@@ -442,7 +459,7 @@ class SidebarWidget(QWidget):
         self._frame.setObjectName("SidebarFrame")
         self._frame.setStyleSheet("""
             QFrame#SidebarFrame {
-                background-color: rgba(12, 12, 16, 240);
+                background-color: rgba(8, 12, 19, 199);
                 border: none;
                 border-radius: 0px;
             }
@@ -473,9 +490,11 @@ class SidebarWidget(QWidget):
         self._playtime_timer.setInterval(1000)
         self._playtime_timer.timeout.connect(self._refresh_playtime)
 
-        # 현재 시간 갱신 타이머 (1초)
+        # 실제 시각의 0.5초 경계에 맞춰 기존 시계 타이머를 다시 예약한다.
         self._clock_timer = QTimer(self)
-        self._clock_timer.setInterval(1000)
+        self._clock_timer.setSingleShot(True)
+        self._clock_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._clock_timer.setInterval(500)
         self._clock_timer.timeout.connect(self._update_clock)
 
         # 녹화 상태 갱신 타이머 (1초)
@@ -498,6 +517,8 @@ class SidebarWidget(QWidget):
         self._thumb_pool.setMaxThreadCount(2)
         self._thumb_signals = _ThumbnailLoadSignals()
         self._thumb_signals.loaded.connect(self._apply_thumbnail_result)
+        self._icon_signals = _IconLoadSignals()
+        self._icon_signals.loaded.connect(self._apply_game_icon)
 
         # 녹화 썸네일 디코딩용 스레드풀 (별도)
         self._rec_thumb_pool = QThreadPool()
@@ -526,13 +547,11 @@ class SidebarWidget(QWidget):
         clock_layout = QVBoxLayout(self._clock_widget)
         clock_layout.setContentsMargins(0, round(self.width() * 0.012), 0, gap)
         clock_layout.setSpacing(round(self.width() * 0.012))
-        self._clock_label = QLabel()
-        self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._clock_label.setProperty("hhRole", "sidebarClock")
+        self._clock_face = SidebarClockFace(self.width())
         self._clock_date_label = QLabel()
         self._clock_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._clock_date_label.setProperty("hhRole", "sidebarSecondary")
-        clock_layout.addWidget(self._clock_label)
+        clock_layout.addWidget(self._clock_face)
         clock_layout.addWidget(self._clock_date_label)
         layout.addWidget(self._clock_widget)
 
@@ -557,28 +576,22 @@ class SidebarWidget(QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(gap)
 
-        # 실행 중 게임 클러스터 영역 (동적으로 채워짐)
-        self._active_clusters_layout = QVBoxLayout()
-        self._active_clusters_layout.setSpacing(gap)
-        top_layout.addLayout(self._active_clusters_layout)
-
-        # 음량은 게임 카드 바로 아래에 배치한다.
-        self._vol_section = QWidget()
-        vol_section_layout = QVBoxLayout(self._vol_section)
-        vol_section_layout.setContentsMargins(0, 0, 0, 0)
-        vol_section_layout.setSpacing(round(self.width() * 0.015))
-
-        vol_title = QLabel("음량")
-        vol_title.setProperty("hhRole", "sidebarSecondary")
-        vol_section_layout.addWidget(vol_title)
-
-        self._vol_list_container = QWidget()
-        self._vol_list_layout = QVBoxLayout(self._vol_list_container)
-        self._vol_list_layout.setContentsMargins(0, 0, 0, 0)
-        self._vol_list_layout.setSpacing(round(self.width() * 0.015))
-        vol_section_layout.addWidget(self._vol_list_container)
-
-        top_layout.addWidget(self._vol_section)
+        top_layout.addWidget(self._section_divider())
+        heading = QHBoxLayout()
+        heading.setSpacing(round(self.width() * 0.02))
+        heading.addWidget(self._media_icon("game"))
+        title = QLabel("게임")
+        title.setProperty("hhRole", "sidebarSectionTitle")
+        heading.addWidget(title)
+        heading.addStretch()
+        self._volume_heading = QLabel("음량")
+        self._volume_heading.setProperty("hhRole", "sidebarSecondary")
+        heading.addWidget(self._volume_heading)
+        top_layout.addLayout(heading)
+        self._games_list_layout = QVBoxLayout()
+        self._games_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._games_list_layout.setSpacing(round(self.width() * 0.01))
+        top_layout.addLayout(self._games_list_layout)
         self._scroll_layout.addWidget(self._top_section)
         self._scroll_layout.addStretch(1)
 
@@ -586,6 +599,7 @@ class SidebarWidget(QWidget):
         media_layout = QVBoxLayout(self._media_section)
         media_layout.setContentsMargins(0, gap, 0, 0)
         media_layout.setSpacing(gap)
+        media_layout.addWidget(self._section_divider())
 
         # 스크린샷 섹션
         self._screenshot_section = self._build_screenshot_section()
@@ -623,8 +637,15 @@ class SidebarWidget(QWidget):
 
         # 닫기 버튼 (스크롤 영역 밖, 항상 하단 고정)
         self._close_btn = QPushButton("닫기")
+        self._close_btn.setIcon(self._action_icon("close"))
         self._close_btn.clicked.connect(self.slide_out)
         layout.addWidget(self._close_btn)
+
+    def _section_divider(self) -> QFrame:
+        divider = QFrame()
+        divider.setFixedHeight(max(1, round(self.width() * 0.0035)))
+        divider.setStyleSheet("background: rgba(255,255,255,26); border: none;")
+        return divider
 
     # ------------------------------------------------------------------
     # 공개 API
@@ -644,10 +665,9 @@ class SidebarWidget(QWidget):
         self._auto_hide_ms = ms
 
     def refresh_content(self) -> None:
-        """게임 클러스터와 볼륨 목록을 모두 갱신합니다."""
+        """등록 게임과 기존 미디어 투영을 갱신하며 실행 상태를 만들어 쓰지 않는다."""
         self._update_clock()
-        self._refresh_active_sections()
-        self._refresh_volumes_list()
+        self._refresh_games()
         self._refresh_screenshot_section()
         self._refresh_recording_section()
         self._refresh_gallery()
@@ -720,6 +740,7 @@ class SidebarWidget(QWidget):
         for signals, receiver in (
             (self._thumb_signals, self._apply_thumbnail_result),
             (self._rec_thumb_signals, self._apply_rec_thumbnail_result),
+            (self._icon_signals, self._apply_game_icon),
         ):
             try:
                 signals.loaded.disconnect(receiver)
@@ -775,109 +796,140 @@ class SidebarWidget(QWidget):
     # 내부 메서드 — 레이아웃
     # ------------------------------------------------------------------
 
-    def _refresh_active_sections(self) -> None:
-        """실행 중인 게임 클러스터를 재구성합니다."""
-        self._playtime_labels.clear()
-        while self._active_clusters_layout.count() > 0:
-            item = self._active_clusters_layout.takeAt(0)
-            if item:
-                w = item.widget()
-                if w:
-                    w.hide()
-                    w.deleteLater()
-
-        active_games = self._get_active_games()
-        for process, pid, start_ts in active_games:
-            cluster = self._make_game_cluster(process, pid, start_ts)
-            self._active_clusters_layout.addWidget(cluster)
-
-    def _get_active_games(self) -> list:
-        """실행 중인 게임을 메인 GUI와 같은 게임명 오름차순으로 반환합니다.
-
-        Returns:
-            list of (ManagedProcess, pid, start_timestamp)
-        """
+    def _refresh_games(self) -> None:
+        """기존 등록 목록과 한 번의 감시 스냅샷으로 게임·음량 행을 만든다."""
         from src.gui.main_window import MainWindow
-        if not MainWindow.INSTANCE:
-            return []
-        # cache는 GUI thread가 소유합니다. 버튼에는 PID와 생성 시각을 값으로 캡처합니다.
-        active = MainWindow.INSTANCE.process_monitor.active_monitored_processes
-        managed = getattr(self._data_manager, 'managed_processes', [])
-        managed_map = {p.id: p for p in managed}
+        self._playtime_labels.clear()
+        while self._games_list_layout.count():
+            item = self._games_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        window = MainWindow.INSTANCE
+        active = dict(window.process_monitor.active_monitored_processes) if window else {}
+        games = sorted(self._data_manager.managed_processes, key=ManagedProcess.name_sort_key)
+        settings = self._data_manager.global_settings
+        self._volume_heading.setVisible(getattr(settings, 'sidebar_volume_section_enabled', True))
+        for process in games:
+            self._games_list_layout.addWidget(self._make_game_row(process, active.get(process.id)))
+        if not games:
+            label = QLabel("등록된 게임 없음")
+            label.setProperty("hhRole", "sidebarSecondary")
+            self._games_list_layout.addWidget(label)
 
-        result = []
-        for proc_id, entry in active.items():
-            process = managed_map.get(proc_id)
-            if process:
-                pid = entry.get('pid')
-                start_ts = entry.get('start_time_approx') or 0.0
-                result.append((process, pid, start_ts))
-        result.sort(key=lambda item: item[0].name_sort_key())
-        return result
-
-    def _make_game_cluster(
-        self,
-        process: ManagedProcess,
-        pid: Optional[int],
-        start_ts: float,
-    ) -> QWidget:
-        """단일 실행 게임의 클러스터 위젯을 생성합니다.
-
-        구성: [아이콘 + 이름] / [오늘 플레이타임] / [게임 종료 버튼]
-        """
-        cluster = QFrame()
-        cluster.setProperty("hhRole", "sidebarGroup")
-        layout = QVBoxLayout(cluster)
-        padding = round(self.width() * 0.035)
+    def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
+        row = QFrame()
+        row.setProperty("hhRole", "sidebarGameRow")
+        row.setProperty("hhRunning", runtime is not None)
+        row.setProperty("processId", process.id)
+        row.setProperty("monitoringPath", process.monitoring_path)
+        layout = QHBoxLayout(row)
+        padding = round(self.width() * 0.015)
         layout.setContentsMargins(padding, padding, padding, padding)
-        layout.setSpacing(round(self.width() * 0.02))
-
-        # ── 헤더: 아이콘 + 이름 ──
-        header = QHBoxLayout()
-        header.setSpacing(round(self.width() * 0.02))
-
-        icon_label = QLabel()
+        layout.setSpacing(round(self.width() * 0.015))
         icon_size = round(self.width() * 0.12)
-        icon_label.setFixedSize(icon_size, icon_size)
-        icon_label.setStyleSheet("background: rgba(255,255,255,8); border: none; border-radius: 10px;")
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_label.setScaledContents(True)
-        header.addWidget(icon_label)
+        icon = QLabel(process.name[:1] or "?")
+        icon.setObjectName("gameIcon")
+        icon.setFixedSize(icon_size, icon_size)
+        icon.setMargin(max(2, round(self.width() * 0.008)))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setScaledContents(True)
+        border = "rgba(118,206,150,255)" if runtime is not None else "transparent"
+        icon.setStyleSheet(f"background: rgba(255,255,255,12); border: 2px solid {border}; border-radius: {round(self.width() * 0.022)}px;")
+        layout.addWidget(icon)
+        self._load_icon_async(process)
 
-        name_label = QLabel(process.name)
-        name_label.setProperty("hhRole", "sidebarGameName")
-        name_label.setWordWrap(True)
-        name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        header.addWidget(name_label, 1)
-        layout.addLayout(header)
+        text = QVBoxLayout()
+        text.setSpacing(round(self.width() * 0.007))
+        name = QLabel(process.name)
+        name.setObjectName("gameName")
+        name.setProperty("hhRole", "sidebarSecondary")
+        name.setWordWrap(True)
+        name.setMinimumWidth(1)
+        name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        text.addWidget(name)
+        pid = runtime.get("pid") if runtime else None
+        created = float(runtime.get("start_time_approx") or 0.0) if runtime else 0.0
+        if runtime is not None and getattr(self._data_manager.global_settings, 'sidebar_playtime_enabled', True):
+            elapsed = QLabel()
+            elapsed.setProperty("hhRole", "sidebarSecondary")
+            elapsed.setWordWrap(True)
+            elapsed.setMinimumWidth(1)
+            elapsed.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            text.addWidget(elapsed)
+            prefix = getattr(self._data_manager.global_settings, 'sidebar_playtime_prefix', '오늘 플레이 시간')
+            self._playtime_labels[process.id] = (elapsed, created, prefix)
+            self._update_playtime_label(elapsed, created, prefix)
+        layout.addLayout(text, 1)
 
-        # 아이콘 비동기 로드
-        self._load_icon_async(process, icon_label)
+        action_size = round(self.width() * 0.09)
+        focus = QPushButton()
+        focus.setObjectName("focusGame")
+        focus.setProperty("hhRole", "sidebarIconAction")
+        focus.setFixedSize(action_size, action_size)
+        focus.setIcon(self._action_icon("focus"))
+        focus.setIconSize(QSize(round(self.width() * 0.046), round(self.width() * 0.046)))
+        focus.setAccessibleName(f"{process.name} 창 바로가기")
+        focus.setToolTip("창 바로가기")
+        focus.setEnabled(pid is not None and created > 0)
+        focus.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created: self._focus_process(key, path, target, stamp))
+        if runtime is not None:
+            layout.addWidget(focus)
+        else:
+            focus.hide()
+            layout.addSpacing(action_size)
 
-        # ── 플레이타임 ──
-        gs = getattr(self._data_manager, 'global_settings', None)
-        playtime_enabled = getattr(gs, 'sidebar_playtime_enabled', True) if gs else True
-        playtime_prefix = getattr(gs, 'sidebar_playtime_prefix', '오늘 플레이 시간') if gs else '오늘 플레이 시간'
-        playtime_label = QLabel("0분")
-        playtime_label.setWordWrap(True)
-        playtime_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        playtime_label.setProperty("hhRole", "sidebarSecondary")
-        playtime_label.setVisible(playtime_enabled)
-        layout.addWidget(playtime_label)
-        self._playtime_labels[process.id] = (playtime_label, start_ts, playtime_prefix)
-        self._update_playtime_label(playtime_label, start_ts, playtime_prefix)
+        action = QPushButton()
+        action.setObjectName("gameAction")
+        action.setProperty("hhRole", "sidebarIconAction")
+        action.setProperty("hhDanger", runtime is not None)
+        action.setFixedSize(action_size, action_size)
+        action.setIcon(self._action_icon("stop" if runtime is not None else "launch"))
+        action.setIconSize(focus.iconSize())
+        action.setAccessibleName(f"{process.name} {'종료' if runtime is not None else '실행'}")
+        action.setToolTip("게임 종료" if runtime is not None else "게임 실행")
+        if runtime is not None:
+            action.setEnabled(pid is not None and created > 0)
+            action.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path, target=pid, stamp=created: self._kill_process(key, path, target, stamp))
+        else:
+            action.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path: self._launch_process(key, path))
+        layout.addWidget(action)
+        dial = self._make_volume_dial(process, pid)
+        dial.setVisible(getattr(self._data_manager.global_settings, 'sidebar_volume_section_enabled', True))
+        layout.addWidget(dial)
+        return row
 
-        # ── 게임 종료 버튼 ──
-        kill_btn = QPushButton("게임 종료")
-        kill_btn.setProperty("hhRole", "danger")
-        kill_btn.setEnabled(pid is not None and start_ts > 0)
-        kill_btn.clicked.connect(
-            lambda _=False, process_id=process.id, path=process.monitoring_path,
-            target_pid=pid, created=start_ts: self._kill_process(process_id, path, target_pid, created)
-        )
-        layout.addWidget(kill_btn)
+    def _launch_process(self, process_id: str, monitoring_path: str) -> None:
+        from src.gui.main_window import MainWindow
+        window = MainWindow.INSTANCE
+        process = next((p for p in self._data_manager.managed_processes
+                        if p.id == process_id and p.monitoring_path == monitoring_path), None)
+        if (process is None or window is None or window._shutting_down
+                or window._beholder_restore_runtime_suspended):
+            logger.warning("사이드바 실행 취소: 등록 대상 또는 앱 준비 상태 변경 (등록=%s)", process_id)
+            return
+        target, mode = window._resolve_process_launch_target(process)
+        if not target:
+            logger.warning("사이드바 실행 경로 없음: 등록=%s", process_id)
+            return
+        args = resolve_launch_args(process, mode, target)
+        QThreadPool.globalInstance().start(_ProcessLaunchTask(
+            process_id, target, mode, args,
+            bool(self._data_manager.global_settings.run_as_admin), window._lifecycle_shutdown_event,
+        ))
+        self._reset_auto_hide()
 
-        return cluster
+    def _focus_process(self, process_id: str, monitoring_path: str, pid: Optional[int], create_time: float) -> None:
+        process = next((p for p in self._data_manager.managed_processes
+                        if p.id == process_id and p.monitoring_path == monitoring_path), None)
+        if process is None or pid is None or create_time <= 0:
+            logger.warning("사이드바 창 전환 취소: 등록 대상 또는 실행 정보 변경 (등록=%s)", process_id)
+            return
+        if focus_managed_process_window(pid, create_time, monitoring_path):
+            self.slide_out()
+        else:
+            logger.warning("사이드바 창 전환 실패: 등록=%s PID=%s", process_id, pid)
+            self._reset_auto_hide()
 
     def _kill_process(self, process_id: str, monitoring_path: str,
                       pid: Optional[int], create_time: float) -> None:
@@ -929,215 +981,62 @@ class SidebarWidget(QWidget):
             self._update_playtime_label(label, start_ts, prefix)
 
     def _update_clock(self) -> None:
-        """현재 시간 레이블을 갱신합니다."""
         import datetime
-        gs = getattr(self._data_manager, 'global_settings', None)
-        fmt = getattr(gs, 'sidebar_clock_format', '%H:%M:%S') if gs else '%H:%M:%S'
         now = datetime.datetime.now()
-        self._clock_label.setText(now.strftime(fmt))
+        self._clock_face.set_time(now)
         weekday = ("월", "화", "수", "목", "금", "토", "일")[now.weekday()]
         self._clock_date_label.setText(f"{now.month}월 {now.day}일 {weekday}요일")
-        enabled = getattr(gs, 'sidebar_clock_enabled', True) if gs else True
-        self._clock_widget.setVisible(enabled)
+        self._clock_widget.setVisible(getattr(self._data_manager.global_settings, 'sidebar_clock_enabled', True))
+        if self._is_shown:
+            self._clock_timer.start(500 - (now.microsecond // 1000) % 500)
 
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 아이콘 비동기 로드
-    # ------------------------------------------------------------------
+    def _load_icon_async(self, process: ManagedProcess) -> None:
+        self._thumb_pool.start(_IconLoadTask(process.id, process.monitoring_path, self._icon_signals))
 
-    def _load_icon_async(self, process: ManagedProcess, icon_label: QLabel) -> None:
-        """게임 아이콘을 백그라운드 스레드에서 추출해 icon_label 에 반영합니다."""
-        from PySide6.QtCore import QThread, Signal as Signal
-
-        class _IconLoader(QThread):
-            icon_loaded = Signal(object)
-
-            def __init__(self, path: str, parent=None):
-                super().__init__(parent)
-                self._path = path
-
-            def run(self):
-                try:
-                    from src.utils.process import get_qicon_for_file
-                    icon = get_qicon_for_file(self._path, icon_size=48)
-                    if icon and not icon.isNull():
-                        self.icon_loaded.emit(icon.pixmap(40, 40))
-                except Exception:
-                    logger.debug("아이콘 로드 실패: %s", self._path, exc_info=True)
-
-        loader = _IconLoader(process.monitoring_path, self)
-
-        def _on_icon(pixmap, lbl=icon_label):
-            try:
-                if not pixmap.isNull():
-                    lbl.setPixmap(pixmap)
-            except RuntimeError:
-                pass  # icon_label 이 이미 삭제된 경우 무시
-            loader.deleteLater()
-
-        loader.icon_loaded.connect(_on_icon)
-        loader.start()
-
-    # ------------------------------------------------------------------
-    # 내부 메서드 — 볼륨 섹션
-    # ------------------------------------------------------------------
-
-    def _refresh_volumes_list(self) -> None:
-        """모든 등록 게임에 대한 볼륨 행을 재구성합니다."""
-        gs = getattr(self._data_manager, 'global_settings', None)
-        vol_enabled = getattr(gs, 'sidebar_volume_section_enabled', True) if gs else True
-        self._vol_section.setVisible(vol_enabled)
-
-        while self._vol_list_layout.count() > 0:
-            item = self._vol_list_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
-
-        processes = sorted(getattr(self._data_manager, 'managed_processes', []), key=ManagedProcess.name_sort_key)
-        if not processes:
-            empty = QLabel("등록된 게임 없음")
-            empty.setProperty("hhRole", "sidebarSecondary")
-            self._vol_list_layout.addWidget(empty)
+    @Slot(str, str, object)
+    def _apply_game_icon(self, process_id: str, path: str, image) -> None:
+        if image is None:
             return
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            if row.property("processId") == process_id and row.property("monitoringPath") == path:
+                label = row.findChild(QLabel, "gameIcon")
+                label.setPixmap(QPixmap.fromImage(image))
+                return
 
-        from src.gui.main_window import MainWindow
-        active_pids: dict = {}
-        if MainWindow.INSTANCE:
-            # dict 복사 - process_monitor 스레드가 동시에 수정할 수 있음
-            active_snapshot = dict(MainWindow.INSTANCE.process_monitor.active_monitored_processes)
-            active_pids = {
-                proc_id: entry.get('pid')
-                for proc_id, entry in active_snapshot.items()
-            }
-
-        for proc in processes:
-            self._vol_list_layout.addWidget(
-                self._make_vol_row(proc, active_pids.get(proc.id))
-            )
-
-    def _make_vol_row(self, process: ManagedProcess, pid: Optional[int]) -> QWidget:
-        """다크 테마 볼륨 행 (녹색 점 + 이름 + 음소거 버튼 + 슬라이더 + 값 레이블)."""
-        is_running = pid is not None
-        row = QWidget()
-        hl = QHBoxLayout(row)
-        hl.setContentsMargins(0, round(self.width() * 0.005), 0, round(self.width() * 0.005))
-        hl.setSpacing(round(self.width() * 0.015))
-
-        dot_lbl = QLabel("●")
-        dot_lbl.setFixedWidth(round(self.width() * 0.025))
-        dot_lbl.setStyleSheet(
-            "color: rgba(80,200,120,220); font-size: 7px;" if is_running
-            else "color: transparent; font-size: 7px;"
-        )
-        hl.addWidget(dot_lbl)
-
-        name_lbl = QLabel(process.name)
-        name_lbl.setProperty("hhRole", "sidebarSecondary")
-        # 이름의 최소 너비가 스크롤 내용 전체를 넓혀 우측 컨트롤을 밀지 않게 한다.
-        name_lbl.setWordWrap(True)
-        name_lbl.setMinimumWidth(1)
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        hl.addWidget(name_lbl, 56)
-
-        mute_btn = QPushButton()
-        mute_btn.setCheckable(True)
-        mute_btn.setProperty("hhRole", "muteToggle")
-        mute_btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-
-        style = QApplication.style()
-        if style:
-            icon_on = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
-            icon_off = style.standardIcon(QStyle.StandardPixmap.SP_MediaVolumeMuted)
-            if not icon_on.isNull():
-                icon_on_w = _tint_icon_white(icon_on)
-                icon_off_w = _tint_icon_white(icon_off) if not icon_off.isNull() else icon_on_w
-                mute_btn.setIcon(icon_on_w)
-                mute_btn._icon_on = icon_on_w
-                mute_btn._icon_off = icon_off_w
-            else:
-                mute_btn.setText("🔊")
-                mute_btn._icon_on = None
-        else:
-            mute_btn.setText("🔊")
-            mute_btn._icon_on = None
-
-        if is_running:
-            try:
-                initial_muted = audio_control.is_muted(pid) or False
-            except Exception:
-                initial_muted = getattr(process, 'default_muted', False)
-        else:
-            initial_muted = getattr(process, 'default_muted', False)
-        if initial_muted:
-            mute_btn.blockSignals(True)
-            mute_btn.setChecked(True)
-            mute_btn.blockSignals(False)
-            if getattr(mute_btn, '_icon_on', None):
-                mute_btn.setIcon(mute_btn._icon_off)
-            else:
-                mute_btn.setText("🔇")
-
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, 100)
-        slider.setSingleStep(5)
-        slider.setPageStep(5)
-        slider.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        slider.setStyleSheet(_SLIDER_STYLE)
-        slider.enterEvent = lambda _e: self._reset_auto_hide()  # type: ignore[assignment]
-
-        val_lbl = QLabel()
-        val_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        val_lbl.setProperty("hhRole", "sidebarSecondary")
-
-        vol = getattr(process, 'default_volume', None)
-        if vol is None:
-            vol = 100
-        if is_running:
+    def _make_volume_dial(self, process: ManagedProcess, pid: Optional[int]) -> VolumeDial:
+        dial = VolumeDial(round(self.width() * 0.145))
+        dial.setAccessibleName(f"{process.name} 음량")
+        value = process.default_volume if process.default_volume is not None else 100
+        muted = process.default_muted
+        if pid is not None:
             try:
                 actual = audio_control.get_app_volume(pid)
+                actual_muted = audio_control.is_muted(pid)
                 if actual is not None:
-                    vol = round((actual * 100) / 5) * 5
+                    value = round(actual * 100 / 5) * 5
+                if actual_muted is not None:
+                    muted = actual_muted
             except Exception:
-                pass
-        vol = max(0, min(100, vol))
-        slider.blockSignals(True)
-        slider.setValue(vol)
-        slider.blockSignals(False)
-        val_lbl.setText(str(vol))
+                logger.debug("게임 음량 조회 실패: 등록=%s PID=%s", process.id, pid, exc_info=True)
+        dial.setValue(value)
+        dial.setChecked(muted)
+        dial.valueChanged.connect(lambda value, p=process, target=pid: self._set_game_volume(value, p, target))
+        dial.toggled.connect(lambda muted, p=process, target=pid: self._set_game_muted(muted, p, target))
+        dial.interacted.connect(self._reset_auto_hide)
+        return dial
 
-        def on_mute_toggled(checked, p=process, pid_ref=pid, btn=mute_btn):
-            if getattr(btn, '_icon_on', None):
-                btn.setIcon(btn._icon_off if checked else btn._icon_on)
-            else:
-                btn.setText("🔇" if checked else "🔊")
-            p.default_muted = checked
-            self._schedule_volume_save(p)
-            if pid_ref is not None:
-                audio_control.set_mute(pid_ref, checked)
-            self._reset_auto_hide()
-
-        def on_changed(v, p=process, pid_ref=pid, lbl=val_lbl, s=slider):
-            snapped = round(v / 5) * 5
-            snapped = max(0, min(100, snapped))
-            if snapped != v:
-                s.blockSignals(True)
-                s.setValue(snapped)
-                s.blockSignals(False)
-            lbl.setText(str(snapped))
-            self._on_vol_list_changed(snapped, p, pid_ref)
-
-        mute_btn.toggled.connect(on_mute_toggled)
-        slider.valueChanged.connect(on_changed)
-        hl.addWidget(mute_btn, 9)
-        hl.addWidget(slider, 25)
-        hl.addWidget(val_lbl, 10)
-        return row
-
-    def _on_vol_list_changed(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
+    def _set_game_volume(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
         if pid is not None:
             audio_control.set_app_volume(pid, value / 100.0)
         process.default_volume = value
+        self._schedule_volume_save(process)
+        self._reset_auto_hide()
+
+    def _set_game_muted(self, muted: bool, process: ManagedProcess, pid: Optional[int]) -> None:
+        if pid is not None:
+            audio_control.set_mute(pid, muted)
+        process.default_muted = muted
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 
@@ -1210,9 +1109,7 @@ class SidebarWidget(QWidget):
 
     def apply_visual_settings(self) -> None:
         """투명도·geometry 설정을 즉시 반영합니다."""
-        gs = getattr(self._data_manager, 'global_settings', None)
-        opacity = max(0.1, min(1.0, getattr(gs, 'sidebar_opacity', 0.85) if gs else 0.85))
-        self.setWindowOpacity(opacity)
+        self.setWindowOpacity(1.0)
         if self._is_shown:
             geo = self._compute_geometry()
             self.setGeometry(geo)
@@ -1318,7 +1215,14 @@ class SidebarWidget(QWidget):
         return section
 
     def _media_icon(self, kind: str) -> QLabel:
-        """목업의 카메라·비디오 선 아이콘을 Qt로 그린다."""
+        """같은 선 굵기의 섹션 아이콘을 표시한다."""
+        size = round(self.width() * 0.05)
+        label = QLabel()
+        label.setFixedSize(size, size)
+        label.setPixmap(self._action_icon(kind).pixmap(size, size))
+        return label
+
+    def _action_icon(self, kind: str) -> QIcon:
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QPainter, QPainterPath, QPen
         size = round(self.width() * 0.05)
@@ -1328,12 +1232,12 @@ class SidebarWidget(QWidget):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.scale(size / 16, size / 16)
-        painter.setPen(QPen(QColor("#f5f5f6"), 1.2))
+        painter.setPen(QPen(QColor("#e8a7b1" if kind == "stop" else "#f5f5f6"), 1.2))
         if kind == "screenshot":
             painter.drawRoundedRect(QRectF(1, 4, 14, 10), 1.5, 1.5)
             painter.drawEllipse(QRectF(5, 6, 6, 6))
             painter.drawRect(QRectF(5, 2, 6, 2))
-        else:
+        elif kind == "recording":
             painter.drawRoundedRect(QRectF(1, 4, 9, 8), 1.5, 1.5)
             path = QPainterPath()
             path.moveTo(10, 6)
@@ -1341,11 +1245,31 @@ class SidebarWidget(QWidget):
             path.lineTo(15, 13)
             path.lineTo(10, 10)
             painter.drawPath(path)
+        elif kind == "game":
+            painter.drawRoundedRect(QRectF(1, 4, 14, 9), 2.5, 2.5)
+            painter.drawLine(3, 8, 7, 8)
+            painter.drawLine(5, 6, 5, 10)
+            painter.drawEllipse(QRectF(10, 7, 1, 1))
+            painter.drawEllipse(QRectF(12, 9, 1, 1))
+        elif kind == "launch":
+            path = QPainterPath()
+            path.moveTo(4, 2)
+            path.lineTo(13, 8)
+            path.lineTo(4, 14)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif kind == "stop":
+            painter.drawArc(QRectF(2, 3, 12, 12), 45 * 16, 270 * 16)
+            painter.drawLine(8, 1, 8, 8)
+        elif kind == "focus":
+            painter.drawLine(3, 13, 13, 3)
+            painter.drawLine(5, 3, 13, 3)
+            painter.drawLine(13, 3, 13, 11)
+        elif kind == "close":
+            painter.drawLine(6, 3, 11, 8)
+            painter.drawLine(11, 8, 6, 13)
         painter.end()
-        label = QLabel()
-        label.setFixedSize(size, size)
-        label.setPixmap(pixmap)
-        return label
+        return QIcon(pixmap)
 
     def set_on_stop_recording(self, fn) -> None:
         """녹화 종료 버튼 클릭 시 호출될 콜백을 등록합니다."""
@@ -1825,9 +1749,6 @@ class SidebarWidget(QWidget):
         try:
             from src.gui.sidebar.win32_effects import apply_blur_effect
             hwnd = int(self.winId())
-            effect = "acrylic"
-            if self._data_manager and hasattr(self._data_manager, 'global_settings'):
-                effect = getattr(self._data_manager.global_settings, 'sidebar_effect', 'acrylic')
-            self._blur_applied = apply_blur_effect(hwnd, effect)
+            self._blur_applied = apply_blur_effect(hwnd, "acrylic")
         except Exception:
             logger.debug("사이드바 블러 효과 적용 실패", exc_info=True)

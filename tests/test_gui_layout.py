@@ -23,6 +23,7 @@ from src.data.data_models import (
     SIDEBAR_MODE_GAME,
 )
 from src.core.process_monitor import ProcessMonitorTickResult
+from src.gui.sidebar.controls import VolumeDial
 import src.gui.sidebar.edge_trigger_window as edge_trigger_module
 from src.gui.sidebar.edge_trigger_window import EdgeTriggerWindow
 
@@ -2272,8 +2273,7 @@ def sidebar_layout(monkeypatch):
         view.close()
 
 
-def test_sidebar_cards_and_sound_follow_main_name_order_and_keep_action_targets(sidebar_layout, monkeypatch):
-    from PySide6.QtWidgets import QSlider
+def test_sidebar_unified_games_follow_main_name_order_and_keep_action_targets(sidebar_layout, monkeypatch):
     from src.gui.main_window import MainWindow
     _app, view, module = sidebar_layout
     # Input/launch order intentionally differs from name order, including equal names.
@@ -2292,28 +2292,30 @@ def test_sidebar_cards_and_sound_follow_main_name_order_and_keep_action_targets(
     monkeypatch.setattr(module.audio_control, "get_app_volume", lambda _pid: None)
     monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
     volume_calls = []
-    monkeypatch.setattr(view, "_on_vol_list_changed", lambda value, game, pid: volume_calls.append((game.id, pid, value)))
+    monkeypatch.setattr(view, "_set_game_volume", lambda value, game, pid: volume_calls.append((game.id, pid, value)))
     stopped = []
     monkeypatch.setattr(view, "_kill_process", lambda *args: stopped.append(args))
     original = [game.to_dict() for game in games]
     active_before = {key: dict(value) for key, value in active.items()}
-    view._refresh_active_sections()
-    view._refresh_volumes_list()
+    view._refresh_games()
     active_order = ["a", "b", "m", "z"]
     assert list(view._playtime_labels) == active_order
-    for index, game_id in enumerate(active_order):
-        cluster = view._active_clusters_layout.itemAt(index).widget()
+    unified_order = ["a", "b", "idle", "m", "z"]
+    assert [view._games_list_layout.itemAt(i).widget().property("processId") for i in range(len(games))] == unified_order
+    for index, game_id in enumerate(unified_order):
+        row = view._games_list_layout.itemAt(index).widget()
         game = next(game for game in games if game.id == game_id)
-        assert next(label.text() for label in cluster.findChildren(QLabel) if label.text() == game.name) == game.name
-        cluster.findChild(QPushButton).click()
-        assert stopped[-1] == (game_id, game.monitoring_path, active[game_id]["pid"], active[game_id]["start_time_approx"])
-        assert view._playtime_labels[game_id][1] == active[game_id]["start_time_approx"]
+        assert row.findChild(QLabel, "gameName").text() == game.name
+        if game_id in active:
+            row.findChild(QPushButton, "gameAction").click()
+            assert stopped[-1] == (game_id, game.monitoring_path, active[game_id]["pid"], active[game_id]["start_time_approx"])
+            assert view._playtime_labels[game_id][1] == active[game_id]["start_time_approx"]
     sound_order = ["a", "b", "idle", "m", "z"]
     for index, game_id in enumerate(sound_order):
-        row = view._vol_list_layout.itemAt(index).widget()
+        row = view._games_list_layout.itemAt(index).widget()
         game = next(game for game in games if game.id == game_id)
-        assert next(label.text() for label in row.findChildren(QLabel) if label.wordWrap()) == game.name
-        row.findChild(QSlider).setValue(35)
+        assert row.findChild(QLabel, "gameName").text() == game.name
+        row.findChild(VolumeDial).setValue(35)
         assert volume_calls[-1] == (game_id, active.get(game_id, {}).get("pid"), 35)
     assert [game.to_dict() for game in games] == original
     assert active == active_before
@@ -2334,20 +2336,20 @@ def test_sidebar_name_edit_and_running_set_refresh_reapply_sort_without_reorderi
     active.pop("4")
     view.refresh_content()
     assert list(view._playtime_labels) == ["2", "3", "0", "1"]
-    assert [next(label.text() for label in view._vol_list_layout.itemAt(index).widget().findChildren(QLabel) if label.wordWrap())
+    assert [next(label.text() for label in view._games_list_layout.itemAt(index).widget().findChildren(QLabel) if label.wordWrap())
             for index in range(len(games))] == ["Alpha", "W" * 80, "긴 이름의 게임 등록 항목 이름", "명조: 위더링 웨이브", "붕괴: 스타레일(베타)"]
     assert [game.id for game in games] == ids
     active.clear()
-    view._refresh_active_sections()
-    assert not view._playtime_labels and not view._active_clusters_layout.count()
+    view._refresh_games()
+    assert not view._playtime_labels
+    assert view._games_list_layout.count() == len(games)
     view._data_manager.managed_processes = []
-    view._refresh_volumes_list()
-    assert view._vol_list_layout.itemAt(0).widget().text() == "등록된 게임 없음"
+    view._refresh_games()
+    assert view._games_list_layout.itemAt(0).widget().text() == "등록된 게임 없음"
 
 
 @pytest.mark.parametrize("height", [250, 1400])
 def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, height):
-    from PySide6.QtWidgets import QSlider
     app, view, _module = sidebar_layout
     view.resize(280, height)
     view.show()
@@ -2356,11 +2358,11 @@ def test_sidebar_long_names_do_not_clip_other_rows_or_controls(sidebar_layout, h
     assert view.width() == 280
     viewport = view._main_scroll.viewport()
     assert view._scroll_content.width() <= viewport.width()
-    rows = view._vol_list_container.findChildren(QSlider)
+    rows = view.findChildren(VolumeDial)
     assert len(rows) == 5
     for slider in rows:
         row = slider.parentWidget()
-        name = next(label for label in row.findChildren(QLabel) if label.wordWrap())
+        name = row.findChild(QLabel, "gameName")
         assert name.width() > 0
         assert name.height() >= name.heightForWidth(name.width())
         for widget in row.findChildren(QPushButton) + row.findChildren(QLabel) + [slider]:
@@ -2412,8 +2414,8 @@ def test_sidebar_active_game_and_gallery_buttons_share_visible_width(sidebar_lay
     view._data_manager.global_settings.recording_enabled = True
     view._data_manager.global_settings.sidebar_playtime_prefix = "W" * 80
     process = view._data_manager.managed_processes[-1]
-    cluster = view._make_game_cluster(process, 42, 123.0)
-    view._active_clusters_layout.addWidget(cluster)
+    row = view._make_game_row(process, {"pid": 42, "start_time_approx": 123.0})
+    view._games_list_layout.addWidget(row)
     view._refresh_screenshot_section()
     view._refresh_recording_section()
     view.resize(280, 500)
@@ -2478,8 +2480,9 @@ def test_sidebar_clock_and_bottom_group_stay_at_edges_with_three_row_cap(sidebar
     assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
     assert view._gallery.geometry().bottom() == view._media_section.height() - 1
     _width, cell_height, gap = view._gallery_cell_size()
-    assert view._gallery.height() == 3 * cell_height + 2 * gap
-    assert len(_gallery_widgets(view)) == 9
+    rows = 2 if height == 700 else 3
+    assert view._gallery.height() == rows * cell_height + (rows - 1) * gap
+    assert len(_gallery_widgets(view)) == rows * 3
     assert view._scroll_layout.itemAt(1).spacerItem().geometry().height() > 0
     assert view._main_scroll.verticalScrollBar().maximum() == 0
 
@@ -2518,28 +2521,24 @@ def test_sidebar_running_indicator_follows_game_identity_after_name_and_session_
         active.clear()
         active[running_id] = {"pid": 123}
         view._data_manager.managed_processes[2].name = "Alpha"
-        view._refresh_volumes_list()
+        view._refresh_games()
         view.resize(280, 700)
         view.show()
         for _ in range(3):
             app.processEvents()
         for index, game in enumerate(sorted(view._data_manager.managed_processes, key=ManagedProcess.name_sort_key)):
-            row = view._vol_list_layout.itemAt(index).widget()
-            dot = row.layout().itemAt(0).widget()
-            name = row.layout().itemAt(1).widget()
+            row = view._games_list_layout.itemAt(index).widget()
+            icon = row.findChild(QLabel, "gameIcon")
+            name = row.findChild(QLabel, "gameName")
             assert name.text() == game.name
-            assert dot.geometry().right() < name.geometry().left()
-            color = dot.palette().color(dot.foregroundRole())
-            if game.id == running_id:
-                assert color.alpha() > 0 and color.green() > color.red()
-            else:
-                assert color.alpha() == 0
+            assert icon.geometry().right() < name.geometry().left()
+            assert row.property("hhRunning") is (game.id == running_id)
+            assert ("rgba(118,206,150,255)" in icon.styleSheet()) is (game.id == running_id)
 
 
 def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_gallery(sidebar_gallery, monkeypatch):
     import time
     from src.gui.main_window import MainWindow
-    from PySide6.QtWidgets import QSlider
     app, view, module, _screenshots, _recordings, _tasks = sidebar_gallery
     names = ["명조: 위더링 웨이브", "몬길: STAR DIVE", "붕괴: 스타레일", "붕괴: 스타레일(베타)",
              "소녀전선2: 망명", "승리의 여신: 니케", "젠레스 존 제로"]
@@ -2556,17 +2555,16 @@ def test_sidebar_balanced_layout_with_full_game_names_fits_controls_and_bottom_g
     for _ in range(4):
         app.processEvents()
     for index in range(len(games)):
-        row = view._vol_list_layout.itemAt(index).widget()
-        name = next(label for label in row.findChildren(QLabel) if label.wordWrap())
-        slider = row.findChild(QSlider)
-        value = row.layout().itemAt(4).widget()
+        row = view._games_list_layout.itemAt(index).widget()
+        name = row.findChild(QLabel, "gameName")
+        dial = row.findChild(VolumeDial)
+        action = row.findChild(QPushButton, "gameAction")
         assert name.height() >= name.heightForWidth(name.width())
-        assert value.width() >= value.fontMetrics().horizontalAdvance(value.text())
-        assert slider.geometry().right() < value.geometry().left()
-        assert value.geometry().right() < row.width()
+        assert action.geometry().right() < dial.geometry().left()
+        assert dial.geometry().right() < row.width()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
     app.processEvents()
-    assert len(_gallery_widgets(view)) == 9
+    assert len(_gallery_widgets(view)) == 6
     assert view._main_scroll.verticalScrollBar().maximum() == 0
     assert view._media_section.geometry().bottom() == view._scroll_content.height() - 1
 
@@ -2581,17 +2579,15 @@ def test_sidebar_content_replace_hides_old_rows_before_deferred_delete(sidebar_g
     monkeypatch.setattr(module.audio_control, "is_muted", lambda _pid: False)
     view.refresh_content()
     app.processEvents()
-    old_card = view._active_clusters_layout.itemAt(0).widget()
-    old_rows = [view._vol_list_layout.itemAt(index).widget() for index in range(view._vol_list_layout.count())]
-    assert old_card.isVisible() and all(row.isVisible() for row in old_rows)
+    old_rows = [view._games_list_layout.itemAt(index).widget() for index in range(view._games_list_layout.count())]
+    assert all(row.isVisible() for row in old_rows)
     view.refresh_content()
     # No event loop/DeferredDelete between replacement and this assertion.
-    assert old_card.isHidden() and all(row.isHidden() for row in old_rows)
-    assert view._active_clusters_layout.itemAt(0).widget() is not old_card
-    assert all(view._vol_list_layout.itemAt(index).widget() is not row for index, row in enumerate(old_rows))
+    assert all(row.isHidden() for row in old_rows)
+    assert all(view._games_list_layout.itemAt(index).widget() is not row for index, row in enumerate(old_rows))
 
 
-def test_sidebar_clock_date_rollover_preserves_format_and_visibility(sidebar_layout, monkeypatch):
+def test_sidebar_clock_date_rollover_uses_fixed_face_and_preserves_visibility(sidebar_layout, monkeypatch):
     import datetime
     _app, view, _module = sidebar_layout
     class Clock(datetime.datetime):
@@ -2605,7 +2601,7 @@ def test_sidebar_clock_date_rollover_preserves_format_and_visibility(sidebar_lay
                            (Clock(2026, 10, 15, 0, 0), "10월 15일 목요일")]:
         Clock.current = now
         view._update_clock()
-        assert view._clock_label.text() == now.strftime("%H:%M")
+        assert view._clock_face.accessibleName() == now.strftime("%H:%M:%S")
         assert view._clock_date_label.text() == date_text
     gs.sidebar_clock_enabled = False
     view._update_clock()
@@ -2816,14 +2812,13 @@ def test_sidebar_close_interrupted_by_reopen_cannot_hide_new_open(sidebar_galler
 
 @pytest.mark.parametrize("saved, expected", [(0, 0), (35, 35), (None, 100)])
 def test_sidebar_saved_volume_zero_is_preserved(sidebar_layout, saved, expected):
-    from PySide6.QtWidgets import QSlider
     _app, view, _module = sidebar_layout
     view._data_manager.managed_processes = [ManagedProcess(
         id="zero", name="Muted Game", monitoring_path="/test/zero.exe", launch_path="/test/zero.exe", default_volume=saved,
     )]
-    view._refresh_volumes_list()
-    row = view._vol_list_layout.itemAt(0).widget()
-    assert row.findChild(QSlider).value() == expected
+    view._refresh_games()
+    row = view._games_list_layout.itemAt(0).widget()
+    assert row.findChild(VolumeDial).value() == expected
 
 
 @pytest.mark.parametrize("kind", ["screenshot", "recording"])

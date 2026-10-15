@@ -1,7 +1,7 @@
 """Windows DWM Acrylic/Mica 효과 ctypes 래퍼.
 
 Windows 빌드 버전에 따라 적용 가능한 효과가 다릅니다:
-- Windows 11 (22000+): Mica, Acrylic (DWM Backdrop API)
+- Windows 11 (22621+): Mica, Acrylic (DWM Backdrop API)
 - Windows 10 (17763+): Acrylic (SetWindowCompositionAttribute)
 - 그 외: 효과 없음 (반투명 배경만 적용)
 """
@@ -13,7 +13,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 # Windows 빌드 버전 상수
-_WIN11_BUILD = 22000   # Windows 11 최초 빌드
+_WIN11_BUILD = 22621   # DWMWA_SYSTEMBACKDROP_TYPE의 공식 최소 빌드
 _WIN10_1809  = 17763   # Acrylic 지원 최초 빌드 (RS5)
 
 
@@ -84,6 +84,18 @@ def _apply_dwm_backdrop(hwnd: int, effect: str) -> bool:
     """Windows 11 이상에서 DWM 백드롭 효과를 적용합니다."""
     try:
         dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+        dwmapi.DwmSetWindowAttribute.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+        dark = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(ctypes.wintypes.HWND(hwnd), 20, ctypes.byref(dark), ctypes.sizeof(dark))
+        class Margins(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_int) for name in ("left", "right", "top", "bottom")]
+        dwmapi.DwmExtendFrameIntoClientArea.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(Margins)]
+        dwmapi.DwmExtendFrameIntoClientArea.restype = ctypes.c_long
+        margins = Margins(-1, -1, -1, -1)
+        if dwmapi.DwmExtendFrameIntoClientArea(ctypes.wintypes.HWND(hwnd), ctypes.byref(margins)) != 0:
+            logger.warning("Acrylic 클라이언트 영역 확장 실패: hwnd=%s", hwnd)
+            return False
         backdrop_type = _DWMSBT_ACRYLIC if effect != "mica" else _DWMSBT_MICA
         value = ctypes.c_int(backdrop_type)
         result = dwmapi.DwmSetWindowAttribute(

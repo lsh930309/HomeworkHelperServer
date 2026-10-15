@@ -14,6 +14,7 @@ from src.data.data_models import ManagedProcess
 from src.gui.power_events import PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST, WindowsPowerEventFilter
 from src.gui.qt_runtime import binding_diagnostics, is_qobject_valid, require_object_thread
 from src.gui.sidebar.sidebar_widget import SidebarWidget
+from src.gui.sidebar.controls import VolumeDial
 from src.gui.volume_panel import _MUTE_BTN_STYLE
 from src.gui.widgets_style import (
     CapsuleProgressBar,
@@ -237,53 +238,19 @@ def test_sidebar_gallery_tabs_have_button_like_rounded_corners_and_clear_gap(sel
     root.close()
 
 
-def test_sidebar_mute_button_uses_blue_checked_state_and_unclipped_focus_border():
+def test_sidebar_round_volume_keeps_checked_state_and_stable_size():
     app = _qapp()
-    root = QWidget()
-    layout = QVBoxLayout(root)
-    button = QPushButton(root)
-    button.setProperty("hhRole", "muteToggle")
-    button.setCheckable(True)
-    layout.addWidget(button)
-    apply_sidebar_widgets_style(root, dark=True)
-    root.show()
+    dial = VolumeDial(42)
+    dial.setChecked(True)
+    dial.show()
     app.processEvents()
-
-    button.setChecked(True)
-    button.clearFocus()
-    button.update()
-    app.processEvents()
-    checked = _button_background(button)
-    assert checked.blue() > checked.red()
-    assert checked.blue() > checked.green()
-    # The sound layout allocates width by ratio; the style must not force a square.
-    assert button.width() >= button.sizeHint().width()
-    assert button.height() >= button.sizeHint().height()
-
-    button.setDown(True)
-    button.update()
-    app.processEvents()
-    assert _button_background(button) != checked
-    button.setDown(False)
-    button.setFocus()
-    button.update()
-    app.processEvents()
-    focused = button.grab().toImage()
-    edge_points = (
-        (focused.width() // 2, 0),
-        (focused.width() - 1, focused.height() // 2),
-        (focused.width() // 2, focused.height() - 1),
-        (0, focused.height() // 2),
-    )
-    # Fractional DPI에서는 오른쪽/아래 1px이 focus 색과 배경의 안티앨리어싱 혼합색입니다.
-    assert all(
-        focused.pixelColor(x, y).lightness() > checked.lightness()
-        for x, y in edge_points
-    )
-    root.close()
+    assert dial.isChecked() and dial.is_silent()
+    assert dial.size().toTuple() == (42, 42)
+    assert not dial.grab().isNull()
+    dial.close()
 
 
-def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
+def test_sidebar_volume_row_preserves_saved_manual_mute_in_round_dial(monkeypatch):
     from src.gui.main_window import MainWindow
 
     monkeypatch.setattr(MainWindow, "INSTANCE", None)
@@ -300,19 +267,15 @@ def test_sidebar_volume_row_does_not_mask_checked_mute_background(monkeypatch):
         managed_processes=[process],
     )
     sidebar = SidebarWidget(data_manager)
-    sidebar._refresh_volumes_list()
+    monkeypatch.setattr(sidebar, "_load_icon_async", lambda *_args: None)
+    sidebar._refresh_games()
     sidebar.show()
     app.processEvents()
 
-    mute_button = next(
-        button
-        for button in sidebar.findChildren(QPushButton)
-        if button.property("hhRole") == "muteToggle"
-    )
-    checked = _button_background(mute_button)
-    assert mute_button.isChecked()
-    assert checked.blue() > checked.red()
-    assert checked.blue() > checked.green()
+    dial = sidebar.findChild(VolumeDial)
+    assert dial.isChecked() and dial.is_silent()
+    assert process.default_muted is True
+    assert not dial.grab().isNull()
     assert sidebar.cleanup(deadline_ms=200)
     sidebar.close()
 

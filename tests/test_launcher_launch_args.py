@@ -57,6 +57,23 @@ def test_launcher_passes_launch_args_as_posix_popen_list(monkeypatch):
     assert calls == [["/Applications/ZenlessZoneZero.app", "-use-d3d12", "--profile", "alpha test"]]
 
 
+def test_cancelled_launch_never_starts_local_process(monkeypatch):
+    monkeypatch.setattr(launcher_module.subprocess, "Popen", lambda *a, **k: pytest.fail("cancelled launch"))
+    launcher = launcher_module.Launcher()
+    assert not launcher.launch_process("/game.exe", cancelled=lambda: True)
+    assert "취소" in launcher.last_error
+
+
+def test_shutdown_during_launch_preflight_never_sends_privileged_command(monkeypatch):
+    monkeypatch.setattr(launcher_module.os, "name", "nt")
+    cancelled = []
+    launcher = launcher_module.Launcher(run_as_admin=True, privilege_client=SimpleNamespace(
+        launch_managed=lambda *a, **k: pytest.fail("shutdown must stop before IPC")))
+    monkeypatch.setattr(launcher, "_confirm_launcher_transition", lambda _target: cancelled.append(True) or True)
+    assert not launcher.launch_process("game.exe", managed_process_id="game", cancelled=lambda: bool(cancelled))
+    assert "취소" in launcher.last_error
+
+
 def test_launcher_preserves_posix_command_string_without_extra_args(monkeypatch):
     calls = []
 

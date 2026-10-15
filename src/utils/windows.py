@@ -15,6 +15,64 @@ _SWP_FRAME_MOVE_FLAGS = 0x0001 | 0x0004 | 0x0010
 _WINDOW_SNAP_DISTANCE_LOGICAL = 15
 
 
+def focus_managed_process_window(pid: int, create_time: float, monitoring_path: str) -> bool:
+    """감시한 동일 프로세스의 현재 사용자 창만 활성화한다. 전환 권한을 우회하지 않는다."""
+    if not is_windows():
+        return False
+    try:
+        import psutil
+        import win32gui
+        import win32process
+        from src.core.process_monitor import _belongs_to_current_user_session, _normalize_process_path
+
+        process = psutil.Process(pid)
+
+        def matches_identity():
+            return (process.is_running() and abs(process.create_time() - create_time) <= 0.001
+                    and _normalize_process_path(process.exe()) == _normalize_process_path(monitoring_path)
+                    and _belongs_to_current_user_session(process))
+
+        if not matches_identity():
+            logger.warning("게임 창 전환 거부: 프로세스 identity 변경 PID=%s", pid)
+            return False
+        windows = []
+
+        def collect(hwnd, _extra):
+            try:
+                if not win32gui.IsWindowVisible(hwnd) or win32process.GetWindowThreadProcessId(hwnd)[1] != pid:
+                    return
+                rect = win32gui.GetWindowPlacement(hwnd)[4] if win32gui.IsIconic(hwnd) else win32gui.GetWindowRect(hwnd)
+                area = max(0, rect[2] - rect[0]) * max(0, rect[3] - rect[1])
+                if area:
+                    windows.append((area, hwnd))
+            except Exception:
+                logger.debug("사라진 게임 창 제외: hwnd=%s", hwnd, exc_info=True)
+
+        win32gui.EnumWindows(collect, None)
+        if not windows:
+            logger.info("전환할 게임 창 없음: PID=%s", pid)
+            return False
+        foreground = win32gui.GetForegroundWindow()
+        hwnd = next((handle for _area, handle in windows if handle == foreground), max(windows)[1])
+        if not matches_identity() or win32process.GetWindowThreadProcessId(hwnd)[1] != pid:
+            logger.warning("게임 창 전환 취소: 창 또는 PID 변경 PID=%s", pid)
+            return False
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.ShowWindowAsync.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+        user32.ShowWindowAsync.restype = ctypes.wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        if win32gui.IsIconic(hwnd):
+            user32.ShowWindowAsync(ctypes.wintypes.HWND(hwnd), 9)  # SW_RESTORE
+        if not user32.SetForegroundWindow(ctypes.wintypes.HWND(hwnd)):
+            logger.warning("Windows가 게임 창 전환을 허용하지 않음: PID=%s hwnd=%s", pid, hwnd)
+            return False
+        return True
+    except Exception:
+        logger.warning("게임 창 전환 실패: PID=%s", pid, exc_info=True)
+        return False
+
+
 def _configure_window_geometry_api(user32) -> None:
     user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
     user32.GetWindowRect.restype = ctypes.wintypes.BOOL
