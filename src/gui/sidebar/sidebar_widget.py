@@ -571,6 +571,8 @@ class SidebarWidget(QWidget):
 
         top_layout.addWidget(self._section_divider())
         heading = QHBoxLayout()
+        row_padding = round(self.width() * 0.015)
+        heading.setContentsMargins(0, 0, row_padding, 0)
         heading.setSpacing(round(self.width() * 0.02))
         heading.addWidget(self._media_icon("game"))
         title = QLabel("게임")
@@ -579,6 +581,8 @@ class SidebarWidget(QWidget):
         heading.addStretch()
         self._volume_heading = QLabel("음량")
         self._volume_heading.setProperty("hhRole", "sidebarSecondary")
+        self._volume_heading.setFixedWidth(round(self.width() * 0.114))
+        self._volume_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading.addWidget(self._volume_heading)
         top_layout.addLayout(heading)
         self._games_list_layout = QVBoxLayout()
@@ -881,8 +885,9 @@ class SidebarWidget(QWidget):
             action.clicked.connect(lambda _=False, key=process.id, path=process.monitoring_path: self._launch_process(key, path))
         layout.addWidget(action)
         dial = self._make_volume_dial(process, pid)
-        dial.setVisible(getattr(self._data_manager.global_settings, 'sidebar_volume_section_enabled', True))
         layout.addWidget(dial)
+        # 부모 없는 조작부를 먼저 show하면 잠깐 독립 네이티브 창으로 나타난다.
+        dial.setVisible(getattr(self._data_manager.global_settings, 'sidebar_volume_section_enabled', True))
         return row
 
     def _launch_process(self, process_id: str, monitoring_path: str) -> None:

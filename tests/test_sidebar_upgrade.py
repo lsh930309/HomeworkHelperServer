@@ -8,9 +8,9 @@ from types import MethodType, SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, QThread, QThreadPool, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QThread, QThreadPool, Qt
 from PySide6.QtGui import QImage, QWheelEvent
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from src.data.data_models import GlobalSettings, ManagedProcess
 from src.gui.sidebar.controls import SidebarClockFace, SidebarDivider, VolumeDial
@@ -53,6 +53,60 @@ def wheel(app, dial, delta):
 
 def current_row(view, index=0):
     return view._games_list_layout.itemAt(index).widget()
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_refresh_never_shows_a_detached_game_control_as_a_window(sidebar, app, monkeypatch, running):
+    from src.gui.main_window import MainWindow
+    view, game, settings, _writes = sidebar
+    active = {game.id: {"pid": 42, "start_time_approx": 123.0}} if running else {}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(
+        process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    unexpected_windows = []
+
+    class ShowObserver(QObject):
+        def eventFilter(self, widget, event):
+            if (event.type() == QEvent.Type.Show and isinstance(widget, QWidget)
+                    and widget.isWindow() and widget is not view):
+                unexpected_windows.append((type(widget).__name__, widget.size().toTuple()))
+            return False
+
+    observer = ShowObserver()
+    app.installEventFilter(observer)
+    try:
+        for _ in range(2):
+            view.slide_in()
+            view._anim.setCurrentTime(view._anim.duration())
+            view.slide_out()
+            view._anim.setCurrentTime(view._anim.duration())
+        for enabled in (True, False, True):
+            settings.sidebar_volume_section_enabled = enabled
+            view.refresh_content()
+    finally:
+        app.removeEventFilter(observer)
+    assert unexpected_windows == []
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_volume_heading_is_centered_over_the_actual_dial_column(sidebar, app, monkeypatch, running):
+    from src.gui.main_window import MainWindow
+    view, game, settings, _writes = sidebar
+    active = {game.id: {"pid": 42, "start_time_approx": 123.0}} if running else {}
+    monkeypatch.setattr(MainWindow, "INSTANCE", SimpleNamespace(
+        process_monitor=SimpleNamespace(active_monitored_processes=active)))
+    view.resize(view.width(), 900)
+    view.show()
+    for enabled in (True, False, True):
+        settings.sidebar_volume_section_enabled = enabled
+        view.refresh_content()
+        app.processEvents()
+        dial = current_row(view).findChild(VolumeDial)
+        heading = view._volume_heading
+        assert heading.isVisible() == dial.isVisible() == enabled
+        if enabled:
+            assert heading.alignment() == Qt.AlignmentFlag.AlignCenter
+            assert heading.width() == dial.width()
+            assert heading.mapTo(view, heading.rect().center()).x() == dial.mapTo(view, dial.rect().center()).x()
 
 
 def test_dial_wheel_accumulates_notches_and_preserves_manual_mute(app):
