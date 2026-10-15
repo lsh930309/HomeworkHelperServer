@@ -3,7 +3,7 @@
 **게임 실행부터 이용 기록, 원격 연결까지.**
 Windows 게임 PC와 Mac을 연결하는 개인용 보조 앱입니다.
 
-**호스트 릴리스 [v1.4.0](https://github.com/lsh930309/HomeworkHelperServer/tree/v1.4.0)** · Windows 호스트 · macOS 원격 클라이언트
+**호스트 안정화 릴리스 [v1.4.1](https://github.com/lsh930309/HomeworkHelperServer/tree/v1.4.1)** · Windows 호스트 · macOS 원격 클라이언트
 
 ## 한눈에 보기
 
