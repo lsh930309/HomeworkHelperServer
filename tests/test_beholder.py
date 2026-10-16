@@ -1191,6 +1191,93 @@ def test_dialog_settings_save_sends_only_actor_owned_fields(monkeypatch):
     assert "theme" not in seen_payloads[0]
 
 
+def test_sidebar_dialog_saves_through_real_settings_route_and_reloads(monkeypatch, tmp_path):
+    """설정 창→클라이언트→제품 PATCH route→CRUD→재조회 경계를 함께 검사한다."""
+    import ast
+    from pathlib import Path
+    from typing import Any
+    from types import SimpleNamespace
+    import sys
+    import requests
+    from fastapi import Depends, Header
+    from sqlalchemy.orm import Session
+    from PySide6.QtWidgets import QApplication
+    from src.api.client import ApiClient
+    from src.data.data_models import GlobalSettings
+    from src.gui.sidebar_settings_dialog import SidebarSettingsDialog
+
+    monkeypatch.setitem(sys.modules, "src.screenshot.key_capture", SimpleNamespace(
+        vk_to_display_name=lambda vk: f"VK 0x{vk:02X}"))
+    app = QApplication.instance() or QApplication([])
+    SessionLocal = _session_factory(monkeypatch)
+    monkeypatch.setattr(crud, "base_dir", str(tmp_path))
+    with SessionLocal() as db:
+        db.add(models.GlobalSettings(id=1, theme="dark", sidebar_mode="always",
+                                    sidebar_auto_hide_ms=0, sidebar_edge_width_px=1,
+                                    sidebar_handle_auto_hide=False, sidebar_opacity=1.0))
+        db.commit()
+
+    def get_db():
+        with SessionLocal() as db:
+            yield db
+
+    api = FastAPI()
+    @api.exception_handler(beholder.BeholderBlocked)
+    async def blocked(_request, exc):
+        return JSONResponse(status_code=409, content={"beholder_incident": beholder.incident_to_dict(exc.incident)})
+    namespace = dict(app=api, crud=crud, beholder=beholder, schemas=schemas,
+                     Any=Any, Session=Session, Depends=Depends, Header=Header, get_db=get_db)
+    tree = ast.parse(Path("homework_helper.pyw").read_text(encoding="utf-8"))
+    routes = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+              and node.name in {"get_global_settings", "patch_global_settings"}]
+    assert len(routes) == 2
+    exec(compile(ast.fix_missing_locations(ast.Module(body=routes, type_ignores=[])),
+                 "homework_helper.pyw", "exec"), namespace)
+    http = TestClient(api)
+    client = object.__new__(ApiClient)
+    client.base_url = "http://testserver"
+    client.global_settings = GlobalSettings.from_dict(http.get("/settings").json())
+    client.latest_beholder_incident = None
+    client._pending_beholder_overrides = {}
+
+    def patch(_url, **kwargs):
+        result = http.patch("/settings", json=kwargs["json"], headers=kwargs["headers"])
+        response = requests.Response()
+        response.status_code = result.status_code
+        response._content = result.content
+        response.url = "http://testserver/settings"
+        return response
+
+    monkeypatch.setattr(requests, "patch", patch)
+    dialog = SidebarSettingsDialog(client.global_settings)
+    try:
+        dialog._auto_hide_spin.setValue(1200)
+        dialog._handle_auto_hide_cb.setChecked(True)
+        updated = dialog.get_updated_settings()
+        assert client.save_global_settings(updated, actor="sidebar_settings_dialog")
+        saved = http.get("/settings").json()
+        assert saved["sidebar_auto_hide_ms"] == 1200
+        assert saved["sidebar_handle_auto_hide"] is True
+        assert saved["theme"] == "dark" and saved["sidebar_opacity"] == 1.0
+        reopened = SidebarSettingsDialog(GlobalSettings.from_dict(saved))
+        try:
+            assert reopened._auto_hide_spin.value() == 1200
+            assert reopened._handle_auto_hide_cb.isChecked()
+            for enabled in (False, True):
+                reopened._handle_auto_hide_cb.setChecked(enabled)
+                assert client.save_global_settings(reopened.get_updated_settings(), actor="sidebar_settings_dialog")
+                assert http.get("/settings").json()["sidebar_handle_auto_hide"] is enabled
+                assert client.global_settings.sidebar_handle_auto_hide is enabled
+            with SessionLocal() as db:
+                assert beholder.active_incidents(db) == []
+            assert list(tmp_path.glob("backups/settings/global_settings.*.json"))
+        finally:
+            reopened.deleteLater()
+    finally:
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_remote_settings_dialog_can_save_only_remote_server_mode(monkeypatch):
     from src.api.client import ApiClient
     from src.data.data_models import GlobalSettings

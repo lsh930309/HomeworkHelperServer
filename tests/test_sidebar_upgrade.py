@@ -55,6 +55,15 @@ def current_row(view, index=0):
     return view._games_list_layout.itemAt(index).widget()
 
 
+def test_stop_icon_has_both_sides_of_the_power_ring(sidebar):
+    view, _game, _settings, _writes = sidebar
+    image = view._action_icon("stop").pixmap(32, 32).toImage()
+    y = round(image.height() * 9 / 16)
+    for start, end in ((0.05, 0.25), (0.75, 0.95)):
+        assert any(image.pixelColor(x, y).alpha() > 16
+                   for x in range(round(image.width() * start), round(image.width() * end)))
+
+
 @pytest.mark.parametrize("running", [False, True])
 def test_refresh_never_shows_a_detached_game_control_as_a_window(sidebar, app, monkeypatch, running):
     from src.gui.main_window import MainWindow

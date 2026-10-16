@@ -1259,7 +1259,7 @@ class SidebarWidget(QWidget):
             path.closeSubpath()
             painter.drawPath(path)
         elif kind == "stop":
-            painter.drawArc(QRectF(2, 3, 12, 12), 45 * 16, 270 * 16)
+            painter.drawArc(QRectF(2, 3, 12, 12), 135 * 16, 270 * 16)
             painter.drawLine(8, 1, 8, 8)
         elif kind == "focus":
             painter.drawLine(3, 13, 13, 3)

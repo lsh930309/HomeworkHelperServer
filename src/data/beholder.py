@@ -75,7 +75,7 @@ GLOBAL_DIALOG_FIELDS = {
 }
 PERSONALIZED_SETTINGS_FIELDS = {
     "sidebar_mode", "sidebar_trigger_y_start", "sidebar_trigger_y_end",
-    "sidebar_handle_auto_hide", "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
+    "sidebar_auto_hide_ms", "sidebar_edge_width_px", "sidebar_height_ratio", "sidebar_opacity", "sidebar_clock_format",
     "sidebar_playtime_prefix", "screenshot_save_dir", "screenshot_capture_mode",
     "screenshot_gamepad_button_index", "screenshot_trigger_vk",
 }
