@@ -475,6 +475,20 @@ def test_short_sidebar_fits_seven_games_two_timers_and_gallery_then_restores(sid
         assert not label.wordWrap() and label.toolTip() == games[index].name
         for control in row.findChildren(QPushButton) + row.findChildren(VolumeDial):
             assert control.width() == control.height() == 32
+    # 폰트·DPI에 따른 내용 높이 차이는 실제 남는 여백 예산으로 흡수한다.
+    # 현재 내용에 행별 위아래 1px만 허용하는 높이를 만들고 갤러리 노출을 확인한다.
+    row_padding = sum(current_row(view, index).layout().contentsMargins().top()
+                      + current_row(view, index).layout().contentsMargins().bottom()
+                      for index in range(len(games)))
+    controls_height = view._media_section.sizeHint().height() - view._gallery.height()
+    content_height = view._top_section.height() - row_padding
+    required_viewport = content_height + len(games) * 2 + controls_height + view._gallery_cell_size()[1]
+    view.resize(280, view.height() - view._main_scroll.viewport().height() + required_viewport)
+    for _ in range(6):
+        app.processEvents()
+    assert view._main_scroll.verticalScrollBar().maximum() == 0
+    assert all(current_row(view, index).layout().contentsMargins().top() <= 1 for index in range(len(games)))
+    assert view._gallery.mapTo(view, QPoint(0, view._gallery.height())).y() <= view._close_btn.y()
     view.resize(280, 1080)
     for _ in range(6):
         app.processEvents()

@@ -10,6 +10,7 @@ from dataclasses import asdict, replace
 from importlib import metadata
 import os
 import json
+import ntpath
 from pathlib import Path
 import platform
 import sqlite3
@@ -226,38 +227,108 @@ def _wait(predicate, seconds: float = 5):
     return None
 
 
+def _process_context(pid: int) -> tuple[str, int]:
+    import win32api
+    import win32security as security
+    handle = win32api.OpenProcess(0x1000, False, pid)
+    try:
+        token = security.OpenProcessToken(handle, security.TOKEN_QUERY)
+        try:
+            return (security.ConvertSidToStringSid(security.GetTokenInformation(token, security.TokenUser)[0]),
+                    security.GetTokenInformation(token, security.TokenSessionId))
+        finally:
+            token.Close()
+    finally:
+        handle.Close()
+
+
+def _path_key(path) -> str:
+    return ntpath.normcase(ntpath.normpath(str(path)))
+
+
+def _owned_fixture(pid: int, launcher_pid: int, root: Path, kind: str, started: float):
+    """ready의 PID는 후보일 뿐이다. 실제 OS identity와 고유 실행 입력으로 소유권을 판정한다."""
+    import psutil
+    process = psutil.Process(pid)
+    allowed = {_path_key(sys.executable), _path_key(getattr(sys, "_base_executable", sys.executable))}
+    if _path_key(process.exe()) not in allowed or process.create_time() < started - .1:
+        raise ValueError("검수 fixture 실행파일 또는 생성 시각이 일치하지 않습니다.")
+    command = process.cmdline()
+    expected = [str(Path(__file__).resolve()), "--fixture", kind, "--root", str(root)]
+    if (len(command) != 6 or _path_key(command[1]) != _path_key(expected[0])
+            or command[2:4] != expected[1:3] or command[4] != "--root"
+            or _path_key(command[5]) != _path_key(root)):
+        raise ValueError("검수 fixture의 고유 root·고정 실행 인자가 일치하지 않습니다.")
+    # Windows venv의 pythonw launcher와 실제 base pythonw PID는 다를 수 있다.
+    if (pid != launcher_pid and process.ppid() != launcher_pid
+            and not any(parent.pid == launcher_pid for parent in process.parents())):
+        raise ValueError("검수 fixture가 시작한 launcher의 자식이 아닙니다.")
+    if _process_context(pid) != _process_context(os.getpid()):
+        raise ValueError("검수 fixture의 Windows 사용자 또는 세션이 일치하지 않습니다.")
+    return process
+
+
+class _FixtureProcess:
+    """launcher가 먼저 끝나도 실제 소유 child의 종료를 기다린다."""
+    def __init__(self, launcher, process):
+        self.launcher, self.process, self.pid = launcher, process, process.pid
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        self.process.wait(timeout=timeout)
+        self.launcher.wait(timeout=max(.01, deadline - time.monotonic()))
+
+
+def _cleanup_unready_fixture(launcher, root: Path, kind: str, started: float) -> bool:
+    import psutil
+    (root / "stop").touch()
+    owned = []
+    for process in psutil.process_iter(["pid", "cmdline"]):
+        command = process.info.get("cmdline") or []
+        if len(command) == 6 and _path_key(command[-1]) == _path_key(root):
+            try:
+                owned.append(_owned_fixture(process.pid, launcher.pid, root, kind, started))
+            except (ValueError, psutil.Error):
+                continue
+    complete = True
+    for process in owned:
+        complete = _stop_fixture(_FixtureProcess(launcher, process), root) and complete
+    if not owned:
+        complete = _stop_fixture(launcher, root)
+    return complete
+
+
 def _spawn_fixture(result_dir: Path, kind: str):
     """다른 프로세스와 섞이지 않는 자기 fixture만 고정 child 모드로 생성한다."""
     root = result_dir / "media-fixture" / (kind + "-" + uuid.uuid4().hex[:8])
     root.mkdir(parents=True)
+    started = time.time()
     child = subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--fixture", kind, "--root", str(root)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if not _wait(lambda: (root / "ready.json").is_file() or child.poll() is not None, 8):
-        _stop_fixture(child, root)
-        raise RuntimeError("검수 fixture 준비 시간이 만료됐습니다.")
-    if not (root / "ready.json").is_file():
-        detail = ((root / "error.json").read_text(encoding="utf-8")
-                  if (root / "error.json").is_file() else str(child.returncode))
-        raise RuntimeError(f"검수 fixture가 준비 전에 종료됐습니다: {detail}")
     try:
+        if not _wait(lambda: (root / "ready.json").is_file() or (root / "error.json").is_file(), 8):
+            raise RuntimeError("검수 fixture 준비 시간이 만료됐습니다.")
+        if not (root / "ready.json").is_file():
+            detail = (root / "error.json").read_text(encoding="utf-8")
+            raise RuntimeError(f"검수 fixture가 준비 전에 종료됐습니다: {detail}")
         ready = json.loads((root / "ready.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        _stop_fixture(child, root)
+        process = _owned_fixture(int(ready["pid"]), child.pid, root, kind, started)
+    except Exception as error:
+        if not _cleanup_unready_fixture(child, root, kind, started):
+            raise RuntimeError(f"{error}; fixture 정상 종료를 확인하지 못했습니다: {root}") from error
         raise
-    if ready.get("pid") != child.pid:
-        _stop_fixture(child, root)
-        raise RuntimeError("검수 fixture PID가 일치하지 않습니다.")
-    return child, root, ready
+    return _FixtureProcess(child, process), root, ready
 
 
 def _stop_fixture(child, root: Path) -> bool:
+    import psutil
     (root / "stop").touch()
     try:
         child.wait(timeout=4)
         return True
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, psutil.TimeoutExpired):
         return False  # 강제 종료·자동 재실행은 하지 않으며 child 자체 상한은 90초다.
 
 
@@ -403,8 +474,10 @@ def _bgm() -> dict:
             result["reason"] = "기존 Spotify 세션이 없거나 여러 개이므로 실행·재생하지 않았습니다."
             return result
         original = spotify[0]
-        if original.status not in {"playing", "paused"} or not (original.can_pause and original.can_play):
-            result["reason"] = "원래 재생 상태를 복원할 수 있는 playing/paused와 Play/Pause 지원이 필요합니다."
+        can_transition = ((original.status == "playing" and original.can_pause)
+                          or (original.status == "paused" and original.can_play))
+        if not can_transition:
+            result["reason"] = "현재 상태에서 실행할 Play 또는 Pause 명령 지원을 확인하지 못했습니다."
             return result
         result["supported"] = True
         desired = "paused" if original.status == "playing" else "playing"

@@ -829,6 +829,7 @@ class SidebarWidget(QWidget):
         # 원래 전체 문구의 높이로 판단하고 표시만 축약한다.
         self._set_compact_game_rows(
             self._normal_top_height(width) + media_controls_height + gallery_minimum > viewport.height())
+        self._fit_compact_row_padding(width, viewport.height() - media_controls_height - gallery_minimum)
         if not self._gallery.isHidden() and self._gallery_layout.count():
             top_layout = self._top_section.layout()
             top_height = (top_layout.totalHeightForWidth(width) if top_layout.hasHeightForWidth()
@@ -840,6 +841,29 @@ class SidebarWidget(QWidget):
             height = rows * cell_height + (rows - 1) * gap
         if self._gallery.minimumHeight() != height:
             self._gallery.setFixedHeight(height)
+
+    def _fit_compact_row_padding(self, width: int, available_height: int) -> None:
+        """폰트별 실제 높이 뒤에 남는 세로 예산만 게임 행 여백으로 나눈다."""
+        if not self._compact_game_rows:
+            return
+        rows = [self._games_list_layout.itemAt(index).widget()
+                for index in range(self._games_list_layout.count())
+                if self._games_list_layout.itemAt(index).widget().property("processId") is not None]
+        if not rows:
+            return
+        top = self._top_section.layout()
+        current_height = (top.totalHeightForWidth(width) if top.hasHeightForWidth()
+                          else top.totalSizeHint().height())
+        used_padding = sum(row.layout().contentsMargins().top() + row.layout().contentsMargins().bottom()
+                           for row in rows)
+        content_height = current_height - used_padding
+        normal_padding = round(self.width() * 0.007)
+        padding = max(0, min(normal_padding, (available_height - content_height) // (len(rows) * 2)))
+        for row in rows:
+            layout = row.layout()
+            margins = layout.contentsMargins()
+            if margins.top() != padding or margins.bottom() != padding:
+                layout.setContentsMargins(margins.left(), padding, margins.right(), padding)
 
     def _normal_top_height(self, width: int) -> int:
         """창 높이와 무관하게, 원래 문구·행 여백에 필요한 높이를 계산한다."""

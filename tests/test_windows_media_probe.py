@@ -215,7 +215,8 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
     from src.core import media_center
     from src.core.media_sessions import MediaSessionInfo
     calls, cleanup = [], []
-    initial = MediaSessionInfo("spotify", "Spotify.exe", status=status, can_play=True, can_pause=True)
+    initial = MediaSessionInfo("spotify", "Spotify.exe", status=status,
+                               can_play=status == "paused", can_pause=status == "playing")
     sessions = (() if status == "missing" else (initial, initial) if status == "multiple" else (initial,))
     class Runtime:
         running = True
@@ -279,3 +280,95 @@ def test_explicit_spotify_prepare_launches_once_without_play_or_credentials(monk
     assert calls == ["prepare"] and launches == cleanup == [True]
     if not session_present:
         assert result["reason"]
+
+
+@pytest.fixture
+def redirected_fixture(tmp_path, monkeypatch):
+    import psutil
+    records = []
+    root = tmp_path / "fixture-root"
+    root.mkdir()
+    class Process:
+        pid = 222
+        parent = 111
+        created = 100.0
+        executable = sys.executable
+        command = [sys.executable, str(Path(probe.__file__).resolve()), "--fixture", "audio", "--root", str(root)]
+        def exe(self): return self.executable
+        def create_time(self): return self.created
+        def cmdline(self): return self.command
+        def ppid(self): return self.parent
+        def parents(self): return []
+        def wait(self, timeout):
+            records.append(("actual", self.pid))
+        @property
+        def info(self): return {"pid": self.pid, "cmdline": self.command}
+    process = Process()
+    def lookup(pid):
+        if pid != 222:
+            raise psutil.NoSuchProcess(pid)
+        return process
+    monkeypatch.setattr(psutil, "Process", lookup)
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [process])
+    monkeypatch.setattr(probe, "_process_context", lambda _pid: ("owner-sid", 1))
+    launcher = SimpleNamespace(pid=111, wait=lambda **_kwargs: records.append(("launcher", 111)),
+                               poll=lambda: 0, returncode=0)
+    return root, process, launcher, records
+
+
+def test_owned_redirected_fixture_uses_os_identity_not_launcher_pid(redirected_fixture):
+    root, process, launcher, records = redirected_fixture
+    assert probe._owned_fixture(222, launcher.pid, root, "audio", 100) is process
+    owned = probe._FixtureProcess(launcher, process)
+    assert owned.pid == 222
+    assert probe._stop_fixture(owned, root)
+    assert records == [("actual", 222), ("launcher", 111)] and (root / "stop").exists()
+
+
+@pytest.mark.parametrize("change", ["exe", "root", "ancestry", "sid", "session", "created"])
+def test_owned_fixture_rejects_unrelated_or_reused_ready_pid(redirected_fixture, monkeypatch, change):
+    root, process, launcher, _records = redirected_fixture
+    if change == "exe": process.executable = "C:/unrelated/program.exe"
+    if change == "root": process.command = [*process.command[:-1], str(root / "other")]
+    if change == "ancestry": process.parent = 999
+    if change == "created": process.created = 50
+    if change in {"sid", "session"}:
+        monkeypatch.setattr(probe, "_process_context", lambda pid: (
+            ("other-sid", 1) if change == "sid" else ("owner-sid", 2)) if pid == 222 else ("owner-sid", 1))
+    with pytest.raises(ValueError):
+        probe._owned_fixture(222, launcher.pid, root, "audio", 100)
+
+
+def test_spawn_waits_for_real_ready_after_launcher_has_already_exited(tmp_path, redirected_fixture, monkeypatch):
+    _root, process, launcher, records = redirected_fixture
+    import json
+    def launch(command, **_kwargs):
+        root = Path(command[-1])
+        process.command = list(command)
+        (root / "ready.json").write_text(json.dumps({"pid": 222}), encoding="utf-8")
+        return launcher
+    monkeypatch.setattr(probe.subprocess, "Popen", launch)
+    monkeypatch.setattr(probe.time, "time", lambda: 100)
+    child, root, ready = probe._spawn_fixture(tmp_path, "audio")
+    assert child.pid == ready["pid"] == 222 and launcher.poll() == 0
+    assert probe._stop_fixture(child, root)
+    assert records == [("actual", 222), ("launcher", 111)]
+
+
+def test_invalid_ready_pid_cleans_actual_owned_child_before_raising(tmp_path, redirected_fixture, monkeypatch):
+    _root, process, launcher, records = redirected_fixture
+    import json
+    roots = []
+    def launch(command, **_kwargs):
+        root = Path(command[-1])
+        roots.append(root)
+        process.command = list(command)
+        (root / "ready.json").write_text(json.dumps({"pid": 999}), encoding="utf-8")
+        return launcher
+    monkeypatch.setattr(probe.subprocess, "Popen", launch)
+    monkeypatch.setattr(probe.time, "time", lambda: 100)
+    import psutil
+    with pytest.raises(psutil.NoSuchProcess):
+        probe._spawn_fixture(tmp_path, "audio")
+    assert (roots[0] / "stop").exists()
+    assert records == [("actual", 222), ("launcher", 111)]
