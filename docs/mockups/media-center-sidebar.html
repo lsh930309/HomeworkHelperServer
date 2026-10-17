@@ -1,0 +1,231 @@
+<div id="hh-media-center-proposal" class="viz-carousel viz-dotted-background" aria-label="사이드바 미디어 센터 배치 제안" data-previous-label="이전 배치" data-next-label="다음 배치">
+  <section data-variant="독립 재생 컨트롤" aria-label="독립 재생 컨트롤 배치"><div class="mc-stage" data-layout="standard"></div></section>
+  <section data-variant="한 줄 컴팩트" aria-label="한 줄 컴팩트 배치" hidden><div class="mc-stage" data-layout="compact"></div></section>
+</div>
+<style>
+  #hh-media-center-proposal .mc-stage { --mc-ink:#e9edf3; --mc-muted:#b6c0cd; --mc-line:#ffffff1b; --mc-control:#ffffff0c; --mc-selected:#356da03d; --mc-green:#87d7ab; --mc-accent:#a4caec; position:relative; width:100%; max-width:600px; min-height:900px; margin:auto; color:var(--mc-ink); font:400 14px/1.4 system-ui,"Malgun Gothic",sans-serif; }
+  #hh-media-center-proposal .mc-scene { position:absolute; inset:0; overflow:hidden; border-radius:12px; background:radial-gradient(ellipse at 5% 28%,#3c6d79 0,transparent 46%),radial-gradient(ellipse at 35% 80%,#61616d 0,transparent 45%),linear-gradient(155deg,#172d44,#364a59 48%,#152633); }
+  #hh-media-center-proposal .mc-scene::after { content:""; position:absolute; inset:40% 0 0; background:linear-gradient(30deg,#102c3e99 30%,transparent 30%),linear-gradient(145deg,transparent 45%,#8da6aa44 45% 57%,transparent 57%); }
+  #hh-media-center-proposal .mc-panel { position:relative; margin-left:auto; width:46%; height:900px; box-sizing:border-box; display:flex; flex-direction:column; container-type:inline-size; background:linear-gradient(150deg,#192330ed,#202b36f7 56%,#121e2af7); border-left:1px solid var(--mc-line); color:var(--mc-ink); }
+  #hh-media-center-proposal .mc-panel * { box-sizing:border-box; }
+  #hh-media-center-proposal .mc-clock { flex:none; padding:6cqw 4.5cqw 4cqw; text-align:center; }
+  #hh-media-center-proposal .mc-clock-face { display:flex; justify-content:center; align-items:flex-end; gap:1.5cqw; font-variant-numeric:tabular-nums; }
+  #hh-media-center-proposal .mc-time { display:flex; align-items:center; font-size:15cqw; font-weight:400; line-height:1; letter-spacing:-.035em; }
+  #hh-media-center-proposal .mc-colon { display:flex; width:5cqw; align-self:stretch; justify-content:center; align-items:center; }
+  #hh-media-center-proposal .mc-seconds { padding-bottom:.5cqw; font-size:4.4cqw; line-height:1; color:var(--mc-muted); }
+  #hh-media-center-proposal .mc-date { margin-top:3cqw; font-size:max(11px,3.7cqw); color:var(--mc-muted); }
+  #hh-media-center-proposal .mc-body { display:flex; flex-direction:column; flex:1; min-height:0; padding:0 4.5cqw; }
+  #hh-media-center-proposal .mc-games { flex:none; padding-top:3cqw; border-top:1px solid var(--mc-line); }
+  #hh-media-center-proposal .mc-section-title { display:flex; align-items:center; justify-content:space-between; gap:2cqw; font-size:max(11px,4cqw); font-weight:500; }
+  #hh-media-center-proposal .mc-label { display:inline-flex; align-items:center; gap:2cqw; min-width:0; }
+  #hh-media-center-proposal .mc-icon { flex:none; display:block; width:4.7cqw; height:4.7cqw; }
+  #hh-media-center-proposal .mc-audio-heading { display:flex; flex-direction:column; align-items:center; justify-content:center; width:11cqw; gap:.5cqw; color:var(--mc-muted); font-size:max(11px,3.3cqw); font-weight:400; }
+  #hh-media-center-proposal .mc-audio-heading .mc-icon { width:3.7cqw; height:3.7cqw; }
+  #hh-media-center-proposal .mc-game-list { display:grid; gap:.8cqw; margin-top:2cqw; }
+  #hh-media-center-proposal .mc-game-row { display:grid; grid-template-columns:11% minmax(0,1fr) 10% 10% 12%; align-items:center; gap:2%; padding:1.5cqw 1cqw; min-height:12.8cqw; border-radius:2.3cqw; }
+  #hh-media-center-proposal .mc-game-row[data-running="true"] { background:var(--mc-selected); }
+  #hh-media-center-proposal .mc-game-art { display:flex; align-items:center; justify-content:center; width:100%; aspect-ratio:1; border-radius:2.2cqw; background:linear-gradient(145deg,#617588,#2d4052); border:2px solid transparent; color:var(--mc-ink); font-size:4.2cqw; font-weight:500; }
+  #hh-media-center-proposal .mc-game-row[data-running="true"] .mc-game-art { border-color:var(--mc-green); }
+  #hh-media-center-proposal .mc-game-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:max(11px,3.8cqw); }
+  #hh-media-center-proposal .mc-game-name small { display:block; color:var(--mc-muted); font-size:max(11px,3.1cqw); }
+  #hh-media-center-proposal .mc-button { display:inline-flex; align-items:center; justify-content:center; gap:1.8cqw; margin:0; padding:0 2.5cqw; min-height:9cqw; border:1px solid #ffffff0d; border-radius:2cqw; background:var(--mc-control); color:var(--mc-ink); font:inherit; font-size:max(11px,3.8cqw); white-space:nowrap; }
+  #hh-media-center-proposal .mc-button:hover { background:#ffffff1c; }
+  #hh-media-center-proposal .mc-button:disabled { opacity:.45; }
+  #hh-media-center-proposal .mc-square { width:100%; min-height:0; aspect-ratio:1; padding:0; }
+  #hh-media-center-proposal .mc-square .mc-icon { width:4.5cqw; height:4.5cqw; }
+  #hh-media-center-proposal .mc-stop { color:#f0b7ba; }
+  #hh-media-center-proposal .mc-volume { display:flex; align-items:center; justify-content:center; width:100%; aspect-ratio:1; padding:0; border:1.5px solid var(--mc-accent); border-radius:50%; background:#172330; color:var(--mc-ink); }
+  #hh-media-center-proposal .mc-volume[data-muted="true"] { border-color:#697d90; color:#acb9c5; }
+  #hh-media-center-proposal .mc-spacer { flex:1; min-height:3cqw; }
+  #hh-media-center-proposal .mc-bottom { flex:none; display:flex; flex-direction:column; gap:3cqw; }
+  #hh-media-center-proposal .mc-player { position:relative; padding-top:4cqw; border-top:1px solid var(--mc-line); }
+  #hh-media-center-proposal .mc-player-head { display:flex; align-items:center; justify-content:space-between; gap:2cqw; margin-bottom:2.5cqw; }
+  #hh-media-center-proposal .mc-player-heading { min-width:0; color:var(--mc-muted); font-size:max(11px,3.8cqw); }
+  #hh-media-center-proposal .mc-player-tools { display:flex; align-items:center; gap:2cqw; }
+  #hh-media-center-proposal .mc-auto { min-height:7cqw; padding:0 2.2cqw; font-size:max(11px,3.5cqw); border-radius:2cqw; }
+  #hh-media-center-proposal .mc-auto[aria-pressed="true"] { color:var(--mc-green); background:#60b9851b; border-color:#87d7ab36; }
+  #hh-media-center-proposal .mc-settings-button { width:7cqw; min-height:0; aspect-ratio:1; padding:0; border:0; background:transparent; }
+  #hh-media-center-proposal .mc-track { display:grid; grid-template-columns:15% minmax(0,1fr); align-items:center; gap:3%; }
+  #hh-media-center-proposal .mc-cover { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; border-radius:2.1cqw; background:linear-gradient(145deg,#55766b,#263e48); }
+  #hh-media-center-proposal .mc-cover .mc-icon { width:7cqw; height:7cqw; color:#d1e9df; }
+  #hh-media-center-proposal .mc-track-meta { min-width:0; }
+  #hh-media-center-proposal .mc-track-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:max(12px,4.2cqw); font-weight:500; }
+  #hh-media-center-proposal .mc-artist { margin-top:.7cqw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--mc-muted); font-size:max(11px,3.4cqw); }
+  #hh-media-center-proposal .mc-playback { display:flex; justify-content:center; align-items:center; gap:4cqw; margin-top:3cqw; }
+  #hh-media-center-proposal .mc-playback .mc-button { width:10cqw; padding:0; aspect-ratio:1; min-height:0; }
+  #hh-media-center-proposal .mc-playback .mc-play { background:#cce1f2; color:#172b3b; }
+  #hh-media-center-proposal .mc-status { display:flex; align-items:center; justify-content:center; gap:1.5cqw; min-height:6cqw; margin-top:1.5cqw; color:var(--mc-muted); font-size:max(11px,3.2cqw); }
+  #hh-media-center-proposal .mc-status .mc-icon { width:3.6cqw; height:3.6cqw; }
+  #hh-media-center-proposal .mc-settings { position:absolute; z-index:5; right:0; bottom:calc(100% - 5cqw); width:100%; padding:4cqw; border:1px solid #6e8499; border-radius:3cqw; background:#202d3c; box-shadow:0 8px 24px #0005; }
+  #hh-media-center-proposal .mc-settings-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:3cqw; font-size:max(12px,4cqw); font-weight:500; }
+  #hh-media-center-proposal .mc-settings label { display:flex; align-items:center; justify-content:space-between; gap:4cqw; min-height:10cqw; font-size:max(11px,3.7cqw); }
+  #hh-media-center-proposal .mc-settings input { flex:none; accent-color:#87c8ad; }
+  #hh-media-center-proposal .mc-session-note { color:var(--mc-muted); font-size:max(11px,3.3cqw); }
+  #hh-media-center-proposal .mc-capture { border-top:1px solid var(--mc-line); padding-top:3.5cqw; display:grid; gap:2cqw; }
+  #hh-media-center-proposal .mc-capture-row { display:flex; align-items:center; justify-content:space-between; gap:2cqw; font-size:max(11px,3.9cqw); }
+  #hh-media-center-proposal .mc-connected { color:var(--mc-green); font-size:max(11px,3.2cqw); }
+  #hh-media-center-proposal .mc-capture-right { display:flex; align-items:center; gap:2cqw; }
+  #hh-media-center-proposal .mc-tabs { display:grid; grid-template-columns:1fr 1fr; gap:1.6cqw; }
+  #hh-media-center-proposal .mc-tabs .mc-button[aria-pressed="true"] { background:#ffffff1c; border-color:#ffffff25; }
+  #hh-media-center-proposal .mc-tabs .mc-button[aria-pressed="false"] { color:var(--mc-muted); }
+  #hh-media-center-proposal .mc-gallery { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.8cqw; }
+  #hh-media-center-proposal .mc-thumb { aspect-ratio:4/3; min-height:0; padding:0; border-radius:2cqw; background:linear-gradient(145deg,#55707c,#253f53); }
+  #hh-media-center-proposal .mc-thumb:nth-child(2n) { background:linear-gradient(145deg,#6a6d77,#2b3d4b); }
+  #hh-media-center-proposal .mc-thumb.mc-more { background:#ffffff0c; display:flex; flex-direction:column; gap:1cqw; }
+  #hh-media-center-proposal .mc-footer { flex:none; padding:3cqw 4.5cqw 4cqw; }
+  #hh-media-center-proposal .mc-footer .mc-button { width:100%; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-track { grid-template-columns:12% minmax(0,1fr) 34%; gap:2.5%; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-playback { margin:0; gap:1cqw; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-playback .mc-button { width:9cqw; }
+  #hh-media-center-proposal [data-layout="compact"] .mc-track-title { font-size:max(11px,3.8cqw); }
+  #hh-media-center-proposal [data-layout="compact"] .mc-artist { font-size:max(11px,3.2cqw); }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-track { grid-template-columns:12% minmax(0,1fr) 34%; gap:2.5%; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-playback { margin:0; gap:1cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-playback .mc-button { width:9cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-track-title { font-size:max(11px,3.8cqw); }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-clock { padding-top:4cqw; padding-bottom:3cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-game-row { min-height:12cqw; padding-top:1cqw; padding-bottom:1cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-bottom { gap:2cqw; }
+  #hh-media-center-proposal .mc-panel[data-short="true"] .mc-player { padding-top:3cqw; }
+  #hh-media-center-proposal [hidden] { display:none!important; }
+  @media(max-width:480px) { #hh-media-center-proposal .mc-stage { max-width:314px; } #hh-media-center-proposal .mc-panel { width:88%; } }
+  @media(pointer:coarse) { #hh-media-center-proposal .mc-settings label { min-height:44px; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('hh-media-center-proposal');
+  const games = [
+    { id:'wuwa', name:'명조: 위더링 웨이브', letter:'명' },
+    { id:'mongil', name:'몬길: STAR DIVE', letter:'몬' },
+    { id:'hsr', name:'붕괴: 스타레일', letter:'붕' },
+    { id:'hsrb', name:'붕괴: 스타레일(베타)', letter:'β' },
+    { id:'gf2', name:'소녀전선2: 망명', letter:'소' },
+    { id:'nikke', name:'승리의 여신: 니케', letter:'니' },
+    { id:'zzz', name:'젠레스 존 제로', letter:'젠' }
+  ];
+  const tracks = [
+    { title:'A Quiet Place', artist:'Lofi Study · Spotify' },
+    { title:'오래된 숲을 지나 새벽의 바다로 걸어가는 사람들', artist:'고요한 밤의 플레이리스트 · Spotify' },
+    { title:'Night Walk', artist:'Soft Piano · Spotify' }
+  ];
+  const defaults = { height:'900', scenario:'playing', longTitle:false, auto:true, backgroundMute:true, autoFocus:true, track:0, gallery:'screenshot' };
+  const state = { ...defaults, playing:true, hold:false, available:true, settings:false, running:[], muted:{} };
+  function restore(saved) {
+    if (!saved || saved.version !== 1) return;
+    for (const key of ['height','scenario','longTitle','auto','backgroundMute','autoFocus','gallery']) {
+      if (typeof saved[key] === typeof defaults[key]) state[key] = saved[key];
+    }
+    if (!['760','900','1080'].includes(state.height)) state.height='900';
+    if (!['empty','playing','paused','held'].includes(state.scenario)) state.scenario='playing';
+    if (!['screenshot','recording'].includes(state.gallery)) state.gallery='screenshot';
+  }
+  restore(window.openai?.widgetState?.privateContent);
+  const icon = name => '<i class="mc-icon" data-lucide="'+name+'" aria-hidden="true"></i>';
+  const button = (name,label,action,classes='') => '<button type="button" class="mc-button cursor-interaction '+classes+'" data-action="'+action+'" aria-label="'+label+'" data-tooltip="'+label+'">'+icon(name)+'</button>';
+  const stages = [...root.querySelectorAll('.mc-stage')];
+  const gameRows = new Map();
+  function icons() { if (globalThis.lucide) lucide.createIcons({ attrs:{ width:16,height:16 } }); }
+  function save() {
+    window.openai?.setWidgetState?.({
+      modelContent:{ previewOnly:true, scenario:state.scenario, height:state.height, autoBgm:state.auto, backgroundMute:state.backgroundMute, autoFocus:state.autoFocus },
+      privateContent:{ version:1, height:state.height,scenario:state.scenario,longTitle:state.longTitle,auto:state.auto,backgroundMute:state.backgroundMute,autoFocus:state.autoFocus,gallery:state.gallery }
+    }).catch(()=>{});
+  }
+  function applyScenario() {
+    state.available = state.scenario!=='empty';
+    state.playing = state.scenario==='playing';
+    state.hold = state.scenario==='held';
+  }
+  function renderGallery(stage) {
+    const gallery=stage.querySelector('.mc-gallery');
+    const rows=state.height==='760'?1:2;
+    gallery.dataset.rows=String(rows);
+    gallery.replaceChildren();
+    const count=rows*3;
+    for(let i=0;i<count;i++) {
+      const tile=document.createElement('button');
+      tile.type='button';tile.className='mc-button mc-thumb cursor-interaction';
+      if(i===count-1) {
+        tile.classList.add('mc-more');tile.innerHTML=icon('folder-open')+'<span>+'+(state.gallery==='screenshot'?693:12)+'</span>';
+        tile.setAttribute('aria-label','더 많은 '+(state.gallery==='screenshot'?'스크린샷':'녹화')+' 보기');
+      } else {
+        tile.innerHTML=icon(state.gallery==='screenshot'?'image':'play');
+        tile.setAttribute('aria-label',(state.gallery==='screenshot'?'스크린샷':'녹화')+' 미리보기 '+(i+1));
+      }
+      gallery.append(tile);
+    }
+  }
+  function render() {
+    const track=tracks[state.longTitle?1:state.track%tracks.length];
+    for(const stage of stages) {
+      const panel=stage.querySelector('.mc-panel');
+      stage.style.minHeight=state.height+'px';panel.style.height=state.height+'px';panel.dataset.short=String(state.height==='760');
+      const trackRow=stage.querySelector('.mc-track'),playback=stage.querySelector('.mc-playback');
+      if(stage.dataset.layout==='compact'||state.height==='760') trackRow.append(playback);
+      else trackRow.after(playback);
+      const title=stage.querySelector('.mc-track-title');title.textContent=state.available?track.title:'Spotify 준비';title.dataset.tooltip=state.available?track.title:'Spotify 실행 및 연결 준비';
+      stage.querySelector('.mc-artist').textContent=state.available?track.artist:'아직 재생 중인 곡이 없어요';
+      const play=stage.querySelector('[data-action="play"]');
+      play.innerHTML=icon(state.playing?'pause':'play');play.setAttribute('aria-label',state.playing?'BGM 일시정지':state.available?'BGM 재생':'Spotify 열고 재생');play.dataset.tooltip=play.getAttribute('aria-label');
+      stage.querySelector('[data-action="previous"]').disabled=!state.available;
+      stage.querySelector('[data-action="next"]').disabled=!state.available;
+      const auto=stage.querySelector('[data-action="auto"]');auto.setAttribute('aria-pressed',String(state.auto));auto.textContent=state.auto?'BGM 자동 켜짐':'BGM 자동 꺼짐';auto.dataset.tooltip='BGM 자동 재생만 '+(state.auto?'켜짐':'꺼짐')+'. 게임 음소거와 포커스는 별도 옵션이에요.';auto.setAttribute('aria-label','BGM 자동 재생 '+(state.auto?'켜짐':'꺼짐'));
+      const status=stage.querySelector('.mc-status');
+      status.innerHTML=icon(state.hold?'hand':state.playing?'audio-lines':'music-2')+'<span>'+(state.hold?'다른 미디어 우선':state.playing?'재생 중':state.available?'일시정지':'연결 대기')+'</span>';
+      status.dataset.tooltip=state.hold?'다른 미디어가 멈춰도 자동 재개하지 않아요. 재생 버튼으로 다시 시작할 수 있어요.':state.playing?'Spotify BGM 재생 중':state.available?'자동으로 재생 상태를 유지하지 않아요':'Spotify를 열어 재생을 준비할 수 있어요';
+      const settings=stage.querySelector('.mc-settings');settings.hidden=!state.settings;
+      stage.querySelector('[data-action="settings"]').setAttribute('aria-expanded',String(state.settings));
+      stage.querySelector('[data-option="backgroundMute"]').checked=state.backgroundMute;
+      stage.querySelector('[data-option="autoFocus"]').checked=state.autoFocus;
+      for(const tab of stage.querySelectorAll('[data-gallery]')) tab.setAttribute('aria-pressed',String(tab.dataset.gallery===state.gallery));
+      for(const game of games) {
+        const row=gameRows.get(stage).get(game.id), running=state.running.includes(game.id);
+        row.dataset.running=String(running);
+        const focus=row.querySelector('[data-action="focus"]');focus.style.visibility=running?'visible':'hidden';focus.disabled=!running;
+        const main=row.querySelector('[data-action="game"]');main.innerHTML=icon(running?'power':'play');main.classList.toggle('mc-stop',running);main.setAttribute('aria-label',game.name+(running?' 종료':' 실행'));
+        row.querySelector('.mc-game-name small').textContent=running?'실행 중':'';
+        const volume=row.querySelector('[data-action="volume"]'),muted=!!state.muted[game.id];volume.dataset.muted=String(muted);volume.innerHTML=icon(muted?'volume-x':'volume-2');volume.setAttribute('aria-label',game.name+' 음소거 '+(muted?'해제':'설정'));
+      }
+      renderGallery(stage);
+    }
+    icons();
+  }
+  for(const stage of stages) {
+    stage.innerHTML='<div class="mc-scene" aria-hidden="true"></div><aside class="mc-panel" aria-label="HomeworkHelper 사이드바 목업"><header class="mc-clock"><div class="mc-clock-face"><div class="mc-time"><span>12</span><span class="mc-colon">:</span><span>34</span></div><span class="mc-seconds">56</span></div><div class="mc-date">10월 17일 토요일</div></header><div class="mc-body"><section class="mc-games"><div class="mc-section-title"><span class="mc-label">'+icon('gamepad-2')+'게임</span><span class="mc-audio-heading">'+icon('volume-2')+'<span>음량</span></span></div><div class="mc-game-list"></div></section><div class="mc-spacer"></div><div class="mc-bottom"><section class="mc-player" aria-label="미디어 센터"><div class="mc-player-head"><span class="mc-player-heading mc-label">'+icon('music-2')+'미디어</span><div class="mc-player-tools"><button type="button" class="mc-button mc-auto cursor-interaction" data-action="auto" aria-pressed="true">자동 켜짐</button>'+button('settings-2','미디어 자동 동작 옵션','settings','mc-settings-button')+'</div></div><div class="mc-track"><div class="mc-cover" aria-hidden="true">'+icon('disc-3')+'</div><div class="mc-track-meta"><div class="mc-track-title"></div><div class="mc-artist"></div></div></div><div class="mc-playback">'+button('skip-back','이전 곡','previous')+button('pause','BGM 일시정지','play','mc-play')+button('skip-forward','다음 곡','next')+'</div><div class="mc-status" aria-live="polite"></div><div class="mc-settings" role="group" aria-label="이번 실행의 미디어 옵션" hidden><div class="mc-settings-title"><span>미디어 자동 동작</span>'+button('x','옵션 닫기','settings','mc-settings-button')+'</div><label><span>비포커스 게임 음소거</span><input type="checkbox" data-option="backgroundMute" checked></label><label><span>새 게임 창 자동 포커스</span><input type="checkbox" data-option="autoFocus" checked></label><div class="mc-session-note">이번 호스트 앱 실행 동안 적용</div></div></section><section class="mc-capture" aria-label="촬영과 녹화"><div class="mc-capture-row"><span class="mc-label">'+icon('camera')+'스크린샷</span><button type="button" class="mc-button cursor-interaction">지금 촬영</button></div><div class="mc-capture-row"><span class="mc-label">'+icon('video')+'녹화</span><span class="mc-capture-right"><span class="mc-connected">연결됨</span><button type="button" class="mc-button cursor-interaction">녹화 시작</button></span></div></section><div class="mc-tabs" role="group" aria-label="갤러리 종류"><button type="button" class="mc-button cursor-interaction" data-gallery="screenshot" aria-pressed="true">스크린샷</button><button type="button" class="mc-button cursor-interaction" data-gallery="recording" aria-pressed="false">녹화</button></div><div class="mc-gallery" aria-label="최대 두 행 공용 갤러리"></div></div></div><footer class="mc-footer"><button type="button" class="mc-button cursor-interaction">'+icon('chevron-right')+'닫기</button></footer></aside>';
+    const list=stage.querySelector('.mc-game-list'),rows=new Map();gameRows.set(stage,rows);
+    for(const game of games) {
+      const row=document.createElement('div');row.className='mc-game-row';row.dataset.game=game.id;
+      row.innerHTML='<div class="mc-game-art" aria-label="'+game.name+' 임시 아이콘">'+game.letter+'</div><div class="mc-game-name" data-tooltip="'+game.name+'">'+game.name+'<small></small></div>'+button('focus','게임 창으로 이동','focus','mc-square')+button('play','게임 실행','game','mc-square')+'<button type="button" class="mc-volume cursor-interaction" data-action="volume" aria-label="게임 음소거">'+icon('volume-2')+'</button>';
+      list.append(row);rows.set(game.id,row);
+    }
+    if(stage.dataset.layout==='compact') stage.querySelector('.mc-track').append(stage.querySelector('.mc-playback'));
+    stage.addEventListener('click',event=>{
+      const gallery=event.target.closest('[data-gallery]');
+      if(gallery) { state.gallery=gallery.dataset.gallery;render();save();return; }
+      const target=event.target.closest('[data-action]');if(!target)return;
+      const action=target.dataset.action;
+      if(action==='play') { state.available=true;state.playing=!state.playing;state.hold=false;state.scenario=state.playing?'playing':'paused'; }
+      if(action==='previous'||action==='next') { state.track=(state.track+(action==='next'?1:tracks.length-1))%tracks.length;state.longTitle=false; }
+      if(action==='auto') { state.auto=!state.auto;if(state.auto) { state.hold=false;state.playing=state.available;state.scenario=state.playing?'playing':'empty'; } }
+      if(action==='settings') state.settings=!state.settings;
+      if(action==='game') { const id=target.closest('[data-game]').dataset.game;state.running=state.running.includes(id)?state.running.filter(x=>x!==id):[...state.running,id]; }
+      if(action==='volume') { const id=target.closest('[data-game]').dataset.game;state.muted[id]=!state.muted[id]; }
+      render();save();
+    });
+    stage.addEventListener('change',event=>{
+      const option=event.target.dataset.option;if(!['backgroundMute','autoFocus'].includes(option))return;
+      state[option]=event.target.checked;render();save();
+    });
+  }
+  applyScenario();render();
+  window.addEventListener('openai:set_globals',event=>{
+    restore(event.detail?.globals?.widgetState?.privateContent);applyScenario();render();
+  });
+  if(globalThis.Tweak) {
+    const tweak=new Tweak({container:root,onChange:()=>{applyScenario();render();save();}});
+    tweak.addSelect(state,'height',{label:'가용 높이',options:[{label:'760 · 갤러리 한 행',value:'760'},{label:'900 · 갤러리 두 행',value:'900'},{label:'1080 · 갤러리 두 행',value:'1080'}]});
+    tweak.addSelect(state,'scenario',{label:'미디어 상태',options:[{label:'Spotify 준비 전',value:'empty'},{label:'BGM 재생 중',value:'playing'},{label:'사용자 일시정지',value:'paused'},{label:'다른 미디어 우선',value:'held'}]});
+    tweak.addToggle(state,'longTitle',{label:'긴 곡명'});
+  }
+})();
+</script>
