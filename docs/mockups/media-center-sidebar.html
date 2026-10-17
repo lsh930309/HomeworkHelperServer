@@ -20,7 +20,7 @@
             <span class="mc-player-heading mc-label"><i class="mc-icon" data-lucide="music-2" aria-hidden="true"></i>미디어</span>
             <div class="mc-player-tools">
               <button type="button" class="mc-button mc-auto cursor-interaction" data-action="auto" aria-pressed="true">BGM 자동</button>
-              <button type="button" class="mc-button mc-settings-button cursor-interaction" data-action="settings" aria-label="미디어 자동 동작 옵션"><i class="mc-icon" data-lucide="settings-2" aria-hidden="true"></i></button>
+              <button type="button" class="mc-button mc-icon-button cursor-interaction" data-action="openSpotify" aria-label="Spotify 열기" data-tooltip="Spotify 창 열기 · 재생 상태는 변경하지 않음"><img class="mc-spotify-app-icon" alt=""></button>
             </div>
           </div>
           <div class="mc-track">
@@ -38,7 +38,7 @@
             <div class="mc-progress-times" aria-hidden="true"><span>1:24</span><span>3:42</span></div>
           </div>
           <div class="mc-settings" role="group" aria-label="이번 실행의 미디어 옵션" hidden>
-            <div class="mc-settings-title"><span>미디어 자동 동작</span><button type="button" class="mc-button mc-settings-button cursor-interaction" data-action="settings" aria-label="옵션 닫기"><i class="mc-icon" data-lucide="x" aria-hidden="true"></i></button></div>
+            <div class="mc-settings-title"><span>미디어 자동 동작</span><button type="button" class="mc-button mc-icon-button cursor-interaction" data-action="settings" aria-label="옵션 닫기"><i class="mc-icon" data-lucide="x" aria-hidden="true"></i></button></div>
             <label><span>비포커스 게임 음소거</span><input type="checkbox" data-option="backgroundMute" checked></label>
             <label><span>새 게임 창 자동 포커스</span><input type="checkbox" data-option="autoFocus" checked></label>
             <div class="mc-session-note">이번 호스트 앱 실행 동안 적용</div>
@@ -97,7 +97,8 @@
   #hh-media-center-proposal .mc-player-tools { display:flex; align-items:center; gap:1.6cqw; }
   #hh-media-center-proposal .mc-auto { min-height:7cqw; padding:0 2.2cqw; font-size:max(11px,3.5cqw); border-radius:2cqw; }
   #hh-media-center-proposal .mc-auto[aria-pressed="true"] { color:var(--mc-green); background:#60b9851b; border-color:#87d7ab36; }
-  #hh-media-center-proposal .mc-settings-button { width:7cqw; min-height:0; aspect-ratio:1; padding:0; border:0; background:transparent; }
+  #hh-media-center-proposal .mc-icon-button { width:7cqw; min-height:0; aspect-ratio:1; padding:0; border:0; background:transparent; }
+  #hh-media-center-proposal .mc-spotify-app-icon { width:72%; height:72%; object-fit:contain; }
   #hh-media-center-proposal .mc-track { display:grid; grid-template-columns:15% minmax(0,1fr); align-items:center; gap:3%; }
   #hh-media-center-proposal .mc-cover { width:100%; aspect-ratio:1; overflow:hidden; display:flex; align-items:center; justify-content:center; border-radius:2.1cqw; background:#172b2b; }
   #hh-media-center-proposal .mc-cover .mc-icon { width:7cqw; height:7cqw; color:#d1e9df; }
@@ -277,14 +278,15 @@
       play.innerHTML=icon(state.playing?'pause':'play');play.setAttribute('aria-label',state.playing?'BGM 일시정지':state.available?'BGM 재생':'Spotify 열고 재생');play.dataset.tooltip=play.getAttribute('aria-label');
       stage.querySelector('[data-action="previous"]').disabled=!state.available;
       stage.querySelector('[data-action="next"]').disabled=!state.available;
-      const auto=stage.querySelector('[data-action="auto"]');auto.setAttribute('aria-pressed',String(state.auto));auto.textContent=state.auto?'BGM 자동 켜짐':'BGM 자동 꺼짐';auto.dataset.tooltip='BGM 자동 재생만 '+(state.auto?'켜짐':'꺼짐')+'. 게임 음소거와 포커스는 별도 옵션이에요.';auto.setAttribute('aria-label','BGM 자동 재생 '+(state.auto?'켜짐':'꺼짐'));
-      auto.dataset.tooltip=state.hold?'다른 미디어 우선 · 자동 재개하지 않아요. 재생 버튼으로 다시 시작할 수 있어요.':auto.dataset.tooltip;
+      const auto=stage.querySelector('[data-action="auto"]');auto.setAttribute('aria-pressed',String(state.auto));auto.textContent=state.auto?'BGM 자동 켜짐':'BGM 자동 꺼짐';auto.dataset.tooltip='BGM 자동 재생만 '+(state.auto?'켜짐':'꺼짐')+' · 우클릭: 미디어 옵션';auto.setAttribute('aria-label','BGM 자동 재생 '+(state.auto?'켜짐':'꺼짐')+' · 우클릭: 미디어 옵션');auto.setAttribute('aria-haspopup','menu');
+      auto.dataset.tooltip=state.hold?'다른 미디어 우선 · 자동 재개하지 않아요. 재생 버튼으로 다시 시작할 수 있어요. · 우클릭: 미디어 옵션':auto.dataset.tooltip;
       const progress=stage.querySelector('.mc-progress');progress.hidden=!state.available;
       progress.querySelector('.mc-progress-fill').style.width='38%';
       progress.querySelector('.mc-progress-track').setAttribute('aria-valuenow','38');
       renderVolume(stage);
       const settings=stage.querySelector('.mc-settings');settings.hidden=!state.settings;
-      stage.querySelector('[data-action="settings"]').setAttribute('aria-expanded',String(state.settings));
+      auto.setAttribute('aria-expanded',String(state.settings));
+      stage.querySelector('[data-action="openSpotify"] img').src=spotifyLogo;
       stage.querySelector('[data-option="backgroundMute"]').checked=state.backgroundMute;
       stage.querySelector('[data-option="autoFocus"]').checked=state.autoFocus;
       for(const tab of stage.querySelectorAll('[data-gallery]')) tab.setAttribute('aria-pressed',String(tab.dataset.gallery===state.gallery));
@@ -318,6 +320,7 @@
       if(action==='auto') { state.auto=!state.auto;if(state.auto) { state.hold=false;state.playing=state.available;state.scenario=state.playing?'playing':'empty'; } }
       if(action==='spotifyVolume') state.spotifyMuted=!state.spotifyMuted;
       if(action==='settings') state.settings=!state.settings;
+      if(action==='openSpotify') state.settings=false;
       if(action==='game') { const id=target.closest('[data-game]').dataset.game;state.running=state.running.includes(id)?state.running.filter(x=>x!==id):[...state.running,id]; }
       if(action==='volume') { const id=target.closest('[data-game]').dataset.game;state.muted[id]=!state.muted[id]; }
       render();save();
@@ -325,6 +328,10 @@
     stage.addEventListener('change',event=>{
       const option=event.target.dataset.option;if(!['backgroundMute','autoFocus'].includes(option))return;
       state[option]=event.target.checked;render();save();
+    });
+    stage.addEventListener('contextmenu',event=>{
+      if(!event.target.closest('[data-action="auto"]'))return;
+      event.preventDefault();state.settings=!state.settings;render();save();
     });
     stage.addEventListener('wheel',event=>{if(!event.target.closest('[data-action="spotifyVolume"]'))return;event.preventDefault();adjustVolume(event.deltaY<0?1:-1);},{passive:false});
     stage.addEventListener('keydown',event=>{if(!event.target.closest('[data-action="spotifyVolume"]')||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();adjustVolume(event.key==='ArrowUp'?1:-1);});

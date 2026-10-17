@@ -230,11 +230,22 @@ class MediaCenterPanel(QWidget):
         self._auto_button.setAccessibleName("BGM 자동 재생")
         self._auto_button.setToolTip("BGM 자동 재생만 전환합니다. 게임 음소거·자동 포커스는 별도 옵션입니다.")
         self._auto_button.clicked.connect(lambda checked: self._set_option("auto_bgm", checked))
+        self._auto_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._auto_button.customContextMenuRequested.connect(self._show_options)
         header.addWidget(self._auto_button)
-        self._options_button = self._button("options", "미디어 옵션", control_size)
-        self._options_button.setObjectName("mediaOptions")
-        self._options_button.clicked.connect(self._show_options)
-        header.addWidget(self._options_button)
+        self._spotify_button = QPushButton()
+        self._spotify_button.setProperty("mediaIconAction", True)
+        self._spotify_button.setFixedSize(control_size, control_size)
+        self._spotify_button.setObjectName("mediaOpenSpotify")
+        self._spotify_button.setAccessibleName("Spotify 열기")
+        self._spotify_button.clicked.connect(lambda _checked=False: self._command("open"))
+        spotify_icon = _ArtworkLabel(get_bundle_resource_path("assets/icons/media/spotify.svg"), self._spotify_button)
+        spotify_icon.setFixedSize(self._icon_size, self._icon_size)
+        spotify_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        spotify_layout = QHBoxLayout(self._spotify_button)
+        spotify_layout.setContentsMargins(0, 0, 0, 0)
+        spotify_layout.addWidget(spotify_icon, alignment=Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self._spotify_button)
         layout.addLayout(header)
 
         track = QHBoxLayout()
@@ -331,7 +342,7 @@ class MediaCenterPanel(QWidget):
         options = snapshot.options if snapshot is not None else MediaOptions()
         self._auto_button.setChecked(options.auto_bgm)
         self._auto_button.setEnabled(ready and self._on_options is not None)
-        self._options_button.setEnabled(ready)
+        self._spotify_button.setEnabled(ready and self._on_command is not None)
         spotify = tuple(item for item in snapshot.sessions if is_spotify_session(item)) if snapshot else ()
         title = (selected.title or "Spotify") if selected else "Spotify 준비"
         artist = (selected.artist or "Spotify") if selected else "재생할 곡을 준비하세요"
@@ -364,12 +375,14 @@ class MediaCenterPanel(QWidget):
             status = "연결 대기"
         else:
             status = {"playing": "재생 중", "paused": "일시정지", "stopped": "정지", "opened": "준비됨"}.get(selected.status, "상태 확인")
-        self._options_button.setToolTip(f"미디어 옵션 · {status}")
-        self._options_button.setAccessibleDescription(status)
+        self._spotify_button.setToolTip(f"Spotify 열기 · {status}")
+        self._spotify_button.setAccessibleDescription(f"Spotify 창 열기 · 재생 상태 변경 없음 · {status}")
         self._auto_button.setToolTip(
             "다른 미디어 우선 · 멈춰도 자동 재개하지 않습니다. 재생 버튼으로 다시 시작하세요."
             if snapshot is not None and snapshot.media_hold else
             "BGM 자동 재생만 전환합니다. 게임 음소거·자동 포커스는 별도 옵션입니다.")
+        self._auto_button.setToolTip(self._auto_button.toolTip() + "\n우클릭: 미디어 옵션")
+        self._auto_button.setAccessibleDescription("왼쪽 클릭: BGM 자동 전환 · 우클릭 또는 메뉴 키: 미디어 옵션")
 
     def _update_artwork(self, selected) -> None:
         artwork = selected.artwork if selected else b""
@@ -489,7 +502,7 @@ class MediaCenterPanel(QWidget):
 
     def _command(self, action: str, session_id: str | None = None, *, value=None) -> bool:
         selected = self._selected()
-        target = (None if action in {"prepare", "dj", "volume", "mute"} else session_id if session_id is not None
+        target = (None if action in {"open", "prepare", "dj", "volume", "mute"} else session_id if session_id is not None
                   else selected.session_id if selected else None)
         if self._on_command is not None:
             try:
@@ -521,10 +534,6 @@ class MediaCenterPanel(QWidget):
             action.setEnabled(snapshot is not None and snapshot.running and self._on_options is not None)
             action.triggered.connect(lambda checked, key=field: self._set_option(key, checked))
         spotify = tuple(item for item in snapshot.sessions if is_spotify_session(item)) if snapshot else ()
-        prepare = menu.addAction("Spotify 열기")
-        prepare.setObjectName("mediaPrepareSpotify")
-        prepare.setEnabled(snapshot is not None and snapshot.running and self._on_command is not None)
-        prepare.triggered.connect(lambda _checked=False: self._command("prepare"))
         dj = menu.addAction("DJ X 열고 재생")
         dj.setObjectName("mediaPrepareDj")
         dj.setToolTip("Spotify DJ 진입을 요청합니다. 실제 DJ 재생 여부는 곡 정보로 확인하세요.")
@@ -550,14 +559,16 @@ class MediaCenterPanel(QWidget):
         note.setEnabled(False)
         return menu
 
-    def _show_options(self) -> None:
+    def _show_options(self, _point: QPoint | None = None) -> None:
+        if self._snapshot is None or not self._snapshot.running:
+            return
         self.close_options()
         self._menu = self._options_menu()
         menu = self._menu
         menu.aboutToHide.connect(lambda: self._release_menu(menu))
         # 오른쪽 경계를 맞춰 팝업이 사이드바 조작 열을 넘어가지 않게 한다.
-        self._menu.popup(self._options_button.mapToGlobal(QPoint(
-            self._options_button.width() - self._menu.sizeHint().width(),
+        self._menu.popup(self._auto_button.mapToGlobal(QPoint(
+            self._auto_button.width() - self._menu.sizeHint().width(),
             -self._menu.sizeHint().height())))
 
     def close_options(self) -> None:
@@ -603,9 +614,5 @@ class MediaCenterPanel(QWidget):
             painter.drawLine(13, 1, 13, 10)
             painter.drawEllipse(QRectF(2, 10, 4, 4))
             painter.drawEllipse(QRectF(9, 9, 4, 4))
-        elif kind == "options":
-            for y, knob in ((3, 5), (8, 11), (13, 6)):
-                painter.drawLine(2, y, 14, y)
-                painter.drawEllipse(QRectF(knob - 1.5, y - 1.5, 3, 3))
         painter.end()
         return QIcon(pixmap)

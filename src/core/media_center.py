@@ -80,7 +80,7 @@ class MediaCenterRuntime:
     def __init__(self, on_change=None, *, backend_factory=WindowsMediaSessions,
                  audio_factory=GameAudioCoordinator, focus_factory=AutoFocusTracker,
                  native_factory=WindowsGameFocusNative, spotify_launcher=launch_spotify,
-                 dj_launcher=None, spotify_process_reader=spotify_processes,
+                 dj_launcher=None, spotify_opener=None, spotify_process_reader=spotify_processes,
                  spotify_audio_factory=SpotifyAudioController,
                  spotify_window_reader=spotify_window, spotify_window_closer=close_spotify_window):
         self._on_change = on_change
@@ -90,6 +90,7 @@ class MediaCenterRuntime:
         self._native_factory = native_factory
         self._spotify_launcher = spotify_launcher
         self._dj_launcher = dj_launcher if dj_launcher is not None else lambda: launch_spotify(dj=True)
+        self._spotify_opener = spotify_opener if spotify_opener is not None else lambda: launch_spotify(show_window=True)
         self._spotify_process_reader = spotify_process_reader
         self._spotify_audio_factory = spotify_audio_factory
         self._spotify_window_reader = spotify_window_reader
@@ -160,7 +161,7 @@ class MediaCenterRuntime:
         return True
 
     def request(self, action: str, session_id: str | None = None, *, value=None) -> bool:
-        if action not in {"prepare", "select", "play", "pause", "previous", "next", "dj", "volume", "mute"}:
+        if action not in {"open", "prepare", "select", "play", "pause", "previous", "next", "dj", "volume", "mute"}:
             return False
         if action == "select" and not session_id:
             return False
@@ -170,7 +171,7 @@ class MediaCenterRuntime:
             return False
         if action not in {"volume", "mute"} and value is not None:
             return False
-        if action in {"dj", "volume", "mute"} and session_id is not None:
+        if action in {"open", "dj", "volume", "mute"} and session_id is not None:
             return False
         with self._lock:
             if self._stop.is_set() or self._thread is None or not self._thread.is_alive():
@@ -412,7 +413,7 @@ class MediaCenterRuntime:
                     await self._execute(command, valid, fresh=fresh)
                     if command.action in {"play", "pause", "previous", "next", "dj"}:
                         fresh = False
-            policy_commands = any(command.action not in {"prepare", "volume", "mute"} for command in commands)
+            policy_commands = any(command.action not in {"open", "prepare", "volume", "mute"} for command in commands)
             if not policy_commands and automatic is not None and not self._stop.is_set():
                 if automatic == "pause" and self._selected is not None:
                     await self._control(self._selected, "pause", generation)
@@ -420,6 +421,9 @@ class MediaCenterRuntime:
                     await self._play(automatic=True, generation=generation)
             # URI 실행·의도 변경 이전에 얻은 세션 관측으로 새 준비를 완료하지 않는다.
             if not self._stop.is_set():
+                # 같은 cycle의 자동 Play가 준비를 만들었어도 사용자가 연 창은 닫지 않는다.
+                if self._pending is not None and any(command.action == "open" and command.epoch == self._epoch for command in commands):
+                    self._pending = replace(self._pending, background_started_at=None, background_window=None)
                 observed_current = self._pending is observed_pending
                 self._close_pending_window(valid and observed_current)
                 await self._advance_pending(valid and observed_current)
@@ -432,6 +436,14 @@ class MediaCenterRuntime:
 
     async def _execute(self, command, valid, *, fresh=True):
         action, session_id = command.action, command.session_id
+        if action == "open":
+            try:
+                if not self._spotify_opener():
+                    raise RuntimeError("Spotify 창 열기 요청이 거부되었습니다.")
+                self._clear_error("spotify_open")
+            except Exception as exc:
+                self._failure(f"Spotify 창 열기 실패: {exc}", "spotify_open")
+            return
         if action in {"volume", "mute"}:
             try:
                 method = self._spotify_audio.set_volume if action == "volume" else self._spotify_audio.set_mute
@@ -541,7 +553,9 @@ class MediaCenterRuntime:
             return
 
         def current():
-            return (not self._stop.is_set() and self._pending is pending
+            with self._lock:
+                opening = any(request.action == "open" and request.epoch == self._epoch for request in self._requests)
+            return (not opening and not self._stop.is_set() and self._pending is pending
                     and pending.generation == self._inputs()[2]
                     and time.monotonic() < pending.deadline
                     and (not pending.automatic or self._automatic_allowed(pending.generation)))

@@ -195,7 +195,7 @@ class Focus:
 
 
 @contextmanager
-def running(sessions=None, *, options=MediaOptions(), targets=(), processes=(), windows=None):
+def running(sessions=None, *, options=MediaOptions(), targets=(), processes=(), windows=None, opener=None):
     backend, audio, native = Backend((session(),) if sessions is None else sessions), Audio(), Native()
     launches, changes, focuses = [], [], []
     backend.processes = processes
@@ -217,6 +217,7 @@ def running(sessions=None, *, options=MediaOptions(), targets=(), processes=(), 
         native_factory=lambda: native, focus_factory=focus_factory,
         spotify_launcher=lambda: launches.append("normal") or True,
         dj_launcher=lambda: launches.append("dj") or True,
+        spotify_opener=opener if opener is not None else lambda: launches.append("open") or True,
         spotify_process_reader=read_processes, spotify_audio_factory=SpotifyAudio,
         spotify_window_reader=windows.read if windows is not None else lambda started_after, expected=None: SpotifyWindow(SpotifyProcess(41, 123, "C:/Spotify.exe"), 10),
         spotify_window_closer=windows.close if windows is not None else lambda window, is_current: True,
@@ -240,7 +241,7 @@ def test_constructor_and_inactive_configuration_have_no_io():
 
     runtime = MediaCenterRuntime(backend_factory=forbidden, audio_factory=forbidden,
                                  native_factory=forbidden, focus_factory=forbidden,
-                                 spotify_launcher=forbidden, dj_launcher=forbidden,
+                                 spotify_launcher=forbidden, dj_launcher=forbidden, spotify_opener=forbidden,
                                  spotify_process_reader=forbidden, spotify_audio_factory=forbidden,
                                  spotify_window_reader=forbidden, spotify_window_closer=forbidden)
     assert runtime.configure(MediaOptions(False, False, False))
@@ -250,6 +251,98 @@ def test_constructor_and_inactive_configuration_have_no_io():
     assert not runtime.configure(MediaOptions())
     with pytest.raises(FrozenInstanceError):
         runtime.snapshot.error = "mutable"
+
+
+@pytest.mark.parametrize("status,processes", [(None, ()), (None, (object(),)), ("paused", (object(),)), ("playing", (object(),))])
+def test_explicit_open_always_requests_window_once_without_playback_or_hold_change(status, processes):
+    calls = []
+    with running(() if status is None else (session(status=status),), options=MediaOptions(False), processes=processes,
+                 opener=lambda: calls.append(threading.get_ident()) or True) as (runtime, backend, *_):
+        generation, held = runtime._generation, runtime.snapshot.media_hold
+        assert runtime.request("open")
+        wait_for(lambda: len(calls) == 1)
+        reads = backend.reads
+        wait_for(lambda: backend.reads >= reads + 3)
+        assert not backend.commands and runtime._pending is None
+        assert runtime._generation == generation and runtime.snapshot.media_hold == held
+        assert threading.get_ident() not in calls
+        assert not runtime.request("open", "spotify") and not runtime.request("open", value=1)
+
+
+def test_explicit_open_works_while_native_media_observation_fails():
+    with running(options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        backend.error = OSError("media provider offline")
+        wait_for(lambda: "media provider offline" in runtime.snapshot.error)
+        assert runtime.request("open")
+        wait_for(lambda: launches == ["open"])
+        assert not backend.commands and runtime.running
+
+
+@pytest.mark.parametrize("failure", [False, OSError("window opener unavailable")])
+def test_explicit_open_rejection_is_reported_without_retry_and_next_click_can_succeed(failure):
+    calls, ready = [], [False]
+    def open_window():
+        calls.append(True)
+        if ready[0]: return True
+        if isinstance(failure, Exception): raise failure
+        return False
+    with running(options=MediaOptions(False), opener=open_window) as (runtime, backend, *_):
+        assert runtime.request("open")
+        wait_for(lambda: "창 열기 실패" in runtime.snapshot.error)
+        reads = backend.reads
+        wait_for(lambda: backend.reads >= reads + 3)
+        assert len(calls) == 1 and not backend.commands
+        ready[0] = True
+        assert runtime.request("open")
+        wait_for(lambda: len(calls) == 2 and not runtime.snapshot.error)
+
+
+def test_explicit_open_preserves_pending_play_intent_and_deadline_but_removes_window_close():
+    windows = WindowController()
+    windows.ready = True
+    with running((), options=MediaOptions(False), windows=windows) as (runtime, backend, _, _, launches, *_):
+        runtime.PREPARE_TIMEOUT_SECONDS = 1
+        assert runtime.request("play")
+        wait_for(lambda: runtime._pending is not None and runtime._pending.background_window is not None)
+        pending = runtime._pending
+        assert runtime.request("open")
+        wait_for(lambda: launches == ["dj", "open"] and runtime._pending.background_started_at is None)
+        assert runtime._pending.deadline == pending.deadline and runtime._pending.intent == pending.intent
+        assert runtime._pending.generation == pending.generation and not runtime._pending.play_requested
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")] and runtime._pending is None)
+        assert not windows.close_calls and not windows.writes
+
+
+def test_queued_open_cancels_native_close_before_worker_processes_open():
+    windows = WindowController()
+    windows.ready = True
+    with running((), options=MediaOptions(False), windows=windows) as (runtime, backend, _, _, launches, *_):
+        runtime.PREPARE_TIMEOUT_SECONDS = 1
+        runtime.BACKGROUND_CLOSE_DELAY_SECONDS = .08
+        assert runtime.request("play")
+        wait_for(lambda: runtime._pending is not None and runtime._pending.background_window is not None)
+        generation = runtime._generation
+        windows.before_apply = lambda: runtime.request("open")
+        backend.sessions = (session(status="playing"),)
+        wait_for(lambda: launches == ["dj", "open"] and runtime._pending is None)
+        assert windows.guards_after_cancel == [False] and not windows.writes
+        assert runtime._generation == generation
+
+
+def test_open_in_same_snapshot_does_not_suppress_external_media_safety_pause(monkeypatch):
+    with running((session(status="playing"),)) as (runtime, backend, _, _, launches, *_):
+        original, queued = backend.snapshot, []
+        async def snapshot_and_open():
+            rows = await original()
+            if not queued:
+                queued.append(runtime.request("open"))
+            return rows
+        backend.sessions = (session(status="playing"), session("browser", "Firefox.exe", "playing"))
+        monkeypatch.setattr(backend, "snapshot", snapshot_and_open)
+        wait_for(lambda: launches == ["open"] and backend.commands == [("spotify", "pause")])
+        wait_for(lambda: runtime.snapshot.media_hold)
+        assert queued == [True]
 
 
 def test_initial_trigger_plays_once_and_manual_pause_is_not_undone():

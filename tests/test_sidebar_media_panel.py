@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QContextMenuEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src.core.media_center import MediaCenterSnapshot, MediaOptions
@@ -187,18 +189,79 @@ def test_unconfirmed_session_status_cannot_control_playback(panel, status):
 
 
 @pytest.mark.parametrize("sessions", [(), (spotify(),)])
-def test_explicit_prepare_remains_available_after_selected_session_disappears(panel, sessions):
+def test_explicit_open_remains_available_after_selected_session_disappears(panel, sessions):
     view, _options, commands, _state = panel
     view.update_snapshot(MediaCenterSnapshot(
         sessions=sessions, bgm_session_id="old-spotify-session",
         error="이전 Spotify 세션을 더 이상 관측할 수 없음", running=True))
     assert not view._play_button.isEnabled()
-    menu = view._options_menu()
-    prepare = next(action for action in menu.actions() if action.objectName() == "mediaPrepareSpotify")
-    assert prepare.isEnabled() and commands == []
-    prepare.trigger()
-    assert commands == [("prepare", None)]
+    assert view._spotify_button.isEnabled() and commands == []
+    view._spotify_button.click()
+    assert commands == [("open", None)]
     assert view._snapshot.bgm_session_id == "old-spotify-session"
+
+
+@pytest.mark.parametrize("status", ["playing", "paused"])
+def test_spotify_icon_opens_window_without_changing_playback_or_options(panel, status):
+    from src.gui.sidebar.media_panel import _ArtworkLabel
+    view, options, commands, _state = panel
+    initial = observed(view, status=status)
+    view._spotify_button.click()
+    assert commands == [("open", None)]
+    assert not options and view._snapshot is initial
+    assert view._snapshot.sessions[0].status == status
+    assert view._spotify_button.width() == view._spotify_button.height() == view._next_button.width()
+    icon = view._spotify_button.findChild(_ArtworkLabel)
+    assert icon is not None and icon._default_renderer.isValid()
+    assert icon.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    menu = view._options_menu()
+    assert "mediaPrepareSpotify" not in {action.objectName() for action in menu.actions()}
+    menu.close()
+
+
+@pytest.mark.parametrize("running", [None, False, True])
+def test_spotify_open_is_disabled_without_live_runtime_or_command_callback(app, running):
+    from src.gui.sidebar.media_panel import MediaCenterPanel
+    commands = []
+    view = MediaCenterPanel(280, on_command=None if running is True else lambda *args: commands.append(args))
+    view.update_snapshot(None if running is None else MediaCenterSnapshot(running=running))
+    assert not view._spotify_button.isEnabled()
+    view._spotify_button.click()
+    assert not commands
+    view.close()
+
+
+def test_bgm_right_click_opens_options_without_toggling_and_close_releases_popup(panel, app):
+    view, options, commands, _state = panel
+    initial = observed(view, options=MediaOptions(auto_bgm=True, background_mute=False))
+    view.show()
+    app.processEvents()
+    button = view._auto_button
+    point = button.rect().center()
+    # Qt의 실제 마우스 버튼과 context-menu 이벤트를 거쳐 같은 입력 경계를 확인한다.
+    QTest.mouseClick(button, Qt.MouseButton.RightButton, pos=point)
+    app.sendEvent(button, QContextMenuEvent(QContextMenuEvent.Reason.Mouse,
+                                          point, button.mapToGlobal(point)))
+    app.processEvents()
+    assert view.options_open and button.isChecked()
+    assert view._snapshot is initial and not options and not commands
+    action = next(action for action in view._menu.actions() if action.objectName() == "mediaBackgroundMute")
+    action.trigger()
+    assert options == [replace(initial.options, background_mute=True)]
+    assert view._snapshot.options.auto_bgm is True and not commands
+    view.close_options()
+    app.processEvents()
+    assert not view.options_open and view._menu is None
+
+
+def test_bgm_left_click_only_toggles_auto_and_does_not_open_options(panel, app):
+    view, options, commands, _state = panel
+    initial = observed(view, options=MediaOptions(auto_bgm=False))
+    view.show()
+    app.processEvents()
+    QTest.mouseClick(view._auto_button, Qt.MouseButton.LeftButton)
+    assert options == [replace(initial.options, auto_bgm=True)]
+    assert view._auto_button.isChecked() and not view.options_open and not commands
 
 
 def test_option_callback_exception_restores_selection_and_command_exception_does_not_fake_playing(panel):

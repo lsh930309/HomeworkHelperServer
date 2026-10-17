@@ -181,6 +181,12 @@ def test_only_fixed_uri_is_requested_once_without_activation(native, dj, uri):
     assert calls == [("launch", uri, {"show_cmd": 7})]
 
 
+def test_explicit_open_uses_normal_spotify_uri_with_visible_window_hint(native):
+    _, calls = native
+    assert spotify_app.launch_spotify(show_window=True)
+    assert calls == [("launch", "spotify:", {"show_cmd": 1})]
+
+
 def test_launch_failure_propagates_without_retry_or_alternate_path(native):
     _, calls = native
 

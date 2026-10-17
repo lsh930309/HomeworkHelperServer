@@ -392,7 +392,49 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
     if scenario not in SPOTIFY_WINDOW_SCENARIOS:
         raise ValueError("지원하지 않는 Spotify 창 검수 시나리오입니다.")
     from src.core.media_center import MediaCenterRuntime, MediaOptions
-    runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
+    opening = scenario == "spotify-window-open"
+    native_open, command_requests, option_requests, forbidden_controls = [], [], [], []
+    panel = app = None
+    if opening:
+        from PySide6.QtWidgets import QApplication
+        from src.core.media_sessions import WindowsMediaSessions
+        from src.core.spotify_audio import SpotifyAudioController
+        from src.core.spotify_app import launch_spotify
+        app = QApplication.instance() or QApplication([])
+        reader = lambda: _spotify_probe_processes(source_appdata, source_local_appdata)
+
+        def open_once():
+            row = {"attempted": True, "accepted": False, "utc": time.time()}
+            native_open.append(row)
+            try:
+                row["accepted"] = bool(launch_spotify(show_window=True))
+                return row["accepted"]
+            except Exception as error:
+                row.update(error_type=type(error).__name__, error=str(error))
+                raise
+
+        def rejected(action, *values):
+            forbidden_controls.append({"action": action, "values": list(values)})
+            return False
+
+        class ReadOnlySessions(WindowsMediaSessions):
+            async def control(self, session_id, action):
+                return rejected(action, session_id)
+
+        class ReadOnlySpotifyAudio(SpotifyAudioController):
+            def set_volume(self, value):
+                return rejected("volume", value)
+            def set_mute(self, value):
+                return rejected("mute", value)
+
+        runtime = MediaCenterRuntime(
+            backend_factory=ReadOnlySessions,
+            spotify_opener=open_once, spotify_launcher=lambda: rejected("prepare"),
+            dj_launcher=lambda: rejected("dj"), spotify_process_reader=reader,
+            spotify_audio_factory=lambda: ReadOnlySpotifyAudio(process_reader=reader),
+        )
+    else:
+        runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
     started = runtime.start(MediaOptions(False, False, False))
     trace, cleanup, errors, chrome, request = [], False, [], None, None
     origin = time.monotonic()
@@ -413,11 +455,48 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
                     if not started or not runtime.running:
                         raise ValueError("미디어 관측 worker가 준비되지 않아 명령을 보내지 않았습니다.")
                     if action == "open":
-                        from src.core.spotify_app import launch_spotify
-                        request["attempted"] = True
-                        request["accepted"] = bool(launch_spotify())  # 고정 spotify: 한 번; Play 없음.
-                        if not request["accepted"]:
-                            raise OSError("Spotify URI 요청을 수락하지 않았습니다.")
+                        from PySide6.QtCore import QPoint
+                        from PySide6.QtGui import QContextMenuEvent
+                        from src.gui.sidebar.media_panel import MediaCenterPanel
+                        def command(action, session_id=None, **kwargs):
+                            row = {"action": action, "session_id": session_id}
+                            command_requests.append(row)
+                            row["queued"] = bool(runtime.request(action, session_id, **kwargs))
+                            return row["queued"]
+                        panel = MediaCenterPanel(280,
+                            on_command=command,
+                            on_options=lambda value: option_requests.append(asdict(value)) or False)
+                        panel.update_snapshot(runtime.snapshot)
+                        # 숨긴 실제 제품 패널의 우클릭 경로를 검증하되 운영 화면에 메뉴를 띄우지 않는다.
+                        menus = []
+                        make_menu = panel._options_menu
+                        def options_menu():
+                            menu = make_menu()
+                            menu.popup = lambda _point: menus.append(menu)
+                            return menu
+                        panel._options_menu = options_menu
+                        auto_before = panel._auto_button.isChecked()
+                        point = QPoint(2, 2)
+                        event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point,
+                                                  panel._auto_button.mapToGlobal(point))
+                        app.sendEvent(panel._auto_button, event)
+                        request["bgm_context"] = {
+                            "menu_requested": len(menus) == 1,
+                            "auto_before": auto_before, "auto_after": panel._auto_button.isChecked(),
+                            "option_requests": len(option_requests), "native_popup_suppressed": True,
+                        }
+                        if not menus or auto_before != panel._auto_button.isChecked() or option_requests:
+                            raise ValueError("BGM 우클릭 메뉴가 열리지 않았거나 자동 설정을 변경했습니다.")
+                        button = panel._spotify_button
+                        request.update(button=button.objectName(), button_enabled=button.isEnabled(),
+                                       button_clicked=False)
+                        if not button.isEnabled():
+                            raise ValueError("실제 Spotify 버튼이 활성화되지 않아 클릭하지 않았습니다.")
+                        request["button_clicked"] = True
+                        button.click()  # 실제 제품 버튼 → runtime open → 주입한 실제 native opener.
+                        request["queued"] = bool(command_requests and command_requests[-1].get("queued"))
+                        if not request["queued"]:
+                            raise ValueError("Spotify 열기 요청이 제품 worker에 접수되지 않았습니다.")
                     else:
                         candidates = [window for window in state["windows"]
                                       if window.get("visible") and not window.get("owner") and not window.get("gone")]
@@ -440,11 +519,42 @@ def _spotify_window_observe(source_appdata: Path, source_local_appdata: str | No
         errors.append({"error_type": type(error).__name__, "error": str(error)})
     finally:
         cleanup = runtime.stop(timeout_seconds=2)
+        if panel is not None:
+            panel.close_options()
+            panel.close()
+            panel.deleteLater()
+            app.processEvents()
+    visible = lambda state: [window for window in state["windows"] if window.get("visible")
+                             and not window.get("iconic") and not window.get("owner") and not window.get("gone")]
+    window_result = {}
+    if opening:
+        final_windows = visible(trace[-1]) if trace else []
+        stable = [{(window["pid"], window["create_time"], window["hwnd"]) for window in visible(state)}
+                  for state in trace[-3:]]
+        window_result = {"initial_processes": trace[0]["processes"] if trace else [],
+                         "final_processes": trace[-1]["processes"] if trace else [],
+                         "initial_windows": trace[0]["windows"] if trace else [],
+                         "final_windows": final_windows,
+                         "visible_seen": any(visible(state) for state in trace[1:]),
+                         "stable_final_visible": len(stable) == 3 and bool(set.intersection(*stable)),
+                         "initial_kind": "warm" if trace and trace[0]["processes"] else "cold"}
+        if request is not None:
+            request.update(attempted=bool(native_open),
+                           accepted=native_open[0]["accepted"] if native_open else None,
+                           native_requests=native_open, command_requests=command_requests)
+        if forbidden_controls:
+            errors.append({"stage": "product_open", "error": "열기 외의 미디어 제어를 요청해 차단했습니다."})
+        if not errors and (len(native_open) != 1 or not native_open[0]["accepted"]):
+            errors.append({"stage": "product_open", "error": "실제 Spotify URI 요청이 한 번 수락되었는지 확인하지 못했습니다."})
+        if not errors and not window_result["stable_final_visible"]:
+            errors.append({"stage": "window_observation", "error": "Spotify 창이 최종 관측에서 복원·표시된 상태를 유지하지 않았습니다."})
     return {"ok": bool(started and trace and cleanup and not errors), "supported": True,
             "scenario": scenario, "trace": trace, "chrome": chrome, "request": request,
             "errors": errors, "cleanup_ok": cleanup, "writes": [],
-            "limits": ["ok는 관측 절차 완료이며 창 최소화·트레이·재생 유지의 성공 판정이 아닙니다.",
-                       "선택한 고정 창 명령 또는 URI 요청만 한 번 실행하며 Play·복원·재전송·강제 종료·설정 변경은 없습니다.",
+            "window_result": window_result, "forbidden_controls": forbidden_controls,
+            "limits": [("ok는 실제 제품 버튼·worker·URI 수락과 최종 복원된 창 표시를 포함합니다. 포커스 획득 보장은 아닙니다."
+                        if opening else "ok는 관측 절차 완료이며 창 최소화·트레이·재생 유지의 성공 판정이 아닙니다."),
+                       "명시한 창 호출·명령 이외의 재생·음량·재전송·강제 종료·설정 변경은 없습니다.",
                        "WM_CLOSE의 트레이 유지 여부는 Spotify 설정과 후속 process·GSMTC 관측으로 구분합니다."]}
 
 

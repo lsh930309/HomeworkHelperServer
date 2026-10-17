@@ -221,6 +221,8 @@ def test_spotify_window_action_verifies_identity_and_sends_at_most_one_request(m
 
 @pytest.mark.parametrize("scenario, duration", [("spotify-window-open", 10), ("spotify-window-close", 5), ("spotify-window-minimize", 5)])
 def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_without_playback(tmp_path, monkeypatch, scenario, duration):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from dataclasses import replace
     from src.core import media_center, spotify_app
     from src.core.media_sessions import MediaSessionInfo
     clock, launches, actions, chrome, options = [0.0], [], [], [], []
@@ -229,17 +231,24 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
     snapshot = media_center.MediaCenterSnapshot(sessions=(session,), running=True)
     class Runtime:
         running = True
-        def __init__(self, spotify_launcher):
-            assert not spotify_launcher()
+        def __init__(self, spotify_launcher, **kwargs):
+            self.kwargs = kwargs
+            if not kwargs:
+                assert not spotify_launcher()
             self.snapshot = snapshot
         def start(self, value):
             options.append(value)
+            self.snapshot = replace(self.snapshot, options=value)
+            return True
+        def request(self, action, session_id):
+            assert action == "open" and session_id is None
+            assert self.kwargs["spotify_opener"]()
             return True
         def stop(self, **kwargs):
             self.running = False
             return True
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
-    monkeypatch.setattr(spotify_app, "launch_spotify", lambda: launches.append("spotify:") or True)
+    monkeypatch.setattr(spotify_app, "launch_spotify", lambda *, show_window=False: launches.append(("spotify:", show_window)) or True)
     monkeypatch.setattr(probe, "_wait", lambda predicate, seconds: predicate())
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
@@ -261,9 +270,101 @@ def test_spotify_window_experiments_keep_warm_identity_and_trace_post_request_wi
     assert all(row["media"]["sessions"][0]["status"] == "paused" for row in result["trace"])
     assert all(not any((value.auto_bgm, value.background_mute, value.auto_focus)) for value in options)
     if scenario.endswith("-open"):
-        assert launches == ["spotify:"] and not actions and len(chrome) == 1
+        assert launches == [("spotify:", True)] and not actions and len(chrome) == 1
+        assert result["request"]["button"] == "mediaOpenSpotify"
+        assert result["request"]["button_clicked"] and result["request"]["queued"]
+        assert result["request"]["command_requests"] == [{"action": "open", "session_id": None, "queued": True}]
+        assert result["request"]["bgm_context"] == {
+            "menu_requested": True, "auto_before": False, "auto_after": False,
+            "option_requests": 0, "native_popup_suppressed": True}
+        assert result["window_result"]["initial_kind"] == "warm"
+        assert result["window_result"]["stable_final_visible"]
+        assert result["forbidden_controls"] == []
     else:
         assert not launches and actions == [(window | {"iconic": True}, scenario.removeprefix("spotify-window-"), True)] and not chrome
+    json.dumps(result)
+
+
+@pytest.mark.parametrize("condition", ["cold", "queue-rejected", "native-rejected", "native-error",
+                                        "no-window", "transient-window", "forbidden-control",
+                                        "start-failed", "cleanup-failed"])
+def test_product_spotify_open_requires_queue_native_acceptance_and_stable_visible_window(tmp_path, monkeypatch, condition):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from src.core import media_center, spotify_app
+    clock, calls = [0.0], []
+    opened = [False]
+    snapshot = media_center.MediaCenterSnapshot(running=True, options=media_center.MediaOptions(False, False, False))
+    class Runtime:
+        running = True
+        def __init__(self, **kwargs):
+            self.kwargs, self.snapshot = kwargs, snapshot
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            self.running = condition != "start-failed"
+            return self.running
+        def request(self, action, session_id):
+            calls.append(("request", action, session_id))
+            assert action == "open" and session_id is None
+            if condition == "queue-rejected":
+                return False
+            assert self.kwargs["spotify_process_reader"]() == ()
+            if condition == "forbidden-control":
+                assert not self.kwargs["dj_launcher"]()
+                assert not self.kwargs["spotify_audio_factory"]().set_volume(100)
+            try:
+                self.kwargs["spotify_opener"]()
+            except OSError:
+                self.snapshot = media_center.MediaCenterSnapshot(error="native open failed", running=True)
+            return True  # worker 접수와 native URI 수락은 별개의 결과다.
+        def stop(self, **_kwargs):
+            calls.append(("stop",))
+            self.running = False
+            return condition != "cleanup-failed"
+    def launch(*, show_window):
+        assert show_window is True
+        calls.append(("native",))
+        if condition == "native-error":
+            raise OSError("native open failed")
+        opened[0] = True
+        return condition != "native-rejected"
+    def processes(source, local):
+        assert source == tmp_path / "actual-profile" and local == "actual-local"
+        return ()
+    def window_state(*_args):
+        present = condition != "cold" or opened[0]
+        visible = opened[0] and condition != "no-window"
+        if condition == "transient-window" and clock[0] >= 9:
+            visible = False
+        process = {"pid": 41, "create_time": 123, "path": "C:/Spotify.exe"}
+        return {"processes": [process] if present else [],
+                "windows": [{**process, "hwnd": 11, "visible": visible, "iconic": False, "owner": 0}] if present else [],
+                "foreground_hwnd": 0}
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(spotify_app, "launch_spotify", launch)
+    monkeypatch.setattr(probe, "_spotify_probe_processes", processes)
+    monkeypatch.setattr(probe, "_spotify_window_state", window_state)
+    monkeypatch.setattr(probe, "_spotify_chrome_controls", lambda *_args: {})
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    result = probe._spotify_window_observe(tmp_path / "actual-profile", "actual-local", "spotify-window-open")
+    assert result["ok"] is (condition == "cold")
+    assert calls.count(("native",)) == (0 if condition in ("queue-rejected", "start-failed") else 1)
+    assert calls[-1] == ("stop",)
+    assert result["cleanup_ok"] is (condition != "cleanup-failed")
+    if condition == "cold":
+        assert result["window_result"]["initial_kind"] == "cold"
+        assert result["window_result"]["initial_processes"] == []
+        assert result["window_result"]["final_processes"][0]["pid"] == 41
+        assert result["window_result"]["stable_final_visible"]
+        assert result["request"]["queued"] and result["request"]["accepted"]
+    elif condition == "native-rejected":
+        assert result["request"]["queued"] and result["request"]["accepted"] is False
+    elif condition == "transient-window":
+        assert result["window_result"]["visible_seen"]
+        assert not result["window_result"]["stable_final_visible"]
+    elif condition == "forbidden-control":
+        assert [row["action"] for row in result["forbidden_controls"]] == ["dj", "volume"]
     json.dumps(result)
 
 

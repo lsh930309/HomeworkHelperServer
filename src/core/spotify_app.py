@@ -84,15 +84,15 @@ def spotify_processes(*, appdata: str | None = None, local_appdata: str | None =
     return tuple(result)
 
 
-def launch_spotify(*, dj: bool = False) -> bool:
-    """고정된 Spotify URI를 비활성 최소화로 한 번 요청한다.
+def launch_spotify(*, dj: bool = False, show_window: bool = False) -> bool:
+    """고정된 Spotify URI를 한 번 요청한다. 명시적 창 열기는 일반 표시를 요청한다.
 
     show_cmd는 Spotify에 전달하는 표시 힌트이며 완전 무창·DJ 재생의
     성공을 의미하지 않는다. 실행 수락 뒤 세션을 기다리는 것은 runtime 책임이다.
     """
     if sys.platform != "win32":
         raise OSError("Spotify launch requires a Windows user session")
-    os.startfile(SPOTIFY_DJ_URI if dj else "spotify:", show_cmd=7)  # SW_SHOWMINNOACTIVE
+    os.startfile(SPOTIFY_DJ_URI if dj else "spotify:", show_cmd=1 if show_window else 7)
     return True
 
 
