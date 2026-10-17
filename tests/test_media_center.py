@@ -137,6 +137,30 @@ class SpotifyAudio:
         return self.accept
 
 
+class WindowMinimizer:
+    """실제 창을 건드리지 않고 late window·guard·1회 적용을 관측한다."""
+    def __init__(self):
+        self.ready = False
+        self.error = None
+        self.before_apply = None
+        self.calls, self.writes, self.guards_after_cancel = [], [], []
+
+    def __call__(self, started_after, *, is_current):
+        self.calls.append((started_after, threading.get_ident(), time.time()))
+        if self.error:
+            raise self.error
+        if not self.ready:
+            return False
+        if self.before_apply is not None:
+            self.before_apply()
+            self.before_apply = None
+            self.guards_after_cancel.append(is_current())
+        if not is_current():
+            return False
+        self.writes.append(started_after)
+        return True
+
+
 class Native:
     def __init__(self):
         self.current = (100, 1000)
@@ -159,7 +183,7 @@ class Focus:
 
 
 @contextmanager
-def running(sessions=None, *, options=MediaOptions(), targets=(), processes=()):
+def running(sessions=None, *, options=MediaOptions(), targets=(), processes=(), minimizer=None):
     backend, audio, native = Backend((session(),) if sessions is None else sessions), Audio(), Native()
     launches, changes, focuses = [], [], []
     backend.processes = processes
@@ -182,6 +206,7 @@ def running(sessions=None, *, options=MediaOptions(), targets=(), processes=()):
         spotify_launcher=lambda: launches.append("normal") or True,
         dj_launcher=lambda: launches.append("dj") or True,
         spotify_process_reader=read_processes, spotify_audio_factory=SpotifyAudio,
+        spotify_window_minimizer=minimizer if minimizer is not None else lambda started_after, *, is_current: True,
     )
     runtime.POLL_SECONDS = 0.01
     runtime.IO_TIMEOUT_SECONDS = 0.5
@@ -202,7 +227,8 @@ def test_constructor_and_inactive_configuration_have_no_io():
     runtime = MediaCenterRuntime(backend_factory=forbidden, audio_factory=forbidden,
                                  native_factory=forbidden, focus_factory=forbidden,
                                  spotify_launcher=forbidden, dj_launcher=forbidden,
-                                 spotify_process_reader=forbidden, spotify_audio_factory=forbidden)
+                                 spotify_process_reader=forbidden, spotify_audio_factory=forbidden,
+                                 spotify_window_minimizer=forbidden)
     assert runtime.configure(MediaOptions(False, False, False))
     runtime.update_targets(())
     assert not runtime.running and not runtime.request("play")
@@ -438,7 +464,8 @@ def test_stop_reports_restore_failure_without_leaving_a_worker_alive():
     runtime = MediaCenterRuntime(backend_factory=lambda: backend, audio_factory=lambda: audio,
                                  native_factory=Native, focus_factory=Focus,
                                  spotify_process_reader=lambda: (), spotify_audio_factory=SpotifyAudio,
-                                 spotify_launcher=lambda: True, dj_launcher=lambda: True)
+                                 spotify_launcher=lambda: True, dj_launcher=lambda: True,
+                                 spotify_window_minimizer=lambda started_after, *, is_current: True)
     runtime.POLL_SECONDS = 0.01
     runtime.start(MediaOptions(False))
     wait_for(lambda: backend.reads > 0)
@@ -710,3 +737,176 @@ def test_same_play_on_every_ready_snapshot_does_not_starve_pending_completion(mo
         before = len(repeated)
         wait_for(lambda: len(repeated) >= before + 4)
         assert all(repeated) and backend.commands == [("spotify", "play")] and launches == ["dj"]
+
+
+@pytest.mark.parametrize("native_status", ["paused", "playing"])
+def test_cold_background_prepare_waits_for_late_window_without_replaying(native_status):
+    minimizer = WindowMinimizer()
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, _, _, launches, *_):
+        runtime.PREPARE_TIMEOUT_SECONDS = .5
+        requested_at = time.time()
+        assert runtime.request("play")
+        wait_for(lambda: launches == ["dj"] and bool(minimizer.calls))
+        deadline = runtime._pending.deadline
+        backend.sessions = (session(status=native_status),)
+        expected = [("spotify", "play")] if native_status == "paused" else []
+        wait_for(lambda: runtime.snapshot.sessions and runtime.snapshot.sessions[0].status == "playing")
+        assert backend.commands == expected and runtime._pending is not None
+        assert runtime._pending.play_requested
+        before = len(minimizer.calls)
+        for _ in range(3):
+            assert runtime.request("play") and runtime.request("prepare")
+        wait_for(lambda: len(minimizer.calls) >= before + 2)
+        assert runtime._pending.deadline == deadline and not minimizer.writes
+        minimizer.ready = True
+        wait_for(lambda: len(minimizer.writes) == 1 and runtime._pending is None)
+        assert all(requested_at <= started <= invoked for started, _thread, invoked in minimizer.calls)
+        assert threading.get_ident() not in {thread for _started, thread, _invoked in minimizer.calls}
+        # 사용자가 다시 복원해도 같은 준비를 완료한 후에는 창에 재접근하지 않는다.
+        calls = len(minimizer.calls)
+        before = backend.reads
+        assert runtime.request("prepare") and runtime.request("play")
+        wait_for(lambda: backend.reads >= before + 4)
+        assert len(minimizer.calls) == calls and len(minimizer.writes) == 1
+        assert backend.commands == expected and launches == ["dj"]
+
+
+def test_prepare_only_keeps_late_window_work_without_adding_play():
+    minimizer = WindowMinimizer()
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: launches == ["normal"] and bool(minimizer.calls))
+        backend.sessions = (session(),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        assert runtime._pending is not None and not backend.commands
+        minimizer.ready = True
+        wait_for(lambda: minimizer.writes and runtime._pending is None)
+        assert not backend.commands and launches == ["normal"]
+
+
+@pytest.mark.parametrize("action,existing_session", [("play", True), ("play", False), ("dj", True), ("dj", False)])
+def test_warm_process_or_session_is_never_automatically_minimized(action, existing_session):
+    minimizer = WindowMinimizer()
+    minimizer.ready = True
+    with running((session(),) if existing_session else (), options=MediaOptions(False),
+                 processes=(object(),), minimizer=minimizer) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request(action)
+        if not existing_session:
+            wait_for(lambda: runtime._pending is not None)
+            backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        before = backend.reads
+        wait_for(lambda: backend.reads >= before + 3)
+        assert not minimizer.calls and not minimizer.writes
+        assert launches == (["dj"] if action == "dj" else [])
+
+
+@pytest.mark.parametrize("cancel", ["pause", "select", "stop", "auto-off", "audible-game", "other-media", "deadline"])
+def test_cancelled_or_expired_preparation_never_handles_late_window(cancel):
+    minimizer = WindowMinimizer()
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
+    with running((), targets=(target,), minimizer=minimizer) as (runtime, backend, _, native, launches, *_):
+        wait_for(lambda: launches == ["dj"] and bool(minimizer.calls))
+        if cancel == "pause":
+            assert runtime.request("pause")
+        elif cancel == "select":
+            backend.sessions = (session("a"), session("b"))
+            wait_for(lambda: len(runtime.snapshot.sessions) == 2)
+            assert runtime.request("select", "b")
+        elif cancel == "stop":
+            assert runtime.stop()
+        elif cancel == "auto-off":
+            assert runtime.configure(MediaOptions(False))
+        elif cancel == "audible-game":
+            native.current = (42, 420)
+        elif cancel == "other-media":
+            backend.sessions = (session("firefox", "Firefox.exe", "playing"),)
+            wait_for(lambda: runtime.snapshot.media_hold)
+        if cancel != "stop":
+            wait_for(lambda: runtime._pending is None)
+        calls = len(minimizer.calls)
+        minimizer.ready = True
+        if cancel != "select":
+            backend.sessions = (session(),)
+        if cancel != "stop":
+            before = backend.reads
+            wait_for(lambda: backend.reads >= before + 4)
+        assert len(minimizer.calls) == calls and not minimizer.writes and not backend.commands
+        assert launches == ["dj"]
+
+
+def test_window_observation_error_is_logged_once_without_failing_playback(caplog):
+    minimizer = WindowMinimizer()
+    minimizer.error = OSError("minimize fixture failure")
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("play")
+        wait_for(lambda: bool(minimizer.calls))
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")] and runtime._pending is None)
+        before = backend.reads
+        wait_for(lambda: backend.reads >= before + 4)
+        assert len(minimizer.calls) == 1 and not minimizer.writes and launches == ["dj"]
+        assert not runtime.snapshot.error and runtime.running
+        assert "minimize fixture failure" in caplog.text
+
+
+@pytest.mark.parametrize("cancel", ["pause", "auto-off"])
+def test_native_window_guard_rechecks_cancellation_immediately_before_application(cancel):
+    minimizer = WindowMinimizer()
+    with running((), minimizer=minimizer) as (runtime, backend, *_):
+        wait_for(lambda: bool(minimizer.calls))
+        minimizer.before_apply = (lambda: runtime.request("pause")) if cancel == "pause" else (
+            lambda: runtime.configure(MediaOptions(False)))
+        minimizer.ready = True
+        wait_for(lambda: bool(minimizer.guards_after_cancel))
+        wait_for(lambda: runtime._pending is None)
+        assert minimizer.guards_after_cancel == [False] and not minimizer.writes
+        backend.sessions = (session(),)
+        before = backend.reads
+        wait_for(lambda: backend.reads >= before + 3)
+        assert not backend.commands
+
+
+def test_prepare_completed_before_late_window_can_upgrade_to_one_play():
+    minimizer = WindowMinimizer()
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: launches == ["normal"])
+        backend.sessions = (session(),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        assert runtime._pending is not None and not runtime._pending.play_requested and not backend.commands
+        deadline = runtime._pending.deadline
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert runtime._pending.deadline == deadline and runtime._pending.play_requested
+        minimizer.ready = True
+        wait_for(lambda: runtime._pending is None)
+        assert len(minimizer.writes) == 1 and launches == ["normal"]
+
+
+def test_late_window_deadline_after_play_does_not_report_playback_failure():
+    minimizer = WindowMinimizer()
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, *_):
+        assert runtime.request("play")
+        wait_for(lambda: bool(minimizer.calls))
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        wait_for(lambda: runtime._pending is None)
+        assert not runtime.snapshot.error and runtime.snapshot.sessions[0].status == "playing"
+        calls = len(minimizer.calls)
+        minimizer.ready = True
+        before = backend.reads
+        wait_for(lambda: backend.reads >= before + 3)
+        assert len(minimizer.calls) == calls and not minimizer.writes
+
+
+def test_prepare_only_ready_session_does_not_turn_missing_window_into_playback_error():
+    minimizer = WindowMinimizer()
+    with running((), options=MediaOptions(False), minimizer=minimizer) as (runtime, backend, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: bool(minimizer.calls))
+        backend.sessions = (session(),)
+        wait_for(lambda: runtime.snapshot.sessions == backend.sessions)
+        assert not runtime._pending.play_requested
+        wait_for(lambda: runtime._pending is None)
+        assert not backend.commands and not runtime.snapshot.error

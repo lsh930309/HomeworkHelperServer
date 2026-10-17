@@ -20,7 +20,7 @@ from src.core.media_policy import BgmPolicy
 from src.core.media_sessions import (
     MediaSessionInfo, WindowsMediaSessions, is_spotify_session,
 )
-from src.core.spotify_app import launch_spotify, spotify_processes
+from src.core.spotify_app import launch_spotify, minimize_spotify_window, spotify_processes
 from src.core.spotify_audio import SpotifyAudioController, SpotifyAudioSnapshot
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,8 @@ class _PendingPreparation:
     intent: str
     automatic: bool
     session_id: str | None = None
+    background_started_at: float | None = None
+    play_requested: bool = False
 
 
 class MediaCenterRuntime:
@@ -77,7 +79,8 @@ class MediaCenterRuntime:
                  audio_factory=GameAudioCoordinator, focus_factory=AutoFocusTracker,
                  native_factory=WindowsGameFocusNative, spotify_launcher=launch_spotify,
                  dj_launcher=None, spotify_process_reader=spotify_processes,
-                 spotify_audio_factory=SpotifyAudioController):
+                 spotify_audio_factory=SpotifyAudioController,
+                 spotify_window_minimizer=minimize_spotify_window):
         self._on_change = on_change
         self._backend_factory = backend_factory
         self._audio_factory = audio_factory
@@ -87,6 +90,7 @@ class MediaCenterRuntime:
         self._dj_launcher = dj_launcher if dj_launcher is not None else lambda: launch_spotify(dj=True)
         self._spotify_process_reader = spotify_process_reader
         self._spotify_audio_factory = spotify_audio_factory
+        self._spotify_window_minimizer = spotify_window_minimizer
         self._lock = threading.Lock()
         self._thread = None
         self._loop = None
@@ -413,7 +417,9 @@ class MediaCenterRuntime:
                     await self._play(automatic=True, generation=generation)
             # URI 실행·의도 변경 이전에 얻은 세션 관측으로 새 준비를 완료하지 않는다.
             if not self._stop.is_set():
-                await self._advance_pending(valid and self._pending is observed_pending)
+                observed_current = self._pending is observed_pending
+                self._minimize_pending_window()
+                await self._advance_pending(valid and observed_current)
             self._refresh_spotify_audio()
             self._publish()
             try:
@@ -500,7 +506,8 @@ class MediaCenterRuntime:
             merged = "dj" if intent == "dj" or pending.intent == "dj" else "play"
             updated = replace(pending, intent=merged,
                               automatic=automatic if pending.intent == "prepare" else pending.automatic and automatic,
-                              session_id=session_id or pending.session_id)
+                              session_id=session_id or pending.session_id,
+                              play_requested=False if dj_requested else pending.play_requested)
             self._pending = pending if updated == pending else updated
             if dj_requested and not self._launch(dj=True):
                 self._pending = None
@@ -508,23 +515,44 @@ class MediaCenterRuntime:
         if intent == "prepare" and any(is_spotify_session(item) for item in self._sessions):
             self._clear_error("command")
             return
-        if intent != "dj":
-            try:
-                running = self._selected is not None or bool(self._spotify_process_reader())
-            except Exception as exc:
-                self._failure(f"Spotify 실행 상태 조회 실패: {exc}")
-                return  # 조회 오류를 미실행으로 바꿔 URI를 중복 실행하지 않는다.
-        else:
-            running = False  # 명시적인 DJ는 이미 실행 중이어도 콘텐츠 URI를 한 번 보낸다.
+        try:
+            running = self._selected is not None or bool(self._spotify_process_reader())
+        except Exception as exc:
+            self._failure(f"Spotify 실행 상태 조회 실패: {exc}")
+            return  # 조회 오류를 미실행으로 바꿔 URI를 중복 실행하지 않는다.
         if self._stop.is_set() or generation != self._inputs()[2]:
             return
         dj = intent == "dj" or (intent == "play" and not running and self._selected is None)
         actual_intent = "dj" if dj else intent
+        cold = not running and self._selected is None
         self._pending = _PendingPreparation(generation, time.monotonic() + self.PREPARE_TIMEOUT_SECONDS,
-                                            actual_intent, automatic, session_id)
-        if (not running and self._selected is None) or intent == "dj":
+                                            actual_intent, automatic, session_id,
+                                            time.time() if cold else None)
+        if cold or intent == "dj":
             if not self._launch(dj=dj):
                 self._pending = None
+
+    def _minimize_pending_window(self):
+        pending = self._pending
+        if pending is None or pending.background_started_at is None:
+            return
+
+        def current():
+            return (not self._stop.is_set() and self._pending is pending
+                    and pending.generation == self._inputs()[2]
+                    and time.monotonic() < pending.deadline
+                    and (not pending.automatic or self._automatic_allowed(pending.generation)))
+
+        if not current():
+            return
+        try:
+            completed = self._spotify_window_minimizer(pending.background_started_at, is_current=current)
+        except Exception:
+            # 창 표시 실패는 재생 실패가 아니다. 같은 창 요청은 자동 재전송하지 않는다.
+            logger.warning("Spotify 새 창 최소화 요청 실패; 재생 준비는 계속합니다.", exc_info=True)
+            completed = True
+        if completed and self._pending is pending:
+            self._pending = replace(pending, background_started_at=None)
 
     async def _play(self, *, automatic, generation, session_id=None, fresh=True):
         if automatic and not self._automatic_allowed(generation):
@@ -558,11 +586,17 @@ class MediaCenterRuntime:
             self._pending = None
         elif time.monotonic() >= pending.deadline:
             self._pending = None
-            self._failure("Spotify 준비 대기가 만료되었습니다. 자동 재요청하지 않습니다.")
+            prepared = pending.intent == "prepare" and any(is_spotify_session(item) for item in self._sessions)
+            if pending.play_requested or prepared:
+                if pending.background_started_at is not None:
+                    logger.info("Spotify 새 표시 창 관측을 마쳤습니다. 늦은 창을 최소화하지 않습니다.")
+            else:
+                self._failure("Spotify 준비 대기가 만료되었습니다. 자동 재요청하지 않습니다.")
         elif valid:
             if pending.intent == "prepare":
                 if any(is_spotify_session(item) for item in self._sessions):
-                    self._pending = None
+                    if pending.background_started_at is None:
+                        self._pending = None
                     self._clear_error("command")
                 return
             selected = next((item for item in self._sessions if item.session_id == self._selected), None)
@@ -572,10 +606,17 @@ class MediaCenterRuntime:
                 self._pending = None
                 self._failure("미디어 세션이 변경되어 이전 재생 대기를 취소했습니다.")
             elif selected.status == "playing":
-                self._pending = None
+                if pending.background_started_at is None:
+                    self._pending = None
+                elif not pending.play_requested:
+                    self._pending = replace(pending, play_requested=True)
                 self._clear_error("command")
+            elif pending.play_requested:
+                if pending.background_started_at is None:
+                    self._pending = None
             elif selected.can_play:
-                self._pending = None
+                self._pending = (replace(pending, play_requested=True)
+                                 if pending.background_started_at is not None else None)
                 await self._control(selected.session_id, "play", pending.generation, automatic=pending.automatic)
 
     def _automatic_allowed(self, generation):

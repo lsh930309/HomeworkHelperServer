@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import ntpath
 import os
@@ -82,4 +83,58 @@ def launch_spotify(*, dj: bool = False) -> bool:
     if sys.platform != "win32":
         raise OSError("Spotify launch requires a Windows user session")
     os.startfile(SPOTIFY_DJ_URI if dj else "spotify:", show_cmd=7)  # SW_SHOWMINNOACTIVE
+    return True
+
+
+def minimize_spotify_window(started_after: float, *, is_current: Callable[[], bool]) -> bool:
+    """현재 cold 준비 요청에서 새로 시작한 Spotify 창 하나만 비활성 최소화한다.
+
+    True는 요청 전송 또는 이미 최소화된 상태이며 실제 완료 보장이 아니다.
+    후보 부재·취소·identity 변경은 False다. 호출 주기와 최종 기한은 runtime이 소유한다.
+    """
+    if sys.platform != "win32":
+        raise OSError("Spotify window minimization requires Windows")
+    if not is_current():
+        return False
+    processes = {process.pid: process for process in spotify_processes()
+                 if process.create_time >= started_after}
+    if not processes:
+        return False
+    import win32gui
+    import win32process
+    from src.utils.audio_control import verify_identity
+
+    candidates = []
+    def collect(hwnd, _unused):
+        if (not win32gui.IsWindowVisible(hwnd)
+                or win32gui.GetWindow(hwnd, 4)):  # GW_OWNER: 대화상자·팝업은 제외한다.
+            return
+        pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+        if pid in processes:
+            candidates.append((hwnd, processes[pid]))
+    win32gui.EnumWindows(collect, None)
+    if not candidates:
+        return False
+    hwnd, process = candidates[0]
+    if not is_current():
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    show = user32.ShowWindowAsync
+    show.argtypes = [wintypes.HWND, ctypes.c_int]
+    show.restype = wintypes.BOOL
+    if (not verify_identity(process)
+            or win32process.GetWindowThreadProcessId(hwnd)[1] != process.pid
+            or not is_current()):
+        return False
+    if not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, 4):
+        return False
+    if win32gui.IsIconic(hwnd):
+        return True
+    if not is_current():
+        return False
+    if not show(hwnd, 7):  # SW_SHOWMINNOACTIVE: 숨김·종료 대신 작업 표시줄 복원 경로를 유지한다.
+        raise OSError("Windows가 Spotify 창 최소화 요청을 수락하지 않았습니다.")
     return True
