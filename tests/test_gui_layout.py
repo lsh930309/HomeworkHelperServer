@@ -2191,6 +2191,7 @@ def test_restore_suspends_runtime_timers_and_monitor_cache():
     window = types.SimpleNamespace(
         _beholder_restore_runtime_suspended=False,
         _lifecycle_shutdown_event=threading.Event(),
+        _stop_media_center=lambda *_args: True,
         process_monitor=process_monitor,
         monitor_timer=monitor_timer,
         scheduler_timer=scheduler_timer,

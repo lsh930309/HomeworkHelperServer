@@ -53,6 +53,8 @@ from src.utils.windows import (
     set_windows_taskbar_visible,
 )
 from src.core.launcher import Launcher
+from src.core.game_audio import GameAudioTarget
+from src.core.media_center import MediaCenterRuntime, MediaOptions
 from src.core.launch_target import (
     launcher_candidates, preset_launcher_patterns, resolve_launch_mode,
     resolve_launch_target, resolve_launch_args,
@@ -144,6 +146,7 @@ class MainWindow(QMainWindow):
     _recording_info_sig = Signal()
     _recording_state_sig = Signal(str)        # OBS 상태 변경 (백그라운드→메인 스레드 릴레이)
     _gamepad_countdown_sig = Signal()         # 게임패드 롱프레스 → 메인 스레드 릴레이
+    _media_center_sig = Signal(object)
 
     _PROGRESS_BAR_SCALE = 10
     _PROGRESS_BAR_MAX = 100 * _PROGRESS_BAR_SCALE
@@ -248,6 +251,10 @@ class MainWindow(QMainWindow):
         self._wake_recovery_in_progress = False
         self._mute_retry_tokens: dict[str, int] = {}
         self._volume_retry_tokens: dict[str, int] = {}
+        # UI 확정 전 자동으로 활성화하지 않는다. 생성·조회만으로 OS를 조작하지 않는다.
+        self._media_center = None
+        self._media_center_snapshot = None
+        self._media_center_sig.connect(self._on_media_center_snapshot)
         self._beholder_seen_incidents: set[int] = set()
         self._beholder_restore_runtime_suspended = False
 
@@ -269,7 +276,9 @@ class MainWindow(QMainWindow):
         # 볼륨 패널 상태
         self._volume_applied_pids: dict[str, int] = {}  # process_id -> 적용 완료 PID (PID 변경 재실행 감지)
         self._volume_panel: VolumePopoverPanel = VolumePopoverPanel(
-            self.data_manager, on_hide=self._on_volume_panel_hidden
+            self.data_manager, on_hide=self._on_volume_panel_hidden,
+            on_audio_change=self._on_game_audio_preferences_changed,
+            audio_state=self._media_game_audio_state,
         )
 
         # 사이드바 컨트롤러 초기화
@@ -915,12 +924,13 @@ class MainWindow(QMainWindow):
         def remaining_ms():
             return max(0, int((deadline - time.monotonic()) * 1000))
 
+        media = self._stop_media_center(remaining_ms())
         # 아직 외부 응답을 기다리는 writer가 있으면 복구 POST를 허용하지 않는다.
         hoyo = self._hoyolab_reconcile.shutdown(remaining_ms())
         nikke = self._nikke_resource_reconcile.shutdown(remaining_ms())
         checkin = self._daily_checkin.shutdown(remaining_ms())
         work = self._work_coordinator.shutdown(deadline_seconds=remaining_ms() / 1000.0)
-        return hoyo and nikke and checkin and work
+        return media and hoyo and nikke and checkin and work
 
     def set_github_button_icon(self, icon: QIcon):
         """IconDownloader로부터 받은 아이콘을 GitHub 버튼에 설정합니다."""
@@ -1527,6 +1537,8 @@ class MainWindow(QMainWindow):
             self._record_status_event("프로세스 상태 변경 감지됨.", 2000)
             self.update_process_statuses_only()
         self._check_and_toggle_game_mode()
+
+        self._publish_media_targets()
 
     def _check_and_toggle_game_mode(self):
         """실행 중인 게임이 있는지 확인하고, 그에 따라 창을 숨기거나 표시합니다."""
@@ -2225,6 +2237,7 @@ class MainWindow(QMainWindow):
         heartbeat_prepared = self._timer_registry.is_enabled("heartbeat") and not self._beholder_restore_runtime_suspended
         self._timer_registry.shutdown()
         self._lifecycle_shutdown_event.set()
+        self._stop_media_center(remaining_ms())
         app_instance = QApplication.instance()
         if app_instance is not None and sys.platform == "win32":
             try:
@@ -2381,6 +2394,94 @@ class MainWindow(QMainWindow):
 
     # ───────── 볼륨 패널 ─────────
 
+    def configure_media_center(self, options: MediaOptions | None) -> bool:
+        """확정될 UI의 명시적 활성화 경계. 호스트·DB·기존 설정을 자동 변경하지 않는다."""
+        if self._shutting_down or self._beholder_restore_runtime_suspended:
+            return False
+        if options is None:
+            return self._stop_media_center()
+        if not is_windows():
+            logger.warning("미디어 센터는 Windows 사용자 세션에서만 사용할 수 있습니다.")
+            return False
+        if self._media_center is None:
+            runtime = MediaCenterRuntime(
+                on_change=lambda snapshot: self._media_center_sig.emit((runtime, snapshot)))
+            self._media_center = runtime
+            self._publish_media_targets()
+            if not runtime.start(options):
+                logger.warning("미디어 센터 시작 실패: %s", runtime.snapshot.error)
+                self._media_center = None
+                self._media_center_snapshot = runtime.snapshot
+                return False
+        else:
+            if not self._media_center.configure(options):
+                logger.warning("종료 또는 정리 중인 미디어 센터의 설정은 변경할 수 없습니다.")
+                return False
+        # 이전 단독 writer의 준비 지연 재시도가 자동 정책을 뒤늦게 덮지 못하게 한다.
+        for process in self.data_manager.managed_processes:
+            self._mute_retry_tokens[process.id] = self._mute_retry_tokens.get(process.id, 0) + 1
+            self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
+        return True
+
+    def request_media_command(self, action: str, session_id: str | None = None) -> bool:
+        runtime = self._media_center
+        return bool(runtime is not None and runtime.request(action, session_id))
+
+    @Slot(object)
+    def _on_media_center_snapshot(self, event) -> None:
+        if self._shutting_down or self._beholder_restore_runtime_suspended or self._media_center is None:
+            return
+        owner, snapshot = event
+        if owner is not self._media_center:
+            return
+        self._media_center_snapshot = snapshot
+        # 레이아웃을 확정하기 전에는 상태를 보관만 한다. 실제 UI는 이 불변 투영을 소비한다.
+
+    def _publish_media_targets(self, changed_process: ManagedProcess | None = None) -> None:
+        runtime = getattr(self, "_media_center", None)
+        if runtime is None:
+            return
+        active = self.process_monitor.active_monitored_processes
+        targets = []
+        for process in self.data_manager.managed_processes:
+            if changed_process is not None and changed_process.id == process.id:
+                process = changed_process
+            entry = active.get(process.id)
+            if entry is None:
+                continue
+            targets.append(GameAudioTarget(
+                process.id, int(entry["pid"]), float(entry["start_time_approx"]),
+                str(entry.get("exe") or process.monitoring_path),
+                bool(process.default_muted), process.default_volume,
+            ))
+        runtime.update_targets(tuple(targets))
+
+    def _media_game_audio_state(self, process_id: str):
+        active = self._media_center is not None
+        snapshot = self._media_center_snapshot
+        observation = next((item for item in getattr(snapshot, "game_audio", ())
+                            if item.target.process_id == process_id), None)
+        return active, observation
+
+    def _on_game_audio_preferences_changed(self, process: ManagedProcess) -> bool:
+        if self._media_center is None:
+            return False
+        self._publish_media_targets(process)
+        return True
+
+    def _stop_media_center(self, deadline_ms: int = 2000) -> bool:
+        runtime = getattr(self, "_media_center", None)
+        if runtime is None:
+            return True
+        stopped = runtime.stop(timeout_seconds=max(0, deadline_ms) / 1000.0)
+        if stopped:
+            self._media_center = None
+            self._media_center_snapshot = None
+            self._volume_applied_pids.clear()
+        else:
+            logger.warning("미디어 센터 종료 또는 사용자 음소거 복원이 완료되지 않았습니다.")
+        return stopped
+
     def _toggle_volume_panel(self):
         """볼륨 팝오버 패널을 토글합니다."""
         if self._volume_panel.isVisible():
@@ -2408,6 +2509,11 @@ class MainWindow(QMainWindow):
 
     def _sync_default_volume_state(self, process: ManagedProcess, pid: Optional[int]) -> None:
         """프로세스의 기본 볼륨을 시스템에 적용하거나 추적 상태를 정리합니다."""
+        if getattr(self, "_media_center", None) is not None:
+            self._mute_retry_tokens[process.id] = self._mute_retry_tokens.get(process.id, 0) + 1
+            self._volume_retry_tokens[process.id] = self._volume_retry_tokens.get(process.id, 0) + 1
+            self._publish_media_targets()
+            return
         if not pid:
             self._volume_applied_pids.pop(process.id, None)
             self._volume_retry_tokens.pop(process.id, None)

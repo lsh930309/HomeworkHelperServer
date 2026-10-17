@@ -83,6 +83,8 @@ class GameAudioCoordinator:
     def reconcile(
         self, foreground_pid: int | None, *, background_mute: bool = True,
     ) -> tuple[GameAudioObservation, ...]:
+        if not self._targets and not self._retired:
+            return ()
         try:
             sessions = tuple(self._backend.enumerate_sessions())
         except Exception:
@@ -146,6 +148,8 @@ class GameAudioCoordinator:
         return tuple(observations)
 
     def cleanup(self) -> bool:
+        if not self._targets and not self._retired:
+            return True
         try:
             sessions = tuple(self._backend.enumerate_sessions())
         except Exception:

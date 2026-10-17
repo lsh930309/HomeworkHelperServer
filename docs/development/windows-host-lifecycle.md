@@ -169,6 +169,14 @@ ShellExecute `runas`, 임시 예약 작업 등 자동 상승 fallback은 제공�
 - 관측과 명령은 GUI 밖의 단일 실행 경계에서 직렬 처리한다. 늦은 play는 최신 게임·미디어
   조건을 다시 확인하며 취소·종료 뒤 대기 명령을 실행하지 않는다. 운영 DB는 미디어 작업이 쓰지 않는다.
 
+미디어 기능은 명시적 활성화 경계에서만 시작한다. 목업 확정 전에는 기존 앱 시작만으로
+활성화하지 않으며 첫 구현의 자동 BGM·비활성 음소거·자동 포커싱 옵션은 해당 실행 동안만
+유지한다. 기존 설정이나 DB 스키마를 추가하지 않는다. 라이브러리 최초 import 시 STA를
+초기화하는 [pywin32](https://github.com/mhammond/pywin32/blob/main/com/win32com/src/PythonCOM.cpp)와
+[comtypes](https://github.com/enthought/comtypes/blob/main/comtypes/__init__.py)는 활성화하는
+GUI 스레드에서 먼저 로드하고, 작업 스레드가 MTA 초기화·오디오·미디어 정리를 소유한다.
+게임·포커스 관측 간격은 250ms이며 느린 비동기 미디어 조회가 이 관측을 막지 않게 한다.
+
 ### 자동 BGM 트리거
 
 자동 기능은 명시적으로 활성화할 때 한 번 판단하며, 이후 의미 있는 게임 소리 조건의 전환에서만

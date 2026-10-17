@@ -421,6 +421,8 @@ class SidebarWidget(QWidget):
         get_recording_elapsed: Optional[Callable[[], int]] = None,
         on_hidden: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
+        on_audio_change: Optional[Callable[[ManagedProcess], bool]] = None,
+        audio_state: Optional[Callable] = None,
     ):
         super().__init__(
             parent,
@@ -435,6 +437,8 @@ class SidebarWidget(QWidget):
         self._reconnect_recording = reconnect_recording
         self._get_recording_elapsed = get_recording_elapsed
         self._on_hidden = on_hidden
+        self._on_audio_change = on_audio_change
+        self._audio_state = audio_state
         self._start_recording_callback: Optional[Callable[[], None]] = None
         self._rec_state = "obs_offline"
         self._rec_elapsed_sec = 0
@@ -1000,7 +1004,13 @@ class SidebarWidget(QWidget):
         dial.setAccessibleName(f"{process.name} 음량")
         value = process.default_volume if process.default_volume is not None else 100
         muted = process.default_muted
-        if pid is not None:
+        policy_active, observation = self._audio_state(process.id) if self._audio_state else (False, None)
+        if policy_active:
+            if observation is not None and observation.available and observation.volume is not None:
+                value = round(observation.volume * 100 / 5) * 5
+            if observation is not None and observation.policy_muted:
+                dial.setToolTip("백그라운드 자동 음소거 · 클릭은 사용자 음소거 설정 변경")
+        elif pid is not None:
             try:
                 actual = audio_control.get_app_volume(pid)
                 actual_muted = audio_control.is_muted(pid)
@@ -1018,16 +1028,18 @@ class SidebarWidget(QWidget):
         return dial
 
     def _set_game_volume(self, value: int, process: ManagedProcess, pid: Optional[int]) -> None:
-        if pid is not None:
-            audio_control.set_app_volume(pid, value / 100.0)
         process.default_volume = value
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_app_volume(pid, value / 100.0)
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 
     def _set_game_muted(self, muted: bool, process: ManagedProcess, pid: Optional[int]) -> None:
-        if pid is not None:
-            audio_control.set_mute(pid, muted)
         process.default_muted = muted
+        handled = bool(self._on_audio_change and self._on_audio_change(process))
+        if pid is not None and not handled:
+            audio_control.set_mute(pid, muted)
         self._schedule_volume_save(process)
         self._reset_auto_hide()
 

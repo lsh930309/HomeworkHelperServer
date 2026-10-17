@@ -315,3 +315,13 @@ def test_legacy_public_functions_aggregate_and_write_all_matching_pid_sessions(m
     assert audio_control.get_app_volume(123) is None
     assert audio_control.is_muted(123) is None
     assert audio_control.set_mute(123, True) is False
+
+
+def test_no_game_targets_need_no_audio_enumeration_or_restore():
+    class UnavailableDevice:
+        def enumerate_sessions(self):
+            raise AssertionError("대상이 없으면 오디오 장치에 접근하지 않아야 한다")
+
+    coordinator = GameAudioCoordinator(UnavailableDevice())
+    assert coordinator.reconcile(None) == ()
+    assert coordinator.cleanup()

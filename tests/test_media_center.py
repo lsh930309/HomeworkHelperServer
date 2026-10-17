@@ -1,0 +1,399 @@
+"""실제 오디오/Windows/DB 없이 worker 수명주기와 사용자 전환 계약을 검증한다."""
+import asyncio
+from contextlib import contextmanager
+from dataclasses import FrozenInstanceError, replace
+import os
+import threading
+import time
+
+import pytest
+
+from src.core.game_audio import GameAudioObservation, GameAudioTarget
+from src.core.media_center import MediaCenterRuntime, MediaOptions
+from src.core.media_sessions import MediaSessionInfo
+
+
+def session(session_id="spotify", app_id="Spotify.exe", status="paused"):
+    return MediaSessionInfo(session_id, app_id, status=status, can_play=True, can_pause=True)
+
+
+def wait_for(condition, timeout=2):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.005)
+    assert condition(), "worker 결과가 제한 시간에 도착하지 않았습니다."
+
+
+class Backend:
+    def __init__(self, sessions=()):
+        self.sessions = tuple(sessions)
+        self.commands = []
+        self.reads = 0
+        self.delay = 0
+        self.error = None
+        self.closed = False
+        self.threads = set()
+        self.busy = False
+        self.control_entered = threading.Event()
+        self.control_cancelled = threading.Event()
+        self.block_control = False
+        self.accept = True
+
+    async def snapshot(self):
+        assert not self.busy, "snapshot/control must be serial"
+        self.busy = True
+        self.threads.add(threading.get_ident())
+        try:
+            self.reads += 1
+            await asyncio.sleep(self.delay)
+            if self.error:
+                raise self.error
+            return self.sessions
+        finally:
+            self.busy = False
+
+    async def control(self, session_id, action):
+        assert not self.busy, "snapshot/control must be serial"
+        self.busy = True
+        self.threads.add(threading.get_ident())
+        self.control_entered.set()
+        try:
+            while self.block_control:
+                await asyncio.sleep(0.01)
+            self.commands.append((session_id, action))
+            if not self.accept:
+                return False
+            if action in {"play", "pause"}:
+                self.sessions = tuple(replace(item, status="playing" if action == "play" else "paused")
+                                      if item.session_id == session_id else item
+                                      for item in self.sessions)
+            return True
+        except asyncio.CancelledError:
+            self.control_cancelled.set()
+            raise
+        finally:
+            self.busy = False
+
+    def close(self):
+        self.threads.add(threading.get_ident())
+        self.closed = True
+
+
+class Audio:
+    def __init__(self):
+        self.targets = ()
+        self.calls = []
+        self.observed = {}
+        self.cleaned = False
+        self.cleanup_result = True
+        self.threads = set()
+
+    def update_targets(self, targets):
+        self.targets = targets
+
+    def reconcile(self, foreground_pid, *, background_mute):
+        self.threads.add(threading.get_ident())
+        self.calls.append((foreground_pid, background_mute))
+        return tuple(GameAudioObservation(
+            target, True, 0.5, target.user_muted,
+            background_mute and target.pid != foreground_pid,
+            self.observed.get(target.pid, not target.user_muted),
+        ) for target in self.targets)
+
+    def cleanup(self):
+        self.threads.add(threading.get_ident())
+        self.cleaned = True
+        return self.cleanup_result
+
+
+class Native:
+    def __init__(self):
+        self.current = (100, 1000)
+
+    def foreground(self):
+        return self.current
+
+
+class Focus:
+    def __init__(self, **kwargs):
+        self.arguments = kwargs
+        self.ticks = []
+        self.cancelled = False
+
+    def tick(self, *args):
+        self.ticks.append(args)
+
+    def cancel(self):
+        self.cancelled = True
+
+
+@contextmanager
+def running(sessions=None, *, options=MediaOptions(), targets=()):
+    backend, audio, native = Backend((session(),) if sessions is None else sessions), Audio(), Native()
+    launches, changes, focuses = [], [], []
+
+    def focus_factory(**kwargs):
+        focus = Focus(**kwargs)
+        focuses.append(focus)
+        return focus
+
+    runtime = MediaCenterRuntime(
+        changes.append, backend_factory=lambda: backend, audio_factory=lambda: audio,
+        native_factory=lambda: native, focus_factory=focus_factory,
+        spotify_launcher=lambda: launches.append(True) or True,
+    )
+    runtime.POLL_SECONDS = 0.01
+    runtime.IO_TIMEOUT_SECONDS = 0.5
+    runtime.PREPARE_TIMEOUT_SECONDS = 0.15
+    runtime.update_targets(targets)
+    runtime.start(options)
+    try:
+        wait_for(lambda: backend.reads > 0)
+        yield runtime, backend, audio, native, launches, changes, focuses
+    finally:
+        assert runtime.stop()
+
+
+def test_constructor_and_inactive_configuration_have_no_io():
+    def forbidden(*args, **kwargs):
+        raise AssertionError("explicit start required")
+
+    runtime = MediaCenterRuntime(backend_factory=forbidden, audio_factory=forbidden,
+                                 native_factory=forbidden, focus_factory=forbidden,
+                                 spotify_launcher=forbidden)
+    assert runtime.configure(MediaOptions(False, False, False))
+    runtime.update_targets(())
+    assert not runtime.running and not runtime.request("play")
+    assert runtime.stop()
+    assert not runtime.configure(MediaOptions())
+    with pytest.raises(FrozenInstanceError):
+        runtime.snapshot.error = "mutable"
+
+
+def test_initial_trigger_plays_once_and_manual_pause_is_not_undone():
+    with running() as (runtime, backend, *_):
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert runtime.request("pause")
+        wait_for(lambda: backend.commands[-1] == ("spotify", "pause"))
+        reads = backend.reads
+        wait_for(lambda: backend.reads > reads + 5)
+        assert backend.commands == [("spotify", "play"), ("spotify", "pause")]
+
+
+def test_focused_game_audible_edges_pause_and_resume_but_unknown_does_not_resume():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
+    with running(targets=(target,)) as (runtime, backend, audio, native, *_):
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        native.current = (42, 420)
+        wait_for(lambda: backend.commands[-1] == ("spotify", "pause"))
+        audio.observed[42] = None
+        time.sleep(0.04)
+        assert len(backend.commands) == 2
+        audio.observed[42] = False
+        wait_for(lambda: backend.commands[-1] == ("spotify", "play"))
+        assert len(backend.commands) == 3
+        assert not target.user_muted
+
+
+def test_other_media_pause_close_and_game_exit_do_not_bypass_hold():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
+    with running(targets=(target,)) as (runtime, backend, audio, native, *_):
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        firefox = session("firefox", "Firefox.exe", "playing")
+        backend.sessions += (firefox,)
+        wait_for(lambda: runtime.snapshot.media_hold)
+        wait_for(lambda: backend.commands[-1] == ("spotify", "pause"))
+        backend.sessions = (session(), replace(firefox, status="paused"))
+        native.current = (42, 420)
+        wait_for(lambda: audio.calls[-1][0] == 42)
+        backend.sessions = (session(),)
+        native.current = (100, 1000)
+        time.sleep(0.06)
+        assert backend.commands == [("spotify", "play"), ("spotify", "pause")]
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands[-1] == ("spotify", "play"))
+        assert not runtime.snapshot.media_hold
+
+
+def test_own_ui_preserves_game_context_and_null_foreground_is_unknown():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
+    with running(targets=(target,)) as (_runtime, backend, audio, native, *_):
+        native.current = (42, 420)
+        wait_for(lambda: audio.calls[-1][0] == 42)
+        native.current = (os.getpid(), 991)
+        before = len(backend.commands)
+        time.sleep(0.04)
+        assert audio.calls[-1] == (42, True)
+        assert len(backend.commands) == before
+        native.current = (0, 0)
+        time.sleep(0.04)
+        assert audio.calls[-1] == (42, True)
+        assert len(backend.commands) == before
+
+
+def test_media_metadata_delay_does_not_block_audio_and_all_io_stays_on_one_worker():
+    with running(options=MediaOptions(False)) as (runtime, backend, audio, *_):
+        backend.delay = 0.12
+        reads, audio_calls = backend.reads, len(audio.calls)
+        wait_for(lambda: backend.reads > reads)
+        wait_for(lambda: len(audio.calls) > audio_calls + 5)
+        assert runtime.running
+    assert backend.closed and audio.cleaned
+    assert len(backend.threads | audio.threads) == 1
+    assert threading.get_ident() not in backend.threads
+
+
+def test_prepare_launches_once_without_play_and_missing_session_intent_expires():
+    with running((), options=MediaOptions(False)) as (runtime, backend, _, _, launches, *_):
+        assert runtime.request("prepare")
+        wait_for(lambda: len(launches) == 1)
+        assert not backend.commands
+        assert runtime.request("play")
+        wait_for(lambda: len(launches) == 2)
+        wait_for(lambda: "만료" in runtime.snapshot.error)
+        backend.sessions = (session(),)
+        time.sleep(0.04)
+        assert not backend.commands and len(launches) == 2
+
+
+def test_pending_play_is_cancelled_by_manual_pause_before_spotify_appears():
+    with running(()) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: len(launches) == 1)
+        assert runtime.request("pause")
+        time.sleep(0.03)
+        backend.sessions = (session(),)
+        time.sleep(0.06)
+        assert not backend.commands and len(launches) == 1
+
+
+def test_pending_automatic_play_rechecks_game_state_before_sending():
+    target = GameAudioTarget("game", 42, 1, "/game.exe", False, 50)
+    with running((), targets=(target,)) as (runtime, backend, audio, native, launches, *_):
+        wait_for(lambda: len(launches) == 1)
+        native.current = (42, 420)
+        wait_for(lambda: audio.calls[-1][0] == 42)
+        backend.sessions = (session(),)
+        time.sleep(0.05)
+        assert not backend.commands
+
+
+def test_multiple_spotify_sessions_need_selection_and_manual_non_bgm_control_is_explicit():
+    with running((session("a"), session("b"))) as (runtime, backend, *_):
+        wait_for(lambda: "여러 개" in runtime.snapshot.error)
+        assert not backend.commands and runtime.snapshot.bgm_session_id is None
+        assert runtime.request("select", "b")
+        wait_for(lambda: runtime.snapshot.bgm_session_id == "b")
+        assert runtime.request("play")
+        wait_for(lambda: backend.commands == [("b", "play")])
+        backend.sessions += (session("firefox", "Firefox.exe"),)
+        wait_for(lambda: len(runtime.snapshot.sessions) == 3)
+        assert runtime.request("play", "firefox")
+        wait_for(lambda: ("firefox", "play") in backend.commands)
+        assert all(command != ("a", "play") for command in backend.commands)
+
+
+def test_old_selected_session_is_not_replaced_for_manual_control():
+    with running((session("spotify"), session("other")), options=MediaOptions(False)) as (runtime, backend, *_):
+        assert runtime.request("select", "spotify")
+        wait_for(lambda: runtime.snapshot.bgm_session_id == "spotify")
+        backend.sessions = (session("new"),)
+        wait_for(lambda: runtime.snapshot.bgm_session_id is None)
+        assert runtime.request("play", "spotify")
+        time.sleep(0.04)
+        assert not backend.commands
+
+
+def test_stop_cancels_inflight_command_and_rejects_late_requests():
+    with running(options=MediaOptions(False)) as (runtime, backend, audio, *_):
+        backend.block_control = True
+        assert runtime.request("play")
+        assert backend.control_entered.wait(1)
+        assert runtime.stop(timeout_seconds=0.5)
+        assert backend.control_cancelled.is_set()
+        assert not backend.commands and backend.closed and audio.cleaned
+        assert not runtime.running and not runtime.request("play")
+        assert not runtime.snapshot.running
+
+
+def test_media_failure_preserves_game_observation_and_does_not_send_stale_commands():
+    with running(options=MediaOptions(False)) as (runtime, backend, audio, *_):
+        backend.error = OSError("unavailable")
+        wait_for(lambda: "조회 실패" in runtime.snapshot.error)
+        before = len(audio.calls)
+        assert runtime.request("play")
+        wait_for(lambda: len(audio.calls) > before + 3)
+        assert not backend.commands
+
+
+def test_options_disable_pending_auto_and_focus_reenable_baselines_existing_games():
+    with running(()) as (runtime, backend, audio, native, launches, changes, focuses):
+        wait_for(lambda: len(launches) == 1)
+        runtime.configure(MediaOptions(False, False, False))
+        wait_for(lambda: audio.calls[-1][1] is False)
+        backend.sessions = (session(),)
+        time.sleep(0.04)
+        assert not backend.commands and focuses[0].cancelled
+        runtime.configure(MediaOptions(False, False, True))
+        wait_for(lambda: len(focuses) == 2)
+        assert focuses[1].ticks
+
+
+def test_reapplying_identical_options_does_not_cancel_pending_play():
+    options = MediaOptions()
+    with running((), options=options) as (runtime, backend, _, _, launches, *_):
+        wait_for(lambda: len(launches) == 1)
+        runtime.configure(options)
+        backend.sessions = (session(),)
+        wait_for(lambda: backend.commands == [("spotify", "play")])
+        assert len(launches) == 1
+
+
+def test_command_rejection_stays_visible_after_successful_state_reads():
+    with running(options=MediaOptions(False)) as (runtime, backend, *_):
+        backend.accept = False
+        assert runtime.request("play")
+        wait_for(lambda: "수락하지" in runtime.snapshot.error)
+        reads = backend.reads
+        wait_for(lambda: backend.reads > reads + 4)
+        assert "수락하지" in runtime.snapshot.error
+        assert runtime.snapshot.sessions[0].status == "paused"
+        backend.accept = True
+        assert runtime.request("play")
+        wait_for(lambda: not runtime.snapshot.error)
+
+
+def test_stop_reports_restore_failure_without_leaving_a_worker_alive():
+    backend, audio = Backend(), Audio()
+    audio.cleanup_result = False
+    runtime = MediaCenterRuntime(backend_factory=lambda: backend, audio_factory=lambda: audio,
+                                 native_factory=Native, focus_factory=Focus)
+    runtime.POLL_SECONDS = 0.01
+    runtime.start(MediaOptions(False))
+    wait_for(lambda: backend.reads > 0)
+    assert not runtime.stop()
+    assert not runtime.running and backend.closed and audio.cleaned
+    assert "복원하지" in runtime.snapshot.error
+    assert not runtime.configure(MediaOptions())
+
+
+def test_snapshot_timeout_keeps_audio_loop_alive_and_stop_cleans_up():
+    with running(options=MediaOptions(False)) as (runtime, backend, audio, *_):
+        runtime.IO_TIMEOUT_SECONDS = 0.02
+        backend.delay = 1
+        wait_for(lambda: "조회 실패" in runtime.snapshot.error)
+        before = len(audio.calls)
+        wait_for(lambda: len(audio.calls) > before + 3)
+        assert runtime.running and not backend.commands
+
+
+def test_runtime_can_restart_only_after_worker_finished_with_a_fresh_epoch():
+    with running(options=MediaOptions(False)) as (runtime, backend, *_):
+        assert runtime.request("pause")
+        assert runtime.stop()
+        first_epoch = runtime._epoch
+        runtime.start(MediaOptions(False))
+        wait_for(lambda: runtime.running and runtime.snapshot.running)
+        assert runtime._epoch == first_epoch + 1
+        assert not runtime.snapshot.media_hold
