@@ -20,7 +20,7 @@ from src.core.media_policy import BgmPolicy
 from src.core.media_sessions import (
     MediaSessionInfo, WindowsMediaSessions, is_spotify_session,
 )
-from src.core.spotify_app import launch_spotify, minimize_spotify_window, spotify_processes
+from src.core.spotify_app import SpotifyWindow, close_spotify_window, launch_spotify, spotify_processes, spotify_window
 from src.core.spotify_audio import SpotifyAudioController, SpotifyAudioSnapshot
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class _PendingPreparation:
     session_id: str | None = None
     background_started_at: float | None = None
     play_requested: bool = False
+    background_window: tuple[SpotifyWindow, float] | None = None
 
 
 class MediaCenterRuntime:
@@ -74,13 +75,14 @@ class MediaCenterRuntime:
     POLL_SECONDS = 0.25
     IO_TIMEOUT_SECONDS = 1.0
     PREPARE_TIMEOUT_SECONDS = 60.0
+    BACKGROUND_CLOSE_DELAY_SECONDS = 5.0
 
     def __init__(self, on_change=None, *, backend_factory=WindowsMediaSessions,
                  audio_factory=GameAudioCoordinator, focus_factory=AutoFocusTracker,
                  native_factory=WindowsGameFocusNative, spotify_launcher=launch_spotify,
                  dj_launcher=None, spotify_process_reader=spotify_processes,
                  spotify_audio_factory=SpotifyAudioController,
-                 spotify_window_minimizer=minimize_spotify_window):
+                 spotify_window_reader=spotify_window, spotify_window_closer=close_spotify_window):
         self._on_change = on_change
         self._backend_factory = backend_factory
         self._audio_factory = audio_factory
@@ -90,7 +92,8 @@ class MediaCenterRuntime:
         self._dj_launcher = dj_launcher if dj_launcher is not None else lambda: launch_spotify(dj=True)
         self._spotify_process_reader = spotify_process_reader
         self._spotify_audio_factory = spotify_audio_factory
-        self._spotify_window_minimizer = spotify_window_minimizer
+        self._spotify_window_reader = spotify_window_reader
+        self._spotify_window_closer = spotify_window_closer
         self._lock = threading.Lock()
         self._thread = None
         self._loop = None
@@ -418,7 +421,7 @@ class MediaCenterRuntime:
             # URI 실행·의도 변경 이전에 얻은 세션 관측으로 새 준비를 완료하지 않는다.
             if not self._stop.is_set():
                 observed_current = self._pending is observed_pending
-                self._minimize_pending_window()
+                self._close_pending_window(valid and observed_current)
                 await self._advance_pending(valid and observed_current)
             self._refresh_spotify_audio()
             self._publish()
@@ -532,9 +535,9 @@ class MediaCenterRuntime:
             if not self._launch(dj=dj):
                 self._pending = None
 
-    def _minimize_pending_window(self):
+    def _close_pending_window(self, valid):
         pending = self._pending
-        if pending is None or pending.background_started_at is None:
+        if pending is None or pending.background_started_at is None or pending.intent == "prepare":
             return
 
         def current():
@@ -545,14 +548,30 @@ class MediaCenterRuntime:
 
         if not current():
             return
+        if pending.session_id is not None and pending.session_id != self._selected:
+            return  # 변경된 미디어 세션을 닫기 전에 기존 준비를 취소한다.
         try:
-            completed = self._spotify_window_minimizer(pending.background_started_at, is_current=current)
+            expected = pending.background_window[0] if pending.background_window else None
+            window = self._spotify_window_reader(pending.background_started_at, expected=expected)
+            if not current():
+                return
+            if window is None:
+                if expected is None:
+                    return
+            elif expected is None:
+                self._pending = replace(pending, background_window=(window, time.monotonic()))
+                return
+            elif (not valid or time.monotonic() - pending.background_window[1] < self.BACKGROUND_CLOSE_DELAY_SECONDS
+                  or not any(item.session_id == self._selected and is_spotify_session(item)
+                             and item.status == "playing" for item in self._sessions)):
+                return
+            else:
+                if self._spotify_window_closer(window, is_current=current):
+                    logger.info("Spotify 새 창 트레이 닫기 요청 수락: PID=%s HWND=%s", window.process.pid, window.hwnd)
         except Exception:
-            # 창 표시 실패는 재생 실패가 아니다. 같은 창 요청은 자동 재전송하지 않는다.
-            logger.warning("Spotify 새 창 최소화 요청 실패; 재생 준비는 계속합니다.", exc_info=True)
-            completed = True
-        if completed and self._pending is pending:
-            self._pending = replace(pending, background_started_at=None)
+            logger.warning("Spotify 새 창 트레이 요청 실패; 재생 준비는 계속합니다.", exc_info=True)
+        if self._pending is pending:
+            self._pending = replace(pending, background_started_at=None, background_window=None)
 
     async def _play(self, *, automatic, generation, session_id=None, fresh=True):
         if automatic and not self._automatic_allowed(generation):
@@ -589,19 +608,21 @@ class MediaCenterRuntime:
             prepared = pending.intent == "prepare" and any(is_spotify_session(item) for item in self._sessions)
             if pending.play_requested or prepared:
                 if pending.background_started_at is not None:
-                    logger.info("Spotify 새 표시 창 관측을 마쳤습니다. 늦은 창을 최소화하지 않습니다.")
+                    logger.info("Spotify 새 표시 창 관측을 마쳤습니다. 늦은 창을 닫지 않습니다.")
             else:
                 self._failure("Spotify 준비 대기가 만료되었습니다. 자동 재요청하지 않습니다.")
         elif valid:
             if pending.intent == "prepare":
                 if any(is_spotify_session(item) for item in self._sessions):
-                    if pending.background_started_at is None:
-                        self._pending = None
+                    self._pending = None
                     self._clear_error("command")
                 return
             selected = next((item for item in self._sessions if item.session_id == self._selected), None)
             if selected is None:
                 return
+            if pending.session_id is None:
+                pending = replace(pending, session_id=selected.session_id)
+                self._pending = pending
             if pending.session_id is not None and pending.session_id != selected.session_id:
                 self._pending = None
                 self._failure("미디어 세션이 변경되어 이전 재생 대기를 취소했습니다.")

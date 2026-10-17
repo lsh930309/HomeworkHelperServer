@@ -22,6 +22,12 @@ class SpotifyProcess:
     path: str
 
 
+@dataclass(frozen=True)
+class SpotifyWindow:
+    process: SpotifyProcess
+    hwnd: int
+
+
 def _spotify_executable(path: str, *, appdata: str | None = None, local_appdata: str | None = None) -> bool:
     path = ntpath.normcase(ntpath.normpath(path))
     roots = (
@@ -90,23 +96,27 @@ def launch_spotify(*, dj: bool = False) -> bool:
     return True
 
 
-def minimize_spotify_window(started_after: float, *, is_current: Callable[[], bool]) -> bool:
-    """현재 cold 준비 요청에서 새로 시작한 Spotify 창 하나만 비활성 최소화한다.
-
-    True는 요청 전송 또는 이미 최소화된 상태이며 실제 완료 보장이 아니다.
-    후보 부재·취소·identity 변경은 False다. 호출 주기와 최종 기한은 runtime이 소유한다.
-    """
-    if sys.platform != "win32":
-        raise OSError("Spotify window minimization requires Windows")
-    if not is_current():
-        return False
-    processes = {process.pid: process for process in spotify_processes()
-                 if process.create_time >= started_after}
-    if not processes:
-        return False
+def _current_window(window: SpotifyWindow) -> bool:
     import win32gui
     import win32process
     from src.utils.audio_control import verify_identity
+    return (verify_identity(window.process) and win32gui.IsWindow(window.hwnd)
+            and win32process.GetWindowThreadProcessId(window.hwnd)[1] == window.process.pid
+            and win32gui.IsWindowVisible(window.hwnd) and not win32gui.GetWindow(window.hwnd, 4))
+
+
+def spotify_window(started_after: float, *, expected: SpotifyWindow | None = None) -> SpotifyWindow | None:
+    """cold 요청의 첫 표시 창을 읽고, 이후에는 핀한 그 창만 재확인한다."""
+    if sys.platform != "win32":
+        raise OSError("Spotify window observation requires Windows")
+    if expected is not None:
+        return expected if _current_window(expected) else None
+    processes = {process.pid: process for process in spotify_processes()
+                 if process.create_time >= started_after}
+    if not processes:
+        return None
+    import win32gui
+    import win32process
 
     candidates = []
     def collect(hwnd, _unused):
@@ -115,30 +125,19 @@ def minimize_spotify_window(started_after: float, *, is_current: Callable[[], bo
             return
         pid = win32process.GetWindowThreadProcessId(hwnd)[1]
         if pid in processes:
-            candidates.append((hwnd, processes[pid]))
+            candidates.append(SpotifyWindow(processes[pid], int(hwnd)))
     win32gui.EnumWindows(collect, None)
     if not candidates:
-        return False
-    hwnd, process = candidates[0]
-    if not is_current():
-        return False
-    import ctypes
-    from ctypes import wintypes
+        return None
+    return candidates[0] if _current_window(candidates[0]) else None
 
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    show = user32.ShowWindowAsync
-    show.argtypes = [wintypes.HWND, ctypes.c_int]
-    show.restype = wintypes.BOOL
-    if (not verify_identity(process)
-            or win32process.GetWindowThreadProcessId(hwnd)[1] != process.pid
-            or not is_current()):
+
+def close_spotify_window(window: SpotifyWindow, *, is_current: Callable[[], bool]) -> bool:
+    """검증한 창에 WM_CLOSE 한 번을 요청한다. 실제 트레이·재생 유지는 별도 관측이다."""
+    if sys.platform != "win32":
+        raise OSError("Spotify window close requires Windows")
+    if not is_current() or not _current_window(window) or not is_current():
         return False
-    if not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindow(hwnd, 4):
-        return False
-    if win32gui.IsIconic(hwnd):
-        return True
-    if not is_current():
-        return False
-    if not show(hwnd, 7):  # SW_SHOWMINNOACTIVE: 숨김·종료 대신 작업 표시줄 복원 경로를 유지한다.
-        raise OSError("Windows가 Spotify 창 최소화 요청을 수락하지 않았습니다.")
+    import win32gui
+    win32gui.PostMessage(window.hwnd, 0x0010, 0, 0)
     return True

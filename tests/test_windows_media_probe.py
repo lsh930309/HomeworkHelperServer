@@ -300,7 +300,7 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
             assert action == "play" and self.kwargs["spotify_process_reader"]() == ()
             assert self.kwargs["dj_launcher"]()
             phases["cold"] = True
-            self.pending_window = not self.kwargs["spotify_window_minimizer"](1, is_current=lambda: self.running)
+            self.pending_window = not self.kwargs["spotify_window_reader"](1, expected=None)
             assert asyncio.run(self.backend.control("spotify", "play"))
             current_session = media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused") if condition == "later_playing" else session
             self.snapshot = media_center.MediaCenterSnapshot(sessions=(current_session,), bgm_session_id="spotify", running=True)
@@ -337,7 +337,7 @@ def test_spotify_startup_comparison_uses_product_play_once_and_stops_at_fixed_ph
         if condition == "later_playing" and clock[0] >= 7:
             runtime.snapshot = media_center.MediaCenterSnapshot(sessions=(session,), bgm_session_id="spotify", running=True)
         if phases["cold"] and runtime and runtime.pending_window:
-            runtime.pending_window = not runtime.kwargs["spotify_window_minimizer"](1, is_current=lambda: runtime.running)
+            runtime.pending_window = not runtime.kwargs["spotify_window_reader"](1, expected=None)
     monkeypatch.setattr(probe.time, "sleep", sleep)
     result = probe._spotify_window_startup(tmp_path, None, first_action=first_action, first_delay=first_delay)
     assert result["cleanup_ok"] and not result["writes"] and calls[-1] == ("stop",)

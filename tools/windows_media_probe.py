@@ -313,10 +313,15 @@ def _spotify_window_startup(source_appdata: Path, source_local_appdata: str | No
             row.update(attempted=False, error_type=type(error).__name__, error=str(error))
         first.update(at=time.monotonic(), target=target)
         return True  # 네이티브 실패도 같은 최초 요청을 다시 보내지 않는다.
+    def observe_comparison(started_after, *, expected=None):
+        initial_minimize(started_after, is_current=lambda: runtime.running and time.monotonic() < deadline)
+        return None  # 비교 action은 위에서 한 번만 적용하며 제품 stage에 창을 넘기지 않는다.
     runtime = MediaCenterRuntime(backend_factory=ObservedSessions,
         spotify_launcher=lambda: launch(False), dj_launcher=lambda: launch(True),
         spotify_process_reader=lambda: _spotify_probe_processes(source_appdata, source_local_appdata),
-        spotify_window_minimizer=initial_minimize)
+        # 과거 비교 시나리오는 자체 1회 action만 사용한다. 제품의 지연 닫기는 중복 적용하지 않는다.
+        spotify_window_reader=observe_comparison,
+        spotify_window_closer=lambda *_args, **_kwargs: False)
     result = {"ok": False, "supported": True,
               "scenario": "spotify-window-startup-delayed-close" if first_delay else "spotify-window-startup-close" if first_action == "close" else "spotify-window-startup", "request_queued": False,
               "launches": launches, "events": events, "trace": trace, "errors": errors, "writes": []}

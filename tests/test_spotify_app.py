@@ -213,7 +213,6 @@ def test_module_import_does_not_observe_or_launch(monkeypatch):
 
 @pytest.fixture
 def window_native(native, monkeypatch):
-    import ctypes
     from src.utils import audio_control
 
     windows, calls = [], []
@@ -237,135 +236,92 @@ def window_native(native, monkeypatch):
     def verify(process):
         calls.append(("identity", process))
         return control.identity
-    def iconic(hwnd):
-        calls.append(("iconic", hwnd))
-        return lookup(hwnd).get("iconic", False)
-    def show(hwnd, mode):
-        calls.append(("show", hwnd, mode))
+    def post(hwnd, message, first, second):
+        calls.append(("post", hwnd, message, first, second))
         if control.failure:
             raise control.failure
-        return control.accepted
     monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(
-        EnumWindows=enumerate_windows, GetWindow=owner, IsIconic=iconic,
+        EnumWindows=enumerate_windows, GetWindow=owner, PostMessage=post,
+        IsWindow=lambda hwnd: any(window["hwnd"] == hwnd for window in windows),
         IsWindowVisible=lambda hwnd: lookup(hwnd).get("visible", True)))
     monkeypatch.setitem(sys.modules, "win32process", SimpleNamespace(
         GetWindowThreadProcessId=process_id))
     monkeypatch.setattr(audio_control, "verify_identity", verify)
-    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: SimpleNamespace(
-        ShowWindowAsync=show), raising=False)
     return native[0], windows, calls, control
 
 
-def test_cold_minimization_only_requests_first_new_spotify_window(window_native):
+def test_cold_window_observation_only_selects_first_new_verified_window(window_native):
     processes, windows, calls, _ = window_native
     processes.extend([Process(41), Process(42)])
-    windows.extend([{"hwnd": 10, "pid": 99}, {"hwnd": 11, "pid": 41},
-                    {"hwnd": 12, "pid": 42}])
-    assert spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert [call for call in calls if call[0] == "show"] == [("show", 11, 7)]
-    verified = [call[1] for call in calls if call[0] == "identity"]
-    assert verified == [spotify_app.SpotifyProcess(41, 123.0, processes[0].path)]
-    assert [call for call in calls if call[:2] == ("window_pid", 11)] == [
-        ("window_pid", 11, 41), ("window_pid", 11, 41)]
+    windows.extend([{"hwnd": 10, "pid": 99}, {"hwnd": 11, "pid": 41}, {"hwnd": 12, "pid": 42}])
+    target = spotify_app.spotify_window(123.0)
+    assert target == spotify_app.SpotifyWindow(spotify_app.SpotifyProcess(41, 123.0, processes[0].path), 11)
+    assert not any(call[0] == "post" for call in calls)
+    assert spotify_app.close_spotify_window(target, is_current=lambda: True)
+    assert [call for call in calls if call[0] == "post"] == [("post", 11, 0x0010, 0, 0)]
 
 
-@pytest.mark.parametrize("window", [
-    {"hwnd": 10, "visible": False}, {"hwnd": 10, "owner": 99},
-    {"hwnd": 10, "pid": 99},
-])
+@pytest.mark.parametrize("window", [{"hwnd": 10, "visible": False}, {"hwnd": 10, "owner": 99}, {"hwnd": 10, "pid": 99}])
 def test_hidden_owned_or_other_process_window_is_not_a_candidate(window_native, window):
     processes, windows, calls, _ = window_native
     processes.append(Process())
     windows.append(window)
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert not any(call[0] in {"show", "identity"} for call in calls)
+    assert spotify_app.spotify_window(123.0) is None
+    assert not any(call[0] in {"post", "identity"} for call in calls)
 
 
-@pytest.mark.parametrize("process", [
-    Process(times=(122.9, 122.9)), Process(owner=False),
-    Process(path=r"C:\Downloads\Spotify.exe"), Process(times=(123.0, 999.0)),
-])
+@pytest.mark.parametrize("process", [Process(times=(122.9, 122.9)), Process(owner=False),
+    Process(path=r"C:\Downloads\Spotify.exe"), Process(times=(123.0, 999.0))])
 def test_old_foreign_or_unverified_process_never_causes_window_access(window_native, process):
     processes, windows, calls, _ = window_native
     processes.append(process)
     windows.append({"hwnd": 10})
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert calls == []
+    assert spotify_app.spotify_window(123.0) is None and calls == []
 
 
-def test_minimization_does_not_touch_processes_when_request_already_cancelled(window_native):
-    processes, windows, calls, _ = window_native
-    processes.append(Process())
-    windows.append({"hwnd": 10})
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: False)
-    assert calls == [] and processes[0].reads == []
-
-
-def test_cancelled_just_before_window_request_is_never_sent(window_native):
-    processes, windows, calls, _ = window_native
-    processes.append(Process())
-    windows.append({"hwnd": 10})
-    assert not spotify_app.minimize_spotify_window(
-        123.0, is_current=lambda: not any(call[0] == "iconic" for call in calls))
-    assert not any(call[0] == "show" for call in calls)
-
-
-def test_reused_pid_or_changed_window_owner_does_not_receive_stale_request(window_native):
+@pytest.mark.parametrize("changed", ["gone", "hidden", "owned", "pid", "identity"])
+def test_pinned_window_change_is_not_replaced_with_another_visible_window(window_native, changed):
     processes, windows, calls, control = window_native
-    processes.append(Process())
+    process = spotify_app.SpotifyProcess(41, 123, "C:/Spotify.exe")
+    target = spotify_app.SpotifyWindow(process, 10)
+    window = {"hwnd": 10, "pid": 41}
+    windows.extend([window, {"hwnd": 11, "pid": 41}])
+    if changed == "gone": windows.remove(window)
+    if changed == "hidden": window["visible"] = False
+    if changed == "owned": window["owner"] = 99
+    if changed == "pid": window["pid"] = 99
+    if changed == "identity": control.identity = False
+    assert spotify_app.spotify_window(123, expected=target) is None
+    assert not spotify_app.close_spotify_window(target, is_current=lambda: True)
+    assert not any(call[0] in {"post", "enumerate_windows"} for call in calls)
+
+
+@pytest.mark.parametrize("cancel_after_validation", [False, True])
+def test_close_cancellation_is_checked_before_native_lookup_and_again_before_post(window_native, cancel_after_validation):
+    _processes, windows, calls, _ = window_native
     windows.append({"hwnd": 10})
-    control.identity = False
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert not any(call[0] == "show" for call in calls)
+    target = spotify_app.SpotifyWindow(spotify_app.SpotifyProcess(41, 123, "C:/Spotify.exe"), 10)
+    current = (lambda: not any(call[0] == "identity" for call in calls)) if cancel_after_validation else lambda: False
+    assert not spotify_app.close_spotify_window(target, is_current=current)
+    assert not any(call[0] == "post" for call in calls)
+    if not cancel_after_validation: assert calls == []
 
 
-def test_window_process_is_rechecked_immediately_before_minimization(window_native):
-    processes, windows, calls, _ = window_native
-    processes.append(Process())
-    windows.append({"hwnd": 10, "pid": [41, 99]})
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert not any(call[0] in {"show", "iconic"} for call in calls)
-
-
-@pytest.mark.parametrize("changed", [{"visible": False}, {"owner": 99}])
-def test_window_closed_to_tray_or_replaced_by_owned_window_is_not_reopened(window_native, monkeypatch, changed):
-    from src.utils import audio_control
-    processes, windows, calls, _ = window_native
-    processes.append(Process())
-    windows.append({"hwnd": 10})
-    verify = audio_control.verify_identity
-    def changed_window(process):
-        matched = verify(process)
-        windows[0].update(changed)
-        return matched
-    monkeypatch.setattr(audio_control, "verify_identity", changed_window)
-    assert not spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert not any(call[0] in {"show", "iconic"} for call in calls)
-
-
-def test_already_minimized_window_completes_without_another_request(window_native):
-    processes, windows, calls, _ = window_native
-    processes.append(Process())
-    windows.append({"hwnd": 10, "iconic": True})
-    assert spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert not any(call[0] == "show" for call in calls)
-    assert any(call[0] == "identity" for call in calls)
-
-
-@pytest.mark.parametrize("failure", [None, OSError("native window failure")])
-def test_native_minimization_failure_propagates_without_second_window_or_fallback(window_native, failure):
-    processes, windows, calls, control = window_native
-    processes.append(Process())
+def test_native_close_failure_propagates_without_fallback_or_second_window(window_native):
+    _processes, windows, calls, control = window_native
     windows.extend([{"hwnd": 10}, {"hwnd": 11}])
-    control.accepted, control.failure = False, failure
-    with pytest.raises(OSError, match="native window failure|최소화"):
-        spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
-    assert [call for call in calls if call[0] == "show"] == [("show", 10, 7)]
+    control.failure = OSError("native close failure")
+    target = spotify_app.SpotifyWindow(spotify_app.SpotifyProcess(41, 123, "C:/Spotify.exe"), 10)
+    with pytest.raises(OSError, match="native close failure"):
+        spotify_app.close_spotify_window(target, is_current=lambda: True)
+    assert [call for call in calls if call[0] == "post"] == [("post", 10, 0x0010, 0, 0)]
 
 
-def test_window_minimization_rejects_non_windows_before_native_access(window_native):
-    processes, windows, calls, _ = window_native
+@pytest.mark.parametrize("operation", ["observe", "close"])
+def test_window_functions_reject_non_windows_before_native_access(window_native, operation):
+    _processes, _windows, calls, _ = window_native
     spotify_app.sys.platform = "darwin"
     with pytest.raises(OSError, match="Windows"):
-        spotify_app.minimize_spotify_window(123.0, is_current=lambda: True)
+        if operation == "observe": spotify_app.spotify_window(123)
+        else: spotify_app.close_spotify_window(None, is_current=lambda: True)
     assert calls == []
