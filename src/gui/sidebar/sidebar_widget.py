@@ -443,6 +443,7 @@ class SidebarWidget(QWidget):
         self._on_hidden = on_hidden
         self._on_audio_change = on_audio_change
         self._audio_state = audio_state
+        self._compact_game_rows = False
         self._on_media_options = on_media_options
         self._on_media_command = on_media_command
         self._media_state = media_state
@@ -818,15 +819,20 @@ class SidebarWidget(QWidget):
     def _fit_gallery_height(self) -> None:
         """필수 내용 뒤의 가용 높이만 사용하며, 여유 공간은 상·하단 사이에 둔다."""
         height = 0
+        viewport = self._main_scroll.viewport()
+        width = viewport.width()
+        _, cell_height, gap = self._gallery_cell_size(width)
+        media_controls_height = (self._media_section.sizeHint().height()
+                                 - self._gallery.minimumHeight())
+        gallery_minimum = cell_height if not self._gallery.isHidden() else 0
+        # 현재 압축된 높이를 기준으로 판단하면 정상/압축 레이아웃이 왕복한다.
+        # 원래 전체 문구의 높이로 판단하고 표시만 축약한다.
+        self._set_compact_game_rows(
+            self._normal_top_height(width) + media_controls_height + gallery_minimum > viewport.height())
         if not self._gallery.isHidden() and self._gallery_layout.count():
-            viewport = self._main_scroll.viewport()
-            width = viewport.width()
-            _, cell_height, gap = self._gallery_cell_size(width)
             top_layout = self._top_section.layout()
             top_height = (top_layout.totalHeightForWidth(width) if top_layout.hasHeightForWidth()
                           else top_layout.totalSizeHint().height())
-            media_controls_height = (self._media_section.sizeHint().height()
-                                     - self._gallery.minimumHeight())
             available = viewport.height() - top_height - media_controls_height
             available_rows = max(1, (available + gap) // (cell_height + gap))
             cell_count = len(self._thumb_buttons) + len(self._rec_thumb_buttons) + 1
@@ -834,6 +840,75 @@ class SidebarWidget(QWidget):
             height = rows * cell_height + (rows - 1) * gap
         if self._gallery.minimumHeight() != height:
             self._gallery.setFixedHeight(height)
+
+    def _normal_top_height(self, width: int) -> int:
+        """창 높이와 무관하게, 원래 문구·행 여백에 필요한 높이를 계산한다."""
+        normal_padding = round(self.width() * 0.015)
+        row_heights = []
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            name = row.findChild(QLabel, "gameName")
+            if name is None:
+                row_heights.append(row.sizeHint().height())
+                continue
+            row.ensurePolished()
+            layout = row.layout()
+            text_width = width - normal_padding * 2 - layout.spacing() * (layout.count() - 1)
+            controls_height = 0
+            for item_index in range(layout.count()):
+                item = layout.itemAt(item_index)
+                widget = item.widget()
+                if widget is not None:
+                    text_width -= item.sizeHint().width()
+                    controls_height = max(controls_height, item.sizeHint().height())
+            text_layout = layout.itemAt(1).layout()
+            text_height = 0
+            for label_index in range(text_layout.count()):
+                label = text_layout.itemAt(label_index).widget()
+                full_text = label.toolTip() or label.text()
+                text_height += label.fontMetrics().boundingRect(
+                    QRect(0, 0, max(1, text_width), 100000),
+                    int(Qt.TextFlag.TextWordWrap), full_text).height()
+            text_height += text_layout.spacing() * (text_layout.count() - 1)
+            row_heights.append(max(controls_height, text_height) + normal_padding * 2)
+        games_height = sum(row_heights) + self._games_list_layout.spacing() * max(0, len(row_heights) - 1)
+        top = self._top_section.layout()
+        margins = top.contentsMargins()
+        return (games_height + top.itemAt(0).sizeHint().height()
+                + top.itemAt(1).layout().sizeHint().height()
+                + top.spacing() * (top.count() - 1) + margins.top() + margins.bottom())
+
+    def _set_compact_game_rows(self, compact: bool, *, force: bool = False) -> None:
+        if self._compact_game_rows == compact and not force:
+            return
+        self._compact_game_rows = compact
+        processes = {process.id: process for process in self._data_manager.managed_processes}
+        padding = round(self.width() * (0.007 if compact else 0.015))
+        for index in range(self._games_list_layout.count()):
+            row = self._games_list_layout.itemAt(index).widget()
+            process = processes.get(row.property("processId"))
+            if process is None:
+                continue
+            layout = row.layout()
+            layout.setContentsMargins(padding, padding, padding, padding)
+            name = row.findChild(QLabel, "gameName")
+            name.setWordWrap(not compact)
+            name.setToolTip(process.name)
+            name.setAccessibleDescription(process.name)
+            # 가로 공간은 기존 버튼 정사각형과 순서를 보존한 뒤 남는 이름 칸이다.
+            text_width = self._main_scroll.viewport().width() - padding * 2 - layout.spacing() * (layout.count() - 1)
+            for item_index in range(layout.count()):
+                item = layout.itemAt(item_index)
+                widget = item.widget()
+                if widget is not None:
+                    text_width -= item.sizeHint().width()
+            name.setText(name.fontMetrics().elidedText(process.name, Qt.TextElideMode.ElideRight,
+                                                     max(1, text_width)) if compact else process.name)
+            entry = self._playtime_labels.get(process.id)
+            if entry is not None:
+                label, started, prefix = entry
+                label.setWordWrap(not compact)
+                self._update_playtime_label(label, started, prefix)
 
     # ------------------------------------------------------------------
     # 내부 메서드 — 레이아웃
@@ -859,6 +934,7 @@ class SidebarWidget(QWidget):
             label = QLabel("등록된 게임 없음")
             label.setProperty("hhRole", "sidebarSecondary")
             self._games_list_layout.addWidget(label)
+        self._set_compact_game_rows(self._compact_game_rows, force=True)
 
     def _make_game_row(self, process: ManagedProcess, runtime: Optional[dict]) -> QFrame:
         row = QFrame()
@@ -885,6 +961,8 @@ class SidebarWidget(QWidget):
         name.setObjectName("gameName")
         name.setProperty("hhRole", "sidebarGameName")
         name.setWordWrap(True)
+        name.setToolTip(process.name)
+        name.setAccessibleDescription(process.name)
         name.setMinimumWidth(1)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         text.addWidget(name)
@@ -1002,17 +1080,17 @@ class SidebarWidget(QWidget):
 
     def _update_playtime_label(self, label: QLabel, start_ts: float, prefix: str = "오늘 플레이 시간") -> None:
         """경과 시간을 계산해 레이블 텍스트를 갱신합니다."""
-        if not start_ts:
-            label.setText(f"{prefix}: 0분")
-            return
-        elapsed = int(time.time() - start_ts)
+        elapsed = int(time.time() - start_ts) if start_ts else 0
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
         if h > 0:
             elapsed_text = f"{h}시간 {m:02d}분"
         else:
             elapsed_text = f"{m}분"
-        label.setText(f"{prefix}: {elapsed_text}")
+        full_text = f"{prefix}: {elapsed_text}"
+        label.setToolTip(full_text)
+        label.setAccessibleDescription(full_text)
+        label.setText(elapsed_text if self._compact_game_rows else full_text)
 
     def _refresh_playtime(self) -> None:
         """1초 타이머마다 모든 실행 중 게임의 플레이타임 레이블을 갱신합니다."""
