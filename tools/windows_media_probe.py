@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import uuid
 
 
-SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers")
+SCENARIOS = ("observe", "audio", "focus", "preview", "bgm", "prepare-spotify", "triggers", "firefox")
 GAME_FIELDS = ("name", "monitoring_path", "default_volume", "default_muted")
 DISPLAY_FIELDS = (
     "sidebar_clock_enabled", "sidebar_clock_format", "sidebar_playtime_enabled",
@@ -686,6 +686,187 @@ def _triggers(result_dir: Path) -> dict:
     return result
 
 
+def _firefox_path() -> Path | None:
+    """설치 경로만 확인한다. Firefox 프로필·쿠키·자격 증명은 읽지 않는다."""
+    candidates = [Path(os.environ[name]) / "Mozilla Firefox/firefox.exe"
+                  for name in ("ProgramFiles", "ProgramFiles(x86)") if os.environ.get(name)]
+    import winreg
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe") as key:
+                candidates.append(Path(winreg.QueryValue(key, None)))
+        except OSError:
+            pass
+    return next((path for path in candidates if path.name.casefold() == "firefox.exe" and path.is_file()), None)
+
+
+def _write_quiet_wave(path: Path, seconds: int = 1) -> None:
+    import math
+    import struct
+    import wave
+    with wave.open(str(path), "wb") as stream:
+        stream.setparams((1, 2, 22050, 22050 * seconds, "NONE", "not compressed"))
+        stream.writeframes(b"".join(struct.pack("<h", int(32 * math.sin(2 * math.pi * 220 * index / 22050)))
+                                    for index in range(22050 * seconds)))
+
+
+def _firefox_fixture_files(root: Path, marker: str) -> tuple[Path, Path]:
+    root.mkdir(parents=True)
+    profile = root / "profile"
+    profile.mkdir()
+    prefs = {"media.autoplay.default": 0, "dom.allow_scripts_to_close_windows": True,
+             "browser.aboutwelcome.enabled": False, "browser.shell.checkDefaultBrowser": False,
+             "browser.startup.homepage_override.mstone": "ignore", "browser.tabs.warnOnClose": False}
+    (profile / "user.js").write_text("\n".join(
+        f"user_pref({json.dumps(name)}, {json.dumps(value)});" for name, value in prefs.items()), encoding="utf-8")
+    _write_quiet_wave(root / "fixture.wav", seconds=20)
+    html = root / "media.html"
+    html.write_text("""<!doctype html><meta charset="utf-8"><title>HomeworkHelper media QA</title>
+<p>HomeworkHelper의 격리된 Firefox 미디어 검수입니다. 잠시 후 이 창만 닫힙니다.</p>
+<audio id="sample" src="fixture.wav" autoplay loop></audio><script>
+const audio = document.getElementById('sample');
+if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({title: MARKER, artist: 'HomeworkHelper QA'});
+audio.play().then(() => { setTimeout(() => audio.pause(), 8000); setTimeout(() => window.close(), 16000); })
+.catch(error => { document.body.append(String(error)); setTimeout(() => window.close(), 1000); });
+</script>""".replace("MARKER", json.dumps(marker)), encoding="utf-8")
+    return profile, html
+
+
+def _launch_firefox(executable: Path, root: Path, marker: str):
+    import psutil
+    profile, html = _firefox_fixture_files(root, marker)
+    started = time.time()
+    launcher = subprocess.Popen([str(executable), "--no-remote", "--profile", str(profile), html.as_uri()],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def owned():
+        for candidate in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                command = candidate.info.get("cmdline") or []
+                if "--profile" not in command:
+                    continue
+                index = command.index("--profile")
+                if index + 1 >= len(command) or _path_key(command[index + 1]) != _path_key(profile):
+                    continue
+                if (_path_key(candidate.exe()) != _path_key(executable) or candidate.create_time() < started - .1
+                        or "--no-remote" not in command or html.as_uri() not in command):
+                    continue
+                if (candidate.pid != launcher.pid and candidate.ppid() != launcher.pid
+                        and not any(parent.pid == launcher.pid for parent in candidate.parents())):
+                    continue
+                if _process_context(candidate.pid) != _process_context(os.getpid()):
+                    continue
+                return _FixtureProcess(launcher, candidate)
+            except (psutil.Error, ValueError):
+                continue
+        return None
+    browser = _wait(owned, 8)
+    if browser is None:
+        raise RuntimeError(f"Firefox 전용 프로필의 실행 identity를 확인하지 못했습니다: {root}")
+    return browser
+
+
+def _close_firefox(browser, diagnostics=None) -> bool:
+    """검증한 새 프로필 main PID의 창만 WM_CLOSE로 정상 종료한다."""
+    import psutil
+    import win32gui
+    import win32process
+    try:
+        if not browser.process.is_running():
+            browser.wait(timeout=1)
+            return True
+        children = browser.process.children(recursive=True)
+        def close(hwnd, _unused):
+            if win32process.GetWindowThreadProcessId(hwnd)[1] == browser.pid:
+                win32gui.PostMessage(hwnd, 0x0010, 0, 0)
+        win32gui.EnumWindows(close, None)
+        deadline = time.monotonic() + 8
+        browser.wait(timeout=8)
+        for process in children:
+            process.wait(timeout=max(.01, deadline - time.monotonic()))
+        return True
+    except Exception as error:
+        if diagnostics is not None:
+            diagnostics.append({"stage": "firefox-close", "type": type(error).__name__, "error": str(error)})
+        return False
+
+
+def _firefox(result_dir: Path) -> dict:
+    from src.core.game_focus import WindowsGameFocusNative
+    from src.core.media_center import MediaCenterRuntime, MediaOptions
+    from src.core.media_sessions import is_spotify_session
+    executable = _firefox_path()
+    result = {"ok": False, "supported": False, "scenario": "firefox",
+              "limits": ["로컬 HTML/WAV와 새 전용 프로필만 사용합니다. 운영 Firefox 프로필·확장·원격 디버깅은 사용하지 않습니다.",
+                         "외부 콘텐츠는 요청하지 않지만 Firefox 자체 배경 네트워크의 전역 차단을 보장하는 검사는 아닙니다."]}
+    if executable is None:
+        result["reason"] = "설치된 Firefox 실행파일 경로를 확인하지 못했습니다."
+        return result
+    runtime = MediaCenterRuntime(spotify_launcher=lambda: False)
+    native = WindowsGameFocusNative()
+    original_foreground = native.foreground()
+    original, browser, steps, errors = None, None, [], []
+    restored, closed, cleanup = False, True, True
+    marker = "HH-media-QA-" + uuid.uuid4().hex[:12]
+    deadline = time.monotonic() + 70
+    def wait(predicate, seconds):
+        return _wait(predicate, max(0, min(seconds, deadline - time.monotonic())))
+    def bgm(status):
+        return any(item.session_id == original.session_id and item.status == status for item in runtime.snapshot.sessions)
+    def fixture(status):
+        return any(item.title == marker and item.status == status for item in runtime.snapshot.sessions)
+    def require(name, predicate, seconds):
+        ok = bool(wait(predicate, seconds))
+        steps.append({"name": name, "ok": ok, "snapshot": asdict(runtime.snapshot)})
+        if not ok:
+            raise RuntimeError(f"Firefox 실제 미디어 상태를 확인하지 못했습니다: {name}")
+    try:
+        if not runtime.start(MediaOptions(False, False, False)):
+            result["reason"] = runtime.snapshot.error or "미디어 worker 시작 실패"
+            return result
+        wait(lambda: runtime.snapshot.sessions or runtime.snapshot.error, 5)
+        spotify = tuple(item for item in runtime.snapshot.sessions if is_spotify_session(item))
+        if len(spotify) != 1 or spotify[0].status not in {"playing", "paused"}:
+            result["reason"] = "명확한 기존 playing/paused Spotify 세션 하나가 필요합니다."
+            return result
+        original = spotify[0]
+        if any(item.status == "playing" and item.session_id != original.session_id for item in runtime.snapshot.sessions):
+            result["reason"] = "다른 미디어가 재생 중이므로 검수하지 않았습니다."
+            return result
+        result["supported"] = True
+        runtime.configure(MediaOptions(True, False, False))
+        require("bgm-playing-baseline", lambda: bgm("playing"), 6)
+        closed = False  # 준비 identity 미확인도 browser 종료 확인 실패로 보고한다.
+        browser = _launch_firefox(executable, result_dir / "media-fixture" / marker, marker)
+        result["fixture_pid"] = browser.pid
+        require("firefox-playing-pauses-bgm", lambda: fixture("playing") and bgm("paused"), 12)
+        require("firefox-paused-keeps-bgm-hold", lambda: fixture("paused") and bgm("paused") and runtime.snapshot.media_hold, 12)
+        closed = _close_firefox(browser, errors)
+        require("firefox-session-ended-keeps-bgm-hold", lambda: not any(
+            item.title == marker for item in runtime.snapshot.sessions) and bgm("paused") and runtime.snapshot.media_hold, 8)
+        stable_until = time.monotonic() + 1
+        stable = True
+        while time.monotonic() < stable_until:
+            stable = stable and bgm("paused") and runtime.snapshot.media_hold
+            time.sleep(.05)
+        steps.append({"name": "after-close-no-replay", "ok": stable})
+    except Exception as error:
+        errors.append({"type": type(error).__name__, "error": str(error)})
+    finally:
+        if browser is not None:
+            closed = _close_firefox(browser, errors) and closed
+        runtime.configure(MediaOptions(False, False, False))
+        if original is not None and result["supported"]:
+            queued = runtime.request("play" if original.status == "playing" else "pause", original.session_id)
+            restored = bool(wait(lambda: bgm(original.status), 6)) if queued else False
+        cleanup = runtime.stop(timeout_seconds=2)
+        result.update(steps=steps, errors=errors, original=asdict(original) if original else None,
+                      playback_state_restored=restored, fixture_closed=closed, cleanup_ok=cleanup,
+                      foreground_before=original_foreground, foreground_after=native.foreground())
+    result["ok"] = bool(result["supported"] and len(steps) == 5 and all(row["ok"] for row in steps)
+                        and not errors and restored and closed and cleanup)
+    return result
+
+
 def _fixture_main(kind: str, root: Path) -> int:
     """최대 90초의 소유 fixture. 프로덕션 모듈·DB·설정을 읽지 않는다."""
     def ready(**values):
@@ -693,16 +874,9 @@ def _fixture_main(kind: str, root: Path) -> int:
         path.write_text(json.dumps({"pid": os.getpid(), **values}), encoding="utf-8")
         path.replace(root / "ready.json")
     if kind == "audio":
-        import math
-        import struct
-        import wave
         import winsound
         wav = root / "fixture.wav"
-        with wave.open(str(wav), "wb") as stream:
-            stream.setparams((1, 2, 22050, 22050, "NONE", "not compressed"))
-            # 약 -60dB의 신호로 오디오 세션만 유지한다.
-            stream.writeframes(b"".join(struct.pack("<h", int(32 * math.sin(2 * math.pi * 220 * index / 22050)))
-                                        for index in range(22050)))
+        _write_quiet_wave(wav)
         winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
         try:
             ready()
@@ -746,6 +920,8 @@ def run(repo: Path, source_appdata: Path, result_dir: Path, scenario: str) -> di
         return _prepare_spotify()
     if scenario == "triggers":
         return _triggers(result_dir)
+    if scenario == "firefox":
+        return _firefox(result_dir)
     return _bgm()
 
 

@@ -107,7 +107,8 @@ function Invoke-Session([string]$Kind, $Status, $Obs = $null) {
         while (!(Test-Path $ResultFile) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
         if (!(Test-Path $ResultFile)) { throw ('사용자 세션 작업 결과 없음. 자동 재시도하지 않음: '+$Root) }
         $Result = Get-Content $ResultFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        $Completed = $true
+        # native 검수 실패에는 미종료 fixture가 있을 수 있어 진단 root를 보존한다.
+        $Completed = $Result.ok -and ($Kind -ne 'media-qa' -or $Result.result.ok)
         if (!$Result.ok) { throw ('사용자 세션 작업 실패: '+$Result.error) }
         return $Result.result
     } finally {

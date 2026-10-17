@@ -448,3 +448,80 @@ def test_triggers_integrate_state_edges_and_restore_without_operational_data(tmp
         assert commands == [(action, "spotify") for action in expected]
         assert result["playback_state_restored"] and result["audio_restored"] and result["fixture_exited"]
         assert (session.volume, session.muted) == (.72, False)
+
+
+def test_firefox_fixture_is_local_only_and_does_not_configure_operational_profile(tmp_path):
+    import wave
+    profile, html = probe._firefox_fixture_files(tmp_path / "firefox-fixture", "QA-title")
+    preferences = (profile / "user.js").read_text(encoding="utf-8")
+    document = html.read_text(encoding="utf-8")
+    assert '"media.autoplay.default", 0' in preferences
+    assert '"dom.allow_scripts_to_close_windows", true' in preferences
+    assert "remote-debugging" not in preferences and "marionette" not in preferences
+    assert "http:" not in document and "https:" not in document
+    assert "fixture.wav" in document and 'title: "QA-title"' in document
+    assert "audio.pause(), 8000" in document and "window.close(), 16000" in document
+    with wave.open(str(html.parent / "fixture.wav")) as stream:
+        assert stream.getnframes() / stream.getframerate() == 20
+
+
+@pytest.mark.parametrize("other_playing", [False, True])
+def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, monkeypatch, other_playing):
+    from src.core import media_center, game_focus
+    from src.core.media_sessions import MediaSessionInfo
+    initial = MediaSessionInfo("spotify", "Spotify.exe", status="paused", can_play=True)
+    other = MediaSessionInfo("other", "other-player.exe", status="playing")
+    runtime_holder, launches, closes, commands, cleanup = [], [], [], [], []
+    class Runtime:
+        def __init__(self, spotify_launcher):
+            assert spotify_launcher() is False
+            self.snapshot = media_center.MediaCenterSnapshot(sessions=(initial, other) if other_playing else (initial,), running=True)
+            runtime_holder.append(self)
+        def start(self, options):
+            assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
+            return True
+        def configure(self, options):
+            if options.auto_bgm:
+                self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="playing"),))
+            return True
+        def request(self, action, session_id):
+            commands.append((action, session_id))
+            self.snapshot = probe.replace(self.snapshot, sessions=(probe.replace(initial, status="paused"),))
+            return True
+        def stop(self, **_kwargs):
+            cleanup.append(True)
+            return True
+    def launch(executable, root, marker):
+        launches.append((executable, root, marker))
+        runtime_holder[0].snapshot = media_center.MediaCenterSnapshot(
+            sessions=(initial, MediaSessionInfo("firefox-fixture", "firefox.exe", title=marker, status="playing")),
+            media_hold=True, running=True)
+        return SimpleNamespace(pid=111)
+    def close(browser, _diagnostics):
+        closes.append(browser.pid)
+        runtime_holder[0].snapshot = probe.replace(runtime_holder[0].snapshot, sessions=(initial,))
+        return True
+    def wait(predicate, _seconds):
+        matched = predicate()
+        if not matched:
+            runtime = runtime_holder[0]
+            runtime.snapshot = probe.replace(runtime.snapshot, sessions=tuple(
+                probe.replace(session, status="paused") if session.app_id == "firefox.exe" else session
+                for session in runtime.snapshot.sessions))
+        return predicate()
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
+    monkeypatch.setattr(game_focus.WindowsGameFocusNative, "foreground", lambda _self: (123, 1234))
+    monkeypatch.setattr(probe, "_firefox_path", lambda: tmp_path / "installed/firefox.exe")
+    monkeypatch.setattr(probe, "_launch_firefox", launch)
+    monkeypatch.setattr(probe, "_close_firefox", close)
+    monkeypatch.setattr(probe, "_wait", wait)
+    result = probe._firefox(tmp_path)
+    assert cleanup == [True]
+    assert result["ok"] is (not other_playing)
+    if other_playing:
+        assert launches == closes == commands == [] and result["supported"] is False
+    else:
+        assert len(launches) == 1 and closes == [111, 111]
+        assert commands == [("pause", "spotify")]
+        assert len(result["steps"]) == 5 and result["playback_state_restored"]
+        assert result["fixture_closed"] and result["foreground_before"] == result["foreground_after"]
