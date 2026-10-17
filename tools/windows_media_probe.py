@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import base64
 from collections import deque
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, is_dataclass, replace
 from importlib import metadata
 import os
 import json
@@ -33,6 +33,29 @@ DISPLAY_FIELDS = (
     "screenshot_save_dir", "recording_enabled", "obs_watch_output_dir",
     "obs_recording_output_dir",
 )
+
+
+def _media_session_payload(session) -> dict:
+    """JSON 근거에는 표지 원문을 복제하지 않고 제공된 크기만 남긴다."""
+    result = {field.name: getattr(session, field.name)
+              for field in fields(session) if field.name != "artwork"}
+    result["artwork_bytes"] = len(session.artwork)
+    return result
+
+
+def _media_snapshot_payload(snapshot) -> dict:
+    result = {}
+    for field in fields(snapshot):
+        value = getattr(snapshot, field.name)
+        if field.name == "sessions":
+            result[field.name] = [_media_session_payload(session) for session in value]
+        elif is_dataclass(value):
+            result[field.name] = asdict(value)
+        elif isinstance(value, tuple):
+            result[field.name] = [asdict(item) if is_dataclass(item) else item for item in value]
+        else:
+            result[field.name] = value
+    return result
 
 
 def _isolated_environment(result_dir: Path) -> dict[str, str | None]:
@@ -92,13 +115,13 @@ def _observe() -> dict:
         if started:
             first.wait(4)
             for index in range(3):
-                samples.append(asdict(runtime.snapshot))
+                samples.append(_media_snapshot_payload(runtime.snapshot))
                 if not runtime.running:
                     break
                 if index < 2:
                     time.sleep(.4)
         else:
-            samples.append(asdict(runtime.snapshot))
+            samples.append(_media_snapshot_payload(runtime.snapshot))
         try:
             foreground = WindowsGameFocusNative().foreground()
         except Exception as error:
@@ -533,7 +556,7 @@ def _bgm() -> dict:
             steps.append({"action": action, "queued": accepted, "original_status_observed": matching,
                           "restored": restored})
         cleanup = runtime.stop(timeout_seconds=2)
-        result.update(steps=steps, original=asdict(original) if original else None,
+        result.update(steps=steps, original=_media_session_payload(original) if original else None,
                       playback_state_restored=restored, cleanup_ok=cleanup)
     result["ok"] = bool(result["supported"] and steps[0]["status_observed"] and restored and cleanup)
     result["limits"] = ["재생 상태만 복원하며 재생 위치의 정확한 역행·복구는 요청하지 않습니다.",
@@ -544,9 +567,9 @@ def _bgm() -> dict:
 def _prepare_spotify() -> dict:
     """고정 prepare 명령 한 번만 실행한다. 로그인 정보 조회·Play 요청은 없다."""
     from src.core.media_center import MediaCenterRuntime, MediaOptions
-    from src.core.media_sessions import is_spotify_session, launch_spotify
+    from src.core.media_sessions import is_spotify_session
+    from src.core.spotify_app import launch_spotify
 
-    launched = threading.Event()
     launches = []
     def launch_once():
         try:
@@ -556,31 +579,41 @@ def _prepare_spotify() -> dict:
         except Exception as error:
             launches.append({"uri_accepted": False, "type": type(error).__name__, "error": str(error)})
             raise
-        finally:
-            launched.set()
     runtime = MediaCenterRuntime(spotify_launcher=launch_once)
     started = runtime.start(MediaOptions(False, False, False))
     queued, sessions, cleanup = False, (), False
     try:
         if started:
             queued = runtime.request("prepare")
-            if queued and launched.wait(4) and launches[0]["uri_accepted"]:
-                _wait(lambda: any(is_spotify_session(item) for item in runtime.snapshot.sessions), 10)
+            if queued:
+                # 실행 중인 앱은 URI를 다시 열지 않는다. 실제 세션 준비가 완료 기준이다.
+                _wait(lambda: any(is_spotify_session(item) for item in runtime.snapshot.sessions)
+                      or bool(runtime.snapshot.error), runtime.PREPARE_TIMEOUT_SECONDS)
             sessions = tuple(item for item in runtime.snapshot.sessions if is_spotify_session(item))
         error = runtime.snapshot.error
     finally:
         cleanup = runtime.stop(timeout_seconds=2)
-    accepted = len(launches) == 1 and launches[0]["uri_accepted"]
-    result = {"ok": bool(started and queued and accepted and sessions and cleanup),
+    requested = bool(launches)
+    accepted = launches[0]["uri_accepted"] if requested else None
+    result = {"ok": bool(started and queued and sessions and cleanup and not error
+                         and (not requested or (len(launches) == 1 and accepted))),
               "supported": True, "scenario": "prepare-spotify", "request_queued": queued,
-              "launches": launches, "uri_accepted": accepted, "session_observed": bool(sessions),
-              "sessions": [asdict(item) for item in sessions], "error": error,
+              "launches": launches, "uri_requested": requested, "uri_accepted": accepted,
+              "session_observed": bool(sessions),
+              "sessions": [_media_session_payload(item) for item in sessions], "error": error,
               "cleanup_ok": cleanup, "play_requested": False}
-    if accepted and not sessions:
+    if error:
+        result["reason"] = error
+    elif not started or not queued:
+        result["reason"] = "Spotify 준비 요청을 접수하지 못했습니다."
+    elif requested and (len(launches) != 1 or not accepted):
+        result["reason"] = "Spotify URI 실행 요청 수락을 확인하지 못했습니다. 자동 재시도하지 않습니다."
+    elif accepted and not sessions:
         result["reason"] = ("Spotify URI 실행 요청은 수락됐지만 미디어 세션은 관측하지 못했습니다. "
                             "로그인 또는 트랙 선택이 필요한지는 화면에서 별도로 확인해야 합니다.")
-    elif not accepted:
-        result["reason"] = "Spotify URI 실행 요청 수락을 확인하지 못했습니다. 자동 재시도하지 않습니다."
+    elif not sessions:
+        result["reason"] = ("새 URI 실행 없이 기다렸지만 Spotify 미디어 세션을 관측하지 못했습니다. "
+                            "실행 중인 앱을 자동으로 다시 열거나 Play를 요청하지 않았습니다.")
     return result
 
 
@@ -608,7 +641,7 @@ def _triggers(result_dir: Path) -> dict:
                    for item in runtime.snapshot.sessions)
     def record(name, predicate):
         matched = bool(wait(predicate))
-        steps.append({"name": name, "ok": matched, "snapshot": asdict(runtime.snapshot)})
+        steps.append({"name": name, "ok": matched, "snapshot": _media_snapshot_payload(runtime.snapshot)})
         if not matched:
             raise RuntimeError(f"자동 미디어 통합 검수 결과를 확인하지 못했습니다: {name}")
     try:
@@ -683,7 +716,7 @@ def _triggers(result_dir: Path) -> dict:
                 errors.append({"stage": "audio-restore", "type": type(error).__name__, "error": str(error)})
         if child is not None:
             exited = _stop_fixture(child, root)
-        result.update(steps=steps, errors=errors, original=asdict(original) if original else None,
+        result.update(steps=steps, errors=errors, original=_media_session_payload(original) if original else None,
                       playback_state_restored=playback_restored, audio_restored=audio_restored,
                       cleanup_ok=cleanup, fixture_exited=exited)
     result["ok"] = bool(result["supported"] and len(steps) == 5 and all(row["ok"] for row in steps)
@@ -903,7 +936,7 @@ def _firefox(result_dir: Path) -> dict:
         ok = bool(wait(check, seconds))
         steps.append({"name": name, "ok": ok,
                       "at_ms": round(((matched[0] if matched else time.monotonic()) - trace_start) * 1000, 2),
-                      "snapshot": asdict(matched[1] if matched else runtime.snapshot)})
+                      "snapshot": _media_snapshot_payload(matched[1] if matched else runtime.snapshot)})
         if not ok:
             raise RuntimeError(f"Firefox 실제 미디어 상태를 확인하지 못했습니다: {name}")
     try:
@@ -951,11 +984,11 @@ def _firefox(result_dir: Path) -> dict:
             queued = selected is not None and runtime.request("play" if original.status == "playing" else "pause", selected.session_id)
             restored = bool(wait(lambda: bgm(original.status), 6)) if queued else False
         cleanup = runtime.stop(timeout_seconds=2)
-        result.update(steps=steps, errors=errors, original=asdict(original) if original else None,
+        result.update(steps=steps, errors=errors, original=_media_session_payload(original) if original else None,
                       playback_state_restored=restored, fixture_closed=closed, cleanup_ok=cleanup,
                       foreground_before=original_foreground, foreground_after=native.foreground(),
                       spotify_id_replacements=replacements,
-                      trace=[{"at_ms": round((timestamp - trace_start) * 1000, 2), "snapshot": asdict(snapshot)}
+                      trace=[{"at_ms": round((timestamp - trace_start) * 1000, 2), "snapshot": _media_snapshot_payload(snapshot)}
                              for timestamp, snapshot in trace.copy()])
     result["ok"] = bool(result["supported"] and len(steps) == 5 and all(row["ok"] for row in steps)
                         and not errors and restored and closed and cleanup)
@@ -1067,6 +1100,7 @@ def _focus_compare_startup(source_appdata: Path, result_dir: Path):
     started, original, events = time.monotonic(), _focus_compare_context(None), []
     registered, native = _focus_compare_registered(source_appdata), WindowsGameFocusNative()
     target, name, prior = None, None, None
+    ready_window, ready_since = None, None
     def progress(kind, **values):
         events.append({"at_ms": round((time.monotonic() - started) * 1000, 2), "kind": kind, **values})
         path = result_dir / "focus-progress.json"
@@ -1094,12 +1128,16 @@ def _focus_compare_startup(source_appdata: Path, result_dir: Path):
             if matched:
                 target, name = matched
             foreground = native.foreground()
-            ready = target is not None and native.window(target) is not None
+            hwnd = native.window(target) if target is not None else None
+            ready = hwnd is not None
+            candidate = (target.pid, hwnd) if ready else None
+            if candidate != ready_window:
+                ready_window, ready_since = candidate, time.monotonic() if ready else None
             if prior != (foreground, target.pid if target else None, ready):
                 progress("startup-state", foreground=list(foreground), window_ready=ready, context=_focus_compare_context(target))
                 prior = (foreground, target.pid if target else None, ready)
             tracker.tick((target,) if matched else (), *foreground, time.monotonic(), os.getpid())
-            if ready:
+            if ready and time.monotonic() - ready_since >= AutoFocusTracker.WINDOW_STABLE_SECONDS:
                 break
             time.sleep(.2)
     tracker.cancel()

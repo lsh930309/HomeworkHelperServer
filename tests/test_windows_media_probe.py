@@ -1,5 +1,6 @@
 """공용 media probe의 운영 데이터 비변경·환경 격리·시각 검수 경계를 확인한다."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -10,6 +11,25 @@ from types import SimpleNamespace
 import pytest
 
 from tools import windows_media_probe as probe
+
+
+def test_media_json_projection_keeps_timing_and_image_size_without_image_bytes():
+    from src.core.media_center import MediaCenterSnapshot
+    from src.core.media_sessions import MediaSessionInfo
+    session = MediaSessionInfo(
+        "spotify", "Spotify.exe", artwork=b"private image contents",
+        position_seconds=30, duration_seconds=180, timeline_updated_at=1792236000,
+        playback_rate=1,
+    )
+    snapshot = MediaCenterSnapshot(sessions=(session,), bgm_session_id="spotify", running=True)
+    result = json.loads(json.dumps(probe._media_snapshot_payload(snapshot)))
+    assert result["bgm_session_id"] == "spotify" and result["running"]
+    row, = result["sessions"]
+    assert "artwork" not in row and row["artwork_bytes"] == len(session.artwork)
+    assert row["position_seconds"] == 30 and row["duration_seconds"] == 180
+    assert row["timeline_updated_at"] == 1792236000 and row["playback_rate"] == 1
+    assert "private image" not in json.dumps(result)
+    assert session.artwork == b"private image contents"
 
 
 def source_database(tmp_path):
@@ -245,6 +265,7 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
     monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
     result = probe._bgm()
+    json.dumps(result)
     assert result["ok"] is bool(actions) and result["supported"] is bool(actions)
     assert calls == actions and cleanup == [True]
     assert result["cleanup_ok"]
@@ -252,39 +273,80 @@ def test_bgm_only_controls_unambiguous_existing_session_and_restores_state(monke
         assert result["playback_state_restored"]
 
 
-@pytest.mark.parametrize("uri_accepted, session_present", [(True, True), (True, False), (False, False)])
-def test_explicit_spotify_prepare_launches_once_without_play_or_credentials(monkeypatch, uri_accepted, session_present):
-    from src.core import media_center, media_sessions
-    calls, cleanup, launches = [], [], []
+@pytest.mark.parametrize("mode, uri_accepted, session_present", [
+    ("cold", True, True), ("cold", True, False), ("cold", False, False),
+    ("cold", False, True), ("warm-ready", None, True), ("warm-delayed", None, True),
+    ("warm-timeout", None, False),
+])
+def test_explicit_spotify_prepare_observes_ready_session_without_reopening_warm_app(
+        monkeypatch, mode, uri_accepted, session_present):
+    from src.core import media_center, media_sessions, spotify_app
+    calls, cleanup, launches, waits, instances = [], [], [], [], []
     session = media_sessions.MediaSessionInfo("spotify", "Spotify.exe", status="paused")
     def launch():
         launches.append(True)
         return uri_accepted
     class Runtime:
+        PREPARE_TIMEOUT_SECONDS = 60
         def __init__(self, spotify_launcher):
             self.launcher = spotify_launcher
-            self.snapshot = media_center.MediaCenterSnapshot(running=True)
+            self.snapshot = media_center.MediaCenterSnapshot(
+                sessions=(session,) if mode == "warm-ready" else (), running=True)
+            instances.append(self)
         def start(self, options):
             assert not any((options.auto_bgm, options.background_mute, options.auto_focus))
             return True
         def request(self, action):
             calls.append(action)
-            self.launcher()
-            self.snapshot = media_center.MediaCenterSnapshot(sessions=(session,) if session_present else (), running=True)
+            if mode == "cold":
+                self.launcher()
+                self.snapshot = media_center.MediaCenterSnapshot(
+                    sessions=(session,) if session_present else (), running=True)
             return True
         def stop(self, **_kwargs):
             cleanup.append(True)
             return True
+    def wait(predicate, seconds):
+        waits.append(seconds)
+        if mode == "warm-delayed":
+            assert not predicate()
+            instances[0].snapshot = media_center.MediaCenterSnapshot(sessions=(session,), running=True)
+        return predicate()
     monkeypatch.setattr(media_center, "MediaCenterRuntime", Runtime)
-    monkeypatch.setattr(media_sessions, "launch_spotify", launch)
-    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    monkeypatch.setattr(spotify_app, "launch_spotify", launch)
+    monkeypatch.setattr(probe, "_wait", wait)
     result = probe._prepare_spotify()
-    assert result["ok"] is (uri_accepted and session_present)
+    json.dumps(result)
+    assert result["ok"] is (session_present and (mode != "cold" or uri_accepted))
+    assert result["uri_requested"] is (mode == "cold")
     assert result["uri_accepted"] is uri_accepted and result["session_observed"] is session_present
     assert result["request_queued"] and result["play_requested"] is False
-    assert calls == ["prepare"] and launches == cleanup == [True]
+    assert calls == ["prepare"] and cleanup == [True] and waits == [60]
+    assert launches == ([True] if mode == "cold" else [])
+    assert len(result["launches"]) == (1 if mode == "cold" else 0)
     if not session_present:
         assert result["reason"]
+
+
+def test_spotify_prepare_does_not_hide_request_failure_when_a_session_is_present(monkeypatch):
+    from src.core import media_center
+    from src.core.media_sessions import MediaSessionInfo
+    snapshot = media_center.MediaCenterSnapshot(
+        sessions=(MediaSessionInfo("spotify", "Spotify.exe"),),
+        error="Spotify 준비 요청 실패", running=True,
+    )
+    runtime = SimpleNamespace(
+        snapshot=snapshot, PREPARE_TIMEOUT_SECONDS=60,
+        start=lambda _options: True, request=lambda _action: True,
+        stop=lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(media_center, "MediaCenterRuntime", lambda **_kwargs: runtime)
+    monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
+    result = probe._prepare_spotify()
+    assert not result["ok"] and result["session_observed"]
+    assert result["error"] == result["reason"] == "Spotify 준비 요청 실패"
+    assert result["uri_requested"] is False and result["uri_accepted"] is None
+    assert result["launches"] == [] and not result["play_requested"]
 
 
 @pytest.fixture
@@ -443,6 +505,7 @@ def test_triggers_integrate_state_edges_and_restore_without_operational_data(tmp
     monkeypatch.setattr(audio_control, "verify_identity", lambda target: target.pid == 111)
     monkeypatch.setattr(probe, "_wait", lambda predicate, _seconds: predicate())
     result = probe._triggers(tmp_path)
+    json.dumps(result)
     assert result["foreground_input"] == "synthetic" and cleaned == active == [True]
     if other_playing:
         assert result["ok"] is False and result["supported"] is False
@@ -550,6 +613,7 @@ def test_firefox_policy_uses_actual_session_phases_and_restores_bgm(tmp_path, mo
     monkeypatch.setattr(probe, "_close_firefox", close)
     monkeypatch.setattr(probe, "_wait", wait)
     result = probe._firefox(tmp_path)
+    json.dumps(result)
     assert cleanup == [True]
     expected_pass = not other_playing and mode not in {"ambiguous", "changed-title", "failed-step"}
     assert result["ok"] is expected_pass
@@ -632,6 +696,7 @@ def test_focus_compare_waits_for_new_game_and_does_not_refocus_existing_game(tmp
     from src.core.game_audio import GameAudioTarget
     import json
     foreground, calls, queries = [10, 100], [], []
+    clock = [0.0]
     target = GameAudioTarget("game", 111, time.time() - 10 if already_running else time.time() + 1, "game.exe", False, None)
     class Native:
         def foreground(self): return tuple(foreground)
@@ -649,10 +714,12 @@ def test_focus_compare_waits_for_new_game_and_does_not_refocus_existing_game(tmp
     monkeypatch.setattr(probe, "_focus_compare_target", select)
     monkeypatch.setattr(probe, "_focus_compare_context", lambda selected: {"foreground": list(foreground), "last_input_tick": 1})
     monkeypatch.setattr(game_focus, "WindowsGameFocusNative", Native)
-    monkeypatch.setattr(probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     selected, name, _started, original, events = probe._focus_compare_startup(tmp_path, tmp_path)
     assert selected is target and name == "검수 게임" and original["foreground"] == [10, 100]
     assert calls == ([] if already_running else [111])
+    assert game_focus.AutoFocusTracker.WINDOW_STABLE_SECONDS <= clock[0] < 60
     assert events[0]["kind"] == "waiting-for-registered-game"
     assert json.loads((tmp_path / "focus-progress.json").read_text())["events"] == events
 
